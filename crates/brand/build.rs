@@ -91,6 +91,9 @@ const OPTIONAL: &[(&str, &str, &str)] = &[
     // no calibration channel: contributors attach calibrations to an issue on `product.repository`
     ("product.calibration_discord", "CALIBRATION_DISCORD", "&str = \"\""),
     ("product.calibration_thread", "CALIBRATION_THREAD", "&str = \"\""),
+    // no marketplace: plug-ins install from files only
+    ("plugins.marketplace", "PLUGINS_MARKETPLACE", "&str = \"\""),
+    ("plugins.marketplace_index", "PLUGINS_MARKETPLACE_INDEX", "&str = \"\""),
     // no upstream: the About window credits no upstream project
     ("upstream.name", "UPSTREAM_NAME", "&str = \"\""),
     ("upstream.repository", "UPSTREAM_REPOSITORY", "&str = \"\""),

@@ -1,20 +1,24 @@
 //! Nikon pixel-shift series: reading the frames' headers and checking that a set of files is one complete series.
 //!
 //! A pixel-shift capture is 4, 8, 16 or 32 ordinary NEFs shot in a burst with the sensor moved between them.
-//! What the maker note records about it was measured from two 16-shot series of one body (a Z 8, FX 3:2 and 1:1
-//! image area); no other tool's source or tag table was consulted. Every meaning below is a hypothesis that
-//! those files bore out:
+//! What the maker note records about it was measured from one series of each mode and from lone frames of one body
+//! (a Z 8, FX 3:2 and 1:1 image area), and checked on every series of a larger test set of all four modes and lone
+//! frames; no other tool's source or tag table was consulted. Every meaning
+//! below is a hypothesis that those files bore out:
 //!
 //! | maker note tag | content |
 //! |---|---|
-//! | `0x0034` (Short) | the number of shots in the series (16), the same in every frame |
-//! | `0x0056` (16 bytes, byte 8) and `0x005e` (28 bytes, byte 5) | the frame's index in the series, 1-based; the two agree |
+//! | `0x005e` (28 bytes, byte 4) | the mode: 0 = not pixel shift (a lone frame), 1, 2, 3, 4 = a series of 4, 8, 16, 32 shots |
+//! | `0x0056` (16 bytes, byte 8) | the frame's number in the series, 1-based |
+//! | `0x005e` (byte 5) | the frame's placement slot: the frame number, except in an 8-shot series where frames 5 to 8 have 17 to 20 (number + 12) |
+//! | `0x0034` (Short) | 16 in every mode and for lone frames: **not** the shot count, only reported |
 //! | `0x00a7` (Long) | a per-exposure counter that rises by one from frame to frame |
 //! | `0x0054` (20 bytes: version, int32 at 4, 4 bytes, int32 at 12, 4 bytes) | the sensor position of the frame (x, y). It follows the real image shift to about 0.1 px and is **only** reported, never used to place a frame |
 //! | `0x001b` (7 Shorts), `0x0045` (4 Shorts) | where the stored frame sits on the sensor, and the image area inside it |
 //!
-//! There is no series or group id: a series is told by its indexes (1..N in order), the counter and the time
-//! between exposures (about 0.12 s).
+//! There is no series or group id: a series is told by its mode, its frame numbers (1..N in order), the counter and the
+//! time between exposures (about 0.12 s). Only the 16-shot merge is built; the other modes are recognised so that they
+//! can be refused by name.
 
 use lcc_tiff::{Tiff, makernote, tags as t};
 
@@ -30,8 +34,10 @@ pub mod tag {
     pub const WHITE_BALANCE: u16 = 0x000c;
 }
 
-const INDEX_A_BYTE: usize = 8;
-const INDEX_B_BYTE: usize = 5;
+/// Byte of `0x0056` that holds the frame number, and bytes of `0x005e` that hold the mode and the placement slot.
+const NUMBER_BYTE: usize = 8;
+const MODE_BYTE: usize = 4;
+const SLOT_BYTE: usize = 5;
 /// Spacing may differ from the series' median interval by half of it, but by at least this much (timing jitter
 /// and the camera's sub-second time resolution).
 const MIN_JITTER_MS: i64 = 250;
@@ -71,8 +77,11 @@ pub enum HeaderError {
     NotTiff,
     #[error("no Nikon maker note")]
     NoMakerNote,
-    #[error("not a pixel-shift frame (no shot count and frame index in the maker note)")]
+    #[error("not a pixel-shift frame (the maker note has no pixel-shift mode and frame number)")]
     NotPixelShift,
+    /// A pixel-shift mode this reader does not know (the mode byte is none of 1 to 4).
+    #[error("not a pixel-shift mode this reader knows ({0})")]
+    UnknownMode(u8),
 }
 
 fn rational(ifd: &lcc_tiff::Ifd, tag: u16) -> f64 {
@@ -110,8 +119,15 @@ fn le_i32(b: &[u8], at: usize) -> Option<i32> {
     Some(i32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
 }
 
+/// The placement slot a frame of a series of `shots` has: its number, except for frames 5 to 8 of an 8-shot series, which
+/// have slots 17 to 20.
+fn expected_slot(shots: u16, number: u16) -> u16 {
+    if shots == 8 && number > 4 { number.saturating_add(12) } else { number }
+}
+
 /// Read the header of a NEF (the bytes may be the whole file or its first few hundred kilobytes: the maker note
-/// ends about 260 KB in). `Err(NotPixelShift)` for an ordinary frame.
+/// ends about 260 KB in). `Err(NotPixelShift)` for an ordinary frame (mode 0 or no pixel-shift tags) and
+/// `Err(UnknownMode)` for a mode this reader does not know.
 pub fn read_header(bytes: &[u8]) -> Result<FrameHeader, HeaderError> {
     let tiff = Tiff::parse(bytes).map_err(|_| HeaderError::NotTiff)?;
     let ifd0 = tiff.ifds.first().ok_or(HeaderError::NotTiff)?;
@@ -122,17 +138,23 @@ pub fn read_header(bytes: &[u8]) -> Result<FrameHeader, HeaderError> {
     let note = makernote::parse_makernote(bytes, entry.offset, entry.count() as u64, tiff.order, &make).ok_or(HeaderError::NoMakerNote)?;
     let mn = &note.ifd;
 
-    let shot_count = mn.u16(tag::SHOT_COUNT);
-    let index_a = mn.bytes(tag::FRAME_INDEX_A).and_then(|b| b.get(INDEX_A_BYTE)).map(|v| u16::from(*v));
-    let index_b = mn.bytes(tag::FRAME_INDEX_B).and_then(|b| b.get(INDEX_B_BYTE)).map(|v| u16::from(*v));
-    if shot_count.is_none() || index_a.is_none() || index_b.is_none() {
-        return Err(HeaderError::NotPixelShift);
-    }
-    // the two index tags must agree; a frame where they don't is reported with no index (detection refuses it)
-    let index = match (index_a, index_b) {
-        (Some(a), Some(b)) if a == b => Some(a),
-        _ => None,
+    // (`0x0034` says 16 in every mode: it is not the shot count)
+    let number = mn.bytes(tag::FRAME_INDEX_A).and_then(|b| b.get(NUMBER_BYTE)).copied();
+    let mode = mn.bytes(tag::FRAME_INDEX_B).and_then(|b| b.get(MODE_BYTE)).copied();
+    let slot = mn.bytes(tag::FRAME_INDEX_B).and_then(|b| b.get(SLOT_BYTE)).copied();
+    let (Some(number), Some(mode), Some(slot)) = (number, mode, slot) else { return Err(HeaderError::NotPixelShift) };
+    let shots = match mode {
+        0 => return Err(HeaderError::NotPixelShift),
+        1 => 4,
+        2 => 8,
+        3 => 16,
+        4 => 32,
+        other => return Err(HeaderError::UnknownMode(other)),
     };
+    // the frame number counts from 1 to the shot count, and the slot must be the one the mode gives that number; a
+    // frame where they don't agree is reported with no number (detection refuses it)
+    let index = ((1..=shots).contains(&u16::from(number)) && u16::from(slot) == expected_slot(shots, u16::from(number))).then_some(u16::from(number));
+    let shot_count = Some(shots);
     // the raw is the largest image in the file
     let raw_size = tiff
         .all_ifds()
@@ -190,7 +212,7 @@ pub enum SeriesError {
     Empty,
     #[error("photo {0} has no (consistent) pixel-shift frame number")]
     NoIndex(usize),
-    #[error("the photos say the series has {0} shots, but not all agree")]
+    #[error("the photos are from series with different shot counts")]
     MixedCount(usize),
     #[error("the series has {count} shots but {have} photos were given")]
     Incomplete { have: usize, count: usize },
@@ -215,6 +237,18 @@ pub enum SeriesError {
 pub struct Series {
     pub count: u16,
     pub order: Vec<usize>,
+}
+
+/// The shot count of the series `headers` are frames of: the mode all of them are in (4, 8, 16 or 32). Frames of
+/// different modes are [`SeriesError::MixedCount`]. This judges the mode only, so that a series that can not be merged
+/// (whichever of its frames are chosen) is told apart from one that is incomplete; [`detect`] checks the rest.
+pub fn series_shot_count(headers: &[FrameHeader]) -> Result<u16, SeriesError> {
+    let first = headers.first().ok_or(SeriesError::Empty)?;
+    let count = first.shot_count.ok_or(SeriesError::NoIndex(1))?;
+    match headers.iter().position(|h| h.shot_count != Some(count)) {
+        Some(_) => Err(SeriesError::MixedCount(headers.len())),
+        None => Ok(count),
+    }
 }
 
 /// Check that `headers` (in any order) are one complete series and put them in series order.
@@ -408,14 +442,27 @@ mod tests {
 
     /// A synthetic NEF with the maker note of a pixel-shift frame (all values invented).
     fn synthetic(index: u8, count: u16, tags: bool) -> Vec<u8> {
+        let mode = match count {
+            4 => 1,
+            8 => 2,
+            16 => 3,
+            _ => 4,
+        };
+        let slot = if count == 8 && index > 4 { index + 12 } else { index };
+        synthetic_with(index, mode, slot, 16, tags)
+    }
+
+    /// The same with the mode, the slot and tag `0x0034` as given (the Z 8 writes 16 in `0x0034` in every mode).
+    fn synthetic_with(index: u8, mode: u8, slot: u8, t34: u16, tags: bool) -> Vec<u8> {
         let mut note = IfdBuilder::new();
         if tags {
-            note.set(tag::SHOT_COUNT, Value::Short(vec![count]));
+            note.set(tag::SHOT_COUNT, Value::Short(vec![t34]));
             let mut a = vec![0u8; 16];
-            a[INDEX_A_BYTE] = index;
+            a[NUMBER_BYTE] = index;
             note.set(tag::FRAME_INDEX_A, Value::Undefined(a));
             let mut b = vec![0u8; 28];
-            b[INDEX_B_BYTE] = index;
+            b[MODE_BYTE] = mode;
+            b[SLOT_BYTE] = slot;
             note.set(tag::FRAME_INDEX_B, Value::Undefined(b));
         }
         note.set(tag::EXPOSURE_COUNTER, Value::Long(vec![700 + u32::from(index)]));
@@ -458,6 +505,64 @@ mod tests {
         assert!(h.time_ms.is_some());
         assert_eq!(read_header(&synthetic(1, 16, false)), Err(HeaderError::NotPixelShift));
         assert_eq!(read_header(b"not a tiff"), Err(HeaderError::NotTiff));
+    }
+
+    /// The shot count is the mode byte (`0x005e` byte 4), whatever `0x0034` says (16 in every mode on the Z 8); a lone
+    /// frame (mode 0) is no pixel-shift frame and an unknown mode is refused, not guessed.
+    #[test]
+    fn the_shot_count_is_the_mode_byte_and_not_tag_0x0034() {
+        for (mode, shots) in [(1u8, 4u16), (2, 8), (3, 16), (4, 32)] {
+            for t34 in [16u16, 4, 99, 0] {
+                let h = read_header(&synthetic_with(1, mode, 1, t34, true)).unwrap();
+                assert_eq!((h.shot_count, h.index), (Some(shots), Some(1)), "mode {mode}, 0x0034 = {t34}");
+            }
+        }
+        assert_eq!(read_header(&synthetic_with(0, 0, 0, 16, true)), Err(HeaderError::NotPixelShift), "a lone frame");
+        for mode in [5u8, 9, 255] {
+            assert_eq!(read_header(&synthetic_with(1, mode, 1, 16, true)), Err(HeaderError::UnknownMode(mode)));
+        }
+    }
+
+    /// The placement slot must be the one the mode gives the frame number: the number itself, except 17 to 20 for frames
+    /// 5 to 8 of an 8-shot series. A frame that breaks the rule, or whose number is outside the series, has no number.
+    #[test]
+    fn the_slot_must_match_the_frame_number_of_the_mode() {
+        let number = |mode: u8, n: u8, slot: u8| read_header(&synthetic_with(n, mode, slot, 16, true)).unwrap().index;
+        for n in 1..=4u8 {
+            assert_eq!(number(1, n, n), Some(u16::from(n)), "4 shots");
+        }
+        for n in 1..=8u8 {
+            assert_eq!(number(2, n, if n > 4 { n + 12 } else { n }), Some(u16::from(n)), "8 shots, frame {n}");
+        }
+        for n in 1..=16u8 {
+            assert_eq!(number(3, n, n), Some(u16::from(n)), "16 shots");
+        }
+        for n in 1..=32u8 {
+            assert_eq!(number(4, n, n), Some(u16::from(n)), "32 shots");
+        }
+        // the slot of another mode's rule, a slot out of step, numbers outside the series
+        assert_eq!(number(2, 5, 5), None, "8 shots, frame 5 in slot 5");
+        assert_eq!(number(2, 2, 14), None, "8 shots, frame 2 in slot 14");
+        assert_eq!(number(3, 3, 4), None, "16 shots, slot 4 for frame 3");
+        assert_eq!(number(4, 20, 8), None, "32 shots, slot 8 for frame 20");
+        assert_eq!(number(1, 1, 17), None, "4 shots, slot 17");
+        assert_eq!(number(1, 5, 5), None, "4 shots, frame 5");
+        assert_eq!(number(2, 9, 21), None, "8 shots, frame 9");
+        assert_eq!(number(4, 33, 33), None, "32 shots, frame 33");
+        assert_eq!(number(3, 0, 0), None, "frame 0");
+    }
+
+    /// Frames of different modes are not one series, and a series that can not be merged is told by its mode alone.
+    #[test]
+    fn the_mode_of_a_set_of_frames_is_judged_before_its_completeness() {
+        let of = |shots: u16, n: u16| FrameHeader { shot_count: Some(shots), ..hdr(n, shots) };
+        let first_half_of_32: Vec<FrameHeader> = (1..=16).map(|n| of(32, n)).collect();
+        assert_eq!(series_shot_count(&first_half_of_32), Ok(32), "any frames of a 32-shot series say 32");
+        assert_eq!(series_shot_count(&(1..=4).map(|n| of(8, n)).collect::<Vec<_>>()), Ok(8));
+        assert_eq!(series_shot_count(&(1..=16).map(|n| of(16, n)).collect::<Vec<_>>()), Ok(16));
+        let mixed = vec![of(4, 1), of(4, 2), of(16, 1)];
+        assert_eq!(series_shot_count(&mixed), Err(SeriesError::MixedCount(3)));
+        assert_eq!(series_shot_count(&[]), Err(SeriesError::Empty));
     }
 
     /// The series' times for an interval of `step` ms, with `jitter(i)` added to frame i.

@@ -207,6 +207,19 @@ fn set_state(ctx: &egui::Context, s: State) {
     STATE.set(Some(s));
 }
 
+/// The Plug-in Manager or one of the plug-ins' windows is up (an install to approve, a permission
+/// to answer, a plug-in's own dialog), or a permission question is waiting to be shown: the
+/// keyboard is theirs ([`crate::keyboard::modal_open`]). The Update question counts through them:
+/// `show` draws it only while one of them is up.
+pub(crate) fn modal_open(app: &LccApp) -> bool {
+    let up = |s: &State| s.open || s.pending.is_some() || s.dialog.is_some() || s.asking.is_some();
+    #[cfg(not(test))]
+    let shown = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(up);
+    #[cfg(test)]
+    let shown = STATE.with_borrow(|s| s.as_ref().is_some_and(up));
+    shown || !app.session.plugin_asks.is_empty()
+}
+
 fn app_ctx(app: &LccApp) -> egui::Context {
     app.tasks.repaint.clone().unwrap_or_default()
 }
@@ -981,7 +994,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         }
         let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), ctx);
         let mut closed = false;
-        egui::Window::new(tr("Plug-in Manager"))
+        let shown = egui::Window::new(tr("Plug-in Manager"))
             .id(key())
             .title_bar(false)
             .frame(crate::dialog_frame::card_frame(ctx))
@@ -1058,6 +1071,10 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     });
                 }
             });
+        // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+        if let Some(w) = &shown {
+            ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+        }
         s.open = open && !closed;
     }
     approval_ui(ctx, &mut s, &installs, &mut actions);
@@ -1223,6 +1240,10 @@ fn ask_ui(app: &mut LccApp, ctx: &egui::Context, s: &mut State) {
             });
         });
     crate::dialog_frame::ModalLayout::finish(ctx, window_id, shown.as_ref().map(|w| w.response.rect));
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     let mut call = serde_json::to_value(&asking.ask.request).unwrap_or(Value::Null);
     *call.field_mut("id") = json!(asking.ask.plugin);
     match answer {
@@ -1408,6 +1429,10 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
             });
         });
     crate::dialog_frame::ModalLayout::finish(ctx, window_id, shown.as_ref().map(|w| w.response.rect));
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if keep {
         s.pending = Some(pending);
     }
@@ -1545,9 +1570,12 @@ impl Row {
 fn dialog_ui(ctx: &egui::Context, s: &mut State, actions: &mut Vec<(&'static str, Value)>) {
     let Some(mut d) = s.dialog.take() else { return };
     let mut keep = true;
-    egui::Window::new(d.label.clone()).id(key().with("dialog")).title_bar(false).frame(crate::dialog_frame::card_frame(ctx)).collapsible(false).show(
-        ctx,
-        |ui| {
+    let shown = egui::Window::new(d.label.clone())
+        .id(key().with("dialog"))
+        .title_bar(false)
+        .frame(crate::dialog_frame::card_frame(ctx))
+        .collapsible(false)
+        .show(ctx, |ui| {
             // the plug-in's own header picture above the command's title
             if let Some(tex) = header_of(ctx, &d.plugin) {
                 ui.add(egui::Image::new(&tex).max_height(HEADER_HEIGHT).max_width(ui.available_width()));
@@ -1572,8 +1600,11 @@ fn dialog_ui(ctx: &egui::Context, s: &mut State, actions: &mut Vec<(&'static str
                     keep = false;
                 }
             });
-        },
-    );
+        });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if keep {
         s.dialog = Some(d);
     }
@@ -2071,7 +2102,7 @@ fn update_row(ui: &mut egui::Ui, e: &Entry, offer: &Value, actions: &mut Vec<(&'
 }
 
 /// A permission group as the update row names it.
-fn group_label(group: &str) -> &'static str {
+pub(super) fn group_label(group: &str) -> &'static str {
     match group {
         "catalog" => tr("Read the catalog"),
         "metadataWrite" => tr("Write photo metadata"),
@@ -2104,7 +2135,7 @@ fn update_ask_ui(ctx: &egui::Context, s: &mut State, actions: &mut Vec<(&'static
     let Some(ask) = s.update_ask.take() else { return };
     let mut keep = true;
     let window_id = key().with("update-ask");
-    egui::Window::new(tr("Update"))
+    let shown = egui::Window::new(tr("Update"))
         .id(window_id)
         .title_bar(false)
         .frame(crate::dialog_frame::card_frame(ctx))
@@ -2129,6 +2160,10 @@ fn update_ask_ui(ctx: &egui::Context, s: &mut State, actions: &mut Vec<(&'static
                 }
             });
         });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if keep {
         s.update_ask = Some(ask);
     }
@@ -2462,6 +2497,37 @@ fn field_ui(ui: &mut egui::Ui, scope: &str, f: &Value, values: &mut Value) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each of the plug-ins' windows keeps the keys from the photos while it is up: the manager, an
+    /// install to approve, a plug-in's own dialog, a permission question (on screen or waiting).
+    #[test]
+    fn every_plugin_window_takes_the_keyboard() {
+        let ctx = egui::Context::default();
+        let mut app = LccApp::new(lcc_engine::Session::new(), crate::Services::default());
+        set_state(&ctx, State::default());
+        assert!(!modal_open(&app), "nothing is up");
+        let dialog = Dialog { plugin: "p".into(), command: "c".into(), label: "C".into(), fields: Vec::new(), values: json!({}), error: None };
+        let ask = || lcc_engine::cmd::plugins::PluginAsk {
+            plugin: "p".into(),
+            plugin_name: "P".into(),
+            request: lcc_plugins::Request { group: lcc_plugins::Group::Catalog, value: None },
+            rerun: json!({}),
+            prepare: false,
+        };
+        for (name, s) in [
+            ("the Plug-in Manager", State { open: true, ..State::default() }),
+            ("an install to approve", State { pending: Some(Pending { path: "p.wasm".into(), info: json!({}) }), ..State::default() }),
+            ("a plug-in's own dialog", State { dialog: Some(dialog), ..State::default() }),
+            ("a permission question", State { asking: Some(Asking { ask: ask(), label: "Catalog".into() }), ..State::default() }),
+        ] {
+            set_state(&ctx, s);
+            assert!(modal_open(&app), "{name} takes the keyboard");
+            set_state(&ctx, State::default());
+            assert!(!modal_open(&app), "{name}: closed, the keyboard is the window's again");
+        }
+        app.session.plugin_asks.push(ask());
+        assert!(modal_open(&app), "a permission question waiting to be shown takes the keyboard");
+    }
 
     /// Under test every test has a Plug-in Manager of its own: one opened on another test's thread
     /// doesn't cover this test's window.

@@ -11,11 +11,15 @@
 //! - while a text field has keyboard focus, accelerators without ⌘ (`G`, `1`, `Delete`…) and the
 //!   text-editing ones (⌘A/⌘C/⌘V/⌘X/⌘Z) are removed, so typing and text editing work; they come
 //!   back when the field loses focus.
+//! - while a modal has the keyboard (a dialog, Settings, the shortcuts overlay, another window
+//!   that waits over the app: [`lcc_ui_egui::keyboard::modal_open`]), a chosen item does nothing but Quit, and the items show disabled,
+//!   so ⌘=, ⌘Delete… never act on the photos behind it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, channel};
 
 use lcc_ui_egui::LccApp;
+use lcc_ui_egui::keyboard::{MenuChoice, menu_choice, owner};
 use lcc_ui_egui::menubar::{
     MenuNode, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_structure as structure_of,
 };
@@ -173,7 +177,7 @@ fn wanted_accelerator(accel: Option<Accelerator>, sc: &str, text_focus: bool, ca
 pub struct NativeMenu {
     menu: Menu,
     items: HashMap<String, Item>,
-    /// Settings… and Quit in the application submenu: ordinary items, so they give up ⌘, and ⌘Q
+    /// About, Settings… and Quit in the application submenu: ordinary items, so they give up ⌘, and ⌘Q
     /// to the shortcut recorder like the rest. (The system's own items there and in File/Window,
     /// such as Hide ⌘H, Close Window ⌘W and Minimize ⌘M, are muda predefined items whose key
     /// cannot be changed or swapped.)
@@ -360,15 +364,20 @@ impl NativeMenu {
             &PredefinedMenuItem::separator(),
             &quit,
         ]);
-        for (handle, cmd, shortcut, text) in [(&settings, SETTINGS, SETTINGS_KEY, "Settings…"), (&quit, QUIT, "Cmd+Q", "Quit {app}")] {
-            let accel = accelerator(shortcut);
+        // (About too, which has no key, so the keyboard's owner greys it out like the rest)
+        for (handle, cmd, shortcut, text) in [
+            (&about, "app.about", None, "About {app}"),
+            (&settings, SETTINGS, Some(SETTINGS_KEY), "Settings…"),
+            (&quit, QUIT, Some("Cmd+Q"), "Quit {app}"),
+        ] {
+            let accel = shortcut.and_then(accelerator);
             self.app_items.push(Item {
                 handle: Handle::Plain(handle.clone()),
                 parent: app_menu.clone(),
                 swappable: true,
                 cmd: cmd.to_string(),
                 params: Value::Null,
-                shortcut: Some(shortcut.to_string()),
+                shortcut: shortcut.map(str::to_string),
                 accel,
                 current: accel,
                 label: lcc_ui_egui::menubar::display_item_label(cmd, &Value::Null, text).to_string(),
@@ -492,6 +501,21 @@ impl NativeMenu {
         lcc_ui_egui::i18n::set_language(app.ui.language);
         let mut quit = false;
         while let Ok(key) = self.rx.try_recv() {
+            // the item's command and shortcut, for the keyboard's owner to judge (About has no shortcut)
+            let (command, shortcut) = match self.items.get(&key).or_else(|| self.app_items.iter().find(|it| it.cmd == key)) {
+                Some(it) => (it.cmd.as_str(), it.shortcut.as_deref()),
+                None => (key.as_str(), None),
+            };
+            // a modal keeps ⌘=, ⌘Delete… from the photos behind it; ⌘A, ⌘C… while a text field has
+            // the focus edit the field, never the photos (#281)
+            match menu_choice(owner(app, ctx), command, shortcut, ctx.egui_wants_keyboard_input()) {
+                MenuChoice::Drop => continue,
+                MenuChoice::TextField => {
+                    let _ = lcc_ui_egui::menubar::forward_to_text_field(app, ctx, shortcut);
+                    continue;
+                }
+                MenuChoice::Run => {}
+            }
             if key == QUIT {
                 quit = true;
                 continue;
@@ -501,10 +525,6 @@ impl NativeMenu {
                 continue;
             }
             if let Some(it) = self.items.get(&key) {
-                // ⌘A, ⌘C… while a text field has the focus edit the field, never the photos (#281)
-                if lcc_ui_egui::menubar::forward_to_text_field(app, ctx, it.shortcut.as_deref()) {
-                    continue;
-                }
                 let (cmd, params) = (it.cmd.clone(), it.params.clone());
                 let _ = lcc_ui_egui::menubar::run_item(app, &cmd, params);
             }
@@ -518,10 +538,15 @@ impl NativeMenu {
             self.rebuild(app);
         }
         /// Synchronize live labels and states; accelerator ownership changes already triggered a rebuild.
-        fn walk(nodes: &[MenuNode], items: &mut HashMap<String, Item>, keymap: &lcc_ui_egui::shortcuts::Keymap) {
+        fn walk(
+            nodes: &[MenuNode],
+            items: &mut HashMap<String, Item>,
+            keymap: &lcc_ui_egui::shortcuts::Keymap,
+            open: &dyn Fn(&str, Option<&str>) -> bool,
+        ) {
             for n in nodes {
                 match n {
-                    MenuNode::Submenu { children, .. } => walk(children, items, keymap),
+                    MenuNode::Submenu { children, .. } => walk(children, items, keymap, open),
                     MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
                         let Some(it) = items.get_mut(&MenuNode::key(id, params)) else { continue };
                         let (native_label, _) = native_item_presentation(keymap, id, params, label, shortcut.as_deref());
@@ -532,12 +557,13 @@ impl NativeMenu {
                             }
                             it.label = native_label;
                         }
-                        if it.enabled != *enabled {
+                        let enabled = *enabled && open(&it.cmd, it.shortcut.as_deref());
+                        if it.enabled != enabled {
                             match &it.handle {
-                                Handle::Plain(h) => h.set_enabled(*enabled),
-                                Handle::Check(h) => h.set_enabled(*enabled),
+                                Handle::Plain(h) => h.set_enabled(enabled),
+                                Handle::Check(h) => h.set_enabled(enabled),
                             }
-                            it.enabled = *enabled;
+                            it.enabled = enabled;
                         }
                         if let (Handle::Check(h), Some(c)) = (&it.handle, checked) {
                             // also resyncs after AppKit toggled it on click
@@ -551,8 +577,21 @@ impl NativeMenu {
                 }
             }
         }
-        if !rebuilt {
-            walk(&bar.iter().flat_map(|(_, v)| v.clone()).collect::<Vec<_>>(), &mut self.items, &app.ui.settings.keymap);
+        // an item the keyboard's owner would drop shows disabled, so a click can't run it either: a
+        // modal greys out all but Quit (the system's own items, Close Window, Hide…, are AppKit's)
+        let (keys, text_focus) = (owner(app, ctx), ctx.egui_wants_keyboard_input());
+        let open = |command: &str, shortcut: Option<&str>| menu_choice(keys, command, shortcut, text_focus) != MenuChoice::Drop;
+        // (after a rebuild too: its items are made with the model's enabled state, which a modal
+        // greys out, e.g. a keymap or language change in Settings)
+        walk(&bar.iter().flat_map(|(_, v)| v.clone()).collect::<Vec<_>>(), &mut self.items, &app.ui.settings.keymap, &open);
+        for it in &mut self.app_items {
+            let enabled = open(&it.cmd, it.shortcut.as_deref());
+            if it.enabled != enabled {
+                if let Handle::Plain(h) = &it.handle {
+                    h.set_enabled(enabled);
+                }
+                it.enabled = enabled;
+            }
         }
 
         let focus = ctx.egui_wants_keyboard_input();

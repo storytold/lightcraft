@@ -228,6 +228,86 @@ fn a_long_press_picks_photos_and_taps_then_add_until_back() {
 }
 
 #[test]
+fn a_long_press_behind_a_window_over_the_app_picks_nothing() {
+    let mut h = library([600.0, 900.0]);
+    let at = h.app.widgets.iter().find(|(w, _)| w.starts_with("thumb:")).unwrap().1.center();
+    let picked = h.app.session.selection.ids.clone();
+    assert_eq!(exec(&mut h, "library.findDuplicates", json!({}))["ok"], true);
+    h.app.synthetic.push(egui::Event::PointerMoved(at));
+    h.app.synthetic.push(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    for _ in 0..60 {
+        h.step();
+    }
+    h.app.synthetic.push(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.settle(SETTLE);
+    assert!(!h.app.ui.modern.selecting, "a long press behind Find Duplicates starts no picking");
+    assert_eq!(h.app.session.selection.ids, picked, "and picks no photo");
+    let r = exec(&mut h, "modern.back", json!({}));
+    assert_eq!(r["result"]["closed"], "findDuplicates", "Back closes Find Duplicates, not what's behind it: {r}");
+    assert!(!h.app.duplicates.as_ref().is_some_and(|f| f.open), "and Find Duplicates is closed");
+}
+
+#[test]
+fn back_closes_a_tool_window_but_not_under_a_question() {
+    type Open = fn(&mut Headless);
+    type Shut = fn(&Headless) -> bool;
+    let windows: [(&str, Open, Shut); 4] = [
+        (
+            "identityPlate",
+            // a change made in the editor, which Back (Cancel) takes back
+            |h| {
+                exec(h, "dialog.identityPlateSetup", json!({}));
+                exec(h, "view.identityPlate", json!({"text": "Changed in the editor"}));
+            },
+            |h| h.app.ui.identity_plate.setup.is_none(),
+        ),
+        (
+            "importWarnings",
+            |h| h.app.import_report = Some(crate::import_report::Report { open: true, ..crate::import_report::Report::new(1, &[]) }),
+            |h| !h.app.import_report.as_ref().is_some_and(|r| r.open),
+        ),
+        ("reviewComments", |h| h.app.review_comments.open = true, |h| !h.app.review_comments.open),
+        ("findDuplicates", |h| drop(exec(h, "library.findDuplicates", json!({}))), |h| !h.app.duplicates.as_ref().is_some_and(|f| f.open)),
+    ];
+    for (name, open, shut) in windows {
+        // a card open behind the window, which Back must leave alone
+        let mut h = develop([800.0, 1280.0]);
+        exec(&mut h, "modern.group", json!({"group": "light"}));
+        let plate = serde_json::to_value(&h.app.ui.identity_plate).unwrap();
+        open(&mut h);
+        h.settle(SETTLE);
+        assert!(!shut(&h), "{name} opens");
+        let r = exec(&mut h, "modern.back", json!({}));
+        assert_eq!(r["result"]["closed"], name, "Back closes {name}: {r}");
+        assert!(shut(&h), "{name} is closed");
+        assert!(h.app.ui.modern.group.is_some(), "Back closing {name} leaves the card behind it open");
+        assert_eq!(serde_json::to_value(&h.app.ui.identity_plate).unwrap(), plate, "{name}: Back cancels, the plate is as it was");
+    }
+    let mut h = library([600.0, 900.0]);
+    exec(&mut h, "library.findDuplicates", json!({}));
+    h.app.quit_prompt = Some(crate::QuitPrompt::Unsaved("changes not saved".into()));
+    exec(&mut h, "modern.back", json!({}));
+    assert!(h.app.duplicates.as_ref().is_some_and(|f| f.open), "with a question over it, Back leaves Find Duplicates open");
+    // in the full-screen preview it waits unseen: Back leaves it for when the preview ends
+    let mut h = library([600.0, 900.0]);
+    exec(&mut h, "library.findDuplicates", json!({}));
+    h.app.ui.fullscreen = true;
+    let r = exec(&mut h, "modern.back", json!({}));
+    assert_ne!(r["result"]["closed"], "findDuplicates", "{r}");
+    assert!(h.app.duplicates.as_ref().is_some_and(|f| f.open), "in full screen, Back leaves the unseen Find Duplicates open");
+}
+
+#[test]
 fn back_closes_dialog_menu_card_and_develop_then_leaves_the_root_to_the_system() {
     let mut h = develop([800.0, 1280.0]);
     let back = |h: &mut Headless| {

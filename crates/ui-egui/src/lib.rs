@@ -79,6 +79,7 @@ pub mod import;
 pub mod import_report;
 mod import_screen;
 pub mod import_tab;
+pub mod keyboard;
 pub mod legacy;
 pub mod libtools;
 pub mod lightroom_destination;
@@ -342,6 +343,8 @@ mod tests_lightroom_destination;
 mod tests_loading_cell;
 #[cfg(test)]
 mod tests_lrc_menus;
+#[cfg(test)]
+mod tests_marketplace;
 #[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
@@ -943,7 +946,9 @@ pub struct LccApp {
     pub clipping_preview: bool,
     /// Since when (egui time) and up to which pass a clipping indicator has been hovered: the
     /// preview waits for the pointer to rest there ([`panels::edit::CLIPPING_PREVIEW_REST_S`]), so a
-    /// pointer gliding across the histogram never re-renders the photo (every tile at 100 %).
+    /// pointer gliding across the histogram never re-renders the photo (every tile at 100 %). A click
+    /// on the indicator sets the time to [`panels::edit::CLIPPING_PREVIEW_SPENT`]: no preview until
+    /// the pointer has left it.
     pub clipping_hover: Option<(f64, u64)>,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
@@ -3236,11 +3241,15 @@ impl LccApp {
         plate::show_setup(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         panels::plugins::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::marketplace::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         camera_roll::prompt(self, &ctx);
         export_task::poll(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         panels::plugins::poll(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::marketplace::poll(self, &ctx);
         render_dng_task::poll(self, &ctx);
         dng_update_task::poll(self, &ctx);
         machine_test::poll(self, &ctx);

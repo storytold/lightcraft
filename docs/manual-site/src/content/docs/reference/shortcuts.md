@@ -6,7 +6,7 @@ sidebar:
 ---
 
 - Default **Classic** key set. On macOS read **Ctrl** as **⌘**; **Alt** is **⌥**. All keys can be changed: see [Customise shortcuts](../../automate/shortcuts/).
-- Keys in a text field or dialog go to the field first. **Ctrl+/** shows the keys of the current module.
+- Keys in a text field go to the field first. While a dialog, Settings, the module's key list or another window over the photos (Find Duplicates, Review Comments, Import Warnings, the Plug-in Manager, the Identity Plate Editor, the Export sheet, a question such as quitting with unsaved changes) is open, shortcuts, menu commands and clicks on the app behind it wait until it closes (on macOS, **⌘Q** still quits and **⌘W** closes the window). The Welcome window, and the window of a catalog that couldn't be opened, leave the menu bar working. **Ctrl+/** shows the keys of the current module.
 - Ratings and flags in the grids: `Shift` with a number, `P`, `X` or `U` applies the action and moves to the next photo.
 - The **Alternative** set has different keys; **Edit ▸ Keymap** switches.
 

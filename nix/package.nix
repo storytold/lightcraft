@@ -1,5 +1,6 @@
 # The desktop app and the CLI/MCP server, built from this repository and named from brand.toml
-# (`binary` and `cli_binary`; cargo's own binary names are the neutral `app` and `app-cli`):
+# (`binary` and `cli_binary`; cargo's own binary name is the neutral `app`). The CLI is a link to
+# the app's executable, which runs as the CLI when started under that name (docs/packaging.md):
 #
 #   nix build          # → ./result/bin/<binary>, ./result/bin/<cli_binary>
 #
@@ -99,17 +100,9 @@ let
     dbus
   ];
 
-  # The two native binaries. The wasm app (apps/web) is built by `cargo xtask web`, not
-  # here; xtask is tooling.
-  binaries = [
-    brand.binary
-    brand.cli_binary
-  ];
-
   # HEIC/HEIF decoding (a default feature; named here so it stays on if the defaults change), as the release builds.
   buildFeatures = [
     "lcc-app/heif"
-    "lcc-cli/heif"
   ];
 in
 rustPlatform.buildRustPackage {
@@ -134,13 +127,12 @@ rustPlatform.buildRustPackage {
     allowBuiltinFetchGit = true;
   };
 
-  # Both binaries, as the .deb/.rpm install them (`packaging/linux/package.sh`).
+  # The one native program, as the .deb/.rpm install it (`packaging/linux/package.sh`). The wasm app
+  # (apps/web) is built by `cargo xtask web`, not here; xtask is tooling.
   cargoBuildFlags = [
     "--locked"
     "-p"
     "lcc-app"
-    "-p"
-    "lcc-cli"
   ];
 
   # `cargo xtask ci` runs `cargo test --workspace`. Tests that need what the sandbox cannot have
@@ -188,9 +180,8 @@ rustPlatform.buildRustPackage {
   };
 
   postInstall = ''
-    # Brand names for cargo's neutral binaries.
+    # The brand name for cargo's neutral binary.
     mv $out/bin/app $out/bin/${brand.binary}
-    mv $out/bin/app-cli $out/bin/${brand.cli_binary}
 
     # Desktop integration: the same rendered templates the .deb/.rpm/.AppImage install.
     install -Dm644 ${desktopFile} $out/share/applications/${appId}.desktop
@@ -217,10 +208,13 @@ rustPlatform.buildRustPackage {
     XDG_CACHE_HOME=$TMPDIR/.cache appstreamcli validate --no-net \
       $out/share/metainfo/${appId}.metainfo.xml
 
-    # makeWrapper keeps the binaries working when the libs above are only dlopen'd.
-    for bin in ${lib.concatStringsSep " " (map (b: "$out/bin/" + b) binaries)}; do
-      wrapProgram "$bin" --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}"
-    done
+    # makeWrapper keeps the program working when the libs above are only dlopen'd.
+    wrapProgram $out/bin/${brand.binary} --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}"
+  ''
+  # The CLI: a link to the program (its wrapper on Linux, which starts it under the name it was
+  # started by), so it runs as the CLI.
+  + ''
+    ln -s ${brand.binary} $out/bin/${brand.cli_binary}
   '';
 
   passthru = {

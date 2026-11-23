@@ -1602,6 +1602,16 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
     for (cache, x) in [(&after, 1000), (&after, 1256), (&after, 1512), (&before, 1512), (&before, 1768)] {
         lcc_gpu::render(&src, &info, &s, &at(x), Some(cache)).expect("gpu render");
     }
+    // A device whose buffers are smaller than the 288 MB source (Mesa lavapipe: 128 MiB storage
+    // bindings; WARP) cuts the windows from the photo on the processor (`render.rs`, step 1) and
+    // uploads only each window's pixels: nothing is uploaded or shared, and nothing is held.
+    let limit = lcc_gpu::max_buffer_bytes().expect("the device rendered");
+    if (src.data.len() as u64) * 12 > limit {
+        assert_eq!(lcc_gpu::source_uploads() - start, 0, "a source over the {} MiB buffer limit is never uploaded", limit >> 20);
+        assert_eq!(lcc_gpu::shared_source_bytes(), 0);
+        assert!(lcc_gpu::stage_bytes(&after) < 100 << 20, "the views' stages hold their windows only");
+        return;
+    }
     assert_eq!(lcc_gpu::source_uploads() - start, 1, "one upload for five windows of two views");
     assert!(lcc_gpu::shared_source_bytes() >= 280_000_000, "{}", lcc_gpu::shared_source_bytes());
     assert!(lcc_gpu::stage_bytes(&after) < 100 << 20, "and it is not in the views' stages");

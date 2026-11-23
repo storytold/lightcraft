@@ -1,0 +1,3 @@
+## Interface
+
+- **Shortcuts wait behind every window that waits for you:** keys no longer act on the photos behind Find Duplicates, Review Comments, Import Warnings, the Plug-in Manager and its questions, the Identity Plate Editor, the catalog dialogs, the catalog chooser opened over a library, the Export sheet, the camera roll question, or a quit or settings-file notice. Clicks on the app behind them wait too, and on Android Back closes Find Duplicates, Review Comments, Import Warnings and the Identity Plate Editor instead of acting on what's behind them. On macOS the menu bar's commands are greyed out until it closes (⌘Q still quits). The Welcome window and the window of a catalog that couldn't be opened leave the menu bar working.
