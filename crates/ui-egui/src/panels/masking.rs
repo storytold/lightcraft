@@ -1589,6 +1589,10 @@ fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key
     if opener.clicked() {
         open = !open;
     }
+    // Escape closes it even while the keyboard is still on the button, which is not inside the menu.
+    if open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        open = false;
+    }
     Menu::new(crate::i18n::tr(label).to_owned())
         .id_salt(("mask-opener-menu", key))
         .opened_by(&opener.response, Trigger::Manual)
