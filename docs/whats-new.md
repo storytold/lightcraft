@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Find missing photos on another drive
+- File ▸ Find Missing Photos on Other Drives looks for each missing photo at the same path on the other drives: another
+  drive letter on Windows, or another disk under /Volumes, /media or /mnt. A library whose drive letter changed, or whose
+  photos are on a copy of the disk, finds them again without searching folder by folder. A file is taken when its size
+  and the capture time in its header match; with the whole-file comparison (on by default) also its content, when the library
+  knows it. Look-alikes on several drives are skipped, never guessed, and the relink is one undo step.
+- After a Lightroom catalog import, the originals it couldn't find are looked for this way automatically. Both are
+  in Settings ▸ General ▸ Missing photos.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

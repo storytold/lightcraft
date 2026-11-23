@@ -420,6 +420,25 @@ fn open_log_folder_reveals_the_hosts_log_file() {
     assert_eq!(run_item(&mut app, "app.openLogFolder", Value::Null).unwrap_err(), "no file manager");
 }
 
+/// File ▸ Find Missing Photos on Other Drives searches on a worker and answers with the relink report; a photo
+/// whose file is nowhere stays missing.
+#[test]
+fn find_missing_on_other_drives_reports_what_it_found() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-drives-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
+    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    std::fs::write(dir.join("gone.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Default::default());
+    app.session.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    std::fs::remove_file(dir.join("gone.png")).unwrap();
+    let r = run_item(&mut app, "file.findMissingOnOtherDrives", json!({"wait": true, "hash": false})).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(0), "{r}");
+    assert_eq!(r["missing"].as_u64(), Some(1), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn find_missing_and_locate() {
     let dir = std::env::temp_dir().join(format!("lc-ui-missing-{}", std::process::id()));

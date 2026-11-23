@@ -307,9 +307,17 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
         app.lightroom_result = Some(result_dialog(&value, &message, &app.session.catalog));
         show_result(app);
     }
+    let missing_after_import = matches!(kind, Kind::Import)
+        && value.get("cancelled") != Some(&Value::Bool(true))
+        && value.get("error").is_none()
+        && value.get("report").unwrap_or(&value)["missing"].as_array().is_some_and(|m| !m.is_empty());
     app.lightroom_last = Some(value);
     app.lightroom = None;
     app.toast_for(ctx, message, 6.0);
+    // Settings ▸ Missing photos: the originals the import couldn't find are looked for on the other drives
+    if missing_after_import && app.ui.settings.missing_other_drives_auto {
+        let _ = crate::menus::run_ui_command(app, "file.findMissingOnOtherDrives", &json!({}));
+    }
 }
 
 fn show_result(app: &mut LightcraftApp) {

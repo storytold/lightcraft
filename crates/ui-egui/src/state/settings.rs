@@ -160,6 +160,12 @@ pub struct AppSettings {
     /// values the selected photos share and marks each field where they differ (Selected Photos),
     /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
     pub info_selected_photos: bool,
+    /// Settings ▸ Missing photos: after a Lightroom catalog import, the originals it couldn't find are looked for at
+    /// the same path on the other drives (`file.findMissingOnOtherDrives`).
+    pub missing_other_drives_auto: bool,
+    /// Settings ▸ Missing photos: that search also compares a found file's whole content with the hash the library
+    /// knows (reads the whole file; off: the size and the capture time decide).
+    pub missing_other_drives_hash: bool,
     /// Filmstrip: file names above the thumbnails.
     pub film_names: bool,
     /// Filmstrip: rating / flag / edited badges on the thumbnails.
@@ -243,6 +249,8 @@ impl Default for AppSettings {
             memory_mb: 0,
             hot_pixel_limit: HOT_PIXEL_LIMIT_DEFAULT,
             info_selected_photos: true,
+            missing_other_drives_auto: true,
+            missing_other_drives_hash: true,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
