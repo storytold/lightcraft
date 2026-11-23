@@ -1046,7 +1046,7 @@ fn library_header(app: &LightcraftApp, ui: &mut egui::Ui, cnt: &str) -> Rect {
     // the title reads in full on hover only where it was trimmed
     crate::widgets::register_with_tooltip(ui, "grid:title", title_rect, (title != full).then_some(full.as_str()));
     crate::widgets::register(ui, "grid:count", count.rect);
-    count.on_hover_text(cnt);
+    craft::ui::contract::tooltip::attach(&count, &cnt.to_owned().into());
     hr
 }
 
@@ -1068,7 +1068,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
             });
             let count = ui.add_sized(vec2(count_w, 24.0), egui::Label::new(egui::RichText::new(cnt).size(12.5).color(t.text_dim)).truncate());
             register(ui, "grid:count", count.rect);
-            count.on_hover_text(cnt);
+            craft::ui::contract::tooltip::attach(&count, &cnt.to_owned().into());
         });
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
@@ -1170,7 +1170,8 @@ fn folder_breadcrumbs(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
         paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), Icon::ChevronRight, t.text_dim);
     };
     if skip > 0 {
-        ui.label(egui::RichText::new("…").color(t.text_dim)).on_hover_text(path);
+        let more = ui.label(egui::RichText::new("…").color(t.text_dim));
+        craft::ui::contract::tooltip::attach(&more, &path.to_owned().into());
         separator(ui);
     }
     let separator_w = 16.0 + 2.0 * ui.spacing().item_spacing.x;
@@ -1190,7 +1191,8 @@ fn folder_breadcrumbs(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
         if last {
             // the folder being shown: its name, with the whole path on hover
             let text = egui::RichText::new(*part).size(13.0).color(t.text).strong();
-            let label = ui.put(rect, egui::Label::new(text).truncate()).on_hover_text(path);
+            let label = ui.put(rect, egui::Label::new(text).truncate());
+            craft::ui::contract::tooltip::attach(&label, &path.to_owned().into());
             crate::widgets::register_response(format!("crumb:{i}"), rect, &label);
         } else {
             // an ancestor: a flat button that opens that folder
