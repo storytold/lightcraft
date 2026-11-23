@@ -19,6 +19,8 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         iso: m.iso,
         flash: m.flash.map(|f| f.fired),
         exposure_bias: m.exposure_bias.map(|v| v as f32),
+        // set by the probe for formats it looks into ([`dng_matte_kinds`])
+        mattes: None,
         serial_number: m.serial_number.clone().unwrap_or_default(),
         location: m.sublocation.clone().unwrap_or_default(),
         city: m.city.clone().unwrap_or_default(),
@@ -121,6 +123,19 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     Some(lightcraft_pipeline::optics::reorient_lens(&lens, raw.orientation, cw, ch))
 }
 
+/// The kinds of segmentation matte a DNG carries that AI masks understand ([`super::load::matte_kind`]), each once,
+/// from the names of its semantic masks ([`lightcraft_meta::dng_semantic_names`]). Only tags are read, so this costs
+/// nothing beside the probe; a mask that later fails to decode, or selects nothing, still counts here.
+fn dng_matte_kinds(bytes: &[u8]) -> Vec<String> {
+    let mut kinds: Vec<String> = Vec::new();
+    for kind in lightcraft_meta::dng_semantic_names(bytes).iter().filter_map(|n| super::load::matte_kind(n)) {
+        if !kinds.iter().any(|k| k == kind.id()) {
+            kinds.push(kind.id().to_string());
+        }
+    }
+    kinds
+}
+
 fn ext_upper(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default()
 }
@@ -159,11 +174,15 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         };
         // what the Exif reader can't see, the decoder may have read from the raw's own records (a CRW keeps make,
         // model and capture time in CIFF records, no Exif): it fills the gaps, so the catalog knows the camera
-        let (meta, captured) = {
+        let (mut meta, captured) = {
             let mut m = m.clone();
             m.fill_missing(&raw.metadata);
             meta_of(&m)
         };
+        // which segmentation mattes the file carries (a DNG's semantic masks), by name: nothing is decoded
+        if raw.format == lightcraft_raw::RawFormat::Dng {
+            meta.mattes = Some(dng_matte_kinds(bytes));
+        }
         let (w, h) = raw.developed_size();
         let (mut w, mut h) = (w.max(1) as u32, h.max(1) as u32);
         if raw.orientation.swaps_axes() {

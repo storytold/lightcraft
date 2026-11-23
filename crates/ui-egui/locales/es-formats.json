@@ -148,6 +148,7 @@
   "{label} {d:+} on every selected photo": "{label} {d:+} en cada foto seleccionada",
   "{label} {index} of {n}": "{label} {index} de {n}",
   "{label}, {n} photos": "{label}, {n} fotos",
+  "{name} found nothing to select on {n} of {total} photos": "{name} no encontró nada que seleccionar en {n} de {total} fotos",
   "{matching} of {t} photos": "{matching} de {t} fotos",
   "{matching} photos": "{matching} fotos",
   "{mode} spot {} of {}": "{mode}: mancha {} de {}",

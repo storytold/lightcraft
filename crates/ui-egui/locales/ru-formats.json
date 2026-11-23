@@ -153,6 +153,7 @@
   "{label} {d:+} on every selected photo": "{label} {d:+} для каждого выбранного фото",
   "{label} {index} of {n}": "{label} {index} из {n}",
   "{label}, {n} photos": "{label}, фото: {n}",
+  "{name} found nothing to select on {n} of {total} photos": "{name}: нечего выбрать на {n} из {total} фото",
   "{matching} of {t} photos": "Фото: {matching} из {t}",
   "{matching} photos": "Фото: {matching}",
   "{mode} spot {} of {}": "{mode}: пятно {} из {}",

@@ -393,7 +393,7 @@ fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawInfo) -> Option<Arc<lightcr
 
 /// What a semantic mask selects, by its `SemanticName`: Apple's (iPhone ProRAW) are named after
 /// their auxiliary image types, `urn:com:apple:photo:<year>:aux:<type>`. Other names: `None`.
-fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
+pub(super) fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
     use lightcraft_pipeline::masks::MatteKind::*;
     let kind = name.strip_prefix("urn:com:apple:photo:")?.rsplit(':').next()?;
     Some(match kind {
