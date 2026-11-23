@@ -278,7 +278,7 @@ fn top_painter(ui: &egui::Ui, name: &'static str) -> egui::Painter {
 
 /// The rotation pointer: a curved double arrow on a dark disc, so it reads over any photo,
 /// turned `turn` radians clockwise ([`rotate_cursor_turn`]).
-fn rotate_cursor(ui: &egui::Ui, at: Pos2, turn: f32) {
+pub(super) fn rotate_cursor(ui: &egui::Ui, at: Pos2, turn: f32) {
     let p = top_painter(ui, "crop-rotate-cursor");
     let r = Rect::from_center_size(at, vec2(22.0, 22.0));
     p.circle_filled(at, 12.0, Color32::from_black_alpha(150));
