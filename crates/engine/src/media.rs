@@ -28,6 +28,7 @@ pub use lightcraft_raw::dcp::DcpProfile;
 use serde::{Deserialize, Serialize};
 
 mod cache;
+mod canvas;
 mod quick;
 mod render;
 mod session;
@@ -37,6 +38,8 @@ mod source;
 pub use cache::DenoiseIndex;
 #[cfg(test)]
 pub(crate) use cache::rendered_budget;
+#[cfg(test)]
+pub(crate) use canvas::{SIZE_RETRY, lock_sizes};
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
 pub use render::{RenderJob, RenderResult, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display};
 #[cfg(test)]
@@ -49,6 +52,13 @@ pub use source::{
 };
 
 pub struct MediaCache {
+    /// Decodes a raw's whole picture, ignoring its default crop (photos with "Show Full Image" on); `None` where the
+    /// host has none (they then show the default crop).
+    pub full_frame_loader: Option<FileLoader>,
+    /// The size of each "Show Full Image" photo's whole picture (oriented), with the [`content_key`] of the file it
+    /// was read from (see [`crate::Session::canvas_size`]); shared with the background reads of
+    /// [`crate::Session::canvas_size_soon`].
+    pub(crate) canvas_sizes: Arc<std::sync::Mutex<canvas::CanvasSizes>>,
     settings_hashes: SettingsHashes,
     /// Decoded thumbnail-level sources (LRU by bytes).
     thumbs: Lru<PhotoId, DecodedSource>,
