@@ -249,19 +249,35 @@ pub fn register_response(id: impl Into<String>, rect: Rect, response: &egui::Res
 
 /// A click pressed and released within this one pass on `response` (a host that delivers a whole click in one batch).
 /// The framework's own gesture needs to see the press before the release; egui still reports such a click.
+/// An assistive technology's Click on the response's own node counts too.
 pub(crate) fn same_pass_click(response: &egui::Response) -> bool {
-    response.clicked() && response.ctx.input(|i| i.pointer.any_pressed() && i.pointer.any_released())
+    let ctx = &response.ctx;
+    if !response.enabled() {
+        return false;
+    }
+    let at = |pressed: bool| {
+        ctx.input(|i| {
+            i.events.iter().find_map(|event| match event {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: p, .. } if *p == pressed => Some(*pos),
+                _ => None,
+            })
+        })
+    };
+    let pointer = match (at(true), at(false)) {
+        (Some(down), Some(up)) => {
+            response.interact_rect.contains(down) && response.interact_rect.contains(up) && ctx.layer_id_at(down) == Some(response.layer_id)
+        }
+        _ => false,
+    };
+    pointer || ctx.input(|i| i.has_accesskit_action_request(response.id, egui::accesskit::Action::Click))
 }
 
-/// Point the hit last registered as `id` in this pass at `response` (its id and layer), keeping its geometry: for a
-/// widget whose own response, rather than one of its parts', names it.
-pub(crate) fn retarget_response(id: &str, response: &egui::Response) {
+/// Adds `response` (its id, layer and clipped rect) as a second hit owner of the widget registered as `id`, without a
+/// second rectangle: for a widget whose own response and one of its parts both name it (a text field and its text).
+pub(crate) fn add_hit(id: &str, response: &egui::Response) {
     response.ctx.data_mut(|d| {
         let registry = d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"));
-        if let Some((_, hit)) = registry.hits.iter_mut().rev().find(|(name, _)| name == id) {
-            hit.id = response.id;
-            hit.layer_id = response.layer_id;
-        }
+        registry.hits.push((id.to_owned(), WidgetHit { id: response.id, layer_id: response.layer_id, interact_rect: response.interact_rect }));
     });
 }
 

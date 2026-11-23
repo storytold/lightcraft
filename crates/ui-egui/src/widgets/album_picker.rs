@@ -276,10 +276,21 @@ impl<'a> AlbumPicker<'a> {
                 // The caller's choices and the search are real controls: a measuring run of the popup lays out
                 // the rest only, never runs the caller's actions or moves the keyboard.
                 let real = !measuring(ui);
-                if real && choices(ui) {
-                    chose_extra = true;
-                    cx.request_close();
-                    return;
+                // A measuring run leaves the caller's choices the room they took in the last real one, so the popup is
+                // measured as tall as it is drawn.
+                let choices_room = key.with("choices-height");
+                if real {
+                    let top = ui.cursor().top();
+                    let picked_extra = choices(ui);
+                    let height = ui.cursor().top() - top;
+                    ui.data_mut(|d| d.insert_temp(choices_room, height));
+                    if picked_extra {
+                        chose_extra = true;
+                        cx.request_close();
+                        return;
+                    }
+                } else if let Some(height) = ui.data(|d| d.get_temp::<f32>(choices_room)).filter(|h| *h > 0.0) {
+                    ui.add_space(height);
                 }
                 // Escape closes the popup and stops there: the dialog around it keeps its edits. The framework popup
                 // takes it as the top layer's cancel; with the keyboard in the search box egui still has the key.
@@ -335,6 +346,14 @@ impl<'a> AlbumPicker<'a> {
                         row.response.scroll_to_me(None);
                     }
                 };
+                // (the empty states sit outside the list, which shows nothing then)
+                if state.query.trim().is_empty() {
+                    if entries.iter().all(|e| e.folder) {
+                        ui.label(RichText::new(crate::i18n::tr("No albums yet")).weak());
+                    }
+                } else if search(entries, &state.query).is_empty() {
+                    ui.label(RichText::new(crate::i18n::tr("No albums match")).weak());
+                }
                 let list_height = (MENU_HEIGHT - search_box.rect.height() - ui.spacing().item_spacing.y).max(48.0);
                 egui::ScrollArea::vertical().id_salt(key.with("list")).max_height(list_height).auto_shrink([false, true]).show(ui, |ui| {
                     if state.query.trim().is_empty() {
@@ -372,9 +391,6 @@ impl<'a> AlbumPicker<'a> {
                                 row(ui, e, &e.name, indent, false, false, &mut picked);
                             }
                         }
-                        if entries.iter().all(|e| e.folder) {
-                            ui.label(RichText::new(crate::i18n::tr("No albums yet")).weak());
-                        }
                     } else {
                         let hits = search(entries, &state.query);
                         // ↑ / ↓ move through the results that can be picked, Enter picks one
@@ -408,9 +424,6 @@ impl<'a> AlbumPicker<'a> {
                         for i in &hits {
                             let e = &entries[*i];
                             row(ui, e, &path_in(entries, &by_id, e.id), 0.0, highlighted == Some(*i), (up || down) && highlighted == Some(*i), &mut picked);
-                        }
-                        if hits.is_empty() {
-                            ui.label(RichText::new(crate::i18n::tr("No albums match")).weak());
                         }
                     }
                 });

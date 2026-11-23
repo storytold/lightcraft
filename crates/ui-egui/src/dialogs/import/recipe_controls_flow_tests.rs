@@ -109,10 +109,17 @@ impl Review {
             // Footer buttons can sit within the window's 12-point bottom margin. The
             // body-only 20-point inset is not a visibility requirement for the real footer.
             let footer = matches!(id, "button:dialogOk" | "button:dialogCancel");
+            // The body ends where the framework dialog's footer starts (its row of buttons), not 20 points above the
+            // window's bottom edge.
+            let body_bottom = self
+                .rects
+                .iter()
+                .find(|(name, _)| name == "button:dialogOk")
+                .map_or(win.bottom() - 20.0, |(_, ok)| (ok.top() - 8.0).min(win.bottom() - 20.0));
             let visible = if footer {
                 win.contains(rect.min) && win.contains(rect.max)
             } else {
-                rect.top() >= win.top() + 30.0 && rect.bottom() <= win.bottom() - 20.0
+                rect.top() >= win.top() + 30.0 && rect.bottom() <= body_bottom
             };
             if visible {
                 let hit = self.hits.iter().find(|(name, _)| name == id).map(|(_, hit)| hit);
@@ -121,7 +128,7 @@ impl Review {
                 }
                 return rect;
             }
-            let bottom = win.bottom() - if footer { 0.0 } else { 20.0 };
+            let bottom = if footer { win.bottom() } else { body_bottom };
             let dy = if rect.bottom() > bottom { -300.0 } else { 300.0 };
             let at = egui::pos2(win.right() - 24.0, win.center().y);
             let draft = self.draft().clone();

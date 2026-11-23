@@ -23,7 +23,7 @@ use export::group_checklist;
 pub(crate) use export::preset_lzw_note;
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_field, field, fit_lists, just_opened, only_shows,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_field, escaped_field, field, fit_lists, just_opened, only_shows,
     return_confirms,
 };
 pub(crate) use rename::rename_preview;
@@ -273,6 +273,12 @@ fn dialog_width(dlg: &Dialog) -> f32 {
 /// library-problem/launch-list window gets the same treatment while it is actually on screen over
 /// this dialog.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
+    // When the pointer was last released: a dialog that a click opened waits out a double click before its title-bar
+    // handle (`title_bar_handle`) takes presses.
+    if ctx.input(|i| i.pointer.any_released()) {
+        let now = ctx.input(|i| i.time);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("lightcraft.dialog.last-release"), now));
+    }
     let Some(dlg) = &app.ui.dialog else {
         // the next dialog shown is a new one, whichever it is
         ctx.data_mut(|d| d.remove::<egui::Id>(egui::Id::unique("lightcraft.dialog.shown-id")));
@@ -439,12 +445,15 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     let replaced = ctx.data(|d| d.get_temp::<egui::Id>(shown_id)) != Some(id);
     ctx.data_mut(|d| d.insert_temp(shown_id, id));
     let now = ctx.input(|i| i.time);
+    let delay = ctx.options(|o| o.input_options.max_double_click_delay);
     if replaced {
-        ctx.data_mut(|d| d.insert_temp(shown_id.with("at"), now));
+        // opened by a click (released just now): the first half of a possible double click
+        let clicked = ctx.data(|d| d.get_temp::<f64>(egui::Id::unique("lightcraft.dialog.last-release"))).is_some_and(|at| now - at <= delay);
+        ctx.data_mut(|d| d.insert_temp(shown_id.with("at"), if clicked { now } else { f64::NEG_INFINITY }));
     }
     // A click that opened the dialog may be the first of a double click: the bar's handle waits out that double click,
     // so its second half is not taken as a double click on the bar (which zooms the window).
-    let settled = now - ctx.data(|d| d.get_temp::<f64>(shown_id.with("at"))).unwrap_or(now) > ctx.options(|o| o.input_options.max_double_click_delay);
+    let settled = now - ctx.data(|d| d.get_temp::<f64>(shown_id.with("at"))).unwrap_or(f64::NEG_INFINITY) > delay;
     if replaced && ctx.input(|i| i.pointer.any_down() && !i.pointer.any_pressed()) {
         ctx.data_mut(|d| d.insert_temp(speculative_id, true));
         raw_blocked = true;
@@ -598,6 +607,9 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     } else {
         // (the import review keeps its hand-picked photos however the click lands; the title bar is not the backdrop)
         if app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(&ctx, window_rect, title_bar, popup_was_open) {
+            close = true;
+        }
+        if escaped_field(&ctx) && !popup_was_open {
             close = true;
         }
         match output.closed {
