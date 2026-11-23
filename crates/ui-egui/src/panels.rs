@@ -145,10 +145,18 @@ fn handle_toast_press(app: &mut LightcraftApp, ctx: &egui::Context, rect: Rect) 
     if !pressed_on_toast {
         return;
     }
-    match app.ui.toast.as_ref().and_then(|t| t.3.clone()) {
-        Some(warnings) if app.ui.dialog.is_none() => app.ui.dialog = Some(crate::state::Dialog::ImportWarnings { warnings }),
-        Some(_) => {}
-        None => app.ui.toast = None,
+    // A warning toast opens its full report: the dialog takes the details out of the toast - a
+    // move, not a copy, a large import's warnings are big - and the toast keeps its text.
+    if app.ui.dialog.is_none()
+        && let Some(warnings) = app.ui.toast.as_mut().and_then(|t| t.3.take())
+    {
+        app.ui.dialog = Some(crate::state::Dialog::ImportWarnings { warnings });
+        return;
+    }
+    // Any other press clears a toast that carries no details (a save warning); a warning toast
+    // under a dialog already open keeps its details, so it is left alone.
+    if app.ui.toast.as_ref().is_some_and(|t| t.3.is_none()) {
+        app.ui.toast = None;
     }
 }
 
