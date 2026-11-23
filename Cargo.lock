@@ -4506,6 +4506,7 @@ dependencies = [
  "lcc-cli",
  "lcc-codecs",
  "lcc-engine",
+ "lcc-firstclick",
  "lcc-gpu",
  "lcc-gpumem",
  "lcc-hdrmeta",
@@ -4954,6 +4955,15 @@ dependencies = [
  "thiserror 2.0.21",
  "wasmi",
  "wat",
+]
+
+[[package]]
+name = "lcc-firstclick"
+version = "26.47.3"
+dependencies = [
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
