@@ -89,3 +89,7 @@ display_name = "Brian Wang"
 
 [people.Terra854]
 display_name = "Terra854"
+
+[people.theDavidCoen]
+real_name = "David Coen"
+sync_github_name = true

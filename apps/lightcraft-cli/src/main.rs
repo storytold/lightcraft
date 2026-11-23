@@ -298,9 +298,12 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         match result {
             Ok(profile) => {
                 let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
+                let label = match profile.look_key() {
+                    Some(l) => format!("{}/{}", profile.model, l),
+                    None => profile.model.clone(),
+                };
                 println!(
-                    "{}: {} photos, {} colour pairs, hue/saturation table {} → {}",
-                    profile.model,
+                    "{label}: {} photos, {} colour pairs, hue/saturation table {} → {}",
                     profile.files,
                     profile.samples,
                     profile.hue_sat.is_some(),
