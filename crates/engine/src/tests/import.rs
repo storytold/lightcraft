@@ -2742,6 +2742,189 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// Review of #1328: a raw's smart preview holds the source its decode made, and a raw too small to bin at preview size
+/// is demosaiced for it, so a change to the raw decode (`smart::SOURCE_VERSION`) puts it out of date like a change to
+/// the camera-look fit does. Every raw developed from its sensor data goes stale for it, with or without a fitted
+/// look (a DNG has its own colour matrices); a PNG's proxy never does; the opening scan runs once per version.
+#[test]
+fn smart_previews_of_raws_from_an_older_decode_are_refreshed() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let src = temp_dir("smartsource-src");
+    let lib = temp_dir("smartsource-lib");
+    for (name, seed) in [("a.png", 3), ("b.png", 9), ("c.png", 5)] {
+        write_png(&src.join(name), seed);
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths: Vec<String> = ["a.png", "b.png", "c.png"].iter().map(|n| src.join(n).to_string_lossy().to_string()).collect();
+    s.execute("library.import", &json!({ "paths": paths })).unwrap();
+    let find = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (arw, dng, png) = (find(&s, "a.png"), find(&s, "b.png"), find(&s, "c.png"));
+    // `a` and `b` stand for raws (the test loader decodes their pixels): an ARW (fitted look) and a DNG (none)
+    for (id, format) in [(arw, "ARW"), (dng, "DNG")] {
+        let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+        raw.format = format.into();
+        raw.kind = lightcraft_catalog::MediaKind::Raw;
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    }
+    let photo = |s: &Session, id| s.catalog.photo(id).unwrap().clone();
+    assert!(photo(&s, arw).fitted_look() && !photo(&s, dng).fitted_look() && photo(&s, dng).develops_raw() && !photo(&s, png).develops_raw());
+    s.execute("library.select", &json!({"ids": [arw.0, dng.0, png.0], "active": arw.0})).unwrap();
+    let dir = s.media.smart_dir.clone().unwrap();
+    let file = |s: &Session, id| crate::smart::sharded_file_path(&dir, &photo(s, id));
+    let (arw_file, dng_file, png_file) = (file(&s, arw), file(&s, dng), file(&s, png));
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let plain = s.media.file_loader.clone().unwrap();
+    s.media.file_loader = Some(look_loader(plain, test_tone(1.5), calls.clone()));
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(3), Some(0)), "{r}");
+    for f in [&arw_file, &dng_file, &png_file] {
+        assert_eq!(smart_header(f)["source_version"], json!(crate::smart::SOURCE_VERSION), "the writer stamps the decode version");
+        assert!(!crate::smart::source_stale(f));
+    }
+
+    // proxies from before the field: the raws' are rebuilt from their originals, the PNG's is left as it is
+    for f in [&arw_file, &dng_file, &png_file] {
+        edit_smart_header(f, |h| {
+            h.as_object_mut().unwrap().remove("source_version");
+        });
+        assert!(crate::smart::source_stale(f), "no field = version 0");
+        assert!(!crate::smart::is_stale(f), "the look is current");
+    }
+    let png_bytes = std::fs::read(&png_file).unwrap();
+    for id in [arw, dng, png] {
+        s.media.forget(id);
+    }
+    calls.store(0, Ordering::SeqCst);
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(3), Some(2)), "{r}");
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "only the raws' originals are read");
+    assert!(!crate::smart::source_stale(&arw_file) && !crate::smart::source_stale(&dng_file));
+    assert!(std::fs::read(&png_file).unwrap() == png_bytes, "a PNG's proxy is never rebuilt for the raw decode");
+
+    // the opening scan: a folder not checked at this decode version looks at the raws once, whatever their look
+    for f in [&arw_file, &dng_file] {
+        edit_smart_header(f, |h| h["source_version"] = json!(0));
+    }
+    crate::smart::mark_look_checked(&dir).unwrap();
+    std::fs::write(dir.join("source-version"), b"0\n").unwrap();
+    assert!(crate::smart::look_checked(&dir) && !crate::smart::source_checked(&dir));
+    for id in [arw, dng, png] {
+        s.media.forget(id);
+    }
+    calls.store(0, Ordering::SeqCst);
+    crate::cmd::previews::refresh_stale_smart_previews(&mut s).unwrap().join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "the two raws");
+    assert!(!crate::smart::source_stale(&arw_file) && !crate::smart::source_stale(&dng_file));
+    assert!(std::fs::read(&png_file).unwrap() == png_bytes);
+    assert!(crate::smart::source_checked(&dir) && crate::smart::look_checked(&dir));
+    assert!(crate::cmd::previews::refresh_stale_smart_previews(&mut s).is_none(), "once per version");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// A library with an ARW (fitted look), a DNG (none) and a PNG (the test loader decodes PNG pixels for the raws),
+/// all three with current smart previews; the loader counts the originals it reads.
+struct SmartFixture {
+    s: Session,
+    src: std::path::PathBuf,
+    lib: std::path::PathBuf,
+    dir: std::path::PathBuf,
+    files: [std::path::PathBuf; 3],
+}
+
+impl SmartFixture {
+    fn new(tag: &str) -> SmartFixture {
+        let src = temp_dir(&format!("{tag}-src"));
+        let lib = temp_dir(&format!("{tag}-lib"));
+        for (name, seed) in [("a.png", 3), ("b.png", 9), ("c.png", 5)] {
+            write_png(&src.join(name), seed);
+        }
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        let paths: Vec<String> = ["a.png", "b.png", "c.png"].iter().map(|n| src.join(n).to_string_lossy().to_string()).collect();
+        s.execute("library.import", &json!({ "paths": paths })).unwrap();
+        let find = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+        let ids = [find(&s, "a.png"), find(&s, "b.png"), find(&s, "c.png")];
+        for (id, format) in [(ids[0], "ARW"), (ids[1], "DNG")] {
+            let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+            raw.format = format.into();
+            raw.kind = lightcraft_catalog::MediaKind::Raw;
+            s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+            s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+        }
+        s.execute("library.select", &json!({"ids": [ids[0].0, ids[1].0, ids[2].0], "active": ids[0].0})).unwrap();
+        let dir = s.media.smart_dir.clone().unwrap();
+        let files = ids.map(|id| crate::smart::sharded_file_path(&dir, s.catalog.photo(id).unwrap()));
+        let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+        assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(3), Some(0)), "{r}");
+        SmartFixture { s, src, lib, dir, files }
+    }
+}
+
+impl Drop for SmartFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.src);
+        let _ = std::fs::remove_dir_all(&self.lib);
+    }
+}
+
+/// Round 2 review of #1328: a proxy written by a newer build in either version (the camera-look fit or the raw decode)
+/// is never rewritten here, even when the other version is older, by Build Smart Previews or by the opening scan;
+/// and the folder's markers never go back.
+#[test]
+fn smart_previews_from_a_newer_build_are_never_downgraded() {
+    let mut f = SmartFixture::new("smartnewer");
+    let (look, source) = (u64::from(crate::camera_preview::LOOK_VERSION), u64::from(crate::smart::SOURCE_VERSION));
+    for (l, s) in [(look + 1, 0), (look.saturating_sub(1), source + 1), (look + 1, source + 1)] {
+        for file in &f.files[..2] {
+            edit_smart_header(file, |h| {
+                h["look_version"] = json!(l);
+                h["source_version"] = json!(s);
+            });
+        }
+        let before: Vec<Vec<u8>> = f.files[..2].iter().map(|file| std::fs::read(file).unwrap()).collect();
+        let r = f.s.execute("library.smartPreviews", &json!({})).unwrap();
+        assert_eq!(r["refreshed"], 0, "({l}, {s}): {r}");
+        std::fs::write(f.dir.join("look-version"), b"0\n").unwrap();
+        std::fs::write(f.dir.join("source-version"), b"0\n").unwrap();
+        crate::cmd::previews::refresh_stale_smart_previews(&mut f.s).unwrap().join().unwrap();
+        let after: Vec<Vec<u8>> = f.files[..2].iter().map(|file| std::fs::read(file).unwrap()).collect();
+        assert!(before == after, "({l}, {s}) rewritten");
+    }
+    // a Compact proxy from a newer encoding (#850's `enc`), its look and decode current, stays too
+    let enc = crate::smart::ENCODE_VERSION;
+    for file in &f.files[..2] {
+        edit_smart_header(file, |h| {
+            h["look_version"] = json!(look);
+            h["source_version"] = json!(source);
+            h["enc"] = json!(enc + 1);
+        });
+    }
+    let before: Vec<Vec<u8>> = f.files[..2].iter().map(|file| std::fs::read(file).unwrap()).collect();
+    let r = f.s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!(r["refreshed"], 0, "enc {}: {r}", enc + 1);
+    std::fs::write(f.dir.join("look-version"), b"0 0\n").unwrap();
+    crate::cmd::previews::refresh_stale_smart_previews(&mut f.s).unwrap().join().unwrap();
+    let after: Vec<Vec<u8>> = f.files[..2].iter().map(|file| std::fs::read(file).unwrap()).collect();
+    assert!(before == after, "enc {} rewritten", enc + 1);
+    // markers from a newer build stay as they are, version by version
+    std::fs::write(f.dir.join("look-version"), b"99 97\n").unwrap();
+    std::fs::write(f.dir.join("source-version"), b"98\n").unwrap();
+    crate::smart::mark_look_checked(&f.dir).unwrap();
+    crate::smart::mark_source_checked(&f.dir).unwrap();
+    assert_eq!(std::fs::read_to_string(f.dir.join("look-version")).unwrap().trim(), "99 97");
+    assert_eq!(std::fs::read_to_string(f.dir.join("source-version")).unwrap().trim(), "98");
+    std::fs::write(f.dir.join("look-version"), b"99\n").unwrap();
+    crate::smart::mark_look_checked(&f.dir).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.dir.join("look-version")).unwrap().trim(),
+        format!("99 {enc}"),
+        "a newer look kept, the encode version added"
+    );
+}
+
 /// The look marker: missing, damaged or older than this build's fit version counts as unchecked.
 #[test]
 fn smart_preview_look_marker_is_read_safely() {
