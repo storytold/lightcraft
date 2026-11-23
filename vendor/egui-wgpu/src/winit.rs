@@ -20,7 +20,15 @@ struct SurfaceState {
     resizing: bool,
     needs_reconfigure: bool,
     needs_recreate: bool,
+    // Patch (unconfigured surface): whether the last configure succeeded, and whether the
+    // current run of failed configures has been logged.
+    configured: bool,
+    configure_failing: bool,
 }
+
+/// Patch (unconfigured surface): how long a surface that failed to configure waits before
+/// the next try (each try is a repaint).
+const CONFIGURE_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Everything you need to paint egui with [`wgpu`] on [`winit`].
 ///
@@ -94,7 +102,7 @@ impl Painter {
     }
 
     fn configure_surface(
-        surface_state: &SurfaceState,
+        surface_state: &mut SurfaceState,
         render_state: &RenderState,
         config: &SurfaceConfig,
     ) {
@@ -180,9 +188,36 @@ impl Painter {
             surf_config.desired_maximum_frame_latency = desired_maximum_frame_latency;
         }
 
+        // Patch (unconfigured surface): a failed configure (seen at launch on Metal: "Failed to
+        // wait for GPU to come idle") is caught here instead of reaching the device's
+        // uncaptured-error handler, and the surface is marked unconfigured, so no frame is
+        // acquired from it until a configure succeeds (see `acquire_frame`). A configure on a
+        // lost device reports no error at all, so it still counts as a success here.
+        let out_of_memory = render_state
+            .device
+            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation = render_state
+            .device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
         surface_state
             .surface
             .configure(&render_state.device, &surf_config);
+        // Inner scope first: both are always popped.
+        let validation = pop_now(validation);
+        let out_of_memory = pop_now(out_of_memory);
+        if let Some(error) = validation.or(out_of_memory) {
+            if !surface_state.configure_failing {
+                log::warn!("window surface: configure failed, retrying: {error}");
+            }
+            surface_state.configured = false;
+            surface_state.configure_failing = true;
+            return;
+        }
+        if surface_state.configure_failing {
+            log::info!("window surface: configured after failing");
+        }
+        surface_state.configured = true;
+        surface_state.configure_failing = false;
         // Patch (HDR display output): the display may have changed (moved window, OS HDR
         // switch, brightness): re-query its HDR facts.
         *render_state.display_hdr_info.write() = Some(
@@ -355,6 +390,8 @@ impl Painter {
                 resizing,
                 needs_reconfigure: false,
                 needs_recreate: false,
+                configured: false,
+                configure_failing: false,
             },
         );
         let Some(width) = NonZeroU32::new(width) else {
@@ -484,18 +521,24 @@ impl Painter {
         // See https://github.com/emilk/egui/issues/903
         #[cfg(all(target_os = "macos", feature = "macos-window-resize-jitter-fix"))]
         {
-            // SAFETY: `as_hal::<Metal>()` returns `None` unless this surface is backed by wgpu's
-            // Metal backend.
-            unsafe {
-                if let (Some(render_state), Some(hal_surface)) = (
-                    self.render_state.as_ref(),
-                    state.surface.as_hal::<wgpu::hal::api::Metal>(),
-                ) {
-                    hal_surface
-                        .render_layer()
-                        .lock()
-                        .setPresentsWithTransaction(resizing);
-
+            // Patch (unconfigured surface): the Metal surface is released before the configure,
+            // which now takes the surface state mutably.
+            if let Some(render_state) = self.render_state.as_ref() {
+                // SAFETY: `as_hal::<Metal>()` returns `None` unless this surface is backed by
+                // wgpu's Metal backend.
+                let metal = unsafe {
+                    state
+                        .surface
+                        .as_hal::<wgpu::hal::api::Metal>()
+                        .map(|hal_surface| {
+                            hal_surface
+                                .render_layer()
+                                .lock()
+                                .setPresentsWithTransaction(resizing);
+                        })
+                        .is_some()
+                };
+                if metal {
                     Self::configure_surface(state, render_state, &self.config.surface);
                 }
             }
@@ -521,6 +564,31 @@ impl Painter {
                 "Ignoring window resize notification with no surface created via Painter::set_window()"
             );
         }
+    }
+
+    /// Patch (unconfigured surface): the surface's next texture and the seconds spent waiting
+    /// for it, after configuring the surface when asked to or when its last configure failed;
+    /// `None` while it still can't be configured. wgpu panics when a surface that never got
+    /// configured is asked for a texture, and the panic can't unwind out of winit's callbacks,
+    /// so the app aborted (a launch with the GPU busy).
+    fn acquire_frame(
+        surface_state: &mut SurfaceState,
+        render_state: &RenderState,
+        config: &SurfaceConfig,
+    ) -> Option<(wgpu::CurrentSurfaceTexture, f32)> {
+        if surface_state.needs_reconfigure || !surface_state.configured {
+            Self::configure_surface(surface_state, render_state, config);
+            surface_state.needs_reconfigure = false;
+        }
+        if !surface_state.configured {
+            return None;
+        }
+
+        profiling::scope!("get_current_texture");
+        // This is what vsync-waiting happens on my Mac.
+        let start = web_time::Instant::now();
+        let output_frame = surface_state.surface.get_current_texture();
+        Some((output_frame, start.elapsed().as_secs_f32()))
     }
 
     /// Returns two things:
@@ -643,19 +711,16 @@ impl Painter {
             )
         };
 
-        if surface_state.needs_reconfigure {
-            Self::configure_surface(surface_state, render_state, &self.config.surface);
-            surface_state.needs_reconfigure = false;
-        }
-
-        let output_frame = {
-            profiling::scope!("get_current_texture");
-            // This is what vsync-waiting happens on my Mac.
-            let start = web_time::Instant::now();
-            let output_frame = surface_state.surface.get_current_texture();
-            vsync_sec += start.elapsed().as_secs_f32();
-            output_frame
+        // Patch (unconfigured surface): skip the frame while the surface can't be configured,
+        // and try again shortly.
+        let Some((output_frame, waited)) =
+            Self::acquire_frame(surface_state, render_state, &self.config.surface)
+        else {
+            self.context
+                .request_repaint_after_for(CONFIGURE_RETRY, viewport_id);
+            return vsync_sec;
         };
+        vsync_sec += waited;
 
         // Patch (device loss): tell the app a frame got its texture (see `on_frame_acquired`).
         if matches!(
@@ -867,5 +932,166 @@ impl Painter {
     #[expect(clippy::needless_pass_by_ref_mut, clippy::unused_self)]
     pub fn destroy(&mut self) {
         // TODO(emilk): something here?
+    }
+}
+
+/// Patch (unconfigured surface): the error an error scope caught, read without blocking. Native
+/// wgpu hands the scope's result back at once; where it doesn't, the configure counts as a
+/// success, as every configure did before.
+fn pop_now(scope: wgpu::ErrorScopeGuard) -> Option<wgpu::Error> {
+    let mut popped = std::pin::pin!(scope.pop());
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    match popped.as_mut().poll(&mut cx) {
+        std::task::Poll::Ready(error) => error,
+        std::task::Poll::Pending => None,
+    }
+}
+
+// Patch (unconfigured surface): a real Metal surface, on a `CAMetalLayer` with no window.
+// Vendored crates aren't workspace members: run with `cargo test -p egui-wgpu` from the root.
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::{Painter, SurfaceState};
+    use crate::{RenderState, RendererOptions, WgpuConfiguration};
+    use core::ffi::{c_char, c_void};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+
+    /// `[receiver selector]` for a selector that takes no arguments and returns an object.
+    unsafe fn send(receiver: *mut c_void, selector: &core::ffi::CStr) -> *mut c_void {
+        let send: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
+        unsafe { send(receiver, sel_registerName(selector.as_ptr())) }
+    }
+
+    /// A `CAMetalLayer` (QuartzCore is linked through wgpu's Metal backend), released on drop.
+    struct MetalLayer(*mut c_void);
+
+    impl MetalLayer {
+        fn new() -> Self {
+            let class = unsafe { objc_getClass(c"CAMetalLayer".as_ptr()) };
+            assert!(!class.is_null(), "CAMetalLayer should be loaded");
+            let layer = unsafe { send(class, c"new") };
+            assert!(!layer.is_null(), "a CAMetalLayer should be created");
+            Self(layer)
+        }
+    }
+
+    impl Drop for MetalLayer {
+        fn drop(&mut self) {
+            unsafe { send(self.0, c"release") };
+        }
+    }
+
+    /// Native wgpu's futures are ready at once.
+    fn ready<F: Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(output) => output,
+            std::task::Poll::Pending => panic!("a native wgpu future should be ready at once"),
+        }
+    }
+
+    /// A launch with the GPU busy: the window surface's first configure failed, the next frame
+    /// asked it for a texture, and wgpu panicked ("Surface is not configured for presentation"),
+    /// aborting the app. A surface whose configure fails is configured again before each frame,
+    /// is never asked for a texture meanwhile, and draws again once a configure succeeds.
+    #[test]
+    fn a_surface_that_failed_to_configure_is_retried_and_never_asked_for_a_frame() {
+        let configured = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&configured);
+        let config = WgpuConfiguration {
+            on_surface_configured: Some(Arc::new(move |_, _| {
+                count.fetch_add(1, Ordering::Relaxed);
+            })),
+            ..Default::default()
+        };
+        let instance = ready(config.wgpu_setup.new_instance());
+        let layer = MetalLayer::new();
+        let surface = unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer.0))
+        }
+        .expect("a surface on the layer");
+        let render_state = match ready(RenderState::create(
+            &config,
+            &instance,
+            Some(&surface),
+            RendererOptions::default(),
+        )) {
+            Ok(render_state) => render_state,
+            Err(e) => {
+                eprintln!("skipped: no Metal adapter ({e})");
+                return;
+            }
+        };
+        // As the app does: an error outside a scope is counted, not wgpu's default panic, so a
+        // surface left unconfigured reaches the frame path as it did in the app.
+        let uncaptured = Arc::new(AtomicUsize::new(0));
+        let errors = Arc::clone(&uncaptured);
+        render_state.device.on_uncaptured_error(Arc::new(move |_| {
+            errors.fetch_add(1, Ordering::Relaxed);
+        }));
+        // A size over the device's limit makes the configure fail, as the busy GPU did.
+        let too_wide = render_state.device.limits().max_texture_dimension_2d + 1;
+        let mut state = SurfaceState {
+            surface,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            width: too_wide,
+            height: 64,
+            resizing: false,
+            needs_reconfigure: false,
+            needs_recreate: false,
+            configured: false,
+            configure_failing: false,
+        };
+
+        Painter::configure_surface(&mut state, &render_state, &config.surface);
+        assert!(
+            !state.configured,
+            "a configure over the size limit should fail"
+        );
+        for _ in 0..2 {
+            assert!(
+                Painter::acquire_frame(&mut state, &render_state, &config.surface).is_none(),
+                "a surface that can't be configured should give no frame, not be asked for one"
+            );
+        }
+        assert_eq!(
+            configured.load(Ordering::Relaxed),
+            0,
+            "the configured hook should run only after a configure that worked"
+        );
+        assert_eq!(
+            uncaptured.load(Ordering::Relaxed),
+            0,
+            "a failed configure should be caught by the painter, not reach the device's uncaptured-error handler"
+        );
+
+        state.width = 64;
+        let frame = Painter::acquire_frame(&mut state, &render_state, &config.surface);
+        assert!(
+            state.configured,
+            "the surface should be configured again on the next frame"
+        );
+        assert!(
+            frame.is_some(),
+            "a configured surface should be asked for its frame"
+        );
+        assert_eq!(
+            configured.load(Ordering::Relaxed),
+            1,
+            "the configured hook should run once the configure works"
+        );
+        drop(frame);
+        drop(state);
+        drop(layer);
     }
 }
