@@ -428,7 +428,7 @@ enum PickRow {
 
 /// The rows `first..end` of a block of `n` rows `row_h` high starting at `top` that meet
 /// `visible`.
-fn rows_in_view(top: f32, row_h: f32, n: usize, visible: Rect) -> (usize, usize) {
+pub(crate) fn rows_in_view(top: f32, row_h: f32, n: usize, visible: Rect) -> (usize, usize) {
     if row_h <= 0.0 || !top.is_finite() {
         return (0, n);
     }
