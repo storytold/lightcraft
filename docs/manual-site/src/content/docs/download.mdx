@@ -1,0 +1,30 @@
+---
+title: Download
+description: Get the latest Chromaforge for Windows, Mac, Linux or Android. Free.
+---
+
+import Download from '../../components/Download.astro';
+
+Free and open source. The button picks the right file for your computer; if it guessed wrong, choose yours from the list.
+
+<Download />
+
+## After downloading
+
+**Windows**
+- Double-click the `.msi` file and follow the installer.
+- If a blue "Windows protected your PC" box appears, click **More info**, then **Run anyway**. It shows because the app is not code-signed.
+
+**Mac**
+- Open the `.dmg` and drag the app into **Applications**.
+- The first time, macOS blocks it because it is not signed by a paid Apple account. Open **System Settings ▸ Privacy & Security**, scroll down and click **Open Anyway**. [Step-by-step help](../start/install/#macos-unknown-app-or-may-be-malware).
+
+**Linux**
+- AppImage: right-click it, allow it to run as a program (Properties ▸ Permissions), then double-click it. In a terminal: `chmod +x ~/Downloads/*.AppImage`.
+- `.deb` or `.rpm`: open it with your software centre, or run `sudo apt install ./file.deb` / `sudo dnf install ./file.rpm`.
+
+**Android**
+- Open the downloaded APK. If Android asks, allow your browser to **install unknown apps**, then tap **Install**.
+- Prefer a store? It is on [Google Play](https://play.google.com/store/apps/details?id=<app_id>) too, a little behind.
+
+The app checks for updates on its own and tells you when a new version is out. More options (portable zip, the command-line tool, building from source): [Install](../start/install/).

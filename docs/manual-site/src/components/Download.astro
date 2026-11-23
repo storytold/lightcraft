@@ -1,0 +1,146 @@
+---
+// The Download page's buttons. The repository comes from brand.toml (`repository`). File names
+// are matched by suffix against the GitHub API's latest release, so no version or product name
+// is written here. Without JavaScript, or when the API fails or is rate-limited, every link
+// already points at the latest release page, which always works.
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const brand = readFileSync(resolve(process.cwd(), '../../brand.toml'), 'utf8') // builds run in docs/manual-site;
+const repo = /^repository\s*=\s*"https:\/\/github\.com\/([^"]+?)\/?"/m.exec(brand)?.[1];
+if (!repo) throw new Error('repository not found in brand.toml');
+const releasePage = `https://github.com/${repo}/releases/latest`;
+
+// id, plain label, detail, file-name suffix (regex source)
+const items = [
+  { id: 'win-x64', label: 'Windows 10/11 (64-bit)', detail: 'installer', re: '-windows-x64\\.msi$' },
+  { id: 'win-arm64', label: 'Windows on ARM (Snapdragon laptops)', detail: 'installer', re: '-windows-arm64\\.msi$' },
+  { id: 'win-zip', label: 'Windows 10/11 (64-bit)', detail: 'portable zip, nothing to install', re: '-windows-x64-portable\\.zip$' },
+  { id: 'win-arm64-zip', label: 'Windows on ARM', detail: 'portable zip, nothing to install', re: '-windows-arm64-portable\.zip$' },
+  { id: 'mac-arm', label: 'Mac with Apple chip (M1 or newer)', detail: 'disk image', re: '-macos-arm64\\.dmg$' },
+  { id: 'mac-intel', label: 'Mac with Intel chip', detail: 'disk image', re: '-macos-x64\\.dmg$' },
+  { id: 'mac-any', label: 'Mac, not sure which chip', detail: 'runs on both, bigger download', re: '-macos-universal\\.dmg$' },
+  { id: 'linux-appimage', label: 'Linux', detail: 'AppImage (works on most distros)', re: '-linux-x86_64\\.AppImage$' },
+  { id: 'linux-deb', label: 'Linux: Ubuntu, Debian, Mint', detail: '.deb package', re: '-linux-x86_64\\.deb$' },
+  { id: 'linux-rpm', label: 'Linux: Fedora, openSUSE', detail: '.rpm package', re: '-linux-x86_64\\.rpm$' },
+  { id: 'linux-flatpak', label: 'Linux', detail: 'Flatpak bundle', re: '-linux-x86_64\\.flatpak$' },
+  { id: 'android', label: 'Android phone or tablet', detail: 'APK', re: '-android-arm64-v8a\\.apk$' },
+];
+---
+<div class="dl" data-repo={repo}>
+  <a class="dl-primary" id="dl-primary" href={releasePage}>
+    <span class="dl-primary-title" id="dl-primary-title">Download the latest version</span>
+    <span class="dl-primary-sub" id="dl-primary-sub">Pick your system below</span>
+  </a>
+  <p class="dl-version" id="dl-version"></p>
+  <h2 id="all-systems">All systems</h2>
+  <ul class="dl-list">
+    {items.map((i) => (
+      <li>
+        <a href={releasePage} data-id={i.id} data-re={i.re} data-label={i.label} data-detail={i.detail}>
+          <strong>{i.label}</strong> — {i.detail}
+        </a>
+      </li>
+    ))}
+  </ul>
+  <p class="dl-note">Link not working? Open the <a href={releasePage}>latest release page</a> and pick the file whose name ends in your system.</p>
+  <details class="dl-note">
+    <summary>For advanced users: checksums</summary>
+    <p>Each release lists the SHA-256 of every file in <a id="dl-sums" href={releasePage}>SHA256SUMS.txt</a> (signature: <code>SHA256SUMS.txt.sig</code>). Compare with <code>sha256sum FILE</code> (Linux), <code>shasum -a 256 FILE</code> (Mac) or <code>Get-FileHash FILE</code> (Windows PowerShell).</p>
+  </details>
+</div>
+
+<script>
+  import { detect } from './download-detect.ts';
+
+  type Asset = { name: string; browser_download_url: string; size: number };
+
+  // Inputs for detect(). The WebGL renderer can name the Mac's chip; Client Hints (Chromium
+  // only) give the CPU architecture, the only way to see Windows on ARM.
+  function renderer(): string {
+    try {
+      const gl = document.createElement('canvas').getContext('webgl');
+      const ext = gl?.getExtension('WEBGL_debug_renderer_info');
+      return gl && ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    } catch { return ''; }
+  }
+  async function arch(): Promise<string> {
+    try {
+      const uad = (navigator as any).userAgentData;
+      const v = uad?.getHighEntropyValues ? await uad.getHighEntropyValues(['architecture']) : null;
+      return typeof v?.architecture === 'string' ? v.architecture : '';
+    } catch { return ''; }
+  }
+  const platform = String((navigator as any).userAgentData?.platform || navigator.platform || '');
+  const needsGl = /mac/i.test(platform) || /macintosh/i.test(navigator.userAgent);
+
+  const root = document.querySelector<HTMLElement>('.dl');
+  const links = [...document.querySelectorAll<HTMLAnchorElement>('.dl-list a[data-id]')];
+  const primary = document.getElementById('dl-primary') as HTMLAnchorElement | null;
+  const title = document.getElementById('dl-primary-title');
+  const sub = document.getElementById('dl-primary-sub');
+  const version = document.getElementById('dl-version');
+  let guessed: HTMLAnchorElement | undefined;
+  const found: Map<HTMLAnchorElement, Asset> = new Map();
+
+  // Point the big button at the guessed file once both the guess and the release are known;
+  // either may arrive first. Until then (or if the file is missing) it opens the release page.
+  function paintPrimary() {
+    if (!guessed || !title || !sub || !primary) return;
+    title.textContent = `Download for ${guessed.dataset.label}`;
+    const hit = found.get(guessed);
+    sub.textContent = hit ? `${guessed.dataset.detail} · ${mb(hit.size)}` : guessed.dataset.detail ?? '';
+    if (hit) primary.href = hit.browser_download_url;
+  }
+
+  arch().then((a) => {
+    const id = detect({ ua: navigator.userAgent, platform, maxTouchPoints: navigator.maxTouchPoints || 0,
+      renderer: needsGl ? renderer() : '', arch: a });
+    guessed = links.find((l) => l.dataset.id === id);
+    paintPrimary();
+  });
+
+  const mb = (n: number) => `${Math.max(1, Math.round((Number(n) || 0) / 1048576))} MB`;
+
+  if (root?.dataset.repo) {
+    fetch(`https://api.github.com/repos/${root.dataset.repo}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((rel: { tag_name?: string; published_at?: string; assets?: Asset[] }) => {
+        const assets = Array.isArray(rel.assets) ? rel.assets : [];
+        for (const a of links) {
+          let re: RegExp;
+          try { re = new RegExp(a.dataset.re ?? '$^'); } catch { continue; }
+          const hit = assets.find((x) => typeof x.name === 'string' && re.test(x.name));
+          if (!hit || !/^https:\/\/github\.com\//.test(hit.browser_download_url)) continue;
+          a.href = hit.browser_download_url;
+          const size = document.createElement('span');
+          size.className = 'dl-size';
+          size.textContent = ` (${mb(hit.size)})`;
+          a.append(size);
+          found.set(a, hit);
+        }
+        paintPrimary();
+        const sums = assets.find((x) => x.name === 'SHA256SUMS.txt');
+        const sumsLink = document.getElementById('dl-sums') as HTMLAnchorElement | null;
+        if (sums && sumsLink) sumsLink.href = sums.browser_download_url;
+        if (version && typeof rel.tag_name === 'string') {
+          const date = rel.published_at ? new Date(rel.published_at).toLocaleDateString() : '';
+          version.textContent = `Latest version ${rel.tag_name.replace(/^v/, '')}${date ? `, released ${date}` : ''}`;
+        }
+      })
+      .catch(() => { /* every link already opens the latest release page */ });
+  }
+</script>
+
+<style>
+  .dl-primary { display: block; text-align: center; text-decoration: none; padding: 1.1rem 1.25rem;
+    border-radius: 0.75rem; background: var(--sl-color-accent); color: var(--sl-color-black);
+    max-width: 32rem; margin-inline: auto; }
+  .dl-primary:hover { background: var(--sl-color-accent-high); color: var(--sl-color-black); }
+  .dl-primary-title { display: block; font-size: var(--sl-text-xl); font-weight: 700; }
+  .dl-primary-sub { display: block; font-size: var(--sl-text-sm); }
+  .dl-version { text-align: center; color: var(--sl-color-gray-3); font-size: var(--sl-text-sm); min-height: 1.5em; }
+  .dl-list { list-style: none; padding: 0; }
+  .dl-list li { margin: 0.4rem 0; overflow-wrap: anywhere; }
+  .dl-size, .dl-note { color: var(--sl-color-gray-3); font-size: var(--sl-text-sm); }
+</style>
