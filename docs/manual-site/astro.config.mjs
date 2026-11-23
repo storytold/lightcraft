@@ -37,7 +37,7 @@ export default defineConfig({
       customCss: ['./src/styles/manual.css'],
       sidebar: [
         { label: 'Download', slug: 'download' },
-        { label: 'Start here', items: [{ slug: 'start/install' }, { slug: 'start/layouts' }, { slug: 'start/tour' }] },
+        { label: 'Start here', items: [{ slug: 'start/install' }, { slug: 'start/getting-started' }, { slug: 'start/layouts' }, { slug: 'start/tour' }] },
         { label: 'Library', items: [{ autogenerate: { directory: 'library' } }] },
         { label: 'Develop', items: [{ autogenerate: { directory: 'develop' } }] },
         { label: 'AI', items: [{ autogenerate: { directory: 'ai' } }] },

@@ -27,6 +27,14 @@ pub const COMMANDS: &[UiCommand] = &[("app.openHelp", "Open Help Topic", None, "
 /// (topic, manual page `#` heading anchor). The page is the path under the manual's content folder
 /// without its extension; an empty anchor opens the page at its top.
 pub const TOPICS: &[(&str, &str)] = &[
+    // Getting Started's tour (`onboarding`)
+    ("gettingStarted", "start/getting-started"),
+    ("tourImport", "library/import"),
+    ("tourLibrary", "library/browse"),
+    ("tourDevelop", "develop/basic"),
+    ("tourAi", "ai"),
+    ("tourOutput", "output/book"),
+    ("tourExport", "output/export"),
     // Settings ▸ General
     ("layout", "reference/settings#layout-and-settings-categories"),
     ("gradingMode", "develop/colour#two-grading-modes"),

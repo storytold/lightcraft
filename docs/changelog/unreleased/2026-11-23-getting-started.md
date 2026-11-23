@@ -1,0 +1,3 @@
+## Highlights
+
+- **Getting Started guide:** after the first welcome, a paged guide offers each AI feature's download with its size, licence, memory use and speed (pre-ticked by the computer's memory and graphics card; faces and search never; nothing downloads before Finish, then through each feature's own download command in the background), the layout, appearance, colour scheme, text size, language and grading mode (applied at once, with undo), key settings (library at launch, update checks, XMP sidecars, Reduce motion) and a short tour of the modules. Skip or Esc downloads nothing. Help ▸ Getting Started… (`app.gettingStarted`) opens it again.

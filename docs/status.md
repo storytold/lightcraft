@@ -17,7 +17,7 @@ and update it in the commit that changes what it says. The detailed phased plan 
 | 2 | Never-crash hardening: fuzz targets, checked indexing, allocation caps, SIL round trips | landed (#1328, #1331, #1334, #1337, #1339, #1340); model-reference job in progress |
 | 3 | Camera colour, CR3 variants, lens data, per-model verification | next |
 
-Checklist breadth: **90.3%** of 629 in-scope rows (P0 98.0%, P1 94.8%, P2 80.2%), from `cargo xtask parity`.
+Checklist breadth: **90.3%** of 630 in-scope rows (P0 98.0%, P1 94.8%, P2 80.3%), from `cargo xtask parity`.
 "Ready for real work" stays an estimate of about 60% (see [target-app-parity.md](target-app-parity.md)).
 
 ## Next task

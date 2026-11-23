@@ -1,0 +1,53 @@
+[
+  {
+    "name": "getting-started-ai",
+    "layouts": [
+      "classic"
+    ],
+    "steps": [
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "app.gettingStarted",
+          "params": {
+            "step": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "getting-started-interface",
+    "layouts": [
+      "classic"
+    ],
+    "steps": [
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "app.gettingStarted",
+          "params": {
+            "step": 1
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "getting-started-tour",
+    "layouts": [
+      "classic"
+    ],
+    "steps": [
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "app.gettingStarted",
+          "params": {
+            "step": 3
+          }
+        }
+      }
+    ]
+  }
+]

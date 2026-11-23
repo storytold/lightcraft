@@ -69,6 +69,12 @@ pub fn max_budget_of(ram: Option<usize>) -> usize {
     }
 }
 
+/// The memory this computer has for the app (bytes; see [`total_ram`]), for the first-run guide's
+/// advice on which AI features fit. `None`: the platform didn't say.
+pub fn installed_ram() -> Option<usize> {
+    total_ram()
+}
+
 /// Memory the process may use (bytes), when the platform tells us without native calls: physical
 /// RAM, held on Linux to the memory limit of the process's cgroup (a container, a Flatpak, a
 /// systemd scope with `MemoryMax`, a CI runner) when that is smaller.

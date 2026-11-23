@@ -50,14 +50,14 @@ cited here still exists. Formerly docs/parity.md.
 | V. Preferences (PREF) | 7 | 2 | 2 | 2 | 1/1 (100%) | 5/6 (83%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
-| Y. Menus | 88 | 0 | 2 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 89 | 0 | 2 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 6 | 1 | 1 | 48/52 (92%) | 24/26 (92%) |
 | Lightroom Classic extras | 106 | 22 | 0 | 0 | — | 36/40 (90%) |
 | BEYOND. Beyond the reference app | 7 | 0 | 0 | 0 | — | — |
 | IMM. Immich integration | 11 | 0 | 0 | 0 | — | 7/7 (100%) |
-| **Total** | 527 | 82 | 20 | 25 | 195/203 (96%) | 172/191 (90%) |
+| **Total** | 528 | 82 | 20 | 25 | 195/203 (96%) | 172/191 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.3%** of 629 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 80.2% of 230.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.3%** of 630 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 80.3% of 231.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -677,6 +677,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-HELP-HELP | Help | P2 | ✅ | `cmd:app.help` | opens the documentation |
 | MENU-HELP-TUTORIALS | Tutorials | OOS | 🚫 | | |
 | MENU-HELP-WHATSNEW | What's new | P2 | ✅ | `cmd:app.whatsNew` | |
+| MENU-HELP-GETTINGSTARTED | Getting started guide | P2 | ✅ | `crates/ui-egui/src/onboarding.rs` | an extra: after the first welcome (and from Help ▸ Getting Started…) a paged guide offers each AI download with its size, licence and memory use (ticked by the computer's memory and graphics card; nothing downloads before Finish), the layout, appearance, text size, language and grading mode, key settings, and one page per module |
 | MENU-HELP-UPDATES | Check for updates | P2 | ✅ | `cmd:app.checkForUpdates`, `cmd:update.status`, `cmd:update.check`, `cmd:update.download`, `cmd:update.install`, `cmd:update.prefs`, `crates/updater`, `crates/engine/src/update.rs`, `crates/ui-egui/src/panels/update.rs` | an extra (the reference app updates through its own service): Help ▸ Check for Updates… reads the release feed (the `latest.json` the release publishes, else GitHub's Releases API; only files on the project's own GitHub releases, over https, are offered), compares versions, shows the notes and what installing will do, downloads the asset for the platform (resumable; only once the release's `SHA256SUMS.txt` carries a valid signature from the key pinned in `brand.toml`, and checked against its size and that signed list's SHA-256; hashed again right before it is installed; a build without a key checks and offers the release page (`cmd:app.openReleasePage`) but installs nothing; in the activity stack) and installs it — the Windows MSI runs, the macOS disk image is mounted and its app (by name, version-checked) swapped in for this bundle with the old one put back on any failure (a build outside an `.app` is pointed to the release page), an AppImage replaces itself once the app has quit (a script waits up to 30 s for it, renames the new file over the old one in one step and starts it; the previous file, kept as `.old`, is deleted at the next start); a Windows copy unpacked from the portable zip (any copy Windows Installer says no MSI installed) unpacks the new zip beside itself, renames its own files aside under a locked manifest, moves the new ones in and starts the new version, which waits on a pipe until the old process has ended (all put back if a step or the start fails); the `.update-old` files go once the new version is up, and a new version that never came up is undone at its next start; a tarball, or a zip under Program Files or in a folder the copy can't write, is laid out for a manual install. The start-up check is opt-in (off by default; Settings ▸ General, the welcome dialog or the update dialog turn it on through `update.prefs`, and headless, `--memory` and `{env}_NO_PREFS` runs never check at start): one check then runs a few seconds after start-up; a release already skipped is not offered again |
 | MENU-HELP-SHORTCUTS | Keyboard shortcuts | P1 | ✅ | `cmd:app.shortcuts` | |
 | MENU-HELP-FEEDBACK | Send feedback | P2 | ✅ | `cmd:app.feedback` | opens a new issue on the project's GitHub |
