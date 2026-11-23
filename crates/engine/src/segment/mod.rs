@@ -1472,7 +1472,8 @@ mod tests {
             let second = s.segment_poll();
             (second.messages, s.segmenter.pending.is_none())
         });
-        let (shared, replies, tag) = setup_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // setup builds a demo library: slow on a loaded runner, and not what this test measures
+        let (shared, replies, tag) = setup_rx.recv_timeout(Duration::from_secs(120)).unwrap();
         // hold the delivery point while polling: a blocking poll fails within the timeout, never hangs
         let delivery = shared.delivery.lock().unwrap();
         go_tx.send(()).unwrap();
