@@ -1083,7 +1083,7 @@ fn blocking_window(
     let (mut body, mut footer) = (body, footer);
     let mut shown = None;
     // The dialog mounts its own modal layer; this area only gives it a parent `Ui`.
-    egui::Area::new(egui::Id::unique((id, "host"))).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
+    crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
         let output = Dialog::new(crate::i18n::tr(title).to_owned())
             .id(window_id(id))
             .opened(Bind::given(true))

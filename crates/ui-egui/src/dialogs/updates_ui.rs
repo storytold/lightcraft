@@ -7,6 +7,7 @@ use craft::ui::dialog::Dialog;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::ui::display::Spinner;
 use craft::ui::display::Text;
+#[cfg(not(target_arch = "wasm32"))]
 use craft::ui::sections::{DialogRole, FooterButton};
 
 use crate::LightcraftApp;
@@ -138,7 +139,7 @@ fn show_result(ctx: &egui::Context, status: &Status) -> CheckResultResponse {
     let buttons = choices.iter().map(|(label, _, _)| FooterButton::new((*label).to_owned(), DialogRole::Other));
     let notice = matches!(status, Status::Updated(_));
     let mut answer = CheckResultResponse::None;
-    egui::Area::new(egui::Id::unique("lightcraft.updates.host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
+    crate::dialogs::host_ui(ctx, egui::Id::unique("lightcraft.updates.host"), |ui| {
         let (output, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lightcraft.updates.inspect"), |ui| {
             let dialog = Dialog::new(crate::i18n::tr("LightCraft Updates").to_owned())
                 .id_salt("lightcraft.updates.result")
@@ -307,30 +308,32 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// (OK, Escape or Enter).
 #[cfg(target_arch = "wasm32")]
 fn show_web_result(ctx: &egui::Context, message: Option<&str>) -> bool {
-    let mut dismissed = false;
-    egui::Area::new(egui::Id::unique("lightcraft.updates.host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
-        let ok = crate::i18n::tr("OK").to_owned();
-        let (output, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lightcraft.updates.inspect"), |ui| {
-            Dialog::new(crate::i18n::tr("LightCraft Updates").to_owned())
-                .id_salt("lightcraft.updates.web")
-                .opened(Bind::given(true))
-                .buttons([FooterButton::new(ok.clone(), DialogRole::Accept)])
-                .close_on_enter(true)
-                // the rest of the application stays reachable, as before
-                .modeless()
-                .show(ui, |ui, _| {
-                    if let Some(message) = message {
-                        Text::new(message.to_owned()).show(ui);
-                    }
-                })
-                .output
-        });
-        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
-            crate::dialogs::register_footer_buttons(&output.response, None, record.as_deref(), &[(ok, "button:updatesWebOk".to_owned())]);
-            dismissed = output.closed.is_some() || output.picked.is_some();
+    use std::cell::Cell;
+    let dismissed = Cell::new(false);
+    crate::dialogs::host_ui(ctx, egui::Id::unique("lightcraft.updates.host"), |ui| {
+        let ok = [crate::dialogs::FooterSpec { label: crate::i18n::tr("OK").to_owned(), name: "button:updatesWebOk".into(), enabled: true, primary: true }];
+        let output = Dialog::new(crate::i18n::tr("LightCraft Updates").to_owned())
+            .id_salt("lightcraft.updates.web")
+            .opened(Bind::given(true))
+            .footer(|ui, _| {
+                if crate::dialogs::footer_buttons(ui, "lightcraft.updates.web", &ok).is_some() {
+                    dismissed.set(true);
+                }
+            })
+            .close_on_enter(true)
+            // the rest of the application stays reachable, as before
+            .modeless()
+            .show(ui, |ui, _| {
+                if let Some(message) = message {
+                    Text::new(message.to_owned()).show(ui);
+                }
+            })
+            .output;
+        if !craft::ui::runtime::measure::active(ctx) && output.closed.is_some() {
+            dismissed.set(true);
         }
     });
-    dismissed
+    dismissed.get()
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
