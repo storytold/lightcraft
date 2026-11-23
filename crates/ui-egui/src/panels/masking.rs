@@ -678,7 +678,7 @@ fn menu_label(source: &str) -> &str {
 
 /// One row of a framework menu: whether it ran this pass (a click, Enter or Space). A row runs
 /// nothing while the menu is only being measured, and the names it publishes are `maskMenu:{key}`.
-fn menu_run(ui: &mut egui::Ui, scope: impl std::hash::Hash, key: &str, label: &str, enabled: bool) -> bool {
+fn menu_run(ui: &mut egui::Ui, scope: impl std::hash::Hash + std::fmt::Debug, key: &str, label: &str, enabled: bool) -> bool {
     let enabled = enabled && ui.is_enabled();
     let shown = MenuItem::new(menu_label(label).to_owned()).id_salt(("mask-menu", scope, key)).enabled(enabled).show(ui);
     if measuring(ui) {
@@ -1534,7 +1534,7 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
 /// The menu a button opens: the framework's, kept open by the button's own activation (the
 /// pointer, a long press and the keyboard alike), and closed by Escape or a click away. `key`
 /// tells this opener's menu from the others'. Nothing is drawn while only measuring.
-fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key: impl std::hash::Hash, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
+fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key: impl std::hash::Hash + std::fmt::Debug, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
     use craft::ui::contract::{Bind, Trigger};
     if measuring(ui) {
         return;
@@ -1565,7 +1565,7 @@ fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key
 
 /// The choices of a component menu: Object, Describe… and the shapes. `scope` tells this menu's
 /// rows from those of the other menus with the same `op`.
-fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str, scope: impl std::hash::Hash + Copy) {
+fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str, scope: impl std::hash::Hash + std::fmt::Debug + Copy) {
     let item = |ui: &mut egui::Ui, kind: &str, label: &str| -> bool {
         let enabled = ui.is_enabled();
         let shown = MenuItem::new(label.to_owned()).id_salt(("mask-comp", scope, op, kind)).enabled(enabled).show(ui);
