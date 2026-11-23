@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Lens database profiles fill the frame
+- A lens database profile whose distortion correction stretches the frame past its edges (for example a zoom at its
+  long end) now zooms the corrected photo in to fill the frame, as the cameras' own corrections do. It used to leave
+  a curved empty border along the edges (issue #3547). Barrel corrections are unchanged. A photo whose profile was
+  looked up earlier gets the new correction after Photo ▸ Reload from Disk.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
