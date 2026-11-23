@@ -349,7 +349,12 @@ pub fn warm_up() {
         if STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
-        let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(|| {
+        let Some(work) = exit::enter() else {
+            STARTED.store(false, Ordering::SeqCst);
+            return;
+        };
+        let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(move || {
+            let _work = work;
             loop {
                 let _ = device();
                 if GPU.get().is_some() || shutting_down() || env_disabled() {
