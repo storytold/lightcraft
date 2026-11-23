@@ -1412,8 +1412,10 @@ dependencies = [
  "craft-draw",
  "craft-font-manager",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-imaging",
+ "craft-layers",
+ "craft-menu",
  "craft-pages",
  "craft-print",
  "craft-quit",
@@ -1421,13 +1423,24 @@ dependencies = [
  "craft-table",
  "craft-text",
  "craft-theme",
+ "craft-theme-editor",
  "craft-theme-store",
  "craft-timeline",
- "craft-ui 0.1.0",
+ "craft-ui",
  "craft-update 0.1.0",
  "craft-window 0.1.0",
  "egui",
  "toml",
+]
+
+[[package]]
+name = "craft-ai-agents"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=d94a3593adcff504eaaad9e5aee4c84fd2f07a72#d94a3593adcff504eaaad9e5aee4c84fd2f07a72"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1444,10 +1457,11 @@ dependencies = [
  "base64 0.22.1",
  "craft-behavior",
  "craft-control",
+ "craft-host",
  "craft-keymap",
  "craft-platform",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "getrandom 0.3.4",
  "hmac",
@@ -1484,11 +1498,11 @@ dependencies = [
  "craft-behavior",
  "craft-docpath 0.1.0",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-platform",
  "craft-settings",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "kurbo",
  "serde",
@@ -1552,12 +1566,12 @@ dependencies = [
  "craft-behavior",
  "craft-cms 0.1.0",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-platform",
  "craft-settings",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "craft-window 0.1.0",
  "egui",
  "serde",
@@ -1568,7 +1582,12 @@ dependencies = [
 name = "craft-control"
 version = "0.1.0"
 dependencies = [
+ "craft-ai-agents",
+ "craft-atomic",
+ "craft-flags",
+ "dirs",
  "getrandom 0.3.4",
+ "log",
  "serde",
  "serde_json",
 ]
@@ -1625,9 +1644,9 @@ dependencies = [
  "craft-behavior",
  "craft-browse",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-platform",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "futures-lite",
  "log",
@@ -1659,15 +1678,24 @@ dependencies = [
  "craft-behavior",
  "craft-color-ui",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-settings",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "kurbo",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-flags"
+version = "0.1.0"
+dependencies = [
+ "craft-atomic",
+ "dirs",
+ "toml_edit",
 ]
 
 [[package]]
@@ -1691,12 +1719,13 @@ dependencies = [
  "craft-behavior",
  "craft-font-catalog",
  "craft-font-store",
- "craft-fonts-build 0.1.0",
+ "craft-fonts-build",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
+ "epaint_default_fonts",
  "log",
  "serde",
  "skrifa 0.44.0",
@@ -1725,11 +1754,6 @@ dependencies = [
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
-
-[[package]]
-name = "craft-fonts-build"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 
 [[package]]
 name = "craft-gainmap"
@@ -1770,7 +1794,7 @@ name = "craft-host"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "egui",
  "serde",
  "toml",
@@ -1801,29 +1825,6 @@ dependencies = [
  "icu_provider_adapters",
  "icu_provider_blob",
  "icu_time",
- "log",
- "objc2-foundation 0.3.2",
- "sys-locale",
- "unicode-bidi",
- "windows-registry",
- "writeable",
-]
-
-[[package]]
-name = "craft-i18n"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
-dependencies = [
- "fixed_decimal",
- "icu_decimal",
- "icu_locale_core",
- "icu_locale_fallback",
- "icu_normalizer",
- "icu_plurals",
- "icu_properties",
- "icu_provider",
- "icu_provider_adapters",
- "icu_provider_blob",
  "log",
  "objc2-foundation 0.3.2",
  "sys-locale",
@@ -1870,10 +1871,10 @@ dependencies = [
  "craft-behavior",
  "craft-color-ui",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "kurbo",
  "serde",
@@ -1905,7 +1906,7 @@ name = "craft-keymap"
 version = "0.1.0"
 dependencies = [
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-tracked",
  "craft-ui-macros",
  "craft-xml 0.1.0",
@@ -1915,11 +1916,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-layers"
+version = "0.1.0"
+dependencies = [
+ "craft-behavior",
+ "craft-i18n",
+ "craft-keymap",
+ "craft-theme",
+ "craft-ui",
+ "egui",
+ "serde",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-menu"
+version = "0.1.0"
+dependencies = [
+ "craft-behavior",
+ "craft-host",
+ "craft-i18n",
+ "craft-keymap",
+ "craft-quit",
+ "craft-theme",
+ "craft-ui",
+ "craft-window 0.1.0",
+ "egui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1952,7 +1983,7 @@ dependencies = [
  "craft-keymap",
  "craft-text",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "kurbo",
  "serde",
@@ -2017,7 +2048,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-host",
- "craft-ui 0.1.0",
+ "craft-ui",
  "craft-winprint-gdi",
  "egui",
  "js-sys",
@@ -2078,11 +2109,11 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-pages",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "image",
  "kurbo",
@@ -2138,7 +2169,7 @@ dependencies = [
  "craft-behavior",
  "craft-keymap",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
 ]
 
@@ -2150,7 +2181,7 @@ dependencies = [
  "craft-host",
  "craft-keymap",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "hypher",
  "miniz_oxide 0.8.9",
@@ -2178,13 +2209,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-theme-editor"
+version = "0.1.0"
+dependencies = [
+ "craft-behavior",
+ "craft-theme",
+ "craft-ui",
+ "egui",
+]
+
+[[package]]
 name = "craft-theme-store"
 version = "0.1.0"
 dependencies = [
  "craft-atomic",
  "craft-behavior",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "dirs",
  "egui",
  "serde",
@@ -2217,7 +2258,7 @@ dependencies = [
  "craft-keymap",
  "craft-theme",
  "craft-time",
- "craft-ui 0.1.0",
+ "craft-ui",
  "egui",
  "serde",
  "web-time",
@@ -2241,32 +2282,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-ui"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
-dependencies = [
- "craft-fonts-build 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
- "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
- "egui",
- "epaint",
- "js-sys",
- "log",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "serde",
- "skrifa 0.44.0",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "craft-ui-canvas"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-theme",
  "craft-ui-macros",
@@ -2284,9 +2304,9 @@ dependencies = [
  "craft-behavior",
  "craft-codepage 0.1.0",
  "craft-font-catalog",
- "craft-fonts-build 0.1.0",
+ "craft-fonts-build",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-platform",
  "craft-quit",
@@ -2328,7 +2348,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-quit",
  "craft-theme",
@@ -2345,7 +2365,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-pdf 0.1.0",
  "craft-theme",
@@ -2365,7 +2385,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-platform",
  "craft-svg",
  "craft-theme",
@@ -2384,7 +2404,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-host",
- "craft-i18n 0.1.0",
+ "craft-i18n",
  "craft-keymap",
  "craft-theme",
  "craft-ui-contract",
@@ -2401,7 +2421,7 @@ dependencies = [
  "chrono",
  "craft-host",
  "craft-theme",
- "craft-ui 0.1.0",
+ "craft-ui",
  "dunce",
  "egui",
  "flate2",
@@ -5935,7 +5955,6 @@ name = "lightcraft-ui-egui"
 version = "0.21.1"
 dependencies = [
  "craft",
- "craft-ui 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "craft-update 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "craft-window 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "egui",

@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use craft::behavior::{Metrics, Sense};
 use craft::theme::{Stateful, States};
-use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _};
+use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _, Styled as _};
 use craft::ui::primitives::{Glyph, IconSpec};
 use craft::ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, UiTokens};
 use egui::{Color32, CornerRadius, Galley, Painter, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
