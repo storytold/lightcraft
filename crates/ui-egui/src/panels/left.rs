@@ -40,8 +40,8 @@ use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag,
 /// folders and sections, with the section visibility menu on the title.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    // (read before the lists: the framework's lists take an Escape that ends a press)
-    sections::note_escape(ui);
+    // the drags of sections and albums are the framework's: the app's state follows them
+    sections::adopt_drags(app, ui);
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;

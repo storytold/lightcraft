@@ -293,6 +293,22 @@ impl LightcraftApp {
         if still_aimed {
             return false;
         }
+        {
+            // TEMPORARY DEBUG
+            let hit = latest_hit;
+            let at_layer = ctx.layer_id_at(target.at);
+            eprintln!(
+                "DEBUGREFUSE id={} at={:?} target.rect={:?} latest={:?} hit={:?} at_layer={:?} top_modal={:?} layers_at_order={:?}",
+                target.id,
+                target.at,
+                target.rect,
+                latest,
+                hit.map(|h| (h.layer_id, h.interact_rect)),
+                at_layer,
+                ctx.memory(|m| m.top_modal_layer()),
+                ctx.memory(|m| m.areas().order().iter().rev().take(6).copied().collect::<Vec<_>>()),
+            );
+        }
         let outside_registered = !target.rect.contains(target.at);
         let reason = match latest {
             None => "disappeared",
