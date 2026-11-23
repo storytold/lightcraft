@@ -46,8 +46,12 @@ fn thumb_px(pts: f32, ppp: f32) -> usize {
 /// must not rebuild the view, its layout or its indexes, and visits only the cells near the screen).
 #[derive(Clone, Debug, Default)]
 pub struct GridStats {
-    /// Frames the grid was drawn.
+    /// Frames the grid was drawn (a frame egui runs in more than one pass counts once).
     pub frames: u64,
+    /// Passes the grid was drawn in: `frames`, plus the passes egui re-ran after a discard.
+    pub passes: u64,
+    /// The egui frame `frames` last counted.
+    last_frame: Option<u64>,
     /// Cells looked at (tested against the viewport or drawn).
     pub cells_visited: u64,
     /// Layouts computed.
@@ -66,7 +70,13 @@ pub struct GridStats {
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t0 = web_time::Instant::now();
     show_inner(app, ui);
-    app.caches.grid_stats.frames += 1;
+    let frame = ui.ctx().cumulative_frame_nr();
+    let stats = &mut app.caches.grid_stats;
+    stats.passes += 1;
+    if stats.last_frame != Some(frame) {
+        stats.frames += 1;
+        stats.last_frame = Some(frame);
+    }
     app.caches.grid_stats.last_show = t0.elapsed();
 }
 
