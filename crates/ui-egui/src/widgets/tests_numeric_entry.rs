@@ -101,6 +101,25 @@ fn typing_after_a_released_click_still_edits() {
     assert_eq!(h.key(Key::Enter).value, Some(2.0));
 }
 
+#[test]
+fn escape_after_typing_restores_the_value_and_gives_the_keyboard_back() {
+    // a click, a typed value, then Escape on a frame of its own: the old value stays and the readout shows it again
+    let mut h = Harness::new();
+    let pos = h.rect.center();
+    let button = |pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.frame(vec![Event::PointerMoved(pos)]);
+    h.frame(vec![button(true)]);
+    h.frame(vec![button(false)]);
+    h.frame(vec![]);
+    assert!(h.view.ctx.egui_wants_keyboard_input(), "the click opens the field");
+    h.frame(vec![Event::Text("2".into())]);
+    assert_eq!(h.key(Key::Escape).value, None, "Escape keeps the old value");
+    h.frame(vec![]);
+    assert_eq!(h.value, 0.71);
+    assert!(!h.view.ctx.egui_wants_keyboard_input(), "Escape gives the keyboard back");
+    assert!(h.key(Key::Enter).value.is_none(), "no retired draft can commit later");
+}
+
 impl Harness {
     /// The track's width: a scrub moves the value as far as dragging the thumb would.
     fn track_width(&self) -> f32 {
