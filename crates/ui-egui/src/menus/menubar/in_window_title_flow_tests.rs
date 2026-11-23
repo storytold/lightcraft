@@ -344,6 +344,12 @@ fn in_window_titles_disabled_sizing_and_outside_release_do_not_open_or_execute()
             ],
             0,
         );
+        // The framework bar opens a menu on the press, so a release elsewhere is not what decides it: the menu
+        // may stay up. Either way nothing runs, and Escape leaves no menu.
+        f.settle();
+        assert_eq!(f.document(), before);
+        assert_eq!(f.app.session.journal, journal);
+        f.key(Key::Escape);
         assert!(!f.is_open());
         assert_eq!(f.document(), before);
         assert_eq!(f.app.session.journal, journal);

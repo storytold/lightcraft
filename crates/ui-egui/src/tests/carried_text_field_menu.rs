@@ -69,7 +69,7 @@ fn right_click_while_carrying(h: &mut Headless, field: &str) {
 fn right_click_on_a_text_field_while_carrying_opens_no_menu() {
     let (mut h, root) = app("carry");
     right_click_while_carrying(&mut h, FIELD);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx), "{FIELD}: no Cut / Copy / Paste menu while photos are carried");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == &format!("{FIELD}:copy")), "{FIELD}: no Cut / Copy / Paste menu while photos are carried");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -82,7 +82,8 @@ fn right_click_on_a_text_field_still_opens_the_menu_without_a_drag() {
     for _ in 0..4 {
         h.step();
     }
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "{FIELD}: its menu");
+    // (the field's menu is the framework's: its rows are published while it is open)
+    assert!(h.app.widgets.iter().any(|(w, _)| w == &format!("{FIELD}:copy")), "{FIELD}: its menu");
     assert!(h.app.widgets.iter().any(|(w, _)| w == &format!("{FIELD}:copy")), "{FIELD}: Copy in its menu");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -108,6 +109,6 @@ fn a_drag_left_over_without_its_button_does_not_hold_back_the_menu() {
     }
     h.step();
     h.step();
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "the search field's menu opens");
+    assert!(h.app.widgets.iter().any(|(w, _)| w == &format!("{FIELD}:copy")), "the search field's menu opens");
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -676,7 +676,7 @@ mod issue1771 {
             let mut h = grid(view);
             assert_eq!(h.request("ui.clickWidget", json!({"id":"menu:File"}), std::time::Duration::from_secs(20))["ok"], true);
             h.step();
-            assert!(egui::Popup::is_any_open(&h.view.ctx), "File menu open before Enter");
+            assert!(craft::ui::menu::bar::is_open(&h.view.ctx), "File menu open before Enter");
             key(&mut h, "Enter", false);
             assert_eq!(h.app.ui.view, view);
             assert_eq!(h.app.session.active(), Some(PhotoId(2)));

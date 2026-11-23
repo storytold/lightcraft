@@ -650,15 +650,16 @@ mod visual_regressions {
             harness.key_press(egui::Key::Space);
             harness.run_steps(3);
             let mut people_focused = false;
+            // the menu's rows are one roving group: the arrow keys move through them
             for _ in 0..20 {
-                harness.key_press(egui::Key::Tab);
+                harness.key_press(egui::Key::ArrowDown);
                 harness.run_steps(3);
                 people_focused = harness.get_by_label("People").is_focused();
                 if people_focused {
                     break;
                 }
             }
-            assert!(people_focused, "Tab reaches People at {scale}x");
+            assert!(people_focused, "ArrowDown reaches People at {scale}x");
             harness.key_press(egui::Key::Space);
             harness.run_steps(3);
             assert_eq!(harness.state().ui.view, ViewMode::People, "keyboard activation dispatches the view command");
