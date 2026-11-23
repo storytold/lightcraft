@@ -2391,19 +2391,19 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Luminance (from linear RGB) minus its 9 × 9 local mean: tone differences between a render and a camera JPEG
-    /// mostly cancel, edges remain.
+    /// Luminance (from linear RGB), smoothed over 3 × 3, minus its 9 × 9 local mean: tone differences between a
+    /// render and a camera JPEG mostly cancel, edges remain. The smoothing keeps pixel-scale noise out (process V8's
+    /// 8 × 8 ordered dither on 8-bit output, sensor noise): in a featureless corner that noise alone passed the
+    /// detail floor of [`patch_shift`] and was correlated against the JPEG's own (rwl-leica-dlux7, ncc 0.15).
     fn detail(w: usize, h: usize, lum: impl Fn(usize, usize) -> f32) -> Vec<f32> {
-        let l: Vec<f32> = (0..w * h).map(|i| lum(i % w, i / w)).collect();
-        let mut out = vec![0.0; w * h];
-        for y in 0..h {
-            for x in 0..w {
-                let (x0, x1, y0, y1) = (x.saturating_sub(4), (x + 5).min(w), y.saturating_sub(4), (y + 5).min(h));
-                let m = (y0..y1).flat_map(|yy| (x0..x1).map(move |xx| (xx, yy))).map(|(xx, yy)| l[yy * w + xx]).sum::<f32>();
-                out[y * w + x] = l[y * w + x] - m / ((x1 - x0) * (y1 - y0)) as f32;
-            }
-        }
-        out
+        let raw: Vec<f32> = (0..w * h).map(|i| lum(i % w, i / w)).collect();
+        let boxed = |l: &[f32], x: usize, y: usize, r: usize| {
+            let (x0, x1, y0, y1) = (x.saturating_sub(r), (x + r + 1).min(w), y.saturating_sub(r), (y + r + 1).min(h));
+            let m = (y0..y1).flat_map(|yy| (x0..x1).map(move |xx| (xx, yy))).map(|(xx, yy)| l[yy * w + xx]).sum::<f32>();
+            m / ((x1 - x0) * (y1 - y0)) as f32
+        };
+        let l: Vec<f32> = (0..w * h).map(|i| boxed(&raw, i % w, i / w, 1)).collect();
+        (0..w * h).map(|i| l[i] - boxed(&l, i % w, i / w, 4)).collect()
     }
 
     /// The integer shift (within ±`r` px) of the `p × p` patch of `a` at `(x, y)` that best matches `b`, with its
