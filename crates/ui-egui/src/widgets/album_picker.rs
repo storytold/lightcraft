@@ -13,8 +13,10 @@
 
 use craft::theme::Variant;
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::contract::overlay::{Dismiss, Outside};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::controls::disclosure::DisclosureGlyph;
+use craft::ui::popover::Popover;
 use craft::ui::primitives::{Glyph, HAlign, IconSpec};
 use egui::{Rect, Response, RichText, Ui, vec2};
 
@@ -220,7 +222,7 @@ impl<'a> AlbumPicker<'a> {
     /// Draw caller-owned choices before the search (e.g. None / New album in the import review).
     /// Return true when an extra choice was picked to close the popup. The caller handles those
     /// actions; `changed()` still reports only an album picked from the tree or search.
-    pub fn show_with_choices(self, ui: &mut Ui, choices: impl FnOnce(&mut Ui) -> bool) -> Response {
+    pub fn show_with_choices(self, ui: &mut Ui, choices: impl FnMut(&mut Ui) -> bool) -> Response {
         let AlbumPicker { id, value, entries, width, empty_text } = self;
         let chosen = value.filter(|v| entries.iter().any(|e| e.id == *v && !e.folder));
         let text = chosen.map_or_else(|| empty_text.unwrap_or_else(|| crate::i18n::tr("Choose an album…").to_string()), |c| path_label(entries, c));
@@ -249,171 +251,161 @@ impl<'a> AlbumPicker<'a> {
             }
         }
         let mut popup_open = state.popup_open;
-        let state = std::cell::RefCell::new(state);
-        let picked = craft_ui::combo::Menu::new(ui, &button.response)
-            .open(&mut popup_open)
-            .height(MENU_HEIGHT)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show_ui_with_header(
-                |ui| {
-                    // A wide popup remembered before a window resize must still fit the current viewport.
-                    let margin = egui::Frame::popup(ui.style()).total_margin().sum().x;
-                    let max_width = (ui.ctx().content_rect().width() - margin).max(1.0);
-                    ui.set_min_width(width.max(260.0).min(max_width));
-                    ui.set_max_width((width.max(260.0) + 120.0).min(max_width));
-                    // Esc closes the popup and stops there: the dialog around it keeps its edits
-                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        crate::widgets::take_escape(ui.ctx());
-                        ui.close();
+        let body_interactive = popup_open;
+        let mut state = state;
+        let mut picked: Option<u64> = None;
+        let mut choices = choices;
+        Popover::new(crate::i18n::tr("Albums").to_owned(), Bind::bound(&mut popup_open))
+            .id(key.with("popover"))
+            .opened_by(&button.response)
+            .dismiss(Dismiss::new().outside(Outside::Absorb))
+            .show(ui, |ui, cx| {
+                // Exit presence is paint-only: the closing popup's search and rows take no input.
+                if !body_interactive {
+                    ui.disable();
+                }
+                // A wide popup remembered before a window resize must still fit the current viewport.
+                let max_width = (ui.ctx().content_rect().width() - 24.0).max(1.0);
+                ui.set_min_width(width.max(260.0).min(max_width));
+                ui.set_max_width((width.max(260.0) + 120.0).min(max_width));
+                // The caller's choices and the search are real controls: a measuring run of the popup lays out
+                // the rest only, never runs the caller's actions or moves the keyboard.
+                let real = !measuring(ui);
+                if real && choices(ui) {
+                    cx.request_close();
+                    return;
+                }
+                // Escape closes the popup and stops there: the dialog around it keeps its edits. The framework popup
+                // takes it as the top layer's cancel; with the keyboard in the search box egui still has the key.
+                if real && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    crate::widgets::take_escape(ui.ctx());
+                    cx.request_close();
+                    return;
+                }
+                // This editor's Enter remains available to the path-search navigator below.
+                let search_box = ui.add(
+                    egui::TextEdit::singleline(&mut state.query)
+                        .id(key.with("search"))
+                        .hint_text(crate::i18n::tr("Search albums"))
+                        .desired_width(f32::INFINITY),
+                );
+                register(ui, format!("albumPickerSearch:{id}"), &search_box);
+                if real && state.focus {
+                    search_box.request_focus();
+                    state.focus = false;
+                }
+                if search_box.changed() {
+                    state.highlight = 0;
+                }
+                // `scroll`: bring the row into view (the arrow keys just moved to it); never every frame,
+                // which would fight the mouse wheel
+                let row = |ui: &mut Ui, e: &AlbumEntry, label: &str, indent: f32, highlighted: bool, scroll: bool, picked: &mut Option<u64>| {
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
+                    let rect = Rect::from_min_max(rect.min + vec2(indent.min((rect.width() - 1.0).max(0.0)), 0.0), rect.max);
+                    let icon = AlbumIcon(if e.smart { Icon::SmartAlbum } else { Icon::Album });
+                    let mut row = Button::new(label.to_owned())
+                        .id(egui::Id::unique(("albumPickerItem", id.as_str(), e.id)))
+                        .variant(Variant::GHOST)
+                        .align(HAlign::Start)
+                        .icon(IconSpec::glyph(&icon))
+                        .selected(Some(e.id) == chosen || highlighted)
+                        .enabled(e.blocked.is_none())
+                        .show_at(ui, rect);
+                    row.response = row.response.on_hover_text(label);
+                    if let Some(why) = &e.blocked {
+                        row.response = row.response.on_disabled_hover_text(why.as_str());
                     }
-                    if choices(ui) {
-                        ui.close();
-                        return true;
+                    register(ui, format!("albumPickerItem:{}:{id}", e.id), &row.response);
+                    if !measuring(ui) && row.clicked() {
+                        *picked = Some(e.id);
                     }
-                    let mut state = state.borrow_mut();
-                    // This editor's Enter remains available to the existing path-search navigator;
-                    // Escape belongs to this popup, not the surrounding Import/rules dialog.
-                    let search_box = ui.add(
-                        egui::TextEdit::singleline(&mut state.query)
-                            .id(key.with("search"))
-                            .hint_text(crate::i18n::tr("Search albums"))
-                            .desired_width(f32::INFINITY),
-                    );
-                    register(ui, format!("albumPickerSearch:{id}"), &search_box);
-                    if state.focus {
-                        search_box.request_focus();
-                        state.focus = false;
+                    if scroll {
+                        row.response.scroll_to_me(None);
                     }
-                    if search_box.changed() {
-                        state.highlight = 0;
-                    }
-                    false
-                },
-                |ui, closed| {
-                    let mut picked: Option<u64> = None;
-                    if closed {
-                        return picked;
-                    }
-                    let mut state = state.borrow_mut();
-                    // `scroll`: bring the row into view (the arrow keys just moved to it); never every frame,
-                    // which would fight the mouse wheel
-                    let row = |ui: &mut Ui, e: &AlbumEntry, label: &str, indent: f32, highlighted: bool, scroll: bool, picked: &mut Option<u64>| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
-                        let rect = Rect::from_min_max(rect.min + vec2(indent.min((rect.width() - 1.0).max(0.0)), 0.0), rect.max);
-                        let icon = AlbumIcon(if e.smart { Icon::SmartAlbum } else { Icon::Album });
-                        let mut row = Button::new(label.to_owned())
-                            .id(egui::Id::unique(("albumPickerItem", id.as_str(), e.id)))
-                            .variant(Variant::GHOST)
-                            .align(HAlign::Start)
-                            .icon(IconSpec::glyph(&icon))
-                            .selected(Some(e.id) == chosen || highlighted)
-                            .enabled(e.blocked.is_none())
-                            .show_at(ui, rect);
-                        row.response = row.response.on_hover_text(label);
-                        if let Some(why) = &e.blocked {
-                            row.response = row.response.on_disabled_hover_text(why.as_str());
-                        }
-                        register(ui, format!("albumPickerItem:{}:{id}", e.id), &row.response);
-                        if row.clicked() {
-                            *picked = Some(e.id);
-                        }
-                        if scroll {
-                            row.response.scroll_to_me(None);
-                        }
-                    };
-                    {
-                        if state.query.trim().is_empty() {
-                            for i in visible_tree(entries, &state.open) {
-                                let e = &entries[i];
-                                let indent = e.depth as f32 * 16.0;
-                                if e.folder {
-                                    // The SDK row owns the whole disclosure action, including its keyboard focus.
-                                    let open = state.open.contains(&e.id);
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)),
-                                        egui::Sense::hover(),
-                                    );
-                                    let rect = Rect::from_min_max(rect.min + vec2(indent.min((rect.width() - 1.0).max(0.0)), 0.0), rect.max);
-                                    let icon = AlbumIcon(Icon::Folder);
-                                    let arrow = DisclosureGlyph::new(if open { 1.0 } else { 0.0 });
-                                    let r = Button::new(e.name.clone())
-                                        .id(egui::Id::unique(("albumPickerFolder", id.as_str(), e.id)))
-                                        .variant(Variant::GHOST)
-                                        .align(HAlign::Start)
-                                        .icon(IconSpec::glyph(&icon))
-                                        .trailing_icon(IconSpec::glyph(&arrow))
-                                        .show_at(ui, rect);
-                                    register(ui, format!("albumPickerFolder:{}:{id}", e.id), &r.response);
-                                    crate::widgets::announce_disclosure(&r.response, true, open, &e.name);
-                                    if r.clicked() {
-                                        // the click took the keyboard from the search box: give it back
-                                        state.focus = true;
-                                        if open {
-                                            state.open.retain(|o| *o != e.id);
-                                        } else {
-                                            state.open.push(e.id);
-                                        }
+                };
+                let list_height = (MENU_HEIGHT - search_box.rect.height() - ui.spacing().item_spacing.y).max(48.0);
+                egui::ScrollArea::vertical().id_salt(key.with("list")).max_height(list_height).auto_shrink([false, true]).show(ui, |ui| {
+                    if state.query.trim().is_empty() {
+                        for i in visible_tree(entries, &state.open) {
+                            let e = &entries[i];
+                            let indent = e.depth as f32 * 16.0;
+                            if e.folder {
+                                // The SDK row owns the whole disclosure action, including its keyboard focus.
+                                let open = state.open.contains(&e.id);
+                                let (rect, _) =
+                                    ui.allocate_exact_size(vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
+                                let rect = Rect::from_min_max(rect.min + vec2(indent.min((rect.width() - 1.0).max(0.0)), 0.0), rect.max);
+                                let icon = AlbumIcon(Icon::Folder);
+                                let arrow = DisclosureGlyph::new(if open { 1.0 } else { 0.0 });
+                                let r = Button::new(e.name.clone())
+                                    .id(egui::Id::unique(("albumPickerFolder", id.as_str(), e.id)))
+                                    .variant(Variant::GHOST)
+                                    .align(HAlign::Start)
+                                    .icon(IconSpec::glyph(&icon))
+                                    .trailing_icon(IconSpec::glyph(&arrow))
+                                    .show_at(ui, rect);
+                                register(ui, format!("albumPickerFolder:{}:{id}", e.id), &r.response);
+                                crate::widgets::announce_disclosure(&r.response, true, open, &e.name);
+                                if !measuring(ui) && r.clicked() {
+                                    // the click took the keyboard from the search box: give it back
+                                    state.focus = true;
+                                    if open {
+                                        state.open.retain(|o| *o != e.id);
+                                    } else {
+                                        state.open.push(e.id);
                                     }
-                                } else {
-                                    // The shared SDK icon column aligns album and folder names.
-                                    row(ui, e, &e.name, indent, false, false, &mut picked);
                                 }
+                            } else {
+                                // The shared SDK icon column aligns album and folder names.
+                                row(ui, e, &e.name, indent, false, false, &mut picked);
                             }
-                            if entries.iter().all(|e| e.folder) {
-                                ui.label(RichText::new(crate::i18n::tr("No albums yet")).weak());
-                            }
+                        }
+                        if entries.iter().all(|e| e.folder) {
+                            ui.label(RichText::new(crate::i18n::tr("No albums yet")).weak());
+                        }
+                    } else {
+                        let hits = search(entries, &state.query);
+                        // ↑ / ↓ move through the results that can be picked, Enter picks one
+                        let pickable: Vec<usize> = hits.iter().copied().filter(|&i| entries[i].blocked.is_none()).collect();
+                        let (down, up, enter) = if measuring(ui) {
+                            (false, false, false)
                         } else {
-                            let hits = search(entries, &state.query);
-                            // ↑ / ↓ move through the results that can be picked, Enter picks one
-                            let pickable: Vec<usize> = hits.iter().copied().filter(|&i| entries[i].blocked.is_none()).collect();
-                            let (down, up, enter) = ui.input_mut(|i| {
+                            ui.input_mut(|i| {
                                 (
                                     i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
                                     i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
                                     i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
                                 )
-                            });
-                            if down {
-                                state.highlight = (state.highlight + 1).min(pickable.len().saturating_sub(1));
-                            }
-                            if up {
-                                state.highlight = state.highlight.saturating_sub(1);
-                            }
-                            let highlighted = pickable.get(state.highlight).copied();
-                            if enter {
-                                match highlighted {
-                                    Some(i) => picked = Some(entries[i].id),
-                                    // Enter took the keyboard from the search box and picked nothing: give it back
-                                    None => state.focus = true,
-                                }
-                            }
-                            let by_id = index(entries);
-                            for i in &hits {
-                                let e = &entries[*i];
-                                row(
-                                    ui,
-                                    e,
-                                    &path_in(entries, &by_id, e.id),
-                                    0.0,
-                                    highlighted == Some(*i),
-                                    (up || down) && highlighted == Some(*i),
-                                    &mut picked,
-                                );
-                            }
-                            if hits.is_empty() {
-                                ui.label(RichText::new(crate::i18n::tr("No albums match")).weak());
+                            })
+                        };
+                        if down {
+                            state.highlight = (state.highlight + 1).min(pickable.len().saturating_sub(1));
+                        }
+                        if up {
+                            state.highlight = state.highlight.saturating_sub(1);
+                        }
+                        let highlighted = pickable.get(state.highlight).copied();
+                        if enter {
+                            match highlighted {
+                                Some(i) => picked = Some(entries[i].id),
+                                // Enter took the keyboard from the search box and picked nothing: give it back
+                                None => state.focus = true,
                             }
                         }
+                        let by_id = index(entries);
+                        for i in &hits {
+                            let e = &entries[*i];
+                            row(ui, e, &path_in(entries, &by_id, e.id), 0.0, highlighted == Some(*i), (up || down) && highlighted == Some(*i), &mut picked);
+                        }
+                        if hits.is_empty() {
+                            ui.label(RichText::new(crate::i18n::tr("No albums match")).weak());
+                        }
                     }
-                    if picked.is_some() {
-                        ui.close();
-                    }
-                    picked
-                },
-            )
-            .flatten();
-        let mut state = state.into_inner();
+                });
+                if picked.is_some() {
+                    cx.request_close();
+                }
+            });
         state.popup_open = popup_open;
         ui.data_mut(|d| d.insert_temp(key, state));
         if let Some(p) = picked {

@@ -29,6 +29,10 @@ fn focused(h: &Headless) -> Option<String> {
     let rect = h.view.ctx.read_response(id)?.rect;
     h.app.widgets.iter().find(|(_, r)| *r == rect).map(|(name, _)| name.clone())
 }
+/// The preset picker is a framework `Select`: its list is a framework popup above the Settings dialog.
+fn popup_open(h: &Headless) -> bool {
+    crate::dialogs::popup_open(&h.view.ctx)
+}
 fn raw_tab(shift: bool, pressed: bool) -> egui::Event {
     egui::Event::Key {
         key: egui::Key::Tab,
@@ -82,13 +86,13 @@ fn an_open_native_preset_combo_keeps_tab_and_escape_out_of_the_settings_page() {
     let mut h = demo();
     let before = h.app.session.import_defaults.clone();
     ask(&mut h, "ui.clickWidget", json!({"id":"combo:settingsRawPreset"}));
-    assert!(egui::Popup::is_any_open(&h.view.ctx));
+    assert!(popup_open(&h));
     ask(&mut h, "ui.key", json!({"key":"Tab"}));
-    eprintln!("SETTINGS_COMBO_TAB_FOCUS={:?} popup={}", focused(&h), egui::Popup::is_any_open(&h.view.ctx));
-    assert!(egui::Popup::is_any_open(&h.view.ctx));
+    eprintln!("SETTINGS_COMBO_TAB_FOCUS={:?} popup={}", focused(&h), popup_open(&h));
+    assert!(popup_open(&h));
     assert_eq!(h.app.session.import_defaults, before);
     ask(&mut h, "ui.key", json!({"key":"Escape"}));
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!popup_open(&h));
     assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "import".into() }));
 }
 
