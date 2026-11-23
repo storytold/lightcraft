@@ -110,7 +110,7 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         ("nef-nikon-d800e.nef", (7424, 4924)),
         ("nef-nikon-d800.nef", (7424, 4924)),
         ("nef-nikon-d810.nef", (7380, 4928)),
-        ("nef-nikon-d850.nef", (6216, 4136)),
+        ("nef-nikon-d850.nef", (8288, 5520)), // the pinned full-size 12-bit file (91a276080), not the earlier M-size one
         ("nef-nikon-d90.nef", (4352, 2868)),
         ("nef-nikon-df.nef", (4992, 3292)),
         ("nef-nikon-z-30.nef", (5600, 3728)),

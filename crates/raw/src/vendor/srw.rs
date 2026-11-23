@@ -118,7 +118,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         )));
     };
     let mut depth = None;
-    let data = if mode == Mode::Full {
+    // the compressed codings' CFA phase (from the camera JPEG) and bit depth come from the samples, so a header-only
+    // probe of those decodes them too, or it would disagree with the full decode
+    let compressed = matches!(coding, Coding::RowBlocks(_) | Coding::Huffman | Coding::Blocks16);
+    let data = if mode == Mode::Full || compressed {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("SRW strip outside file".into()))?;
         if src.len() as u64 != strip {
             return Err(RawError::Corrupt("SRW strip shorter than its rows".into()));

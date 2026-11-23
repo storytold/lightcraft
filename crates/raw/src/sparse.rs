@@ -268,6 +268,11 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
             Ok(info) if preview && !matches!(info.photometric, t::photometric::CFA | t::photometric::LINEAR_RAW) => continue,
             // (Sony Compressed RAW 2: the header probe decodes the start of every tile; a preview reads none)
             Ok(info) if !preview && info.compression == 32766 => return HeaderPlan::Whole("an ARW6 header probe reads its tiles"),
+            // (a compressed Samsung SRW's header probe decodes its strip for the CFA phase and bit depth; 32770 also
+            // covers plain 12-bit packing, which is read whole too rather than told apart here)
+            Ok(info) if !preview && matches!(info.compression, 32770 | 32772 | 32773) && crate::probe(bytes) == Some(RawFormat::Srw) => {
+                return HeaderPlan::Whole("a compressed SRW header probe decodes its strip");
+            }
             Ok(info) => info.chunks(len).iter().map(|c| (c.offset, c.len)).collect(),
             // a raw IFD without the tags a TIFF image needs (an older CR2's) still lists its strips
             Err(_) => match (ifd.u64s(t::STRIP_OFFSETS), ifd.u64s(t::STRIP_BYTE_COUNTS)) {

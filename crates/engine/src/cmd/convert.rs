@@ -844,16 +844,19 @@ mod tests {
         s.catalog.apply(Op::SetEmbeddedLens { id, lens: None }).unwrap();
         s.catalog.apply(Op::SetDevelop { id, settings: std::sync::Arc::new(old), label: "x".into(), edited: None }).unwrap();
         s.media.forget(id);
-        let before = s.render_now(id, 160, 120).unwrap().image.data;
+        // (no render before the Reload: since upstream #3781 a decode records the file's lens in the catalog itself,
+        // which would leave Reload nothing to read; the uncorrected render is taken after the Undo instead)
         let r = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
         assert_eq!(r["reloaded"], json!([id.0]));
         let now = s.catalog.photo(id).unwrap().clone();
         assert_eq!(now.embedded_lens, ph.embedded_lens);
         assert!(now.develop.optics.lens_profile && !now.is_edited());
-        assert_ne!(s.render_now(id, 160, 120).unwrap().image.data, before, "the corrected render differs");
+        let corrected = s.render_now(id, 160, 120).unwrap().image.data;
         s.execute("edit.undo", &json!({})).unwrap();
         let undone = s.catalog.photo(id).unwrap();
         assert!(undone.embedded_lens.is_none() && !undone.develop.optics.lens_profile, "one undo step");
+        s.media.forget(id);
+        assert_ne!(s.render_now(id, 160, 120).unwrap().image.data, corrected, "the corrected render differs");
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {

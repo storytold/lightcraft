@@ -417,9 +417,9 @@ pub fn decode_reduced(bytes: &[u8], min_long: usize) -> Result<Option<RawImage>>
 ///
 /// A few vendor formats derive part of this from the samples themselves (Nikon NEF: optically
 /// masked trailing columns; Olympus ORF: the bit depth of 16-bit files, and the CFA phase of files
-/// without an Exif `CFAPattern`; Pentax PEF without crop tags: dark borders). Those read the
-/// samples they need and drop them: ORF and PEF unpack their uncompressed data; NEF reads only the
-/// first 128 rows (`vendor::nef::MASK_ROWS`), which both the probe and the full decode judge the masked
+/// without an Exif `CFAPattern`; Pentax PEF without crop tags: dark borders; compressed Samsung SRW: the CFA
+/// phase and bit depth). Those read the samples they need and drop them: ORF and PEF unpack their uncompressed
+/// data, compressed SRW decodes its strip; NEF reads only the first 128 rows (`vendor::nef::MASK_ROWS`), which both the probe and the full decode judge the masked
 /// columns from, so a compressed NEF probes in a few milliseconds instead of decoding its whole
 /// Huffman stream (issue #708).
 pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {

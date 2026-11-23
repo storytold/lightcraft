@@ -3961,7 +3961,9 @@ mod tests {
             let own = lcc_raw::color::has_matrix(&raw.color);
             let (make, model) = (raw.metadata.make.as_deref(), raw.metadata.model.as_deref().unwrap_or_default());
             let measured = lcc_raw::spectral::find(make, model).is_some();
-            let covered = measured || lcc_raw::kelvin_presets::covers(make, model);
+            // a Kelvin scale through the spectral matrices, the presets, or (G7) the camera database's matrices
+            let in_db = lcc_camdb::find(make, model).is_some_and(|e| lcc_raw::color::has_matrix(&e.color_data()));
+            let covered = measured || lcc_raw::kelvin_presets::covers(make, model) || in_db;
             let before = raw.color.clone();
             let (_, t, fitted) = starting_colour(&mut raw, &bytes, lens.as_ref(), None, CameraColour::Auto, false);
             let spectral = !own && fitted.is_none() && measured;
@@ -3971,7 +3973,7 @@ mod tests {
             let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
             assert_eq!(info.camera_tone.is_some(), fitted.is_some(), "{name}");
             // white balance: relative only without matrices anywhere (or presets); a covered camera edits in Kelvin,
-            // through the spectral matrices or its presets, whichever look it got (issue #730)
+            // through the spectral matrices, its presets or the camera database, whichever look it got (issue #730)
             assert_eq!(info.relative_wb, !own && !covered, "{name}");
             assert_eq!(info.legacy_relative_wb, !own && covered, "{name}");
             if covered && !own {
@@ -4110,7 +4112,10 @@ mod tests {
         let (img, info) = crate::files::load_bytes(&bytes, 400).unwrap();
         assert_eq!((img.width, img.height), (400, 300), "framed in the in-camera aspect ratio");
         assert!(info.camera_tone.is_some(), "no camera look fitted");
-        assert!(info.relative_wb && info.as_shot_temp == 6500.0 && info.as_shot_tint == 0.0);
+        // white balance: this body has a Kelvin scale for its as-shot multipliers (since G7, 28ab04873, the camera
+        // database's matrices are the last way to one), so it edits in Kelvin from the as-shot reading, not relative
+        assert!(!info.relative_wb && info.legacy_relative_wb, "{info:?}");
+        assert!(info.as_shot_temp != 6500.0 && (2000.0..50000.0).contains(&info.as_shot_temp) && info.as_shot_tint.abs() < 100.0, "{info:?}");
     }
 
     /// Issue #232 (skipped without the corpus): the public ILCE-7RM2 sample's camera JPEG is
@@ -4630,9 +4635,9 @@ mod tests {
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw");
         // (the GFX100S shares the GFX 100's measured sensor, so its white balance is in Kelvin through those
-        // matrices; the X-T2 and X-T20 have none and stay relative)
+        // matrices; the X-T2 and X-T20 have none, and since G7 read Kelvin through the camera database's matrices)
         for (name, accepted, kelvin) in
-            [("raf-fuji-xt2-865.raf", true, false), ("raf-fuji-gfx100s-4503.raf", true, true), ("raf-fuji-xt20-compressed.raf", true, false)]
+            [("raf-fuji-xt2-865.raf", true, true), ("raf-fuji-gfx100s-4503.raf", true, true), ("raf-fuji-xt20-compressed.raf", true, true)]
         {
             let Ok(bytes) = std::fs::read(dir.join(name)) else { continue };
             let header = crate::files::probe_bytes(name, &bytes).unwrap();
