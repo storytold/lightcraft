@@ -2,6 +2,8 @@
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::menu::MenuItem;
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
@@ -14,6 +16,10 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 pub mod survey;
+
+#[cfg(test)]
+#[path = "compare_external155_tests.rs"]
+mod compare_external155_tests;
 
 /// Most photos a survey shows.
 pub const SURVEY_MAX: usize = 48;
@@ -525,6 +531,22 @@ fn slot_index(s: Slot) -> u8 {
     }
 }
 
+/// Keep automation on the actual SDK response; measuring a popup must not publish hits or act.
+fn compare_action(ui: &mut egui::Ui, id: &'static str, label: &'static str) -> bool {
+    let shown = MenuItem::new(crate::i18n::tr(label).to_owned()).id_salt(id).enabled(ui.is_enabled()).show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    crate::widgets::register_response(id, shown.response.rect, &shown.response);
+    if shown.ran {
+        // SDK keyboard activation must dismiss the legacy popup too, not just pointer clicks.
+        ui.close();
+        true
+    } else {
+        false
+    }
+}
+
 pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
     let Some((sel, cand)) = compare_pair(app) else {
@@ -550,10 +572,10 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
         crate::widgets::context_menu(&resp, |ui| {
-            if ui.button(crate::i18n::tr("Swap")).clicked() {
+            if compare_action(ui, "compare:swap", "Swap") {
                 let _ = swap(app);
             }
-            if ui.button(crate::i18n::tr("Make Candidate the Select")).clicked() {
+            if compare_action(ui, "compare:makeSelect", "Make Candidate the Select") {
                 let _ = make_select(app);
             }
             ui.separator();
@@ -645,7 +667,7 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (img, _, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
     app.image_rect = Some(img);
     crate::widgets::context_menu(&lresp, |ui| {
-        if ui.button(crate::i18n::tr("Clear Reference")).clicked() {
+        if compare_action(ui, "compare:clearReference", "Clear Reference") {
             app.ui.reference = None;
             app.ui.view = ViewMode::Detail;
         }

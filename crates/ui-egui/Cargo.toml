@@ -10,6 +10,7 @@ description = "LightCraft egui frontend (Lightroom-style UI); swappable — noth
 workspace = true
 
 [dependencies]
+craft = { workspace = true }
 craft-ui = { workspace = true }
 craft-window = { workspace = true }
 lightcraft-geom = { workspace = true }

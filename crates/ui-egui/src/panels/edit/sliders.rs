@@ -188,6 +188,9 @@ pub(super) fn section(
     title: &str,
     body: impl FnOnce(&mut LightcraftApp, &mut egui::Ui, &DevelopSettings),
 ) {
+    use craft::ui::contract::{Props as _, ShowContainer as _};
+    use craft::ui::menu::Menu;
+
     let open = app.ui.section_open(id);
     let (resp, toggled) = section_header(ui, id, title, open, Some(d.section_enabled(id)));
     if let Some(on) = toggled {
@@ -199,15 +202,43 @@ pub(super) fn section(
             app.toast(ui.ctx(), e);
         }
     }
-    crate::widgets::context_menu(&resp, |ui| {
-        let mut solo = app.ui.single_panel;
-        let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
-        register(ui, "sectionMenu:solo", item.rect);
-        if item.clicked() {
+    Menu::context(crate::i18n::tr(title).to_owned(), &resp).id_salt(("develop-section-menu", id)).show(ui, |ui, menu| {
+        use craft::behavior::Proposal;
+        use craft::ui::choice::Checkbox;
+        use craft::ui::contract::{Bind, Show as _, Sizing};
+        use craft::ui::layout_components::Row;
+
+        let current = app.ui.single_panel;
+        let item =
+            || Checkbox::new(Bind::given(current)).id_salt(("section-solo-mode", id)).label(crate::i18n::tr("Solo Mode")).sizing(Sizing::FillWidth);
+        if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+            // The Checkbox leaf measures only its box. Measure the full labelled flow in a public content-sized layout.
+            // Container measurement is an invisible sizing run; it applies no action and publishes no live target here.
+            let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+            let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item().show(ui));
+            ui.allocate_exact_size(size, Sense::hover());
+            return;
+        }
+        if crate::panels::settings::native_controls_active(ui.ctx()) {
+            let mut solo = current;
+            let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
+            register(ui, "sectionMenu:solo", item.rect);
+            if item.clicked() {
+                if let Err(e) = app.run("view.soloSections", json!({"on": solo})) {
+                    app.toast(ui.ctx(), e);
+                }
+                menu.request_close();
+            }
+            return;
+        }
+        let shown = item().show(ui);
+        crate::widgets::register_response("sectionMenu:solo", shown.response.interact_rect, &shown.response);
+        if let Some(solo) = shown.events.committed().copied().filter(|on| ui.is_enabled() && *on != current) {
+            // The existing command also keeps the last open section. A local bool assignment is not equivalent.
             if let Err(e) = app.run("view.soloSections", json!({"on": solo})) {
                 app.toast(ui.ctx(), e);
             }
-            ui.close();
+            menu.request_close();
         }
     });
     if open {
@@ -227,11 +258,36 @@ pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
 
 fn hdr_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
-        let mut v = app.ui.hdr_visualize;
-        let r = ui.checkbox(&mut v, "Visualize HDR");
-        register(ui, "check:hdrVisualize", r.rect);
-        if r.on_hover_text("Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it").changed() {
-            app.ui.hdr_visualize = v;
+        use craft::behavior::Proposal;
+        use craft::ui::choice::Checkbox;
+        use craft::ui::contract::{Bind, Props as _, Show as _, Sizing};
+
+        let current = app.ui.hdr_visualize;
+        let help = "Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it";
+        let checkbox = || {
+            // This is a global app preference, not a photo develop value. No per-photo copy is kept.
+            Checkbox::new(Bind::given(current)).id_salt("hdr-visualize").label("Visualize HDR").tooltip(help).sizing(Sizing::FillWidth)
+        };
+        if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+            // The animated parent still receives geometry, but speculative passes must not mount or activate the control.
+            let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+            let size = checkbox().measure_in(&child, Proposal::Ideal);
+            ui.allocate_exact_size(size, egui::Sense::hover());
+            return;
+        }
+        if crate::panels::settings::native_controls_active(ui.ctx()) {
+            let mut v = current;
+            let r = ui.checkbox(&mut v, "Visualize HDR");
+            register(ui, "check:hdrVisualize", r.rect);
+            if r.on_hover_text(help).changed() && ui.is_enabled() && v != current {
+                app.ui.hdr_visualize = v;
+            }
+            return;
+        }
+        let shown = checkbox().show(ui);
+        crate::widgets::register_response("check:hdrVisualize", shown.response.interact_rect, &shown.response);
+        if let Some(on) = shown.events.committed().copied().filter(|on| ui.is_enabled() && *on != current) {
+            app.ui.hdr_visualize = on;
         }
     });
     control(app, ui, d, "hdr.maxEv", true);
@@ -240,6 +296,151 @@ fn hdr_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
 /// Quick Develop (grid with several photos selected): relative steps applied to every selected
 /// photo from its own value.
 pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
+    use std::hash::{Hash as _, Hasher as _};
+    // This one workflow needs the old bordered rectangular atom face, not the SDK's
+    // square ghost IconButton. Only that face/measurement is local; the supported
+    // component lifecycle owns input, focus, cancellation and accessibility.
+    mod quick_arrow {
+        use craft::behavior::Metrics;
+        use craft::theme::{State, Stateful, States};
+        use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _, Styled as _};
+        use craft::ui::primitives::{Glyph, IconSpec};
+        use craft::ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, UiTokens};
+        use egui::{Color32, Painter, Rect, Response, Stroke, Ui, Vec2, vec2};
+
+        use crate::icons::Icon;
+
+        #[derive(Clone, Debug, PartialEq, ComponentStyle)]
+        struct ArrowStyle {
+            #[style(focus)]
+            focus: FocusLook,
+            #[style(metrics)]
+            metrics: Metrics,
+            glyph: Stateful<StyleColor>,
+        }
+
+        struct ArrowGlyph(Icon);
+        impl Glyph for ArrowGlyph {
+            fn paint(&self, painter: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+                crate::icons::paint(painter, rect, self.0, color);
+            }
+        }
+
+        #[derive(Component)]
+        struct QuickArrow {
+            #[common]
+            common: Common,
+            #[style_key]
+            focus: Color32,
+            #[style_key]
+            ink: [Color32; 4],
+            widgets: egui::style::Widgets,
+            padding: egui::Margin,
+            framed: bool,
+            gap: f32,
+            size: Vec2,
+            opacity: f32,
+            glyph: ArrowGlyph,
+        }
+
+        impl Component for QuickArrow {
+            const ROLE: Role = Role::BUTTON;
+            const OVERLAYS: bool = false;
+            const PARTS: bool = false;
+            const SHOWS_LABEL: bool = false;
+            type Style = ArrowStyle;
+            type Output = Response;
+
+            fn style(cx: &StyleCx<'_>, key: QuickArrowStyleKey) -> ArrowStyle {
+                let [rest, hover, pressed, disabled] = key.ink.map(|c| cx.color(craft::theme::Rgba::from(c)));
+                ArrowStyle {
+                    focus: FocusLook::new(Stroke::new(2.0, key.focus), -2.0),
+                    metrics: Metrics::new(),
+                    glyph: Stateful::new(rest).off(States::new(rest, hover, pressed, disabled)),
+                }
+            }
+            fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+                self.size
+            }
+            fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+                let visual = match cx.state().state {
+                    State::Rest => &self.widgets.inactive,
+                    State::Hover => &self.widgets.hovered,
+                    State::Pressed => &self.widgets.active,
+                    State::Disabled => &self.widgets.noninteractive,
+                };
+                if self.framed {
+                    // Match egui's native button frame, including state-dependent stroke,
+                    // corners and expansion without moving the measured layout rectangle.
+                    let mut frame = egui::Frame {
+                        fill: visual.weak_bg_fill,
+                        corner_radius: visual.corner_radius,
+                        inner_margin: self.padding,
+                        ..Default::default()
+                    }
+                    .apply_stroke_and_expansion_without_layout_shift(visual.bg_stroke, visual.expansion);
+                    frame.fill = frame.fill.gamma_multiply(self.opacity);
+                    frame.stroke.color = frame.stroke.color.gamma_multiply(self.opacity);
+                    ui.reserve_slot(cx.visible).extend(&cx.response.ctx, vec![frame.paint(cx.rect - frame.total_margin())]);
+                }
+                // The original arrow_button has an empty text atom followed by the 16 pt
+                // vector. Keep its native icon gap/offset rather than silently recentering it.
+                let icon_rect = Rect::from_center_size(cx.rect.center() + vec2(self.gap / 2.0, 0.0), Vec2::splat(16.0));
+                ui.draw().icon(icon_rect, &IconSpec::glyph(&self.glyph).color(cx.resolve(&cx.style.glyph)));
+            }
+            fn finish(self, cx: Cx<'_, Self>) -> Response {
+                cx.response.clone()
+            }
+        }
+
+        pub(super) fn show(ui: &mut Ui, owner: u64, control: &str, direction: &str, icon: Icon, label: String) -> bool {
+            let widgets = ui.visuals().widgets.clone();
+            let ink = [
+                widgets.inactive.fg_stroke.color,
+                widgets.hovered.fg_stroke.color,
+                widgets.active.fg_stroke.color,
+                widgets.noninteractive.fg_stroke.color,
+            ];
+            let framed = ui.visuals().button_frame;
+            let padding = if framed { ui.spacing().button_padding.into() } else { egui::Margin::ZERO };
+            let gap = ui.spacing().icon_spacing;
+            let font = ui.style().override_font_id.clone().unwrap_or_else(|| egui::TextStyle::Body.resolve(ui.style()));
+            let empty_text = ui.painter().layout_no_wrap(String::new(), font, ui.visuals().text_color()).size();
+            let size = (vec2(empty_text.x + gap + 16.0, empty_text.y.max(16.0)) + padding.sum()).max(vec2(0.0, ui.spacing().interact_size.y));
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            // `measure::run` may wrap an otherwise ordinary Ui. The installed SDK's
+            // press lifecycle tests Ui sizing, so a dispatch-only guard after show_at
+            // is too late: that measured press can survive to a real release. Keep
+            // the identical layout allocation, but create no control/lifecycle here.
+            if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+                return false;
+            }
+            let response = QuickArrow {
+                common: Common::new(),
+                focus: crate::theme::Tokens::get(ui.ctx()).accent,
+                ink,
+                widgets,
+                padding,
+                framed,
+                gap,
+                size,
+                opacity: ui.opacity(),
+                glyph: ArrowGlyph(icon),
+            }
+            .id_salt(("quick-develop-arrow", owner, control, direction))
+            .label(label.clone())
+            .tooltip(label)
+            .show_at(ui, rect);
+            crate::widgets::register_response(format!("button:quick-{control}-{direction}"), rect, &response);
+            craft::ui::contract::clicked(&response)
+        }
+    }
+
+    // Hash the target context once per draw, not once per arrow. Ordinary edits and
+    // Undo/Redo keep it stable; library/active/selection/view handoffs get a new owner.
+    let mut context = std::collections::hash_map::DefaultHasher::new();
+    (app.session.library_generation(), std::mem::discriminant(&app.ui.view), app.session.active(), &app.session.selection.ids).hash(&mut context);
+    let owner = context.finish();
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("Quick Develop · {n} photos", n = n)).color(t.text_label).size(12.5));
@@ -265,18 +466,16 @@ pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize
                     ("▶", Icon::ChevronRight, small),
                     ("▶▶", Icon::ChevronDoubleRight, big),
                 ] {
-                    let r = crate::widgets::arrow_button(ui, "", icon, false);
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::Role::Button,
-                            ui.is_enabled(),
-                            crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)),
-                        )
-                    });
-                    crate::widgets::register(ui, format!("button:quick-{ctl}-{txt}"), r.rect);
-                    if r.on_hover_text(crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)))
-                        .clicked()
-                    {
+                    let tooltip = crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label));
+                    let clicked = if crate::panels::settings::native_controls_active(ui.ctx()) {
+                        let r = crate::widgets::arrow_button(ui, "", icon, false);
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip.clone()));
+                        crate::widgets::register(ui, format!("button:quick-{ctl}-{txt}"), r.rect);
+                        r.on_hover_text(tooltip).clicked()
+                    } else {
+                        quick_arrow::show(ui, owner, ctl, txt, icon, tooltip)
+                    };
+                    if clicked && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                         let _ = app.run("develop.quickAdjust", json!({"control": ctl, "delta": d}));
                     }
                 }
@@ -429,3 +628,15 @@ mod tests {
         assert!(!wrapped.iter().any(|&(l, w)| l == Locale::En && w >= 222.0), "{wrapped:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "quick_develop_flow_tests.rs"]
+mod quick_develop_flow_tests;
+
+#[cfg(test)]
+#[path = "hdr_visualize_flow_tests.rs"]
+mod hdr_visualize_flow_tests;
+
+#[cfg(test)]
+#[path = "section_solo_flow_tests.rs"]
+mod section_solo_flow_tests;

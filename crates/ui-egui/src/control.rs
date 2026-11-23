@@ -657,6 +657,51 @@ pub(crate) fn check_gesture_numbers(method: &str, p: &Value) -> Result<(), Strin
     check(method, "", p)
 }
 
+/// Owned focus/barrier facts from the request's own body; one clipboard eligibility engine.
+#[derive(Clone, Copy)]
+pub(crate) struct ClipboardFacts {
+    barrier: Option<&'static str>,
+    focused: bool,
+}
+impl ClipboardFacts {
+    pub(crate) fn capture(app: &LightcraftApp, ctx: &egui::Context) -> Self {
+        let barrier = if crate::panels::notices::blocks_input(app) {
+            Some("a modal prompt")
+        } else if crate::panels::library_problem::blocks_dialog_input(app) {
+            Some("the blocking library window")
+        } else {
+            None
+        };
+        Self { barrier, focused: ctx.text_edit_focused() }
+    }
+    fn check(self) -> Result<(), String> {
+        if let Some(barrier) = self.barrier {
+            return Err(format!("ui.clipboard: {barrier} is blocking background input"));
+        }
+        if !self.focused {
+            return Err("ui.clipboard: no text field has the focus (click one first)".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn append_paste(self, output: &mut egui::FullOutput, owner: egui::ViewportId, claim: &std::sync::atomic::AtomicU8, eligible: bool) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        // State is an output fact, NOT identity: 0 unclaimed, 1 claimed/no paste, 2 appended.
+        if claim.compare_exchange(0, 1, SeqCst, SeqCst).is_err() { return claim.load(SeqCst) == 2; }
+        if !eligible { return false; }
+        if self.check().is_err() { return false; }
+        let Some(viewport) = output.viewport_output.get_mut(&owner) else { return false };
+        viewport.commands.push(egui::ViewportCommand::RequestPaste);
+        claim.store(2, SeqCst);
+        true
+    }
+}
+#[derive(Clone, Copy)]
+pub(crate) enum PasteDispatch {
+    Context,
+    /// Witness for this exact pending request, never inferred from output kind/count.
+    OwnOutput(bool),
+}
+
 /// Resolve one queued synthetic-input control request against the **current** layout.
 ///
 /// Called by the app only after a completed UI pass newer than admission (plan §4.5). Widget rects
@@ -664,6 +709,13 @@ pub(crate) fn check_gesture_numbers(method: &str, p: &Value) -> Result<(), Strin
 /// has pushed the events onto `app.synthetic`; the app answers the request once the UI consumed
 /// them.
 pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, method: &str, p: &Value) -> Result<GestureOutcome, String> {
+    let clipboard = ClipboardFacts::capture(app, ctx);
+    gesture_events_at(app, ctx, method, p, clipboard, PasteDispatch::Context)
+}
+
+pub(crate) fn gesture_events_at(
+    app: &mut LightcraftApp, ctx: &egui::Context, method: &str, p: &Value, clipboard: ClipboardFacts, paste: PasteDispatch,
+) -> Result<GestureOutcome, String> {
     check_gesture_numbers(method, p)?;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64);
@@ -781,25 +833,18 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
             // later), so a barrier created after the request can drop that later event; the reply
             // below cannot promise dispatch or delivery. With `text`, the synthetic
             // Event::Paste is filtered and canceled like other injected input.
-            let barrier = if crate::panels::notices::blocks_input(app) {
-                Some("a modal prompt")
-            } else if crate::panels::library_problem::blocks_dialog_input(app) {
-                Some("the blocking library window")
-            } else {
-                None
-            };
-            if let Some(barrier) = barrier {
-                return Err(format!("ui.clipboard: {barrier} is blocking background input"));
-            }
-            if !ctx.text_edit_focused() {
-                return Err("ui.clipboard: no text field has the focus (click one first)".into());
-            }
+            // The exact request's successful own-output witness already passed this one eligibility engine.
+            if !(matches!(paste, PasteDispatch::OwnOutput(true)) && s("action") == Some("paste") && s("text").is_none()) { clipboard.check()?; }
             match s("action") {
                 Some("cut") => app.synthetic.push(egui::Event::Cut),
                 Some("copy") => app.synthetic.push(egui::Event::Copy),
                 Some("paste") => match s("text") {
                     Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
-                    None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                    None => match paste {
+                        PasteDispatch::Context => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                        PasteDispatch::OwnOutput(true) => {},
+                        PasteDispatch::OwnOutput(false) => return Err("ui.clipboard: its own paste output is unavailable".into()),
+                    },
                 },
                 _ => return Err("ui.clipboard: `action` is cut, copy or paste".into()),
             }
@@ -910,4 +955,26 @@ fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
         "diskBudget": disk.map(|d| d.budget()),
         "loupeEdge": app.session.loupe_edge,
     })
+}
+
+#[cfg(test)]
+mod completion_clipboard_tests {
+    #[test]
+    fn captured_clipboard_eligibility_and_exact_witness_do_not_revalidate_or_reemit() {
+        let ctx = egui::Context::default();
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let own = super::ClipboardFacts { barrier: None, focused: true };
+        app.notices.push("newer prompt".into());
+        let params = serde_json::json!({"action": "paste"});
+        assert!(super::gesture_events(&mut app, &ctx, "ui.clipboard", &params).is_err(), "legacy caller uses current barrier");
+        assert!(super::gesture_events_at(&mut app, &ctx, "ui.clipboard", &params, own, super::PasteDispatch::OwnOutput(true)).is_ok());
+        assert!(super::gesture_events_at(&mut app, &ctx, "ui.clipboard", &params, own, super::PasteDispatch::OwnOutput(false)).is_err());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+        output.textures_delta.clear();
+        assert!(output.viewport_output.values().all(|v| v.commands.iter().all(|c| !matches!(c, egui::ViewportCommand::RequestPaste))));
+        assert!(app.synthetic.is_empty());
+        let claim = std::sync::atomic::AtomicU8::new(0);
+        assert!(!own.append_paste(&mut output, egui::ViewportId::ROOT, &claim, false));
+        assert!(!own.append_paste(&mut output, egui::ViewportId::ROOT, &claim, true), "a later candidate cannot revive the earlier refused completion");
+    }
 }

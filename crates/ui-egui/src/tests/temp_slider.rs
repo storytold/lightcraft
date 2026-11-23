@@ -102,11 +102,23 @@ fn the_kelvin_temp_slider_has_lightrooms_scale() {
 #[test]
 fn other_sliders_stay_linear() {
     let mut h = edit_panel(true);
-    set(&mut h, "light.exposure", 1.0);
-    assert!((thumb(&h, "light.exposure") - 0.6).abs() < 0.005, "+1.00 of −5…+5 at 60 %");
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure", "fx": 0.75}), T)["ok"], true);
-    h.settle(SETTLE);
-    assert!((develop(&h).light.exposure - 2.5).abs() < 0.011, "{}", develop(&h).light.exposure);
+    // The ported control exposes the SDK's actual thumb sensing geometry. The old hollow
+    // circle painter is intentionally not its interface; both unported Temp tests above/below
+    // retain their existing ring/scale checks.
+    for value in [-4.0, -2.5, 0.0, 1.0, 3.75] {
+        set(&mut h, "light.exposure", value);
+        let track = widget(&h, "slider:light.exposure");
+        let knob = widget(&h, "sliderThumb:light.exposure");
+        let at = (knob.center().x - track.left()) / track.width();
+        let expected = (value + 5.0) / 10.0;
+        assert!((f64::from(at) - expected).abs() < 0.005, "{value} drawn at {at}, linear position is {expected}");
+    }
+    for fraction in [0.1, 0.25, 0.6, 0.75, 0.9] {
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure", "fx": fraction}), T)["ok"], true);
+        h.settle(SETTLE);
+        let expected = -5.0 + 10.0 * fraction;
+        assert!((develop(&h).light.exposure - expected).abs() < 0.011, "click {fraction}: {} vs linear {expected}", develop(&h).light.exposure);
+    }
 }
 
 /// The relative temperature of a rendered photo (−100…+100, 0 = as shot, in the middle) is unchanged.

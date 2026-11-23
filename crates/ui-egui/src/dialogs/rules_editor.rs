@@ -1,6 +1,8 @@
 //! The smart-album rule editor: match all / any / none of a list of rules (field, operator,
 //! value), with nested groups. Field and operator lists come from `lightcraft_catalog::rules`.
 
+use craft::ui::contract::{Props as _, ShowContainer as _, Trigger};
+use craft::ui::menu::Menu;
 use egui::RichText;
 use lightcraft_catalog::rules::{FIELD_GROUPS, Kind, Problem, TOP_LEVEL_FIELDS, bool_value, field_kind, field_label, ops_for};
 use lightcraft_catalog::{Match, Rule, RuleSet};
@@ -9,7 +11,14 @@ use serde_json::{Value, json};
 use crate::album_picker::{AlbumEntry, AlbumPicker};
 use crate::date_picker::{DatePicker, PickedDate};
 use crate::theme::Tokens;
-use crate::widgets::register;
+
+mod controls;
+
+fn register(ui: &egui::Ui, id: impl Into<String>, rect: egui::Rect) {
+    if !controls::measuring(ui) {
+        crate::widgets::register(ui, id, rect);
+    }
+}
 
 pub mod rules_move;
 
@@ -53,12 +62,15 @@ fn match_combo(ui: &mut egui::Ui, salt: &str, m: &mut Match) {
         Match::Any => "any",
         Match::None => "none",
     };
-    let combo = crate::widgets::combo_box(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
-        for x in [Match::All, Match::Any, Match::None] {
-            ui.selectable_value(m, x, crate::i18n::tr(label(x)));
-        }
-    });
-    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Match"));
+    let options: Vec<_> =
+        [Match::All, Match::Any, Match::None].into_iter().map(|m| (label(m).to_owned(), crate::i18n::tr(label(m)).to_owned())).collect();
+    if let Some(pick) = controls::select(ui, &format!("ruleMatch:{salt}"), "Match", label(*m), &options, 72.0) {
+        *m = match pick.as_str() {
+            "any" => Match::Any,
+            "none" => Match::None,
+            _ => Match::All,
+        };
+    }
 }
 
 fn text_value(ui: &mut egui::Ui, v: &mut Value, width: f32, hint: &str, salt: &str) {
@@ -67,15 +79,15 @@ fn text_value(ui: &mut egui::Ui, v: &mut Value, width: f32, hint: &str, salt: &s
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    let r = ui.add(egui::TextEdit::singleline(&mut s).hint_text(crate::i18n::tr(hint)).desired_width(width));
-    register(ui, format!("field:{salt}"), r.rect);
-    if r.changed() {
+    let before = s.clone();
+    controls::text(ui, &format!("field:{salt}"), &mut s, width, hint);
+    if !controls::measuring(ui) && s != before {
         *v = json!(s);
     }
 }
 
-fn number_value(ui: &mut egui::Ui, v: &mut Value, field: &str) {
-    let mut n = v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0.0);
+fn number_value(ui: &mut egui::Ui, v: &mut Value, field: &str, salt: &str) {
+    let n = v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0.0);
     let (lo, hi, speed) = match field {
         "rating" => (0.0, 5.0, 0.05),
         "iso" => (0.0, 409_600.0, 10.0),
@@ -88,9 +100,7 @@ fn number_value(ui: &mut egui::Ui, v: &mut Value, field: &str) {
     let whole = matches!(field, "rating" | "iso" | "keywordCount" | "personCount" | "longEdge" | "shortEdge");
     // the range limits dragging; a stored value outside it (a rating of 9 from an agent) is shown
     // as it is, marked by the check, not quietly clamped to something that matches
-    let dv = egui::DragValue::new(&mut n).range(lo..=hi).clamp_existing_to_range(false).speed(speed);
-    let dv = if whole { dv.fixed_decimals(0) } else { dv.max_decimals(2) };
-    if ui.add(dv).changed() {
+    if let Some(n) = controls::number(ui, &format!("field:{salt}"), field_label(field).unwrap_or(field), n, lo, hi, speed, whole) {
         *v = if whole { json!(n.round() as i64) } else { json!(n) };
     }
 }
@@ -151,17 +161,19 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
             };
             let mut n = stored_n.unwrap_or(30.0);
             let mut unit = stored_unit.to_lowercase();
-            let mut changed =
-                ui.add(egui::DragValue::new(&mut n).range(1.0..=10_000.0).clamp_existing_to_range(false).speed(0.2).fixed_decimals(0)).changed();
-            let combo = crate::widgets::combo_box(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
-                for u in ["hours", "days", "weeks", "months", "years"] {
-                    if ui.selectable_label(unit.trim_end_matches('s') == u.trim_end_matches('s'), crate::i18n::tr(u)).clicked() {
-                        unit = u.to_string();
-                        changed = true;
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Unit"));
+            let number = controls::number(ui, &format!("field:{salt}-n"), "Value", n, 1.0, 10_000.0, 1.0, true);
+            let options: Vec<_> =
+                ["hours", "days", "weeks", "months", "years"].into_iter().map(|u| (u.to_owned(), crate::i18n::tr(u).to_owned())).collect();
+            // Catalog input also accepts singular and differently cased units; drawing preserves them.
+            let selected = options.iter().find(|o| unit.trim_end_matches('s') == o.0.trim_end_matches('s')).map_or(unit.as_str(), |o| o.0.as_str());
+            let picked = controls::select(ui, &format!("ruleUnit:{salt}"), "Unit", selected, &options, 88.0);
+            let changed = number.is_some() || picked.is_some();
+            if let Some(value) = number {
+                n = value;
+            }
+            if let Some(value) = picked {
+                unit = value;
+            }
             if changed {
                 *v = json!({"n": n.round(), "unit": unit});
             }
@@ -177,9 +189,9 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
                 ui.label(crate::i18n::tr("and"));
                 text_value(ui, hi, 60.0, "1/125", &format!("{salt}-b"));
             } else if k == Kind::Number {
-                number_value(ui, lo, field);
+                number_value(ui, lo, field, &format!("{salt}-a"));
                 ui.label(crate::i18n::tr("and"));
-                number_value(ui, hi, field);
+                number_value(ui, hi, field, &format!("{salt}-b"));
             } else if k == Kind::Date {
                 // each date's picker stops at the other one, so the two stay in order
                 let (lo_date, hi_date) = (lo.as_str().and_then(PickedDate::parse), hi.as_str().and_then(PickedDate::parse));
@@ -200,34 +212,24 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
         }
         // camera notation: 1/250, 0.5, 2"
         (Some(Kind::Number), _) if field == "shutterSpeed" => text_value(ui, v, 70.0, "1/250", salt),
-        (Some(Kind::Number), _) => number_value(ui, v, field),
+        (Some(Kind::Number), _) => number_value(ui, v, field, salt),
         (Some(Kind::Choice(c)), _) => {
             let cur = v.as_str().unwrap_or("").to_string();
-            let combo = crate::widgets::combo_box(format!("{salt}-choice"))
-                .width(120.0)
-                .selected_text(crate::i18n::choice_text(field, &cur))
-                .show_ui(ui, |ui| {
-                    for (id, _) in c.iter() {
-                        if ui.selectable_label(cur == *id, crate::i18n::choice_text(field, id)).clicked() {
-                            *v = json!(id);
-                        }
-                    }
-                });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            let options: Vec<_> = c.iter().map(|(id, _)| (id.to_string(), crate::i18n::choice_text(field, id).to_string())).collect();
+            if let Some(picked) = controls::select(ui, &format!("ruleChoice:{salt}"), field_label(field).unwrap_or(field), &cur, &options, 120.0) {
+                *v = json!(picked);
+            }
         }
         (Some(Kind::Bool), _) => {
             // the catalog's reading of the value ("false" is no); one that is neither yes nor no is
             // shown as written and kept until a choice replaces it, so the dialog reports it
             let cur = bool_value(v);
             let text = cur.map_or_else(|| v.to_string(), |b| crate::i18n::bool_text(b).to_string());
-            let combo = crate::widgets::combo_box(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
-                for b in [true, false] {
-                    if ui.selectable_label(cur == Some(b), crate::i18n::bool_text(b)).clicked() {
-                        *v = json!(b);
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            let options: Vec<_> = [true, false].into_iter().map(|b| (b.to_string(), crate::i18n::bool_text(b).to_string())).collect();
+            let current = cur.map_or(text, |b| b.to_string());
+            if let Some(picked) = controls::select(ui, &format!("ruleBool:{salt}"), field_label(field).unwrap_or(field), &current, &options, 72.0) {
+                *v = json!(picked == "true");
+            }
         }
         (Some(Kind::Date), _) => {
             text_value(ui, v, 120.0, "2026-04 or 2026-04-12", salt);
@@ -242,39 +244,28 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
 fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String, value: &mut Value) {
     let label = field_label(field).unwrap_or(field.as_str()).to_string();
     let current = field.clone();
-    let r = crate::widgets::combo_box(format!("{salt}-field")).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).show_ui(ui, |ui| {
-        let mut pick = None;
+    let face = controls::face(ui, &format!("ruleField:{salt}"), "Field", crate::i18n::tr(&label), 150.0);
+    let mut pick = None;
+    Menu::new(crate::i18n::tr("Field").to_owned()).id_salt((salt, "field-menu")).values().opened_by(&face, Trigger::Click).show(ui, |ui, _| {
         let mut item = |ui: &mut egui::Ui, id: &'static str| {
-            let r = ui.selectable_label(current == id, crate::i18n::tr(field_label(id).unwrap_or(id)));
-            register(ui, format!("ruleFieldItem:{id}:{salt}"), r.rect);
-            if r.clicked() {
+            if controls::item(ui, &format!("ruleFieldItem:{id}:{salt}"), crate::i18n::tr(field_label(id).unwrap_or(id)), current == id) {
                 pick = Some(id);
-                ui.close();
             }
         };
         for id in TOP_LEVEL_FIELDS {
             item(ui, id);
         }
         ui.separator();
-        // submenu rows look like the items above them; the one holding the current field stands out
-        // (a transparent frame, not none: a frameless button drops its padding and hover fill; the
-        // list's style already drops the resting border)
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
         for (group, ids) in FIELD_GROUPS {
-            let text = RichText::new(crate::i18n::tr(group));
-            let text = if ids.contains(&current.as_str()) { text.strong() } else { text };
-            let r = crate::widgets::menu_button(ui, text, |ui| {
+            let row = Menu::submenu_row(ui, crate::i18n::tr(group).to_owned(), |ui, _| {
                 for id in *ids {
                     item(ui, id);
                 }
             });
-            register(ui, format!("ruleFieldGroup:{group}:{salt}"), r.response.rect);
+            controls::register(ui, format!("ruleFieldGroup:{group}:{salt}"), &row.response);
         }
-        pick
     });
-    crate::widgets::name_combo(&r.response, crate::i18n::tr("Field"));
-    register(ui, format!("ruleField:{salt}"), r.response.rect);
-    let Some(Some(id)) = r.inner else { return };
+    let Some(id) = pick else { return };
     if field == id {
         return;
     }
@@ -286,10 +277,10 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
     *value = default_value(field, op);
 }
 
-/// How wide `ui.small_button(text)` is: its text and the button's padding.
-fn small_button_width(ui: &egui::Ui, text: &str) -> f32 {
-    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
-    galley.size().x + 2.0 * ui.spacing().button_padding.x
+fn action_width(ui: &egui::Ui, label: &str) -> f32 {
+    let text = egui::WidgetText::from(crate::i18n::tr(label));
+    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    (galley.size().x + 24.0).max(72.0)
 }
 
 /// A rule's problem, shown under it in the caution colour (`ruleProblem:<salt>` for tests and
@@ -304,6 +295,14 @@ fn problem_note(ui: &mut egui::Ui, problem: Option<&Problem>, salt: &str) {
 /// Edit `rs` in place; `salt` keeps widget ids apart between groups, `path` is where `rs` sits
 /// (empty at the top) so each row finds its own problem in `env`.
 pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path: &[usize], env: &Env) {
+    if controls::measuring(ui) {
+        edit_body(ui, &mut rs.clone(), salt, depth, path, env);
+    } else {
+        edit_body(ui, rs, salt, depth, path, env);
+    }
+}
+
+fn edit_body(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path: &[usize], env: &Env) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.label(RichText::new(crate::i18n::tr("Match")).color(t.text_label));
@@ -320,7 +319,7 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
             Rule::Group { group } => {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this group")).clicked() {
+                        if controls::button(ui, &format!("button:ruleRemoveGroup-{rsalt}"), "−", "Remove this group", 24.0) {
                             remove = Some(i);
                         }
                         ui.vertical(|ui| edit(ui, group, &rsalt, depth + 1, &here, env));
@@ -332,34 +331,26 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                 ui.horizontal(|ui| {
                     field_menu(ui, &rsalt, field, op, value);
                     let kind = field_kind(field).unwrap_or(Kind::Text);
-                    let op_label = ops_for(kind).iter().find(|o| o.0 == op.as_str()).map_or(op.as_str(), |o| o.1).to_string();
-                    let combo =
-                        crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
-                            for (id, l) in ops_for(kind) {
-                                if ui.selectable_label(op == id, crate::i18n::tr(l)).clicked() && op != id {
-                                    let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
-                                    *op = id.to_string();
-                                    if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
-                                        *value = default_value(field, op);
-                                    }
-                                }
-                            }
-                        });
-                    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Operator"));
+                    let options: Vec<_> = ops_for(kind).iter().map(|(id, label)| (id.to_string(), crate::i18n::tr(label).to_owned())).collect();
+                    if let Some(id) = controls::select(ui, &format!("ruleOp:{rsalt}"), "Operator", op, &options, 110.0)
+                        && *op != id
+                    {
+                        let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
+                        *op = id;
+                        if was_special || matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
+                            *value = default_value(field, op);
+                        }
+                    }
                     value_editor(ui, field, op, value, &rsalt, env);
                     // − and + at the end of the row, after the value however long it is: a
                     // right-to-left layout put them over the value when the row had no room left
                     // (#2353), and the dialog widens to the row instead
-                    let buttons = small_button_width(ui, "−") + ui.spacing().item_spacing.x + small_button_width(ui, "+");
+                    let buttons = 48.0 + ui.spacing().item_spacing.x;
                     ui.add_space((ui.available_width() - buttons).max(0.0));
-                    let del = ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this rule"));
-                    register(ui, format!("button:ruleRemove-{rsalt}"), del.rect);
-                    if del.clicked() {
+                    if controls::button(ui, &format!("button:ruleRemove-{rsalt}"), "−", "Remove this rule", 24.0) {
                         remove = Some(i);
                     }
-                    let add = ui.small_button("+").on_hover_text(crate::i18n::tr("Add a rule (⌥-click: a group)"));
-                    register(ui, format!("button:ruleAdd-{rsalt}"), add.rect);
-                    if add.clicked() {
+                    if controls::button(ui, &format!("button:ruleAdd-{rsalt}"), "+", "Add a rule (⌥-click: a group)", 24.0) {
                         let group = ui.input(|i| i.modifiers.alt) && depth < 3;
                         insert = Some((
                             i + 1,
@@ -379,17 +370,20 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
     }
     if rs.rules.is_empty() || depth == 0 {
         ui.horizontal(|ui| {
-            let add = ui.small_button(crate::i18n::tr("+ Rule"));
-            register(ui, format!("button:ruleAddEnd-{salt}"), add.rect);
-            if add.clicked() {
+            let rule_width = action_width(ui, "+ Rule");
+            if controls::button(ui, &format!("button:ruleAddEnd-{salt}"), "+ Rule", "+ Rule", rule_width) {
                 rs.rules.push(new_rule());
             }
-            if depth < 3 && ui.small_button(crate::i18n::tr("+ Group")).clicked() {
+            let group_width = action_width(ui, "+ Group");
+            if depth < 3 && controls::button(ui, &format!("button:ruleAddGroup-{salt}"), "+ Group", "+ Group", group_width) {
                 rs.rules.push(Rule::Group { group: RuleSet { mode: Match::Any, rules: vec![new_rule()] } });
             }
         });
     }
 }
+
+#[cfg(test)]
+mod rules_port155_tests;
 
 #[cfg(test)]
 mod tests {

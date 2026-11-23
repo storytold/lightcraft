@@ -14,17 +14,72 @@ const BUTTON_H: f32 = 40.0;
 /// Space between tool buttons.
 const GAP: f32 = 6.0;
 
+
+/// Keep one definition of the actual Panel frame for drawing and its intrinsic reservation.
+fn panel_frame(t: &Tokens) -> egui::Frame {
+    egui::Frame::NONE
+        .fill(t.chrome)
+        .inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 8 })
+        .stroke(egui::Stroke::new(1.0, t.divider))
+}
+
+/// Panel's documented separator is outside the frame, in its inner-facing outer margin.
+/// Resolve that public style metric without drawing controls or creating an egui hit owner.
+fn frame_with_separator(mut frame: egui::Frame, style: &egui::Style) -> egui::Frame {
+    let separator = style.visuals.widgets.noninteractive.bg_stroke.width.round() as i8;
+    frame.outer_margin.left = frame.outer_margin.left.saturating_add(separator);
+    frame
+}
+
+fn centered_reservation(outer_width: f32, child_width: f32, frame: egui::Frame) -> f32 {
+    let content_width = (outer_width - frame.total_margin().sum().x).max(0.0);
+    let centered_overflow = (child_width - content_width).max(0.0) / 2.0;
+    (outer_width - centered_overflow).max(0.0)
+}
+
+/// The room the existing fixed-width, centered-content Panel actually leaves unavailable to
+/// its neighbor. Its frame response can extend past the host; shell reservation must not
+/// confuse this consumed extent with the Panel's requested presentation width.
+pub(crate) fn shell_extent(ctx: &egui::Context) -> f32 {
+    let t = Tokens::get(ctx);
+    let frame = frame_with_separator(panel_frame(&t), &ctx.global_style());
+    centered_reservation(t.strip_w, t.strip_w, frame)
+}
+
+fn presentation_rect(mut slot: egui::Rect, width: f32, rtl: bool) -> egui::Rect {
+    if rtl {
+        slot.max.x = slot.min.x + width;
+    } else {
+        slot.min.x = slot.max.x - width;
+    }
+    slot
+}
+
+/// Draw exactly once in the original presentation footprint, independently of the consumed
+/// extent. Merely narrowing the parent would narrow the content again and move every button.
+/// The outside edge stays fixed in both directions; only the inside clip grows to the same
+/// footprint the old declared-width slot supplied. The viewport still bounds every hit/paint.
+pub(crate) fn show_in_shell(app: &mut LightcraftApp, ui: &mut egui::Ui, rtl: bool) {
+    let width = Tokens::get(ui.ctx()).strip_w;
+    let rect = presentation_rect(ui.max_rect(), width, rtl);
+    let mut clip = ui.clip_rect();
+    if rtl {
+        clip.max.x = clip.max.x.max(rect.max.x);
+    } else {
+        clip.min.x = clip.min.x.min(rect.min.x);
+    }
+    let clip = clip.intersect(rect).intersect(ui.ctx().content_rect());
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("legacy-tool-strip-frame").max_rect(rect));
+    child.set_clip_rect(clip);
+    show(app, &mut child);
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::right("tool_strip")
         .exact_size(t.strip_w)
         .resizable(false)
-        .frame(
-            egui::Frame::NONE
-                .fill(t.chrome)
-                .inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 8 })
-                .stroke(egui::Stroke::new(1.0, t.divider)),
-        )
+        .frame(panel_frame(&t))
         .show(ui, |ui| {
             crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
             let has_photo = app.session.active().is_some();
@@ -107,5 +162,69 @@ mod tests {
         let (top, bottom) = (presets.top(), 700.0 - info.bottom());
         assert!((top - bottom).abs() < 0.5, "Presets starts {top} below the top, Info ends {bottom} above the bottom");
         assert_eq!(info.top() - keywords.bottom(), GAP, "the bottom buttons are spaced like the top ones");
+    }
+}
+
+#[cfg(test)]
+mod intrinsic_reservation_tests {
+    use super::*;
+    use crate::headless::HeadlessView;
+
+    #[test]
+    fn intrinsic_extent_matches_actual_panel_with_and_without_overflow() {
+        for width in [1025.0, 1400.0] {
+            for scale in [1.0, 1.25, 2.0] {
+                for child_width in [32.0, 48.0] {
+                    for stroke in [0.0, 1.0, 2.0] {
+                        let mut view = HeadlessView::new();
+                        for frame_index in 0..3 {
+                            let raw = HeadlessView::raw_input(vec2(width, 768.0), scale, frame_index as f64 / 60.0, vec![]);
+                            view.run(raw, |ui| {
+                                let frame = egui::Frame::NONE.stroke(egui::Stroke::new(stroke, egui::Color32::GRAY));
+                                let expected = centered_reservation(48.0, child_width, frame_with_separator(frame, ui.style()));
+                                let root = ui.available_rect_before_wrap();
+                                egui::Panel::right("intrinsic-regression")
+                                    .exact_size(48.0).resizable(false).frame(frame)
+                                    .show(ui, |ui| {
+                                        ui.vertical_centered(|ui| {
+                                            ui.allocate_exact_size(vec2(child_width, 40.0), egui::Sense::hover());
+                                        });
+                                    });
+                                let actual = root.right() - ui.available_rect_before_wrap().right();
+                                assert_eq!(actual, expected, "width={width} scale={scale} child={child_width} stroke={stroke}");
+                                if child_width == 32.0 {
+                                    assert_eq!(actual, 48.0, "a non-overflowing child must not receive a parity offset");
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn presentation_footprint_is_unchanged_on_both_end_sides() {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let width = Tokens::get(&ctx).strip_w;
+        let extent = shell_extent(&ctx);
+        for outer in [1025.0, 1400.0] {
+            for rtl in [false, true] {
+                let slot = if rtl {
+                    egui::Rect::from_min_max(egui::pos2(0.0, 42.0), egui::pos2(extent, 768.0))
+                } else {
+                    egui::Rect::from_min_max(egui::pos2(outer - extent, 42.0), egui::pos2(outer, 768.0))
+                };
+                let rect = presentation_rect(slot, width, rtl);
+                assert_eq!(rect.width(), width);
+                assert_eq!((rect.top(), rect.bottom()), (slot.top(), slot.bottom()));
+                if rtl {
+                    assert_eq!((rect.left(), rect.right()), (0.0, width));
+                } else {
+                    assert_eq!((rect.left(), rect.right()), (outer - width, outer));
+                }
+            }
+        }
     }
 }

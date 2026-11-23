@@ -416,20 +416,48 @@ fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// selected photos' statuses differ, and any status picked is given to all of them. A status
 /// picked goes to the photos `targets`.
 fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus, mixed: bool, targets: &[PhotoId]) {
+    use craft::behavior::Mixed;
+    use craft::i18n::{Word, WordRows};
+    use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+    use craft::ui::pickers::Select;
+    use craft::ui::runtime::env::{WordsOverride, with_env};
+
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
-    let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
-    let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
-        for st in lightcraft_catalog::CopyrightStatus::ALL {
-            let on = !mixed && st == current;
-            if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
-                let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
-                let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
-            }
-        }
+    let label = crate::i18n::tr("Copyright Status");
+    ui.label(egui::RichText::new(label).size(11.5).color(t.text_dim));
+    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+    let editable = ui.is_enabled() && !targets.is_empty() && !measuring;
+    let entries: Vec<_> = lightcraft_catalog::CopyrightStatus::ALL
+        .into_iter()
+        .map(|status| Entry::new(status, crate::i18n::tr(status.label())))
+        .collect();
+    let value = if mixed { Mixed::Mixed } else { Mixed::Same(current) };
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), 24.0), Sense::hover());
+    // The fixed field has already reserved its measured size. A speculative pass must not
+    // construct the interactive picker: a real press might otherwise open its popup here.
+    if measuring {
+        ui.add_space(6.0);
+        return;
+    }
+    // Keep LightCraft's translated Mixed label without replacing the SDK's mixed binding.
+    let words = WordRows::new().row(Word::keyed("select.mixed", MIXED), crate::i18n::tr(MIXED));
+    let shown = with_env(ui, |scope| scope.words = Some(WordsOverride::Overlay(words)), |ui| {
+        Select::new(label, Bind::given(value), &entries)
+            .id_salt("info-copyright-status")
+            .enabled(editable)
+            .show_at(ui, rect)
     });
-    crate::widgets::name_combo(&r.response, crate::i18n::tr("Copyright Status"));
-    register(ui, "field:copyrightStatus", r.response.rect);
+    if !measuring {
+        crate::widgets::register_response("field:copyrightStatus", shown.response.rect, &shown.response);
+        // The SDK owns drafts, keyboard navigation and dismissal. Only its commit edits the
+        // document; reselecting a common value must not create an Undo entry.
+        if let Some(status) = shown.events.committed().filter(|status| mixed || **status != current)
+            && editable
+        {
+            let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
+            let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": status.id()}));
+        }
+    }
     ui.add_space(6.0);
 }
 
@@ -465,3 +493,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     }
     ui.add_space(6.0);
 }
+
+#[cfg(test)]
+#[path = "info_copyright_tests.rs"]
+mod copyright_tests;

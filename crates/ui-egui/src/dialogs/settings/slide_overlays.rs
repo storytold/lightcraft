@@ -204,59 +204,8 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         placement(app, ui, t, "slideshowStars", &r.place, true, &stars);
     }
 
-    // text overlays
-    ui.add_space(6.0);
-    ui.label(RichText::new(crate::i18n::tr("Text overlays")).font(t.semibold(11.5)).color(t.text));
-    let n = s.texts.len();
-    for (i, o) in s.texts.iter().enumerate() {
-        let id = format!("slideshowText{i}");
-        let wrap = |v: Value| text_change(i, n, v);
-        ui.add_space(2.0);
-        row(ui, t, &format!("{} {}", crate::i18n::tr("Text"), i + 1), |ui| {
-            text(app, ui, &id, &o.text, "{title} · {exposure}", &|v| wrap(json!({"text": v})));
-            if crate::widgets::text_button(ui, &format!("{id}Remove"), "Remove", false).clicked() {
-                set(app, json!({"removeText": i}));
-            }
-        });
-        if app.session.slide_overlays.texts.len() != n {
-            return; // removed: the indices moved; drawn again next frame
-        }
-        row(ui, t, "Size", |ui| {
-            slider(app, ui, &format!("{id}Size"), o.size, Range { lo: 0.01, hi: TEXT_SIZE_MAX / 2.0, unit: Unit::Percent }, &|v| {
-                wrap(json!({"size": v}))
-            })
-        });
-        row(ui, t, "Colour", |ui| colour(app, ui, &format!("{id}Color"), o.color, &|c| wrap(json!({"color": c}))));
-        row(ui, t, "Opacity", |ui| {
-            slider(app, ui, &format!("{id}Opacity"), o.opacity, Range { lo: 0.0, hi: 1.0, unit: Unit::Percent }, &|v| wrap(json!({"opacity": v})))
-        });
-        placement(app, ui, t, &id, &o.place, true, &wrap);
-        let sh = o.shadow;
-        if toggle(app, ui, &format!("{id}Shadow"), sh.on, "Shadow", &|v| wrap(json!({"shadow": v}))) {
-            row(ui, t, "Opacity", |ui| {
-                slider(app, ui, &format!("{id}ShadowOpacity"), sh.opacity, Range { lo: 0.0, hi: 1.0, unit: Unit::Percent }, &|v| {
-                    wrap(json!({"shadowOpacity": v}))
-                })
-            });
-            row(ui, t, "Offset", |ui| {
-                slider(app, ui, &format!("{id}ShadowOffset"), sh.offset, Range { lo: 0.0, hi: SHADOW_OFFSET_MAX, unit: Unit::Percent }, &|v| {
-                    wrap(json!({"shadowOffset": v}))
-                })
-            });
-            row(ui, t, "Radius", |ui| {
-                slider(app, ui, &format!("{id}ShadowRadius"), sh.radius, Range { lo: 0.0, hi: SHADOW_RADIUS_MAX, unit: Unit::Percent }, &|v| {
-                    wrap(json!({"shadowRadius": v}))
-                })
-            });
-            row(ui, t, "Angle", |ui| {
-                slider(app, ui, &format!("{id}ShadowAngle"), sh.angle, Range { lo: -180.0, hi: 180.0, unit: Unit::Degrees }, &|v| {
-                    wrap(json!({"shadowAngle": v}))
-                })
-            });
-        }
-    }
-    if n < lightcraft_engine::slide_overlay::MAX_TEXTS && crate::widgets::text_button(ui, "slideshowAddText", "Add text overlay", false).clicked() {
-        set(app, json!({"addText": {}}));
+    if text_overlays(app, ui, t) {
+        return; // The removed row changed the indices. Continue with fresh rows next pass.
     }
     hint(
         ui,
@@ -296,3 +245,429 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.label(RichText::new(warning).size(11.0).color(t.caution));
     }
 }
+
+/// These library preferences have no persisted row IDs. Keep UI identities separate from their
+/// command indices: our own removal shifts the indices, not the remaining editors' identities.
+/// An external replacement or library switch retires all editors rather than retargeting a draft.
+#[derive(Clone, Default)]
+struct TextRows {
+    generation: u64,
+    next: u64,
+    ids: Vec<egui::Id>,
+    observed: Vec<lightcraft_engine::slide_overlay::TextOverlay>,
+}
+
+impl TextRows {
+    fn append(&mut self) {
+        self.next = self.next.saturating_add(1);
+        self.ids.push(egui::Id::unique("slideshow-text-editor").with((self.generation, self.next)));
+    }
+
+    fn prepare(&mut self, generation: u64, texts: &[lightcraft_engine::slide_overlay::TextOverlay]) {
+        if self.generation != generation || self.observed != texts {
+            self.generation = generation;
+            self.ids.clear();
+            for _ in texts {
+                self.append();
+            }
+            self.observed = texts.to_vec();
+        }
+    }
+}
+
+fn real_pass(ui: &egui::Ui) -> bool {
+    !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn text_row_button(ui: &mut egui::Ui, owner: egui::Id, name: &str, label: &str, selected: Option<bool>, enabled: bool) -> bool {
+    use craft::ui::buttons::{Button, ToggleButton};
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let real = real_pass(ui);
+    let (response, clicked) = if super::native_controls_active(ui.ctx()) {
+        // Keep shipped Settings in its existing native traversal domain. In sizing, do not
+        // invoke the shared helper that publishes an automation target as a side effect.
+        if !real {
+            let r = ui.add_enabled(false, egui::Button::new(crate::i18n::tr(label)));
+            (r, false)
+        } else {
+            let out = ui
+                .add_enabled_ui(enabled, |ui| crate::widgets::text_button(ui, &format!("slideshow-row-{owner:?}"), label, selected.unwrap_or(false)))
+                .inner;
+            let clicked = out.clicked();
+            (out.response, clicked)
+        }
+    } else if let Some(selected) = selected {
+        let out = ToggleButton::new(crate::i18n::tr(label).to_owned(), Bind::given(selected)).id(owner).enabled(enabled).show(ui);
+        let clicked = out.events.committed().is_some();
+        (out.response, clicked)
+    } else {
+        let out = Button::new(crate::i18n::tr(label).to_owned()).id(owner).enabled(enabled).show(ui);
+        let clicked = out.clicked();
+        (out.response, clicked)
+    };
+    if real {
+        crate::widgets::register_response(format!("button:{name}"), response.rect, &response);
+    }
+    real && ui.is_enabled() && enabled && clicked
+}
+
+fn text_row_field(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: egui::Id, name: &str, value: &str, wrap: &dyn Fn(Value) -> Value) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let real = real_pass(ui);
+    let committed = if super::native_controls_active(ui.ctx()) {
+        let key = owner.with("native-draft");
+        let mut draft: String = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| value.to_owned());
+        if !real {
+            ui.add(egui::TextEdit::singleline(&mut draft).desired_width(260.0).interactive(false));
+            None
+        } else {
+            // The internal widget key stays with the overlay even when an earlier row is removed.
+            // The public automation alias below still follows the current command index.
+            let widget = format!("field:slideshow-overlay-{owner:?}");
+            let out = TextField::singleline(&widget, &mut draft)
+                .hint(crate::i18n::tr("{title} · {exposure}"))
+                .width(ui.available_width().clamp(80.0, 260.0))
+                .show(ui);
+            crate::widgets::register_response(format!("field:{name}"), out.response.rect, &out.response);
+            if out.editing && ui.is_enabled() {
+                ui.data_mut(|d| d.insert_temp(key, draft.clone()));
+            } else {
+                ui.data_mut(|d| d.remove::<String>(key));
+            }
+            if out.cancelled() {
+                crate::widgets::take_escape(ui.ctx());
+            }
+            out.committed().then_some(draft)
+        }
+    } else {
+        let draft_key = owner.with("sdk-draft");
+        let mut draft: String = ui.data(|d| d.get_temp(draft_key)).unwrap_or_else(|| value.to_owned());
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().clamp(80.0, 260.0), 24.0), egui::Sense::hover());
+        let out = craft::ui::text::TextField::new(crate::i18n::tr("Text"), Bind::bound(&mut draft))
+            .id(owner.with("text"))
+            .placeholder(crate::i18n::tr("{title} · {exposure}"))
+            .limit(None) // Preserve engine-side character truncation at commit, not while typing.
+            .submits()
+            .show_at(ui, rect);
+        if real {
+            crate::widgets::register_response(format!("field:{name}"), out.response.rect, &out.response);
+            if out.escaped {
+                crate::widgets::take_escape(ui.ctx());
+            }
+            if out.events.ended().is_some() || !ui.is_enabled() {
+                ui.data_mut(|d| d.remove::<String>(draft_key));
+            } else {
+                ui.data_mut(|d| d.insert_temp(draft_key, draft));
+            }
+        }
+        out.events.committed().cloned()
+    };
+    if real
+        && ui.is_enabled()
+        && let Some(value_after) = committed.filter(|after| after != value)
+    {
+        set(app, wrap(json!({"text": value_after})));
+    }
+}
+
+/// Merge preview values only. The real command remains the validation/persistence authority.
+fn text_row_preview(app: &mut LightcraftApp, patch: &Value) {
+    if let Ok(next) = app.session.slide_overlays.merged(patch) {
+        app.session.slide_overlays = next;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_row_slider(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    owner: egui::Id,
+    name: &str,
+    label: &str,
+    value: f64,
+    range: Range,
+    wrap: &dyn Fn(Value) -> Value,
+    key: &str,
+) {
+    use craft::behavior::{EditEvent, Mixed};
+    use craft::ui::contract::{Bind, Props as _, Show as _, Sizing};
+    use craft::ui::form::{SliderField, SliderFieldLayout};
+    let real = real_pass(ui);
+    let (k, suffix) = match range.unit {
+        Unit::Percent => (100.0, "%"),
+        Unit::Degrees => (1.0, "°"),
+    };
+    let patch = |value: f64| wrap(json!({key: value / k}));
+    if super::native_controls_active(ui.ctx()) {
+        let mut v = value * k;
+        // Default Always clamping calls egui's rounded setter even during passive layout.
+        // Display-scale float round-tripping must not dispatch edits or rewrite neighbors.
+        // Real pointer/keyboard edits still clamp and round to the existing UI range.
+        let out = ui.add_enabled(
+            real,
+            egui::Slider::new(&mut v, range.lo * k..=range.hi * k).clamping(egui::SliderClamping::Edits).suffix(format!(" {suffix}")).max_decimals(1),
+        );
+        if !real {
+            return;
+        }
+        crate::widgets::register_response(format!("slider:{name}"), out.rect, &out);
+        let start_key = owner.with((key, "drag-before"));
+        if ui.is_enabled() {
+            if out.drag_started() {
+                ui.data_mut(|d| d.insert_temp(start_key, value * k));
+            }
+            if out.changed() && out.dragged() {
+                text_row_preview(app, &patch(v));
+            }
+            if out.drag_stopped() {
+                let before = ui.data_mut(|d| d.remove_temp::<f64>(start_key)).unwrap_or(value * k);
+                // Live preview already holds v. Restore only this key before dispatch, otherwise
+                // the command sees a no-op and never writes the final value to prefs.json.
+                text_row_preview(app, &patch(before));
+                if v != before {
+                    set(app, patch(v));
+                }
+            } else if out.changed() && !out.dragged() {
+                set(app, patch(v));
+            }
+        } else if let Some(before) = ui.data_mut(|d| d.remove_temp::<f64>(start_key)) {
+            text_row_preview(app, &patch(before));
+        }
+        return;
+    }
+    let (out, record) = craft::ui::runtime::inspect::record(ui, owner.with((key, "inspect")), |ui| {
+        SliderField::new(crate::i18n::tr(label).to_owned(), Bind::given(value * k), range.lo * k..=range.hi * k)
+            .id(owner.with(key))
+            .layout(SliderFieldLayout::Inline)
+            .field_sizing(Sizing::Content)
+            .unit(suffix)
+            .step(0.1)
+            .sizing(Sizing::FillWidth)
+            .show(ui)
+    });
+    if !real {
+        return;
+    }
+    if let Some(record) = record {
+        for (index, element) in record.elements.iter().enumerate() {
+            let Some(facts) = &element.facts else { continue };
+            let prefix = match facts.role.as_str() {
+                "Slider" => "slider",
+                "SpinButton" => "sliderValue",
+                _ => continue,
+            };
+            // A composite child may have an SDK arena response rather than an egui read_response.
+            // Use that recorded child's real owner and stop bounds, as KeywordSet's footer does;
+            // this registers an alias only, never another interactive widget or a guessed target.
+            let mut response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
+                let mut response = out.response.clone();
+                response.id = element.id;
+                response.rect = record.stop_rect(index).unwrap_or(element.rect);
+                response.interact_rect = response.rect.intersect(ui.clip_rect());
+                response
+            });
+            response.interact_rect = response.interact_rect.intersect(ui.clip_rect());
+            crate::widgets::register_response(format!("{prefix}:{name}"), response.rect, &response);
+        }
+    }
+    for event in &out.events {
+        match event {
+            EditEvent::Update { value, .. } if ui.is_enabled() => text_row_preview(app, &patch(*value)),
+            EditEvent::Commit { before: Mixed::Same(before), after, .. } if ui.is_enabled() => {
+                text_row_preview(app, &patch(*before));
+                if after != before {
+                    set(app, patch(*after));
+                }
+            }
+            EditEvent::Set { before, after, .. } if ui.is_enabled() => {
+                if !matches!(before, Mixed::Same(value) if value == after) {
+                    set(app, patch(*after));
+                }
+            }
+            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => text_row_preview(app, &patch(*before)),
+            _ => {}
+        }
+    }
+}
+
+fn text_row_placement(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    owner: egui::Id,
+    name: &str,
+    p: &Placement,
+    wrap: &dyn Fn(Value) -> Value,
+) {
+    const GLYPHS: [&str; 9] = ["↖", "↑", "↗", "←", "•", "→", "↙", "↓", "↘"];
+    row(ui, t, "Position", |ui| {
+        ui.vertical(|ui| {
+            for r in 0..3 {
+                ui.horizontal(|ui| {
+                    for c in 0..3 {
+                        let i = r * 3 + c;
+                        let (Some(anchor), Some(glyph)) = (ANCHORS.get(i), GLYPHS.get(i)) else { continue };
+                        if text_row_button(ui, owner.with(("anchor", i)), &format!("{name}Anchor-{i}"), glyph, Some(p.anchor == *anchor), true)
+                            && p.anchor != *anchor
+                        {
+                            set(app, wrap(json!({"anchor": lightcraft_engine::slide_overlay::anchor_id(*anchor)})));
+                        }
+                    }
+                });
+            }
+        });
+    });
+    row(ui, t, "Anchored to", |ui| {
+        for (i, (value, label, id)) in [(RelativeTo::Slide, "Slide", "slide"), (RelativeTo::Photo, "Photo", "photo")].into_iter().enumerate() {
+            if text_row_button(ui, owner.with(("relative", i)), &format!("{name}RelativeTo-{i}"), label, Some(p.relative_to == value), true)
+                && p.relative_to != value
+            {
+                set(app, wrap(json!({"relativeTo": id})));
+            }
+        }
+    });
+    for (key, label, value, suffix) in [("offsetX", "Offset X", p.offset_x, "OffsetX"), ("offsetY", "Offset Y", p.offset_y, "OffsetY")] {
+        row(ui, t, label, |ui| {
+            text_row_slider(
+                app,
+                ui,
+                owner,
+                &format!("{name}{suffix}"),
+                label,
+                value,
+                Range { lo: -OFFSET_MAX / 2.0, hi: OFFSET_MAX / 2.0, unit: Unit::Percent },
+                wrap,
+                key,
+            )
+        });
+    }
+}
+
+fn text_row_shadow(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: egui::Id, name: &str, value: bool, wrap: &dyn Fn(Value) -> Value) -> bool {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let real = real_pass(ui);
+    let (response, next) = if super::native_controls_active(ui.ctx()) {
+        let mut on = value;
+        let response = ui.add_enabled(real, egui::Checkbox::new(&mut on, crate::i18n::tr("Shadow")));
+        let next = response.changed().then_some(on);
+        (response, next)
+    } else {
+        let out = craft::ui::choice::Checkbox::new(Bind::given(value)).id(owner.with("shadow")).label(crate::i18n::tr("Shadow")).show(ui);
+        let next = out.events.committed().copied();
+        (out.response, next)
+    };
+    if real {
+        crate::widgets::register_response(format!("check:settings.{name}Shadow"), response.rect, &response);
+        if ui.is_enabled()
+            && let Some(on) = next.filter(|on| *on != value)
+        {
+            set(app, wrap(json!({"shadow": on})));
+            return on;
+        }
+    }
+    value
+}
+
+/// The actual production text-overlay subtree. It can be exercised without drawing a photo or
+/// running the app logic loop. Both native Settings and isolated SDK presentation call this path.
+fn text_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) -> bool {
+    use lightcraft_engine::slide_overlay::MAX_TEXTS;
+    let real = real_pass(ui);
+    let state_key = egui::Id::unique("slideshow-text-rows").with(ui.ctx().viewport_id());
+    let mut rows = ui.data(|d| d.get_temp::<TextRows>(state_key)).unwrap_or_default();
+    let texts = app.session.slide_overlays.texts.clone();
+    rows.prepare(app.session.library_generation(), &texts);
+    ui.add_space(6.0);
+    ui.label(RichText::new(crate::i18n::tr("Text overlays")).font(t.semibold(11.5)).color(t.text));
+    let n = texts.len();
+    for (i, o) in texts.iter().enumerate() {
+        let Some(owner) = rows.ids.get(i).copied() else { continue };
+        let name = format!("slideshowText{i}");
+        let wrap = |v: Value| text_change(i, n, v);
+        let removed = ui
+            .push_id(owner, |ui| {
+                ui.add_space(2.0);
+                let mut remove = false;
+                row(ui, t, &format!("{} {}", crate::i18n::tr("Text"), i + 1), |ui| {
+                    text_row_field(app, ui, owner, &name, &o.text, &wrap);
+                    remove = text_row_button(ui, owner.with("remove"), &format!("{name}Remove"), "Remove", None, true);
+                });
+                if remove {
+                    let before = app.session.slide_overlays.texts.len();
+                    set(app, json!({"removeText": i}));
+                    return app.session.slide_overlays.texts.len() != before;
+                }
+                for (key, label, value, lo, hi, suffix) in [("size", "Size", o.size, 0.01, TEXT_SIZE_MAX / 2.0, "Size")] {
+                    row(ui, t, label, |ui| {
+                        text_row_slider(app, ui, owner, &format!("{name}{suffix}"), label, value, Range { lo, hi, unit: Unit::Percent }, &wrap, key)
+                    });
+                }
+                // Keep the existing platform-neutral egui colour picker; only accepted real changes
+                // enter the existing validated command. It is not a new SDK colour-dialog provider.
+                row(ui, t, "Colour", |ui| {
+                    let mut color = o.color;
+                    let response = ui.add_enabled_ui(real, |ui| egui::color_picker::color_edit_button_srgb(ui, &mut color)).inner;
+                    if real {
+                        crate::widgets::register_response(format!("button:{name}Color"), response.rect, &response);
+                        if ui.is_enabled() && response.changed() {
+                            set(app, wrap(json!({"color": color})));
+                        }
+                    }
+                });
+                row(ui, t, "Opacity", |ui| {
+                    text_row_slider(
+                        app,
+                        ui,
+                        owner,
+                        &format!("{name}Opacity"),
+                        "Opacity",
+                        o.opacity,
+                        Range { lo: 0.0, hi: 1.0, unit: Unit::Percent },
+                        &wrap,
+                        "opacity",
+                    )
+                });
+                text_row_placement(app, ui, t, owner, &name, &o.place, &wrap);
+                // The existing shadow presentation stays native/scoped with the same command policy.
+                // Give its shared helper IDs the stable row identity, rather than the shifting index.
+                let sh = o.shadow;
+                let on = text_row_shadow(app, ui, owner, &name, sh.on, &wrap);
+                if on {
+                    for (key, label, value, lo, hi, unit, suffix) in [
+                        ("shadowOpacity", "Opacity", sh.opacity, 0.0, 1.0, Unit::Percent, "ShadowOpacity"),
+                        ("shadowOffset", "Offset", sh.offset, 0.0, SHADOW_OFFSET_MAX, Unit::Percent, "ShadowOffset"),
+                        ("shadowRadius", "Radius", sh.radius, 0.0, SHADOW_RADIUS_MAX, Unit::Percent, "ShadowRadius"),
+                        ("shadowAngle", "Angle", sh.angle, -180.0, 180.0, Unit::Degrees, "ShadowAngle"),
+                    ] {
+                        row(ui, t, label, |ui| {
+                            text_row_slider(app, ui, owner, &format!("{name}{suffix}"), label, value, Range { lo, hi, unit }, &wrap, key)
+                        });
+                    }
+                }
+                false
+            })
+            .inner;
+        if removed {
+            rows.ids.remove(i);
+            rows.observed = app.session.slide_overlays.texts.clone();
+            ui.data_mut(|d| d.insert_temp(state_key, rows));
+            return true;
+        }
+    }
+    // Keep the original hidden-at-limit presentation, not an enabled command that will fail.
+    if n < MAX_TEXTS && text_row_button(ui, state_key.with((rows.generation, "add")), "slideshowAddText", "Add text overlay", None, true) {
+        set(app, json!({"addText": {}}));
+        if app.session.slide_overlays.texts.len() == n + 1 {
+            rows.append();
+        }
+    }
+    if real {
+        rows.observed = app.session.slide_overlays.texts.clone();
+        ui.data_mut(|d| d.insert_temp(state_key, rows));
+    }
+    false
+}
+
+#[cfg(test)]
+#[path = "slide_overlays_sdk_tests.rs"]
+mod slide_overlays_sdk_tests;

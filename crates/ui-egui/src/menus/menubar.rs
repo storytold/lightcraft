@@ -1071,14 +1071,114 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         ui.spacing_mut().item_spacing.x = TITLE_GAP;
         // All titles first, then their popups, so a title the pointer moves onto can take over
         // from the open menu before either is drawn (no frame with two menus or none).
+        use craft::behavior::Metrics;
+        use craft::theme::{Stateful, States};
+        use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
+        use craft::ui::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
+        use std::sync::Arc;
+
+        // Keep the unpadded 13 pt title face and existing bar_width/overflow geometry.
+        // This app-owned leaf only senses titles; the anchored native menu subtree,
+        // title-switch state and actual menu commands below keep their existing owners.
+        #[derive(Clone, Debug, PartialEq, ComponentStyle)]
+        struct TitleStyle {
+            #[style(surface)]
+            surface: SurfaceLook,
+            #[style(focus)]
+            focus: FocusLook,
+            #[style(metrics)]
+            metrics: Metrics,
+        }
+        #[derive(Component)]
+        struct InWindowTitle {
+            #[common]
+            common: Common,
+            #[style_key]
+            hover: egui::Color32,
+            #[style_key]
+            pressed: egui::Color32,
+            #[style_key]
+            focus: egui::Color32,
+            galley: Arc<egui::Galley>,
+            color: egui::Color32,
+            size: egui::Vec2,
+            opacity: f32,
+        }
+        impl Component for InWindowTitle {
+            const ROLE: Role = Role::MENU_ITEM;
+            const PARTS: bool = false;
+            const OVERLAYS: bool = false;
+            type Style = TitleStyle;
+            type Output = egui::Response;
+            fn style(cx: &StyleCx<'_>, key: InWindowTitleStyleKey) -> TitleStyle {
+                let color = |value: egui::Color32| cx.color(craft::theme::Rgba::from(value));
+                let clear = color(egui::Color32::TRANSPARENT);
+                TitleStyle {
+                    surface: SurfaceLook::new(Stateful::new(clear).off(States::new(clear, color(key.hover), color(key.pressed), clear)))
+                        .radius(egui::CornerRadius::same(4)),
+                    focus: FocusLook::new(egui::Stroke::new(2.0, key.focus), -2.0),
+                    metrics: Metrics::new(),
+                }
+            }
+            fn sense(&self) -> craft::behavior::Sense {
+                craft::behavior::Sense::CLICK | craft::behavior::Sense::FOCUS
+            }
+            fn measure(&mut self, _: &MeasureCx<'_, Self>) -> egui::Vec2 {
+                self.size
+            }
+            fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+                let shape = egui::epaint::TextShape::new(cx.rect.center() - self.galley.size() / 2.0, Arc::clone(&self.galley), self.color)
+                    .with_opacity_factor(self.opacity);
+                ui.reserve_slot(cx.visible).extend(&cx.response.ctx, vec![shape.into()]);
+            }
+            fn access(&self, access: &mut craft::ui::contract::Access, _: &Cx<'_, Self>) {
+                // This leaf opens the existing native menu; it owns no SDK overlay.
+                access.has_popup(craft::ui::contract::PopupKind::Menu);
+            }
+            fn finish(self, cx: Cx<'_, Self>) -> egui::Response {
+                cx.response.clone()
+            }
+        }
+        let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
         let titles: Vec<egui::Response> = bar
             .iter()
             .map(|(title, _)| {
-                let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(title)).font(font.clone()).color(t.text_label)).frame(false));
-                crate::widgets::register(ui, format!("menu:{title}"), r.rect);
+                if crate::panels::settings::native_controls_active(ui.ctx()) {
+                    let r =
+                        ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(title)).font(font.clone()).color(t.text_label)).frame(false));
+                    if !measuring {
+                        crate::widgets::register(ui, format!("menu:{title}"), r.rect);
+                    }
+                    return r;
+                }
+                let caption = crate::i18n::tr(title);
+                let galley = ui.painter().layout_no_wrap(caption.to_owned(), font.clone(), t.text_label);
+                let size = galley.size().max(egui::vec2(0.0, ui.spacing().interact_size.y));
+                let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+                if measuring {
+                    return response;
+                }
+                let r = InWindowTitle {
+                    common: Common::new(),
+                    hover: t.hover,
+                    pressed: t.pressed,
+                    focus: t.accent,
+                    galley,
+                    color: t.text_label,
+                    size,
+                    opacity: ui.opacity(),
+                }
+                .label(caption.to_owned())
+                .id_salt(("in-window-menu-title", title))
+                .show_at(ui, rect);
+                crate::widgets::register_response(format!("menu:{title}"), r.rect, &r);
                 r
             })
             .collect();
+        if measuring {
+            ui.spacing_mut().item_spacing.x = saved;
+            return ui.cursor().left() - start;
+        }
         let confirmed = switch_open_title(ui.ctx(), &titles);
         for ((_, items), r) in bar.iter().zip(&titles) {
             // (opening and closing by click is done in `switch_open_title`)
@@ -1091,7 +1191,10 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             egui::Popup::menu(r)
                 .close_behavior(close)
                 .open_memory(None)
-                .show(|ui| crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 1, bar_bottom)));
+                .show(|ui| {
+                    craft::ui::runtime::focus::native_menu_popup(ui, r);
+                    crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 1, bar_bottom))
+                });
         }
         ui.spacing_mut().item_spacing.x = saved;
     } else {
@@ -1204,6 +1307,10 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
         }
     }
 }
+
+#[cfg(test)]
+#[path = "menubar/in_window_title_flow_tests.rs"]
+mod in_window_title_flow_tests;
 
 #[cfg(test)]
 mod tests;

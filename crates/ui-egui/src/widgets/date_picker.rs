@@ -8,10 +8,15 @@
 //! `datePickerPrecision:<year|month|day>:<id>`, `datePickerPrev:<id>`, `datePickerNext:<id>` and
 //! `datePickerCell:<iso>:<id>`.
 
-use egui::{Response, RichText, Ui, vec2};
+use std::sync::Arc;
+
+use craft::behavior::Metrics;
+use craft::theme::{Stateful, States};
+use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _, clicked};
+use craft::ui::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
+use egui::{Color32, CornerRadius, Galley, Response, RichText, Stroke, Ui, Vec2, vec2};
 
 use crate::icons::Icon;
-use crate::widgets::register;
 
 /// How much of a date a value names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -189,6 +194,131 @@ fn holds_today(cell: &PickedDate, today: Option<PickedDate>) -> bool {
     today.is_some_and(|t| t.first_day() >= cell.first_day() && t.first_day() <= cell.last_day())
 }
 
+// Calendar cells are intentionally not stock SDK buttons: their private padding cannot fit
+// seven 26-point columns, and their plain labels cannot retain today's bold underline. This
+// local component keeps only that compact face. The SDK owns all sensing, primary-release
+// activation, cancellation, keyboard, disabled/read-only state, focus and accessibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct OptionPalette {
+    hover: Color32,
+    pressed: Color32,
+    selected: Color32,
+    edge: Color32,
+    text: Color32,
+    focus: Color32,
+}
+
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+struct OptionStyle {
+    #[style(surface)]
+    surface: SurfaceLook,
+    #[style(focus)]
+    focus: FocusLook,
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+#[derive(Component)]
+struct CalendarOption {
+    #[common]
+    common: Common,
+    #[style_key]
+    palette: OptionPalette,
+    #[style_key]
+    selected: bool,
+    galley: Arc<Galley>,
+    size: Vec2,
+    opacity: f32,
+}
+
+impl Component for CalendarOption {
+    const ROLE: Role = Role::BUTTON;
+    const PARTS: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = OptionStyle;
+    type Output = Response;
+
+    fn style(cx: &StyleCx<'_>, key: CalendarOptionStyleKey) -> OptionStyle {
+        let p = key.palette;
+        let color = |c: Color32| cx.color(craft::theme::Rgba::from(c));
+        let clear = color(Color32::TRANSPARENT);
+        let fill = if key.selected {
+            Stateful::new(color(p.selected))
+        } else {
+            Stateful::new(clear).off(States::new(clear, color(p.hover), color(p.pressed), clear))
+        };
+        let edge = if key.selected { color(p.edge) } else { clear };
+        OptionStyle {
+            surface: SurfaceLook::new(fill).radius(CornerRadius::same(4)).border(Stateful::new(edge), 1.0),
+            focus: FocusLook::new(Stroke::new(2.0, p.focus), -2.0),
+            metrics: Metrics::new(),
+        }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        self.size
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let shape = egui::epaint::TextShape::new(cx.rect.center() - self.galley.size() / 2.0, Arc::clone(&self.galley), self.palette.text)
+            .with_opacity_factor(self.opacity);
+        ui.reserve_slot(cx.visible).extend(&cx.response.ctx, vec![shape.into()]);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// One compact option, with a semantic id so keyboard focus never follows a reused grid slot
+/// onto an unrelated date after paging. Read activation with the SDK's `clicked`, not egui's.
+fn option(ui: &mut Ui, id: String, text: RichText, label: String, selected: bool, enabled: bool, min_width: f32) -> Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let opacity = if enabled { 1.0 } else { ui.visuals().disabled_alpha() };
+    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    let size = (galley.size() + ui.spacing().button_padding * 2.0).max(vec2(min_width, ui.spacing().interact_size.y));
+    let (_, rect) = ui.allocate_space(size);
+    let response = CalendarOption {
+        common: Common::new(),
+        palette: OptionPalette {
+            hover: t.hover,
+            pressed: t.pressed,
+            selected: t.accent.gamma_multiply(0.6 * opacity),
+            edge: t.accent.gamma_multiply(opacity),
+            text: t.text_label,
+            focus: t.accent,
+        },
+        selected,
+        galley,
+        size,
+        opacity: ui.opacity() * opacity,
+    }
+    .id(ui.scope_id().with(("date-picker-option", id.as_str())))
+    .label(label)
+    .selected(selected)
+    .enabled(enabled)
+    .show_at(ui, rect);
+    if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+        crate::widgets::register_response(id, rect, &response);
+    }
+    response
+}
+
+/// egui's consume_key matches extra Alt/Shift logically; a calendar must take only bare
+/// Tab or Shift+Tab. Remove one matching press, leaving all other events untouched.
+fn take_calendar_tab(input: &mut egui::InputState) -> Option<bool> {
+    let (at, forward) = input.events.iter().enumerate().find_map(|(at, event)| match event {
+        egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. }
+            if *modifiers == egui::Modifiers::NONE || *modifiers == egui::Modifiers::SHIFT =>
+        {
+            Some((at, !modifiers.shift))
+        }
+        _ => None,
+    })?;
+    input.events.remove(at);
+    Some(forward)
+}
+
 /// A calendar button that edits a [`PickedDate`]; see the module docs.
 pub struct DatePicker<'a> {
     id: String,
@@ -238,7 +368,12 @@ impl<'a> DatePicker<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let DatePicker { id, value, precisions, min, max, today } = self;
         let mut button = crate::widgets::icon_button(ui, &format!("datePicker:{id}"), Icon::Calendar, vec2(24.0, 22.0), false, true, "Pick a date");
-        register(ui, format!("datePicker:{id}"), button.rect);
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            crate::widgets::register_response(format!("datePicker:{id}"), button.rect, &button.response);
+        }
+        let env = craft::ui::runtime::env::Env::of(ui);
+        let enabled = ui.is_enabled() && env.enabled;
+        let read_only = env.read_only;
         let state = egui::Id::unique(("datePicker", id.as_str()));
         if button.clicked() {
             // open on the value (or today), at its precision when it is one of those offered
@@ -247,118 +382,217 @@ impl<'a> DatePicker<'a> {
             let precision = value.map(|v| v.precision()).filter(|p| precisions.contains(p)).unwrap_or(fallback);
             ui.data_mut(|d| d.insert_temp(state, View::open(at, precision)));
         }
+        let focus_state = state.with("focus-on-open");
+        if button.clicked() {
+            ui.data_mut(|d| d.insert_temp(focus_state, true));
+        }
+        let mut focus_on_open = ui.data(|d| d.get_temp::<bool>(focus_state)).unwrap_or(false);
         let mut picked: Option<PickedDate> = None;
         let mut view = ui.data(|d| d.get_temp::<View>(state)).unwrap_or(View { precision: Precision::Day, year: 2026, month: 1 });
-        egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-            // as wide as a month of days, however much room the window has
-            ui.set_min_width(220.0);
-            ui.set_max_width(240.0);
-            if precisions.len() > 1 {
-                ui.horizontal(|ui| {
-                    for p in precisions {
-                        let r = ui.selectable_label(view.precision == *p, crate::i18n::tr(p.label()));
-                        register(ui, format!("datePickerPrecision:{}:{id}", p.id()), r.rect);
-                        if r.clicked() {
-                            view.precision = *p;
-                        }
-                    }
-                });
-                ui.separator();
-            }
-            ui.horizontal(|ui| {
-                let prev = crate::widgets::arrow_button(ui, "", Icon::ChevronLeft, true);
-                prev.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Previous page")));
-                register(ui, format!("datePickerPrev:{id}"), prev.rect);
-                let title = match view.precision {
-                    Precision::Day => crate::i18n::date_group_label(&format!("{:04}-{:02}", view.year, view.month), false),
-                    Precision::Month => format!("{:04}", view.year),
-                    Precision::Year => {
-                        let first = view.year.div_euclid(12) * 12;
-                        format!("{first:04}–{:04}", first + 11)
-                    }
-                };
-                ui.label(RichText::new(title).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let next = crate::widgets::arrow_button(ui, "", Icon::ChevronRight, false);
-                    next.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Next page")));
-                    register(ui, format!("datePickerNext:{id}"), next.rect);
-                    if next.clicked() {
-                        view = step(view, true);
-                    }
-                    if prev.clicked() {
-                        view = step(view, false);
-                    }
-                });
-            });
-            let cell = |ui: &mut Ui, date: PickedDate, text: String, picked: &mut Option<PickedDate>| {
-                let allowed = in_bounds(&date, min.as_ref(), max.as_ref());
-                let text = if holds_today(&date, today) { RichText::new(text).strong().underline() } else { RichText::new(text) };
-                let r = ui.add_enabled(allowed, egui::Button::selectable(*value == Some(date), text).min_size(vec2(26.0, 0.0)));
-                register(ui, format!("datePickerCell:{}:{id}", date.iso()), r.rect);
-                if r.clicked() {
-                    *picked = Some(date);
-                }
-            };
-            egui::Grid::new(("datePickerGrid", id.as_str())).spacing(vec2(2.0, 2.0)).show(ui, |ui| match view.precision {
-                Precision::Day => {
-                    for name in WEEKDAY_SHORT {
-                        ui.label(RichText::new(crate::i18n::tr(name)).weak());
-                    }
-                    ui.end_row();
-                    for week in month_grid(view.year, view.month).chunks(7) {
-                        for d in week {
-                            match d {
-                                Some(d) => {
-                                    cell(ui, PickedDate { year: view.year, month: Some(view.month), day: Some(*d) }, d.to_string(), &mut picked)
+        egui::Popup::from_response(&button.response)
+            .open_memory(button.clicked().then_some(egui::SetOpenCommand::Toggle))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                craft::ui::runtime::env::with_env(
+                    ui,
+                    |set| {
+                        // egui's popup is a new Ui, not a child of the opener's disabled/read-only scope.
+                        set.enabled = Some(enabled);
+                        set.read_only = Some(read_only);
+                    },
+                    |ui| {
+                        let mut stops = Vec::with_capacity(47);
+                        // as wide as a month of days, however much room the window has
+                        ui.set_min_width(220.0);
+                        ui.set_max_width(240.0);
+                        if precisions.len() > 1 {
+                            ui.horizontal(|ui| {
+                                for p in precisions {
+                                    let label = crate::i18n::tr(p.label());
+                                    let r = option(
+                                        ui,
+                                        format!("datePickerPrecision:{}:{id}", p.id()),
+                                        RichText::new(label),
+                                        label.to_owned(),
+                                        view.precision == *p,
+                                        true,
+                                        0.0,
+                                    );
+                                    if enabled {
+                                        stops.push(r.id);
+                                    }
+                                    if clicked(&r) {
+                                        view.precision = *p;
+                                    }
                                 }
-                                None => {
-                                    ui.label("");
+                            });
+                            ui.separator();
+                        }
+                        ui.horizontal(|ui| {
+                            let prev = crate::widgets::icon_button(
+                                ui,
+                                &format!("datePickerPrev:{id}"),
+                                Icon::ChevronLeft,
+                                vec2(32.0, 22.0),
+                                false,
+                                true,
+                                "Previous page",
+                            );
+                            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                                crate::widgets::register_response(format!("datePickerPrev:{id}"), prev.rect, &prev.response);
+                            }
+                            if enabled {
+                                stops.push(prev.id);
+                            }
+                            let title = match view.precision {
+                                Precision::Day => crate::i18n::date_group_label(&format!("{:04}-{:02}", view.year, view.month), false),
+                                Precision::Month => format!("{:04}", view.year),
+                                Precision::Year => {
+                                    let first = view.year.div_euclid(12) * 12;
+                                    format!("{first:04}–{:04}", first + 11)
+                                }
+                            };
+                            ui.label(RichText::new(title).strong());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let next = crate::widgets::icon_button(
+                                    ui,
+                                    &format!("datePickerNext:{id}"),
+                                    Icon::ChevronRight,
+                                    vec2(32.0, 22.0),
+                                    false,
+                                    true,
+                                    "Next page",
+                                );
+                                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                                    crate::widgets::register_response(format!("datePickerNext:{id}"), next.rect, &next.response);
+                                }
+                                if enabled {
+                                    stops.push(next.id);
+                                }
+                                if next.clicked() {
+                                    view = step(view, true);
+                                }
+                                if prev.clicked() {
+                                    view = step(view, false);
+                                }
+                            });
+                        });
+                        let mut first_enabled = None;
+                        let mut preferred = None;
+                        let mut cell = |ui: &mut Ui, date: PickedDate, text: String, picked: &mut Option<PickedDate>| {
+                            let allowed = in_bounds(&date, min.as_ref(), max.as_ref());
+                            let text = if holds_today(&date, today) { RichText::new(text).strong().underline() } else { RichText::new(text) };
+                            let r = option(ui, format!("datePickerCell:{}:{id}", date.iso()), text, date.iso(), *value == Some(date), allowed, 26.0);
+                            // A root SDK Response retains the host Ui's enabled flag; bounds
+                            // are a component prop. Use that real prop when listing Tab stops.
+                            if allowed && enabled {
+                                stops.push(r.id);
+                                first_enabled.get_or_insert(r.id);
+                                if *value == Some(date) || (value.is_none() && holds_today(&date, today)) {
+                                    preferred = Some(r.id);
                                 }
                             }
+                            if clicked(&r) {
+                                *picked = Some(date);
+                            }
+                        };
+                        egui::Grid::new(("datePickerGrid", id.as_str())).spacing(vec2(2.0, 2.0)).show(ui, |ui| match view.precision {
+                            Precision::Day => {
+                                for name in WEEKDAY_SHORT {
+                                    ui.label(RichText::new(crate::i18n::tr(name)).weak());
+                                }
+                                ui.end_row();
+                                for week in month_grid(view.year, view.month).chunks(7) {
+                                    for d in week {
+                                        match d {
+                                            Some(d) => cell(
+                                                ui,
+                                                PickedDate { year: view.year, month: Some(view.month), day: Some(*d) },
+                                                d.to_string(),
+                                                &mut picked,
+                                            ),
+                                            None => {
+                                                ui.label("");
+                                            }
+                                        }
+                                    }
+                                    ui.end_row();
+                                }
+                            }
+                            Precision::Month => {
+                                for row in 0..3u8 {
+                                    for col in 1..=4u8 {
+                                        let m = row * 4 + col;
+                                        let date = PickedDate { year: view.year, month: Some(m), day: None };
+                                        cell(ui, date, crate::i18n::date_group_label(&date.iso(), true), &mut picked);
+                                    }
+                                    ui.end_row();
+                                }
+                            }
+                            Precision::Year => {
+                                let first = view.year.div_euclid(12) * 12;
+                                for row in 0..3 {
+                                    for col in 0..4 {
+                                        let y = first + row * 4 + col;
+                                        if (0..=9999).contains(&y) {
+                                            cell(ui, PickedDate::year(y), format!("{y:04}"), &mut picked);
+                                        }
+                                    }
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                        // Open on the selected/today cell, or the first permitted one. Do this only in
+                        // a real pass: a new popup can first run an invisible sizing pass.
+                        if focus_on_open && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                            if let Some(target) = preferred.or(first_enabled) {
+                                craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(target));
+                            }
+                            focus_on_open = false;
                         }
-                        ui.end_row();
-                    }
-                }
-                Precision::Month => {
-                    for row in 0..3u8 {
-                        for col in 1..=4u8 {
-                            let m = row * 4 + col;
-                            let date = PickedDate { year: view.year, month: Some(m), day: None };
-                            cell(ui, date, crate::i18n::date_group_label(&date.iso(), true), &mut picked);
-                        }
-                        ui.end_row();
-                    }
-                }
-                Precision::Year => {
-                    let first = view.year.div_euclid(12) * 12;
-                    for row in 0..3 {
-                        for col in 0..4 {
-                            let y = first + row * 4 + col;
-                            if (0..=9999).contains(&y) {
-                                cell(ui, PickedDate::year(y), format!("{y:04}"), &mut picked);
+                        // The SDK leaves Tab to egui while a legacy popup is open, but egui
+                        // cannot move a focused SDK stop. Route only this popup's bare Tab
+                        // through the SDK's focus service; activation remains the leaf's.
+                        if !ui.is_sizing_pass()
+                            && !craft::ui::runtime::measure::active(ui.ctx())
+                            && let Some(at) = ui.ctx().memory(|m| m.focused()).and_then(|id| stops.iter().position(|stop| *stop == id))
+                        {
+                            let direction = ui.input_mut(take_calendar_tab);
+                            if let Some(forward) = direction {
+                                let next = if forward { (at + 1) % stops.len() } else { (at + stops.len() - 1) % stops.len() };
+                                craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(stops[next]));
                             }
                         }
-                        ui.end_row();
-                    }
-                }
+                        // Esc closes the calendar and stops there: the dialog around it keeps its edits.
+                        // Restore the opener on selection/cancel, not on outside clicks (which can focus
+                        // another field in the caller).
+                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            crate::widgets::take_escape(ui.ctx());
+                            craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(button.id));
+                            ui.close();
+                        }
+                        if picked.is_some() {
+                            craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(button.id));
+                            ui.close();
+                        }
+                    },
+                )
             });
-            // Esc closes the calendar and stops there: the dialog around it keeps its edits
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                crate::widgets::take_escape(ui.ctx());
-                ui.close();
-            }
-            if picked.is_some() {
-                ui.close();
-            }
+        ui.data_mut(|d| {
+            d.insert_temp(state, view);
+            d.insert_temp(focus_state, focus_on_open);
         });
-        ui.data_mut(|d| d.insert_temp(state, view));
         if let Some(date) = picked {
             *value = Some(date);
-            button.mark_changed();
+            button.response.mark_changed();
         }
-        button
+        button.response
     }
 }
+
+#[cfg(test)]
+#[path = "date_picker/interaction_tests.rs"]
+mod interaction_tests;
 
 #[cfg(test)]
 mod tests {

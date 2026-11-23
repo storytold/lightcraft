@@ -1,3 +1,8 @@
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::primitives::{Glyph, IconSpec};
+use craft::ui::style::UiTokens;
+
 use super::sliders::control;
 use super::{
     Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PhotoId, Pos2, Rect, Sense, Stroke, Tokens, Vertex, json, paint, pos2, register,
@@ -16,6 +21,67 @@ const GRADING_TABS: [(&str, &str, Icon); 4] = [
 
 /// The wheels, in the order of `UiState::grading_hidden`.
 const GRADING_WHEELS: [(&str, &str); 3] = [("shadows", "Shadows"), ("midtones", "Midtones"), ("highlights", "Highlights")];
+
+fn eye_measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// Only the original drawing is local. The public IconButton owns sensing, Tab,
+/// focus indication, primary-release activation, cancellation and accessibility.
+struct WheelEyeGlyph {
+    id: egui::Id,
+    visible: bool,
+    hidden: bool,
+}
+
+impl Glyph for WheelEyeGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+        // Keep the always-mounted Tab stop quiet at rest, but reveal its eye in
+        // the very pass keyboard focus arrives, without needing a prior hover.
+        if self.visible || painter.ctx().memory(|memory| memory.has_focus(self.id)) {
+            paint(painter, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), if self.hidden { Icon::EyeOff } else { Icon::Eye }, color);
+        }
+    }
+}
+
+/// Keep an eye-origin press out of the overlapping native wheel, including its
+/// release frame (egui clears press_origin on release) and cancellation frames.
+fn eye_owns_pointer(ui: &egui::Ui, key: &str, eye: Rect) -> bool {
+    if eye_measuring(ui) {
+        return false;
+    }
+    let id = egui::Id::unique(("wheelEyePress", key));
+    let began = ui.input(|input| input.events.iter().any(|event| matches!(event,
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if eye.contains(*pos)
+    )));
+    let owned = began || ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+    let down = ui.input(|input| input.pointer.primary_down());
+    ui.data_mut(|data| data.insert_temp(id, owned && down));
+    owned
+}
+
+fn wheel_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, i: usize, key: &str, eye: Rect, visible: bool) {
+    let hidden = app.ui.grading_hidden_for(photo).get(i).copied().unwrap_or(false);
+    // A press started for one photo must not activate an eye after switching photos.
+    let id = egui::Id::unique(("wheelEye", photo.0, key));
+    let glyph = WheelEyeGlyph { id, visible: visible || hidden, hidden };
+    let tooltip = crate::i18n::tr(if hidden { "Show this wheel's effect" } else { "Hide this wheel's effect" });
+    let shown = IconButton::new(IconSpec::glyph(&glyph))
+        .id(id)
+        .label(crate::i18n::tr("Show / hide"))
+        .description(format!("{}: {}", crate::i18n::tr(GRADING_WHEELS[i].1), tooltip))
+        .tooltip(tooltip)
+        .selected(hidden)
+        .enabled(ui.is_enabled())
+        .show_at(ui, eye);
+    if eye_measuring(ui) {
+        return;
+    }
+    crate::widgets::register_response(format!("wheelEye:{key}"), eye, &shown.response);
+    if ui.is_enabled() && shown.clicked() {
+        app.ui.set_grading_hidden(photo, i, !hidden);
+    }
+}
 
 pub(super) fn grading(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, photo: PhotoId) {
     let mode = GRADING_TABS.iter().find(|(k, ..)| *k == app.ui.grading_mode).map_or("3way", |(k, ..)| *k);
@@ -78,6 +144,8 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     let r = Rect::from_center_size(c, vec2(rad * 2.0, rad * 2.0));
     // the corners (eye, readout) count as the wheel for hovering
     let zone = r.expand(10.0);
+    let eye = Rect::from_center_size(r.left_bottom() + vec2(2.0, -2.0), vec2(16.0, 16.0));
+    let wheel_input = !eye_measuring(ui) && ui.is_enabled() && !eye_owns_pointer(ui, key, eye);
     let hovering = ui.rect_contains_pointer(zone);
     let resp = ui.interact(r, egui::Id::unique(("wheel", key)), Sense::click_and_drag());
     crate::widgets::announce(&resp, format!("{} {key}", crate::i18n::tr("Color wheel")));
@@ -105,7 +173,7 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     // puck as it is at that moment.
     let grab_id = egui::Id::unique(("wheelGrab", key));
     let mods = ui.input(|i| WheelMods::from_modifiers(i.modifiers));
-    let pointer = wheel_pointer(ui, &resp);
+    let pointer = if wheel_input { wheel_pointer(ui, &resp) } else { None };
     let grab = match pointer {
         Some(q) if resp.dragged() || resp.clicked() => {
             let held = ui.data(|m| m.get_temp::<WheelGrab>(grab_id)).filter(|g| g.mods == mods && !resp.drag_started());
@@ -141,16 +209,16 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     ui.painter().circle_filled(dot, 5.0, if hidden { Color32::from_gray(150) } else { Color32::WHITE });
     ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, Color32::BLACK));
     ui.painter().text(pos2(c.x, c.y + rad + 12.0), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(12.0), t.text_label);
-    if resp.drag_started() {
+    if wheel_input && resp.drag_started() {
         let _ = app.run("develop.beginInteraction", json!({"label": crate::i18n::tr_format!("{label} Grading", label = label)}));
     }
-    if (resp.dragged() || resp.clicked())
+    if wheel_input && (resp.dragged() || resp.clicked())
         && let Some(q) = pointer
     {
         let (hue, sat) = grab.map_or_else(|| wheel_pick(q - c, rad, None), |g| g.pick(q - c, rad));
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): hue.round(), format!("grading.{key}.sat"): sat.round()}}));
     }
-    if resp.drag_stopped() || resp.clicked() {
+    if wheel_input && (resp.drag_stopped() || resp.clicked()) {
         let _ = app.run("develop.endInteraction", json!({}));
     }
     // released, or Esc (egui ends a drag on it)
@@ -160,7 +228,7 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     {
         give_pointer_back(ui.ctx(), held.origin);
     }
-    if resp.double_clicked() {
+    if wheel_input && resp.double_clicked() {
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
     }
     // hue and saturation readout: centred above the wheel, shown like the eye (no fade)
@@ -174,18 +242,9 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
             t.text_label,
         );
     }
-    // the eye: on top of the wheel, shown while hovering or while the wheel is hidden
-    if hovering || hidden {
-        let eye = Rect::from_center_size(r.left_bottom() + vec2(2.0, -2.0), vec2(16.0, 16.0));
-        let er = ui.interact(eye, egui::Id::unique(("wheelEye", key)), Sense::click());
-        crate::widgets::announce(&er, crate::i18n::tr("Show / hide"));
-        register(ui, format!("wheelEye:{key}"), eye);
-        paint(ui.painter(), eye, if hidden { Icon::EyeOff } else { Icon::Eye }, if hidden { t.text_disabled } else { t.icon });
-        let er = er.on_hover_text(crate::i18n::tr(if hidden { "Show this wheel's effect" } else { "Hide this wheel's effect" }));
-        if er.clicked() {
-            app.ui.set_grading_hidden(photo, i, !hidden);
-        }
-    }
+    // Always mounted for natural Tab reach; the glyph reveals on hover, hidden
+    // preview state, or focus. No native eye click owner remains underneath it.
+    wheel_eye(app, ui, photo, i, key, eye, hovering);
 }
 
 /// A wheel's modifier state. Shift keeps the hue, Cmd/Ctrl the saturation (Shift wins when both
@@ -419,3 +478,7 @@ pub(crate) fn wheel_mesh(c: Pos2, rad: f32) -> Mesh {
     }
     mesh
 }
+
+#[cfg(test)]
+#[path = "grading_wheel_eye_port_tests.rs"]
+mod grading_wheel_eye_port_tests;

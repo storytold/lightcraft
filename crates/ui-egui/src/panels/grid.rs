@@ -1,6 +1,12 @@
 //! Photo Grid (justified rows) and Square Grid. Virtualized: only visible cells request thumbnails.
 
 #[cfg(test)]
+mod folder_header_flow_tests;
+#[cfg(test)]
+mod folder_header_sdk_flow_tests;
+#[cfg(test)]
+mod folder_header_boundary_flow_tests;
+#[cfg(test)]
 mod header_tests;
 
 use std::collections::{HashMap, HashSet};
@@ -1053,19 +1059,64 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-            let mut sub = b.subfolders;
-            let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
-            register(ui, "check:includeSubfolders", c.rect);
-            if c.changed() {
+            use craft::behavior::Proposal;
+            use craft::ui::contract::{Bind, Props as _, Show as _};
+            let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+            let native = crate::panels::settings::native_controls_active(ui.ctx());
+            let interactive = real && ui.is_enabled();
+            let sub = if native {
+                let mut sub = b.subfolders;
+                let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
+                register(ui, "check:includeSubfolders", c.rect);
+                c.changed().then_some(sub)
+            } else {
+                let checkbox = || {
+                    craft::ui::choice::Checkbox::new(Bind::given(b.subfolders))
+                        .id_salt(("folder-header-subfolders", &b.path))
+                        .label(crate::i18n::tr("Include subfolders").to_owned())
+                        .enabled(interactive)
+                };
+                if !real {
+                    // Sizing and SDK measurement allocate only, with no capture, live alias or edit.
+                    let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+                    let size = checkbox().measure_in(&child, Proposal::Width(ui.available_width()));
+                    ui.allocate_exact_size(size, Sense::hover());
+                    None
+                } else {
+                    let shown = checkbox().show(ui);
+                    crate::widgets::register_response("check:includeSubfolders", shown.response.interact_rect, &shown.response);
+                    shown.events.committed().copied().filter(|sub| ui.is_enabled() && *sub != b.subfolders)
+                }
+            };
+            if let Some(sub) = sub {
                 let _ = app.run("library.browse", json!({"path": b.path, "subfolders": sub}));
             }
             // Counted once per view (cached); the ids are only gathered on a click.
             if local_n > 0 {
                 let label = crate::i18n::tr_format!("Add {local_n} to My Photos", local_n = local_n);
-                let button =
-                    ui.add(egui::Button::new(egui::RichText::new(label).font(t.semibold(11.5)).color(t.text)).wrap().min_size(vec2(37.0, 24.0)));
-                register(ui, "button:addToLibrary", button.rect);
-                if button.clicked() {
+                let clicked = if native {
+                    let button =
+                        ui.add(egui::Button::new(egui::RichText::new(label).font(t.semibold(11.5)).color(t.text)).wrap().min_size(vec2(37.0, 24.0)));
+                    register(ui, "button:addToLibrary", button.rect);
+                    button.clicked()
+                } else {
+                    // A release belongs to this folder/view, never a replacement visible set. The
+                    // cached generation is constant-time; do not hash every visible photo each frame.
+                    let generation = app.session.visible_shared().0;
+                    let button =
+                        || craft::ui::buttons::Button::new(label.clone()).id_salt(("folder-header-add", &b.path, generation)).enabled(interactive);
+                    if !real {
+                        let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+                        let size = button().measure_in(&child, Proposal::Width(ui.available_width()));
+                        ui.allocate_exact_size(size, Sense::hover());
+                        false
+                    } else {
+                        let shown = button().show(ui);
+                        crate::widgets::register_response("button:addToLibrary", shown.response.interact_rect, &shown.response);
+                        ui.is_enabled() && shown.clicked()
+                    }
+                };
+                if clicked {
                     let local: Vec<u64> = ids.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.local)).map(|id| id.0).collect();
                     let n = local.len();
                     match app.run("photo.addToLibrary", json!({"ids": local})) {

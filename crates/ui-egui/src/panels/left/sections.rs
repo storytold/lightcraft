@@ -293,7 +293,7 @@ fn show_header_button(app: &mut LightcraftApp, ui: &mut egui::Ui, header: Rect, 
             }
         }
         HeaderAction::Menu(items) => {
-            egui::Popup::menu(&resp).show(|ui| items(app, ui));
+            resp.menu().show(|ui| items(app, ui));
         }
     }
 }

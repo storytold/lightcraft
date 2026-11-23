@@ -7,6 +7,9 @@
 
 use std::sync::Arc;
 
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props, Show};
+
 use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value, json};
 
@@ -127,6 +130,8 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let mut submit: Option<String> = None;
     let mut clear = false;
+    // Measuring must not publish targets or apply an action before the real pass.
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     ui.horizontal(|ui| {
         ui.add_space(super::people::PAD - 4.0);
         let n = selected.len();
@@ -148,9 +153,11 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if b.clicked() {
             submit = Some(chosen);
         }
-        let c = ui.button(crate::i18n::tr("Clear"));
-        register(ui, "unnamed:clear", c.rect);
-        clear = c.clicked() || field.cancelled();
+        let c = Button::new(crate::i18n::tr("Clear")).id_salt("unnamed:clear").show(ui);
+        if real {
+            crate::widgets::register_response("unnamed:clear", c.response.rect, &c.response);
+        }
+        clear = real && (c.clicked() || field.cancelled());
     });
     // the people already named, matching what is typed (a click names the faces)
     let typed = app.ui.unnamed_name.trim().to_lowercase();
@@ -185,6 +192,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// The heading of the section, at `at`, and what it says about where the faces come from.
 pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, at: egui::Pos2, right: f32) {
     let t = Tokens::get(ui.ctx());
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let count = if list.total > list.faces.len() { format!("{} of {}", list.faces.len(), list.total) } else { list.total.to_string() };
     let p = ui.painter();
     p.text(at, Align2::LEFT_CENTER, "Unnamed faces", t.semibold(15.0), t.text);
@@ -203,17 +211,21 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
     p.text(pos2(at.x, at.y + 24.0), Align2::LEFT_CENTER, sub, t.font(12.0), t.text_dim);
     if !list.ready && list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(at.x, at.y + 38.0), vec2(120.0, 22.0));
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr("Open Settings")));
-        register(ui, "unnamed:openSettings", b.rect);
-        if b.clicked() {
+        let b = Button::new(crate::i18n::tr("Open Settings")).id_salt("unnamed:openSettings").show_at(ui, r);
+        if real {
+            crate::widgets::register_response("unnamed:openSettings", b.response.rect, &b.response);
+        }
+        if real && b.clicked() {
             let _ = app.run("app.settings", json!({"tab": "faces"}));
         }
     } else if !list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
         let all = app.ui.unnamed_selected.len() == list.faces.len();
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })));
-        register(ui, "unnamed:selectAll", b.rect);
-        if b.clicked() {
+        let b = Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })).id_salt("unnamed:selectAll").show_at(ui, r);
+        if real {
+            crate::widgets::register_response("unnamed:selectAll", b.response.rect, &b.response);
+        }
+        if real && b.clicked() {
             app.ui.unnamed_selected.clear();
             if !all {
                 app.ui.unnamed_selected.extend(list.faces.iter().map(|f| (f.photo, f.index)));
@@ -278,6 +290,10 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
         click(app, list, i, shift);
     }
 }
+
+#[cfg(test)]
+#[path = "unnamed_faces_port_tests.rs"]
+mod unnamed_faces_port_tests;
 
 #[cfg(test)]
 mod tests {

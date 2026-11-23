@@ -240,6 +240,7 @@ fn prompt_key(app: &LightcraftApp) -> Option<PromptKey> {
 #[derive(Default)]
 pub(crate) struct PromptInput {
     key: Option<PromptKey>,
+    drawn: bool,
     /// The prompt has completed a layout pass; its `Area`s are interactable and its button ids are
     /// known. Before this, input must not reach it or the panels under it.
     laid_out: bool,
@@ -266,6 +267,7 @@ impl PromptInput {
     fn reset_to(&mut self, key: Option<PromptKey>) {
         let transition = key.is_some();
         self.key = key;
+        self.drawn = false;
         self.laid_out = false;
         self.transition = transition;
         self.focus = 0;
@@ -510,18 +512,21 @@ pub(crate) fn shield_pass(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 /// A completed, nondiscarded pass has laid out and focused the prompt: input may reach it from the
 /// next host frame. A changed/dismissed prompt is reset here as well, so a queued next notice is
 /// treated as a new transition.
-pub(crate) fn finish_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if ctx.will_discard() {
-        return;
-    }
-    let current = prompt_key(app);
+pub(crate) struct PromptCompletion(Option<PromptKey>, bool);
+pub(crate) fn begin_draw(app: &mut LightcraftApp) { app.notice_input.drawn = false; }
+pub(crate) fn capture_completion(app: &LightcraftApp) -> PromptCompletion {
+    PromptCompletion(prompt_key(app), app.notice_input.drawn)
+}
+pub(crate) fn apply_completion(app: &mut LightcraftApp, completion: PromptCompletion) {
+    let PromptCompletion(current, drawn) = completion;
+    if prompt_key(app) != current { return; }
     if app.notice_input.key != current {
         // A prompt can change during the draw itself (Tasks -> Unsaved, or OK -> next notice).
         // Leave it in its transition state so the next host frame shields the new prompt too.
         app.notice_input.reset_to(current);
         return;
     }
-    if current.is_some() {
+    if current.is_some() && drawn {
         app.notice_input.laid_out = true;
         app.notice_input.transition = false;
     }
@@ -534,6 +539,7 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let last = buttons.len().checked_sub(1)?;
+    input.drawn = true;
     let cancel_index = buttons.iter().position(|(_, _, choice)| matches!(choice, Choice::Cancel | Choice::Ok)).unwrap_or(last);
     if !input.focus_set {
         input.focus = cancel_index;
@@ -835,5 +841,27 @@ mod tests {
             assert_eq!(gpu_notice(Some(reason), true), None, "{reason}");
         }
         assert_eq!(gpu_notice(None, true), None, "the GPU is in use");
+    }
+
+    #[test]
+    fn late_output_completion_settles_only_its_actual_unchanged_prompt_draw() {
+        let ctx = egui::Context::default();
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        app.install_framework(&ctx);
+        app.notices.push("own prompt".into());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::begin_draw(&mut app);
+            super::prepare_ui_pass(&mut app, ui.ctx());
+            super::show(&mut app, ui.ctx());
+            app.capture_ui_completion(ui.ctx());
+        }).drop_without_applying_deltas();
+        assert!(!app.notice_input.laid_out);
+        app.drain_ui_completions(&ctx);
+        assert!(app.notice_input.laid_out);
+        let old = super::capture_completion(&app);
+        app.notices.push("next".into());
+        super::prepare_ui_pass(&mut app, &ctx);
+        super::apply_completion(&mut app, old);
+        assert!(!app.notice_input.laid_out, "new notice must retain its shield");
     }
 }

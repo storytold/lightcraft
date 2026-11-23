@@ -16,6 +16,9 @@
 
 use std::path::{Path, PathBuf};
 
+use craft::behavior::Proposal;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
 use egui::{Align2, RichText, vec2};
 use serde_json::json;
 
@@ -85,7 +88,7 @@ pub(crate) enum LibraryPass {
 /// Its `Foreground` areas are non-interactable during their first layout pass, and a text field
 /// behind it may still own the keyboard focus. The frame that creates a window therefore draws
 /// only that window and drops background input, just as a new notice prompt does.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct WindowBarrier {
     /// The window whose completed layout has already settled. `None` until the first pass is
     /// accepted (and again once the window or its banner replaces it).
@@ -247,11 +250,15 @@ pub(crate) fn begin_draw(app: &mut LightcraftApp) {
 /// pass settles it; a window hidden by a prompt or by the dialog it opened, or one that appeared
 /// midway through this pass (the banner's Open Library… button), keeps the transition armed so
 /// the first pass that draws it again is shielded.
-pub(crate) fn finish_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if ctx.will_discard() {
-        return;
-    }
-    if let Some(mode) = visible_mode(app) {
+pub(crate) struct LibraryCompletion(WindowBarrier, Option<WindowMode>, bool);
+pub(crate) fn capture_completion(app: &LightcraftApp) -> LibraryCompletion {
+    LibraryCompletion(app.library_window_input.clone(), visible_mode(app), app.library_problem.as_ref().is_none_or(|p| p.dismissed))
+}
+pub(crate) fn apply_completion(app: &mut LightcraftApp, completion: LibraryCompletion) {
+    let LibraryCompletion(barrier, visible, absent) = completion;
+    if visible_mode(app) != visible || app.library_problem.as_ref().is_none_or(|p| p.dismissed) != absent { return; }
+    app.library_window_input = barrier;
+    if let Some(mode) = visible {
         if app.library_window_input.drawn == Some(mode) && (!app.library_window_input.transition || app.library_window_input.shielded) {
             app.library_window_input.shown = Some(mode);
             app.library_window_input.transition = false;
@@ -260,7 +267,7 @@ pub(crate) fn finish_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) {
         } else if !app.library_window_input.transition {
             app.library_window_input.begin_transition();
         }
-    } else if app.library_problem.as_ref().is_none_or(|p| p.dismissed) {
+    } else if absent {
         app.library_window_input = WindowBarrier::default();
     } else if !app.library_window_input.transition {
         // A prompt appeared or changed during the draw and now hides the window.
@@ -1115,9 +1122,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
-                    let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui, format!("button:{id}"), r.rect);
-                    if r.clicked() {
+                    let enabled = enabled && ui.is_enabled();
+                    let mut button = Button::new(crate::i18n::tr(label).to_owned())
+                        .id_salt((ERROR_WINDOW_ID, id))
+                        .size(craft::theme::ControlSize::Sm)
+                        .enabled(enabled);
+                    let size = button.measure_in(ui, Proposal::Ideal).max(vec2(0.0, 26.0));
+                    let (_, rect) = ui.allocate_space(size);
+                    let r = button.show_at(ui, rect);
+                    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                    if real {
+                        crate::widgets::register_response(format!("button:{id}"), r.response.rect, &r.response);
+                    }
+                    if real && enabled && r.clicked() {
                         choice = Some(c);
                     }
                 };
@@ -1353,5 +1370,32 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.library_window_input.begin_transition();
         clear_focus(ui.ctx());
         ui.ctx().request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    #[test]
+    fn own_draw_and_shield_survive_delayed_completion_but_hidden_window_does_not_settle() {
+        let ctx = egui::Context::default();
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        app.install_framework(&ctx);
+        app.library_problem = Some(super::LibraryProblem::new("missing", "test"));
+        app.library_window_input.begin_transition();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.library_window_input.drawn = Some(super::WindowMode::Error);
+            app.library_window_input.shielded = true;
+            app.capture_ui_completion(ui.ctx());
+        }).drop_without_applying_deltas();
+        assert!(app.library_window_input.transition);
+        app.library_window_input.drawn = None;
+        app.drain_ui_completions(&ctx);
+        assert_eq!(app.library_window_input.shown, Some(super::WindowMode::Error));
+        assert!(!app.library_window_input.transition);
+        app.library_window_input.begin_transition();
+        app.library_window_input.drawn = None;
+        let hidden = super::capture_completion(&app);
+        super::apply_completion(&mut app, hidden);
+        assert!(app.library_window_input.transition, "no actual draw cannot settle a window");
     }
 }

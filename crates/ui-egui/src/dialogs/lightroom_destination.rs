@@ -14,6 +14,11 @@
 
 use std::path::{Path, PathBuf};
 
+use craft::behavior::Proposal;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::text::TextField;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -218,13 +223,32 @@ pub fn ok_label(dialog: &Dialog) -> &'static str {
     }
 }
 
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// Register only actual mounted SDK controls, never speculative measurement hits.
+fn register(ui: &egui::Ui, id: &str, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+/// Native caption rows have already spent their width; mount fields in their real remainder.
+fn text(ui: &mut egui::Ui, id: &str, label: &str, value: &mut String, width: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width.max(1.0), 24.0), egui::Sense::hover());
+    let shown = TextField::new(label.to_owned(), Bind::bound(value)).id_salt(id).limit(None).submits().show_at(ui, rect);
+    register(ui, id, &shown.response);
+}
+
 /// The window's body: the two choices, the new library's name and location, and "Don't ask again".
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     let Dialog::LightroomDestination { catalog, library, photos, new_library, name, location, dont_ask, .. } = dialog else { return };
     let t = crate::theme::Tokens::get(ui.ctx());
     let tr = crate::i18n::tr;
     let file = Path::new(catalog.as_str()).file_name().map_or_else(|| catalog.clone(), |n| n.to_string_lossy().into_owned());
-    ui.label(crate::i18n::tr_format!("Where should the Lightroom catalog “{catalog}” go?", catalog = file));
+    let question = crate::i18n::tr_format!("Where should the Lightroom catalog “{catalog}” go?", catalog = file);
+    ui.label(&question);
     ui.label(egui::RichText::new(catalog.as_str()).color(t.text_dim));
     ui.add_space(4.0);
     let n = *photos;
@@ -234,8 +258,6 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         library = library,
         count = n
     );
-    let r = ui.radio_value(new_library, false, merge);
-    crate::widgets::register(ui, "radio:lightroomDestination-open", r.rect);
     let indent = ui.spacing().icon_width + ui.spacing().icon_spacing;
     let note = |ui: &mut egui::Ui, text: &str| {
         ui.horizontal(|ui| {
@@ -243,16 +265,33 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
             ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim)).wrap());
         });
     };
-    note(
-        ui,
-        if n == 0 {
-            tr("The library is empty: the catalog's photos, collections and edits become its first.")
-        } else {
-            tr("The catalog's photos, collections and edits join the ones already in this library.")
-        },
+    let choices = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
+        let open = Radio::new(false).id_salt("lightroomDestination-open").label(merge.clone()).show(ui);
+        register(ui, "radio:lightroomDestination-open", &open);
+        note(
+            ui,
+            if n == 0 {
+                tr("The library is empty: the catalog's photos, collections and edits become its first.")
+            } else {
+                tr("The catalog's photos, collections and edits join the ones already in this library.")
+            },
+        );
+        let new = Radio::new(true).id_salt("lightroomDestination-new").label(tr("Create a new library").to_owned()).show(ui);
+        register(ui, "radio:lightroomDestination-new", &new);
+    };
+    // The legacy dialog owns the outer row. Measure in its actual width, not the enclosing SDK column.
+    let width = ui.available_width().max(1.0);
+    let mut measuring_value = *new_library;
+    let child = ui.new_child(
+        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY))).sizing_pass().invisible(),
     );
-    let r = ui.radio_value(new_library, true, tr("Create a new library"));
-    crate::widgets::register(ui, "radio:lightroomDestination-new", r.rect);
+    let size = RadioGroup::new(question.clone(), Bind::bound(&mut measuring_value)).id_salt("lightroomDestination").measure_in(
+        &child,
+        Proposal::Width(width),
+        choices,
+    );
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size.y.max(24.0)), egui::Sense::hover());
+    RadioGroup::new(question.clone(), Bind::bound(new_library)).id_salt("lightroomDestination").show_at(ui, rect, choices);
     ui.add_enabled_ui(*new_library, |ui| {
         // a field's caption, left-aligned in a column as wide as the longer one (in any language)
         let font = egui::TextStyle::Body.resolve(ui.style());
@@ -270,26 +309,25 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         ui.horizontal(|ui| {
             ui.add_space(indent);
             caption(ui, tr("Library name"));
-            crate::text_field::TextField::singleline("field:lightroomLibraryName", name)
-                .label(tr("Library name"))
-                .width(ui.available_width().max(120.0))
-                .show(ui);
+            text(ui, "field:lightroomLibraryName", tr("Library name"), name, ui.available_width().max(120.0));
         });
         ui.horizontal(|ui| {
             ui.add_space(indent);
             caption(ui, tr("Location"));
             let choose = app.services.pick_folder.is_some();
-            let button_w = if choose { 80.0 } else { 0.0 };
-            crate::text_field::TextField::singleline("field:lightroomLibraryLocation", location)
-                .label(tr("Location"))
-                .width((ui.available_width() - button_w).max(120.0))
-                .show(ui);
-            if choose
-                && crate::widgets::text_button(ui, "lightroomLibraryChoose", tr("Choose…"), false).clicked()
-                && let Some(pick) = app.services.pick_folder.as_mut()
-                && let Some(d) = pick()
-            {
-                *location = d;
+            let mut button = Button::new(tr("Choose…").to_owned()).id_salt("lightroomLibraryChoose");
+            let button_w = if choose { button.measure_in(ui, Proposal::Ideal).x.max(80.0) + ui.spacing().item_spacing.x } else { 0.0 };
+            text(ui, "field:lightroomLibraryLocation", tr("Location"), location, (ui.available_width() - button_w).max(120.0));
+            if choose {
+                let shown = button.show(ui);
+                register(ui, "button:lightroomLibraryChoose", &shown.response);
+                if !measuring(ui)
+                    && shown.clicked()
+                    && let Some(pick) = app.services.pick_folder.as_mut()
+                    && let Some(d) = pick()
+                {
+                    *location = d;
+                }
             }
         });
         note(ui, tr("LightCraft opens the new library, then imports the catalog into it. Its folder must be new or empty."));
@@ -297,8 +335,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     ui.add_space(4.0);
     // (it only speaks of merging: unticked and greyed out while a new library is chosen)
     let mut ticked = *dont_ask && !*new_library;
-    let c = ui.add_enabled(!*new_library, egui::Checkbox::new(&mut ticked, tr("Don't ask again (always merge into the open library)")));
-    crate::widgets::register(ui, "check:lightroomDontAsk", c.rect);
+    let c = Checkbox::new(Bind::bound(&mut ticked))
+        .id_salt("lightroomDontAsk")
+        .label(tr("Don't ask again (always merge into the open library)").to_owned())
+        .enabled(!*new_library)
+        .show(ui);
+    register(ui, "check:lightroomDontAsk", &c.response);
     if !*new_library {
         *dont_ask = ticked;
     }
@@ -365,3 +407,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+#[path = "lightroom_destination_wave110_tests.rs"]
+mod lightroom_destination_wave110_tests;

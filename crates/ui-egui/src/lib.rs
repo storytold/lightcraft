@@ -503,6 +503,8 @@ impl ShotGeometry {
 /// A synthetic-input control request waiting for a fresh layout and for its last event to be
 /// consumed by a completed UI pass.
 struct PendingGesture {
+    /// Stable presentation-completion identity and own-output claim, never semantic payload.
+    completion: std::sync::Arc<std::sync::atomic::AtomicU8>,
     method: String,
     params: Value,
     reply: Sender<ControlResponse>,

@@ -4227,20 +4227,30 @@ fn about_dialog_tabs_show_the_credits() {
     let r = h.request("ui.menu.invoke", json!({"id": "app.about"}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About));
-    // a new window sizes itself on its first frame: let it settle before clicking its tabs
-    h.step();
-    h.step();
-    for (i, (tab, _)) in crate::panels::dialogs::ABOUT_TABS.iter().enumerate().rev() {
-        let r = h.request("ui.clickWidget", json!({"id": format!("button:aboutTab-{tab}")}), t);
-        assert_eq!(r["ok"], true, "{tab}: {r}");
-        h.step();
-        let shown = h.view.ctx.data_mut(|d| d.get_temp::<u8>(egui::Id::unique("about_tab")));
-        assert_eq!(shown.map(usize::from), Some(i), "{tab}");
+    let tree = |h: &Headless| craft::ui::runtime::inspect::recorded(&h.view.ctx, egui::Id::unique("about-app-contract")).expect("SDK About was painted");
+    for (tab, evidence) in [("Models", "Models"), ("Contributors", "Contributors"), ("About", "Join the ArtCraft Discord")] {
+        for _ in 0..5 { h.step(); }
+        let nodes = tree(&h);
+        let target = nodes.elements.iter().find(|node| node.facts.as_ref().is_some_and(|f| f.role == "Tab" && f.name.as_deref() == Some(tab) && f.interactive && !f.disabled)).unwrap_or_else(|| panic!("missing enabled SDK tab {tab}"));
+        let at = target.rect.center();
+        assert_eq!(h.request("ui.click", json!({"x":at.x,"y":at.y}), t)["ok"], true);
+        for _ in 0..4 { h.step(); }
+        if tab == "Contributors" {
+            // Initially the grab bag is visible. "Table" is a view selector, not the table name.
+            let nodes = tree(&h);
+            let at = nodes.elements.iter().find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("Table") && f.interactive && !f.disabled)).expect("Table view selector").rect.center();
+            assert_eq!(h.request("ui.click", json!({"x":at.x,"y":at.y}), t)["ok"], true);
+            for _ in 0..4 { h.step(); }
+        }
+        assert!(tree(&h).elements.iter().any(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(evidence) && (tab == "About" || f.role == "Table"))), "missing content after clicking {tab}");
+        assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About));
     }
-    h.request("ui.clickWidget", json!({"id": "button:aboutTab-contributors"}), t);
     let img = h.snapshot(SETTLE);
     assert_eq!(img.size, [1300, 820]);
-    assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About), "switching tabs keeps the dialog open");
+    let nodes = tree(&h);
+    let ok = nodes.elements.iter().find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("OK") && f.interactive && !f.disabled)).expect("real SDK footer").rect.center();
+    assert_eq!(h.request("ui.click", json!({"x":ok.x,"y":ok.y}), t)["ok"], true);
+    assert!(h.step_until(t, |frame| frame.app.ui.dialog.is_none()), "SDK OK closes the application dialog");
 }
 
 /// Settings ▸ Display / `app.displayProfile`: previews are shown through the monitor profile

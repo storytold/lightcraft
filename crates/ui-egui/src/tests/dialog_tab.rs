@@ -22,9 +22,17 @@ fn demo_with_selection() -> Headless {
 
 /// The registered widget (`field:…`, `check:…`, `button:…`) that has the keyboard focus.
 fn focused(h: &Headless) -> Option<String> {
-    let id = h.view.ctx.memory(|m| m.focused())?;
-    let rect = h.view.ctx.read_response(id)?.rect;
-    h.app.widgets.iter().find(|(_, r)| *r == rect).map(|(w, _)| w.clone())
+    let id = h.view.ctx.memory(|memory| memory.focused())?;
+    let response = h.view.ctx.read_response(id)?;
+    if let Some(record) = craft::ui::runtime::focus::focused_rec(&h.view.ctx) {
+        if record.stop.part.is_some() || id != record.stop.root || !response.enabled() || !response.has_focus() {
+            return None;
+        }
+        let owners = h.app.widget_hits.iter().filter(|(_, hit)| hit.id == record.stop.id).map(|(name, _)| name).collect::<Vec<_>>();
+        assert!(owners.len() <= 1, "one registered alias for the actual focused SDK owner: {owners:?}");
+        return owners.first().map(|name| (*name).clone());
+    }
+    h.app.widgets.iter().find(|(_, rect)| *rect == response.rect).map(|(name, _)| name.clone())
 }
 
 fn key(h: &mut Headless, params: serde_json::Value) {

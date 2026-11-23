@@ -193,6 +193,8 @@ pub struct Interaction {
     pub label: String,
     pub photo: PhotoId,
     pub original: Arc<DevelopSettings>,
+    /// The timestamp paired with the original settings, including an originally unedited photo.
+    pub original_edited: Option<String>,
     /// Whether an edit during the interaction changed the crop itself. If none did, the crop the
     /// photo shows was fitted by Constrain Crop, and the final commit starts again from the original
     /// crop, so Auto Sync carries the edit and not the active photo's fitted crop.
@@ -1133,15 +1135,16 @@ impl Session {
             self.end_interaction()?;
         }
         let id = self.active().ok_or_else(|| EngineError::Other("no active photo".into()))?;
+        let original_edited = self.catalog.photo(id).and_then(|photo| photo.edited.clone());
         // old masks go onto the photo before a drag moves the frame under them (they then stay on
         // their content while it does, not only once it ends)
         if let Some(d) = self.develop_of(id).filter(|d| d.masks.iter().any(|m| !m.on_photo)) {
             let mut on = (*d).clone();
             self.attach_masks(id, &d, &mut on);
-            self.apply_silent(Op::SetDevelop { id, settings: Arc::new(on), label: label.into(), edited: None })?;
+            self.apply_silent(Op::SetDevelop { id, settings: Arc::new(on), label: label.into(), edited: original_edited.clone() })?;
         }
         let original = self.develop_of(id).unwrap_or_default();
-        self.interaction = Some(Interaction { label: label.into(), photo: id, original, crop_edited: false });
+        self.interaction = Some(Interaction { label: label.into(), photo: id, original, original_edited, crop_edited: false });
         Ok(())
     }
 
@@ -1150,12 +1153,16 @@ impl Session {
         let Some(i) = self.interaction.take() else { return Ok(()) };
         let Some(cur) = self.develop_of(i.photo) else { return Ok(()) };
         if *cur == *i.original {
+            // Live previews can change only the timestamp when a drag returns to its start.
+            if self.catalog.photo(i.photo).is_some_and(|photo| photo.edited != i.original_edited) {
+                self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: i.original_edited })?;
+            }
             return Ok(());
         }
         // Restore the original silently, then commit the final value as one step. A crop nobody
         // edited goes back to the original's: Constrain Crop fits it again for the final warp, and
         // Auto Sync carries the edit, not the active photo's fitted crop (review of #1990).
-        self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original.clone(), label: i.label.clone(), edited: None })?;
+        self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original.clone(), label: i.label.clone(), edited: i.original_edited })?;
         let mut last = (*cur).clone();
         if !i.crop_edited {
             last.crop.geometry = i.original.crop.geometry;
@@ -1165,7 +1172,7 @@ impl Session {
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
         if let Some(i) = self.interaction.take() {
-            self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: None })?;
+            self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: i.original_edited })?;
         }
         Ok(())
     }

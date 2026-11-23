@@ -31,6 +31,8 @@ pub struct TextFieldResponse {
     pub ending: Option<Ending>,
     /// An edit is under way: the field has the focus, or its menu does.
     pub editing: bool,
+    /// The actual configured native TextEdit gives Tab to navigation rather than owning it.
+    pub(crate) tab_navigation: bool,
 }
 
 impl TextFieldResponse {
@@ -248,6 +250,7 @@ impl<'a> TextField<'a> {
         // would be gone
         let right = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary) || i.pointer.button_released(egui::PointerButton::Secondary));
         let selection = egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range());
+        let tab_navigation = !edit.get_event_filter().tab;
         let mut response = ui.add(edit);
         // screen readers: the field by its caption, even once it holds text (egui names it by
         // nothing but its contents)
@@ -296,10 +299,24 @@ impl<'a> TextField<'a> {
             }
         }
         let menu_was_open = memo.menu_open;
+        // egui closes a popup after drawing its Area. On Escape that leaves the closing
+        // Area's click proxy over the field for the very next pointer press. Omit only our
+        // own open menu on this pass; keep menu_was_open for the existing edit/refocus path.
+        let popup_id = egui::Popup::default_response_id(&response);
+        let close_for_escape = escape
+            && ui.is_enabled()
+            && !ui.is_sizing_pass()
+            && !craft::ui::runtime::measure::active(ui.ctx())
+            && egui::Popup::is_id_open(ui.ctx(), popup_id);
+        if close_for_escape {
+            egui::Popup::close_id(ui.ctx(), popup_id);
+            crate::widgets::take_escape(ui.ctx());
+        }
         // a click on a greyed-out item does nothing, as in a native menu: only a choice or a click
         // outside closes it (not the right-click that moves the menu within the field, #1877)
         // (while photos are carried a right-click opens no menu: that is not what the person is doing)
-        memo.menu_open = !(response.secondary_clicked() && crate::widgets::carrying(ui.ctx()))
+        memo.menu_open = !close_for_escape
+            && !(response.secondary_clicked() && crate::widgets::carrying(ui.ctx()))
             && egui::Popup::context_menu(&response)
                 .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
                 .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
@@ -345,7 +362,7 @@ impl<'a> TextField<'a> {
         }
         let editing = ending.is_none() && (focused || memo.away || memo.menu_open || memo.action.is_some());
         ui.data_mut(|d| d.insert_temp(id.with("memo"), memo));
-        TextFieldResponse { response, ending, editing }
+        TextFieldResponse { response, ending, editing, tab_navigation }
     }
 }
 
@@ -419,3 +436,171 @@ fn menu(ui: &mut Ui, widget: &str, id: egui::Id, text: &str, action: &mut Option
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod live_filter_tests;
+
+
+#[cfg(test)]
+mod native_popup_preclose_tests {
+    use super::*;
+    use crate::headless::HeadlessView;
+    use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
+
+    const FIRST: &str = "preclose-first";
+    const SECOND: &str = "preclose-second";
+
+    struct Rig {
+        view: HeadlessView,
+        text: String,
+        sibling: String,
+        widgets: Vec<(String, Rect)>,
+        endings: Vec<Ending>,
+        sibling_open_after_first: bool,
+        first_escape_taken: bool,
+        enabled: bool,
+        measuring: bool,
+        time: f64,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let mut rig = Self {
+                view: HeadlessView::new(), text: "Lisbon".into(), sibling: "Porto".into(),
+                widgets: Vec::new(), endings: Vec::new(), sibling_open_after_first: false, first_escape_taken: false,
+                enabled: true, measuring: false, time: 0.0,
+            };
+            rig.settle();
+            rig
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            self.time += 1.0 / 60.0;
+            let raw = HeadlessView::raw_input(egui::vec2(500.0, 320.0), 1.0, self.time, events);
+            let Self { view, text, sibling, endings, sibling_open_after_first, first_escape_taken, enabled, measuring, .. } = self;
+            view.run(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                let mut draw = |ui: &mut Ui| {
+                    ui.add_space(20.0);
+                    ui.add_enabled_ui(*enabled, |ui| {
+                        let field = TextField::singleline(FIRST, text).width(210.0).show(ui);
+                        endings.extend(field.ending);
+                        *first_escape_taken = crate::widgets::escape_taken(&ctx);
+                    });
+                    // Observe the actual sibling owner between the two fields' shows.
+                    *sibling_open_after_first = egui::Popup::is_id_open(&ctx, id(SECOND).with("popup"));
+                    ui.add_space(80.0);
+                    TextField::singleline(SECOND, sibling).width(210.0).show(ui);
+                };
+                if *measuring {
+                    craft::ui::runtime::measure::run(&ctx, || draw(ui));
+                } else {
+                    draw(ui);
+                }
+            });
+            self.widgets = crate::widgets::take_registry(&self.view.ctx);
+        }
+
+        fn settle(&mut self) {
+            for _ in 0..4 { self.frame(Vec::new()); }
+        }
+
+        fn rect(&self, name: &str) -> Rect {
+            self.widgets.iter().rev().find(|(key, _)| key == name).map(|(_, rect)| *rect)
+                .unwrap_or_else(|| panic!("missing {name}: {:?}", self.widgets))
+        }
+
+        fn click_without_settling(&mut self, at: Pos2, button: PointerButton) {
+            self.time += 1.0;
+            let event = |pressed| Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE };
+            self.frame(vec![Event::PointerMoved(at), event(true)]);
+            self.frame(vec![event(false)]);
+        }
+
+        fn click(&mut self, name: &str, button: PointerButton) {
+            self.click_without_settling(self.rect(name).center(), button);
+            self.settle();
+        }
+
+        fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
+            Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }
+        }
+
+        fn key(&mut self, key: Key, modifiers: Modifiers) {
+            self.frame(vec![Self::key_event(key, true, modifiers), Self::key_event(key, false, modifiers)]);
+            self.settle();
+        }
+
+        fn popup_open(&self, name: &str) -> bool {
+            egui::Popup::is_id_open(&self.view.ctx, id(name).with("popup"))
+        }
+
+        fn selection(&self) -> Option<egui::text::CCursorRange> {
+            egui::text_edit::TextEditState::load(&self.view.ctx, id(FIRST)).and_then(|state| state.cursor.char_range())
+        }
+    }
+
+    #[test]
+    fn escape_omits_the_closing_proxy_before_immediate_secondary_reopen() {
+        let mut rig = Rig::new();
+        rig.click(FIRST, PointerButton::Primary);
+        rig.click(FIRST, PointerButton::Secondary);
+        assert!(rig.popup_open(FIRST));
+        let at = rig.rect(FIRST).center();
+        rig.frame(vec![Rig::key_event(Key::Escape, true, Modifiers::NONE), Rig::key_event(Key::Escape, false, Modifiers::NONE)]);
+        assert!(!rig.popup_open(FIRST));
+        assert!(rig.widgets.iter().all(|(name, _)| name != "preclose-first:cut"), "closing pass must not draw a menu proxy");
+        assert!(rig.first_escape_taken, "the closing pass owns Escape before the frame-local marker expires");
+        // The very next pass is the secondary press: no empty/settle frame in between.
+        rig.click_without_settling(at, PointerButton::Secondary);
+        assert!(rig.popup_open(FIRST), "the first real secondary click must reopen the field's menu");
+        assert!(rig.endings.is_empty());
+        assert_eq!(rig.text, "Lisbon");
+    }
+
+    #[test]
+    fn menu_escape_keeps_draft_selection_and_existing_second_escape_cancel() {
+        let mut rig = Rig::new();
+        rig.click(FIRST, PointerButton::Primary);
+        rig.key(Key::A, Modifiers::COMMAND);
+        rig.frame(vec![Event::Text("Rome".into())]);
+        rig.key(Key::A, Modifiers::COMMAND);
+        rig.click(FIRST, PointerButton::Secondary);
+        let selected = rig.selection();
+        assert!(selected.is_some_and(|range| !range.is_empty()));
+        rig.key(Key::Escape, Modifiers::NONE);
+        assert_eq!(rig.text, "Rome");
+        assert_eq!(rig.selection(), selected);
+        assert!(rig.endings.is_empty());
+        assert!(rig.view.ctx.memory(|memory| memory.has_focus(id(FIRST))));
+        rig.key(Key::Escape, Modifiers::NONE);
+        assert_eq!(rig.text, "Lisbon");
+        assert_eq!(rig.endings, vec![Ending::Escape]);
+    }
+
+    #[test]
+    fn earlier_field_does_not_preclose_its_siblings_popup() {
+        let mut rig = Rig::new();
+        rig.click(SECOND, PointerButton::Primary);
+        rig.click(SECOND, PointerButton::Secondary);
+        assert!(rig.popup_open(SECOND));
+        rig.frame(vec![Rig::key_event(Key::Escape, true, Modifiers::NONE), Rig::key_event(Key::Escape, false, Modifiers::NONE)]);
+        assert!(rig.sibling_open_after_first, "the first field must leave the second field's own popup to its owner");
+        assert!(!rig.popup_open(SECOND), "the sibling closes its own menu");
+        assert!(rig.endings.is_empty());
+    }
+
+    #[test]
+    fn preclose_does_not_claim_disabled_or_measuring_escape() {
+        for measuring in [false, true] {
+            let mut rig = Rig::new();
+            rig.click(FIRST, PointerButton::Secondary);
+            assert!(rig.popup_open(FIRST));
+            rig.enabled = measuring;
+            rig.measuring = measuring;
+            rig.frame(vec![Rig::key_event(Key::Escape, true, Modifiers::NONE), Rig::key_event(Key::Escape, false, Modifiers::NONE)]);
+            assert!(!rig.first_escape_taken, "the new preclose must not claim disabled/measurement input during the pass");
+            // This checks the new early-close effect, not egui's pre-existing late-close behavior.
+        }
+    }
+}

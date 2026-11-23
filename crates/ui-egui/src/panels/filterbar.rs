@@ -2,6 +2,18 @@
 //! edited state and camera / lens / keyword pickers — every control drives `library.filter`.
 //! "Save as Smart Album…" keeps the current view as a live album; "Clear" resets the filter.
 
+#[cfg(test)]
+#[path = "filterbar_actions_external155_tests.rs"]
+mod actions_external155_tests;
+#[cfg(test)]
+mod sdk_tests;
+#[cfg(test)]
+mod tests;
+
+use craft::ui::buttons::Button;
+use craft::ui::contract::overlay::Trigger;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::menu::{Menu, MenuItem};
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, vec2};
 use lightcraft_catalog::{ColorLabel, Flag, MediaKind, RatingOp};
 use serde_json::{Value, json};
@@ -91,6 +103,129 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     if let Some(p) = chosen {
         filter(app, p);
     }
+}
+
+/// The legacy control is an action menu, not a value-editing field. Keep its non-focus-taking
+/// native opener, with the SDK owning the actual popup, checked rows, navigation and dismissal.
+fn kind_picker(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let choices = [
+        ("all", "All types"),
+        ("image", "Photos"),
+        ("raw", "Raw"),
+        ("video", "Videos"),
+        ("hdr", "HDR"),
+        ("panorama", "Panoramas"),
+        ("hdrPanorama", "HDR Panoramas"),
+    ];
+    let f = &app.session.filter;
+    let current = f.merged.clone().unwrap_or_else(|| {
+        match f.kind {
+            None => "all",
+            Some(MediaKind::Image) => "image",
+            Some(MediaKind::Raw) => "raw",
+            Some(MediaKind::Video) => "video",
+        }
+        .to_string()
+    });
+    let shown = choices.iter().find(|(value, _)| *value == current).map_or("Merged", |(_, label)| *label);
+    let active = f.kind.is_some() || f.merged.is_some();
+    let t = Tokens::get(ui.ctx());
+    // Applying a filter inserts chips before this bar, shifting egui's automatic IDs. A
+    // keyboard opener must keep its identity across that layout change to receive focus back.
+    let opener = ui.scope_builder(
+        egui::UiBuilder::new().scope_id(egui::Id::unique("lightcraft-filter-kind-opener")),
+        |ui| crate::widgets::dropdown(ui, "filter-kind", crate::i18n::tr(shown), t.font(12.5), if active { t.text } else { t.text_label }),
+    ).inner;
+    if active {
+        ui.painter().rect_stroke(opener.rect.expand(2.0), 4.0, Stroke::new(1.0, t.accent.gamma_multiply(0.7)), StrokeKind::Outside);
+    }
+    let measuring = craft::ui::runtime::measure::active(ui.ctx());
+    let pass = ui.ctx().cumulative_pass_nr();
+    let keyboard_id = opener.id.with("keyboard-menu");
+    let mut keyboard_open = ui.ctx().data(|data| data.get_temp::<(u64, bool)>(keyboard_id))
+        .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
+        .is_some_and(|(_, open)| open);
+    // External SDK click triggers only see pointer presses. Bridge activation only while
+    // this native opener owns focus, leaving all other keys and controls alone.
+    if !measuring && ui.is_enabled() && opener.has_focus()
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+            || input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
+    {
+        keyboard_open = true;
+    }
+    let keyboard_session = keyboard_open;
+    let mut chosen = None;
+    let mut menu_focus = None;
+    let menu = Menu::new(crate::i18n::tr("Type")).id_salt("filter-kind-menu").values().opened_by(&opener, Trigger::Click);
+    let menu = if keyboard_session { menu.open(Bind::bound(&mut keyboard_open)) } else { menu };
+    let shown = menu.show(ui, |ui, _| {
+        for (value, label) in choices {
+            let selected = value == current;
+            let item = MenuItem::new(crate::i18n::tr(label)).id_salt(value).entry_checked(selected);
+            let item = if selected { item.default_stop() } else { item };
+            let out = item.show(ui);
+            if !craft::ui::runtime::measure::active(ui.ctx()) {
+                crate::widgets::register_response(format!("filter:kind-{value}"), out.response.rect, &out.response);
+                if ui.memory(|memory| memory.has_focus(out.response.id)) {
+                    menu_focus = Some(out.response.id);
+                }
+            }
+            if out.ran {
+                chosen = Some(value);
+            }
+        }
+    });
+    if !measuring {
+        ui.ctx().data_mut(|data| {
+            if keyboard_open {
+                data.insert_temp(keyboard_id, (pass, true));
+            } else {
+                data.remove::<(u64, bool)>(keyboard_id);
+            }
+        });
+    }
+    if !measuring && shown.output.closed.is_some() {
+        // The native opener has no SDK focus stop. With no stop to restore, the menu leaves
+        // its disappearing row focused; that dead focus blocks the grid's shortcut pass.
+        // Release only this menu's row, never a field focused by an outside click.
+        if let Some(focused) = menu_focus {
+            ui.memory_mut(|memory| memory.surrender_focus(focused));
+        }
+        if keyboard_session && matches!(shown.output.closed,
+            Some(craft::ui::runtime::overlay::CloseReason::Activated
+                | craft::ui::runtime::overlay::CloseReason::Escape
+                | craft::ui::runtime::overlay::CloseReason::Enter))
+        {
+            opener.request_focus();
+        }
+    }
+    if !craft::ui::runtime::measure::active(ui.ctx())
+        && ui.is_enabled()
+        && let Some(value) = chosen
+    {
+        let patch = match value {
+            "all" => json!({"kind": null, "merged": null}),
+            "image" | "raw" | "video" => json!({"kind": value, "merged": null}),
+            "hdr" | "panorama" | "hdrPanorama" => json!({"kind": null, "merged": value}),
+            _ => return,
+        };
+        filter(app, patch);
+    }
+}
+
+/// SDK buttons own both pointer and keyboard activation; sizing must not publish targets or run actions.
+fn filter_action(ui: &mut egui::Ui, widget: &str, label: &str, enabled: bool) -> bool {
+    let enabled = enabled && ui.is_enabled();
+    let shown = Button::new(crate::i18n::tr(label).to_owned())
+        .id(egui::Id::unique(widget))
+        .size(craft::theme::ControlSize::Sm)
+        .enabled(enabled)
+        .show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    crate::widgets::register_response(widget, shown.response.rect, &shown.response);
+    enabled && shown.clicked()
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -188,41 +323,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     ui.add_space(14.0);
 
-    // kind + edited
-    let kind_label = match f.kind {
-        None => "All types",
-        Some(MediaKind::Image) => "Photos",
-        Some(MediaKind::Raw) => "Raw",
-        Some(MediaKind::Video) => "Videos",
-    };
-    let kind_label = match f.merged.as_deref() {
-        Some("hdr") => "HDR",
-        Some("panorama") => "Panoramas",
-        Some("hdrPanorama") => "HDR Panoramas",
-        Some(_) => "Merged",
-        None => kind_label,
-    };
-    picker(
-        app,
-        ui,
-        "kind",
-        kind_label,
-        f.kind.is_some() || f.merged.is_some(),
-        [
-            ("All types", Value::Null, None),
-            ("Photos", json!("image"), Some(MediaKind::Image)),
-            ("Raw", json!("raw"), Some(MediaKind::Raw)),
-            ("Videos", json!("video"), Some(MediaKind::Video)),
-        ]
-        .into_iter()
-        .map(|(l, v, k)| (l.to_string(), json!({"kind": v, "merged": null}), f.kind == k && f.merged.is_none()))
-        .chain(
-            [("HDR", "hdr"), ("Panoramas", "panorama"), ("HDR Panoramas", "hdrPanorama")]
-                .into_iter()
-                .map(|(l, m)| (l.to_string(), json!({"kind": null, "merged": m}), f.merged.as_deref() == Some(m))),
-        )
-        .collect(),
-    );
+    // The media-kind flow uses the SDK; all other filter controls keep their existing paths.
+    kind_picker(app, ui);
     let edited_label = match f.edited {
         None => "Edited or not",
         Some(true) => "Edited",
@@ -259,14 +361,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // save / clear
     ui.add_space(14.0);
     let filtering = app.session.filter != Default::default();
-    let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))));
-    register(ui, "button:filterSave", save.rect);
-    if save.clicked() {
+    if filter_action(ui, "button:filterSave", "Save as Smart Album…", filtering) {
         let _ = app.run("dialog.newSmartAlbum", json!({}));
     }
-    let clear = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Clear")).font(t.font(12.5))));
-    register(ui, "button:filterClear", clear.rect);
-    if clear.clicked() {
+    if filter_action(ui, "button:filterClear", "Clear", filtering) {
         app.ui.search.clear();
         let _ = app.run("library.clearFilter", json!({}));
     }

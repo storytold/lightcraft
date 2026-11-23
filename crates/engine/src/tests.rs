@@ -2187,3 +2187,161 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
         assert!(s.auto_sync, "Auto Sync must remain enabled");
     }
 }
+
+/// Interaction snapshots own the complete before-image used by cancel and committed inverses.
+/// These use real engine commands and catalog records, without a UI timestamp repair.
+mod interaction_edit_metadata {
+    use super::{Session, demo, json};
+    use lightcraft_catalog::{Op, PhotoId};
+    use serde_json::Value;
+
+    const PRIOR: &str = "2001-02-03T04:05:06";
+    const CURRENT: &str = "2026-11-21T06:00:00";
+
+    fn records(s: &Session, ids: [PhotoId; 2]) -> [Value; 2] {
+        ids.map(|id| serde_json::to_value(s.catalog.photo(id).unwrap()).unwrap())
+    }
+
+    fn fixture(prior: Option<&str>) -> (Session, [PhotoId; 2]) {
+        let mut s = demo();
+        let visible = s.visible_cloned();
+        let ids = [visible[0], visible[1]];
+        s.execute("library.select", &json!({"ids":[ids[0].0,ids[1].0],"active":ids[0].0})).unwrap();
+        s.execute("develop.autoSync", &json!({"on":false})).unwrap();
+        s.clock = Box::new(|| CURRENT.to_owned());
+        // Initial catalog data, not a production workaround: Some and None are independent inputs.
+        let settings = s.develop_of(ids[0]).unwrap();
+        s.catalog.apply(Op::SetDevelop { id: ids[0], settings, label: "Fixture timestamp".into(), edited: prior.map(str::to_owned) }).unwrap();
+        (s, ids)
+    }
+
+    fn set(s: &mut Session, value: f64) {
+        s.execute("develop.set", &json!({"control":"light.exposure","value":value})).unwrap();
+    }
+
+    fn release_undo_redo(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        let before = records(&s, ids);
+        let original = s.develop_of(ids[0]).unwrap().light.exposure;
+        let undo = s.undo.len();
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        assert_eq!(records(&s, ids), before, "Begin preserves the exact prior optional timestamp and both complete photos");
+        set(&mut s, original + 0.25);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT));
+        assert_eq!(s.undo.len(), undo, "first live update is not an Undo entry");
+        assert_eq!(records(&s, ids)[1], before[1], "first live update never edits the neighbor");
+        set(&mut s, original + 0.5);
+        assert_eq!(s.undo.len(), undo, "later live updates remain one interaction");
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        let committed = records(&s, ids);
+        assert_eq!(s.develop_of(ids[0]).unwrap().light.exposure, original + 0.5);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT));
+        assert_eq!(committed[1], before[1], "release never edits the complete neighbor");
+        assert_eq!(s.undo.len(), undo + 1, "release commits exactly one Undo entry");
+        assert!(s.interaction.is_none());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), before, "Undo restores the complete original photos, exact optional timestamp, value and history");
+        assert_eq!(s.undo.len(), undo);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), committed, "Redo restores the complete committed photos and committed timestamp/value pair");
+        assert_eq!(s.undo.len(), undo + 1);
+    }
+
+    fn cancel(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        let before = records(&s, ids);
+        let original = s.develop_of(ids[0]).unwrap().light.exposure;
+        let (undo, redo) = (s.undo.len(), s.redo.len());
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        assert_eq!(records(&s, ids), before);
+        set(&mut s, original + 0.75);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT));
+        assert_eq!(records(&s, ids)[1], before[1]);
+        s.execute("develop.cancelInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), before, "Cancel restores the entire prior target and optional timestamp, leaving its neighbor unchanged");
+        assert_eq!((s.undo.len(), s.redo.len()), (undo, redo), "Cancel adds neither Undo nor Redo entries");
+        assert!(s.interaction.is_none());
+    }
+
+    fn return_to_original(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        let before = records(&s, ids);
+        let original = s.develop_of(ids[0]).unwrap().light.exposure;
+        let (undo, redo) = (s.undo.len(), s.redo.len());
+        let revision = s.catalog.revision;
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        assert_eq!(s.catalog.revision, revision, "an untouched Begin/End does not manufacture a catalog mutation");
+        assert_eq!(records(&s, ids), before);
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        set(&mut s, original + 0.5);
+        set(&mut s, original);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT), "the preview still carries the new timestamp before release");
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), before, "return-to-start is a complete no-op, including the optional timestamp and neighbor");
+        assert_eq!((s.undo.len(), s.redo.len()), (undo, redo));
+        assert!(s.interaction.is_none());
+    }
+
+    fn attachment(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        s.execute("mask.add", &json!({"kind":"linear"})).unwrap();
+        let mut old = (*s.develop_of(ids[0]).unwrap()).clone();
+        old.masks[0].on_photo = false;
+        s.catalog
+            .apply(Op::SetDevelop {
+                id: ids[0],
+                settings: std::sync::Arc::new(old.clone()),
+                label: "Legacy fixture".into(),
+                edited: prior.map(str::to_owned),
+            })
+            .unwrap();
+        let before = records(&s, ids);
+        let mut attached = old.clone();
+        s.attach_masks(ids[0], &old, &mut attached);
+        assert!(attached.masks.iter().all(|mask| mask.on_photo), "fixture actually exercises legacy attachment");
+        let mut canonical = before.clone();
+        canonical[0]["develop"] = serde_json::to_value(&attached).unwrap();
+        let undo = s.undo.len();
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        assert_eq!(records(&s, ids), canonical, "Begin performs only existing attachment, retaining the exact optional timestamp and neighbor");
+        assert_eq!(&*s.interaction.as_ref().unwrap().original, &attached, "the interaction still snapshots canonical on-photo settings");
+        set(&mut s, attached.light.exposure + 0.25);
+        s.execute("develop.cancelInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), canonical, "Cancel keeps existing attachment semantics while restoring the original timestamp");
+        assert_eq!(s.undo.len(), undo);
+    }
+
+    #[test]
+    fn release_undo_redo_restore_prior_some_timestamp_and_complete_photos() {
+        release_undo_redo(Some(PRIOR));
+    }
+    #[test]
+    fn release_undo_redo_restore_prior_none_timestamp_and_complete_photos() {
+        release_undo_redo(None);
+    }
+    #[test]
+    fn cancel_restores_prior_some_timestamp_and_untouched_neighbor() {
+        cancel(Some(PRIOR));
+    }
+    #[test]
+    fn cancel_restores_prior_none_timestamp_and_untouched_neighbor() {
+        cancel(None);
+    }
+    #[test]
+    fn no_op_release_preserves_prior_some_timestamp_without_history() {
+        return_to_original(Some(PRIOR));
+    }
+    #[test]
+    fn no_op_release_preserves_prior_none_timestamp_without_history() {
+        return_to_original(None);
+    }
+    #[test]
+    fn legacy_attachment_preserves_prior_some_timestamp_before_snapshot() {
+        attachment(Some(PRIOR));
+    }
+    #[test]
+    fn legacy_attachment_preserves_prior_none_timestamp_before_snapshot() {
+        attachment(None);
+    }
+}

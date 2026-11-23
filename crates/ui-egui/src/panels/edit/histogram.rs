@@ -255,27 +255,17 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             }
         });
         if app.ui.proof_profile.is_some() {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(crate::i18n::tr("Intent:")).color(t.text_label));
-                use lightcraft_engine::proof::ProofIntent;
-                for (i, label) in [(ProofIntent::Perceptual, "Perceptual"), (ProofIntent::Relative, "Relative")] {
-                    let r = ui.selectable_label(app.ui.proof_intent == i, crate::i18n::tr(label));
-                    register(ui, format!("button:proofIntent-{}", i.name()), r.rect);
-                    if r.clicked() && app.ui.proof_intent != i {
-                        let _ = app.run("view.softProof", json!({"intent": i.name()}));
-                    }
-                }
-            });
+            let mut intent = app.ui.proof_intent;
             let mut paper = app.ui.proof_paper_ink;
-            let r = ui.checkbox(&mut paper, crate::i18n::tr("Simulate Paper & Ink"));
-            register(ui, "button:proofPaperInk", r.rect);
-            if r.changed() {
+            proof_options(ui, &mut intent, &mut paper);
+            if intent != app.ui.proof_intent {
+                let _ = app.run("view.softProof", json!({"intent": intent.name()}));
+            }
+            if paper != app.ui.proof_paper_ink {
                 let _ = app.run("view.softProof", json!({"paperInk": paper}));
             }
         }
-        let r = ui.button(crate::i18n::tr("Create Proof Copy"));
-        register(ui, "button:createProofCopy", r.rect);
-        if r.clicked() {
+        if proof_button(ui, "button:createProofCopy", "Create Proof Copy", false) {
             let target = app.ui.proof_profile.as_ref().map_or_else(|| app.ui.proof.space.label().to_string(), |(_, n)| n.clone());
             let name = crate::i18n::tr_format!("Proof Copy ({})", target);
             if app.run("photo.virtualCopy", json!({"ids": [id.0], "name": name})).is_ok() {
@@ -285,6 +275,53 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
     });
     divider(ui);
 }
+
+// These controls publish their real SDK response, never a second hover-only hit owner.
+fn proof_measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn proof_register(ui: &egui::Ui, id: &str, response: &egui::Response) {
+    if !proof_measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+fn proof_button(ui: &mut egui::Ui, id: &str, label: &str, selected: bool) -> bool {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(id).selected(selected).show(ui);
+    proof_register(ui, id, &shown.response);
+    !proof_measuring(ui) && shown.clicked()
+}
+
+/// Edit local proposals only; the caller retains the device-profile gate and command dispatch.
+fn proof_options(ui: &mut egui::Ui, intent: &mut lightcraft_engine::proof::ProofIntent, paper: &mut bool) {
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use lightcraft_engine::proof::ProofIntent;
+    let mut proposed = *intent;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(crate::i18n::tr("Intent:")).color(Tokens::get(ui.ctx()).text_label));
+        for (i, label) in [(ProofIntent::Perceptual, "Perceptual"), (ProofIntent::Relative, "Relative")] {
+            if proof_button(ui, &format!("button:proofIntent-{}", i.name()), label, *intent == i) {
+                proposed = i;
+            }
+        }
+    });
+    let mut value = *paper;
+    let shown = Checkbox::new(Bind::bound(&mut value)).id_salt("proofPaperInk").label(crate::i18n::tr("Simulate Paper & Ink").to_owned()).show(ui);
+    proof_register(ui, "button:proofPaperInk", &shown.response);
+    // Native egui sizing and SDK speculative measurement must not commit a draft.
+    if !proof_measuring(ui) {
+        *intent = proposed;
+        *paper = value;
+    }
+}
+
+#[cfg(test)]
+#[path = "soft_proof_wave155_tests.rs"]
+mod soft_proof_wave155_tests;
 
 /// The tile and chevron colours of a clipping button, from the theme's own raised fills: the tile
 /// sits one step above the plot's backdrop (`button`) and the chevron (bright when clipping shows, dim otherwise) stands 3:1 on it in every

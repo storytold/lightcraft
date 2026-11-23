@@ -53,6 +53,12 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
 /// that, so Settings stays open (a second Esc, with nothing being edited, closes it).
 pub(super) fn field(ui: &mut egui::Ui, field: crate::text_field::TextField<'_>) -> crate::text_field::TextFieldResponse {
     let shown = field.show(ui);
+    // Only the mixed SDK path opts in. The whole-tree native fallback keeps egui's own traversal.
+    if !super::native_controls_active(ui.ctx()) {
+        use craft::ui::runtime::focus::{NativeTextTab, native_text_tab_participant};
+        let tab = if shown.tab_navigation { NativeTextTab::Navigation } else { NativeTextTab::EditorOwned };
+        native_text_tab_participant(ui, &shown.response, tab);
+    }
     if shown.cancelled() {
         crate::widgets::take_escape(ui.ctx());
     }
@@ -89,9 +95,27 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 
 /// A checkbox addressable as `check:{id}`; true when toggled.
 pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
-    let r = ui.checkbox(value, crate::i18n::tr(label));
-    register(ui, format!("check:{id}"), r.rect);
-    r.changed()
+    if super::native_controls_active(ui.ctx()) {
+        let r = ui.checkbox(value, crate::i18n::tr(label));
+        register(ui, format!("check:{id}"), r.rect);
+        return r.changed();
+    }
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+
+    let out = Checkbox::new(Bind::given(*value)).id_salt(("settings-check", id)).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    crate::widgets::register_response(format!("check:{id}"), out.response.rect, &out.response);
+    if let Some(&on) = out.events.committed()
+        && ui.is_enabled()
+        && on != *value
+    {
+        *value = on;
+        return true;
+    }
+    false
 }
 
 /// Mutually exclusive buttons (`button:{id}-{index}`).

@@ -1,5 +1,24 @@
 use super::{LightcraftApp, PhotoId, Tokens, divider, header, json, padded, register, slider, text_button};
 
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _};
+
+/// Publish only the actual SDK response, never a speculative layout pass's target or edit.
+fn crop_checkbox(ui: &mut egui::Ui, id: &str, label: &str, value: &mut bool) -> bool {
+    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+    let before = *value;
+    let shown = Checkbox::new(Bind::bound(value)).id_salt(id).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if measuring {
+        *value = before;
+        return false;
+    }
+    // As in lens_blur_apply, the SDK adds the label to this same owner after
+    // rendering the square. Publish its final real row, not the square-only rect.
+    let response = ui.ctx().read_response(shown.response.id).unwrap_or_else(|| shown.response.clone());
+    crate::widgets::register_response(id, response.rect, &response);
+    shown.value().is_some() && *value != before
+}
+
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
 const ASPECT_PRESETS: [(&str, &str); 10] = [
     ("Free", "free"),
@@ -38,34 +57,190 @@ pub(super) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) ->
     format!("{:.2} : 1", r.max(1.0 / r))
 }
 
+fn aspect_real(ui: &egui::Ui) -> bool {
+    !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// The custom fields keep their public locators; the SDK owners are stable for this photo.
+/// Return/Enter submits the pair; Tab/blur only edits the local menu draft.
+fn aspect_field(ui: &mut egui::Ui, owner: PhotoId, widget: &str, label: &str, value: &mut String) -> bool {
+    if crate::panels::settings::native_controls_active(ui.ctx()) {
+        if !aspect_real(ui) {
+            ui.add(egui::TextEdit::singleline(value).desired_width(34.0).interactive(false));
+            return false;
+        }
+        let out = crate::text_field::TextField::singleline(widget, value).label(crate::i18n::tr(label)).width(34.0).show(ui);
+        if out.cancelled() {
+            crate::widgets::take_escape(ui.ctx());
+        }
+        return ui.is_enabled() && out.ending == Some(crate::text_field::Ending::Return);
+    }
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(46.0, 24.0), egui::Sense::hover());
+    let out = craft::ui::text::TextField::new(crate::i18n::tr(label).to_owned(), Bind::bound(value))
+        .id_salt(("crop-custom-field", owner.0, widget))
+        .limit(None)
+        .submits()
+        .show_at(ui, rect);
+    if aspect_real(ui) {
+        crate::widgets::register_response(widget, out.response.rect, &out.response);
+        if out.escaped {
+            crate::widgets::take_escape(ui.ctx());
+        }
+    }
+    aspect_real(ui) && ui.is_enabled() && out.submitted
+}
+
 /// "Custom" row of the aspect menu: two number fields and an Apply button (`crop.aspect` `[w, h]`).
-fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let key = egui::Id::unique("crop-custom-aspect");
-    let (mut w, mut h): (String, String) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
+/// The app-specific parser and limits are deliberately unchanged; typing never edits a photo.
+fn custom_aspect(ui: &mut egui::Ui, owner: PhotoId) -> Option<serde_json::Value> {
+    let key = egui::Id::unique(("crop-custom-aspect", owner.0));
+    let (mut w, mut h): (String, String) = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
     let mut apply = false;
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Custom"));
-        let a = ui.add(egui::TextEdit::singleline(&mut w).desired_width(34.0));
-        crate::widgets::screen_reader_name(ui.ctx(), a.id, crate::i18n::tr("Width"));
-        register(ui, "field:cropCustomW", a.rect);
+        apply |= aspect_field(ui, owner, "field:cropCustomW", "Width", &mut w);
         ui.label("×");
-        let b = ui.add(egui::TextEdit::singleline(&mut h).desired_width(34.0));
-        crate::widgets::screen_reader_name(ui.ctx(), b.id, crate::i18n::tr("Height"));
-        register(ui, "field:cropCustomH", b.rect);
-        let go = text_button(ui, "cropCustomApply", "Apply", false);
-        apply = go.clicked() || ((a.lost_focus() || b.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        apply |= aspect_field(ui, owner, "field:cropCustomH", "Height", &mut h);
+        if crate::panels::settings::native_controls_active(ui.ctx()) {
+            if aspect_real(ui) {
+                apply |= text_button(ui, "cropCustomApply", "Apply", false).clicked();
+            } else {
+                ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Apply")));
+            }
+        } else {
+            let go = craft::ui::buttons::Button::new(crate::i18n::tr("Apply")).id_salt(("crop-custom-apply", owner.0)).show(ui);
+            if aspect_real(ui) {
+                crate::widgets::register_response("button:cropCustomApply", go.response.rect, &go.response);
+                apply |= go.clicked();
+            }
+        }
     });
+    if !aspect_real(ui) || !ui.is_enabled() {
+        return None;
+    }
+    ui.data_mut(|d| d.insert_temp(key, (w.clone(), h.clone())));
     if apply {
         // Accept `3`, `2.5` and `3,5`; anything else (zero, negative, text, huge) is ignored.
         let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0);
         if let (Some(x), Some(y)) = (num(&w), num(&h))
             && (1.0 / lightcraft_geom::MAX_RATIO..=lightcraft_geom::MAX_RATIO).contains(&(x / y))
         {
-            let _ = app.run("crop.aspect", json!({"aspect": [x, y]}));
-            ui.close();
+            return Some(json!({"aspect": [x, y]}));
         }
     }
-    ui.data_mut(|d| d.insert_temp(key, (w, h)));
+    None
+}
+
+/// The actual preset/custom popup used by the Crop panel. All commands retain their active
+/// photo semantics; a menu belonging to an old/absent active photo cannot retarget another one.
+fn aspect_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: PhotoId, original: Option<f64>) {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::ShowContainer as _;
+    use craft::ui::contract::overlay::{Dismiss, Outside};
+    use craft::ui::controls::disclosure::DisclosureGlyph;
+    use craft::ui::menu::{Menu, MenuItem};
+    use craft::ui::popover::Popover;
+
+    let current = aspect_label(app.crop_tool_aspect(), original);
+    let enabled = app.session.active() == Some(owner);
+    if !aspect_real(ui) && crate::panels::settings::native_controls_active(ui.ctx()) {
+        ui.add_enabled(false, egui::Button::new(crate::i18n::tr(&current)));
+        return;
+    }
+    let mut picked = None;
+    if crate::panels::settings::native_controls_active(ui.ctx()) {
+        ui.add_enabled_ui(enabled, |ui| {
+            let t = Tokens::get(ui.ctx());
+            let face = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&current), t.font(12.5), t.text);
+            egui::Popup::menu(&face).show(|ui| {
+                for (label, value) in ASPECT_PRESETS {
+                    let row = ui.button(crate::i18n::tr(label));
+                    if aspect_real(ui) {
+                        crate::widgets::register_response(format!("button:cropAspect-{value}"), row.rect, &row);
+                        if ui.is_enabled() && row.clicked() {
+                            picked = Some(json!({"aspect": value}));
+                        }
+                    }
+                }
+                ui.separator();
+                if let Some(custom) = custom_aspect(ui, owner) {
+                    picked = Some(custom);
+                    ui.close();
+                }
+            });
+        });
+    } else {
+        let face = Button::new(crate::i18n::tr("Aspect Ratio"))
+            .painted(crate::i18n::tr(&current).to_owned())
+            .trailing_icon(DisclosureGlyph::dropdown())
+            .id_salt(("crop-aspect", owner.0))
+            .enabled(enabled)
+            .show(ui);
+        if !aspect_real(ui) {
+            return;
+        }
+        crate::widgets::register_response("dropdown:cropAspect", face.response.rect, &face.response);
+        let pass = ui.ctx().cumulative_pass_nr();
+        let slot = face.response.id.with("menu-open");
+        let mut open = ui
+            .data(|d| d.get_temp::<(u64, bool)>(slot))
+            .filter(|(last, _)| *last == pass || last.checked_add(1) == Some(pass))
+            .is_some_and(|(_, open)| open)
+            && enabled
+            && ui.is_enabled();
+        if enabled && ui.is_enabled() && face.clicked() {
+            open = !open;
+        }
+        // This popup includes a validating form, not just menu actions. Menu's default
+        // on-activate dismissal would close it even when Apply rejects invalid text.
+        // Keep preset roving in an inline Menu; only a successful app-level pick closes
+        // the form. The SDK's normal popup focus/escape/outside lifecycle stays in charge.
+        // Exit presence is paint-only. In particular, a retained text root must not
+        // receive typing or write the saved menu draft after the open binding closes.
+        let body_interactive = open;
+        Popover::new(crate::i18n::tr("Aspect Ratio"), Bind::bound(&mut open))
+            .id_salt(("crop-aspect-menu", owner.0))
+            .opened_by(&face.response)
+            .dismiss(Dismiss::new().outside(Outside::Absorb))
+            // Inline Menu supplies the roving group, but its host must supply the menu
+            // scope used by keyboard_in_menu and menu-level key routing.
+            .overlay(|overlay| overlay.focus(craft::ui::runtime::focus::FocusPolicy::MENU))
+            .show(ui, |ui, cx| {
+                if !body_interactive {
+                    ui.disable();
+                }
+                Menu::inline(crate::i18n::tr("Aspect Ratio")).id_salt(("crop-aspect-presets", owner.0)).values().show(ui, |ui, _| {
+                    for (label, value) in ASPECT_PRESETS {
+                        let item = MenuItem::new(crate::i18n::tr(label).replace('&', "&&"))
+                            .id_salt(("crop-aspect-preset", owner.0, value))
+                            .entry_checked(current == label)
+                            .keep_open(true)
+                            .show(ui);
+                        if aspect_real(ui) {
+                            crate::widgets::register_response(format!("button:cropAspect-{value}"), item.response.rect, &item.response);
+                            if ui.is_enabled() && item.ran {
+                                picked = Some(json!({"aspect": value}));
+                            }
+                        }
+                    }
+                });
+                ui.separator();
+                if let Some(custom) = custom_aspect(ui, owner) {
+                    picked = Some(custom);
+                }
+                if picked.is_some() {
+                    cx.request_close();
+                }
+            });
+        ui.data_mut(|d| d.insert_temp(slot, (pass, open)));
+    }
+    if ui.is_enabled()
+        && enabled
+        && app.session.active() == Some(owner)
+        && let Some(payload) = picked
+    {
+        let _ = app.run("crop.aspect", payload);
+    }
 }
 
 pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -78,19 +253,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("Aspect Ratio"));
-            let cur = aspect_label(app.crop_tool_aspect(), original);
-            let t = Tokens::get(ui.ctx());
-            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
-
-            egui::Popup::menu(&r).show(|ui| {
-                for (label, a) in ASPECT_PRESETS {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
-                        let _ = app.run("crop.aspect", json!({"aspect": a}));
-                    }
-                }
-                ui.separator();
-                custom_aspect(app, ui);
-            });
+            aspect_picker(app, ui, id, original);
             let locked = app.crop_tool_aspect().is_some();
             if text_button(ui, "cropLock", if locked { "Locked" } else { "Lock" }, locked).clicked() {
                 let _ = app.run("crop.aspect", json!({"aspect": "toggle"}));
@@ -183,31 +346,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
     });
-    padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Overlay"));
-        {
-            use crate::state::CropOverlay as O;
-            let opts = [
-                (O::Thirds, "Thirds", "thirds"),
-                (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden", "golden"),
-                (O::Diagonal, "Diagonal", "diagonal"),
-                (O::Triangle, "Triangle", "triangle"),
-                (O::Spiral, "Spiral", "spiral"),
-                (O::None, "None", "none"),
-            ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
-                app.ui.crop_overlay = opts[i].0;
-            }
-            if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
-                && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
-            {
-                let _ = app.run("view.cropOverlayOrientation", json!({}));
-            }
-        }
-    });
+    crop_overlay_choices(app, ui, id);
     divider(ui);
     header(ui, "Geometry");
     padded(ui, |ui| {
@@ -261,7 +400,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(4.0);
         let mut c = d.geometry.constrain_crop;
-        if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
+        if crop_checkbox(ui, "check:crop.constrain", "Constrain Crop", &mut c) {
             let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
         }
     });
@@ -272,46 +411,175 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
 }
 
+/// Crop's composition overlay is a view preference, not a develop edit or a canvas action.
+/// One spatial radio group keeps keyboard ownership across both rows; labels wrap in their cells.
+fn crop_overlay_choices(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: PhotoId) {
+    use crate::state::CropOverlay as O;
+    use craft::behavior::{NavShape, Proposal};
+    use craft::ui::choice::{Radio, RadioGroup};
+    use craft::ui::contract::ShowContainer as _;
+
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let interactive = real && ui.is_enabled() && app.session.active() == Some(owner);
+    padded(ui, |ui| {
+        // Layout probes must neither publish speculative choices nor activate the retained Flip action.
+        if !interactive {
+            ui.disable();
+        }
+        ui.label(crate::i18n::tr("Overlay"));
+        let opts = [
+            (O::Thirds, "Thirds", "thirds"),
+            (O::Grid, "Grid", "grid"),
+            (O::Golden, "Golden", "golden"),
+            (O::Diagonal, "Diagonal", "diagonal"),
+            (O::Triangle, "Triangle", "triangle"),
+            (O::Spiral, "Spiral", "spiral"),
+            (O::None, "None", "none"),
+        ];
+        let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
+        let picked = if crate::panels::settings::native_controls_active(ui.ctx()) {
+            if real {
+                let items: Vec<(&str, &str)> = opts.iter().map(|(_, label, key)| (*label, *key)).collect();
+                crate::widgets::segmented(ui, "cropOverlay", &items, active, 4)
+            } else {
+                // Preserve native layout without running its geometry-only automation registration.
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0 + ui.spacing().item_spacing.y), egui::Sense::hover());
+                None
+            }
+        } else {
+            let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0)).max(1.0);
+            let cell_width = ((width - 12.0) / 4.0).max(1.0);
+            let body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
+                for (row_index, row) in opts.chunks(4).enumerate() {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for (column, (_, label, key)) in row.iter().enumerate() {
+                            let index = (row_index * 4 + column) as u8;
+                            ui.allocate_ui_with_layout(egui::vec2(cell_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                                ui.set_min_width(cell_width);
+                                ui.set_max_width(cell_width);
+                                let response =
+                                    Radio::new(index).id_salt(("crop-overlay-choice", owner, key)).label(crate::i18n::tr(label).to_owned()).show(ui);
+                                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                                    // The real arena response keeps the painted face in rect, but its
+                                    // completed interaction rectangle includes this same owner's label.
+                                    crate::widgets::register_response(format!("button:cropOverlay-{key}"), response.interact_rect, &response);
+                                }
+                            });
+                        }
+                    });
+                }
+            };
+            let selected = active.unwrap_or_default() as u8;
+            let child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY)))
+                    .sizing_pass()
+                    .invisible(),
+            );
+            let size = RadioGroup::new(crate::i18n::tr("Overlay").to_owned(), Bind::given(selected))
+                .id_salt(("crop-overlay-choices", owner))
+                .nav(NavShape::Spatial)
+                .enabled(interactive)
+                .measure_in(&child, Proposal::Ideal, body);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size.y.max(24.0)), egui::Sense::hover());
+            if real {
+                let shown = RadioGroup::new(crate::i18n::tr("Overlay").to_owned(), Bind::given(selected))
+                    .id_salt(("crop-overlay-choices", owner))
+                    .nav(NavShape::Spatial)
+                    .enabled(interactive)
+                    .show_at(ui, rect, body);
+                shown.output.events.committed().copied().map(usize::from)
+            } else {
+                // External SDK measurement need not set egui's sizing flag. Measuring and
+                // allocating above is sufficient; never mount an arena or its members there.
+                None
+            }
+        };
+        if interactive && let Some((overlay, _, _)) = picked.and_then(|index| opts.get(index)) {
+            app.ui.crop_overlay = *overlay;
+        }
+        if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
+            && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
+        {
+            let _ = app.run("view.cropOverlayOrientation", json!({}));
+        }
+    });
+}
+
 pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    use crate::widgets::SliderOut;
+    use craft::behavior::{EditEvent, Mixed, NumberCodec, Reader};
+    use craft::ui::contract::Sizing;
+    use craft::ui::form::SliderField;
+
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let interactive = real && ui.is_enabled() && app.session.active() == Some(id);
+    let gesture_key = egui::Id::unique("remove-brush-interaction-owner");
+    // Commands use the selected spot. Do not let an old captured gesture become a
+    // live edit of a new photo/spot, or leave its engine interaction open on disable.
+    if real
+        && let Some((photo, spot, control)) = ui.data(|d| d.get_temp::<(PhotoId, usize, String)>(gesture_key))
+        && (!interactive || photo != id || app.session.active_spot != Some(spot))
+    {
+        if app.ui.dragging_control.as_deref() == Some(control.as_str()) {
+            let _ = app.run("develop.cancelInteraction", json!({}));
+            app.ui.dragging_control = None;
+        }
+        ui.data_mut(|d| d.remove::<(PhotoId, usize, String)>(gesture_key));
+    }
+    if !interactive {
+        ui.disable();
+    }
     let d = app.session.develop_of(id).unwrap_or_default();
+    let selected = app.session.active_spot.filter(|index| d.spots.get(*index).is_some());
+    // The common text_button and crop_checkbox already use SDK components. Keep
+    // those adapters, including text_button's native route, rather than duplicate them.
     header(ui, "Remove");
     padded(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
-                if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() {
-                    app.ui.tool = tool.into();
+        ui.push_id(("remove-header", id), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
+                    if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() && interactive {
+                        app.ui.tool = tool.into();
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
+            ui.add_space(4.0);
+            if text_button(ui, "findDust", crate::i18n::tr("Find Dust Spots"), false)
+                .on_hover_text(crate::i18n::tr("Heal the small, soft dark spots sensor dust leaves on smooth areas"))
+                .clicked()
+                && interactive
+            {
+                match app.run("spot.findDust", json!({})) {
+                    Ok(r) => {
+                        let n = r["added"].as_u64().unwrap_or(0);
+                        app.toast(
+                            ui.ctx(),
+                            if n == 0 {
+                                crate::i18n::tr("No dust spots found").to_string()
+                            } else {
+                                crate::i18n::tr_format!("Healed {n} dust spot{}", if n == 1 { "" } else { "s" }, n = n)
+                            },
+                        );
+                    }
+                    Err(e) => app.toast(ui.ctx(), e),
                 }
             }
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(crate::i18n::tr("Paint over a distraction on the photo to remove it.")).color(Tokens::get(ui.ctx()).text_dim),
+            );
         });
-        ui.add_space(8.0);
-        ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
-        ui.add_space(4.0);
-        if text_button(ui, "findDust", crate::i18n::tr("Find Dust Spots"), false)
-            .on_hover_text(crate::i18n::tr("Heal the small, soft dark spots sensor dust leaves on smooth areas"))
-            .clicked()
-        {
-            match app.run("spot.findDust", json!({})) {
-                Ok(r) => {
-                    let n = r["added"].as_u64().unwrap_or(0);
-                    app.toast(
-                        ui.ctx(),
-                        if n == 0 {
-                            crate::i18n::tr("No dust spots found").to_string()
-                        } else {
-                            crate::i18n::tr_format!("Healed {n} dust spot{}", if n == 1 { "" } else { "s" }, n = n)
-                        },
-                    );
-                }
-                Err(e) => app.toast(ui.ctx(), e),
-            }
-        }
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(crate::i18n::tr("Paint over a distraction on the photo to remove it.")).color(Tokens::get(ui.ctx()).text_dim));
     });
-    // brush settings; with a spot selected they edit that spot too
-    let sel = app.session.active_spot.and_then(|i| d.spots.get(i).map(|sp| (i, sp.clone())));
+    // Brush settings; with a spot selected they edit exactly that spot too.
+    let sel = selected.and_then(|index| d.spots.get(index).map(|spot| (index, spot.clone())));
     if let Some((i, sp)) = &sel {
-        (app.ui.remove_size, app.ui.remove_feather, app.ui.remove_opacity) = (sp.size as f32, sp.feather as f32, sp.opacity as f32);
+        if interactive {
+            (app.ui.remove_size, app.ui.remove_feather, app.ui.remove_opacity) = (sp.size as f32, sp.feather as f32, sp.opacity as f32);
+        }
         divider(ui);
         let mode = match sp.mode {
             lightcraft_develop::SpotMode::Heal => "Heal",
@@ -332,99 +600,349 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         decimals: 0,
         track: lightcraft_develop::Track::Plain,
     };
+    // Local model mapping only: the SDK owns editing/gestures and the existing
+    // apply_slider_out adapter owns engine begin/update/end and Undo grouping.
+    let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64, enabled: bool| {
+        if crate::dialogs::settings::native_controls_active(ui.ctx()) {
+            return (slider(ui, spec, value, interactive && enabled, None), false);
+        }
+        let number_spec = *spec;
+        let record_key = ui.scope_id().with(("remove-field", id, selected, spec.id));
+        let (out, record) = craft::ui::runtime::inspect::record(ui, record_key, |ui| {
+            egui::Frame::NONE
+                .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
+                .show(ui, |ui| {
+                    SliderField::new(crate::i18n::tr(spec.label).to_owned(), Bind::given(value).reset(spec.default), spec.min..=spec.max)
+                        .id_salt(("remove-field", id, selected, spec.id))
+                        .step(spec.step)
+                        .number_codec(
+                            NumberCodec::new(Reader::new(), usize::from(spec.decimals))
+                                .parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
+                        )
+                        .fill(false)
+                        .tooltip(crate::i18n::tr("Click to type a value, drag to change it").to_owned())
+                        .enabled(interactive && enabled)
+                        .sizing(Sizing::FillWidth)
+                        .show(ui)
+                })
+                .inner
+        });
+        if real && let Some(record) = record {
+            for (index, element) in record.elements.iter().enumerate() {
+                let Some(facts) = &element.facts else { continue };
+                let prefix = match facts.role.as_str() {
+                    "Slider" => "slider",
+                    "SpinButton" => "sliderValue",
+                    "Label" => "sliderLabel",
+                    _ => continue,
+                };
+                let rect = record.stop_rect(index).unwrap_or(element.rect);
+                // The recorded composite child is the actual SDK owner, including
+                // arena children with no native read_response. This is an alias,
+                // not an additional interactive widget or an input intent.
+                let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
+                    let mut response = out.response.clone();
+                    response.id = element.id;
+                    response.rect = rect;
+                    response.interact_rect = rect.intersect(ui.clip_rect());
+                    response
+                });
+                let mut target = rect;
+                if prefix == "slider"
+                    && let Some(thumb) = record
+                        .hits
+                        .iter()
+                        .find(|part| part.owner == element.id && part.part.is_some_and(|part| part.key == craft::ui::value_drag::Slider::THUMB))
+                {
+                    // Preserve the old locator's model-value span: SDK endpoints
+                    // are the centres of the endpoint thumbs, not the box edges.
+                    target = rect.shrink2(egui::vec2((thumb.bounds.width() * 0.5).min(rect.width() * 0.5), 0.0));
+                    crate::widgets::register_geometry(ui.ctx(), format!("sliderThumb:{}", spec.id), thumb.bounds);
+                }
+                crate::widgets::register_response(format!("{prefix}:{}", spec.id), target, &response);
+            }
+        }
+        let mut result = SliderOut::default();
+        let mut cancelled = false;
+        if real {
+            for event in &out.events {
+                match event {
+                    EditEvent::Begin { .. } if interactive && enabled => result.drag_started = true,
+                    EditEvent::Update { value, .. } if interactive && enabled => result.value = Some(*value),
+                    EditEvent::Commit { after, .. } if interactive && enabled => {
+                        result.value = Some(*after);
+                        result.drag_stopped = true;
+                    }
+                    EditEvent::Set { after, .. } if interactive && enabled => result.value = Some(*after),
+                    EditEvent::Cancel { before, .. } => {
+                        if let Some(Mixed::Same(value)) = before {
+                            result.value = Some(*value);
+                        }
+                        cancelled = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (result, cancelled)
+    };
     let sliders = [
-        (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", (app.ui.remove_size * 1000.0) as f64),
-        (plain("ui.removeFeather", "Feather", 0.0, 100.0, 50.0), "feather", app.ui.remove_feather as f64),
-        (plain("ui.removeOpacity", "Opacity", 0.0, 100.0, 100.0), "opacity", app.ui.remove_opacity as f64),
+        (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", sel.as_ref().map_or(app.ui.remove_size as f64, |(_, sp)| sp.size) * 1000.0),
+        (plain("ui.removeFeather", "Feather", 0.0, 100.0, 50.0), "feather", sel.as_ref().map_or(app.ui.remove_feather as f64, |(_, sp)| sp.feather)),
+        (plain("ui.removeOpacity", "Opacity", 0.0, 100.0, 100.0), "opacity", sel.as_ref().map_or(app.ui.remove_opacity as f64, |(_, sp)| sp.opacity)),
     ];
     for (spec, key, v) in sliders {
-        let out = slider(ui, &spec, v, true, None);
+        let (out, cancelled) = field(ui, &spec, v, true);
         let scale = if key == "size" { 1000.0 } else { 1.0 };
-        if let Some(v) = out.value {
+        if interactive && let Some(v) = out.value {
             match key {
                 "size" => app.ui.remove_size = (v / scale) as f32,
                 "feather" => app.ui.remove_feather = v as f32,
                 _ => app.ui.remove_opacity = v as f32,
             }
         }
-        if sel.is_some() {
+        if cancelled {
+            if ui
+                .data(|d| d.get_temp::<(PhotoId, usize, String)>(gesture_key))
+                .is_some_and(|(photo, spot, control)| photo == id && Some(spot) == selected && control == spec.id)
+            {
+                if app.ui.dragging_control.as_deref() == Some(spec.id) {
+                    let _ = app.run("develop.cancelInteraction", json!({}));
+                    app.ui.dragging_control = None;
+                }
+                ui.data_mut(|d| d.remove::<(PhotoId, usize, String)>(gesture_key));
+            }
+        } else if interactive && let Some(index) = selected {
+            if out.drag_started {
+                ui.data_mut(|d| d.insert_temp(gesture_key, (id, index, spec.id.to_owned())));
+            }
             crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| app.run("spot.update", json!({key: v / scale})));
+            if out.drag_stopped || out.reset {
+                ui.data_mut(|d| d.remove::<(PhotoId, usize, String)>(gesture_key));
+            }
         }
     }
     if sel.is_some() {
         padded(ui, |ui| {
-            ui.horizontal(|ui| {
-                if text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {
-                    let _ = app.run("spot.refreshSource", json!({}));
-                }
-                if text_button(ui, "spotDelete", crate::i18n::tr("Delete (⌫)"), false).clicked() {
-                    let _ = app.run("spot.delete", json!({}));
-                }
+            ui.push_id(("remove-selected-actions", id, selected), |ui| {
+                ui.horizontal(|ui| {
+                    if text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() && interactive {
+                        let _ = app.run("spot.refreshSource", json!({}));
+                    }
+                    if text_button(ui, "spotDelete", crate::i18n::tr("Delete (⌫)"), false).clicked() && interactive {
+                        let _ = app.run("spot.delete", json!({}));
+                    }
+                });
             });
         });
     }
-    // Visualize Spots (A): a black/white high-pass view that makes dust and specks stand out
     padded(ui, |ui| {
         let mut v = app.ui.visualize_spots;
-        if ui.checkbox(&mut v, crate::i18n::tr("Visualize Spots (A)")).changed() {
+        if crop_checkbox(ui, "check:remove.visualizeSpots", "Visualize Spots (A)", &mut v) && interactive {
             app.ui.visualize_spots = v;
         }
     });
-    let spec = lightcraft_develop::ControlSpec {
-        id: "ui.spotsThreshold",
-        label: "Threshold",
-        section: lightcraft_develop::Section::Detail,
-        min: 0.0,
-        max: 100.0,
-        default: 50.0,
-        step: 1.0,
-        decimals: 0,
-        track: lightcraft_develop::Track::Plain,
-    };
-    let out = slider(ui, &spec, app.ui.spots_threshold as f64, app.ui.visualize_spots, None);
-    if let Some(v) = out.value {
+    let spec = plain("ui.spotsThreshold", "Threshold", 0.0, 100.0, 50.0);
+    let (out, _) = field(ui, &spec, app.ui.spots_threshold as f64, app.ui.visualize_spots);
+    if interactive
+        && app.ui.visualize_spots
+        && let Some(v) = out.value
+    {
         app.ui.spots_threshold = v as f32;
     }
     padded(ui, |ui| {
         tool_overlay_options(app, ui);
         ui.add_space(4.0);
-        if !d.spots.is_empty() && text_button(ui, "removeClear", crate::i18n::tr("Delete all spots"), false).clicked() {
-            for i in (0..d.spots.len()).rev() {
-                let _ = app.run("spot.delete", json!({"index": i}));
+        ui.push_id(("remove-clear", id), |ui| {
+            if !d.spots.is_empty() && text_button(ui, "removeClear", crate::i18n::tr("Delete all spots"), false).clicked() && interactive {
+                // Preserve the original reverse indexed commands and their Undo steps.
+                for i in (0..d.spots.len()).rev() {
+                    let _ = app.run("spot.delete", json!({"index": i}));
+                }
             }
-        }
+        });
     });
 }
 
 /// Tool Overlay: when the spot and mask pins show on the photo (Auto / Always / Selected / Never;
 /// Shift+H steps through them). Remove and Masking panels.
 pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    use crate::state::ToolOverlay;
+    use crate::state::{RightPanel, ToolOverlay};
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+    use craft::ui::controls::disclosure::DisclosureGlyph;
+    use craft::ui::menu::{Menu, MenuItem};
+
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let owner = app.session.active();
+    let masking = app.ui.right == RightPanel::Masking;
+    let eligible = owner.is_some() && (!masking || app.ui.mask_pins);
+    let current = app.ui.tool_overlay;
     let t = Tokens::get(ui.ctx());
+    let mut picked = None;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
-        let current = app.ui.tool_overlay;
-        let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
-            .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
-        egui::Popup::menu(&r).show(|ui| {
-            for m in ToolOverlay::ALL {
-                let item = ui.selectable_label(m == current, crate::i18n::tr(m.label()));
-                register(ui, format!("toolOverlay:{}", m.name()), item.rect);
-                if item.clicked() {
-                    let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
-                }
+        if crate::panels::settings::native_controls_active(ui.ctx()) {
+            if !real {
+                ui.add_enabled(false, egui::Button::new(crate::i18n::tr(current.label())));
+                return;
             }
-        });
+            let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
+                .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
+            let enabled = eligible && ui.is_enabled();
+            egui::Popup::menu(&r).show(|ui| {
+                let body_real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                for mode in ToolOverlay::ALL {
+                    let row = ui.selectable_label(mode == current, crate::i18n::tr(mode.label()));
+                    if body_real {
+                        crate::widgets::register_response(format!("toolOverlay:{}", mode.name()), row.rect, &row);
+                        if enabled && ui.is_enabled() && row.clicked() {
+                            picked = Some(mode);
+                        }
+                    }
+                }
+            });
+            return;
+        }
+        let face = Button::new(crate::i18n::tr("Tool Overlay"))
+            .painted(crate::i18n::tr(current.label()).to_owned())
+            .trailing_icon(DisclosureGlyph::dropdown())
+            .tooltip(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"))
+            .id_salt(("tool-overlay", owner, masking))
+            .enabled(real && eligible)
+            .show(ui);
+        if !real {
+            return;
+        }
+        crate::widgets::register_response("dropdown:toolOverlay", face.response.rect, &face.response);
+        // As in curve_footer, the real SDK button activation opens for pointer,
+        // Enter and Space. The SDK owns menu focus, arrows, Tab and dismissal.
+        let pass = ui.ctx().cumulative_pass_nr();
+        let slot = face.response.id.with("menu-open");
+        let mut open = ui
+            .data(|data| data.get_temp::<(u64, bool)>(slot))
+            .filter(|(last, _)| *last == pass || last.checked_add(1) == Some(pass))
+            .is_some_and(|(_, open)| open)
+            && eligible
+            && ui.is_enabled();
+        if eligible && ui.is_enabled() && face.clicked() {
+            open = !open;
+        }
+        let body_interactive = open;
+        Menu::new(crate::i18n::tr("Tool Overlay"))
+            .id_salt(("tool-overlay-menu", owner, masking))
+            .values()
+            .tab_exits()
+            .opened_by(&face.response, Trigger::Manual)
+            .open(Bind::bound(&mut open))
+            .show(ui, |ui, _| {
+                // Menu measures this body inside the same parent pass. The outer
+                // real flag cannot authorize aliases or actions in those callbacks.
+                let body_real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                // A closing layer may still paint; it must not keep live rows or
+                // expose aliases after Escape, a pick, or parent disablement.
+                if !body_interactive {
+                    ui.disable();
+                }
+                for mode in ToolOverlay::ALL {
+                    let row = MenuItem::new(crate::i18n::tr(mode.label()))
+                        .id_salt(("tool-overlay-mode", owner, masking, mode.name()))
+                        .entry_checked(mode == current);
+                    let row = if mode == current { row.default_stop() } else { row };
+                    let shown = row.show(ui);
+                    if body_interactive && body_real {
+                        crate::widgets::register_response(format!("toolOverlay:{}", mode.name()), shown.response.rect, &shown.response);
+                        if ui.is_enabled() && shown.ran {
+                            picked = Some(mode);
+                        }
+                    }
+                }
+            });
+        ui.data_mut(|data| data.insert_temp(slot, (pass, open)));
     });
+    if real
+        && eligible
+        && ui.is_enabled()
+        && app.session.active() == owner
+        && (app.ui.right == RightPanel::Masking) == masking
+        && (!masking || app.ui.mask_pins)
+        && let Some(mode) = picked
+    {
+        let _ = app.run("view.toolOverlay", json!({"mode": mode.name()}));
+    }
 }
+
+#[cfg(test)]
+#[path = "shared_tool_overlay_flow_tests.rs"]
+mod shared_tool_overlay_flow_tests;
 
 pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
+    use crate::widgets::SliderOut;
+    use craft::behavior::{EditEvent, Mixed, NumberCodec, Reader};
+    use craft::ui::contract::Sizing;
+    use craft::ui::form::SliderField;
+
+    // Numeric ownership belongs to the actual bound interaction. The earlier
+    // mode/delete controls and commands only gain real-pass action eligibility.
+    type Owner = (PhotoId, usize, usize, [u64; 4], bool);
+    #[derive(Clone)]
+    struct Gesture {
+        owner: Owner,
+        control: String,
+        label: String,
+        original: std::sync::Arc<lightcraft_develop::DevelopSettings>,
+    }
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let interactive = real && ui.is_enabled() && app.session.active() == Some(id);
+    let selected = d.red_eye.get(app.ui.eye.min(d.red_eye.len().saturating_sub(1))).map(|eye| {
+        (
+            id,
+            app.ui.eye.min(d.red_eye.len().saturating_sub(1)),
+            d.red_eye.len(),
+            [eye.center.x.to_bits(), eye.center.y.to_bits(), eye.rx.to_bits(), eye.ry.to_bits()],
+            eye.pet,
+        )
+    });
+    let gesture_key = egui::Id::unique("red-eye-numeric-interaction-owner");
+    let previous_key = egui::Id::unique("red-eye-numeric-parent-pass");
+    let gesture = ui.data(|data| data.get_temp::<Gesture>(gesture_key));
+    let owns = |app: &LightcraftApp, gesture: &Gesture| {
+        app.ui.dragging_control.as_deref() == Some(gesture.control.as_str())
+            && app.session.interaction.as_ref().is_some_and(|interaction| {
+                interaction.photo == gesture.owner.0
+                    && interaction.label == gesture.label
+                    && std::sync::Arc::ptr_eq(&interaction.original, &gesture.original)
+            })
+    };
+    let pass = ui.ctx().cumulative_pass_nr();
+    let previous = ui.data(|data| data.get_temp::<(Option<Owner>, bool, u64, u64)>(previous_key));
+    let gap = previous.is_some_and(|(_, _, seen, _)| seen.saturating_add(1) < pass);
+    let rebound = previous.is_some_and(|(owner, enabled, _, _)| owner != selected || enabled != interactive);
+    let lost = gesture.as_ref().is_some_and(|gesture| !owns(app, gesture));
+    let epoch = previous.map_or(0, |(_, _, _, epoch)| epoch.saturating_add(u64::from(gap || rebound || lost)));
+    if real {
+        if (gap || rebound || lost || !interactive || gesture.as_ref().is_some_and(|gesture| Some(gesture.owner) != selected))
+            && let Some(gesture) = &gesture
+        {
+            // Cancel only the exact engine interaction this adapter began. A
+            // foreign interaction with the same control name is not ours.
+            if owns(app, gesture) {
+                let _ = app.run("develop.cancelInteraction", json!({}));
+                app.ui.dragging_control = None;
+            } else if app.session.interaction.is_none() && app.ui.dragging_control.as_deref() == Some(gesture.control.as_str()) {
+                // A genuine panel/selection command may already have committed it.
+                app.ui.dragging_control = None;
+            }
+            ui.data_mut(|data| data.remove::<Gesture>(gesture_key));
+        }
+        ui.data_mut(|data| data.insert_temp(previous_key, (selected, interactive, pass, epoch)));
+    }
     header(ui, "Red Eye");
     padded(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             for (label, pet) in [("Red Eye", false), ("Pet Eye", true)] {
-                if text_button(ui, &format!("eyeMode-{}", if pet { "pet" } else { "red" }), label, app.ui.eye_pet == pet).clicked() {
+                if text_button(ui, &format!("eyeMode-{}", if pet { "pet" } else { "red" }), label, app.ui.eye_pet == pet).clicked() && interactive {
                     app.ui.eye_pet = pet;
                 }
             }
@@ -454,26 +972,142 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             n = n
         ),
     );
+    // find(indexed id) returns a TEMPLATE spec: retain the old unindexed
+    // sliderLabel:/slider:/sliderValue: aliases; only the command payload is indexed.
+    let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64| {
+        if crate::dialogs::settings::native_controls_active(ui.ctx()) {
+            if !real {
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), Tokens::get(ui.ctx()).slider_row_h), egui::Sense::hover());
+                return (SliderOut::default(), false);
+            }
+            return (slider(ui, spec, value, interactive, None), false);
+        }
+        let number_spec = *spec;
+        let record_key = egui::Id::unique(("red-eye-field-record", id, i, spec.id));
+        let (out, record) = craft::ui::runtime::inspect::record(ui, record_key, |ui| {
+            egui::Frame::NONE
+                .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
+                .show(ui, |ui| {
+                    SliderField::new(crate::i18n::tr(spec.label).to_owned(), Bind::given(value).reset(spec.default), spec.min..=spec.max)
+                        .id_salt(("red-eye-field", selected, epoch, spec.id))
+                        .step(spec.step)
+                        .number_codec(
+                            NumberCodec::new(Reader::new(), usize::from(spec.decimals))
+                                .parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
+                        )
+                        .fill(false)
+                        .tooltip(crate::i18n::tr("Click to type a value, drag to change it").to_owned())
+                        .enabled(interactive)
+                        .sizing(Sizing::FillWidth)
+                        .show(ui)
+                })
+                .inner
+        });
+        if real && let Some(record) = record {
+            for (index, element) in record.elements.iter().enumerate() {
+                let Some(facts) = &element.facts else { continue };
+                let prefix = match facts.role.as_str() {
+                    "Slider" => "slider",
+                    "SpinButton" => "sliderValue",
+                    "Label" => "sliderLabel",
+                    _ => continue,
+                };
+                let rect = record.stop_rect(index).unwrap_or(element.rect);
+                // The recorded composite child is the actual SDK owner, including
+                // arena children with no native read_response. This is an alias,
+                // not an additional interactive widget or an input intent.
+                let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
+                    let mut response = out.response.clone();
+                    response.id = element.id;
+                    response.rect = rect;
+                    response.interact_rect = rect.intersect(ui.clip_rect());
+                    response
+                });
+                let mut target = rect;
+                if prefix == "slider"
+                    && let Some(thumb) = record
+                        .hits
+                        .iter()
+                        .find(|part| part.owner == element.id && part.part.is_some_and(|part| part.key == craft::ui::value_drag::Slider::THUMB))
+                {
+                    // Preserve the old locator's model-value span: SDK endpoints
+                    // are the centres of the endpoint thumbs, not the box edges.
+                    target = rect.shrink2(egui::vec2((thumb.bounds.width() * 0.5).min(rect.width() * 0.5), 0.0));
+                    crate::widgets::register_geometry(ui.ctx(), format!("sliderThumb:{}", spec.id), thumb.bounds);
+                }
+                crate::widgets::register_response(format!("{prefix}:{}", spec.id), target, &response);
+            }
+        }
+        let mut result = SliderOut::default();
+        let mut cancelled = false;
+        if real {
+            for event in &out.events {
+                match event {
+                    EditEvent::Begin { .. } if interactive => result.drag_started = true,
+                    EditEvent::Update { value, .. } if interactive => result.value = Some(*value),
+                    EditEvent::Commit { after, .. } if interactive => {
+                        result.value = Some(*after);
+                        result.drag_stopped = true;
+                    }
+                    EditEvent::Set { after, .. } if interactive => result.value = Some(*after),
+                    EditEvent::Cancel { before, .. } => {
+                        if let Some(Mixed::Same(value)) = before {
+                            result.value = Some(*value);
+                        }
+                        cancelled = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (result, cancelled)
+    };
     for k in ["pupilSize", "darken"] {
         let cid = format!("redEye.{i}.{k}");
         let Some(spec) = lightcraft_develop::controls::find(&cid) else { continue };
         let v = lightcraft_develop::controls::get(&d, &cid).unwrap_or(spec.default);
-        let out = slider(ui, spec, v, true, None);
-        crate::panels::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": cid, "value": v})));
+        let (out, cancelled) = field(ui, spec, v);
+        if cancelled {
+            if let Some(gesture) = ui.data(|data| data.get_temp::<Gesture>(gesture_key))
+                && gesture.control == spec.id
+                && Some(gesture.owner) == selected
+            {
+                if owns(app, &gesture) {
+                    let _ = app.run("develop.cancelInteraction", json!({}));
+                    app.ui.dragging_control = None;
+                }
+                ui.data_mut(|data| data.remove::<Gesture>(gesture_key));
+            }
+        } else if interactive {
+            crate::panels::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": cid, "value": v})));
+            if out.drag_started
+                && let (Some(owner), Some(interaction)) = (selected, app.session.interaction.as_ref())
+            {
+                ui.data_mut(|data| {
+                    data.insert_temp(
+                        gesture_key,
+                        Gesture { owner, control: spec.id.to_owned(), label: interaction.label.clone(), original: interaction.original.clone() },
+                    )
+                });
+            }
+            if out.drag_stopped || out.reset {
+                ui.data_mut(|data| data.remove::<Gesture>(gesture_key));
+            }
+        }
     }
     padded(ui, |ui| {
         if eye.pet {
             let mut on = eye.catchlight.is_some();
-            if ui.checkbox(&mut on, crate::i18n::tr("Add Catchlight")).changed() {
+            if crop_checkbox(ui, "check:redeye.catchlight", "Add Catchlight", &mut on) {
                 let _ = app.run("redeye.catchlight", json!({"index": i, "on": on}));
             }
             ui.add_space(4.0);
         }
         ui.horizontal(|ui| {
-            if text_button(ui, "eyeDelete", crate::i18n::tr("Delete"), false).clicked() {
+            if text_button(ui, "eyeDelete", crate::i18n::tr("Delete"), false).clicked() && interactive {
                 let _ = app.run("redeye.delete", json!({"index": i}));
             }
-            if n > 1 && text_button(ui, "eyeDeleteAll", crate::i18n::tr("Delete all"), false).clicked() {
+            if n > 1 && text_button(ui, "eyeDeleteAll", crate::i18n::tr("Delete all"), false).clicked() && interactive {
                 for k in (0..n).rev() {
                     let _ = app.run("redeye.delete", json!({"index": k}));
                 }
@@ -481,3 +1115,23 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     });
 }
+
+#[cfg(test)]
+#[path = "crop_checkboxes_external155_tests.rs"]
+mod crop_checkboxes_external155_tests;
+
+#[cfg(test)]
+#[path = "crop_aspect_flow_tests.rs"]
+mod crop_aspect_flow_tests;
+
+#[cfg(test)]
+#[path = "remove_controls_flow_tests.rs"]
+mod remove_controls_flow_tests;
+
+#[cfg(test)]
+#[path = "red_eye_controls_flow_tests.rs"]
+mod red_eye_controls_flow_tests;
+
+#[cfg(test)]
+#[path = "crop_overlay_flow_tests.rs"]
+mod crop_overlay_flow_tests;

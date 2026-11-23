@@ -2,10 +2,22 @@
 
 use serde_json::Value;
 
+#[cfg(target_arch = "wasm32")]
+use craft::ui::buttons::Button;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::contract::{Bind, ShowContainer as _};
+use craft::ui::contract::{Props as _, Show as _};
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::dialog::Dialog;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::display::{Spinner, Text};
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::sections::{DialogRole, FooterButton};
+
 use crate::LightcraftApp;
 
 #[cfg(not(target_arch = "wasm32"))]
-use craft_update::dialog::{CheckResultDialog, CheckResultResponse};
+use craft_update::dialog::CheckResultResponse;
 #[cfg(not(target_arch = "wasm32"))]
 use craft_update::updater::{Action, Status, Updater};
 
@@ -61,11 +73,11 @@ impl LightcraftApp {
     }
 }
 
-/// The update prompt owns the keyboard while it is open: shortcuts must not reach the library behind it.
+/// Modal update prompts and results own the keyboard; the installed-version notice stays modeless.
 pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        app.updates_rt.updater.prompt_open()
+        app.updates_rt.updater.prompt_open() || !matches!(app.updates_rt.updater.status(), Status::Idle | Status::Updated(_))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -92,6 +104,9 @@ pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
 }
 
 pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if craft::ui::runtime::measure::active(ctx) {
+        return;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         let rt = &mut app.updates_rt;
@@ -115,7 +130,155 @@ fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
     !prompt_open && !matches!(status, Status::Idle)
 }
 
+/// The startup offer stays with craft-update. Only the app's requested-check result is adapted
+/// here: retries queue a check for `tick`, and a restart still follows the updater's unsaved guard.
+#[cfg(not(target_arch = "wasm32"))]
+fn show_result(ctx: &egui::Context, status: &Status) -> CheckResultResponse {
+    use craft::ui::contract::overlay::Outside;
+
+    if matches!(status, Status::Idle) || craft::ui::runtime::measure::active(ctx) {
+        return CheckResultResponse::None;
+    }
+    let choices = result_choices(status);
+    let buttons = choices.iter().map(|(label, _, _)| FooterButton::new((*label).to_owned(), DialogRole::Other));
+    let notice = matches!(status, Status::Updated(_));
+    let mut answer = CheckResultResponse::None;
+    egui::Area::new(egui::Id::unique("lightcraft.updates.host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
+        let (output, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lightcraft.updates.inspect"), |ui| {
+            let dialog = Dialog::new(crate::i18n::tr("LightCraft Updates").to_owned())
+                .id_salt("lightcraft.updates.result")
+                .opened(Bind::given(true))
+                .buttons(buttons)
+                .overlay(|mut overlay| {
+                    // The old result card dismissed on an outside click, except the modeless
+                    // installed-version notice. No update operation is canceled by dismissing it.
+                    overlay.dismiss = overlay.dismiss.outside(Outside::Keep);
+                    overlay
+                });
+            let dialog = if notice { dialog.modeless() } else { dialog };
+            let shown = dialog.show(ui, |ui, _| result_body(ui, status));
+            if !ui.is_sizing_pass() {
+                if let Some((_, _, choice)) = shown.output.picked.and_then(|at| choices.get(at)) {
+                    answer = *choice;
+                } else if shown.output.closed.is_some()
+                    || (!notice
+                        && ui.input(|input| {
+                            input.pointer.primary_clicked()
+                                && input.pointer.press_origin().is_some_and(|at| !shown.output.response.rect.contains(at))
+                                && input.pointer.interact_pos().is_some_and(|at| !shown.output.response.rect.contains(at))
+                        }))
+                {
+                    answer = CheckResultResponse::Close;
+                }
+                crate::widgets::register_response("dialog:updates", shown.output.response.rect, &shown.output.response);
+            }
+            shown.output
+        });
+        // Footer hit areas come from real SDK controls, including their clip and layer. They
+        // are not invisible proxy widgets, and measurement publishes no automation targets.
+        if !ui.is_sizing_pass()
+            && let Some(record) = record
+        {
+            for element in &record.elements {
+                let Some(facts) = &element.facts else {
+                    continue;
+                };
+                if facts.role != "Button" {
+                    continue;
+                }
+                let Some((_, id, _)) = choices.iter().find(|(label, _, _)| facts.name.as_deref() == Some(*label)) else {
+                    continue;
+                };
+                let Some(hit) = record.hits.iter().find(|hit| hit.owner == element.id && hit.part == element.part) else {
+                    continue;
+                };
+                let mut response = output.response.clone();
+                response.id = element.id;
+                response.rect = hit.rect;
+                response.interact_rect = hit.rect;
+                crate::widgets::register_response(*id, hit.rect, &response);
+            }
+        }
+    });
+    answer
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn result_choices(status: &Status) -> Vec<(&'static str, &'static str, CheckResultResponse)> {
+    if matches!(status, Status::Checking | Status::Idle) {
+        return Vec::new();
+    }
+    let mut choices = vec![(crate::i18n::tr("OK"), "button:updatesOk", CheckResultResponse::Close)];
+    match status {
+        Status::Failed(_) | Status::InstallFailed(_) => {
+            choices.push((crate::i18n::tr("Check Again"), "button:updatesCheckAgain", CheckResultResponse::CheckAgain))
+        }
+        Status::Ready => choices.push((crate::i18n::tr("Restart to Update"), "button:updatesRestart", CheckResultResponse::RestartToUpdate)),
+        _ => {}
+    }
+    choices
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn result_body(ui: &mut egui::Ui, status: &Status) {
+    ui.set_width(400.0_f32.min(ui.ctx().content_rect().width() - 64.0).max(160.0));
+    Text::new(format!("{} v{}", crate::UPDATE_APP.name, env!("CARGO_PKG_VERSION"))).show(ui);
+    Text::new(format!("by {}", crate::UPDATE_APP.developer)).show(ui);
+    match status {
+        Status::Checking | Status::Installing => {
+            ui.horizontal(|ui| {
+                Spinner::new().show(ui);
+                Text::new(
+                    crate::i18n::tr(if matches!(status, Status::Checking) { "Checking for updates…" } else { "Installing update…" }).to_owned(),
+                )
+                .show(ui);
+            });
+        }
+        Status::Failed(error) | Status::InstallFailed(error) => {
+            Text::new(
+                crate::i18n::tr(if matches!(status, Status::Failed(_)) {
+                    "Could not check for updates."
+                } else {
+                    "The update could not be installed:"
+                })
+                .to_owned(),
+            )
+            .show(ui);
+            // Keep arbitrary service errors scrollable and copyable; a long error cannot push
+            // retry or dismissal off screen. SelectableText is the SDK's read-only control.
+            egui::ScrollArea::vertical().id_salt("updatesError").max_height(160.0).show(ui, |ui| {
+                craft::ui::text::SelectableText::new("Update error", error).multiline().show(ui);
+            });
+            if matches!(status, Status::Failed(_)) {
+                Text::new(format!("All releases are listed at {}", crate::UPDATE_APP.releases_url())).show(ui);
+            }
+        }
+        Status::Ready => {
+            Text::new(craft_update::updater::READY_TEXT.replace("{app}", crate::UPDATE_APP.name)).show(ui);
+        }
+        Status::Managed => {
+            Text::new(format!(
+                "{} {} follows the version chosen in the launcher, so it does not update itself.",
+                crate::UPDATE_APP.name,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .show(ui);
+        }
+        Status::Updated(version) => {
+            Text::new(format!("{} updated to {version}.", crate::UPDATE_APP.name)).show(ui);
+        }
+        Status::UpToDate => {
+            Text::new(format!("{} {} is the newest version available.", crate::UPDATE_APP.name, env!("CARGO_PKG_VERSION"))).show(ui);
+        }
+        Status::Idle => {}
+    }
+}
+
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // Measurement must not consume keys, dismiss outcomes, or start the retained updater's actions.
+    if craft::ui::runtime::measure::active(ctx) {
+        return;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The close for a ready update waits until nothing is unsaved.
@@ -128,8 +291,7 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         // A found update opens the startup prompt and leaves the status idle, which ends the result dialog.
         let rt = &mut app.updates_rt;
         if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
-            let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"));
-            match dialog.show(ctx, rt.updater.status()) {
+            match show_result(ctx, rt.updater.status()) {
                 CheckResultResponse::None => {}
                 // Closing the dialog dismisses the outcome it showed.
                 CheckResultResponse::Close => rt.updater.dismiss_status(),
@@ -154,8 +316,12 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(msg);
                 }
                 ui.add_space(8.0);
-                if ui.button(crate::i18n::tr("OK")).clicked() {
-                    app.updates_rt.manual_window_open = false;
+                let shown = Button::new(crate::i18n::tr("OK").to_owned()).id_salt("updatesWebOk").show(ui);
+                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
+                    crate::widgets::register_response("button:updatesWebOk", shown.response.rect, &shown.response);
+                    if shown.clicked() {
+                        app.updates_rt.manual_window_open = false;
+                    }
                 }
             });
         if let Some(w) = &shown {
@@ -166,6 +332,10 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "updates_external155_tests.rs"]
+mod updates_external155_tests;
 
 #[cfg(test)]
 mod tests {

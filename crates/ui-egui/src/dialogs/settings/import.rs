@@ -1,6 +1,35 @@
+use craft::ui::buttons::Button;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _};
+
 use super::general::{cameras, preset_combo};
 use super::widgets::{button_width, check, choices, field, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, Tokens, json, register};
+
+fn auto_import_measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn auto_import_button(ui: &mut egui::Ui, id: &str, label: &str, enabled: bool) -> bool {
+    let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(id).enabled(enabled).show(ui);
+    if auto_import_measuring(ui) {
+        return false;
+    }
+    crate::widgets::register_response(id, shown.response.rect, &shown.response);
+    ui.is_enabled() && enabled && shown.clicked()
+}
+
+fn auto_import_copy(ui: &mut egui::Ui, value: bool) -> Option<bool> {
+    let shown = Checkbox::new(Bind::given(value))
+        .id_salt("check:settingsAutoCopy")
+        .label(crate::i18n::tr("Copy into the library (else use the files where they are)").to_owned())
+        .show(ui);
+    if auto_import_measuring(ui) {
+        return None;
+    }
+    crate::widgets::register_response("check:settingsAutoCopy", shown.response.rect, &shown.response);
+    shown.events.committed().copied().filter(|next| ui.is_enabled() && *next != value)
+}
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
@@ -153,15 +182,13 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 None => drop(ui.label(RichText::new(crate::i18n::tr("Off")).color(t.text))),
             }
             let can = app.services.pick_folder.is_some();
-            let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
-            register(ui, "button:settingsAutoFolder", r.rect);
-            if r.clicked()
+            if auto_import_button(ui, "button:settingsAutoFolder", "Choose…", can)
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
                 && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
             {
                 app.toast(ui.ctx(), e);
             }
-            if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
+            if d.auto_folder.is_some() && auto_import_button(ui, "button:settingsAutoOff", "Turn Off", true) {
                 let _ = app.run("library.autoImport", json!({"folder": null}));
             }
         });
@@ -176,8 +203,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         }
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
-                let mut copy = d.auto_copy;
-                if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
+                if let Some(copy) = auto_import_copy(ui, d.auto_copy) {
                     let _ = app.run("library.autoImport", json!({"copy": copy}));
                 }
             });
@@ -189,6 +215,14 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                     ui,
                     crate::text_field::TextField::singleline("field:settingsAutoAlbum", &mut name).hint(crate::i18n::tr("None")).width(180.0),
                 );
+                // This island's adjacent Button/Checkbox are SDK controls even while the
+                // enclosing Settings subtree uses native presentation. Enroll only their
+                // actually shown native sibling, after field() has done its one show/Escape path.
+                if !auto_import_measuring(ui) {
+                    use craft::ui::runtime::focus::{NativeTextTab, native_text_tab_participant};
+                    let tab = if shown.tab_navigation { NativeTextTab::Navigation } else { NativeTextTab::EditorOwned };
+                    native_text_tab_participant(ui, &shown.response, tab);
+                }
                 if shown.committed() {
                     let _ = app.run("library.autoImport", json!({"album": name.trim()}));
                 }
@@ -200,3 +234,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         hint(ui, t, crate::i18n::tr("In-memory session: these settings last until LightCraft quits."));
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "auto_import_controls_port_tests.rs"]
+mod auto_import_controls_port_tests;

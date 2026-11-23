@@ -66,42 +66,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             "Remove Hot Pixels (Detail) leaves a raw unchanged when more than this share of its photosites would be replaced: such a photo doesn't look like hot pixels on a sensor.",
         ),
     );
-    heading(ui, t, crate::i18n::tr("Preview cache"));
-    let cur = app.session.cache_mb;
-    row(ui, t, crate::i18n::tr("Size limit"), |ui| {
-        let gb = lightcraft_engine::media::default_disk_cache_bytes(app.session.catalog.len()).div_ceil(1 << 30);
-        let auto = format!("{} ({gb} GB)", crate::i18n::tr("Automatic"));
-        let custom = custom_cache_option(cur);
-        let mut opts =
-            vec![(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB"), (51_200, "50 GB"), (204_800, "200 GB")];
-        opts.extend(custom.as_ref().map(|(mb, l)| (*mb, l.as_str())));
-        opts.push((0, auto.as_str()));
-        // (a saved size the list doesn't offer shows as its own option, not as Automatic: picking
-        // Automatic then changes it; CodeRabbit on #3583)
-        let mut v = if CACHE_SIZES.contains(&cur) || custom.is_some() { cur } else { 0 };
-        if choices(ui, "settingsCache", &opts, &mut v) {
-            let _ = app.run("library.preferences", json!({"cacheMb": v}));
-        }
-    });
-    hint(
-        ui,
-        t,
-        crate::i18n::tr(
-            "Grid thumbnails and the previews the loupe shows, kept on disk so photos open at once next time. Automatic makes room for every photo in this library (about 1.5 MB a photo). 50 GB: normal · 200 GB: better, for several weddings or large shoots.",
-        ),
-    );
-    let used = app.session.media.rendered.disk().map(|d| d.size());
-    row(ui, t, crate::i18n::tr("In use"), |ui| {
-        ui.label(
-            RichText::new(used.map(|b| format!("{:.1} MB", b as f64 / 1048576.0)).unwrap_or_else(|| crate::i18n::tr("memory only").to_string()))
-                .color(t.text),
-        );
-        let r = ui.button(crate::i18n::tr("Clear Cache"));
-        register(ui, "button:settingsClearCache", r.rect);
-        if r.clicked() {
-            let _ = app.run("library.clearPreviews", json!({}));
-        }
-    });
+    preview_cache_section(app, ui, t);
     background_prep(app, ui, t);
     heading(ui, t, crate::i18n::tr("Local folders"));
     row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
@@ -332,4 +297,68 @@ mod tests {
         assert_eq!(super::custom_cache_option(10_240), Some((10_240, "10 GB".to_string())));
         assert_eq!(super::custom_cache_option(3000), Some((3000, "3000 MB".to_string())));
     }
+}
+
+/// Only the Clear Cache action: the surrounding usage label/settings retain their owners.
+fn clear_preview_cache_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    use craft::ui::contract::{Props as _, Show as _};
+    let label = crate::i18n::tr("Clear Cache");
+    // Keep Settings a single native keyboard traversal domain. A lone SDK stop would
+    // consume Tab without reaching any of the size buttons that precede this action.
+    let (response, clicked) = if super::native_controls::active(ui.ctx()) {
+        let r = ui.button(label);
+        let clicked = r.clicked();
+        (r, clicked)
+    } else {
+        let out = craft::ui::buttons::Button::new(label).id_salt("settingsClearCache").show(ui);
+        let clicked = out.clicked();
+        (out.response, clicked)
+    };
+    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+    if !measuring {
+        crate::widgets::register_response("button:settingsClearCache", response.rect, &response);
+    }
+    if !measuring && ui.is_enabled() && clicked {
+        let _ = app.run("library.clearPreviews", json!({}));
+    }
+}
+
+#[cfg(test)]
+#[path = "clear_preview_cache_port_tests.rs"]
+mod clear_preview_cache_port_tests;
+
+/// The Preview cache subsection. Showing it alone does not probe GPU availability or local folders.
+fn preview_cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Preview cache"));
+    let cur = app.session.cache_mb;
+    row(ui, t, crate::i18n::tr("Size limit"), |ui| {
+        let gb = lightcraft_engine::media::default_disk_cache_bytes(app.session.catalog.len()).div_ceil(1 << 30);
+        let auto = format!("{} ({gb} GB)", crate::i18n::tr("Automatic"));
+        let custom = custom_cache_option(cur);
+        let mut opts =
+            vec![(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB"), (51_200, "50 GB"), (204_800, "200 GB")];
+        opts.extend(custom.as_ref().map(|(mb, l)| (*mb, l.as_str())));
+        opts.push((0, auto.as_str()));
+        // (a saved size the list doesn't offer shows as its own option, not as Automatic: picking
+        // Automatic then changes it; CodeRabbit on #3583)
+        let mut v = if CACHE_SIZES.contains(&cur) || custom.is_some() { cur } else { 0 };
+        if choices(ui, "settingsCache", &opts, &mut v) && ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            let _ = app.run("library.preferences", json!({"cacheMb": v}));
+        }
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Grid thumbnails and the previews the loupe shows, kept on disk so photos open at once next time. Automatic makes room for every photo in this library (about 1.5 MB a photo). 50 GB: normal · 200 GB: better, for several weddings or large shoots.",
+        ),
+    );
+    let used = app.session.media.rendered.disk().map(|d| d.size());
+    row(ui, t, crate::i18n::tr("In use"), |ui| {
+        ui.label(
+            RichText::new(used.map(|b| format!("{:.1} MB", b as f64 / 1048576.0)).unwrap_or_else(|| crate::i18n::tr("memory only").to_string()))
+                .color(t.text),
+        );
+        clear_preview_cache_button(app, ui);
+    });
 }

@@ -24,7 +24,10 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 mod body;
+mod controls;
 mod scan;
+#[cfg(test)]
+mod sdk_tests;
 mod tags;
 mod task;
 

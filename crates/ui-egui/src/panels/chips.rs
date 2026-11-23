@@ -2,6 +2,9 @@
 //! date, keyword…), "+N more" for what does not fit, and "Clear all". The count next to them says
 //! how many of the source's photos match, so an empty grid never looks like an empty folder.
 
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::primitives::{Glyph, IconSpec};
 use egui::{Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_engine::FilterChip;
 use serde_json::json;
@@ -100,6 +103,17 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
     tr(&chip.label).to_string()
 }
 
+/// The existing seven-point cross, painted by the public SDK icon-button lifecycle.
+struct ChipClose;
+
+impl Glyph for ChipClose {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, color: egui::Color32, _: bool) {
+        let (a, b) = (rect.center() - vec2(3.5, 3.5), rect.center() + vec2(3.5, 3.5));
+        painter.line_segment([a, b], Stroke::new(1.3, color));
+        painter.line_segment([pos2(a.x, b.y), pos2(b.x, a.y)], Stroke::new(1.3, color));
+    }
+}
+
 /// Draws the strip; does nothing without chips.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     if chips.is_empty() {
@@ -126,15 +140,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         let text_r = Rect::from_min_max(r.min, pos2(r.right() - 22.0, r.max.y));
         ui.painter().with_clip_rect(text_r).text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &label, font.clone(), t.text);
         let xr = Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), vec2(18.0, 18.0));
-        let resp = ui.interact(xr, egui::Id::unique(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
-        crate::widgets::announce(&resp, format!("{}: {label}", crate::i18n::tr("Remove this filter")));
-        register(ui, format!("chip:{i}"), xr);
-        let col = if resp.hovered() { t.text } else { t.text_dim };
-        let m = 3.5;
-        let (a, b) = (xr.center() - vec2(m, m), xr.center() + vec2(m, m));
-        ui.painter().line_segment([a, b], Stroke::new(1.3, col));
-        ui.painter().line_segment([pos2(a.x, b.y), pos2(b.x, a.y)], Stroke::new(1.3, col));
-        if resp.clicked() {
+        let remove = IconButton::new(IconSpec::glyph(&ChipClose))
+            .id(egui::Id::unique(("filter-chip-x", i)))
+            .label(format!("{}: {label}", crate::i18n::tr("Remove this filter")))
+            .tooltip(crate::i18n::tr("Remove this filter"))
+            .show_at(ui, xr);
+        let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+        if !measuring {
+            crate::widgets::register_response(format!("chip:{i}"), xr, &remove.response);
+        }
+        if !measuring && remove.clicked() {
             let _ = app.run("library.filter", c.clear.clone());
             if c.clear.get("text").is_some() {
                 app.ui.search.clear();
@@ -152,7 +167,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     let hidden = &chips[shown..];
     if !hidden.is_empty() {
         let more = crate::widgets::text_button(&mut child, "chipsMore", &crate::i18n::tr_format!("+{} more", hidden.len()), false);
-        egui::Popup::menu(&more).show(|ui| {
+        more.menu().show(|ui| {
             for c in hidden {
                 if ui
                     .button(format!("{}  ✕", display_label(c, &app.session.filter, &app.session.catalog)))
@@ -172,6 +187,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         let _ = app.run("library.clearFilter", json!({}));
     }
 }
+
+#[cfg(test)]
+#[path = "filter_chip_removal_port_tests.rs"]
+mod filter_chip_removal_port_tests;
 
 #[cfg(test)]
 mod tests {

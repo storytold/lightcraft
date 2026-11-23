@@ -5,6 +5,11 @@
 //! commands: dragging a cell is `print.cell.move`, its corner handle `print.cell.resize`, with
 //! the guides' snapping done by the command. Widgets register under `print:*`, `button:print*`
 //! and `drag:print*` ids for the control channel and the headless tests.
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::pickers::Select;
+use craft::ui::text::NumberField;
+
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::export::ExportOptions;
@@ -95,25 +100,61 @@ fn fmt_len(inches: f64, unit: Unit) -> String {
     format!("{:.*} {}", decimals(unit), unit.from_inches(inches), unit.label())
 }
 
+fn measuring(ui: &Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// Mount fields in the native settings rows, not an inherited SDK column width.
+/// The engine owns inches; only the displayed value and scrub step use the ruler unit.
+fn number(
+    ui: &mut Ui,
+    id: &str,
+    label: &str,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+    step: f64,
+    decimals: usize,
+    unit: &str,
+) -> Option<f64> {
+    let mut typed = Some(value);
+    let (rect, _) = ui.allocate_exact_size(vec2(76.0, 24.0), Sense::hover());
+    let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut typed))
+        .id_salt(("print-number", id))
+        .range(range)
+        .step(step)
+        .commit_decimals(decimals)
+        .fixed_decimals(decimals)
+        .unit(unit.to_owned())
+        .show_at(ui, rect);
+    if measuring(ui) {
+        return None;
+    }
+    crate::widgets::register_response(format!("drag:{id}"), shown.response.rect, &shown.response);
+    typed.filter(|v| ui.is_enabled() && v.is_finite() && *v != value)
+}
+
 /// A length field in the ruler's unit; the new value in inches when it changed.
 fn length(ui: &mut Ui, id: &str, inches: f64, unit: Unit, min_in: f64, max_in: f64) -> Option<f64> {
-    let mut v = unit.from_inches(inches);
-    let r = ui.add(
-        egui::DragValue::new(&mut v)
-            .range(unit.from_inches(min_in)..=unit.from_inches(max_in))
-            .speed(unit.per_inch() * 0.01)
-            .max_decimals(decimals(unit))
-            .suffix(format!(" {}", unit.label())),
-    );
-    register(ui, format!("drag:{id}"), r.rect);
-    r.changed().then(|| unit.to_inches(v))
+    number(
+        ui,
+        id,
+        id,
+        unit.from_inches(inches),
+        unit.from_inches(min_in)..=unit.from_inches(max_in),
+        unit.per_inch() * 0.01,
+        decimals(unit),
+        unit.label(),
+    )
+    .map(|v| unit.to_inches(v))
 }
 
 fn check(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
-    let mut v = value;
-    let r = ui.checkbox(&mut v, crate::i18n::tr(label));
-    register(ui, format!("check:{id}"), r.rect);
-    r.changed().then_some(v)
+    let shown = Checkbox::new(Bind::given(value)).id_salt(("print-check", id)).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if measuring(ui) {
+        return None;
+    }
+    crate::widgets::register_response(format!("check:{id}"), shown.response.rect, &shown.response);
+    shown.events.committed().copied().filter(|v| ui.is_enabled() && *v != value)
 }
 
 fn choice<V: PartialEq + Copy>(ui: &mut Ui, id: &str, options: &[(V, &str)], current: V) -> Option<V> {
@@ -161,12 +202,13 @@ fn current_paper(paper: &str) -> &str {
 }
 
 /// The dialog's body: the settings column and the page preview side by side.
-pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
+pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) -> bool {
     let ctx = ui.ctx().clone();
     let screen = ctx.content_rect();
     let width = (screen.width() - 80.0).clamp(640.0, 1180.0);
     let height = (screen.height() - 190.0).clamp(280.0, 780.0);
     let mut pu = std::mem::take(&mut app.ui.print);
+    let mut close = false;
     let st = app.session.print.clone();
     // (no `id`/`ids` given: the selection, which never fails to parse)
     let ids = app.session.targets(&json!({})).unwrap_or_default();
@@ -181,7 +223,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
             ui.set_min_size(vec2(SETTINGS_W, height));
             egui::ScrollArea::vertical().id_salt("print-settings").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_width(SETTINGS_W - 14.0);
-                settings(app, ui, t, &mut pu, &st, ids.len());
+                close = settings(app, ui, t, &mut pu, &st, ids.len());
             });
         });
         // (a `separator` would take the dialog's whole free height)
@@ -194,17 +236,40 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
         });
     });
     app.ui.print = pu;
+    close
 }
 
 /// The print templates: save the settings as one, import, and the saved ones to apply, export and delete.
-fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi) {
+fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi) -> bool {
     let ctx = ui.ctx().clone();
     heading(ui, t, "Templates");
+    let mut close = false;
     ui.horizontal(|ui| {
-        crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
-            .hint(crate::i18n::tr("Template name"))
-            .width(140.0)
-            .show(ui);
+        if crate::panels::settings::native_controls_active(ui.ctx()) {
+            crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
+                .hint(crate::i18n::tr("Template name"))
+                .width(140.0)
+                .show(ui);
+        } else {
+            let (rect, _) = ui.allocate_exact_size(vec2(140.0, ui.spacing().interact_size.y.max(24.0)), Sense::hover());
+            let real = !measuring(ui);
+            let eligible = real && ui.is_enabled() && ui.is_visible() && ui.clip_rect().intersects(rect);
+            let shown = craft::ui::text::TextField::new(crate::i18n::tr("Template name").to_owned(), Bind::bound(&mut pu.template_name))
+                .id_salt("field:printTemplateName")
+                .placeholder(crate::i18n::tr("Template name").to_owned())
+                // A disabled adapter can still cancel its old focused gesture. Protect the
+                // mutable binding as well so the first covered Escape cannot clear Name.
+                .read_only(!ui.is_enabled())
+                .limit(None)
+                .show_at(ui, rect);
+            if real {
+                crate::widgets::register_response("field:printTemplateName", shown.response.rect, &shown.response);
+            }
+            // Preserve the observed native one-Escape parent dismissal for this plain Name.
+            // `escaped` also includes Escape-reason Revert; no such programmatic path is
+            // installed here, and this is not a general physical-key discriminator.
+            close |= eligible && shown.escaped;
+        }
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
@@ -242,6 +307,7 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
             });
         });
     }
+    close
 }
 
 /// The image settings: zoom, rotation, border and stroke.
@@ -274,10 +340,7 @@ fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSet
         if let Some(v) = check(ui, "printStroke", "Inner Stroke", im.stroke_enabled) {
             patch(app, &ctx, json!({"image": {"strokeEnabled": v}}));
         }
-        let mut pt = im.stroke_width_pt;
-        let r = ui.add(egui::DragValue::new(&mut pt).range(0.0..=36.0).speed(0.05).max_decimals(2).suffix(" pt"));
-        register(ui, "drag:printStrokeWidth", r.rect);
-        if r.changed() {
+        if let Some(pt) = number(ui, "printStrokeWidth", "Inner stroke width", im.stroke_width_pt, 0.0..=36.0, 0.05, 2, "pt") {
             patch(app, &ctx, json!({"image": {"strokeWidthPt": pt}}));
         }
         if let Some(c) = colour(ui, "printStrokeColor", im.stroke_color) {
@@ -312,14 +375,14 @@ fn page_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSett
     }
 }
 
-fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
+fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) -> bool {
     let ctx = ui.ctx().clone();
     let l = &st.layout;
     let unit = st.guides.units;
     ui.spacing_mut().item_spacing.y = 5.0;
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
 
-    templates_section(app, ui, t, pu);
+    let close = templates_section(app, ui, t, pu);
 
     heading(ui, t, "Layout Style");
     let styles =
@@ -341,13 +404,14 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         Style::ContactSheet => {
             let g = &l.grid;
             row(ui, t, "Grid", |ui| {
-                let (mut c, mut r) = (g.columns, g.rows);
-                let a = ui.add(egui::DragValue::new(&mut c).range(1..=layout::MAX_GRID).suffix(" cols"));
-                register(ui, "drag:printColumns", a.rect);
-                let b = ui.add(egui::DragValue::new(&mut r).range(1..=layout::MAX_GRID).suffix(" rows"));
-                register(ui, "drag:printRows", b.rect);
-                if a.changed() || b.changed() {
-                    patch(app, &ctx, json!({"layout": {"grid": {"columns": c, "rows": r}}}));
+                let c = number(ui, "printColumns", "Columns", g.columns as f64, 1.0..=layout::MAX_GRID as f64, 1.0, 0, "cols");
+                let r = number(ui, "printRows", "Rows", g.rows as f64, 1.0..=layout::MAX_GRID as f64, 1.0, 0, "rows");
+                if c.is_some() || r.is_some() {
+                    patch(
+                        app,
+                        &ctx,
+                        json!({"layout": {"grid": {"columns": c.unwrap_or(g.columns as f64) as usize, "rows": r.unwrap_or(g.rows as f64) as usize}}}),
+                    );
                 }
             });
             row(ui, t, "Spacing", |ui| {
@@ -446,16 +510,17 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
 
     heading(ui, t, "Page Setup");
     row(ui, t, "Paper", |ui| {
-        let current = current_paper(&l.page.paper);
-        let c = craft_ui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
-            for name in layout::paper_names().chain(std::iter::once("custom")) {
-                if ui.selectable_label(current == name, paper_label(name)).clicked() {
-                    patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
-                }
+        let current = current_paper(&l.page.paper).to_owned();
+        let entries: Vec<_> =
+            layout::paper_names().chain(std::iter::once("custom")).map(|name| Entry::new(name.to_owned(), paper_label(name))).collect();
+        let (rect, _) = ui.allocate_exact_size(vec2(170.0, 24.0), Sense::hover());
+        let shown = Select::new(crate::i18n::tr("Paper"), Bind::given(current.clone()), &entries).id_salt("printPaper").show_at(ui, rect);
+        if !measuring(ui) {
+            crate::widgets::register_response("combo:printPaper", shown.response.rect, &shown.response);
+            if let Some(name) = shown.events.committed().filter(|name| **name != current) {
+                patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
             }
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
-        register(ui, "combo:printPaper", c.response.rect);
+        }
     });
     if l.page.paper.eq_ignore_ascii_case("custom") {
         row(ui, t, "Size", |ui| {
@@ -491,14 +556,12 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
 
     heading(ui, t, "Print Job");
     row(ui, t, "Resolution", |ui| {
-        let mut ppi = st.job.ppi;
-        let r = ui.add(egui::DragValue::new(&mut ppi).range(72.0..=720.0).speed(1.0).max_decimals(0).suffix(" ppi"));
-        register(ui, "drag:printPpi", r.rect);
-        if r.changed() {
+        if let Some(ppi) = number(ui, "printPpi", "Resolution", f64::from(st.job.ppi), 72.0..=720.0, 1.0, 0, "ppi") {
             patch(app, &ctx, json!({"job": {"ppi": ppi}}));
         }
     });
     print_job_color(app, ui, t, &st.job.color);
+    close
 }
 
 /// Send one colour setting of the print job (the rest stay as they are).
@@ -556,10 +619,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     });
     for (key, label, value) in [("brightness", "Brightness", color.brightness), ("contrast", "Contrast", color.contrast)] {
         row(ui, t, label, |ui| {
-            let mut v = value;
-            let r = ui.add(egui::DragValue::new(&mut v).range(-100.0..=100.0).speed(0.5).max_decimals(0));
-            register(ui, format!("drag:print{label}"), r.rect);
-            if r.changed() {
+            if let Some(v) = number(ui, &format!("print{label}"), label, f64::from(value), -100.0..=100.0, 0.5, 0, "") {
                 patch_color(app, &ctx, key, json!(v));
             }
         });
@@ -1034,3 +1094,11 @@ mod tests {
         assert_eq!(paper_label(current_paper("a4")), "A4");
     }
 }
+
+#[cfg(test)]
+#[path = "print_view_wave110_tests.rs"]
+mod wave110_tests;
+
+#[cfg(test)]
+#[path = "print_template_flow_tests.rs"]
+mod print_template_flow_tests;

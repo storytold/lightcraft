@@ -2,6 +2,13 @@
 //! not only the active one's, as Lightroom Classic shows them. A keyword only some of the selected
 //! photos have is marked as such.
 
+mod add;
+
+#[cfg(test)]
+mod flow_tests;
+
+pub(crate) use add::{add_field, field_focused, painter_field};
+
 use lightcraft_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
@@ -14,15 +21,21 @@ use crate::widgets::register;
 pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use crate::state::KeywordingView as V;
     ui.horizontal_wrapped(|ui| {
-        for (view, id, label) in [
+        for (view, id, label) in
+            [
             (V::Enter, "enter", "Enter Keywords"),
             (V::Keywords, "keywords", "Keywords"),
             (V::Containing, "containing", "& Containing"),
             (V::WillExport, "willExport", "Will Export"),
-        ] {
-            let r = ui.selectable_label(app.ui.keywording_view == view, crate::i18n::tr(label));
-            register(ui, format!("keywordView:{id}"), r.rect);
-            if r.clicked() {
+        ]
+        {
+            use craft::ui::buttons::Button;
+            use craft::ui::contract::{Props as _, Show as _};
+            let key = format!("keywordView:{id}");
+            let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(&key).selected(app.ui.keywording_view == view).show(ui);
+            if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { continue; }
+            crate::widgets::register_response(key, shown.response.rect, &shown.response);
+            if ui.is_enabled() && shown.clicked() {
                 app.ui.keywording_view = view;
             }
         }

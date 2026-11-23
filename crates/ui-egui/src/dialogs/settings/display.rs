@@ -7,6 +7,10 @@ use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
 /// The monitor profile (`app.displayProfile`): previews are shown through the display's ICC
 /// profile, so wide-gamut and calibrated displays show colours as they are.
 pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if !super::native_controls_active(ui.ctx()) {
+        monitor_profile_sdk(app, ui, t);
+        return;
+    }
     heading(ui, t, crate::i18n::tr("Monitor profile"));
     let current = app.renderer.display().cloned();
     let screen = current.as_ref().is_some_and(|d| d.path == crate::SCREEN_PROFILE);
@@ -34,6 +38,86 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         let r = ui.add_enabled(!app.ui.settings.display_profile.is_empty(), egui::Button::new(none));
         register(ui, "button:settingsDisplayProfileNone", r.rect);
         if r.clicked() {
+            app.ui.settings.display_profile.clear();
+        }
+        if !can {
+            hint(ui, t, crate::i18n::tr("not available here"));
+        }
+    });
+    if let Some(e) = &app.display_error {
+        ui.label(RichText::new(e).size(11.0).color(t.reject));
+    }
+    if let Some(d) = &current {
+        let info = d.describe();
+        if !screen {
+            row(ui, t, crate::i18n::tr("File"), |ui| {
+                path_label(ui, "settingsDisplayFile", &d.path, egui::FontId::proportional(11.0), t.text_dim, 0.0);
+            });
+        }
+        row(ui, t, crate::i18n::tr("Type"), |ui| {
+            let kind = match d.profile.kind {
+                lightcraft_engine::display::DisplayKind::MatrixTrc => crate::i18n::tr("Matrix/TRC"),
+                lightcraft_engine::display::DisplayKind::Lut => crate::i18n::tr("LUT-based"),
+            };
+            ui.label(RichText::new(kind).color(t.text));
+        });
+        row(ui, t, crate::i18n::tr("Primaries (x, y)"), |ui| {
+            let p = &info["primaries"];
+            let xy = |(k, l): (&str, &str)| format!("{l} {:.3}, {:.3}", p[k][0].as_f64().unwrap_or(0.0), p[k][1].as_f64().unwrap_or(0.0));
+            let text = [("red", "R"), ("green", "G"), ("blue", "B")].map(xy).join("   ");
+            ui.label(RichText::new(text).size(11.0).color(t.text_dim));
+        });
+    }
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Photos are shown through your monitor's ICC profile, so colours are right on wide-gamut and calibrated displays, and the Detail view uses the display's whole gamut. The histogram, the preview caches and exports are not affected.",
+        ),
+    );
+    #[cfg(target_os = "linux")]
+    hint(ui, t, crate::i18n::tr("Profiles assigned in your desktop's colour settings are usually in ~/.local/share/icc."));
+}
+
+fn monitor_profile_sdk(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    heading(ui, t, crate::i18n::tr("Monitor profile"));
+    let current = app.renderer.display().cloned();
+    let screen = current.as_ref().is_some_and(|d| d.path == crate::SCREEN_PROFILE);
+    row(ui, t, crate::i18n::tr("Profile"), |ui| {
+        let name = match &current {
+            Some(d) => d.profile.description.clone(),
+            None => crate::i18n::tr("None (the display is treated as sRGB)").to_string(),
+        };
+        ui.label(RichText::new(name).color(t.text));
+        if screen {
+            hint(ui, t, crate::i18n::tr("this screen's profile"));
+        }
+    });
+    row(ui, t, "", |ui| {
+        let can = app.services.pick_display_profile.is_some();
+        let r =
+            craft::ui::buttons::Button::new(crate::i18n::tr("Choose Profile…").to_owned()).id_salt("settingsDisplayProfile").enabled(can).show(ui);
+        if real {
+            crate::widgets::register_response("button:settingsDisplayProfile", r.response.rect, &r.response);
+        }
+        if real
+            && ui.is_enabled()
+            && can
+            && r.clicked()
+            && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
+        {
+            app.ui.settings.display_profile = path;
+        }
+        // with no profile chosen, previews follow the screen's own profile where the host knows it
+        let none = if app.services.screen_profile.is_some() { crate::i18n::tr("Use Screen Profile") } else { crate::i18n::tr("Use sRGB") };
+        let enabled = !app.ui.settings.display_profile.is_empty();
+        let r = craft::ui::buttons::Button::new(none.to_owned()).id_salt("settingsDisplayProfileNone").enabled(enabled).show(ui);
+        if real {
+            crate::widgets::register_response("button:settingsDisplayProfileNone", r.response.rect, &r.response);
+        }
+        if real && ui.is_enabled() && enabled && r.clicked() {
             app.ui.settings.display_profile.clear();
         }
         if !can {
@@ -131,26 +215,99 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         let lines = if n == 1 { &mut app.ui.settings.loupe_info.info1 } else { &mut app.ui.settings.loupe_info.info2 };
         for (i, line) in lines.iter_mut().enumerate() {
             let id = format!("viewOptionsInfo{n}Line{}", i + 1);
-            let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
-                for f in F::ALL {
-                    let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-                    let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
-                    register(ui, format!("button:{id}-{key}"), r.rect);
-                    if r.clicked() {
-                        *line = *f;
+            let name = crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label()));
+            if super::native_controls_active(ui.ctx()) {
+                // Settings remains one native subtree until mixed traversal is supported.
+                let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
+                    for f in F::ALL {
+                        let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                        let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
+                        register(ui, format!("button:{id}-{key}"), r.rect);
+                        if r.clicked() {
+                            *line = *f;
+                        }
                     }
+                });
+                crate::widgets::name_combo(&r.response, &name);
+                register(ui, format!("combo:{id}"), r.response.rect);
+            } else {
+                use craft::ui::buttons::Button;
+                use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+                use craft::ui::controls::disclosure::DisclosureGlyph;
+                use craft::ui::menu::{Menu, MenuItem};
+
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
+                if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+                    continue;
                 }
-            });
-            crate::widgets::name_combo(
-                &r.response,
-                &crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label())),
-            );
-            register(ui, format!("combo:{id}"), r.response.rect);
+                let face = Button::new(name.clone())
+                    .painted(crate::i18n::tr(line.label()).to_owned())
+                    .trailing_icon(DisclosureGlyph::dropdown())
+                    .id_salt(("view-options-line", &id))
+                    .show_at(ui, rect);
+                crate::widgets::register_response(format!("combo:{id}"), rect, &face.response);
+                // A value menu retains the existing semantic option locators, unlike indexed
+                // Select rows. Only activation commits; navigating or dismissing edits nothing.
+                let mut picked = None;
+                // The SDK's external Click opener is pointer-press-only. Let the production
+                // button's actual activation (pointer, keyboard or AT) own the toggle instead.
+                // Stale state expires when this field leaves the presented subtree.
+                let pass = ui.ctx().cumulative_pass_nr();
+                let slot = face.response.id.with("menu-open");
+                let mut open = ui
+                    .data(|data| data.get_temp::<(u64, bool)>(slot))
+                    .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
+                    .is_some_and(|(_, open)| open);
+                if ui.is_enabled() && face.clicked() {
+                    open = !open;
+                }
+                Menu::new(name)
+                    .id_salt(("view-options-menu", &id))
+                    .values()
+                    .opened_by(&face.response, Trigger::Manual)
+                    .open(Bind::bound(&mut open))
+                    .show(ui, |ui, _| {
+                        for f in F::ALL {
+                            let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                            let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+                            // These are literal translated captions, not mnemonic-marked menu text.
+                            let caption = crate::i18n::tr(f.label()).replace('&', "&&");
+                            let row = MenuItem::new(caption).id_salt((&id, &key)).entry_checked(line == f);
+                            let row = if line == f { row.default_stop() } else { row };
+                            let row = row.show(ui);
+                            if !measuring {
+                                crate::widgets::register_response(format!("button:{id}-{key}"), row.response.rect, &row.response);
+                                if ui.is_enabled() && row.ran {
+                                    picked = Some(*f);
+                                }
+                            }
+                        }
+                    });
+                ui.data_mut(|data| data.insert_temp(slot, (pass, open)));
+                if ui.is_enabled()
+                    && let Some(field) = picked
+                {
+                    *line = field;
+                }
+            }
         }
-        let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
-        register(ui, format!("button:viewOptionsDefaults{n}"), r.rect);
-        if r.clicked() {
-            *lines = defaults;
+        if super::native_controls_active(ui.ctx()) {
+            let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
+            register(ui, format!("button:viewOptionsDefaults{n}"), r.rect);
+            if r.clicked() {
+                *lines = defaults;
+            }
+        } else {
+            use craft::ui::buttons::Button;
+            use craft::ui::contract::{Props as _, Show as _};
+            let r =
+                Button::new(crate::i18n::tr("Use Defaults").to_owned()).id_salt(("view-options-defaults", n)).enabled(*lines != defaults).show(ui);
+            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                crate::widgets::register_response(format!("button:viewOptionsDefaults{n}"), r.response.rect, &r.response);
+                if ui.is_enabled() && *lines != defaults && r.clicked() {
+                    *lines = defaults;
+                }
+            }
         }
         // one Info at most shows briefly: ticking one unticks the other
         let info = if n == 1 { I::Basic } else { I::Exposure };
@@ -162,6 +319,10 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
     heading(ui, t, crate::i18n::tr("General"));
     check(ui, "viewOptions.loupeMessages", &mut app.ui.settings.loupe_messages, "Show message when loading or rendering photos");
 }
+
+#[cfg(test)]
+#[path = "loupe_view_options_flow_tests.rs"]
+mod loupe_view_options_flow_tests;
 
 // ----------------------------------------------------------------------------------- Slideshow
 
@@ -219,3 +380,7 @@ pub fn display_profile(app: &mut LightcraftApp, p: &Value) -> Result<Value, Stri
         None => json!({"path": null, "description": "sRGB (no display profile)"}),
     })
 }
+
+#[cfg(test)]
+#[path = "display_profile_flow_tests.rs"]
+mod display_profile_flow_tests;

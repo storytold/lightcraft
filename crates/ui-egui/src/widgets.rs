@@ -131,6 +131,11 @@ pub struct Registry {
 /// overlay. A point below the top modal dialog is instead left to egui's modal routing: the dialog
 /// consumes it, or a click on the backdrop closes the dialog, and no background widget is pressed.
 pub fn register(ui: &egui::Ui, id: impl Into<String>, rect: Rect) {
+    register_with_tooltip(ui, id, rect, None);
+}
+
+/// Adds guidance to the existing hover-only automation probe; never creates a second hit owner.
+pub(crate) fn register_with_tooltip(ui: &egui::Ui, id: impl Into<String>, rect: Rect, hint: Option<&str>) {
     let ctx = ui.ctx();
     let registry = egui::Id::unique("lc-registry");
     let id = id.into();
@@ -146,6 +151,9 @@ pub fn register(ui: &egui::Ui, id: impl Into<String>, rect: Rect) {
     let hit = rect.is_finite().then(|| {
         let id = egui::Id::unique(("lc-automation-hit", id.as_str(), duplicate));
         let response = ui.interact(rect, id, egui::Sense::hover());
+        if let Some(hint) = hint {
+            craft::ui::contract::tooltip::attach(&response, &hint.to_owned().into());
+        }
         WidgetHit { id, layer_id: response.layer_id, interact_rect: response.interact_rect }
     });
     ctx.data_mut(|d| {
@@ -830,11 +838,17 @@ fn wheel_nudges(remainder: &mut f32, delta: f32) -> f64 {
     f64::from(steps)
 }
 
+/// Native keyboard nudge in model units, before any value-dependent rounding or clamping.
+pub(crate) fn nudge_unit(spec: &ControlSpec) -> f64 {
+    let step = spec.step.max(1e-9);
+    if spec.id == "wb.temp" { 50.0 } else { (((spec.max - spec.min) / 200.0 / step).round().max(1.0)) * step }
+}
+
 /// `value` moved by `steps` keyboard nudges: one nudge is about 1/200 of the range, a whole
 /// number of the control's steps (exposure 0.05, most sliders 1, temperature 50 K).
 pub fn nudged(spec: &ControlSpec, value: f64, steps: f64) -> f64 {
     let step = spec.step.max(1e-9);
-    let unit = if spec.id == "wb.temp" { 50.0 } else { (((spec.max - spec.min) / 200.0 / step).round().max(1.0)) * step };
+    let unit = nudge_unit(spec);
     (((value + unit * steps) / step).round() * step).clamp(spec.min, spec.max)
 }
 
@@ -918,27 +932,11 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
     resp
 }
 
-/// A small bordered text button (Auto, B&W, HDR…).
-pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
-    let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
-    let t = Tokens::get(ui.ctx());
-    let font = t.semibold(11.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
-    let size = vec2(text_button_width(galley.size().x), 24.0);
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
-    register(ui, format!("button:{id}"), r);
-    let fill = if active {
-        t.pressed
-    } else if resp.hovered() {
-        t.hover
-    } else {
-        t.button
-    };
-    let p = ui.painter();
-    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-    p.galley(r.center() - galley.size() / 2.0, galley, t.text);
-    resp
+/// A small bordered text button (Auto, B&W, HDR…) on the SDK interaction pipeline.
+/// Its output keeps framework activation through tooltip chains; open its popup with
+/// [`TextButtonOutput::menu`], not `egui::Popup::menu`, whose click rule is different.
+pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> TextButtonOutput {
+    text_button::show(ui, id, label, active)
 }
 
 /// The width of a [`text_button`] whose label is `text_width` wide.
@@ -1014,33 +1012,9 @@ pub(crate) fn accessible_label<'a>(resp: &egui::Response, tip: &'a str) -> &'a s
     label
 }
 
-/// An icon-only button. `active` draws the selected background (tool strip).
-pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
-    let tooltip = crate::i18n::tr(tooltip);
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    let name = accessible_label(&resp, tooltip);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, name));
-    register(ui, format!("icon:{id}"), r);
-    let p = ui.painter();
-    let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
-    if active {
-        p.rect_filled(sq, 4.0, t.tool_active);
-    } else if resp.hovered() && enabled {
-        p.rect_filled(sq, 4.0, t.hover.gamma_multiply(0.7));
-    }
-    let c = if !enabled {
-        t.text_disabled
-    } else if active {
-        t.pick
-    } else if resp.hovered() {
-        t.text
-    } else {
-        t.icon
-    };
-    let glyph = (size.x.min(size.y) * 0.62).min(22.0);
-    paint(p, Rect::from_center_size(r.center(), vec2(glyph, glyph)), icon, c);
-    if !tooltip.is_empty() { resp.on_hover_text(tooltip) } else { resp }
+/// An icon-only SDK button. `active` keeps the selected tool-strip face.
+pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> IconButtonOutput {
+    icon_button::show(ui, id, icon, size, active, enabled, tooltip)
 }
 
 /// A borderless dropdown button: `text` followed by a painted chevron (no font glyph needed).
@@ -1360,7 +1334,11 @@ pub mod date_picker;
 mod numeric_entry_tests;
 pub mod progress;
 pub mod rating;
+mod icon_button;
+pub use icon_button::IconButtonOutput;
+mod text_button;
 pub mod text_field;
+pub use text_button::TextButtonOutput;
 
 #[cfg(test)]
 #[path = "widgets/tests_slider_reset.rs"]
@@ -1373,6 +1351,12 @@ fn focused_slider_key() -> egui::Id {
 /// The slider a click or drag armed for vertical wheel edits, if any.
 fn wheel_slider_key() -> egui::Id {
     egui::Id::unique("lightcraft-wheel-slider")
+}
+
+/// Adopt the actual egui focus root of a framework slider track. Numeric text parts do not
+/// call this: they keep the full text-edit shortcut barrier.
+pub(crate) fn note_slider_focus(ctx: &egui::Context, root: egui::Id) {
+    ctx.data_mut(|data| data.insert_temp(focused_slider_key(), root));
 }
 
 /// Whether the widget with keyboard focus is a develop slider selected by a click, drag or Tab.

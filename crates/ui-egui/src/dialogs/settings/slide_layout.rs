@@ -129,12 +129,44 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         row(ui, t, "Opacity", |ui| slider(app, ui, "slideshowWashOpacity", "washOpacity", s.wash_opacity, 1.0, Unit::Percent));
         row(ui, t, "Angle", |ui| slider(app, ui, "slideshowWashAngle", "washAngle", s.wash_angle, 180.0, Unit::Degrees));
     }
+    background_photo_controls(app, ui, t, &s);
+    reset_layout_button(app, ui);
+}
+
+/// The existing background-photo workflow, kept local to the slideshow layout owner.
+fn background_photo_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, s: &SlideSettings) {
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+
     let active = app.session.active();
-    let mut on = s.background_image.is_some();
-    let r = ui.add_enabled(on || active.is_some(), egui::Checkbox::new(&mut on, crate::i18n::tr("Background image")));
-    register(ui, "check:settings.slideshowBackgroundImage", r.rect);
-    if r.changed() {
-        set(app, json!({"backgroundImage": if on { active.map(|a| a.0) } else { None }}));
+    let on = s.background_image.is_some();
+    let enabled = on || active.is_some();
+    let interactive = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    // Settings remains a native subtree until mixed SDK/native traversal is supported.
+    let next = if super::native_controls_active(ui.ctx()) {
+        let mut next = on;
+        let response = ui.add_enabled(enabled && interactive, egui::Checkbox::new(&mut next, crate::i18n::tr("Background image")));
+        if interactive {
+            crate::widgets::register_response("check:settings.slideshowBackgroundImage", response.rect, &response);
+        }
+        response.changed().then_some(next)
+    } else {
+        let out = Checkbox::new(Bind::given(on))
+            .id_salt(("settings-check", "settings.slideshowBackgroundImage"))
+            .label(crate::i18n::tr("Background image").to_owned())
+            .enabled(enabled)
+            .show(ui);
+        if interactive {
+            crate::widgets::register_response("check:settings.slideshowBackgroundImage", out.response.rect, &out.response);
+        }
+        out.events.committed().copied()
+    };
+    if interactive
+        && ui.is_enabled()
+        && enabled
+        && let Some(next) = next.filter(|next| *next != on)
+    {
+        set(app, json!({"backgroundImage": if next { active.map(|a| a.0) } else { None }}));
     }
     if let Some(bid) = s.background_image {
         let name = app.session.catalog.photo(lightcraft_catalog::PhotoId(bid)).map(|p| p.file_name.clone());
@@ -143,6 +175,8 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.label(egui::RichText::new(text).color(t.text));
             if let Some(a) = active.filter(|a| a.0 != bid)
                 && crate::widgets::text_button(ui, "slideshowUseSelected", "Use selected photo", false).clicked()
+                && interactive
+                && ui.is_enabled()
             {
                 set(app, json!({"backgroundImage": a.0}));
             }
@@ -151,8 +185,15 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     } else {
         hint(ui, t, "Select a photo, then turn this on to fill the slide behind every photo with it.");
     }
+}
+
+fn reset_layout_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
-    if crate::widgets::text_button(ui, "slideshowResetLayout", "Reset layout", false).clicked() {
+    if crate::widgets::text_button(ui, "slideshowResetLayout", "Reset layout", false).clicked()
+        && ui.is_enabled()
+        && !ui.is_sizing_pass()
+        && !craft::ui::runtime::measure::active(ui.ctx())
+    {
         reset(app);
     }
 }
@@ -323,3 +364,7 @@ pub fn reset(app: &mut LightcraftApp) {
     let d = SlideSettings::default().to_json();
     set(app, d);
 }
+
+#[cfg(test)]
+#[path = "slideshow_background_flow_tests.rs"]
+mod slideshow_background_flow_tests;

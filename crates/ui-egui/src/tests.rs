@@ -13,6 +13,7 @@ fn settle_budget_only_expands_for_llvm_coverage_runs() {
 }
 
 mod activity;
+mod dialog_settings_popup_contract;
 mod album_picker;
 mod album_remove;
 mod alt_preview;
@@ -33,9 +34,12 @@ mod curve;
 mod date_picker;
 mod dialog_copy;
 mod dialog_fit;
+mod dialog_settings_blur_count;
 mod dialog_primary;
 mod dialog_settings;
 mod dialog_settings_text;
+mod dialog_settings_keyboard_contract;
+mod dialog_settings_keyboard_guards;
 mod dialog_tab;
 mod dialogs;
 mod disk_space;
@@ -118,3 +122,5 @@ mod zoom_keys;
 
 pub(super) mod fixtures;
 pub(super) mod render_fixtures;
+
+mod real_journey;

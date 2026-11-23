@@ -6,12 +6,14 @@
 
 use std::sync::Arc;
 
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::theme::Tokens;
-use crate::widgets::register;
+use crate::widgets::{register, register_response};
 
 const PAD: f32 = 20.0;
 const SECTION_H: f32 = 56.0;
@@ -154,18 +156,27 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             let _ = app.run("view.people", json!({}));
         }
         ui.label(RichText::new(&shown_name).font(t.semibold(15.0)).color(t.text));
-        let rename = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui, "person:rename", rename.rect);
-        if rename.clicked() {
+        let rename = Button::new(crate::i18n::tr("Rename Person…")).id_salt("person:rename").show(ui);
+        // Measurement must not publish automation targets or dispatch page actions.
+        let real_pass = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        if real_pass {
+            register_response("person:rename", rename.response.rect, &rename.response);
+        }
+        if real_pass && rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
         let count = if page.total == 1 { "1 face".to_string() } else { format!("{} faces", page.total) };
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(PAD - 4.0);
-            let photos = ui.button(crate::i18n::tr("Show photos")).on_hover_text(crate::i18n::tr("Their photos in the grid"));
-            register(ui, "person:photos", photos.rect);
-            if photos.clicked() {
+            let photos = Button::new(crate::i18n::tr("Show photos")).id_salt("person:photos").show(ui);
+            let clicked = photos.clicked();
+            let response = photos.response.on_hover_text(crate::i18n::tr("Their photos in the grid"));
+            let real_pass = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+            if real_pass {
+                register_response("person:photos", response.rect, &response);
+            }
+            if real_pass && clicked {
                 let _ = app.run("library.filter", json!({"person": shown_name}));
                 let _ = app.run("view.photoGrid", json!({}));
             }
@@ -375,6 +386,10 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     }
     hit
 }
+
+#[cfg(test)]
+#[path = "tests_named_person_actions.rs"]
+mod named_person_actions_tests;
 
 #[cfg(test)]
 mod tests {

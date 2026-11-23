@@ -87,19 +87,105 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, key: &
     }
 }
 
+/// Only a presented, enabled title control can commit a library preference.
+fn title_input(ui: &egui::Ui) -> bool {
+    ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx())
+}
+
+#[derive(Clone)]
+struct TitleDraft {
+    text: String,
+    model: String,
+    pass: u64,
+    native: bool,
+}
+
 /// The screen's text field (`field:{id}`), saved when the edit ends.
 fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &str) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+
     let mem = egui::Id::unique(("slideshow-title-field", id));
-    let mut s: String = ui.data(|d| d.get_temp(mem)).unwrap_or_else(|| value.to_string());
+    let pass = ui.ctx().cumulative_pass_nr();
+    let native = super::native_controls_active(ui.ctx());
+    // A hidden/rebound field starts from its own authoritative screen, never a stale draft.
+    let remembered = ui
+        .data(|d| d.get_temp::<TitleDraft>(mem))
+        .filter(|d| d.native == native && d.model == value && (d.pass == pass || d.pass.checked_add(1) == Some(pass)));
+    let mut draft = remembered.map_or_else(|| value.to_owned(), |d| d.text);
     let widget = format!("field:{id}");
-    let r = TextField::singleline(&widget, &mut s).hint(crate::i18n::tr("Title text")).width(ui.available_width().clamp(80.0, 260.0)).show(ui);
-    if r.editing {
-        ui.data_mut(|d| d.insert_temp(mem, s.clone()));
+    let width = ui.available_width().clamp(80.0, 260.0);
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let committed = if native {
+        if !real {
+            // Measurement has no field memo, focus, menu, command or automation side effects.
+            ui.add(egui::TextEdit::singleline(&mut draft).desired_width(width).hint_text(crate::i18n::tr("Title text")).interactive(false));
+            return;
+        }
+        let out = TextField::singleline(&widget, &mut draft).hint(crate::i18n::tr("Title text")).width(width).show(ui);
+        if out.cancelled() {
+            crate::widgets::take_escape(ui.ctx());
+        }
+        if out.editing && ui.is_enabled() {
+            ui.data_mut(|d| d.insert_temp(mem, TitleDraft { text: draft.clone(), model: value.to_owned(), pass, native }));
+        } else {
+            ui.data_mut(|d| d.remove::<TitleDraft>(mem));
+        }
+        out.committed().then_some(draft)
     } else {
-        ui.data_mut(|d| d.remove::<String>(mem));
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
+        let out = craft::ui::text::TextField::new(crate::i18n::tr("Title text"), Bind::bound(&mut draft))
+            .id(crate::text_field::id(&widget))
+            .placeholder(crate::i18n::tr("Title text"))
+            .limit(None) // Keep engine-side text truncation at commit, not while typing.
+            .submits()
+            .show_at(ui, rect);
+        if real {
+            crate::widgets::register_response(widget, out.response.rect, &out.response);
+            if out.escaped {
+                crate::widgets::take_escape(ui.ctx());
+            }
+            if out.events.ended().is_some() || !ui.is_enabled() {
+                ui.data_mut(|d| d.remove::<TitleDraft>(mem));
+            } else {
+                ui.data_mut(|d| d.insert_temp(mem, TitleDraft { text: draft, model: value.to_owned(), pass, native }));
+            }
+        }
+        out.events.committed().cloned()
+    };
+    if title_input(ui)
+        && let Some(next) = committed.filter(|next| next != value)
+    {
+        set(app, ui.ctx(), t, "text", json!(next));
     }
-    if r.committed() && s != value {
-        set(app, ui.ctx(), t, "text", json!(s));
+}
+
+/// Enable is independent for each title screen; disabled controls never commit.
+fn screen_enable(app: &mut LightcraftApp, ui: &mut egui::Ui, title: Title, s: &TitleScreen, name: &str, label: &str) -> bool {
+    let mut on = s.enabled;
+    if check(ui, &format!("settings.{name}"), &mut on, label) && title_input(ui) {
+        set(app, ui.ctx(), title, "enabled", json!(on));
+    } else {
+        on = s.enabled;
+    }
+    if !on && title_input(ui) {
+        ui.data_mut(|d| d.remove::<TitleDraft>(egui::Id::unique(("slideshow-title-field", format!("{name}Text")))));
+    }
+    on
+}
+
+/// Content and its optional editor are one workflow. Colour/scale/duration stay with `screen`.
+fn screen_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, s: &TitleScreen, name: &str, content_id: &str) {
+    row(ui, t, "Shows", |ui| {
+        let mut c = s.content;
+        let opts = [(TitleContent::IdentityPlate, "Identity plate"), (TitleContent::Text, "Text"), (TitleContent::None, "Colour only")];
+        if choices(ui, content_id, &opts, &mut c) && title_input(ui) {
+            set(app, ui.ctx(), title, "content", json!(c.id()));
+        }
+    });
+    if s.content == TitleContent::Text {
+        row(ui, t, "Text", |ui| text(app, ui, &format!("{name}Text"), title, &s.text));
+    } else if title_input(ui) {
+        ui.data_mut(|d| d.remove::<TitleDraft>(egui::Id::unique(("slideshow-title-field", format!("{name}Text")))));
     }
 }
 
@@ -109,31 +195,18 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
         Title::Intro => ("slideshowIntro", "settingsSlideshowIntroContent", "Intro screen"),
         Title::Ending => ("slideshowEnding", "settingsSlideshowEndingContent", "Ending screen"),
     };
-    let mut on = s.enabled;
-    if check(ui, &format!("settings.{name}"), &mut on, label) {
-        set(app, ui.ctx(), title, "enabled", json!(on));
-    }
-    if !on {
+    if !screen_enable(app, ui, title, s, name, label) {
         return;
     }
     row(ui, t, "Colour", |ui| colour(app, ui, &format!("{name}Color"), title, "color", s.color));
-    row(ui, t, "Shows", |ui| {
-        let mut c = s.content;
-        let opts = [(TitleContent::IdentityPlate, "Identity plate"), (TitleContent::Text, "Text"), (TitleContent::None, "Colour only")];
-        if choices(ui, content_id, &opts, &mut c) {
-            set(app, ui.ctx(), title, "content", json!(c.id()));
-        }
-    });
+    screen_content(app, ui, t, title, s, name, content_id);
     if s.content == TitleContent::None {
         return;
-    }
-    if s.content == TitleContent::Text {
-        row(ui, t, "Text", |ui| text(app, ui, &format!("{name}Text"), title, &s.text));
     }
     row(ui, t, "Scale", |ui| slider(app, ui, &format!("{name}Scale"), title, "scale", s.scale, SIZE_MIN..=PLATE_SIZE_MAX, 100.0, " %"));
     ui.horizontal(|ui| {
         let mut over = s.override_color;
-        if check(ui, &format!("settings.{name}Override"), &mut over, "Override colour") {
+        if check(ui, &format!("settings.{name}Override"), &mut over, "Override colour") && title_input(ui) {
             set(app, ui.ctx(), title, "overrideColor", json!(over));
         }
         if over {
@@ -141,7 +214,7 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
         }
     });
     let mut own = s.duration.is_some();
-    if check(ui, &format!("settings.{name}OwnDuration"), &mut own, "Own duration (off: the slide duration)") {
+    if check(ui, &format!("settings.{name}OwnDuration"), &mut own, "Own duration (off: the slide duration)") && title_input(ui) {
         let d = if own { json!(app.session.slideshow.slide_duration) } else { Value::Null };
         set(app, ui.ctx(), title, "duration", d);
     }
@@ -166,3 +239,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.label(egui::RichText::new(w).size(11.0).color(t.caution));
     }
 }
+
+#[cfg(test)]
+#[path = "slide_title_screen_flow_tests.rs"]
+mod slide_title_screen_flow_tests;

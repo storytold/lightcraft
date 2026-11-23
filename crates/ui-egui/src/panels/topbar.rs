@@ -226,41 +226,101 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
     x
 }
 
+/// LightCraft's original 18-point mode artwork; the SDK owns the button and its focus ring.
+struct AppearanceGlyph {
+    icon: Icon,
+    ink: egui::Color32,
+}
+
+impl craft::ui::primitives::Glyph for AppearanceGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, _: egui::Color32, _: bool) {
+        paint(painter, Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), self.icon, self.ink);
+    }
+}
+
 /// The appearance icon at `x`, with its theme-favourites menu.
 fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rect, x: f32) {
-    // Appearance Mode: a click steps Auto → Light → Dark → Auto; the icon shows the mode
+    use craft::ui::buttons::IconButton;
+    use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+    use craft::ui::menu::{Menu, MenuItem};
+    use craft::ui::primitives::IconSpec;
+
     let (icon, mode) = appearance_icon(app.ui.settings.appearance_mode);
     let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+    let id = egui::Id::unique(("top", "appearance"));
     let tip = format!("{}: {}", crate::i18n::tr("Appearance Mode"), crate::i18n::tr(mode));
-    let resp = ui.interact(r, egui::Id::unique(("top", "appearance")), Sense::click()).on_hover_text(tip.clone());
-    crate::widgets::announce(&resp, tip.clone());
-    register(ui, "icon:appearance", r);
-    paint(ui.painter(), r.shrink(5.0), icon, if resp.hovered() { t.text } else { t.icon });
-    if resp.clicked() {
+    // egui resolves hover from the prior pass's geometry before drawing this pass.
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    let glyph = AppearanceGlyph { icon, ink: if hovered { t.text } else { t.icon } };
+    let anchor = IconButton::new(IconSpec::glyph(&glyph)).id(id).label(tip.clone()).tooltip(tip).show_at(ui, r);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    let resp = &anchor.response;
+    crate::widgets::register_response("icon:appearance", r, resp);
+    // SDK primary activation includes keyboard and accessibility. Its rewritten CLICKED flag
+    // is not egui's secondary-click flag. Read the *same* registered widget for that verdict;
+    // this does not create another hit target or consume/replay an event.
+    let secondary = ui.ctx().read_response(id).is_some_and(|raw| raw.enabled() && raw.secondary_clicked());
+    let primary = anchor.clicked();
+    if primary {
         let _ = app.run("view.appearance", json!({}));
     }
-    crate::widgets::context_menu(&resp, |ui| {
-        let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
-        register(ui, "menu:appearanceSettings", settings.rect);
-        if settings.clicked() {
-            let _ = app.run("app.settings", json!({"tab": "interface"}));
-            ui.close();
-        }
-        let favorites = app.ui.settings.favorite_themes.clone();
-        for dark in [false, true] {
-            let group: Vec<_> =
-                crate::theme::ThemeKind::ALL.iter().filter(|k| k.is_dark() == dark && favorites.iter().any(|id| id == k.id())).collect();
-            if !group.is_empty() {
-                ui.separator();
-            }
-            for kind in group {
-                let r = ui.selectable_label(app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind, crate::i18n::tr(kind.label()));
-                register(ui, format!("menu:themeFavorite-{}", kind.id()), r.rect);
-                if r.clicked() {
-                    let _ = app.run("view.theme", json!({"theme": kind.id()}));
-                    ui.close();
+    let enabled = ui.is_enabled();
+    let key = resp.id.with("appearance-menu-open");
+    let mut open = ui.ctx().data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+    // Only a click won by the icon may open the menu, not an arbitrary release over it.
+    // The menu and its opener now share the SDK focus registry.
+    if secondary && crate::widgets::carrying(ui.ctx()) {
+        return;
+    }
+    if secondary && enabled {
+        open = true;
+    } else if primary {
+        open = false;
+    }
+    let shown = Menu::context(crate::i18n::tr("Appearance Mode").to_owned(), resp).id_salt("appearance-context").open(Bind::bound(&mut open)).show(
+        ui,
+        |ui, _| {
+            let live = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+            let row = MenuItem::new(crate::i18n::tr("Appearance Settings…").to_owned()).id_salt("menu:appearanceSettings").enabled(enabled).show(ui);
+            if live {
+                crate::widgets::register_response("menu:appearanceSettings", row.response.rect, &row.response);
+                if row.ran {
+                    let _ = app.run("app.settings", json!({"tab": "interface"}));
                 }
             }
+            let favorites = &app.ui.settings.favorite_themes;
+            let selected = app.ui.settings.theme(app.system_theme(ui.ctx()));
+            let mut choice = None;
+            for dark in [false, true] {
+                let mut first = true;
+                for kind in crate::theme::ThemeKind::ALL.iter().filter(|kind| kind.is_dark() == dark && favorites.iter().any(|id| id == kind.id())) {
+                    if first {
+                        ui.separator();
+                        first = false;
+                    }
+                    let id = format!("menu:themeFavorite-{}", kind.id());
+                    let row =
+                        MenuItem::new(crate::i18n::tr(kind.label()).to_owned()).id_salt(kind.id()).check(selected == *kind).enabled(enabled).show(ui);
+                    if live {
+                        crate::widgets::register_response(id, row.response.rect, &row.response);
+                        if row.ran {
+                            choice = Some(kind.id());
+                        }
+                    }
+                }
+            }
+            if let Some(theme) = choice {
+                let _ = app.run("view.theme", json!({"theme": theme}));
+            }
+        },
+    );
+    ui.ctx().data_mut(|data| {
+        if open && shown.output.closed.is_none() {
+            data.insert_temp(key, true);
+        } else {
+            data.remove::<bool>(key);
         }
     });
 }
@@ -287,3 +347,7 @@ fn unsaved_tip(n: usize, e: &str) -> String {
         n = n
     )
 }
+
+#[cfg(test)]
+#[path = "appearance_settings_menu_port_tests.rs"]
+mod appearance_settings_menu_port_tests;

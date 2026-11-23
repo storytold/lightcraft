@@ -11,10 +11,33 @@
 //! `albumPicker:<id>` (the button), `albumPickerSearch:<id>`, `albumPickerFolder:<folder>:<id>`
 //! and `albumPickerItem:<album>:<id>`.
 
+use craft::theme::Variant;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::controls::disclosure::DisclosureGlyph;
+use craft::ui::primitives::{Glyph, HAlign, IconSpec};
 use egui::{Rect, Response, RichText, Ui, vec2};
 
 use crate::icons::Icon;
-use crate::widgets::register;
+/// Do not publish invisible SDK layout probes as real automation targets.
+fn register(ui: &Ui, id: impl Into<String>, response: &Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+fn measuring(ui: &Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// Reuse LightCraft's original artwork in the SDK face; no extra interaction or focus stop.
+struct AlbumIcon(Icon);
+
+impl Glyph for AlbumIcon {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, color: egui::Color32, _: bool) {
+        crate::icons::paint(painter, rect, self.0, color);
+    }
+}
 
 /// One row of the picker: an album, a smart album or a folder.
 #[derive(Clone, Debug, PartialEq)]
@@ -146,16 +169,6 @@ pub fn search(entries: &[AlbumEntry], query: &str) -> Vec<usize> {
     first.into_iter().chain(rest).collect()
 }
 
-/// A disclosure chevron centred on `c`: pointing down (`down`), else right.
-fn disclosure(p: &egui::Painter, c: egui::Pos2, down: bool, color: egui::Color32) {
-    crate::icons::paint(
-        p,
-        Rect::from_center_size(c, vec2(16.0, 16.0)),
-        if down { crate::icons::Icon::ChevronDown } else { crate::icons::Icon::ChevronRight },
-        color,
-    );
-}
-
 /// What the open popup remembers between frames.
 #[derive(Clone, Default)]
 struct State {
@@ -164,6 +177,7 @@ struct State {
     /// The highlighted search result (↑ / ↓, Enter).
     highlight: usize,
     focus: bool,
+    popup_open: bool,
 }
 
 /// The popup's maximum height: the search field and the list.
@@ -209,21 +223,34 @@ impl<'a> AlbumPicker<'a> {
         let AlbumPicker { id, value, entries, width, empty_text } = self;
         let chosen = value.filter(|v| entries.iter().any(|e| e.id == *v && !e.folder));
         let text = chosen.map_or_else(|| empty_text.unwrap_or_else(|| crate::i18n::tr("Choose an album…").to_string()), |c| path_label(entries, c));
-        // the name, and a drop-down arrow painted at the right (the UI font has no arrow glyph)
-        let mut button =
-            ui.add_sized(vec2(width, ui.spacing().interact_size.y), egui::Button::new(text.as_str()).truncate().right_text(" ")).on_hover_text(text);
-        let arrow_color = crate::theme::Tokens::get(ui.ctx()).icon;
-        disclosure(ui.painter(), egui::pos2(button.rect.right() - 10.0, button.rect.center().y), true, arrow_color);
-        register(ui, format!("albumPicker:{id}"), button.rect);
-        let key = egui::Id::unique(("albumPicker", id.as_str()));
-        if button.clicked() {
-            // open on the chosen album's folders, with the search empty and ready for typing
-            let open = chosen.map(|c| ancestors(entries, c)).unwrap_or_default();
-            ui.data_mut(|d| d.insert_temp(key, State { open, focus: true, ..Default::default() }));
+        let size = vec2(width.min(ui.available_width()).max(1.0), ui.spacing().interact_size.y.max(24.0));
+        // A caller may measure the whole picker in an SDK body. It must not open a popup, run
+        // caller choices, claim focus, register hits, or replace the real popup/search state.
+        if measuring(ui) {
+            return ui.allocate_exact_size(size, egui::Sense::hover()).1;
         }
-        let state: State = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let mut button = Button::new(text.clone())
+            .id(egui::Id::unique(("albumPickerButton", id.as_str())))
+            .trailing_icon(DisclosureGlyph::dropdown())
+            .show_at(ui, rect);
+        button.response = button.response.on_hover_text(text);
+        register(ui, format!("albumPicker:{id}"), &button.response);
+        let key = egui::Id::unique(("albumPicker", id.as_str()));
+        let mut state: State = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+        if button.clicked() {
+            // Explicit SDK activation drives the legacy popup host, including long releases and
+            // keyboard activation; never narrow it back to egui's independent click predicate.
+            state.popup_open = !state.popup_open;
+            if state.popup_open {
+                let open = chosen.map(|c| ancestors(entries, c)).unwrap_or_default();
+                state = State { open, focus: true, popup_open: true, ..Default::default() };
+            }
+        }
+        let mut popup_open = state.popup_open;
         let state = std::cell::RefCell::new(state);
-        let picked = craft_ui::combo::Menu::new(ui, &button)
+        let picked = craft_ui::combo::Menu::new(ui, &button.response)
+            .open(&mut popup_open)
             .height(MENU_HEIGHT)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show_ui_with_header(
@@ -243,9 +270,15 @@ impl<'a> AlbumPicker<'a> {
                         return true;
                     }
                     let mut state = state.borrow_mut();
-                    let search_box =
-                        ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(crate::i18n::tr("Search albums")).desired_width(f32::INFINITY));
-                    register(ui, format!("albumPickerSearch:{id}"), search_box.rect);
+                    // This editor's Enter remains available to the existing path-search navigator;
+                    // Escape belongs to this popup, not the surrounding Import/rules dialog.
+                    let search_box = ui.add(
+                        egui::TextEdit::singleline(&mut state.query)
+                            .id(key.with("search"))
+                            .hint_text(crate::i18n::tr("Search albums"))
+                            .desired_width(f32::INFINITY),
+                    );
+                    register(ui, format!("albumPickerSearch:{id}"), &search_box);
                     if state.focus {
                         search_box.request_focus();
                         state.focus = false;
@@ -261,30 +294,32 @@ impl<'a> AlbumPicker<'a> {
                         return picked;
                     }
                     let mut state = state.borrow_mut();
-                    let t = crate::theme::Tokens::get(ui.ctx());
                     // `scroll`: bring the row into view (the arrow keys just moved to it); never every frame,
                     // which would fight the mouse wheel
                     let row = |ui: &mut Ui, e: &AlbumEntry, label: &str, indent: f32, highlighted: bool, scroll: bool, picked: &mut Option<u64>| {
-                        ui.horizontal(|ui| {
-                            ui.add_space(indent);
-                            let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
-                            let icon = if e.smart { Icon::SmartAlbum } else { Icon::Album };
-                            crate::icons::paint(ui.painter(), r, icon, if e.blocked.is_some() { t.text_disabled } else { t.icon });
-                            let resp = ui
-                                .add_enabled(e.blocked.is_none(), egui::Button::selectable(Some(e.id) == chosen || highlighted, label).truncate())
-                                .on_hover_text(label);
-                            register(ui, format!("albumPickerItem:{}:{id}", e.id), resp.rect);
-                            let resp = match &e.blocked {
-                                Some(why) => resp.on_disabled_hover_text(why.as_str()),
-                                None => resp,
-                            };
-                            if resp.clicked() {
-                                *picked = Some(e.id);
-                            }
-                            if scroll {
-                                resp.scroll_to_me(None);
-                            }
-                        });
+                        let (rect, _) =
+                            ui.allocate_exact_size(vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
+                        let rect = Rect::from_min_max(rect.min + vec2(indent.min((rect.width() - 1.0).max(0.0)), 0.0), rect.max);
+                        let icon = AlbumIcon(if e.smart { Icon::SmartAlbum } else { Icon::Album });
+                        let mut row = Button::new(label.to_owned())
+                            .id(egui::Id::unique(("albumPickerItem", id.as_str(), e.id)))
+                            .variant(Variant::GHOST)
+                            .align(HAlign::Start)
+                            .icon(IconSpec::glyph(&icon))
+                            .selected(Some(e.id) == chosen || highlighted)
+                            .enabled(e.blocked.is_none())
+                            .show_at(ui, rect);
+                        row.response = row.response.on_hover_text(label);
+                        if let Some(why) = &e.blocked {
+                            row.response = row.response.on_disabled_hover_text(why.as_str());
+                        }
+                        register(ui, format!("albumPickerItem:{}:{id}", e.id), &row.response);
+                        if row.clicked() {
+                            *picked = Some(e.id);
+                        }
+                        if scroll {
+                            row.response.scroll_to_me(None);
+                        }
                     };
                     {
                         if state.query.trim().is_empty() {
@@ -292,33 +327,24 @@ impl<'a> AlbumPicker<'a> {
                                 let e = &entries[i];
                                 let indent = e.depth as f32 * 16.0;
                                 if e.folder {
-                                    // a folder row folds and unfolds, like the sidebar's: triangle, icon, name
+                                    // The SDK row owns the whole disclosure action, including its keyboard focus.
                                     let open = state.open.contains(&e.id);
-                                    let height = ui.spacing().interact_size.y;
-                                    let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click());
-                                    if r.hovered() {
-                                        ui.painter().rect_filled(rect, 3.0, t.hover);
-                                    }
-                                    let x = rect.left() + indent;
-                                    disclosure(
-                                        ui.painter(),
-                                        egui::pos2(x + 7.0, rect.center().y),
-                                        open,
-                                        if r.hovered() { t.text } else { t.text_dim },
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)),
+                                        egui::Sense::hover(),
                                     );
-                                    let icon = egui::Rect::from_center_size(egui::pos2(x + 23.0, rect.center().y), vec2(14.0, 14.0));
-                                    crate::icons::paint(ui.painter(), icon, Icon::Folder, t.icon);
-                                    ui.painter().text(
-                                        egui::pos2(x + 36.0, rect.center().y),
-                                        egui::Align2::LEFT_CENTER,
-                                        &e.name,
-                                        egui::TextStyle::Button.resolve(ui.style()),
-                                        t.text_label,
-                                    );
-                                    register(ui, format!("albumPickerFolder:{}:{id}", e.id), r.rect);
-                                    // what assistive tools announce: the folder, and whether it is open
-                                    let name = e.name.clone();
-                                    crate::widgets::announce_disclosure(&r, true, open, &name);
+                                    let rect = Rect::from_min_max(rect.min + vec2(indent.min((rect.width() - 1.0).max(0.0)), 0.0), rect.max);
+                                    let icon = AlbumIcon(Icon::Folder);
+                                    let arrow = DisclosureGlyph::new(if open { 1.0 } else { 0.0 });
+                                    let r = Button::new(e.name.clone())
+                                        .id(egui::Id::unique(("albumPickerFolder", id.as_str(), e.id)))
+                                        .variant(Variant::GHOST)
+                                        .align(HAlign::Start)
+                                        .icon(IconSpec::glyph(&icon))
+                                        .trailing_icon(IconSpec::glyph(&arrow))
+                                        .show_at(ui, rect);
+                                    register(ui, format!("albumPickerFolder:{}:{id}", e.id), &r.response);
+                                    crate::widgets::announce_disclosure(&r.response, true, open, &e.name);
                                     if r.clicked() {
                                         // the click took the keyboard from the search box: give it back
                                         state.focus = true;
@@ -329,8 +355,8 @@ impl<'a> AlbumPicker<'a> {
                                         }
                                     }
                                 } else {
-                                    // past the triangle column, so names line up with folder names
-                                    row(ui, e, &e.name, indent + 14.0, false, false, &mut picked);
+                                    // The shared SDK icon column aligns album and folder names.
+                                    row(ui, e, &e.name, indent, false, false, &mut picked);
                                 }
                             }
                             if entries.iter().all(|e| e.folder) {
@@ -386,14 +412,20 @@ impl<'a> AlbumPicker<'a> {
                 },
             )
             .flatten();
-        ui.data_mut(|d| d.insert_temp(key, state.into_inner()));
+        let mut state = state.into_inner();
+        state.popup_open = popup_open;
+        ui.data_mut(|d| d.insert_temp(key, state));
         if let Some(p) = picked {
             *value = Some(p);
-            button.mark_changed();
+            button.response.mark_changed();
         }
-        button
+        button.response
     }
 }
+
+#[cfg(test)]
+#[path = "album_picker/tests.rs"]
+mod sdk_tests;
 
 #[cfg(test)]
 mod tests {

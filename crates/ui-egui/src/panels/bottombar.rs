@@ -45,7 +45,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         ui.painter().rect_filled(sep, 0.0, t.button_border);
                         ui.add_space(10.0);
                         let sort = icon_button(ui, "sort", Icon::Sort, vec2(30.0, 30.0), false, true, "Sort");
-                        egui::Popup::menu(&sort).show(|ui| sort_menu(app, ui));
+                        let sort_live = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                        let sort_enabled = ui.is_enabled();
+                        sort.menu().show(|ui| sort_menu(app, ui, sort_live, sort_enabled));
                     } else {
                         let current_icon = VIEW_MODES.iter().find(|(_, _, mode, _)| *mode == app.ui.view).map_or(Icon::More, |(_, icon, _, _)| *icon);
                         let more = icon_button(ui, "viewOptions", current_icon, vec2(40.0, 32.0), true, true, "View");
@@ -55,7 +57,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             Icon::ChevronDown,
                             t.text,
                         );
-                        egui::Popup::menu(&more).show(|ui| {
+                        let sort_live = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                        let sort_enabled = ui.is_enabled();
+                        more.menu().show(|ui| {
                             for &(id, _, mode, label) in VIEW_MODES {
                                 if ui.selectable_label(app.ui.view == mode, crate::i18n::tr(label)).clicked() {
                                     let _ = app.run(&format!("view.{id}"), json!({}));
@@ -63,7 +67,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                                 }
                             }
                             ui.separator();
-                            crate::widgets::menu_button(ui, crate::i18n::tr("Sort"), |ui| sort_menu(app, ui));
+                            crate::widgets::menu_button(ui, crate::i18n::tr("Sort"), |ui| sort_menu(app, ui, sort_live, sort_enabled));
                             if compact_zoom && matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
                                 crate::widgets::menu_button(ui, crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100), |ui| {
                                     click_zoom_menu(app, ui)
@@ -114,6 +118,55 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     pill_ui.add_space(6.0);
     let flag = active.as_ref().map(|p| p.flag).unwrap_or_default();
     for (id, icon, f) in [("unflag", Icon::Circle, Flag::None), ("pick", Icon::FlagPick, Flag::Pick), ("reject", Icon::FlagReject, Flag::Reject)] {
+        if f == Flag::Pick && !crate::panels::settings::native_controls_active(pill_ui.ctx()) {
+            use craft::ui::contract::{Props as _, Show as _};
+            let generation = app.session.library_generation();
+            let active = app.session.active();
+            let selection = app.session.selected();
+            let culling = crate::panels::compare::culling(app);
+            let owner = egui::Id::unique(("lc-bottom-pick", generation, active, &selection, culling));
+            // Keep the original allocation slot; only Pick's actual sensing belongs to the SDK.
+            let (_, rect) = pill_ui.allocate_space(vec2(22.0, 22.0));
+            let real = !pill_ui.is_sizing_pass() && !craft::ui::runtime::measure::active(pill_ui.ctx());
+            let enabled = pill_ui.is_enabled();
+            let hovered = pill_ui.ctx().read_response(owner).is_some_and(|response| response.hovered());
+            let selected = flag == Flag::Pick;
+            let glyph = PickGlyph {
+                selected,
+                ink: if selected {
+                    t.pick
+                } else if hovered {
+                    t.text
+                } else {
+                    t.icon
+                },
+            };
+            // A measuring press must never arm a later real release: disable before SDK sensing.
+            let shown = craft::ui::buttons::IconButton::new(craft::ui::primitives::IconSpec::glyph(&glyph))
+                .id(owner)
+                .label(crate::i18n::tr("Pick"))
+                .selected(selected)
+                .enabled(real && enabled)
+                .show_at(&mut pill_ui, rect);
+            if real {
+                crate::widgets::register_response("flag:pick", shown.response.rect, &shown.response);
+            }
+            if real
+                && enabled
+                && pill_ui.is_visible()
+                && pill_ui.clip_rect().intersects(shown.response.rect)
+                && shown.clicked()
+                && app.session.library_generation() == generation
+                && app.session.active() == active
+                && app.session.selected() == selection
+                && crate::panels::compare::culling(app) == culling
+            {
+                let mut params = json!({"flag": "pick"});
+                crate::panels::compare::target_active(app, &mut params);
+                let _ = app.run("photo.flag", params);
+            }
+            continue;
+        }
         let (r, resp) = pill_ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
         crate::widgets::announce_selected(
             &resp,
@@ -146,6 +199,12 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     if !with_copy {
         return;
     }
+    if !crate::panels::settings::native_controls_active(ui.ctx()) {
+        let copy_r = Rect::from_min_size(pos2(pill.right() + 10.0, pill.top()), vec2(copy_width, 30.0));
+        let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
+        settings_transfer_sdk(app, ui, &t, copy_r, gear_r, label, active.is_some());
+        return;
+    }
     let copy_r = Rect::from_min_size(pos2(pill.right() + 10.0, pill.top()), vec2(copy_width, 30.0));
     let cresp = ui.interact(copy_r, egui::Id::unique("copy-settings"), Sense::click());
     crate::widgets::announce(&cresp, label.to_string());
@@ -165,6 +224,93 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     paint(ui.painter(), gear_r.shrink(7.0), Icon::Gear, t.icon);
     if gresp.clicked() {
         let _ = app.run("dialog.copySettings", json!({}));
+    }
+}
+
+// A held transfer belongs to its library, active source, ordered selection, view context,
+// clipboard contents and chosen groups. Hash the existing values, not a fabricated UI epoch.
+fn settings_transfer_owner(app: &LightcraftApp) -> egui::Id {
+    egui::Id::unique((
+        "lc-bottom-settings-transfer",
+        app.session.library_generation(),
+        app.session.active(),
+        app.session.selected(),
+        crate::panels::compare::culling(app),
+        &app.session.clipboard,
+        &app.session.copy_groups,
+    ))
+}
+
+fn settings_transfer_sdk(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, copy_r: Rect, gear_r: Rect, label: &str, can_copy: bool) {
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let enabled = ui.is_enabled();
+    let has_clip = app.session.clipboard.is_some();
+    let mut context = settings_transfer_owner(app);
+    // Disable before sensing: a measuring/sizing press must not arm an ordinary release.
+    let primary = craft::ui::buttons::Button::new(label.to_owned())
+        .id(context.with("primary"))
+        .variant(craft::theme::Variant::GHOST)
+        .enabled(real && enabled && can_copy)
+        .show_at(ui, copy_r);
+    crate::widgets::register_response("button:copySettings", primary.response.rect, &primary.response);
+    if real
+        && enabled
+        && can_copy
+        && ui.is_visible()
+        && ui.clip_rect().intersects(primary.response.rect)
+        && primary.clicked()
+        && settings_transfer_owner(app) == context
+    {
+        // Paste remains selection-wide in Compare. Do not use Pick's target_active adapter.
+        let _ = if has_clip { app.run("develop.paste", json!({})) } else { app.run("develop.copy", json!({})) };
+        let msg = if has_clip { "Settings pasted" } else { "Edit settings copied" };
+        app.toast(ui.ctx(), crate::i18n::tr(msg));
+        context = settings_transfer_owner(app);
+    }
+    let glyph = SettingsGearGlyph { ink: t.icon };
+    let gear = craft::ui::buttons::IconButton::new(craft::ui::primitives::IconSpec::glyph(&glyph))
+        .id(context.with("gear"))
+        .label(crate::i18n::tr("Copy Settings…"))
+        // Keep the native gear's policy: it does not itself require an active photo.
+        .enabled(real && enabled)
+        .show_at(ui, gear_r);
+    crate::widgets::register_response("icon:copyGear", gear.response.rect, &gear.response);
+    if real
+        && enabled
+        && ui.is_visible()
+        && ui.clip_rect().intersects(gear.response.rect)
+        && gear.clicked()
+        && settings_transfer_owner(app) == context
+    {
+        let _ = app.run("dialog.copySettings", json!({}));
+    }
+}
+
+// Only the app's existing glyph ink/geometry is local; the SDK owns all interaction.
+struct SettingsGearGlyph {
+    ink: egui::Color32,
+}
+impl craft::ui::primitives::Glyph for SettingsGearGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, _: egui::Color32, _: bool) {
+        paint(painter, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::Gear, self.ink);
+    }
+}
+
+// Preserve LightCraft's filled/outlined Pick drawing inside the public SDK IconButton.
+// This glyph has no sensing, event handling, component state or command binding.
+struct PickGlyph {
+    selected: bool,
+    ink: egui::Color32,
+}
+impl craft::ui::primitives::Glyph for PickGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, _: egui::Color32, _: bool) {
+        paint(
+            painter,
+            Rect::from_center_size(rect.center(), vec2(16.0, 16.0)),
+            if self.selected { Icon::FlagPickFilled } else { Icon::FlagPick },
+            self.ink,
+        );
     }
 }
 
@@ -302,7 +448,21 @@ fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+/// One checked sort option in the retained native popup. The SDK owns its focus and hit target.
+fn sort_choice(ui: &mut egui::Ui, id: &str, label: &str, checked: bool) -> bool {
+    use craft::ui::contract::{Props as _, Show as _};
+    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+    let row = craft::ui::menu::MenuItem::new(crate::i18n::tr(label).to_owned())
+        .id_salt(id).entry_checked(checked).enabled(ui.is_enabled() && !measuring).show(ui);
+    if measuring { return false; }
+    crate::widgets::register_response(id, row.response.rect, &row.response);
+    ui.is_enabled() && row.ran
+}
+
+fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, live: bool, enabled: bool) {
+    if !live { return; }
+    if !enabled { ui.disable(); }
+    use craft::ui::contract::{Props as _, Show as _};
     use lightcraft_catalog::GroupBy;
     use lightcraft_catalog::SortKey::*;
     let cur = app.session.sort;
@@ -316,28 +476,37 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("File Size", FileSize, "fileSize"),
         ("Random", Random, "random"),
     ] {
-        if ui.selectable_label(cur.key == key, crate::i18n::tr(label)).clicked() {
+        if sort_choice(ui, &format!("sort:key:{k}"), label, cur.key == key) {
             let _ = app.run("library.sort", json!({"key": k}));
         }
     }
-    if cur.key == Random && ui.button(crate::i18n::tr("Reshuffle")).clicked() {
-        let _ = app.run("library.shuffle", json!({}));
+    // These SDK rows live inside the existing native egui popup. The caller owns
+    // command dispatch and closing that popup, not the SDK command registry.
+    if cur.key == Random {
+        let row = craft::ui::menu::MenuItem::new(crate::i18n::tr("Reshuffle")).id_salt("sort-reshuffle").show(ui);
+        if row.ran && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            let _ = app.run("library.shuffle", json!({}));
+            ui.close();
+        }
     }
     // a view that holds its photos shows what matches now when asked to
     if app.session.hold_view {
-        let r = ui.button(crate::i18n::tr("Refresh View"));
-        crate::widgets::register(ui, "button:refreshView", r.rect);
-        if r.clicked() {
-            let _ = app.run("library.refresh", json!({}));
+        let row = craft::ui::menu::MenuItem::new(crate::i18n::tr("Refresh View")).id_salt("sort-refresh-view").show(ui);
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            crate::widgets::register_response("button:refreshView", row.response.rect, &row.response);
+            if row.ran {
+                let _ = app.run("library.refresh", json!({}));
+                ui.close();
+            }
         }
     }
     ui.separator();
     // a shuffle has no direction worth choosing
     ui.add_enabled_ui(cur.key != Random, |ui| {
-        if ui.selectable_label(cur.key != Random && cur.ascending, crate::i18n::tr("Ascending")).clicked() {
+        if sort_choice(ui, "sort:ascending", "Ascending", cur.key != Random && cur.ascending) {
             let _ = app.run("library.sort", json!({"ascending": true}));
         }
-        if ui.selectable_label(cur.key != Random && !cur.ascending, crate::i18n::tr("Descending")).clicked() {
+        if sort_choice(ui, "sort:descending", "Descending", cur.key != Random && !cur.ascending) {
             let _ = app.run("library.sort", json!({"ascending": false}));
         }
     });
@@ -350,7 +519,7 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("Year", GroupBy::Year, "year"),
         ("None", GroupBy::None, "none"),
     ] {
-        if ui.selectable_label(cur.group == g, crate::i18n::tr(label)).clicked() {
+        if sort_choice(ui, &format!("sort:group:{k}"), label, cur.group == g) {
             let _ = app.run("library.sort", json!({"group": k}));
         }
     }
@@ -553,3 +722,15 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bottombar/sort_popup_external_20261119.rs"]
+mod sort_popup_external_20261119;
+
+#[cfg(test)]
+#[path = "bottombar/pick_flow_tests.rs"]
+mod pick_flow_tests;
+
+#[cfg(test)]
+#[path = "bottombar/copy_paste_flow_tests.rs"]
+mod copy_paste_flow_tests;

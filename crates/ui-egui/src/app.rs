@@ -9,11 +9,13 @@ use super::{
     merge, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
 
+mod completion;
 mod control;
 mod frame;
 mod input;
 mod prefs;
 mod screenshot;
+mod shell;
 
 #[cfg(test)]
 pub(crate) use frame::import_tick_allowed;
@@ -21,6 +23,28 @@ pub(crate) use frame::import_tick_allowed;
 pub(crate) use screenshot::shot_ready;
 
 impl LightcraftApp {
+    /// Installs the framework runtime before this context's first pass and supplies the shell's
+    /// presentation values. It does not replace LightCraft's fonts, commands or saved workspace.
+    pub fn install_framework(&self, ctx: &egui::Context) {
+        self.try_install_framework(ctx).expect("LightCraft requires the UI runtime before the first pass");
+    }
+
+    /// A host must not report successful startup with an unsensed SDK shell or About dialog.
+    pub fn try_install_framework(&self, ctx: &egui::Context) -> Result<(), String> {
+        let mut spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+        ctx.options(|options| {
+            spec.wheel.zoom = options.input_options.zoom_modifier;
+            spec.wheel.sideways = options.input_options.horizontal_scroll_modifier;
+        });
+        match craft::ui::install(ctx, spec) {
+            Ok(()) | Err(craft::ui::InstallError::AlreadyInstalled) => {}
+            Err(error) => return Err(format!("Cannot install the LightCraft UI runtime: {error}")),
+        }
+        completion::install(ctx);
+        shell::prepare(self, ctx);
+        Ok(())
+    }
+
     /// Build the app with default UI, renderer, cache and control state, and move AI segmentation
     /// to a worker so frames apply results instead of waiting.
     pub fn new(mut session: Session, services: Services) -> Self {
@@ -646,6 +670,7 @@ impl LightcraftApp {
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.drain_ui_completions(ctx);
         self.sync_prep_settings();
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
@@ -695,6 +720,7 @@ impl LightcraftApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
+        self.drain_ui_completions(&ctx);
         if !self.fonts_ready {
             ctx.request_repaint();
             return;
@@ -702,7 +728,7 @@ impl LightcraftApp {
         self.sync_theme(&ctx);
         self.ui_pass(&ctx);
         self.draw_window(ui);
-        self.finish_ui_pass(&ctx);
+        self.capture_ui_completion(&ctx);
     }
 }
 

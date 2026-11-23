@@ -6,15 +6,25 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Divider;
+use craft::ui::menu::{Menu, MenuItem};
+
+use egui::{Align2, Rect, Sense, pos2, vec2};
 use lightcraft_develop::{ControlSpec, Preset, Section, Track};
 use lightcraft_engine::presets::PresetList;
 use serde_json::json;
 
-use crate::icons::{Icon, paint};
+use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, register, slider};
 use crate::{HoverPreview, LightcraftApp};
+
+mod sdk;
+
+#[cfg(test)]
+#[path = "presets/preset_options_external_20261119.rs"]
+mod preset_options_external_20261119;
 
 /// Long edge of preset thumbnails (px).
 const THUMB_EDGE: usize = 128;
@@ -85,6 +95,7 @@ impl AppliedByPhoto {
 /// The Presets panel: the Favorites section of starred presets on top (issue #1999), then the
 /// groups of built-in and user presets, each row applying its preset on click.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let measuring = craft::ui::runtime::measure::active(ui.ctx());
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -105,22 +116,68 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             crate::i18n::tr("Create Preset…"),
         )
         .clicked()
+            && !measuring
         {
             app.ui.dialog = Some(crate::state::Dialog::create_preset());
         }
         let more = icon_button(&mut hdr, "presetMore", Icon::More, vec2(28.0, 28.0), false, true, crate::i18n::tr("More preset options"));
-        egui::Popup::menu(&more).show(|ui| {
-            let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
-            register(ui, "presetMenu:thumbnails", r.rect);
-            ui.separator();
-            if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
-                let _ = app.run("file.importPresets", json!({}));
+        if !measuring && !ui.is_sizing_pass() {
+            let pass = ui.ctx().cumulative_pass_nr();
+            let open_id = more.response.id.with("preset-options-open");
+            let mut open = ui.data(|data| data.get_temp::<(u64, bool)>(open_id))
+                .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
+                .is_some_and(|(_, open)| open);
+            // Use the compact SDK button's activation, including keyboard and long release.
+            // Manual avoids a second toggle from the popup's external pointer-press trigger.
+            if more.clicked() {
+                open = !open;
             }
-            let any_user = app.session.presets.iter().any(|p| !p.builtin);
-            if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
-                let _ = app.run("file.exportPresets", json!({}));
-            }
-        });
+            Menu::new(crate::i18n::tr("More preset options").to_owned())
+                .id_salt("preset-options-menu")
+                .opened_by(&more.response, craft::ui::contract::Trigger::Manual)
+                .open(Bind::bound(&mut open))
+                .show(ui, |ui, _| {
+                    // The SDK measures popup bodies separately; the outer panel guard is not enough.
+                    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+                    let thumbs = MenuItem::new(crate::i18n::tr("Show Thumbnails"))
+                        .id_salt("preset-options-thumbnails")
+                        .check(app.ui.preset_thumbs)
+                        .keep_open(true)
+                        .show(ui);
+                    if !measuring {
+                        crate::widgets::register_response("presetMenu:thumbnails", thumbs.response.rect, &thumbs.response);
+                        if thumbs.ran {
+                            app.ui.preset_thumbs = !app.ui.preset_thumbs;
+                        }
+                    }
+                    Divider::horizontal().show(ui);
+                    let import = MenuItem::new(crate::i18n::tr("Import Presets…")).id_salt("preset-options-import").show(ui);
+                    if !measuring {
+                        crate::widgets::register_response("presetMenu:import", import.response.rect, &import.response);
+                        if import.ran {
+                            let _ = app.run("file.importPresets", json!({}));
+                        }
+                    }
+                    let any_user = app.session.presets.iter().any(|p| !p.builtin);
+                    let export = MenuItem::new(crate::i18n::tr("Export User Presets…"))
+                        .id_salt("preset-options-export")
+                        .enabled(any_user)
+                        .show(ui);
+                    if !measuring {
+                        crate::widgets::register_response("presetMenu:export", export.response.rect, &export.response);
+                        if export.ran {
+                            let _ = app.run("file.exportPresets", json!({}));
+                        }
+                    }
+                });
+            ui.data_mut(|data| {
+                if open {
+                    data.insert_temp(open_id, (pass, true));
+                } else {
+                    data.remove::<(u64, bool)>(open_id);
+                }
+            });
+        }
         divider(ui);
         // amount slider (applies to the last applied preset)
         let amt_id = egui::Id::unique("preset-amount");
@@ -139,6 +196,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             };
             let out = slider(ui, &spec, last.amount, true, None);
             if let Some(v) = out.value
+                && !measuring
                 && app.run("edit.undo", json!({})).is_ok()
             {
                 // Only replace the most recent preset; never undo intervening edits.
@@ -151,7 +209,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             }
             divider(ui);
-        } else if last.is_some_and(|last| last.is_stale(&app.session)) {
+        } else if !measuring && last.is_some_and(|last| last.is_stale(&app.session)) {
             // kept across a switch to another photo and back (the slider returns with it); gone once
             // a later edit, undo or redo owns the step
             ui.data_mut(|d| d.remove::<AppliedPreset>(amt_id));
@@ -171,29 +229,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 // the Favorites section opens and closes apart from a user group named "Favorites"
                 let open_id = egui::Id::unique(("preset-group", favorites, &g));
                 let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                crate::widgets::announce(&resp, g.to_string());
+                let (_, r) = ui.allocate_space(vec2(ui.available_width(), 32.0));
+                let shown = sdk::group_row(ui, r, favorites, &g, crate::i18n::builtin_label(&g, builtin).as_ref(), open);
+                let resp = shown.response;
                 // outside the `presetGroup:` ids, which a user group of any name can take
-                register(ui, if favorites { "presetFavorites".to_string() } else { format!("presetGroup:{g}") }, r);
-                paint(
-                    ui.painter(),
-                    Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(16.0, 16.0)),
-                    if open { Icon::ChevronDown } else { Icon::ChevronRight },
-                    t.text_label,
-                );
-                ui.painter().text(
-                    pos2(r.left() + 36.0, r.center().y),
-                    Align2::LEFT_CENTER,
-                    crate::i18n::builtin_label(&g, builtin),
-                    t.semibold(13.0),
-                    t.text_label,
-                );
-                if resp.clicked() {
-                    ui.data_mut(|d| d.insert_temp(open_id, !open));
+                if !measuring {
+                    crate::widgets::register_response(if favorites { "presetFavorites".to_string() } else { format!("presetGroup:{g}") }, r, &resp);
                 }
-                if !favorites {
-                    crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button(crate::i18n::tr("Export Group…")).clicked() {
+                if !measuring {
+                    if let Some(change) = shown.open {
+                        ui.data_mut(|d| d.insert_temp(open_id, change.open));
+                    } else if craft::ui::contract::clicked(&resp) {
+                        ui.data_mut(|d| d.insert_temp(open_id, !open));
+                    }
+                }
+                if !favorites && !measuring {
+                    sdk::context_menu(ui, &resp, &g, |ui| {
+                        if MenuItem::new(crate::i18n::tr("Export Group…")).show(ui).ran {
                             let _ = app.run("file.exportPresets", json!({"group": g}));
                         }
                     });
@@ -208,41 +260,38 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 for &i in grp.items.get(first..end).unwrap_or_default() {
                     let Some(pr) = app.session.presets.get(i).cloned() else { continue };
                     let (pid, name, fav) = (pr.id.clone(), crate::i18n::builtin_label(&pr.name, pr.builtin).to_string(), pr.favorite);
-                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
-                    crate::widgets::announce(&resp, name.clone());
-                    // a starred preset is listed twice: in Favorites and in its group
-                    register(ui, if favorites { format!("presetFavorite:{pid}") } else { format!("preset:{pid}") }, r);
+                    let (_, r) = ui.allocate_space(vec2(ui.available_width(), row_h));
                     let is_last = marked.as_deref() == Some(pid.as_str());
-                    if is_last {
-                        register(ui, "presetApplied", r);
-                        ui.painter().rect_filled(r, 0.0, t.tool_active);
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.7));
-                    }
-                    // the preview is what a click commits: the same composition as `preset.apply` (`Session::preset_applied`)
-                    let look = if thumbs || resp.hovered() { active.and_then(|id| app.session.preset_applied(id, &pr, 1.0)) } else { None };
-                    let mut text_x = r.left() + 40.0;
-                    if thumbs && let (Some(id), Some(s)) = (active, look.as_ref()) {
-                        let tr = Rect::from_min_size(pos2(r.left() + 36.0, r.top() + 5.0), vec2(66.0, row_h - 10.0));
-                        ui.painter().rect_filled(tr, 2.0, t.canvas);
-                        if let Some(job) = app.session.variant_job(id, s, THUMB_EDGE)
-                            && let Some(tex) = app.renderer.variant(job)
-                        {
-                            ui.painter().image(tex.id(), tr, cover_uv(tr, tex.size), Color32::WHITE);
-                        }
-                        text_x = tr.right() + 10.0;
-                    }
-                    ui.painter().text(pos2(text_x, r.center().y), Align2::LEFT_CENTER, &name, t.font(13.0), t.text_label);
-                    if fav {
-                        crate::rating::paint_star(
-                            ui.painter(),
-                            Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0)),
-                            true,
-                            t.star,
+                    // The thumbnail and hover use the engine composition, never a UI-only approximation.
+                    let mut look = if thumbs && !measuring { active.and_then(|id| app.session.preset_applied(id, &pr, 1.0)) } else { None };
+                    let texture = if thumbs && !measuring {
+                        active.zip(look.as_ref()).and_then(|(id, settings)| {
+                            let job = app.session.variant_job(id, settings, THUMB_EDGE)?;
+                            app.renderer.variant(job).map(|texture| (texture.id(), texture.size))
+                        })
+                    } else {
+                        None
+                    };
+                    let resp =
+                        sdk::PresetRow { favorites, preset: &pid, label: &name, selected: is_last, favorite: fav, thumbnails: thumbs, texture }
+                            .show_at(ui, r);
+                    // Keep the actual SDK hit owner and egui's exact clipped interaction rect.
+                    if !measuring {
+                        crate::widgets::register_response(
+                            if favorites { format!("presetFavorite:{pid}") } else { format!("preset:{pid}") },
+                            r,
+                            &resp,
                         );
+                        if is_last {
+                            crate::widgets::register_response("presetApplied", r, &resp);
+                        }
+                    }
+                    if resp.hovered() && !measuring && look.is_none() {
+                        look = active.and_then(|id| app.session.preset_applied(id, &pr, 1.0));
                     }
                     // resting on a preset previews it in the loupe (no history entry)
-                    if resp.hovered()
+                    if !measuring
+                        && resp.hovered()
                         && let Some(s) = look
                     {
                         let label = crate::i18n::tr_format!("Preset: {name}", name = name);
@@ -251,56 +300,63 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
+                    if !measuring && craft::ui::contract::clicked(&resp) && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
-                    crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
-                            let _ = app.run("preset.favorite", json!({"id": pid}));
-                        }
-                        if builtin {
-                            return;
-                        }
-                        ui.separator();
-                        if ui
-                            .add_enabled(app.session.active().is_some(), egui::Button::new(crate::i18n::tr("Update with Current Settings")))
-                            .clicked()
-                        {
-                            match app.run("preset.update", json!({"id": pid})) {
-                                Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
-                                Err(e) => app.toast(ui.ctx(), e),
+                    if !measuring {
+                        sdk::context_menu(ui, &resp, &name, |ui| {
+                            if MenuItem::new(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).show(ui).ran {
+                                let _ = app.run("preset.favorite", json!({"id": pid}));
                             }
-                        }
-                        if ui.button(crate::i18n::tr("Rename…")).clicked() {
-                            crate::panels::dialogs::prompt(app, "Rename Preset", "Preset name", &name, "preset.rename", json!({"id": pid}), "name");
-                        }
-                        crate::widgets::menu_button(ui, crate::i18n::tr("Move to Group"), |ui| {
-                            for g in groups.iter().filter(|x| x.user && x.name != group).map(|x| &x.name) {
-                                if ui.button(g).clicked() {
-                                    let _ = app.run("preset.move", json!({"id": pid, "group": g}));
+                            if builtin {
+                                return;
+                            }
+                            Divider::horizontal().show(ui);
+                            if MenuItem::new(crate::i18n::tr("Update with Current Settings")).enabled(app.session.active().is_some()).show(ui).ran {
+                                match app.run("preset.update", json!({"id": pid})) {
+                                    Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
+                                    Err(e) => app.toast(ui.ctx(), e),
                                 }
                             }
-                            if ui.button(crate::i18n::tr("New Group…")).clicked() {
+                            if MenuItem::new(crate::i18n::tr("Rename…")).show(ui).ran {
                                 crate::panels::dialogs::prompt(
                                     app,
-                                    "Move Preset to New Group",
-                                    "Group name",
-                                    "",
-                                    "preset.move",
+                                    "Rename Preset",
+                                    "Preset name",
+                                    &name,
+                                    "preset.rename",
                                     json!({"id": pid}),
-                                    "group",
+                                    "name",
                                 );
                             }
+                            Menu::submenu_row(ui, crate::i18n::tr("Move to Group"), |ui, _| {
+                                for g in groups.iter().filter(|x| x.user && x.name != group).map(|x| &x.name) {
+                                    if MenuItem::new(g.clone()).show(ui).ran {
+                                        let _ = app.run("preset.move", json!({"id": pid, "group": g}));
+                                    }
+                                }
+                                if MenuItem::new(crate::i18n::tr("New Group…")).show(ui).ran {
+                                    crate::panels::dialogs::prompt(
+                                        app,
+                                        "Move Preset to New Group",
+                                        "Group name",
+                                        "",
+                                        "preset.move",
+                                        json!({"id": pid}),
+                                        "group",
+                                    );
+                                }
+                            });
+                            Divider::horizontal().show(ui);
+                            if MenuItem::new(crate::i18n::tr("Delete Preset")).show(ui).ran {
+                                let _ = app.run("preset.delete", json!({"id": pid}));
+                            }
                         });
-                        ui.separator();
-                        if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
-                            let _ = app.run("preset.delete", json!({"id": pid}));
-                        }
-                    });
+                    }
                 }
                 if end < grp.items.len() {
                     ui.allocate_space(vec2(ui.available_width(), (grp.items.len() - end) as f32 * row_h));
@@ -310,7 +366,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
         let last_hover_id = egui::Id::unique("last-preset-hover");
         let pointer_in_scroll = ui.ctx().input(|i| i.pointer.hover_pos()).is_some_and(|pos| scroll.inner_rect.contains(pos));
-        if pointer_in_scroll {
+        if !measuring && pointer_in_scroll {
             if app.hover_preview.is_none()
                 && let Some(id) = active
                 && let Some((saved_id, saved_preset, saved_label)) =
@@ -320,7 +376,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             {
                 app.hover_preview = Some(HoverPreview { label: saved_label, settings: s });
             }
-        } else {
+        } else if !measuring {
             ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id));
         }
     });
@@ -454,6 +510,280 @@ pub fn cover_uv(r: Rect, size: [usize; 2]) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    fn panel_harness(height: f32) -> Harness<'static, LightcraftApp> {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        app.ui.preset_thumbs = false;
+        // The production host installs the app's semibold/font families before its first pass.
+        // Installing the SDK alone is not a replacement for LightCraft's font setup.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        app.install_framework(&ctx);
+        let mut h = Harness::builder().with_context(ctx).with_size(vec2(320.0, height)).build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                crate::widgets::take_registries(ui.ctx());
+                app.hover_preview = None;
+                let measuring = ui.data(|d| d.get_temp::<bool>(egui::Id::unique("preset-test-measure"))).unwrap_or(false);
+                if measuring {
+                    craft::ui::runtime::measure::run(&ui.ctx().clone(), || super::show(app, ui));
+                } else {
+                    super::show(app, ui);
+                }
+                (app.widgets, app.widget_hits) = crate::widgets::take_registries(ui.ctx());
+            },
+            app,
+        );
+        h.run_steps(5);
+        h
+    }
+
+    fn first_row(h: &Harness<'_, LightcraftApp>) -> String {
+        h.state()
+            .widgets
+            .iter()
+            .find(|(id, rect)| id.starts_with("preset:") && rect.top() > 60.0 && rect.bottom() < 500.0)
+            .map(|(id, _)| id.clone())
+            .expect("visible real preset row")
+    }
+
+    fn pointer(h: &mut Harness<'_, LightcraftApp>, widget: &str, button: egui::PointerButton) {
+        let rect = h.state().widgets.iter().find(|(id, _)| id == widget).unwrap().1;
+        let pos = rect.center();
+        h.event(egui::Event::PointerMoved(pos));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos, button, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos, button, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+    }
+
+    #[test]
+    fn sdk_preset_pointer_applies_one_command_and_undo_restores_photo() {
+        let mut h = panel_harness(600.0);
+        let photo = h.state().session.active().unwrap();
+        let before = h.state().session.develop_of(photo).unwrap();
+        let row = first_row(&h);
+        let preset = h.state().session.presets.iter().find(|p| row == format!("preset:{}", p.id)).unwrap().clone();
+        let expected = h.state().session.preset_applied(photo, &preset, 1.0).unwrap();
+        let commits = h.state().session.commits();
+        pointer(&mut h, &row, egui::PointerButton::Primary);
+        assert_eq!(h.state().session.commits(), commits + 1);
+        assert_eq!(*h.state().session.develop_of(photo).unwrap(), expected);
+        assert!(h.state().widgets.iter().any(|(id, _)| id == "presetApplied"));
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().session.develop_of(photo).unwrap(), before);
+        assert!(!h.state().widgets.iter().any(|(id, _)| id == "presetApplied"));
+    }
+
+    #[test]
+    fn sdk_preset_keyboard_activation_is_one_apply_not_an_egui_double_dispatch() {
+        for key in [egui::Key::Enter, egui::Key::Space] {
+            let mut h = panel_harness(600.0);
+            let row = first_row(&h);
+            let hit = h.state().widget_hits.iter().find(|(id, _)| id == &row).unwrap().1;
+            h.ctx.memory_mut(|memory| memory.request_focus(hit.id));
+            h.run_steps(2);
+            let commits = h.state().session.commits();
+            h.key_press(key);
+            h.run_steps(3);
+            assert_eq!(h.state().session.commits(), commits + 1, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn sdk_preset_right_click_favorites_and_escape_do_not_apply() {
+        let mut h = panel_harness(600.0);
+        let row = first_row(&h);
+        let commits = h.state().session.commits();
+        pointer(&mut h, &row, egui::PointerButton::Secondary);
+        assert_eq!(h.state().session.commits(), commits);
+        h.get_by_label("Add to Favorites").click();
+        h.run_steps(3);
+        let pid = row.strip_prefix("preset:").unwrap();
+        assert!(h.state().session.presets.iter().find(|p| p.id == pid).unwrap().favorite);
+        assert!(h.state().session.undo.is_empty(), "favorite does not develop a photo");
+        pointer(&mut h, &row, egui::PointerButton::Secondary);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.query_by_label("Remove from Favorites").is_none());
+        assert!(h.state().session.undo.is_empty());
+    }
+
+    #[test]
+    fn sdk_preset_no_selection_refuses_apply_but_preserves_context_menu() {
+        let mut h = panel_harness(600.0);
+        h.state_mut().session.selection = Default::default();
+        h.run_steps(3);
+        let row = first_row(&h);
+        let commits = h.state().session.commits();
+        pointer(&mut h, &row, egui::PointerButton::Primary);
+        assert_eq!(h.state().session.commits(), commits);
+        assert!(!h.state().widgets.iter().any(|(id, _)| id == "presetApplied"));
+        pointer(&mut h, &row, egui::PointerButton::Secondary);
+        assert!(h.query_by_label("Add to Favorites").is_some());
+    }
+
+    #[test]
+    fn sdk_preset_active_outside_selection_is_not_edited_or_marked() {
+        let mut h = panel_harness(600.0);
+        let active = h.state().session.active().unwrap();
+        let selected = h.state_mut().session.visible().iter().copied().find(|id| *id != active).unwrap();
+        h.state_mut().session.selection.ids = vec![selected];
+        let before = h.state().session.develop_of(active).unwrap();
+        let row = first_row(&h);
+        pointer(&mut h, &row, egui::PointerButton::Primary);
+        assert_eq!(h.state().session.develop_of(active).unwrap(), before);
+        assert!(!h.state().widgets.iter().any(|(id, _)| id == "presetApplied"));
+        h.state_mut().session.selection.active = Some(selected);
+        h.run_steps(3);
+        assert!(h.state().widgets.iter().any(|(id, _)| id == "presetApplied"));
+    }
+
+    #[test]
+    fn sdk_preset_hover_cancels_on_exit_without_undo_or_photo_edit() {
+        let mut h = panel_harness(600.0);
+        let active = h.state().session.active().unwrap();
+        let before = h.state().session.develop_of(active).unwrap();
+        let row = first_row(&h);
+        let pos = h.state().widgets.iter().find(|(id, _)| id == &row).unwrap().1.center();
+        h.event(egui::Event::PointerMoved(pos));
+        h.run_steps(3);
+        assert!(h.state().hover_preview.is_some());
+        assert!(h.state().session.undo.is_empty());
+        h.event(egui::Event::PointerGone);
+        h.run_steps(3);
+        assert!(h.state().hover_preview.is_none());
+        assert_eq!(h.state().session.develop_of(active).unwrap(), before);
+    }
+
+    #[test]
+    fn sdk_preset_measure_does_not_apply_preview_or_publish_row_targets() {
+        let mut h = panel_harness(600.0);
+        let row = first_row(&h);
+        let pos = h.state().widgets.iter().find(|(id, _)| id == &row).unwrap().1.center();
+        let commits = h.state().session.commits();
+        h.ctx.data_mut(|data| data.insert_temp(egui::Id::unique("preset-test-measure"), true));
+        h.event(egui::Event::PointerMoved(pos));
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+        assert_eq!(h.state().session.commits(), commits);
+        assert!(h.state().hover_preview.is_none());
+        assert!(!h.state().widgets.iter().any(|(id, _)| id.starts_with("preset:")));
+        h.ctx.data_mut(|data| data.insert_temp(egui::Id::unique("preset-test-measure"), false));
+        h.run_steps(3);
+        pointer(&mut h, &row, egui::PointerButton::Primary);
+        assert_eq!(h.state().session.commits(), commits + 1, "the real pass still owns the command");
+    }
+
+    #[test]
+    fn sdk_preset_large_collection_keeps_virtualization_and_exact_clipping() {
+        let mut h = panel_harness(240.0);
+        h.state_mut().session.add_presets(
+            (0..5000)
+                .map(|i| Preset {
+                    id: format!("user.sdk.{i}"),
+                    name: format!("Preset {i}"),
+                    group: "AAA scale".into(),
+                    settings: json!({"light": {"exposure": 0.5}}),
+                    favorite: false,
+                    builtin: false,
+                })
+                .collect(),
+        );
+        h.run_steps(4);
+        let rows: Vec<_> = h.state().widget_hits.iter().filter(|(id, _)| id.starts_with("preset:")).collect();
+        assert!((2..20).contains(&rows.len()), "only visible rows plus one-row overscan: {}", rows.len());
+        assert!(rows.iter().all(|(_, hit)| hit.interact_rect.top() >= 0.0 && hit.interact_rect.bottom() <= 240.0));
+        assert!(rows.iter().any(|(id, _)| id.starts_with("preset:user.sdk.")));
+    }
+
+    #[test]
+    fn sdk_preset_tab_reaches_named_row_then_enter_applies() {
+        let mut h = panel_harness(600.0);
+        let row = first_row(&h);
+        let hit = h.state().widget_hits.iter().find(|(id, _)| id == &row).unwrap().1;
+        let preset = h.state().session.presets.iter().find(|p| row == format!("preset:{}", p.id)).unwrap();
+        let name = crate::i18n::builtin_label(&preset.name, preset.builtin).to_string();
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::ListItem, &name).is_some());
+        for _ in 0..100 {
+            if h.ctx.memory(|memory| memory.focused()) == Some(hit.id) {
+                break;
+            }
+            h.key_press(egui::Key::Tab);
+            h.run_steps(1);
+        }
+        assert_eq!(h.ctx.memory(|memory| memory.focused()), Some(hit.id), "a real Tab stop, not just a painted label");
+        let commits = h.state().session.commits();
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().session.commits(), commits + 1);
+    }
+
+    #[test]
+    fn sdk_preset_amount_replaces_only_its_preset_undo_step() {
+        let mut h = panel_harness(600.0);
+        let photo = h.state().session.active().unwrap();
+        let before = h.state().session.develop_of(photo).unwrap();
+        let row = first_row(&h);
+        pointer(&mut h, &row, egui::PointerButton::Primary);
+        let rect = h.state().widgets.iter().find(|(id, _)| id == "slider:presetAmount").unwrap().1;
+        let pos = egui::pos2(egui::lerp(rect.x_range(), 0.25), rect.center().y);
+        h.event(egui::Event::PointerMoved(pos));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+        let applied: AppliedPreset = h.ctx.data(|data| data.get_temp(egui::Id::unique("preset-amount"))).unwrap();
+        assert!(applied.amount < 100.0, "the actual Amount control changed the amount");
+        assert_eq!(h.state().session.undo.len(), 1, "one undo still removes the whole preset");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().session.develop_of(photo).unwrap(), before);
+        // An unrelated edit invalidates the slider instead of granting it that edit's undo step.
+        pointer(&mut h, &row, egui::PointerButton::Primary);
+        h.state_mut().run("develop.set", json!({"values": {"light.exposure": 0.75}})).unwrap();
+        h.run_steps(3);
+        assert!(!h.state().widgets.iter().any(|(id, _)| id == "slider:presetAmount"));
+        assert_eq!(h.state().session.develop_of(photo).unwrap().light.exposure, 0.75);
+    }
+
+    #[test]
+    fn sdk_preset_carrying_blocks_context_menu() {
+        let mut h = panel_harness(600.0);
+        let row = first_row(&h);
+        crate::widgets::set_carrying(&h.ctx, true);
+        pointer(&mut h, &row, egui::PointerButton::Secondary);
+        assert!(h.query_by_label("Add to Favorites").is_none());
+        assert!(h.state().session.undo.is_empty());
+        crate::widgets::set_carrying(&h.ctx, false);
+        pointer(&mut h, &row, egui::PointerButton::Secondary);
+        assert!(h.query_by_label("Add to Favorites").is_some());
+    }
+
+    #[test]
+    fn sdk_preset_repeated_right_click_moves_menu_without_one_frame_flash() {
+        let mut h = panel_harness(600.0);
+        let row = first_row(&h);
+        pointer(&mut h, &row, egui::PointerButton::Secondary);
+        let old = h.get_by_label("Add to Favorites").rect();
+        let rect = h.state().widgets.iter().find(|(id, _)| id == &row).unwrap().1;
+        let pos = egui::pos2(rect.left() + 8.0, rect.center().y);
+        h.event(egui::Event::PointerMoved(pos));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+        let moved = h.get_by_label("Add to Favorites").rect();
+        assert_ne!(moved.min, old.min, "menu relocates to the new right-click");
+        assert!(h.state().session.undo.is_empty());
+    }
 
     #[test]
     fn amount_slider_does_not_undo_a_later_edit() {

@@ -5,6 +5,8 @@
 
 use std::cmp::Ordering;
 
+use craft::ui::patterns::form_dialogs::{Contributor as FrameworkContributor, Credits as FrameworkCredits, ModelCredit as FrameworkModelCredit};
+
 use egui::RichText;
 
 use crate::{LightcraftApp, theme::Tokens};
@@ -35,7 +37,49 @@ pub struct Model {
     pub lines_deleted: u64,
 }
 
+// Keep the baked, consent-filtered DTOs as the source of truth. The SDK owns
+// presentation; converting a row must not choose a name, sort it or open its link.
+impl From<&Contributor> for FrameworkContributor {
+    fn from(person: &Contributor) -> Self {
+        let mut row = Self::new(person.login)
+            .counts(person.prs, person.commits)
+            .lines(person.lines_added, person.lines_deleted)
+            .binary(person.binary_added, person.binary_deleted)
+            .active(person.first_commit, person.last_commit)
+            .profile(profile_url(person));
+        if let Some(name) = person.display_name {
+            row = row.display_name(name);
+        }
+        if let Some(name) = person.real_name {
+            row = row.real_name(name);
+        }
+        row
+    }
+}
+
+impl From<&Model> for FrameworkModelCredit {
+    fn from(model: &Model) -> Self {
+        Self::new(model.company, model.model, model.version).work(model.commits, model.lines_added, model.lines_deleted)
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/credits.rs"));
+
+/// The baked credits in the existing SDK's public data format, ready for an About consumer.
+///
+/// These tables never change at runtime. Share one immutable projection rather than
+/// allocating contributor profiles and both row vectors on each presentation pass.
+/// This does not install the SDK, render a dialog, read credit files or open links.
+pub fn framework_credits() -> &'static FrameworkCredits {
+    static CREDITS: std::sync::OnceLock<FrameworkCredits> = std::sync::OnceLock::new();
+    CREDITS.get_or_init(|| {
+        FrameworkCredits::new(
+            CONTRIBUTORS.iter().map(FrameworkContributor::from).collect::<Vec<_>>(),
+            MODELS.iter().map(FrameworkModelCredit::from).collect::<Vec<_>>(),
+            TOTAL_COMMITS,
+        )
+    })
+}
 
 /// Which name to show. Display and real names fall back to the `@username` when not given.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -536,6 +580,63 @@ mod tests {
     }
 
     #[test]
+    fn framework_contributors_preserve_absent_names_and_all_credit_fields() {
+        for (display, real) in [(None, None), (Some("Display name"), None), (None, Some("Real name")), (Some("Display name"), Some("Real name"))] {
+            let source = Contributor {
+                login: "some-user",
+                display_name: display,
+                real_name: real,
+                prs: u64::MAX,
+                commits: 18,
+                lines_added: 7,
+                lines_deleted: u64::MAX,
+                binary_added: 91,
+                binary_deleted: 65,
+                first_commit: "",
+                last_commit: "2026-01-03T00:00:00Z",
+            };
+            let row = FrameworkContributor::from(&source);
+            assert_eq!(row.login.as_ref(), source.login);
+            assert_eq!(row.display_name.as_deref(), display, "absent consent is not replaced by a guessed name");
+            assert_eq!(row.real_name.as_deref(), real);
+            assert_eq!(row.profile.as_deref(), Some("https://github.com/some-user"));
+            assert_eq!((row.prs, row.commits), (source.prs, source.commits));
+            assert_eq!((row.lines_added, row.lines_deleted), (source.lines_added, source.lines_deleted));
+            assert_eq!((row.binary_added, row.binary_deleted), (source.binary_added, source.binary_deleted));
+            assert_eq!(row.first_commit.as_ref(), source.first_commit);
+            assert_eq!(row.last_commit.as_ref(), source.last_commit);
+            assert_eq!(row.lines_delta(), 7 - i128::from(u64::MAX));
+        }
+    }
+
+    #[test]
+    fn framework_models_preserve_versions_and_untruncated_work_counts() {
+        for version in ["", "1.2.3"] {
+            let source = Model { company: "Company", model: "Model", version, commits: u64::MAX, lines_added: 12, lines_deleted: 98 };
+            let row = FrameworkModelCredit::from(&source);
+            assert_eq!(row.company.as_ref(), source.company);
+            assert_eq!(row.model.as_ref(), source.model);
+            assert_eq!(row.version.as_ref(), source.version);
+            assert_eq!((row.commits, row.lines_added, row.lines_deleted), (source.commits, source.lines_added, source.lines_deleted));
+        }
+    }
+
+    #[test]
+    fn framework_snapshot_uses_baked_order_totals_and_is_reused() {
+        let credits = framework_credits();
+        assert!(std::ptr::eq(credits, framework_credits()), "immutable baked data is not remapped per pass");
+        assert_eq!(credits.total_commits, TOTAL_COMMITS);
+        assert_eq!(credits.contributors.len(), CONTRIBUTORS.len());
+        assert_eq!(credits.models.len(), MODELS.len());
+        for (source, row) in CONTRIBUTORS.iter().zip(credits.contributors.iter()) {
+            assert_eq!(row, &FrameworkContributor::from(source));
+        }
+        for (source, row) in MODELS.iter().zip(credits.models.iter()) {
+            assert_eq!(row, &FrameworkModelCredit::from(source));
+        }
+    }
+
+    #[test]
     fn names_fall_back_to_the_username() {
         let p = c("bob", Some("Bobby"), None, 0, 0, "");
         assert_eq!(p.name(NameMode::Username), "@bob");
@@ -708,3 +809,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "credits_contributor_flow_tests.rs"]
+mod contributor_verification_tests;

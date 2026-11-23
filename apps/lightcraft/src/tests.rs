@@ -1,5 +1,7 @@
 use super::*;
 
+mod settings_keyboard_contract;
+
 #[test]
 fn desktop_clear_color_stays_opaque_with_a_modal_open() {
     let mut app = App(
