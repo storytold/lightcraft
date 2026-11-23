@@ -710,7 +710,9 @@ impl LightcraftApp {
 /// driver. A process that ends while it does crashes inside the driver (issue #620; in CI, tests
 /// killed by SIGSEGV after they had passed). The window ends through [`LightcraftApp::shutdown`],
 /// which decides that itself; any other end (a test returning, a headless run) passes through here
-/// first, so it waits for the warm-up, bounded.
+/// first, so it waits for the warm-up, bounded. (Native only: there is no warm-up thread on the web,
+/// and the web host moves fields out of the app.)
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for LightcraftApp {
     fn drop(&mut self) {
         if !lightcraft_engine::gpu::shutting_down() {
