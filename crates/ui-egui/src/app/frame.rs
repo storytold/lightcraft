@@ -536,7 +536,7 @@ impl LightcraftApp {
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
         (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
-        self.text_focus = ctx.egui_wants_keyboard_input();
+        self.text_focus = crate::text_field::typing(&ctx);
         self.end_frame(&ctx, t0);
     }
 }

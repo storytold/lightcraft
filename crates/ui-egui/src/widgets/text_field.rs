@@ -63,6 +63,16 @@ pub fn id(widget: &str) -> egui::Id {
     egui::Id::unique("lc-text-field").with(widget)
 }
 
+/// Whether the keyboard focus is on something that types: a framework text part or shortcut recorder, or an app's own
+/// egui text widget outside the framework. A focused framework button, slider or list does not count: the runtime
+/// already keeps the keys it uses, so the app's shortcuts still get the rest.
+pub(crate) fn typing(ctx: &egui::Context) -> bool {
+    match craft::ui::runtime::focus::focused_rec(ctx) {
+        Some(rec) => rec.stop.text || craft::ui::runtime::focus::takes_letters(&rec.stop.keys),
+        None => ctx.egui_wants_keyboard_input(),
+    }
+}
+
 /// Whether the field registered as `widget` has the keyboard focus now.
 pub(crate) fn focused(ctx: &egui::Context, widget: &str) -> bool {
     has_focus(ctx, id(widget))

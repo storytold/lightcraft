@@ -340,6 +340,10 @@ fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static 
 /// Content widgets keep keyboard ownership, including text fields and arrow-driven sliders.
 /// Dock chrome owns activation, traversal, resizing and cancellation; its other keys reach commands.
 fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    // A framework stop keeps the keys it uses (the runtime takes them); only one that types owns the rest.
+    if craft::ui::runtime::focus::focused_rec(ctx).is_some() {
+        return crate::text_field::typing(ctx);
+    }
     if !ctx.egui_wants_keyboard_input() {
         // Escape drops egui focus before shortcuts run; keep the numeric edit's whole input batch.
         return ctx.input(|input| input.key_pressed(Key::Escape))
