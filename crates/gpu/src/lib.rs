@@ -351,12 +351,14 @@ pub fn warm_up() {
     #[cfg(not(target_arch = "wasm32"))]
     if !env_disabled() && ENABLED.load(Ordering::SeqCst) && GPU.get().is_none() && !WINDOW_PENDING.load(Ordering::Acquire) {
         static STARTED: AtomicBool = AtomicBool::new(false);
+        // In flight from here, before `STARTED` is set and before the thread exists: a host that ends
+        // the process right after any `warm_up` returns (this one, or a concurrent call that finds
+        // the thread starting) must find it with `wait_warm_up`. A closed gate starts nothing; a call
+        // that starts nothing drops its token again, and a failed spawn drops it with the closure.
+        let Some(in_flight) = WARM_UP.enter() else { return };
         if STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
-        // in flight from here, not from when the thread first runs: a host that ends the process
-        // right after this returns must find it with `wait_warm_up` (dropped if the spawn fails)
-        let in_flight = WARM_UP.enter();
         let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(move || {
             let _in_flight = in_flight;
             loop {
