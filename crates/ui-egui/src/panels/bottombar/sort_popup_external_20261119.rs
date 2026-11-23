@@ -1,5 +1,5 @@
 //! Source-only preparation: run only in the parent's separately admitted test job.
-//! Uses the actual bottom-bar Sort opener, native popup and SDK action rows.
+//! Uses the actual bottom-bar Sort opener and its framework menu rows.
 
 use super::*;
 use crate::headless::HeadlessView;
@@ -128,10 +128,15 @@ impl Frames {
         self.settle();
     }
 
+    /// The Sort menu is drawn: its Ascending row is always there while it is open.
+    fn is_open(&self) -> bool {
+        self.rows.iter().any(|(name, _)| name == "Ascending")
+    }
+
     fn open(&mut self) {
         let opener = self.hit("icon:sort");
         self.click_at(opener.interact_rect.center(), false);
-        assert!(egui::Popup::is_any_open(&self.ctx), "actual native popup opened");
+        assert!(self.is_open(), "actual framework menu opened");
     }
 
     fn snapshot(&mut self) -> serde_json::Value {
@@ -166,7 +171,7 @@ fn external_sort_popup_action_visibility_and_real_refresh_locator() {
                     assert_eq!(hit.id, row.id, "locator names the SDK row, not a hover probe");
                     assert_eq!(hit.layer_id, row.layer_id);
                     assert_eq!(hit.interact_rect, row.interact_rect);
-                    assert_ne!(hit.layer_id, f.hit("icon:sort").layer_id, "native popup owns its layer");
+                    assert_ne!(hit.layer_id, f.hit("icon:sort").layer_id, "the menu owns its layer");
                 }
                 assert_eq!(f.snapshot(), before, "opening and idle must not dispatch");
             }
@@ -195,7 +200,7 @@ fn external_sort_popup_actions_dispatch_exactly_once_with_deterministic_state() 
                 } else {
                     f.click_at(response.interact_rect.center(), true);
                 }
-                assert!(!egui::Popup::is_any_open(&f.ctx), "action closes the existing native popup");
+                assert!(!f.is_open(), "action closes the menu");
                 assert_eq!(f.app.session.journal, vec![(command.to_owned(), json!({}))], "single caller dispatch, empty params");
                 assert_eq!(f.app.session.sort.seed, oracle.session.sort.seed, "one deterministic transition, not chance order inequality");
                 assert_eq!(f.app.session.visible_cloned(), oracle.session.visible_cloned());
@@ -222,11 +227,11 @@ fn external_sort_popup_escape_outside_and_reopen_do_not_dispatch() {
     let before = f.snapshot();
     f.open();
     f.key(Key::Escape);
-    assert!(!egui::Popup::is_any_open(&f.ctx));
+    assert!(!f.is_open());
     assert_eq!(f.snapshot(), before);
     f.open();
     f.click_at(pos2(990.0, 10.0), false);
-    assert!(!egui::Popup::is_any_open(&f.ctx));
+    assert!(!f.is_open());
     assert_eq!(f.snapshot(), before);
     f.open();
     assert_eq!(f.snapshot(), before);
@@ -272,7 +277,7 @@ fn library_sort_choices_change_order_direction_and_group_without_photo_edits() {
         ("sort:key:fileName", "File Name", json!({"key":"fileName"})),
         ("sort:ascending", "Ascending", json!({"ascending":true})),
     ] {
-        if !egui::Popup::is_any_open(&f.ctx) { f.open(); }
+        if !f.is_open() { f.open(); }
         let row = f.row(label).clone();
         assert_eq!(f.hit(id).id, row.id);
         assert!(row.enabled() && row.sense.is_focusable());
@@ -285,7 +290,7 @@ fn library_sort_choices_change_order_direction_and_group_without_photo_edits() {
         assert_eq!(f.app.session.catalog.revision, revision);
         assert_eq!(f.app.session.undo.len(), undo);
         if id == "sort:key:random" {
-            if !egui::Popup::is_any_open(&f.ctx) { f.open(); }
+            if !f.is_open() { f.open(); }
             let dir = f.row("Ascending").clone();
             assert!(!dir.enabled());
             f.click_at(dir.interact_rect.center(), false);
@@ -312,7 +317,7 @@ fn library_sort_choices_measuring_release_is_inert_then_same_owner_changes_order
         assert!(!f.hits.iter().any(|(n, _)| n.starts_with("sort:")), "measurement published a sort hit");
         f.settle();
         assert_eq!(f.snapshot(), before, "measuring release changed the library or replayed");
-        if !egui::Popup::is_any_open(&f.ctx) { f.open(); }
+        if !f.is_open() { f.open(); }
         let recovered = f.hit(target);
         assert_eq!(recovered.id, hit.id);
         f.click_at(recovered.interact_rect.center(), false);
@@ -385,7 +390,7 @@ fn capture_external_sort_popup_matched_old_new() {
                 harness.run_steps(8);
                 harness.get_by_label("Sort").click();
                 harness.run_steps(8);
-                assert!(egui::Popup::is_any_open(&harness.ctx));
+                assert!(harness.query_by_label("Ascending").is_some());
                 assert_eq!(harness.query_by_label("Reshuffle").is_some(), random);
                 assert_eq!(harness.query_by_label("Refresh View").is_some(), held);
                 assert!(harness.state().session.journal.is_empty());
