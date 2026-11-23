@@ -16,6 +16,7 @@ use crate::widgets::{register, register_geometry};
 
 mod crop;
 mod filmstrip;
+pub(crate) mod host;
 mod geometry;
 mod info;
 mod lens_blur;
@@ -383,7 +384,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !fullscreen {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
-    loupe_context_menu(app, &resp, id);
+    loupe_context_menu(app, ui, &resp, id);
 }
 
 /// Names the loupe for screen readers as the grid names the same photo (file, rating, flag, label), not
@@ -393,16 +394,17 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
 }
 
 /// The loupe's right-click menu: zoom commands and the grid's photo menu.
-fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) {
-    crate::widgets::context_menu(resp, |ui| {
-        crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
+fn loupe_context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, id: PhotoId) {
+    use craft::ui::contract::Show as _;
+    host::context_menu(ui, resp, crate::i18n::tr("Photo"), |ui| {
+        craft::ui::menu::Menu::submenu_row(ui, crate::i18n::tr("Zoom"), |ui, _| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
-                if ui.button(crate::i18n::tr(label)).clicked() {
+                if craft::ui::menu::MenuItem::new(crate::i18n::tr(label)).show(ui).ran {
                     let _ = app.run(cmd, json!({}));
                 }
             }
         });
-        ui.separator();
+        craft::ui::display::Divider::horizontal().show(ui);
         super::grid::context_menu(app, ui, id);
     });
 }

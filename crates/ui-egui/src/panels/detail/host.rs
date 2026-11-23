@@ -1,0 +1,174 @@
+//! Host-painted click targets and context menus on the SDK pipeline.
+//!
+//! The detail, compare, filmstrip and faces pages paint their own pictures (photo canvases, thumbnails, face
+//! crops, badges). What was a raw `ui.interact(.., Sense::click())` over such a picture is a [`HostTarget`]: the host
+//! still paints the face, and the SDK owns sensing, the press machine (double click), keyboard activation, the focus
+//! ring and the accessibility node, as the keyword list's and the Profiles tiles' controls do.
+
+use std::hash::Hash;
+use std::ops::Deref;
+
+use craft::behavior::{Metrics, PressPhase, Sense};
+use craft::ui::contract::{Common, Component, Cx, NoValue, Outcome, PaintUi, Pointer as _, Props as _, Role, Show as _};
+use craft::ui::menu::Menu;
+use craft::ui::contract::ShowContainer as _;
+use craft::ui::style::{ComponentStyle, FocusLook, StyleCx};
+use egui::{Color32, Rect, Response, Stroke, Ui};
+
+use crate::theme::Tokens;
+
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+struct TargetStyle {
+    #[style(focus)]
+    focus: FocusLook,
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+#[derive(craft::ui::contract::Component)]
+struct HostTarget {
+    #[common]
+    common: Common,
+    #[style_key]
+    accent: Color32,
+    drag: bool,
+}
+
+impl Component for HostTarget {
+    const ROLE: Role = Role::BUTTON;
+    const PARTS: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = TargetStyle;
+    type Output = HostOutput;
+
+    fn style(_: &StyleCx<'_>, key: HostTargetStyleKey) -> TargetStyle {
+        TargetStyle { focus: FocusLook::new(Stroke::new(2.0, key.accent), -2.0), metrics: Metrics::new() }
+    }
+
+    fn sense(&self) -> Sense {
+        if self.drag { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
+    }
+
+    /// The host paints the face.
+    fn paint(&mut self, _: &mut PaintUi<'_>, _: &Cx<'_, Self>) {}
+
+    fn finish(self, cx: Cx<'_, Self>) -> HostOutput {
+        let clicks = if cx.activation().is_some() {
+            match cx.press().phase {
+                PressPhase::Release { start, click: true, .. } => start.clicks,
+                _ => 1,
+            }
+        } else {
+            0
+        };
+        HostOutput { response: cx.response.clone(), clicks }
+    }
+}
+
+/// What a host-painted target reports: its response, whether it was activated (pointer or keyboard) and whether
+/// that was a double click.
+pub(crate) struct HostOutput {
+    pub response: Response,
+    clicks: u32,
+}
+
+impl HostOutput {
+    /// Activated this pass, by pointer release or keyboard.
+    pub fn clicked(&self) -> bool {
+        craft::ui::contract::clicked(&self.response)
+    }
+
+    /// The activation was the second press of a double click.
+    pub fn double_clicked(&self) -> bool {
+        self.clicked() && self.clicks >= 2
+    }
+}
+
+impl Deref for HostOutput {
+    type Target = Response;
+
+    fn deref(&self) -> &Response {
+        &self.response
+    }
+}
+
+impl Outcome for HostOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// What a target needs besides where it is.
+pub(crate) struct Target<'a> {
+    /// The accessible name.
+    pub label: String,
+    /// A hover tooltip; empty for none.
+    pub tooltip: String,
+    /// Whether a press may become a drag (the host reads `drag_started` from the response).
+    pub drag: bool,
+    /// Whether the target reads as the selected one.
+    pub selected: bool,
+    _lifetime: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> Target<'a> {
+    pub fn new(label: impl Into<String>) -> Self {
+        Target { label: label.into(), tooltip: String::new(), drag: false, selected: false, _lifetime: std::marker::PhantomData }
+    }
+
+    pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = tooltip.into();
+        self
+    }
+
+    pub fn drag(mut self) -> Self {
+        self.drag = true;
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+}
+
+/// Show a host-painted target over `rect`, named `key` for egui. The caller registers its automation name with
+/// `register_response` when the pass is a live one.
+pub(crate) fn target(ui: &mut Ui, key: impl Hash + std::fmt::Debug, rect: Rect, spec: Target<'_>) -> HostOutput {
+    let mut control = HostTarget { common: Common::new(), accent: Tokens::get(ui.ctx()).accent, drag: spec.drag }
+        .id(egui::Id::unique(key))
+        .label(spec.label)
+        .selected(spec.selected)
+        .enabled(ui.is_enabled());
+    if !spec.tooltip.is_empty() {
+        control = control.tooltip(spec.tooltip);
+    }
+    control.show_at(ui, rect)
+}
+
+/// Whether this pass draws and acts: not an invisible sizing pass and not an SDK measuring run.
+pub(crate) fn live(ui: &Ui) -> bool {
+    !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// The SDK context menu of `response`: secondary click and Shift+F10 open it. While photos are carried, or in a
+/// measuring pass, it shows nothing. The body shows `MenuItem`s (or submenu rows), whose run closes the menu.
+pub(crate) fn context_menu(ui: &mut Ui, response: &Response, label: &str, mut body: impl FnMut(&mut Ui)) {
+    if !live(ui) || crate::widgets::carrying(ui.ctx()) {
+        return;
+    }
+    Menu::context(label.to_owned(), response).id_salt(("lc-context-menu", response.id)).show(ui, |ui, _| body(ui));
+}
+
+/// LightCraft's own vector icon as the glyph of a framework button (a leading or trailing icon, 16 points).
+#[derive(craft::ui::contract::MemoProps)]
+pub(crate) struct IconGlyph(pub crate::icons::Icon);
+
+impl craft::ui::primitives::Glyph for IconGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, color: Color32, _: bool) {
+        crate::icons::paint(painter, Rect::from_center_size(rect.center(), egui::vec2(16.0, 16.0)), self.0, color);
+    }
+}

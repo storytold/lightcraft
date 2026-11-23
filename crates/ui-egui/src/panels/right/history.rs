@@ -1,5 +1,7 @@
 use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
-use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Sense, Tokens, header, json, padded, paint, pos2, text_button, vec2};
+use craft::ui::display::Divider;
+use crate::panels::detail::host;
+use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Tokens, header, json, padded, paint, pos2, text_button, vec2};
 
 pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
@@ -37,12 +39,21 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
         // newest first
         for (i, v) in shown.into_iter().rev() {
             ui.push_id(("version-row", id.0, i), |ui| {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
-                crate::widgets::announce(&resp, format!("{} {}", crate::i18n::tr("Version"), i + 1));
+                let (_, r) = ui.allocate_space(vec2(ui.available_width(), 58.0));
+                let current = *v.settings == *p.develop;
+                let resp = host::target(
+                    ui,
+                    ("version-row", id.0, i),
+                    r,
+                    host::Target::new(format!("{} {}", crate::i18n::tr("Version"), i + 1)).tooltip(crate::i18n::tr(if current {
+                        "The photo has these settings"
+                    } else {
+                        "Click to restore · double-click to rename"
+                    })),
+                );
                 if !measuring {
                     crate::widgets::register_response(format!("version:{i}"), r, &resp);
                 }
-                let current = *v.settings == *p.develop;
                 if resp.hovered() {
                     ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
                 }
@@ -78,11 +89,6 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                 } else if resp.clicked() && !current {
                     let _ = app.run("version.restore", json!({"index": i}));
                 }
-                let resp = resp.on_hover_text(crate::i18n::tr(if current {
-                    "The photo has these settings"
-                } else {
-                    "Click to restore · double-click to rename"
-                }));
                 // Native egui popups route Tab away from SDK stops. The SDK menu must own this layer.
                 if !measuring && !(resp.secondary_clicked() && crate::widgets::carrying(ui.ctx())) {
                     let mut targets = Vec::new();
@@ -95,9 +101,6 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                             if !interactive {
                                 ui.disable();
                             }
-                            let native_enabled = ui.is_enabled()
-                                && !ui.is_sizing_pass()
-                                && !craft::ui::runtime::measure::active(ui.ctx());
                             if history_menu_action(ui, ("version", id.0, i, "restore"), "Restore", &mut targets) {
                                 action = Some(VersionMenuAction::Restore);
                                 menu.request_close();
@@ -106,7 +109,7 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                                 action = Some(VersionMenuAction::Update);
                                 menu.request_close();
                             }
-                            if ui.add_enabled(native_enabled, egui::Button::new(crate::i18n::tr("Rename…"))).clicked() {
+                            if history_menu_action(ui, ("version", id.0, i, "rename"), "Rename…", &mut targets) {
                                 action = Some(VersionMenuAction::Rename);
                                 menu.request_close();
                             }
@@ -114,8 +117,8 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                                 action = Some(VersionMenuAction::Before);
                                 menu.request_close();
                             }
-                            ui.separator();
-                            if ui.add_enabled(native_enabled, egui::Button::new(crate::i18n::tr("Delete"))).clicked() {
+                            Divider::horizontal().show(ui);
+                            if history_menu_action(ui, ("version", id.0, i, "delete"), "Delete", &mut targets) {
                                 action = Some(VersionMenuAction::Delete);
                                 menu.request_close();
                             }
@@ -190,8 +193,8 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
         let cursor = p.history_index();
         for (i, h) in p.history.iter().enumerate().rev() {
             ui.push_id(("history-row", id.0, i), |ui| {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-                crate::widgets::announce(&resp, crate::i18n::tr(&h.label));
+                let (_, r) = ui.allocate_space(vec2(ui.available_width(), 24.0));
+                let resp = host::target(ui, ("history-row", id.0, i), r, host::Target::new(crate::i18n::tr(&h.label)));
                 if !measuring {
                     crate::widgets::register_response(format!("history:{i}"), r, &resp);
                 }
@@ -225,19 +228,16 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                             if !interactive {
                                 ui.disable();
                             }
-                            let native_enabled = ui.is_enabled()
-                                && !ui.is_sizing_pass()
-                                && !craft::ui::runtime::measure::active(ui.ctx());
                             if history_menu_action(ui, ("history", id.0, i, "before"), "Copy History Step Settings to Before", &mut targets) {
                                 action = Some(HistoryMenuAction::Before);
                                 menu.request_close();
                             }
-                            if ui.add_enabled(native_enabled, egui::Button::new(crate::i18n::tr("Create Version from Step"))).clicked() {
+                            if history_menu_action(ui, ("history", id.0, i, "createVersion"), "Create Version from Step", &mut targets) {
                                 action = Some(HistoryMenuAction::CreateVersion);
                                 menu.request_close();
                             }
-                            ui.separator();
-                            if ui.add_enabled(native_enabled, egui::Button::new(crate::i18n::tr("Clear History"))).clicked() {
+                            Divider::horizontal().show(ui);
+                            if history_menu_action(ui, ("history", id.0, i, "clear"), "Clear History", &mut targets) {
                                 action = Some(HistoryMenuAction::Clear);
                                 menu.request_close();
                             }

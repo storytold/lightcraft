@@ -42,7 +42,7 @@ fn open(h: &mut Headless, photo: u64, row: &str) {
     let at = visible.center();
     ask(h, "ui.clickWidget", json!({"id": name, "button": "right",
         "fx": (at.x - image.left()) / image.width(), "fy": (at.y - image.top()) / image.height()}));
-    assert!(egui::Popup::is_any_open(&h.view.ctx));
+    assert!(craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     assert!(h.app.widget_hits.iter().any(|(id, _)| id == row), "real menu response registered for {row}");
 }
 
@@ -87,7 +87,7 @@ fn compare_external155_swap_real_press_release_preserves_active_pin_and_navigati
     assert_eq!(h.app.canvas_rect, canvas);
     assert_eq!(h.app.ui.view, ViewMode::Compare);
     assert_eq!(h.app.session.undo.len(), undo);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn compare_external155_make_select_actual_click_advances_exactly_once() {
     assert_eq!(h.app.ui.pan, (7.0, -5.0));
     assert_eq!(h.app.canvas_rect, canvas);
     assert_eq!(h.app.session.undo.len(), undo);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn compare_external155_clear_reference_keyboard_activation_keeps_active_selectio
     assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0));
     assert_eq!(h.app.ui.pan, (7.0, -5.0));
     assert_eq!(h.app.session.undo.len(), undo);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn compare_external155_escape_cancels_both_menus_without_retargeting_photos() {
         open(&mut h, photo, row);
         ask(&mut h, "ui.key", json!({"key": "Escape"}));
         assert_eq!(snapshot(&h), before, "opening and cancelling is not an action");
-        assert!(!egui::Popup::is_any_open(&h.view.ctx));
+        assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
         assert!(!h.app.widgets.iter().any(|(id, _)| id == row), "dismissed rows are no longer targets");
         let stale = h.request("ui.clickWidget", json!({"id": row}), WAIT);
         assert_eq!(stale["ok"], false, "a dismissed target must not run: {stale}");
@@ -207,7 +207,7 @@ fn compare_cancel_replace_candidate_then_promote_uses_new_pair_and_keeps_referen
     open(&mut h, ids[1], "compare:makeSelect");
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
     assert_eq!(snapshot(&h), before);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
 
     // Change the candidate through the filmstrip, not by assigning the pair in the test.
     ask(&mut h, "ui.clickWidget", json!({"id": format!("film:{}", ids[2])}));
@@ -226,5 +226,5 @@ fn compare_cancel_replace_candidate_then_promote_uses_new_pair_and_keeps_referen
     assert_eq!(h.app.ui.pan, (7.0, -5.0));
     assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0));
     assert_eq!(snapshot(&h)["undo"], before["undo"]);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
 }

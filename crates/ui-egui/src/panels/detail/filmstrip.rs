@@ -1,4 +1,4 @@
-use super::{Align2, Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, json, pos2, register, vec2};
+use super::{host, Align2, Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, json, pos2, register, vec2};
 
 /// Size of the Navigator mini map (points).
 const NAV_W: f32 = 180.0;
@@ -96,10 +96,12 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             if !local.intersects(vp.expand2(vec2(cell_w * 4.0, 0.0))) {
                 continue;
             }
-            let resp = ui.interact(cr, egui::Id::unique(("film", id.0)), Sense::click_and_drag());
             let failed = app.renderer.thumb(*id).is_none() && app.renderer.failure(Slot::Thumb(*id)).is_some();
-            crate::widgets::announce(&resp, film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed));
-            register(ui, format!("film:{}", id.0), cr);
+            let spoken = film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed);
+            let resp = host::target(ui, ("film", id.0), cr, host::Target::new(spoken).drag());
+            if host::live(ui) {
+                crate::widgets::register_response(format!("film:{}", id.0), cr, &resp);
+            }
             let state = app.session.selection.state_of(*id);
             let p = ui.painter();
             let label = app.session.catalog.photo(*id).and_then(|ph| ph.label);
@@ -145,13 +147,19 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     let g = p.layout_no_wrap(text, t.semibold(9.5), Color32::WHITE);
                     let br = Rect::from_min_size(fr.min + vec2(3.0, 3.0), vec2(g.size().x + 22.0, 15.0));
                     // like the grid's badge: a click expands / collapses the stack
-                    let badge = ui.interact(br, egui::Id::unique(("film-stack-badge", id.0)), Sense::click()).on_hover_text(if collapsed {
-                        "Stack — click to expand"
-                    } else {
-                        "Stack — click to collapse"
-                    });
-                    crate::widgets::announce(&badge, crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" }));
-                    register(ui, format!("filmstack:{}", id.0), br);
+                    let badge = host::target(
+                        ui,
+                        ("film-stack-badge", id.0),
+                        br,
+                        host::Target::new(crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" })).tooltip(if collapsed {
+                            "Stack — click to expand"
+                        } else {
+                            "Stack — click to collapse"
+                        }),
+                    );
+                    if host::live(ui) {
+                        crate::widgets::register_response(format!("filmstack:{}", id.0), br, &badge);
+                    }
                     let p = ui.painter();
                     let fill = if badge.hovered() { Color32::from_black_alpha(230) } else { Color32::from_black_alpha(170) };
                     p.rect_filled(br, 7.5, fill);
@@ -196,7 +204,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 }
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
-            crate::widgets::context_menu(&resp, |ui| crate::panels::grid::context_menu(app, ui, *id));
+            host::context_menu(ui, &resp, crate::i18n::tr("Photo"), |ui| crate::panels::grid::context_menu(app, ui, *id));
         }
     });
 }
