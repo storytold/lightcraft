@@ -37,39 +37,6 @@ const WINDOW_FROM: usize = 80;
 /// Rows built below the visible ones.
 const WINDOW_MARGIN: usize = 1;
 
-/// One level of a sidebar tree at the framework's default steps, kept for the tests that name it.
-#[cfg(test)]
-pub(crate) const INDENT_STEP: f32 = 16.0;
-
-/// The narrowest a level was drawn before the framework's tree took over the indentation.
-#[cfg(test)]
-pub(crate) const MIN_INDENT_STEP: f32 = 8.0;
-
-/// How wide the sidebar's content needs to be. The tree rows size themselves now, so nothing asks
-/// for more than the panel: always 0.
-#[cfg(test)]
-pub(crate) fn content_width(_ctx: &egui::Context) -> f32 {
-    0.0
-}
-
-/// The step a level is drawn with: the framework's own, which does not narrow.
-#[cfg(test)]
-pub(crate) fn indent_step(_ctx: &egui::Context) -> f32 {
-    INDENT_STEP
-}
-
-/// The widest step (16, 14, 12, 10 or 8 pt) at which a row `deepest` deep (in [`INDENT_STEP`]s)
-/// keeps room for its name and count in a panel `panel_w` wide.
-#[cfg(test)]
-pub(crate) fn step_for(panel_w: f32, deepest: f32) -> f32 {
-    let levels = deepest / INDENT_STEP;
-    if levels < 1.0 {
-        return INDENT_STEP;
-    }
-    let room = panel_w - 42.0 - 80.0 - 18.0 - 40.0;
-    [16.0, 14.0, 12.0, 10.0].into_iter().find(|step| levels * step <= room).unwrap_or(MIN_INDENT_STEP)
-}
-
 /// What a disclosure triangle is called: "Expand Travel" / "Collapse Travel".
 pub(crate) fn disclosure_name(open: bool, name: &str) -> String {
     if open { crate::i18n::tr_format!("Collapse {name}", name = name) } else { crate::i18n::tr_format!("Expand {name}", name = name) }
@@ -101,6 +68,48 @@ pub(super) fn measuring(ui: &egui::Ui) -> bool {
 
 const NAME: ColumnKey = ColumnKey::new("side-caption");
 const COUNT: ColumnKey = ColumnKey::new("side-count");
+/// The room between the name and the count, where a colour label's dot sits.
+const GAP: ColumnKey = ColumnKey::new("side-gap");
+
+/// Width of [`GAP`] without and with a colour label's dot.
+const GAP_PLAIN: f32 = 4.0;
+const GAP_MARK: f32 = 16.0;
+
+/// How far one level of a tree steps in, as far as the sidebar plans its width: the deepest row
+/// asks for this many points a level, and the sidebar scrolls sideways when that exceeds the panel.
+const LEVEL_WIDTH: f32 = 16.0;
+
+/// What a row needs besides its levels: the icon and triangle, a name's share, the count.
+const ROW_ROOM: f32 = 42.0 + 140.0 + 40.0;
+
+/// How wide the sidebar's content needs to be, from the deepest row of the last frame: the panel's
+/// width, or more when the levels leave too little room for the names. One frame behind, which
+/// needs no second layout pass. 0 until the first frame has been drawn.
+pub(super) fn content_width(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("left-content-width"))).unwrap_or(0.0)
+}
+
+/// A row `depth` levels deep asks the sidebar for its width.
+fn note_depth(ui: &egui::Ui, depth: usize) {
+    let need = depth as f32 * LEVEL_WIDTH + ROW_ROOM;
+    ui.data_mut(|d| {
+        let m = d.get_temp_mut_or_insert_with::<f32>(egui::Id::unique("left-content-need"), || 0.0);
+        *m = m.max(need);
+    });
+}
+
+/// Called once a frame after the lists: the width the deepest row asked for becomes next frame's.
+/// Returns whether it changed.
+pub(super) fn settle_width(ctx: &egui::Context, panel: f32) -> bool {
+    let need = ctx.data_mut(|d| d.remove_temp::<f32>(egui::Id::unique("left-content-need"))).unwrap_or(0.0);
+    let wide = need.max(panel);
+    let changed = (wide - content_width(ctx)).abs() > 0.5;
+    if changed {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("left-content-width"), wide));
+        ctx.request_repaint();
+    }
+    changed
+}
 
 /// One row of a sidebar list, as the framework's list shows it.
 #[derive(Clone, Debug, Hash)]
@@ -452,10 +461,15 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     let want = scroll_target(ui);
     let rows = if !build_all && rows.len() > WINDOW_FROM { built_rows(ui, rows, salt, want.as_ref()) } else { rows };
     let has_notes = rows.iter().any(|row| row.note.is_some());
+    let has_marks = rows.iter().any(|row| row.mark.is_some());
+    if tree && let Some(deepest) = rows.iter().map(|row| row.depth).max() {
+        note_depth(ui, deepest);
+    }
     let source = SideRows::new(rows);
     const DISCLOSURE: PartKey = PartKey::new("disclosure");
     let mut columns = vec![ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
     if show_counts || has_notes {
+        columns.push(ColumnSpec::new(GAP, "", ColumnWidth::Fixed(if has_marks { GAP_MARK } else { GAP_PLAIN })));
         columns.push(ColumnSpec::new(COUNT, "", ColumnWidth::Fixed(40.0)));
     }
     // The collection's lead is transient navigation, not the sidebar's choice: only its real
@@ -515,7 +529,8 @@ fn list_shown<E>(ui: &mut egui::Ui, out: &CollectionResponse<String, E>, source:
         let label = row.cells.iter().find(|(column, _)| *column == NAME).map(|(_, rect)| *rect);
         let count = row.cells.iter().find(|(column, _)| *column == COUNT).map(|(_, rect)| *rect);
         if item.register {
-            register_row(ui, item, row.rect, (label, count), selected == Some(item.key.as_str()));
+            let gap = row.cells.iter().find(|(column, _)| *column == GAP).map(|(_, rect)| *rect);
+            register_row(ui, item, row.rect, (label, count, gap), selected == Some(item.key.as_str()));
         }
         if let Some(toggle) = &item.toggle {
             for (_, response) in &row.openers {
@@ -532,7 +547,7 @@ fn list_shown<E>(ui: &mut egui::Ui, out: &CollectionResponse<String, E>, source:
 
 /// Lists a row under `source:<id>`, `highlight:<id>` (the chosen one), `label:<id>` and
 /// `count:<id>`, and paints its colour label's dot.
-fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count): (Option<Rect>, Option<Rect>), chosen: bool) {
+fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count, gap): (Option<Rect>, Option<Rect>, Option<Rect>), chosen: bool) {
     let id = &item.id;
     register(ui, format!("source:{id}"), rect);
     if chosen {
@@ -547,8 +562,8 @@ fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count): (Opti
         register(ui, format!("count:{id}"), count);
     }
     if let Some(color) = item.mark {
-        // a label's dot sits just before the count, or at the row's end without one
-        let x = count.map_or(rect.right() - 18.0, |count| count.left() - 6.0);
+        // a label's dot sits in the gap before the count, or at the row's end without one
+        let x = gap.map_or_else(|| count.map_or(rect.right() - 18.0, |count| count.left() - 6.0), |gap| gap.center().x);
         let dot = Rect::from_center_size(pos2(x, rect.center().y), vec2(8.0, 8.0));
         ui.painter().circle_filled(dot.center(), 4.0, color);
         register(ui, format!("labelMark:{id}"), dot);

@@ -29,9 +29,7 @@ use keywords::keyword_rows;
 pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
 use local::{local_now, local_rows};
 pub(crate) use rows::disclosure_name;
-#[cfg(test)]
-pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP, content_width, indent_step, step_for};
-use rows::{LIBFOLDER_REVEALED, SCROLL_TO_ROW, SideEvent, SideRow, SideSpec, set_tree_open, side_list};
+use rows::{LIBFOLDER_REVEALED, SCROLL_TO_ROW, SideEvent, SideRow, SideSpec, content_width, set_tree_open, settle_width, side_list};
 pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
 #[cfg(test)]
@@ -42,6 +40,8 @@ use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag,
 /// folders and sections, with the section visibility menu on the title.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // (read before the lists: the framework's lists take an Escape that ends a press)
+    sections::note_escape(ui);
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -49,14 +49,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         sidebar_title(app, ui);
         let counts = app.caches.counts(&app.session.catalog);
         let (total, picks, deleted) = (counts.total, counts.picks, counts.deleted);
-        egui::ScrollArea::vertical().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
+        egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             drag_auto_scroll(app, ui);
             // where the visible part of the content starts (screen y), for the pinned header
             let view_top = ui.cursor().top() + viewport.min.y;
             ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-view-top"), view_top));
-            // rows are as wide as the panel: the lists size their own rows
-            ui.set_min_width(viewport.width());
-            ui.set_max_width(viewport.width());
+            // rows are as wide as the deepest one asks (last frame), at least the panel; the sidebar
+            // scrolls sideways when that exceeds the panel
+            let wide = viewport.width().max(content_width(ui.ctx()));
+            ui.set_min_width(wide);
+            ui.set_max_width(wide);
             // where the visible part of the content ends (screen x), for what stays at the edge
             ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-visible-right"), ui.cursor().left() + viewport.max.x));
             let src = app.session.source;
@@ -151,6 +153,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.add_space(SECTION_GAP * 2.0);
             pinned_header(app, ui, &placed, view_top);
             section_drag(app, ui, &placed);
+            settle_width(ui.ctx(), viewport.width());
         });
     });
 }
