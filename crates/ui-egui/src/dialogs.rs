@@ -226,8 +226,7 @@ pub(crate) fn popup_open(ctx: &egui::Context) -> bool {
 /// opens in.
 pub(crate) fn host_ui<R>(ctx: &egui::Context, id: egui::Id, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let mut ui = egui::Ui::new(ctx.clone(), id, egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.content_rect()));
-    // the framework's own words in the dialog (its menus, lists and common actions) follow LightCraft's language
-    crate::i18n::with_framework_words(&mut ui, add)
+    add(&mut ui)
 }
 
 /// Block the underlying panels from the first frame, before the dialog's modal layer is recorded. Close background
@@ -1915,7 +1914,7 @@ fn remove_folder_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 /// About owns its SDK layer. Never put it inside the legacy modal window.
 pub(crate) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: bool) {
     if save_effect::active(app, root.ctx()) {
-        return crate::i18n::with_framework_words(root, |root| save_effect::show_root(app, root, blocked));
+        return save_effect::show_root(app, root, blocked);
     }
     if !matches!(app.ui.dialog, Some(Dialog::About)) {
         return show(app, root.ctx(), blocked);
@@ -1936,10 +1935,7 @@ pub(crate) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: b
     let dialog = AboutDialog::new(&info, credits::framework_credits());
     let ctx = root.ctx().clone();
     let (out, record) = craft::ui::runtime::inspect::record(root, egui::Id::unique("about-app-contract"), |ui| {
-        // the About dialog's own words (its title, tabs and headers) in LightCraft's language
-        crate::i18n::with_framework_words(ui, |ui| {
-            craft::ui::runtime::overlay::stack_place(&ctx, STACK_DIALOG, egui::Id::unique("lightcraft.dialog"), || dialog.show(ui))
-        })
+        craft::ui::runtime::overlay::stack_place(&ctx, STACK_DIALOG, egui::Id::unique("lightcraft.dialog"), || dialog.show(ui))
     });
     // The framework dialog's window and its OK under the names every dialog has, with their real responses.
     if !root.is_sizing_pass() && !craft::ui::runtime::measure::active(root.ctx()) {

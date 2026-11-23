@@ -226,58 +226,99 @@ pub fn language() -> Locale {
     LOCALE.with(std::cell::Cell::get)
 }
 
-/// The craft framework's own words (its dialogs' titles and buttons, table headers, common actions) in LightCraft's
-/// language. The framework asks for each word by its English text; LightCraft's catalogs are keyed by English text, so
-/// each word reads as `tr` of its English, and stays English where a catalog has no row. A word with `{app}` in it
-/// ("About {app}") is looked up with the app's name in its place, as LightCraft's own catalogs write it ("About
-/// LightCraft"). One `Words` per language, built once: a new one is a new generation to the framework, which builds
-/// every view that reads it again.
-pub(crate) fn framework_words(language: Locale) -> std::sync::Arc<craft::ui::runtime::env::Words> {
-    use craft::ui::runtime::env::Words;
+/// The craft framework's own words (its dialogs' titles and buttons, menus, tooltips, table headers, common actions)
+/// in LightCraft's language, for the whole window: the framework reads them from the `Host` the app gives each frame
+/// (`FrameInput::host`), through craft-i18n catalogs. These are LightCraft's own catalogs, keyed by English text as
+/// the framework asks for its words ([`framework_catalogs`]). One host per language, kept: a new host is a new
+/// generation to the framework, which builds every view again. English has none, so its words stay the framework's
+/// own as before.
+pub(crate) fn framework_host(language: Locale) -> Option<std::sync::Arc<craft::host::Host>> {
     use std::sync::{Arc, Mutex, PoisonError};
-    static WORDS: Mutex<BTreeMap<Locale, Arc<Words>>> = Mutex::new(BTreeMap::new());
-    let mut cache = WORDS.lock().unwrap_or_else(PoisonError::into_inner);
-    Arc::clone(cache.entry(language).or_insert_with(|| {
-        if language.catalog().is_empty() {
-            return Arc::new(Words::english());
-        }
-        Arc::new(
-            Words::new(move |word| framework_word(language, word.context, word.english)).with_plural(move |_, n, one, other| {
-                let form = if n == 1 { one } else { other };
-                let text = tr_in(language, form);
-                (text != form).then(|| text.replace("{n}", &n.to_string()))
-            }),
-        )
-    }))
+    static HOSTS: Mutex<BTreeMap<Locale, Option<Arc<craft::host::Host>>>> = Mutex::new(BTreeMap::new());
+    if language.catalog().is_empty() {
+        return None;
+    }
+    let mut hosts = HOSTS.lock().unwrap_or_else(PoisonError::into_inner);
+    hosts
+        .entry(language)
+        .or_insert_with(|| {
+            let (i18n, lang) = (framework_catalogs(), framework_lang(language)?);
+            let app = craft::host::AppInfo { id: "lightcraft", name: APP_NAME, version: env!("CARGO_PKG_VERSION") };
+            Some(Arc::new(craft::host::Host::builder(app).i18n(Arc::clone(i18n)).lang(lang).build()))
+        })
+        .clone()
 }
 
 /// The application name the framework's `{app}` words stand for.
 const APP_NAME: &str = "LightCraft";
 
-/// One framework word in `language`: `None` where LightCraft's catalog has no translation of it.
-fn framework_word(language: Locale, context: &str, english: &str) -> Option<String> {
-    let text = if !context.is_empty() {
-        // a word that reads only in its context ("key" for key caps): that row or English
-        language.catalog().get(&format!("{context}|{english}"))?.clone()
-    } else if english.contains("{app}") {
-        let named = english.replace("{app}", APP_NAME);
-        let translated = tr_in(language, &named);
-        if translated == named {
-            return None;
-        }
-        translated.replace(APP_NAME, "{app}")
-    } else {
-        tr_in(language, english).to_owned()
-    };
-    (text != english).then_some(text)
+/// `language` in [`framework_catalogs`].
+pub(crate) fn framework_lang(language: Locale) -> Option<craft::i18n::Lang> {
+    framework_catalogs().from_code(language.code())
 }
 
-/// Runs `body` with the framework's words in the current language ([`framework_words`]): the framework surfaces
-/// shown inside it (dialogs, their menus and lists) read their built-in words in LightCraft's language.
-pub(crate) fn with_framework_words<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    use craft::ui::runtime::env::{WordsOverride, with_env};
-    let words = framework_words(language());
-    with_env(ui, |env| env.words = Some(WordsOverride::Replace(words)), body)
+/// LightCraft's catalogs as craft-i18n catalogs, built once: a row per translated message (a `"<context>|<source>"`
+/// key is a row of that context), and for a message that names the app ("About LightCraft") the same row with
+/// `{app}` in its place, as the framework's words write it ("About {app}"). Rows craft-i18n would refuse (different
+/// placeholders, a trailing … on one side only, control characters) are left out, so they stay English rather than
+/// being logged as broken.
+pub(crate) fn framework_catalogs() -> &'static std::sync::Arc<craft::i18n::I18n> {
+    static CATALOGS: OnceLock<std::sync::Arc<craft::i18n::I18n>> = OnceLock::new();
+    CATALOGS.get_or_init(|| {
+        let offered: Vec<&str> = Locale::ALL.iter().filter(|language| !language.catalog().is_empty()).map(|language| language.code()).collect();
+        let catalogs = offered.iter().filter_map(|code| Locale::parse(code)).map(|language| (language.code().to_owned(), String::new(), craft_catalog(language)));
+        let (i18n, problems) = craft::i18n::I18n::from_owned(catalogs.collect::<Vec<_>>(), &offered);
+        for problem in problems {
+            log::debug!("framework words: {problem}");
+        }
+        std::sync::Arc::new(i18n)
+    })
+}
+
+/// One language's catalog in craft-i18n's row format: `context<TAB>source<TAB>translation`, escaped.
+fn craft_catalog(language: Locale) -> String {
+    fn escape(text: &str) -> String {
+        text.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t")
+    }
+    /// `{name}` placeholders, sorted, as craft-i18n compares them.
+    fn placeholders(text: &str) -> Vec<&str> {
+        let mut names = Vec::new();
+        let mut rest = text;
+        while let Some((_, after)) = rest.split_once('{') {
+            let Some((name, after)) = after.split_once('}') else { break };
+            names.push(name);
+            rest = after;
+        }
+        names.sort_unstable();
+        names
+    }
+    let mut rows = String::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut add = |context: &str, source: &str, translation: &str| {
+        let hidden = |text: &str| text.chars().any(|c| c != '\n' && c != '\t' && (c.is_control() || c == '\u{feff}'));
+        let fits = !source.is_empty()
+            && !translation.is_empty()
+            && !context.starts_with(['@', '#'])
+            && ![context, source, translation].into_iter().any(hidden)
+            && placeholders(source) == placeholders(translation)
+            && source.ends_with('…') == translation.ends_with('…');
+        if fits && seen.insert((context.to_owned(), source.to_owned())) {
+            rows.push_str(&format!("{}\t{}\t{}\n", escape(context), escape(source), escape(translation)));
+        }
+    };
+    for (key, translation) in language.catalog() {
+        // a contextual message (`tr_ctx`): its context is a plain word before the bar
+        match key.split_once('|') {
+            Some((context, source)) if !context.is_empty() && context.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') => {
+                add(context, source, translation);
+            }
+            _ => add("", key, translation),
+        }
+        if key.contains(APP_NAME) && translation.contains(APP_NAME) && !key.contains("{app}") {
+            add("", &key.replace(APP_NAME, "{app}"), &translation.replace(APP_NAME, "{app}"));
+        }
+    }
+    rows
 }
 
 /// Translate a built-in display label, preserving unknown labels verbatim.
