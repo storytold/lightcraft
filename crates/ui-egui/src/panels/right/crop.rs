@@ -211,7 +211,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     header(ui, "Geometry");
     padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Upright"));
+        ui.label(crate::i18n::tr("Perspective Correction"));
         {
             use lightcraft_develop::Upright;
             let modes = [

@@ -13,6 +13,8 @@ use crate::state::{ViewMode, Zoom};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
+pub mod survey;
+
 /// Most photos a survey shows.
 pub const SURVEY_MAX: usize = 48;
 
@@ -203,9 +205,25 @@ fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: 
     if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
         app.renderer.request(slot, job, 60);
     }
+    request_thumb(app, id);
+}
+
+/// Ask for the thumbnail a tile shows until its render is there.
+fn request_thumb(app: &mut LightcraftApp, id: PhotoId) {
     if let Some(job) = app.session.thumb_job(id, 256) {
         app.renderer.request(Slot::Thumb(id), job, 30);
     }
+}
+
+/// The photo's frame as shown: cropped, rotated and lens-corrected.
+fn frame_of(photo: &lightcraft_catalog::Photo) -> lightcraft_pipeline::geometry::Frame {
+    lightcraft_pipeline::geometry::Frame::with_lens(
+        photo.width.max(1) as usize,
+        photo.height.max(1) as usize,
+        &photo.develop,
+        true,
+        photo.embedded_lens.as_ref(),
+    )
 }
 
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
@@ -226,13 +244,7 @@ fn photo_tile(
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, area, resp) };
     let caption_h = 26.0;
     let img_area = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - caption_h));
-    let frame = lightcraft_pipeline::geometry::Frame::with_lens(
-        photo.width.max(1) as usize,
-        photo.height.max(1) as usize,
-        &photo.develop,
-        true,
-        photo.embedded_lens.as_ref(),
-    );
+    let frame = frame_of(&photo);
     let aspect = frame.aspect() as f32;
     let native = super::detail::output_px(&frame);
     let mut img = super::detail::fit_rect(img_area, aspect, zoom, native, ppp, app.ui.pan);
@@ -249,7 +261,13 @@ fn photo_tile(
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
-    request_tile_renders(app, id, slot, want, aspect);
+    // a gliding survey tile asks for its render once it has landed, not one per size it passes on
+    // the way, and for its thumbnail (one size) meanwhile; tiles that stay put render as usual
+    if app.ui.view == ViewMode::Survey && app.survey_motion.gliding(id, ui.input(|i| i.time)) {
+        request_thumb(app, id);
+    } else {
+        request_tile_renders(app, id, slot, want, aspect);
+    }
     // zoomed past what that render holds (1:1 to check focus): the part on screen as a window, as
     // in the loupe. Compare and Reference only; Survey tiles are fit views.
     let pane = match slot {
@@ -546,21 +564,6 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.painter().line_segment([pos2(mid, area.top()), pos2(mid, area.bottom())], Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
 }
 
-/// Columns for `n` tiles of aspect ~3:2 in `area`, maximizing the tile size.
-pub fn survey_columns(n: usize, area: Rect) -> usize {
-    let mut best = (1, 0.0f32);
-    for cols in 1..=n.max(1) {
-        let rows = n.div_ceil(cols);
-        let w = area.width() / cols as f32;
-        let h = area.height() / rows as f32;
-        let s = w.min(h * 1.5);
-        if s > best.1 {
-            best = (cols, s);
-        }
-    }
-    best.0
-}
-
 pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let canvas = area_and_filmstrip(app, ui);
@@ -570,14 +573,20 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         return;
     }
     let area = canvas.shrink(14.0);
-    let cols = survey_columns(photos.len(), area);
-    let rows = photos.len().div_ceil(cols);
-    let (cw, ch) = (area.width() / cols as f32, area.height() / rows as f32);
-    for (i, id) in photos.iter().enumerate() {
-        let (c, r) = (i % cols, i / cols);
-        let cell = Rect::from_min_size(pos2(area.left() + c as f32 * cw, area.top() + r as f32 * ch), vec2(cw, ch)).shrink(6.0);
+    let aspects: Vec<f32> = photos.iter().map(|id| app.session.catalog.photo(*id).map_or(1.5, |p| frame_of(p).aspect() as f32)).collect();
+    let cells = survey::cells(&aspects, area);
+    let now = ui.input(|i| i.time);
+    let placed = app.survey_motion.place(&photos, &cells, area, ui.ctx().cumulative_frame_nr(), now);
+    let (slots, freed) = app.survey_motion.assign_slots(&photos);
+    for s in freed {
+        app.renderer.release(Slot::Compare(s));
+    }
+    if app.survey_motion.moving(now) {
+        ui.ctx().request_repaint();
+    }
+    for ((id, cell), slot) in photos.iter().zip(placed).zip(slots) {
         // (Survey tiles are fit views with no windows: what counts is the photo as painted)
-        let (_, img, resp) = photo_tile(app, ui, *id, Slot::Compare(i as u8), cell, "", Zoom::Fit);
+        let (_, img, resp) = photo_tile(app, ui, *id, Slot::Compare(slot), cell.shrink(survey::GAP), "", Zoom::Fit);
         if app.session.selection.active == Some(*id) {
             app.image_rect = Some(img);
         }

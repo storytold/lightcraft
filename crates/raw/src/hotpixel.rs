@@ -140,7 +140,7 @@ impl RawImage {
         let black = self.black.mean();
         let RawData::U16(d) = &mut self.data else { return 0 };
         if self.cpp != 1
-            || !cfa.valid()
+            || !crate::cfa_valid(&cfa)
             || w.checked_mul(h) != Some(d.len())
             || a.width < 4 * MARGIN
             || a.height < 4 * MARGIN
@@ -316,6 +316,12 @@ fn candidates(v: &View<'_>, (x0, x1, y0, y1): (usize, usize, usize, usize), blac
                 let s = v.at(x as isize, y as isize);
                 let max = v.neighbours(x, y, &mut buf);
                 if s <= max {
+                    continue;
+                }
+                // σ rises with level and the median is at least the dimmest neighbour, so σ there bounds the
+                // threshold from below: most photosites fail it without sorting their neighbours
+                let min = buf.iter().copied().fold(f32::MAX, f32::min);
+                if s - max <= K_HOT * noise.sigma(min - black) {
                     continue;
                 }
                 let m = median(&mut buf);
@@ -515,5 +521,59 @@ mod tests {
         let before = r.data.clone();
         assert_eq!(r.suppress_hot_pixels(), 0);
         assert_eq!(r.data, before);
+    }
+
+    /// The candidates skip sorting a photosite's neighbours when it can't pass with the dimmest of them as its
+    /// median. With shot noise (σ rising with level) and photosites on an edge between a dark and a bright area,
+    /// that shortcut must find exactly the candidates of the full test on every photosite.
+    #[test]
+    fn candidates_match_the_full_test_across_an_edge() {
+        let (w, h, black) = (128usize, 128usize, 512.0f32);
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut noise = || {
+            (0..4)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed >> 11) as f32 / (1u64 << 53) as f32 - 0.5
+                })
+                .sum::<f32>()
+                * 1.732
+        };
+        // dark left, bright right, shot noise σ² = 4 · level + 100
+        let mut data: Vec<u16> = (0..w * h)
+            .map(|i| {
+                let level = if i % w < w / 2 { 400.0 } else { 9000.0 };
+                (black + level + (4.0 * level + 100.0).sqrt() * noise()).round() as u16
+            })
+            .collect();
+        // photosites on both sides of the edge, from slightly to far above their brightest neighbours
+        for (k, y) in (8..120).step_by(3).enumerate() {
+            let x = w / 2 - 2 + k % 4;
+            data[y * w + x] = (black + 9000.0 + 60.0 * (k % 9) as f32 + 150.0) as u16;
+        }
+        let d = &data;
+        let cfa = Cfa::bayer("RGGB").unwrap();
+        let phases = super::phases(&cfa);
+        let v = super::View { d, w, pw: cfa.width, ph: cfa.height, phases: &phases };
+        let area = (super::MARGIN, w - super::MARGIN, super::MARGIN, h - super::MARGIN);
+        let noise = super::noise_model(&v, area, black, 16383.0 - black).unwrap();
+        assert!(noise.sigma(9000.0) > 2.0 * noise.sigma(400.0), "the fit sees shot noise: {noise:?}");
+        // the full test on every photosite
+        let mut buf = Vec::new();
+        let mut full = Vec::new();
+        for y in area.2..area.3 {
+            for x in area.0..area.1 {
+                let s = v.at(x as isize, y as isize);
+                let max = v.neighbours(x, y, &mut buf);
+                let m = super::median(&mut buf);
+                if s > max && s - max > super::K_HOT * noise.sigma(m - black) {
+                    full.push((x, y, m.round() as u16));
+                }
+            }
+        }
+        assert!(full.len() >= 10, "the edge has candidates to find: {}", full.len());
+        assert_eq!(super::candidates(&v, area, black, noise), full);
     }
 }

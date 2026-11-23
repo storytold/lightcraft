@@ -728,6 +728,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     ),
                     None => None,
                 };
+                // the keywords given that the library refuses as new names, each checked once
+                let refused: Vec<(String, String)> = strs("keywords")
+                    .into_iter()
+                    .flatten()
+                    .chain(strs("addKeywords").unwrap_or_default())
+                    .map(|k| lightcraft_catalog::keywords::clean(&k))
+                    .filter_map(|k| s.catalog.check_keyword_name(&k).err().map(|e| (k, e.to_string())))
+                    .collect();
                 let mut ops = Vec::new();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
@@ -757,7 +765,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::clean;
+                    use lightcraft_catalog::keywords::{clean, same};
                     // (a set of the lower-cased keywords keeps this linear however many are supplied)
                     let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
                     let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
@@ -766,6 +774,10 @@ pub fn specs() -> Vec<CommandSpec> {
                             m.keywords.push(k);
                         }
                     };
+                    // a keyword the photo or the library doesn't have yet can't end in `*`
+                    if let Some((_, e)) = refused.iter().find(|(k, _)| !m.keywords.iter().any(|x| same(&clean(x), k))) {
+                        return Err(bad("photo.setMeta", e.clone()));
+                    }
                     if let Some(k) = strs("keywords") {
                         m.keywords.clear();
                         seen.clear();
@@ -1302,10 +1314,13 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         // ---- import
         cmd!(query "library.inspectLightroom", "Inspect Lightroom Catalog", [], None,
-        "{path: .lrcat} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
-        always, |_, p| {
+        "{path: .lrcat, or a Lightroom catalog backup .zip} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
+        always, |s, p| {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
-            let data = crate::lightroom_catalog::read(std::path::Path::new(path)).map_err(|e| bad("library.inspectLightroom",e))?;
+            let (cancel, total, done) = Default::default();
+            let temp = crate::lightroom_catalog::backup_temp_root(s);
+            let data = crate::lightroom_catalog::read_source(std::path::Path::new(path), temp.as_deref(), &cancel, &total, &done)
+                .map_err(|e| bad("library.inspectLightroom",e))?;
             Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings,"skipped":data.skipped}))
         }),
         cmd!(
@@ -1313,7 +1328,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Lightroom Catalog",
             [],
             None,
-            "{path: .lrcat, updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
+            "{path: .lrcat, or a Lightroom catalog backup .zip (unpacked to a temporary folder in the library, removed after reading; the zip is not changed), updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;

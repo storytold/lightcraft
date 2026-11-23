@@ -85,6 +85,9 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
         app.ui.dialog = None;
     }
     app.renderer.forget_all();
+    // photo ids are local to a catalog: a survey tile of the next library must not glide from a
+    // cell of this one, nor keep its render slot
+    app.survey_motion = Default::default();
     if let Err(err) = opened {
         let Some(prev) = previous_dir else { return Err(err) };
         return match app.session.open_library(&prev, false) {
