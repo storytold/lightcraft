@@ -140,13 +140,12 @@ impl Frames {
             let mut draw = |ui: &mut egui::Ui, app: &mut LightcraftApp| {
                 let ctx = ui.ctx().clone();
                 let mut section = || {
-                    assert_eq!(super::super::native_controls::active(&ctx), native_settings);
                     let t = Tokens::get(&ctx);
                     preview_cache_section(app, ui, &t);
                     after(ui, app);
                 };
                 if native_settings {
-                    super::super::native_controls::scope(&ctx, section);
+                    (section)();
                 } else {
                     section();
                 }

@@ -749,7 +749,7 @@ fn button_row(
     ui.add_space((ui.available_width() - buttons_w).max(0.0));
     // The LabelNames SDK inputs and footer share one traversal without carrying a
     // footer's place from another dialog kind in the generic dialog window.
-    if matches!(dlg, Dialog::LabelNames { .. }) && !settings::native_controls_active(ui.ctx()) {
+    if matches!(dlg, Dialog::LabelNames { .. }) {
         let cancel_size = cancel_button.desired_size(ui);
         let ok_size = ok_button.desired_size(ui);
         ui.push_id(kind, |ui| {
@@ -778,9 +778,9 @@ fn button_row(
         return;
     }
     let sdk_album =
-        matches!(dlg, Dialog::NewAlbum { .. }) && !settings::native_controls_active(ui.ctx());
+        matches!(dlg, Dialog::NewAlbum { .. });
     let keyword_footer = match dlg {
-        Dialog::KeywordTag { editing, parent, .. } if !settings::native_controls_active(ui.ctx()) => Some((editing.as_deref(), parent.as_deref())),
+        Dialog::KeywordTag { editing, parent, .. } => Some((editing.as_deref(), parent.as_deref())),
         _ => None,
     };
     let cancel_clicked = !informational
@@ -1122,34 +1122,24 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, close: &mut bool, dlg: &mut Dialog) {
     let Dialog::SmartRules { id, name, rules, .. } = dlg else { return };
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    if settings::native_controls_active(ui.ctx()) {
-        let r = crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY)),
-            crate::i18n::tr("Name"),
-        );
-        if real {
-            crate::widgets::register(ui, "field:smartName", r.rect);
-        }
-    } else {
-        use craft::ui::contract::{Bind, Props as _, Show as _};
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
-        let eligible = real && ui.is_enabled() && ui.is_visible() && ui.clip_rect().intersects(rect);
-        let shown = craft::ui::text::TextField::new(crate::i18n::tr("Name").to_owned(), Bind::bound(name))
-            .id_salt("field:smartName")
-            .placeholder(crate::i18n::tr("Name").to_owned())
-            // A covering legacy prompt freezes the draft, including gesture-cancel restores.
-            // Disabled presentation alone can still produce an SDK Cancel on the old focus.
-            .read_only(!ui.is_enabled())
-            .limit(None)
-            .show_at(ui, rect);
-        if real {
-            crate::widgets::register_response("field:smartName", shown.response.rect, &shown.response);
-        }
-        // Only this plain Name opts into the observed legacy one-Escape whole-draft close.
-        // No programmatic draft-revert/completion path is installed here: public `escaped`
-        // also covers Escape-reason Revert and must not be treated as proof of a physical key.
-        *close |= eligible && shown.escaped;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
+    let eligible = real && ui.is_enabled() && ui.is_visible() && ui.clip_rect().intersects(rect);
+    let shown = craft::ui::text::TextField::new(crate::i18n::tr("Name").to_owned(), Bind::bound(name))
+        .id_salt("field:smartName")
+        .placeholder(crate::i18n::tr("Name").to_owned())
+        // A covering legacy prompt freezes the draft, including gesture-cancel restores.
+        // Disabled presentation alone can still produce an SDK Cancel on the old focus.
+        .read_only(!ui.is_enabled())
+        .limit(None)
+        .show_at(ui, rect);
+    if real {
+        crate::widgets::register_response("field:smartName", shown.response.rect, &shown.response);
     }
+    // Only this plain Name opts into the observed legacy one-Escape whole-draft close.
+    // No programmatic draft-revert/completion path is installed here: public `escaped`
+    // also covers Escape-reason Revert and must not be treated as proof of a physical key.
+    *close |= eligible && shown.escaped;
     ui.add_space(6.0);
     // the folder an album made from a folder view carries is not in the editor, but it counts
     let folder = id
@@ -1276,10 +1266,6 @@ fn label_names_body(
     t: &Tokens,
     dlg: &mut Dialog,
 ) -> bool {
-    if settings::native_controls_active(ui.ctx()) {
-        label_names_native_body(app, ui, t, dlg);
-        return false;
-    }
     let Dialog::LabelNames { names, save_as } = dlg else {
         return false;
     };
@@ -1469,10 +1455,6 @@ fn new_album_body(
     use craft::ui::contract::{Bind, Props as _, Show as _};
     // Respect an explicit native presentation scope without changing the
     // installed generic dialog's supported-SDK default.
-    if settings::native_controls_active(ui.ctx()) {
-        new_album_native_body(app, ui, confirm, dlg);
-        return;
-    }
     let Dialog::NewAlbum {
         name,
         folder,
@@ -1624,59 +1606,6 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     else {
         return;
     };
-    if settings::native_controls_active(ui.ctx()) {
-        ui.label(egui::RichText::new(crate::i18n::tr("Keyword Name")).color(t.text_dim));
-        // several fields: the name takes the focus when the dialog opens, not after
-        let r = crate::text_field::TextField::singleline("field:keywordTagName", name)
-            .hint(crate::i18n::tr("Keyword Name"))
-            .width(f32::INFINITY)
-            .select_on_focus(true)
-            .show(ui);
-        if ui.is_enabled() && just_opened(ui, "keyword-tag") {
-            r.response.request_focus();
-        }
-        if r.ending == Some(crate::text_field::Ending::Return) {
-            *confirm = true;
-        }
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(crate::i18n::tr("Synonyms")).color(t.text_dim));
-        // Return in either field creates (or saves) the keyword
-        let r = crate::text_field::TextField::singleline("field:keywordSynonyms", synonyms)
-            .hint(crate::i18n::tr("Separated by commas"))
-            .width(f32::INFINITY)
-            .show(ui);
-        if r.ending == Some(crate::text_field::Ending::Return) {
-            *confirm = true;
-        }
-        ui.add_space(6.0);
-        if editing.is_none() {
-            if let Some(p) = parent {
-                let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
-                #[cfg(test)]
-                keyword_tag_options_flow_tests::observe(ui, "check:keywordInside", &r);
-                crate::widgets::register(ui, "check:keywordInside", r.rect);
-            }
-            let n = app.session.selection.ids.len();
-            let r = ui.add_enabled(n > 0, egui::Checkbox::new(add_to_selected, crate::i18n::tr("Add to Selected Photos")));
-            #[cfg(test)]
-            keyword_tag_options_flow_tests::observe(ui, "check:keywordAddToSelected", &r);
-            crate::widgets::register(ui, "check:keywordAddToSelected", r.rect);
-            ui.add_space(4.0);
-        }
-        ui.label(egui::RichText::new(crate::i18n::tr("Keyword Tag Options")).color(t.text_dim));
-        for (on, label, id) in [
-            (include_on_export, "Include on Export", "check:keywordIncludeOnExport"),
-            (export_containing, "Export Containing Keywords", "check:keywordExportContaining"),
-            (export_synonyms, "Export Synonyms", "check:keywordExportSynonyms"),
-            (person, "Person", "check:keywordPerson"),
-        ] {
-            let r = ui.checkbox(on, crate::i18n::tr(label));
-            #[cfg(test)]
-            keyword_tag_options_flow_tests::observe(ui, id, &r);
-            crate::widgets::register(ui, id, r.rect);
-        }
-        return;
-    }
 
     use craft::behavior::Proposal;
     use craft::ui::choice::Checkbox;

@@ -445,11 +445,6 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
         ui.allocate_space(vec2(ui.available_width(), Tokens::get(ui.ctx()).slider_row_h));
         return;
     }
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        let out = slider(ui, spec, current, ui.is_enabled(), None);
-        apply_slider_out(app, spec, out, |app, value| set(app, spec, value));
-        return;
-    }
     let owner = (app.session.library_generation(), target.0, target.1);
     let pass = ui.ctx().cumulative_pass_nr();
     let enabled = ui.is_enabled();
@@ -722,40 +717,25 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     let t = Tokens::get(ui.ctx());
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let native = crate::panels::settings::native_controls_active(ui.ctx());
     let parent_enabled = ui.is_enabled();
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
-        if native {
-            if real {
-                let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
-                egui::Popup::menu(&r).show(|ui| {
-                    for v in MaskView::ALL {
-                        if ui.selectable_label(v == view, menu_label(v.label())).clicked() && parent_enabled && ui.is_enabled() {
-                            let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
-                        }
-                    }
-                });
-            } else {
-                ui.add_enabled(false, egui::Button::new(menu_label(view.label())));
-            }
-        } else {
-            // Reserve the original dropdown's size and automatic response ID. The SDK owns
-            // its list, real focus, proposals and cancellation; only a pick runs the command.
-            let g = one_line(ui.painter(), menu_label(view.label()), t.font(12.5), t.text_label, f32::INFINITY);
-            let (id, rect) = ui.allocate_space(vec2(g.size().x + 20.0, g.size().y.max(20.0)));
-            let entries: Vec<_> = MaskView::ALL.into_iter().map(|v| Entry::new(v.name().to_owned(), menu_label(v.label()))).collect();
-            let out = Select::new(crate::i18n::tr("Overlay"), Bind::given(view.name().to_owned()), &entries).id(id).enabled(real).show_at(ui, rect);
-            if real {
-                crate::widgets::register_response("dropdown:maskOverlayMode", out.response.rect, &out.response);
-                if ui.is_enabled()
-                    && let Some(mode) = out.events.committed()
-                {
-                    let _ = app.run("view.maskOverlayMode", json!({"mode": mode}));
-                }
+        // Reserve the original dropdown's size and automatic response ID. The SDK owns
+        // its list, real focus, proposals and cancellation; only a pick runs the command.
+        let g = one_line(ui.painter(), menu_label(view.label()), t.font(12.5), t.text_label, f32::INFINITY);
+        let (id, rect) = ui.allocate_space(vec2(g.size().x + 20.0, g.size().y.max(20.0)));
+        let entries: Vec<_> = MaskView::ALL.into_iter().map(|v| Entry::new(v.name().to_owned(), menu_label(v.label()))).collect();
+        let out = Select::new(crate::i18n::tr("Overlay"), Bind::given(view.name().to_owned()), &entries).id(id).enabled(real).show_at(ui, rect);
+        if real {
+            crate::widgets::register_response("dropdown:maskOverlayMode", out.response.rect, &out.response);
+            if ui.is_enabled()
+                && let Some(mode) = out.events.committed()
+            {
+                let _ = app.run("view.maskOverlayMode", json!({"mode": mode}));
             }
         }
+    
     });
     let colored = matches!(view, MaskView::Color | MaskView::ColorOnBw);
     if colored {
@@ -763,18 +743,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             for c in OVERLAY_COLORS {
                 let name = format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
                 let label = format!("{} #{:02x}{:02x}{:02x}", crate::i18n::tr("Overlay color"), c[0], c[1], c[2]);
-                let clicked = if native {
-                    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), if real { Sense::click() } else { Sense::hover() });
-                    if real {
-                        crate::widgets::announce(&resp, label);
-                        crate::widgets::register_response(name, r, &resp);
-                    }
-                    ui.painter().rect_filled(r.shrink(2.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
-                    if app.ui.mask_overlay_color == c {
-                        ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
-                    }
-                    resp.clicked()
-                } else {
+                let clicked = {
                     let (id, rect) = ui.allocate_space(vec2(18.0, 18.0));
                     // Palette bytes are encoded sRGB, not linear-light colour values.
                     let color = craft::theme::Srgba::rgb(c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0);
@@ -803,94 +772,74 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let enabled = colored && app.ui.mask_overlay;
     let pins_id;
-    if native {
-        if real {
-            let out = slider(ui, &spec, app.ui.mask_overlay_opacity as f64, enabled && ui.is_enabled(), None);
-            if ui.is_enabled()
-                && let Some(v) = out.value
-            {
-                app.ui.mask_overlay_opacity = v as f32;
-            }
-        } else {
-            ui.allocate_space(vec2(ui.available_width(), t.slider_row_h));
-        }
-        pins_id = ui.next_auto_id();
+    // Keep the original row geometry and each interactive response ID. Separate SDK
+    // slider/number controls retain the existing track and exact-entry locators.
+    let w = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
+    pins_id = ui.next_auto_id();
+    let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(w - 46.0, 18.0));
+    let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
+    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+    let id = ui.scope_id().with(spec.id);
+    let mut value = app.ui.mask_overlay_opacity as f64;
+    let label = ui.interact(label_rect, id.with("label"), if real && enabled { Sense::click() } else { Sense::hover() });
+    crate::widgets::announce(&label, crate::i18n::tr_format!("Reset {name}", name = crate::i18n::tr("Opacity")));
+    let label = if enabled && real {
+        label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = crate::i18n::tr("Opacity")))
     } else {
-        // Keep the original row geometry and each interactive response ID. Separate SDK
-        // slider/number controls retain the existing track and exact-entry locators.
-        let w = ui.available_width();
-        let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
-        pins_id = ui.next_auto_id();
-        let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(w - 46.0, 18.0));
-        let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
-        let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
-        let id = ui.scope_id().with(spec.id);
-        let mut value = app.ui.mask_overlay_opacity as f64;
-        let label = ui.interact(label_rect, id.with("label"), if real && enabled { Sense::click() } else { Sense::hover() });
-        crate::widgets::announce(&label, crate::i18n::tr_format!("Reset {name}", name = crate::i18n::tr("Opacity")));
-        let label = if enabled && real {
-            label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = crate::i18n::tr("Opacity")))
-        } else {
-            label
-        };
-        ui.painter().text(
-            label_rect.left_center(),
-            egui::Align2::LEFT_CENTER,
-            crate::i18n::tr("Opacity"),
-            t.font(12.5),
-            if enabled { t.text_label } else { t.text_disabled },
-        );
-        let out = Slider::new(Bind::bound(&mut value).reset(spec.default), spec.min..=spec.max)
-            .id(id)
-            .label(crate::i18n::tr("Opacity"))
-            .step(spec.step)
-            .enabled(real && enabled)
-            .show_at(ui, track_rect);
-        let field = NumberField::new(
-            crate::i18n::tr_format!("{name} value", name = crate::i18n::tr("Opacity")),
-            Bind::given(Some(value)).reset(Some(spec.default)),
-        )
-        .id(id.with("value"))
-        .range(spec.min..=spec.max)
+        label
+    };
+    ui.painter().text(
+        label_rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        crate::i18n::tr("Opacity"),
+        t.font(12.5),
+        if enabled { t.text_label } else { t.text_disabled },
+    );
+    let out = Slider::new(Bind::bound(&mut value).reset(spec.default), spec.min..=spec.max)
+        .id(id)
+        .label(crate::i18n::tr("Opacity"))
         .step(spec.step)
-        // A display suffix alone does not teach NumberField to parse percent text.
-        // Percent has factor 1 here: both bare 63 and 63% keep the host's 0..100 units.
-        .unit_kind(craft::ui::runtime::env::UnitKind::Percent)
-        .unit("%")
-        .snap_typed(true)
-        .fixed_decimals(0)
-        .commit_decimals(0)
         .enabled(real && enabled)
-        .show_at(ui, value_rect);
-        if real {
-            crate::widgets::register_response("sliderLabel:ui.maskOverlayOpacity", label.rect, &label);
-            crate::widgets::register_response("slider:ui.maskOverlayOpacity", out.response.rect, &out.response);
-            crate::widgets::register_response("sliderValue:ui.maskOverlayOpacity", field.response.rect, &field.response);
-            crate::widgets::register_response("sliderField:ui.maskOverlayOpacity", field.response.rect, &field.response);
-            if enabled && ui.is_enabled() {
-                if label.double_clicked() {
-                    value = spec.default;
-                } else if let Some(Some(next)) = field.events.committed() {
-                    // The original exact-entry field applies only on Return/blur, unlike
-                    // the live track. A proposal is not a committed per-view edit.
-                    value = *next;
-                }
-                // Opacity has always been a per-view value, not a develop command or
-                // history entry. Local binding isolates speculative slider passes.
-                if value.is_finite() {
-                    app.ui.mask_overlay_opacity = value as f32;
-                }
+        .show_at(ui, track_rect);
+    let field = NumberField::new(
+        crate::i18n::tr_format!("{name} value", name = crate::i18n::tr("Opacity")),
+        Bind::given(Some(value)).reset(Some(spec.default)),
+    )
+    .id(id.with("value"))
+    .range(spec.min..=spec.max)
+    .step(spec.step)
+    // A display suffix alone does not teach NumberField to parse percent text.
+    // Percent has factor 1 here: both bare 63 and 63% keep the host's 0..100 units.
+    .unit_kind(craft::ui::runtime::env::UnitKind::Percent)
+    .unit("%")
+    .snap_typed(true)
+    .fixed_decimals(0)
+    .commit_decimals(0)
+    .enabled(real && enabled)
+    .show_at(ui, value_rect);
+    if real {
+        crate::widgets::register_response("sliderLabel:ui.maskOverlayOpacity", label.rect, &label);
+        crate::widgets::register_response("slider:ui.maskOverlayOpacity", out.response.rect, &out.response);
+        crate::widgets::register_response("sliderValue:ui.maskOverlayOpacity", field.response.rect, &field.response);
+        crate::widgets::register_response("sliderField:ui.maskOverlayOpacity", field.response.rect, &field.response);
+        if enabled && ui.is_enabled() {
+            if label.double_clicked() {
+                value = spec.default;
+            } else if let Some(Some(next)) = field.events.committed() {
+                // The original exact-entry field applies only on Return/blur, unlike
+                // the live track. A proposal is not a committed per-view edit.
+                value = *next;
+            }
+            // Opacity has always been a per-view value, not a develop command or
+            // history entry. Local binding isolates speculative slider passes.
+            if value.is_finite() {
+                app.ui.mask_overlay_opacity = value as f32;
             }
         }
     }
     let mut pins = app.ui.mask_pins;
-    let changed = if native {
-        let out = ui.add_enabled(real, egui::Checkbox::new(&mut pins, crate::i18n::tr("Show Pins")));
-        if real {
-            crate::widgets::register_response("check:maskPins", out.rect, &out);
-        }
-        out.changed()
-    } else {
+    let changed = {
         let out = Checkbox::new(Bind::given(pins)).id(pins_id).label(crate::i18n::tr("Show Pins")).enabled(real).show(ui);
         if real {
             crate::widgets::register_response("check:maskPins", out.response.rect, &out.response);
@@ -939,15 +888,6 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             editing: bool,
         }
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        if crate::panels::settings::native_controls_active(ui.ctx()) {
-            if real {
-                let out = slider(ui, spec, value, ui.is_enabled(), None);
-                apply_slider_out(app, spec, out, set);
-            } else {
-                ui.allocate_space(vec2(ui.available_width(), Tokens::get(ui.ctx()).slider_row_h));
-            }
-            return;
-        }
         let owner = (app.session.library_generation(), app.session.active(), app.session.active_mask);
         let key = ui.scope_id().with(("mask-range-visit", comp, spec.id));
         let revision = app.session.catalog.revision;
@@ -1154,13 +1094,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             });
             let mut map = app.ui.mask_overlay && app.ui.mask_overlay_mode == "colorOnBw";
             let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-            let changed = if crate::panels::settings::native_controls_active(ui.ctx()) {
-                let r = ui.add_enabled(real, egui::Checkbox::new(&mut map, crate::i18n::tr("Show Luminance Map")));
-                if real {
-                    crate::widgets::register_response(format!("check:lumMap{comp}"), r.rect, &r);
-                }
-                r.changed()
-            } else {
+            let changed = {
                 use craft::ui::contract::{Bind, Props as _, Show as _};
                 let out = craft::ui::choice::Checkbox::new(Bind::given(map))
                     .id_salt(("luminance-map", app.session.library_generation(), app.session.active(), app.session.active_mask, comp))
@@ -1305,21 +1239,6 @@ fn component_row_popup(
         return;
     }
     let target = ComponentMenuTarget::current(app, mask, k);
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        // A native fallback is deliberately retained, not mixed with SDK stops. Capture its
-        // original document revision while open so a shifted index can never name a new row.
-        let mut draw = |ui: &mut egui::Ui| {
-            let key = ui.scope_id().with("native-component-menu-target");
-            let pass = ui.ctx().cumulative_pass_nr();
-            let previous = ui.data(|d| d.get_temp::<NativeComponentMenuVisit>(key));
-            let held = previous.filter(|v| v.pass == pass || v.pass.checked_add(1) == Some(pass)).map_or(target, |v| v.target);
-            ui.data_mut(|d| d.insert_temp(key, NativeComponentMenuVisit { target: held, pass }));
-            ui.add_enabled_ui(held == target && held.live(app), |ui| native_component_row_menu(app, ui, mask, k, label, count));
-        };
-        crate::widgets::context_menu(row, &mut draw);
-        egui::Popup::menu(more).show(draw);
-        return;
-    }
     if row.secondary_clicked() && crate::widgets::carrying(ui.ctx()) {
         return;
     }
@@ -1683,14 +1602,7 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     fn check(ui: &mut egui::Ui, owner: (u64, Option<PhotoId>, Option<u32>), name: &str, label: &str, hint: &str, value: &mut bool) {
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        let next = if crate::panels::settings::native_controls_active(ui.ctx()) {
-            let mut local = *value;
-            let response = ui.add_enabled(real, egui::Checkbox::new(&mut local, crate::i18n::tr(label))).on_hover_text(crate::i18n::tr(hint));
-            if real {
-                crate::widgets::register_response(format!("check:{name}"), response.rect, &response);
-            }
-            response.changed().then_some(local)
-        } else {
+        let next = {
             let out = craft::ui::choice::Checkbox::new(Bind::given(*value))
                 .id_salt(("mask-brush", owner, name))
                 .label(crate::i18n::tr(label).to_owned())
@@ -1726,15 +1638,6 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             number_start: Option<f64>,
         }
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        if crate::panels::settings::native_controls_active(ui.ctx()) {
-            return if real {
-                let enabled = ui.is_enabled();
-                slider(ui, spec, current, enabled, None).value.filter(|_| enabled)
-            } else {
-                ui.allocate_space(vec2(ui.available_width(), Tokens::get(ui.ctx()).slider_row_h));
-                None
-            };
-        }
         let owner = (app.session.library_generation(), app.session.active(), app.session.active_mask);
         let revision = app.session.catalog.revision;
         let pass = ui.ctx().cumulative_pass_nr();

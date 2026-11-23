@@ -7,10 +7,8 @@ use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
 /// The monitor profile (`app.displayProfile`): previews are shown through the display's ICC
 /// profile, so wide-gamut and calibrated displays show colours as they are.
 pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    if !super::native_controls_active(ui.ctx()) {
-        monitor_profile_sdk(app, ui, t);
-        return;
-    }
+    monitor_profile_sdk(app, ui, t);
+    return;
     heading(ui, t, crate::i18n::tr("Monitor profile"));
     let current = app.renderer.display().cloned();
     let screen = current.as_ref().is_some_and(|d| d.path == crate::SCREEN_PROFILE);
@@ -216,99 +214,77 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         for (i, line) in lines.iter_mut().enumerate() {
             let id = format!("viewOptionsInfo{n}Line{}", i + 1);
             let name = crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label()));
-            if super::native_controls_active(ui.ctx()) {
-                // Settings remains one native subtree until mixed traversal is supported.
-                let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
+            use craft::ui::buttons::Button;
+            use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+            use craft::ui::controls::disclosure::DisclosureGlyph;
+            use craft::ui::menu::{Menu, MenuItem};
+
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
+            if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+                continue;
+            }
+            let face = Button::new(name.clone())
+                .painted(crate::i18n::tr(line.label()).to_owned())
+                .trailing_icon(DisclosureGlyph::dropdown())
+                .id_salt(("view-options-line", &id))
+                .show_at(ui, rect);
+            crate::widgets::register_response(format!("combo:{id}"), rect, &face.response);
+            // A value menu retains the existing semantic option locators, unlike indexed
+            // Select rows. Only activation commits; navigating or dismissing edits nothing.
+            let mut picked = None;
+            // The SDK's external Click opener is pointer-press-only. Let the production
+            // button's actual activation (pointer, keyboard or AT) own the toggle instead.
+            // Stale state expires when this field leaves the presented subtree.
+            let pass = ui.ctx().cumulative_pass_nr();
+            let slot = face.response.id.with("menu-open");
+            let mut open = ui
+                .data(|data| data.get_temp::<(u64, bool)>(slot))
+                .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
+                .is_some_and(|(_, open)| open);
+            if ui.is_enabled() && face.clicked() {
+                open = !open;
+            }
+            Menu::new(name)
+                .id_salt(("view-options-menu", &id))
+                .values()
+                .opened_by(&face.response, Trigger::Manual)
+                .open(Bind::bound(&mut open))
+                .show(ui, |ui, _| {
                     for f in F::ALL {
                         let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-                        let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
-                        register(ui, format!("button:{id}-{key}"), r.rect);
-                        if r.clicked() {
-                            *line = *f;
+                        let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+                        // These are literal translated captions, not mnemonic-marked menu text.
+                        let caption = crate::i18n::tr(f.label()).replace('&', "&&");
+                        let row = MenuItem::new(caption).id_salt((&id, &key)).entry_checked(line == f);
+                        let row = if line == f { row.default_stop() } else { row };
+                        let row = row.show(ui);
+                        if !measuring {
+                            crate::widgets::register_response(format!("button:{id}-{key}"), row.response.rect, &row.response);
+                            if ui.is_enabled() && row.ran {
+                                picked = Some(*f);
+                            }
                         }
                     }
                 });
-                crate::widgets::name_combo(&r.response, &name);
-                register(ui, format!("combo:{id}"), r.response.rect);
-            } else {
-                use craft::ui::buttons::Button;
-                use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
-                use craft::ui::controls::disclosure::DisclosureGlyph;
-                use craft::ui::menu::{Menu, MenuItem};
-
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
-                if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
-                    continue;
-                }
-                let face = Button::new(name.clone())
-                    .painted(crate::i18n::tr(line.label()).to_owned())
-                    .trailing_icon(DisclosureGlyph::dropdown())
-                    .id_salt(("view-options-line", &id))
-                    .show_at(ui, rect);
-                crate::widgets::register_response(format!("combo:{id}"), rect, &face.response);
-                // A value menu retains the existing semantic option locators, unlike indexed
-                // Select rows. Only activation commits; navigating or dismissing edits nothing.
-                let mut picked = None;
-                // The SDK's external Click opener is pointer-press-only. Let the production
-                // button's actual activation (pointer, keyboard or AT) own the toggle instead.
-                // Stale state expires when this field leaves the presented subtree.
-                let pass = ui.ctx().cumulative_pass_nr();
-                let slot = face.response.id.with("menu-open");
-                let mut open = ui
-                    .data(|data| data.get_temp::<(u64, bool)>(slot))
-                    .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
-                    .is_some_and(|(_, open)| open);
-                if ui.is_enabled() && face.clicked() {
-                    open = !open;
-                }
-                Menu::new(name)
-                    .id_salt(("view-options-menu", &id))
-                    .values()
-                    .opened_by(&face.response, Trigger::Manual)
-                    .open(Bind::bound(&mut open))
-                    .show(ui, |ui, _| {
-                        for f in F::ALL {
-                            let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-                            let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
-                            // These are literal translated captions, not mnemonic-marked menu text.
-                            let caption = crate::i18n::tr(f.label()).replace('&', "&&");
-                            let row = MenuItem::new(caption).id_salt((&id, &key)).entry_checked(line == f);
-                            let row = if line == f { row.default_stop() } else { row };
-                            let row = row.show(ui);
-                            if !measuring {
-                                crate::widgets::register_response(format!("button:{id}-{key}"), row.response.rect, &row.response);
-                                if ui.is_enabled() && row.ran {
-                                    picked = Some(*f);
-                                }
-                            }
-                        }
-                    });
-                ui.data_mut(|data| data.insert_temp(slot, (pass, open)));
-                if ui.is_enabled()
-                    && let Some(field) = picked
-                {
-                    *line = field;
-                }
+            ui.data_mut(|data| data.insert_temp(slot, (pass, open)));
+            if ui.is_enabled()
+                && let Some(field) = picked
+            {
+                *line = field;
             }
+        
         }
-        if super::native_controls_active(ui.ctx()) {
-            let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
-            register(ui, format!("button:viewOptionsDefaults{n}"), r.rect);
-            if r.clicked() {
+        use craft::ui::buttons::Button;
+        use craft::ui::contract::{Props as _, Show as _};
+        let r =
+            Button::new(crate::i18n::tr("Use Defaults").to_owned()).id_salt(("view-options-defaults", n)).enabled(*lines != defaults).show(ui);
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            crate::widgets::register_response(format!("button:viewOptionsDefaults{n}"), r.response.rect, &r.response);
+            if ui.is_enabled() && *lines != defaults && r.clicked() {
                 *lines = defaults;
             }
-        } else {
-            use craft::ui::buttons::Button;
-            use craft::ui::contract::{Props as _, Show as _};
-            let r =
-                Button::new(crate::i18n::tr("Use Defaults").to_owned()).id_salt(("view-options-defaults", n)).enabled(*lines != defaults).show(ui);
-            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
-                crate::widgets::register_response(format!("button:viewOptionsDefaults{n}"), r.response.rect, &r.response);
-                if ui.is_enabled() && *lines != defaults && r.clicked() {
-                    *lines = defaults;
-                }
-            }
         }
+    
         // one Info at most shows briefly: ticking one unticks the other
         let info = if n == 1 { I::Basic } else { I::Exposure };
         let mut briefly = app.ui.settings.loupe_info.briefly == info;

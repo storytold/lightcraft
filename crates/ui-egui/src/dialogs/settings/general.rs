@@ -127,12 +127,7 @@ fn library_launch_input(ui: &egui::Ui) -> bool {
 fn library_launch_button(ui: &mut egui::Ui, alias: &str, label: &str, can: bool) -> bool {
     use craft::ui::contract::{Props as _, Show as _};
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let native = super::native_controls_active(ui.ctx());
-    let (response, clicked) = if native {
-        let response = ui.add_enabled(can && real, egui::Button::new(crate::i18n::tr(label)));
-        let clicked = response.clicked();
-        (response, clicked)
-    } else {
+    let (response, clicked) = {
         let shown = craft::ui::buttons::Button::new(crate::i18n::tr(label).to_owned())
             .id_salt(alias)
             .enabled(can && real)
@@ -144,7 +139,7 @@ fn library_launch_button(ui: &mut egui::Ui, alias: &str, label: &str, can: bool)
         crate::widgets::register_response(alias, response.rect, &response);
     }
     #[cfg(test)]
-    general_library_launch_flow_tests::observe(ui, alias, &response, native, clicked);
+    general_library_launch_flow_tests::observe(ui, alias, &response, false, clicked);
     can && library_launch_input(ui) && clicked
 }
 
@@ -232,21 +227,6 @@ pub(super) fn preset_combo(
             .unwrap_or_else(|| crate::i18n::tr_format!("{pid} (missing)", pid = pid))
     };
     let text = current.map(name).unwrap_or_else(|| crate::i18n::tr(none_label).to_string());
-    if super::native_controls_active(ui.ctx()) {
-        // Settings remains a native subtree until SDK/native traversal is supported.
-        let mut out = None;
-        let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).show_ui(ui, |ui| {
-            if ui.selectable_label(current.is_none(), crate::i18n::tr(none_label)).clicked() {
-                out = Some(None);
-            }
-            if let Some(pid) = crate::panels::presets::picker_rows(ui, id, &app.session.presets, current) {
-                out = Some(Some(pid));
-            }
-        });
-        crate::widgets::name_combo(&r.response, label);
-        register(ui, format!("combo:{id}"), r.response.rect);
-        return out.filter(|v| v.as_deref() != current);
-    }
 
     use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
     use craft::ui::pickers::Select;

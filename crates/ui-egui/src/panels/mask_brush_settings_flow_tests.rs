@@ -95,7 +95,6 @@ impl Fixture {
             egui::CentralPanel::default().show(root, |ui| {
                 ui.set_max_width(360.0);
                 let mut draw = |ui: &mut egui::Ui| {
-                    assert!(!crate::panels::settings::native_controls_active(ui.ctx()));
                     if let Some(photo) = app.session.active() {
                         super::show(app, ui, photo);
                     }

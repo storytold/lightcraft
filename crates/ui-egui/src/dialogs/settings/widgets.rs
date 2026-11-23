@@ -89,11 +89,6 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 
 /// A checkbox addressable as `check:{id}`; true when toggled.
 pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
-    if super::native_controls_active(ui.ctx()) {
-        let r = ui.checkbox(value, crate::i18n::tr(label));
-        register(ui, format!("check:{id}"), r.rect);
-        return r.changed();
-    }
     use craft::ui::choice::Checkbox;
     use craft::ui::contract::{Bind, Props as _, Show as _};
 

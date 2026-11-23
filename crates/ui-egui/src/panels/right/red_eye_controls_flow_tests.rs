@@ -114,7 +114,6 @@ impl Fixture {
             egui::CentralPanel::default().show(root, |ui| {
                 ui.set_max_width(380.0);
                 let mut draw = |ui: &mut egui::Ui| {
-                    assert!(!crate::panels::settings::native_controls_active(ui.ctx()));
                     crate::panels::right::show(app, ui);
                 };
                 ui.allocate_ui(egui::vec2(380.0, 2350.0), |ui| match probe {

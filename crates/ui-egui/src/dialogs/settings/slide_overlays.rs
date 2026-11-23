@@ -283,20 +283,7 @@ fn text_row_button(ui: &mut egui::Ui, owner: egui::Id, name: &str, label: &str, 
     use craft::ui::buttons::{Button, ToggleButton};
     use craft::ui::contract::{Bind, Props as _, Show as _};
     let real = real_pass(ui);
-    let (response, clicked) = if super::native_controls_active(ui.ctx()) {
-        // Keep shipped Settings in its existing native traversal domain. In sizing, do not
-        // invoke the shared helper that publishes an automation target as a side effect.
-        if !real {
-            let r = ui.add_enabled(false, egui::Button::new(crate::i18n::tr(label)));
-            (r, false)
-        } else {
-            let out = ui
-                .add_enabled_ui(enabled, |ui| crate::widgets::text_button(ui, &format!("slideshow-row-{owner:?}"), label, selected.unwrap_or(false)))
-                .inner;
-            let clicked = out.clicked();
-            (out.response, clicked)
-        }
-    } else if let Some(selected) = selected {
+    let (response, clicked) = if let Some(selected) = selected {
         let out = ToggleButton::new(crate::i18n::tr(label).to_owned(), Bind::given(selected)).id(owner).enabled(enabled).show(ui);
         let clicked = out.events.committed().is_some();
         (out.response, clicked)
@@ -314,32 +301,7 @@ fn text_row_button(ui: &mut egui::Ui, owner: egui::Id, name: &str, label: &str, 
 fn text_row_field(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: egui::Id, name: &str, value: &str, wrap: &dyn Fn(Value) -> Value) {
     use craft::ui::contract::{Bind, Props as _, Show as _};
     let real = real_pass(ui);
-    let committed = if super::native_controls_active(ui.ctx()) {
-        let key = owner.with("native-draft");
-        let mut draft: String = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| value.to_owned());
-        if !real {
-            ui.add(egui::TextEdit::singleline(&mut draft).desired_width(260.0).interactive(false));
-            None
-        } else {
-            // The internal widget key stays with the overlay even when an earlier row is removed.
-            // The public automation alias below still follows the current command index.
-            let widget = format!("field:slideshow-overlay-{owner:?}");
-            let out = TextField::singleline(&widget, &mut draft)
-                .hint(crate::i18n::tr("{title} · {exposure}"))
-                .width(ui.available_width().clamp(80.0, 260.0))
-                .show(ui);
-            crate::widgets::register_response(format!("field:{name}"), out.response.rect, &out.response);
-            if out.editing && ui.is_enabled() {
-                ui.data_mut(|d| d.insert_temp(key, draft.clone()));
-            } else {
-                ui.data_mut(|d| d.remove::<String>(key));
-            }
-            if out.cancelled() {
-                crate::widgets::take_escape(ui.ctx());
-            }
-            out.committed().then_some(draft)
-        }
-    } else {
+    let committed = {
         let draft_key = owner.with("sdk-draft");
         let mut draft: String = ui.data(|d| d.get_temp(draft_key)).unwrap_or_else(|| value.to_owned());
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().clamp(80.0, 260.0), 24.0), egui::Sense::hover());
@@ -398,43 +360,6 @@ fn text_row_slider(
         Unit::Degrees => (1.0, "°"),
     };
     let patch = |value: f64| wrap(json!({key: value / k}));
-    if super::native_controls_active(ui.ctx()) {
-        let mut v = value * k;
-        // Default Always clamping calls egui's rounded setter even during passive layout.
-        // Display-scale float round-tripping must not dispatch edits or rewrite neighbors.
-        // Real pointer/keyboard edits still clamp and round to the existing UI range.
-        let out = ui.add_enabled(
-            real,
-            egui::Slider::new(&mut v, range.lo * k..=range.hi * k).clamping(egui::SliderClamping::Edits).suffix(format!(" {suffix}")).max_decimals(1),
-        );
-        if !real {
-            return;
-        }
-        crate::widgets::register_response(format!("slider:{name}"), out.rect, &out);
-        let start_key = owner.with((key, "drag-before"));
-        if ui.is_enabled() {
-            if out.drag_started() {
-                ui.data_mut(|d| d.insert_temp(start_key, value * k));
-            }
-            if out.changed() && out.dragged() {
-                text_row_preview(app, &patch(v));
-            }
-            if out.drag_stopped() {
-                let before = ui.data_mut(|d| d.remove_temp::<f64>(start_key)).unwrap_or(value * k);
-                // Live preview already holds v. Restore only this key before dispatch, otherwise
-                // the command sees a no-op and never writes the final value to prefs.json.
-                text_row_preview(app, &patch(before));
-                if v != before {
-                    set(app, patch(v));
-                }
-            } else if out.changed() && !out.dragged() {
-                set(app, patch(v));
-            }
-        } else if let Some(before) = ui.data_mut(|d| d.remove_temp::<f64>(start_key)) {
-            text_row_preview(app, &patch(before));
-        }
-        return;
-    }
     let (out, record) = craft::ui::runtime::inspect::record(ui, owner.with((key, "inspect")), |ui| {
         SliderField::new(crate::i18n::tr(label).to_owned(), Bind::given(value * k), range.lo * k..=range.hi * k)
             .id(owner.with(key))
@@ -546,12 +471,7 @@ fn text_row_placement(
 fn text_row_shadow(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: egui::Id, name: &str, value: bool, wrap: &dyn Fn(Value) -> Value) -> bool {
     use craft::ui::contract::{Bind, Props as _, Show as _};
     let real = real_pass(ui);
-    let (response, next) = if super::native_controls_active(ui.ctx()) {
-        let mut on = value;
-        let response = ui.add_enabled(real, egui::Checkbox::new(&mut on, crate::i18n::tr("Shadow")));
-        let next = response.changed().then_some(on);
-        (response, next)
-    } else {
+    let (response, next) = {
         let out = craft::ui::choice::Checkbox::new(Bind::given(value)).id(owner.with("shadow")).label(crate::i18n::tr("Shadow")).show(ui);
         let next = out.events.committed().copied();
         (out.response, next)

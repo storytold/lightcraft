@@ -1062,14 +1062,8 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
             use craft::behavior::Proposal;
             use craft::ui::contract::{Bind, Props as _, Show as _};
             let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-            let native = crate::panels::settings::native_controls_active(ui.ctx());
             let interactive = real && ui.is_enabled();
-            let sub = if native {
-                let mut sub = b.subfolders;
-                let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
-                register(ui, "check:includeSubfolders", c.rect);
-                c.changed().then_some(sub)
-            } else {
+            let sub = {
                 let checkbox = || {
                     craft::ui::choice::Checkbox::new(Bind::given(b.subfolders))
                         .id_salt(("folder-header-subfolders", &b.path))
@@ -1094,12 +1088,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
             // Counted once per view (cached); the ids are only gathered on a click.
             if local_n > 0 {
                 let label = crate::i18n::tr_format!("Add {local_n} to My Photos", local_n = local_n);
-                let clicked = if native {
-                    let button =
-                        ui.add(egui::Button::new(egui::RichText::new(label).font(t.semibold(11.5)).color(t.text)).wrap().min_size(vec2(37.0, 24.0)));
-                    register(ui, "button:addToLibrary", button.rect);
-                    button.clicked()
-                } else {
+                let clicked = {
                     // A release belongs to this folder/view, never a replacement visible set. The
                     // cached generation is constant-time; do not hash every visible photo each frame.
                     let generation = app.session.visible_shared().0;

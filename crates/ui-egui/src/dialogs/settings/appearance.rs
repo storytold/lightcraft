@@ -73,50 +73,6 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
                     }
                     return;
                 }
-                if super::native_controls_active(ui.ctx()) {
-                    for (v, kind) in options {
-                        let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 24.0));
-                        let hovered = ui.ctx().pointer_hover_pos().is_some_and(|p| row.contains(p));
-                        ui.horizontal(|ui| {
-                            let r = ui.radio_value(value, *v, crate::i18n::tr(kind.label()));
-                            register(ui, format!("radio:theme-{}", kind.id()), r.rect);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let favorite = favorites.iter().any(|id| id == kind.id());
-                                let r = ui
-                                    .add_visible(favorite || hovered, egui::Button::new("").min_size(egui::vec2(24.0, 24.0)).frame(false))
-                                    .on_hover_text(crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }));
-                                r.widget_info(|| {
-                                    egui::WidgetInfo::labeled(
-                                        egui::Role::Button,
-                                        true,
-                                        format!(
-                                            "{}: {}",
-                                            crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }),
-                                            crate::i18n::tr(kind.label())
-                                        ),
-                                    )
-                                });
-                                register(ui, format!("button:themeFavorite-{}", kind.id()), r.rect);
-                                if favorite || hovered {
-                                    crate::rating::paint_star(
-                                        ui.painter(),
-                                        r.rect.shrink(4.0),
-                                        favorite,
-                                        if favorite { t.accent } else { t.text_dim },
-                                    );
-                                }
-                                if r.clicked() {
-                                    if favorite {
-                                        favorites.retain(|id| id != kind.id());
-                                    } else {
-                                        favorites.push(kind.id().into());
-                                    }
-                                }
-                            });
-                        });
-                    }
-                    return;
-                }
                 use craft::behavior::{NavShape, Proposal};
                 use craft::theme::Variant;
                 use craft::ui::buttons::Button;

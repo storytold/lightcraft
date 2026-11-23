@@ -230,7 +230,7 @@ fn sdk_curve_reset_each_sizing_mode_suppresses_automation_and_commands() {
         let undo = f.app.session.undo.len();
         let ctx = f.ctx.clone();
         let _ = take_registries(&ctx);
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let mut draw = || {
                 let mut builder = egui::UiBuilder::new().max_rect(ui.max_rect());
                 if egui_sizing { builder = builder.sizing_pass(); }
@@ -241,7 +241,7 @@ fn sdk_curve_reset_each_sizing_mode_suppresses_automation_and_commands() {
             };
             if sdk_measure { craft::ui::runtime::measure::run(&ctx, draw); } else { draw(); }
         });
-        drop(output);
+        output.textures_delta.clear();
         let (rects, hits) = take_registries(&ctx);
         assert!(rects.is_empty() && hits.is_empty(), "no invisible targets: {egui_sizing}/{sdk_measure}");
         assert_eq!(f.settings(), before);

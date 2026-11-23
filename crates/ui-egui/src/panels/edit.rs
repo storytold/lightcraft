@@ -67,12 +67,6 @@ fn camera_local_tone_checkbox(ui: &mut egui::Ui, owner: PhotoId, current: bool) 
         ui.allocate_exact_size(size, egui::Sense::hover());
         return None;
     }
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        let mut on = current;
-        let r = ui.checkbox(&mut on, label);
-        crate::widgets::register(ui, key, r.rect);
-        return r.on_hover_text(tooltip).changed().then_some(on).filter(|on| ui.is_enabled() && *on != current);
-    }
     let shown = checkbox().show(ui);
     // The SDK's interaction rectangle includes the whole localized label, not just its mark.
     crate::widgets::register_response(key, shown.response.interact_rect, &shown.response);
@@ -131,15 +125,6 @@ fn vignette_style(
         .show(ui, |ui| {
             if !interactive {
                 ui.disable();
-            }
-            if crate::panels::settings::native_controls_active(ui.ctx()) {
-                return if real {
-                    let items: Vec<(&str, &str)> = styles.iter().map(|(_, label, key)| (*label, *key)).collect();
-                    crate::widgets::segmented(ui, "vignetteStyle", &items, active, 3)
-                } else {
-                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::hover());
-                    None
-                };
             }
             let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0)).max(1.0);
             let cell_width = ((width - 8.0) / 3.0).max(1.0);

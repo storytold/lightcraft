@@ -215,10 +215,6 @@ pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<Str
             }
         });
     }
-    if super::settings::native_controls_active(ui.ctx()) {
-        native(ui, tag, groups);
-        return;
-    }
     use craft::behavior::Proposal;
     use craft::ui::buttons::Button;
     use craft::ui::choice::Checkbox;

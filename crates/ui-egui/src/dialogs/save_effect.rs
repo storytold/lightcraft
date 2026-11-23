@@ -12,7 +12,7 @@ use crate::LightcraftApp;
 use crate::state::Dialog;
 
 pub(super) fn active(app: &LightcraftApp, ctx: &egui::Context) -> bool {
-    matches!(app.ui.dialog, Some(Dialog::SaveEffect { .. })) && !crate::panels::settings::native_controls_active(ctx)
+    matches!(app.ui.dialog, Some(Dialog::SaveEffect { .. }))
 }
 
 pub(super) fn owner() -> egui::Id {

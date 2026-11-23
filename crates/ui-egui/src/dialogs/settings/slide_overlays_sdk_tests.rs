@@ -108,7 +108,7 @@ impl Fixture {
                         super::text_overlays(app, ui, &crate::theme::Tokens::get(&ctx));
                     };
                     if native {
-                        super::super::native_controls::scope(&ctx, subtree);
+                        (subtree)();
                     } else {
                         subtree();
                     }

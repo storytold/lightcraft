@@ -288,15 +288,6 @@ fn suggestion_button(ui: &mut egui::Ui, owner: egui::Id, keyword: &str, name: &s
     use craft::ui::contract::{Props as _, Show as _};
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let enabled = ui.is_enabled();
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        let t = Tokens::get(ui.ctx());
-        let r = ui.add(egui::Button::new(egui::RichText::new(format!("+ {name}")).color(t.text_label)).corner_radius(10.0));
-        let r = if grouped { r.on_hover_text(whole) } else { r };
-        if real {
-            register(ui, format!("kwSuggest:{keyword}"), r.rect);
-        }
-        return real && enabled && r.clicked();
-    }
     // The SDK owns the press lifecycle, keyboard activation and focus. Do not bridge keys or
     // interpret egui's cached click snapshot, including a press from a disabled/measurement pass.
     // Cancel this leaf's press lifecycle during measurement too, not merely its returned

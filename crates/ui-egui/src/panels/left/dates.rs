@@ -46,12 +46,9 @@ pub(crate) fn browse_all_photos(app: &mut LightcraftApp, on: bool) {
     }
 }
 
-/// The ordinary By Date tree uses the supported collection lifecycle; the original
-/// native renderer remains the literal whole-workflow fallback.
+/// The By Date tree, on the framework's collection lifecycle.
 pub(super) fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        native_date_rows(app, ui);
-    } else if craft::ui::runtime::measure::active(ui.ctx()) && !ui.is_sizing_pass() {
+    if craft::ui::runtime::measure::active(ui.ctx()) && !ui.is_sizing_pass() {
         // A context-only measure supplies a supported non-publishing sizing UI,
         // rather than registering live collection input in the measured pass.
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());

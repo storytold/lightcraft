@@ -143,14 +143,7 @@ fn background_photo_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tok
     let enabled = on || active.is_some();
     let interactive = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     // Settings remains a native subtree until mixed SDK/native traversal is supported.
-    let next = if super::native_controls_active(ui.ctx()) {
-        let mut next = on;
-        let response = ui.add_enabled(enabled && interactive, egui::Checkbox::new(&mut next, crate::i18n::tr("Background image")));
-        if interactive {
-            crate::widgets::register_response("check:settings.slideshowBackgroundImage", response.rect, &response);
-        }
-        response.changed().then_some(next)
-    } else {
+    let next = {
         let out = Checkbox::new(Bind::given(on))
             .id_salt(("settings-check", "settings.slideshowBackgroundImage"))
             .label(crate::i18n::tr("Background image").to_owned())

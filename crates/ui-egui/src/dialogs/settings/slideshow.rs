@@ -29,7 +29,6 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use craft::ui::contract::{Props as _, Show as _};
     heading(ui, t, crate::i18n::tr("Export"));
     let running = app.session.slideshow_export.as_ref().is_some_and(|r| r.running());
-    let native = super::native_controls_active(ui.ctx());
     #[cfg(test)]
     let mut controls = Vec::new();
     ui.horizontal_wrapped(|ui| {
@@ -41,11 +40,7 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ("slideshowExportJpeg", "Export JPEG…", "jpeg"),
             ("slideshowExportVideo", "Export Video…", "video"),
         ] {
-            let (response, clicked) = if native {
-                let response = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
-                let clicked = response.clicked();
-                (response, clicked)
-            } else {
+            let (response, clicked) = {
                 let output =
                     FrameworkButton::new(crate::i18n::tr(label).to_owned()).id_salt(("slideshow-export-launcher", id)).enabled(enabled).show(ui);
                 let clicked = output.clicked();
@@ -56,7 +51,7 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
             #[cfg(test)]
             controls.push(json!({"alias":format!("button:{id}"),"format":format,"real":real,"enabled":enabled,
-                "native":native,"responseId":format!("{:?}",response.id),"rect":format!("{:?}",response.rect),"clicked":clicked}));
+                "responseId":format!("{:?}",response.id),"rect":format!("{:?}",response.rect),"clicked":clicked}));
             if enabled && clicked {
                 let _ = app.run("dialog.slideshowExport", json!({"format": format}));
             }
@@ -64,7 +59,7 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     #[cfg(test)]
     {
-        let receipt = json!({"frame":ui.ctx().cumulative_frame_nr(),"pass":ui.ctx().cumulative_pass_nr(),"native":native,"controls":controls});
+        let receipt = json!({"frame":ui.ctx().cumulative_frame_nr(),"pass":ui.ctx().cumulative_pass_nr(),"controls":controls});
         ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("slideshow-launcher-current-controls"), receipt));
     }
     hint(ui, t, crate::i18n::tr("The photos in view as slides, with the settings above. Progress shows in the activity stack."));
@@ -145,10 +140,6 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         crate::i18n::tr("Slideshow in the View menu plays the photos in view from the selected one. These settings are saved with the library."),
     );
 }
-
-#[cfg(test)]
-#[path = "slideshow_export_launcher_flow_tests.rs"]
-mod slideshow_export_launcher_flow_tests;
 
 #[cfg(test)]
 #[path = "slideshow_export_launcher_candidate_flow_tests.rs"]

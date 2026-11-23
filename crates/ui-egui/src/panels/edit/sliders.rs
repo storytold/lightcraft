@@ -219,18 +219,6 @@ pub(super) fn section(
             ui.allocate_exact_size(size, Sense::hover());
             return;
         }
-        if crate::panels::settings::native_controls_active(ui.ctx()) {
-            let mut solo = current;
-            let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
-            register(ui, "sectionMenu:solo", item.rect);
-            if item.clicked() {
-                if let Err(e) = app.run("view.soloSections", json!({"on": solo})) {
-                    app.toast(ui.ctx(), e);
-                }
-                menu.request_close();
-            }
-            return;
-        }
         let shown = item().show(ui);
         crate::widgets::register_response("sectionMenu:solo", shown.response.interact_rect, &shown.response);
         if let Some(solo) = shown.events.committed().copied().filter(|on| ui.is_enabled() && *on != current) {
@@ -273,15 +261,6 @@ fn hdr_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
             let size = checkbox().measure_in(&child, Proposal::Ideal);
             ui.allocate_exact_size(size, egui::Sense::hover());
-            return;
-        }
-        if crate::panels::settings::native_controls_active(ui.ctx()) {
-            let mut v = current;
-            let r = ui.checkbox(&mut v, "Visualize HDR");
-            register(ui, "check:hdrVisualize", r.rect);
-            if r.on_hover_text(help).changed() && ui.is_enabled() && v != current {
-                app.ui.hdr_visualize = v;
-            }
             return;
         }
         let shown = checkbox().show(ui);
@@ -468,12 +447,7 @@ pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize
                     ("▶▶", Icon::ChevronDoubleRight, big),
                 ] {
                     let tooltip = crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label));
-                    let clicked = if crate::panels::settings::native_controls_active(ui.ctx()) {
-                        let r = crate::widgets::arrow_button(ui, "", icon, false);
-                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip.clone()));
-                        crate::widgets::register(ui, format!("button:quick-{ctl}-{txt}"), r.rect);
-                        r.on_hover_text(tooltip).clicked()
-                    } else {
+                    let clicked = {
                         quick_arrow::show(ui, owner, ctl, txt, icon, tooltip)
                     };
                     if clicked && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {

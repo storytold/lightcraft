@@ -92,40 +92,23 @@ fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
     });
 }
 
-/// The centred search field with its placeholder and focus ring.
-fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect) {
-    // search field (centred on the window)
-    let id = crate::text_field::id("field:search");
+/// The centred search field: the framework's search field (glyph, placeholder, clear part, focus ring).
+/// The library filters as the text changes.
+fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rect) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
     if std::mem::take(&mut app.ui.focus_search) {
-        ui.memory_mut(|m| m.request_focus(id));
+        crate::text_field::focus(ui.ctx(), "field:search");
     }
-    let focused = ui.memory(|m| m.has_focus(id));
-    ui.painter().rect(
-        sr,
-        4.0,
-        if focused { t.canvas } else { t.field },
-        Stroke::new(1.0, if focused { t.accent } else { t.field_border }),
-        StrokeKind::Inside,
-    );
-    let mut child =
-        ui.new_child(egui::UiBuilder::new().max_rect(sr.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    let empty = app.ui.search.is_empty();
-    if empty && !focused {
-        let g = child.painter().layout_no_wrap(crate::i18n::tr("Search Photos").into(), t.font(13.5), t.text_dim);
-        let w = g.size().x + 24.0;
-        let x0 = sr.center().x - w / 2.0;
-        paint(child.painter(), Rect::from_min_size(pos2(x0, sr.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
-        child.painter().galley(pos2(x0 + 24.0, sr.center().y - g.size().y / 2.0), g, t.text_dim);
-    }
-    let resp = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
-        .label(crate::i18n::tr("Search Photos"))
-        .frame(false)
-        .width(sr.width() - 20.0)
-        .font(t.font(13.5))
-        .text_color(t.text)
-        .show(&mut child)
-        .response;
-    if resp.changed() {
+    let before = app.ui.search.clone();
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, crate::text_field::id("field:search").with("inspect"), |ui| {
+        craft::ui::text::TextField::search(crate::i18n::tr("Search Photos"), Bind::bound(&mut app.ui.search))
+            .id(crate::text_field::id("field:search"))
+            .placeholder(crate::i18n::tr("Search Photos"))
+            .limit(None)
+            .show_at(ui, sr)
+    });
+    crate::text_field::register_field(ui, "field:search", &shown.response, record.as_deref());
+    if app.ui.search != before {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));
     }

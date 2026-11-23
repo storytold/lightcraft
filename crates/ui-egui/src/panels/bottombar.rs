@@ -118,7 +118,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     pill_ui.add_space(6.0);
     let flag = active.as_ref().map(|p| p.flag).unwrap_or_default();
     for (id, icon, f) in [("unflag", Icon::Circle, Flag::None), ("pick", Icon::FlagPick, Flag::Pick), ("reject", Icon::FlagReject, Flag::Reject)] {
-        if f == Flag::Pick && !crate::panels::settings::native_controls_active(pill_ui.ctx()) {
+        if f == Flag::Pick {
             use craft::ui::contract::{Props as _, Show as _};
             let generation = app.session.library_generation();
             let active = app.session.active();
@@ -199,12 +199,10 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     if !with_copy {
         return;
     }
-    if !crate::panels::settings::native_controls_active(ui.ctx()) {
-        let copy_r = Rect::from_min_size(pos2(pill.right() + 10.0, pill.top()), vec2(copy_width, 30.0));
-        let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
-        settings_transfer_sdk(app, ui, &t, copy_r, gear_r, label, active.is_some());
-        return;
-    }
+    let copy_r = Rect::from_min_size(pos2(pill.right() + 10.0, pill.top()), vec2(copy_width, 30.0));
+    let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
+    settings_transfer_sdk(app, ui, &t, copy_r, gear_r, label, active.is_some());
+    return;
     let copy_r = Rect::from_min_size(pos2(pill.right() + 10.0, pill.top()), vec2(copy_width, 30.0));
     let cresp = ui.interact(copy_r, egui::Id::unique("copy-settings"), Sense::click());
     crate::widgets::announce(&cresp, label.to_string());

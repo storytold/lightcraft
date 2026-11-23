@@ -49,37 +49,6 @@ fn focused(ctx: &egui::Context, field: egui::Id) -> bool {
     craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == field)
 }
 
-fn register_field(ui: &egui::Ui, id: &str, response: &egui::Response, record: Option<&craft::ui::runtime::inspect::Recorded>) -> Rect {
-    if craft::ui::runtime::measure::active(ui.ctx()) {
-        return response.rect;
-    }
-    // SDK hit responses are clipped, and become a zero-height rect on the clip edge when
-    // scrolled away. Keep the real placed geometry for visibility, scrolling and automation;
-    // the response still supplies the genuine clipped interaction owner.
-    let rect = record
-        .and_then(|record| record.elements.iter().find(|element| element.id == response.id && element.part.is_none()))
-        .map_or(response.rect, |element| element.rect);
-    if let Some(record) = record {
-        for element in &record.elements {
-            let Some(facts) = &element.facts else { continue };
-            let action = [("Cut", "cut"), ("Copy", "copy"), ("Paste", "paste"), ("Select All", "selectAll")]
-                .into_iter()
-                .find(|(label, _)| facts.name.as_deref() == Some(crate::i18n::tr(label)));
-            if element.component == "MenuItem"
-                && let Some((_, action)) = action
-                && let Some(response) = ui.ctx().read_response(element.id)
-            {
-                crate::widgets::register_response(format!("{id}:{action}"), response.rect, &response);
-            }
-        }
-    }
-    if response.interact_rect.is_positive() {
-        crate::widgets::register_response(id, rect, response);
-    } else {
-        crate::widgets::register_geometry(ui.ctx(), id, rect);
-    }
-    rect
-}
 
 /// The painter is a real sibling SDK stop, so Tab can leave the add field's typing run.
 /// Its text remains an app preference; only Enter asks the existing Paint command to run.
@@ -95,7 +64,7 @@ pub(crate) fn painter_field(ui: &mut egui::Ui, text: &mut String) -> bool {
             .submits()
             .show_at(ui, rect)
     });
-    register_field(ui, "field:keywordPainter", &shown.response, record.as_deref());
+    crate::text_field::register_field(ui, "field:keywordPainter", &shown.response, record.as_deref());
     if shown.submitted || shown.escaped {
         if let Some(stop) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == id) {
             ui.memory_mut(|m| m.surrender_focus(stop.stop.root));
@@ -201,7 +170,7 @@ pub(crate) fn add_field(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &
             .sizing(Sizing::FillWidth)
             .show(ui)
     });
-    let field_rect = register_field(ui, "field:keyword", &r.response, record.as_deref());
+    let field_rect = crate::text_field::register_field(ui, "field:keyword", &r.response, record.as_deref());
     if begin || asked {
         craft::ui::runtime::focus::request(ui.ctx(), FocusTarget::Id(field));
     }

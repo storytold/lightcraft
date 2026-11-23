@@ -92,7 +92,7 @@ impl Fixture {
                 };
                 ui.add_enabled_ui(enabled, |ui| {
                     // The actual Settings presentation keeps neighboring text/Album native.
-                    super::super::native_controls::scope(&ctx, || {
+                    (|| {
                         let tokens = crate::theme::Tokens::get(&ctx);
                         let mut draw = |ui: &mut egui::Ui| super::import_tab(app, ui, &tokens);
                         if mode == 1 {
@@ -100,7 +100,7 @@ impl Fixture {
                         } else {
                             draw(ui);
                         }
-                    });
+                    })();
                 });
             });
         }));

@@ -305,11 +305,7 @@ fn clear_preview_cache_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let label = crate::i18n::tr("Clear Cache");
     // Keep Settings a single native keyboard traversal domain. A lone SDK stop would
     // consume Tab without reaching any of the size buttons that precede this action.
-    let (response, clicked) = if super::native_controls::active(ui.ctx()) {
-        let r = ui.button(label);
-        let clicked = r.clicked();
-        (r, clicked)
-    } else {
+    let (response, clicked) = {
         let out = craft::ui::buttons::Button::new(label).id_salt("settingsClearCache").show(ui);
         let clicked = out.clicked();
         (out.response, clicked)

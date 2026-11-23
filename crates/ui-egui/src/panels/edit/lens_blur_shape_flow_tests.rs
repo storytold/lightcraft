@@ -163,7 +163,6 @@ impl Fixture {
                     panel = ui.max_rect();
                     ui.set_clip_rect(ui.clip_rect().intersect(panel));
                     let mut draw = |ui: &mut egui::Ui| {
-                        assert!(!crate::panels::settings::native_controls_active(ui.ctx()));
                         final_record_layer = Some(ui.layer_id());
                         let (_, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lens-blur-shape-actual-parent-record"), |ui| {
                             crate::panels::right::show(app, ui);

@@ -351,11 +351,7 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
         use craft::ui::contract::{Props as _, Show as _};
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
         let interactive = real && ui.is_enabled();
-        let clicked = if crate::panels::settings::native_controls_active(ui.ctx()) {
-            let r = ui.small_button(crate::i18n::tr("Try the graphics card again"));
-            register(ui, "denoise:retryGpu", r.rect);
-            r.clicked()
-        } else {
+        let clicked = {
             let owner = egui::Id::unique(("denoise-work-retry", list["dir"].as_str(), app.session.library.as_ref().map(|library| &library.dir)));
             let control =
                 || craft::ui::buttons::Button::new(crate::i18n::tr("Try the graphics card again").to_owned()).id(owner).enabled(interactive);
@@ -397,10 +393,6 @@ fn photos_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: 
 /// Photos actions share their production rendering with command-recording tests; the callback
 /// is synchronous command dispatch, never a background pump or inference entry point here.
 fn photos_queue_actions(ui: &mut egui::Ui, running: Option<(u64, u64)>, queued: u64, mut run: impl FnMut(&str, Value)) {
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        native_photos_queue_actions(ui, running, queued, run);
-        return;
-    }
     use craft::ui::buttons::Button;
     use craft::ui::contract::{Props as _, Show as _};
 
@@ -499,20 +491,10 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
         use craft::ui::contract::{Bind, Props as _, Show as _};
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
         let interactive = real && ui.is_enabled();
-        let native = crate::panels::settings::native_controls_active(ui.ctx());
         // Settings are model-folder global, but a pending action also belongs to this library:
         // changing the budget immediately evicts there, and Clear must never retarget a new one.
         let owner = egui::Id::unique(("denoise-work-cache", list["dir"].as_str(), app.session.library.as_ref().map(|library| &library.dir)));
-        let choice = if native {
-            let mut choice = current;
-            let combo = crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
-                for gb in CACHE_LIMITS {
-                    ui.selectable_value(&mut choice, gb, tr_format!("{size} GB", size = gb));
-                }
-            });
-            crate::widgets::name_combo(&combo.response, tr("Cache limit"));
-            (choice != current).then_some(choice)
-        } else {
+        let choice = {
             let entries =
                 CACHE_LIMITS.into_iter().map(|gb| craft::ui::contract::Entry::new(gb, tr_format!("{size} GB", size = gb))).collect::<Vec<_>>();
             let control = || {
@@ -535,11 +517,7 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
             let _ = app.run("denoise.settings", json!({"cacheGb": choice}));
             app.caches.denoise.epoch += 1;
         }
-        let clicked = if native {
-            let r = ui.button(tr("Clear cache"));
-            register(ui, "denoise:clear", r.rect);
-            r.clicked()
-        } else {
+        let clicked = {
             let control = || craft::ui::buttons::Button::new(tr("Clear cache").to_owned()).id(owner.with("clear")).enabled(interactive);
             if !real {
                 let measure = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());

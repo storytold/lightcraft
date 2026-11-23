@@ -158,7 +158,7 @@ impl Fixture {
                     let mut draw = |ui: &mut egui::Ui| {
                         let t = Tokens::get(ui.ctx());
                         if native {
-                            super::super::native_controls::scope(&ctx, || display_tab(app, ui, &t));
+                            (|| display_tab(app, ui, &t))();
                         } else {
                             display_tab(app, ui, &t);
                         }

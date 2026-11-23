@@ -36,7 +36,6 @@ fn create_album_actual_parent_publishes_sdk_name_and_checkbox_owners() {
     app.install_framework(&ctx);
     let mut elements = vec![];
     for tick in 1..=8 {
-        assert!(!super::settings::native_controls_active(&ctx), "actual unscoped generic parent defaults to SDK");
         let raw = HeadlessView::raw_input(egui::vec2(1400.0, 1000.0), 1.0, f64::from(tick) / 60.0, vec![]);
         let mut out = ctx.run_ui(raw, |root| {
             crate::widgets::take_registries(&ctx);

@@ -83,31 +83,10 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
     let t = Tokens::get(ui.ctx());
     let bands = lightcraft_develop::MIXER_BANDS;
     let sel = bands.iter().position(|b| *b == app.ui.mixer_mode).unwrap_or(0);
-    if !crate::panels::settings::native_controls_active(ui.ctx()) {
-        if let Some(index) = mixer_band_picker(ui, sel, crate::is_bw(d)) {
-            if let Some(band) = bands.get(index) {
-                app.ui.mixer_mode = (*band).to_owned();
-            }
+    if let Some(index) = mixer_band_picker(ui, sel, crate::is_bw(d)) {
+        if let Some(band) = bands.get(index) {
+            app.ui.mixer_mode = (*band).to_owned();
         }
-    } else {
-        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 4 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                for (i, b) in bands.iter().enumerate() {
-                    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                    crate::widgets::announce(&resp, crate::i18n::tr(b));
-                    register(ui, format!("mixerBand:{b}"), r);
-                    ui.painter().circle_filled(r.center(), 9.0, hex(BAND_COLORS[i]));
-                    if i == sel {
-                        ui.painter().circle_stroke(r.center(), 10.5, Stroke::new(1.5, t.text));
-                        ui.painter().circle_filled(r.center(), 2.0, Color32::WHITE);
-                    }
-                    if resp.clicked() {
-                        app.ui.mixer_mode = b.to_string();
-                    }
-                }
-            });
-        });
     }
     // targeted adjustment: pick the attribute, then drag on the photo
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {

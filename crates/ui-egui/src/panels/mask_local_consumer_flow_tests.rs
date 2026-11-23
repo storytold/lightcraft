@@ -87,7 +87,6 @@ impl Fixture {
         let out = self.ctx.run_ui(raw, |root| {
             egui::CentralPanel::default().show(root, |ui| {
                 ui.set_max_width(360.0);
-                assert!(!crate::panels::settings::native_controls_active(ui.ctx()));
                 let mut draw = |ui: &mut egui::Ui| {
                     if app.ui.right == crate::state::RightPanel::Masking {
                         if let Some(photo) = app.session.active() {

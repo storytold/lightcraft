@@ -380,13 +380,6 @@ fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, names: &[String]) {
 fn save_naming_field(ui: &mut egui::Ui, widget: &str, value: &mut String, hint: &str, width: f32, autofocus: bool) -> bool {
     use craft::ui::contract::{Bind, Props as _, Show as _};
     use craft::ui::runtime::focus::{self, FocusTarget};
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        let shown = crate::text_field::TextField::singleline(widget, value).hint(crate::i18n::tr(hint)).width(width).show(ui);
-        if autofocus && !shown.editing && value.is_empty() && ui.memory(|memory| memory.focused().is_none()) {
-            shown.response.request_focus();
-        }
-        return shown.ending == Some(crate::text_field::Ending::Return);
-    }
     let width = width.min(ui.available_width()).max(1.0);
     let (rect, _) = ui.allocate_exact_size(vec2(width, ui.spacing().interact_size.y.max(24.0)), Sense::hover());
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
@@ -428,107 +421,92 @@ pub fn save_body(
 ) -> bool {
     let t = Tokens::get(ui.ctx());
     let enter = save_naming_field(ui, "field:effectName", name, "Preset name", f32::INFINITY, true);
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        ui.horizontal(|ui| {
-            save_naming_field(ui, "field:effectGroup", group, "Group (optional)", ui.available_width() - 30.0, false);
-            let pick = ui.small_button("…").on_hover_text(crate::i18n::tr("Choose a group"));
-            register(ui, "button:effectGroupPick", pick.rect);
-            egui::Popup::menu(&pick).show(|ui| {
-                for (g, _) in fx::menu_order(&app.session.mask_effects) {
-                    if ui.button(if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.clone() }).clicked() {
-                        *group = g;
-                    }
-                }
-            });
-        });
-    } else {
-        use craft::ui::buttons::Button;
-        use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
-        use craft::ui::popover::Popover;
-        use craft::ui::runtime::focus::Initial;
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+    use craft::ui::popover::Popover;
+    use craft::ui::runtime::focus::Initial;
 
-        let key = egui::Id::unique("lightcraft.save-effect.group-popup");
-        let stamp = key.with("shown-pass");
-        let pass = ui.ctx().cumulative_pass_nr();
-        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        let (kept, previous) = ui.data(|data| (data.get_temp::<bool>(key).unwrap_or(false), data.get_temp::<u64>(stamp)));
-        // This app-only bit is the Popover's bound open state, not a focus owner.
-        // A newly shown Save never inherits a popup from a vanished parent.
-        let mut popup = kept && previous.is_some_and(|last| last == pass || last.checked_add(1) == Some(pass));
-        let mut picked = None;
-        #[cfg(test)]
-        let mut popup_probe_buttons: Vec<(String, egui::Response)> = Vec::new();
-        ui.horizontal(|ui| {
-            // Group Return ends its field but must never use Name's Save path.
-            save_naming_field(ui, "field:effectGroup", group, "Group (optional)", ui.available_width() - 30.0, false);
-            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), ui.spacing().interact_size.y.max(24.0)), Sense::hover());
-            let picker = Button::new("…").id_salt("button:effectGroupPick").tooltip(crate::i18n::tr("Choose a group").to_owned()).show_at(ui, rect);
-            if real {
-                register_response("button:effectGroupPick", picker.rect, &picker);
-                if clicked(&picker) {
-                    popup = !popup;
-                }
+    let key = egui::Id::unique("lightcraft.save-effect.group-popup");
+    let stamp = key.with("shown-pass");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let (kept, previous) = ui.data(|data| (data.get_temp::<bool>(key).unwrap_or(false), data.get_temp::<u64>(stamp)));
+    // This app-only bit is the Popover's bound open state, not a focus owner.
+    // A newly shown Save never inherits a popup from a vanished parent.
+    let mut popup = kept && previous.is_some_and(|last| last == pass || last.checked_add(1) == Some(pass));
+    let mut picked = None;
+    #[cfg(test)]
+    let mut popup_probe_buttons: Vec<(String, egui::Response)> = Vec::new();
+    ui.horizontal(|ui| {
+        // Group Return ends its field but must never use Name's Save path.
+        save_naming_field(ui, "field:effectGroup", group, "Group (optional)", ui.available_width() - 30.0, false);
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), ui.spacing().interact_size.y.max(24.0)), Sense::hover());
+        let picker = Button::new("…").id_salt("button:effectGroupPick").tooltip(crate::i18n::tr("Choose a group").to_owned()).show_at(ui, rect);
+        if real {
+            register_response("button:effectGroupPick", picker.rect, &picker);
+            if clicked(&picker) {
+                popup = !popup;
             }
-            let _popup_result = Popover::new(crate::i18n::tr("Choose a group").to_owned(), Bind::bound(&mut popup))
-                .id_salt("save-effect-group-choices")
-                .opened_by(&picker)
-                .initial_focus(Initial::Keep)
-                .overlay(|mut overlay| {
-                    // Keep the real opener focused on open, then let ordinary Tab
-                    // cross this instance's option Buttons into its parent. Keep is
-                    // not the nontrapping KeepAnchor dropdown contract. SDK owns keys.
-                    overlay.focus = overlay.focus.trap(false);
-                    overlay.dismiss = overlay.dismiss.focus_left(false).opener_escape(craft::ui::contract::overlay::OpenerEscape::CloseAndBlur);
-                    overlay
-                })
-                .show(ui, |ui, _| {
-                    for (value, _) in fx::menu_order(&app.session.mask_effects) {
-                        let label = if value.is_empty() { crate::i18n::tr("None").to_owned() } else { value.clone() };
-                        let option = Button::new(label).id_salt(("save-effect-group-option", value.as_str())).show(ui);
-                        #[cfg(test)]
-                        if real {
-                            popup_probe_buttons.push((if value.is_empty() { "None".to_owned() } else { value.clone() }, option.response.clone()));
-                        }
-                        if real {
-                            register_response(format!("popup:{}", if value.is_empty() { "None" } else { value.as_str() }), option.rect, &option);
-                            if clicked(&option) {
-                                picked = Some(value);
-                            }
+        }
+        let _popup_result = Popover::new(crate::i18n::tr("Choose a group").to_owned(), Bind::bound(&mut popup))
+            .id_salt("save-effect-group-choices")
+            .opened_by(&picker)
+            .initial_focus(Initial::Keep)
+            .overlay(|mut overlay| {
+                // Keep the real opener focused on open, then let ordinary Tab
+                // cross this instance's option Buttons into its parent. Keep is
+                // not the nontrapping KeepAnchor dropdown contract. SDK owns keys.
+                overlay.focus = overlay.focus.trap(false);
+                overlay.dismiss = overlay.dismiss.focus_left(false).opener_escape(craft::ui::contract::overlay::OpenerEscape::CloseAndBlur);
+                overlay
+            })
+            .show(ui, |ui, _| {
+                for (value, _) in fx::menu_order(&app.session.mask_effects) {
+                    let label = if value.is_empty() { crate::i18n::tr("None").to_owned() } else { value.clone() };
+                    let option = Button::new(label).id_salt(("save-effect-group-option", value.as_str())).show(ui);
+                    #[cfg(test)]
+                    if real {
+                        popup_probe_buttons.push((if value.is_empty() { "None".to_owned() } else { value.clone() }, option.response.clone()));
+                    }
+                    if real {
+                        register_response(format!("popup:{}", if value.is_empty() { "None" } else { value.as_str() }), option.rect, &option);
+                        if clicked(&option) {
+                            picked = Some(value);
                         }
                     }
-                });
-            #[cfg(test)]
-            if real {
-                let family: Vec<_> = craft::ui::runtime::overlay::family(ui.ctx(), egui::Id::unique("lightcraft.save-effect"))
-                    .into_iter().filter_map(|id|craft::ui::runtime::overlay::entry(ui.ctx(), id))
-                    .map(|entry|serde_json::json!({"id":format!("{:?}",entry.id),"rank":format!("{:?}",entry.rank),"exiting":entry.exiting})).collect();
-                let buttons: Vec<_> = popup_probe_buttons.iter().map(|(label,response)| {
-                    let point = response.rect.center();
-                    serde_json::json!({"label":label,"id":format!("{:?}",response.id),"enabledWhenDrawn":response.enabled(),
-                        "senseWhenDrawn":format!("{:?}",response.sense),"rect":[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y],
-                        "layerWhenDrawn":format!("{:?}",response.layer_id),"cachedLayerAtInterior":format!("{:?}",ui.ctx().layer_id_at(point)),
-                        "lastPassShapesAtInterior":format!("{:?}",craft::ui::runtime::pointer::shapes_at(ui.ctx(),point))})
-                }).collect();
-                let receipt = serde_json::json!({"frameAtShow":ui.ctx().cumulative_frame_nr(),"passAtShow":ui.ctx().cumulative_pass_nr(),
-                    "phase":"immediately-after-Popover-show-within-draw","popoverId":format!("{:?}",_popup_result.output.response.id),
-                    "outputOpen":_popup_result.output.open,"outputClosed":format!("{:?}",_popup_result.output.closed),"bindingAfterShow":popup,
-                    "bodyRan":_popup_result.inner.is_some(),"familyAtShow":family,"actualOptionResponses":buttons});
-                if _popup_result.output.closed.is_some() {
-                    println!("SAVE_EFFECT_POPOVER_CLOSE_OUTPUT {}",receipt);
                 }
-                ui.ctx().data_mut(|data|data.insert_temp(egui::Id::unique("save-effect-popup-frame-provenance"),receipt));
-            }
-        });
-        if real {
-            if let Some(value) = picked {
-                *group = value;
-                popup = false;
-            }
-            ui.data_mut(|data| {
-                data.insert_temp(key, popup);
-                data.insert_temp(stamp, pass);
             });
+        #[cfg(test)]
+        if real {
+            let family: Vec<_> = craft::ui::runtime::overlay::family(ui.ctx(), egui::Id::unique("lightcraft.save-effect"))
+                .into_iter().filter_map(|id|craft::ui::runtime::overlay::entry(ui.ctx(), id))
+                .map(|entry|serde_json::json!({"id":format!("{:?}",entry.id),"rank":format!("{:?}",entry.rank),"exiting":entry.exiting})).collect();
+            let buttons: Vec<_> = popup_probe_buttons.iter().map(|(label,response)| {
+                let point = response.rect.center();
+                serde_json::json!({"label":label,"id":format!("{:?}",response.id),"enabledWhenDrawn":response.enabled(),
+                    "senseWhenDrawn":format!("{:?}",response.sense),"rect":[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y],
+                    "layerWhenDrawn":format!("{:?}",response.layer_id),"cachedLayerAtInterior":format!("{:?}",ui.ctx().layer_id_at(point)),
+                    "lastPassShapesAtInterior":format!("{:?}",craft::ui::runtime::pointer::shapes_at(ui.ctx(),point))})
+            }).collect();
+            let receipt = serde_json::json!({"frameAtShow":ui.ctx().cumulative_frame_nr(),"passAtShow":ui.ctx().cumulative_pass_nr(),
+                "phase":"immediately-after-Popover-show-within-draw","popoverId":format!("{:?}",_popup_result.output.response.id),
+                "outputOpen":_popup_result.output.open,"outputClosed":format!("{:?}",_popup_result.output.closed),"bindingAfterShow":popup,
+                "bodyRan":_popup_result.inner.is_some(),"familyAtShow":family,"actualOptionResponses":buttons});
+            if _popup_result.output.closed.is_some() {
+                println!("SAVE_EFFECT_POPOVER_CLOSE_OUTPUT {}",receipt);
+            }
+            ui.ctx().data_mut(|data|data.insert_temp(egui::Id::unique("save-effect-popup-frame-provenance"),receipt));
         }
+    });
+    if real {
+        if let Some(value) = picked {
+            *group = value;
+            popup = false;
+        }
+        ui.data_mut(|data| {
+            data.insert_temp(key, popup);
+            data.insert_temp(stamp, pass);
+        });
     }
     ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
     let adjust = app
@@ -538,33 +516,64 @@ pub fn save_body(
         .and_then(|d| app.session.active_mask.and_then(|mid| d.masks.iter().find(|m| m.id == mid).map(|m| m.adjust)));
     let changed = adjust.as_ref().map(fx::changed_fields).unwrap_or_default();
     let list = checklist();
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{FieldLayout, LabelKind, SideLabel};
+    use craft::ui::display::Text;
+    use craft::ui::fonts::FontRef;
+    use craft::ui::layout_components::Stack;
+    use craft::ui::primitives::DocRun;
+    use craft::ui::style::DataColor;
+
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    Stack::new().id_salt("save-effect-include-block").show(ui, |ui, cx| {
         ui.columns(2, |cols| {
             for (i, k) in list.iter().enumerate() {
-                let mut on = fields.iter().any(|f| f == k);
-                let text = egui::RichText::new(crate::i18n::tr(field_label(k)));
-                // the sliders this mask changes stand out; the others are dimmed
-                let text = if changed.iter().any(|c| c == k) { text.color(t.text).strong() } else { text.color(t.text_dim) };
-                let r = cols[i % 2].checkbox(&mut on, text);
-                register_response(format!("effectInclude:{k}"), r.rect, &r);
-                if r.changed() {
-                    fields.retain(|f| f != k);
-                    if on {
-                        fields.push(k.to_string());
+                let mut on = fields.iter().any(|field| field == k);
+                let was = on;
+                let changed_here = changed.iter().any(|field| field == k);
+                let words = crate::i18n::tr(field_label(k)).to_owned();
+                // Preserve the original normal/strong and dim color distinction
+                // as public static text inside the SDK-owned checkbox label.
+                // labelled_with keeps the whole label in the real checkbox hit.
+                let font = egui::TextStyle::Body.resolve(cols[i % 2].style());
+                let face = match &font.family {
+                    egui::FontFamily::Proportional => FontRef::proportional(),
+                    egui::FontFamily::Monospace => FontRef::monospace(),
+                    egui::FontFamily::Name(name) => FontRef::named(name),
+                };
+                let run = DocRun::new(words.clone(), face, font.size, DataColor::new(if changed_here { t.text } else { t.text_dim }));
+                let run = if changed_here { run.bold() } else { run };
+                let shown = cx.labelled_with(
+                    &mut cols[i % 2],
+                    ("effectInclude", *k),
+                    words.into(),
+                    SideLabel::new().layout(FieldLayout::After).kind(LabelKind::Hidden),
+                    Checkbox::new(Bind::bound(&mut on)),
+                    Text::spans(&[run]),
+                );
+                if real {
+                    register_response(format!("effectInclude:{k}"), shown.response.rect, &shown.response);
+                    if on != was {
+                        fields.retain(|field| field != k);
+                        if on {
+                            fields.push(k.to_string());
+                        }
                     }
                 }
             }
         });
         ui.horizontal(|ui| {
-            for (id, text) in [("all", "All"), ("none", "None"), ("changed", "Changed Only")] {
-                let b = ui.small_button(crate::i18n::tr(text));
-                register(ui, format!("effectInclude:{id}"), b.rect);
-                if b.clicked() {
-                    *fields = match id {
-                        "all" => list.iter().map(|k| k.to_string()).collect(),
-                        "none" => Vec::new(),
-                        _ => changed.iter().filter(|k| k.as_str() != "color_hue").cloned().collect(),
-                    };
+            for (id, words) in [("all", "All"), ("none", "None"), ("changed", "Changed Only")] {
+                let shown = Button::new(crate::i18n::tr(words).to_owned()).id_salt(("effectInclude", id)).show(ui);
+                if real {
+                    register_response(format!("effectInclude:{id}"), shown.rect, &shown);
+                    if clicked(&shown) {
+                        *fields = match id {
+                            "all" => list.iter().map(|field| field.to_string()).collect(),
+                            "none" => Vec::new(),
+                            _ => changed.iter().filter(|field| field.as_str() != "color_hue").cloned().collect(),
+                        };
+                    }
                 }
             }
         });
@@ -575,94 +584,19 @@ pub fn save_body(
             .color(t.text_dim)
             .size(11.0),
         );
-        let r = ui.checkbox(amount, crate::i18n::tr("Include Amount"));
-        register(ui, "check:effectAmount", r.rect);
-        let r = ui.checkbox(brush, crate::i18n::tr("Include brush size, feather and flow"));
-        register(ui, "check:effectBrush", r.rect);
-    } else {
-        use craft::ui::buttons::Button;
-        use craft::ui::choice::Checkbox;
-        use craft::ui::contract::{Bind, FieldLayout, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
-        use craft::ui::display::Text;
-        use craft::ui::fonts::FontRef;
-        use craft::ui::layout_components::Stack;
-        use craft::ui::primitives::DocRun;
-        use craft::ui::style::DataColor;
-
-        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        Stack::new().id_salt("save-effect-include-block").show(ui, |ui, cx| {
-            ui.columns(2, |cols| {
-                for (i, k) in list.iter().enumerate() {
-                    let mut on = fields.iter().any(|field| field == k);
-                    let was = on;
-                    let changed_here = changed.iter().any(|field| field == k);
-                    let words = crate::i18n::tr(field_label(k)).to_owned();
-                    // Preserve the original normal/strong and dim color distinction
-                    // as public static text inside the SDK-owned checkbox label.
-                    // labelled_with keeps the whole label in the real checkbox hit.
-                    let font = egui::TextStyle::Body.resolve(cols[i % 2].style());
-                    let face = match &font.family {
-                        egui::FontFamily::Proportional => FontRef::proportional(),
-                        egui::FontFamily::Monospace => FontRef::monospace(),
-                        egui::FontFamily::Name(name) => FontRef::named(name),
-                    };
-                    let run = DocRun::new(words.clone(), face, font.size, DataColor::new(if changed_here { t.text } else { t.text_dim }));
-                    let run = if changed_here { run.bold() } else { run };
-                    let shown = cx.labelled_with(
-                        &mut cols[i % 2],
-                        ("effectInclude", *k),
-                        words.into(),
-                        SideLabel::new().layout(FieldLayout::After).kind(LabelKind::Hidden),
-                        Checkbox::new(Bind::bound(&mut on)),
-                        Text::spans(&[run]),
-                    );
-                    if real {
-                        register_response(format!("effectInclude:{k}"), shown.response.rect, &shown.response);
-                        if on != was {
-                            fields.retain(|field| field != k);
-                            if on {
-                                fields.push(k.to_string());
-                            }
-                        }
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                for (id, words) in [("all", "All"), ("none", "None"), ("changed", "Changed Only")] {
-                    let shown = Button::new(crate::i18n::tr(words).to_owned()).id_salt(("effectInclude", id)).show(ui);
-                    if real {
-                        register_response(format!("effectInclude:{id}"), shown.rect, &shown);
-                        if clicked(&shown) {
-                            *fields = match id {
-                                "all" => list.iter().map(|field| field.to_string()).collect(),
-                                "none" => Vec::new(),
-                                _ => changed.iter().filter(|field| field.as_str() != "color_hue").cloned().collect(),
-                            };
-                        }
-                    }
-                }
-            });
-            ui.label(
-                egui::RichText::new(crate::i18n::tr(
-                    "Highlighted: sliders this mask changes. Sliders left out stay as they are when the preset is applied.",
-                ))
-                .color(t.text_dim)
-                .size(11.0),
-            );
-            let shown =
-                Checkbox::new(Bind::bound(&mut *amount)).label(crate::i18n::tr("Include Amount").to_owned()).id_salt("check:effectAmount").show(ui);
-            if real {
-                register_response("check:effectAmount", shown.response.rect, &shown.response);
-            }
-            let shown = Checkbox::new(Bind::bound(&mut *brush))
-                .label(crate::i18n::tr("Include brush size, feather and flow").to_owned())
-                .id_salt("check:effectBrush")
-                .show(ui);
-            if real {
-                register_response("check:effectBrush", shown.response.rect, &shown.response);
-            }
-        });
-    }
+        let shown =
+            Checkbox::new(Bind::bound(&mut *amount)).label(crate::i18n::tr("Include Amount").to_owned()).id_salt("check:effectAmount").show(ui);
+        if real {
+            register_response("check:effectAmount", shown.response.rect, &shown.response);
+        }
+        let shown = Checkbox::new(Bind::bound(&mut *brush))
+            .label(crate::i18n::tr("Include brush size, feather and flow").to_owned())
+            .id_salt("check:effectBrush")
+            .show(ui);
+        if real {
+            register_response("check:effectBrush", shown.response.rect, &shown.response);
+        }
+    });
     enter
 }
 

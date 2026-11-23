@@ -87,7 +87,7 @@ fn production_cull_body_mounts_sdk_controls_without_clamping_typed_values() {
     let mut dialog = Dialog::Cull { reject_below: 25.0, pick_best: false, burst_gap: 1800.0, similarity: 1.0 };
     let mut roles = Vec::new();
     for _ in 0..3 {
-        let _ = ctx.run_ui(egui::RawInput::default(), |root_ui| {
+        let mut frame_out = ctx.run_ui(egui::RawInput::default(), |root_ui| {
             let ctx = &root_ui.ctx().clone();
             egui::CentralPanel::default().show(root_ui, |ui| {
                 let t = crate::theme::Tokens::get(ctx);
@@ -97,6 +97,7 @@ fn production_cull_body_mounts_sdk_controls_without_clamping_typed_values() {
                 roles = record.iter().flat_map(|record| record.elements.iter()).filter_map(|element| element.facts.as_ref().map(|facts| facts.role.clone())).collect();
             });
         });
+        frame_out.textures_delta.clear();
     }
     assert_eq!(roles.iter().filter(|role| role.as_str() == "Slider").count(), 2, "{roles:?}");
     assert_eq!(roles.iter().filter(|role| role.as_str() == "SpinButton").count(), 2, "{roles:?}");
@@ -107,7 +108,7 @@ fn production_cull_body_mounts_sdk_controls_without_clamping_typed_values() {
 #[test]
 fn cull_registration_skips_both_sizing_modes() {
     let ctx = framework_context();
-    let _ = ctx.run_ui(egui::RawInput::default(), |root_ui| {
+    let mut frame_out = ctx.run_ui(egui::RawInput::default(), |root_ui| {
         let ctx = &root_ui.ctx().clone();
         egui::CentralPanel::default().show(root_ui, |ui| {
             crate::widgets::take_registries(ctx);
@@ -126,13 +127,14 @@ fn cull_registration_skips_both_sizing_modes() {
             assert_eq!(value, 1.0);
         });
     });
+    frame_out.textures_delta.clear();
 }
 
 #[test]
 fn cull_historical_field_alias_owns_the_real_slider_hit() {
     let ctx = framework_context();
     for _ in 0..3 {
-        let _ = ctx.run_ui(egui::RawInput::default(), |root_ui| {
+        let mut frame_out = ctx.run_ui(egui::RawInput::default(), |root_ui| {
             let ctx = &root_ui.ctx().clone();
             egui::CentralPanel::default().show(root_ui, |ui| {
                 crate::widgets::take_registries(ctx);
@@ -152,5 +154,6 @@ fn cull_historical_field_alias_owns_the_real_slider_hit() {
                 assert_eq!(value, 25.0);
             });
         });
+        frame_out.textures_delta.clear();
     }
 }

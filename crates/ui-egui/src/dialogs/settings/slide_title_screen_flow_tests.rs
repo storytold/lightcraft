@@ -134,10 +134,9 @@ impl Fixture {
                     let t = Tokens::get(ui.ctx());
                     match presentation {
                         Presentation::NativeSections => {
-                            super::super::native_controls::scope(&ctx, || sections(app, ui, &t));
+                            (|| sections(app, ui, &t))();
                         }
                         Presentation::SdkWorkflow => {
-                            assert!(!super::super::native_controls_active(ui.ctx()));
                             let settings = app.session.slide_titles.clone();
                             // These are the actual functions called by production `screen`, not
                             // alternate controls. Native colour/scale/duration are outside this leaf.

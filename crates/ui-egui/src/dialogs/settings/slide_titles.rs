@@ -14,7 +14,6 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::panels::settings::{check, choices, heading, hint, row};
-use crate::text_field::TextField;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -97,7 +96,6 @@ struct TitleDraft {
     text: String,
     model: String,
     pass: u64,
-    native: bool,
 }
 
 /// The screen's text field (`field:{id}`), saved when the edit ends.
@@ -106,32 +104,15 @@ fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &
 
     let mem = egui::Id::unique(("slideshow-title-field", id));
     let pass = ui.ctx().cumulative_pass_nr();
-    let native = super::native_controls_active(ui.ctx());
     // A hidden/rebound field starts from its own authoritative screen, never a stale draft.
     let remembered = ui
         .data(|d| d.get_temp::<TitleDraft>(mem))
-        .filter(|d| d.native == native && d.model == value && (d.pass == pass || d.pass.checked_add(1) == Some(pass)));
+        .filter(|d| d.model == value && (d.pass == pass || d.pass.checked_add(1) == Some(pass)));
     let mut draft = remembered.map_or_else(|| value.to_owned(), |d| d.text);
     let widget = format!("field:{id}");
     let width = ui.available_width().clamp(80.0, 260.0);
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let committed = if native {
-        if !real {
-            // Measurement has no field memo, focus, menu, command or automation side effects.
-            ui.add(egui::TextEdit::singleline(&mut draft).desired_width(width).hint_text(crate::i18n::tr("Title text")).interactive(false));
-            return;
-        }
-        let out = TextField::singleline(&widget, &mut draft).hint(crate::i18n::tr("Title text")).width(width).show(ui);
-        if out.cancelled() {
-            crate::widgets::take_escape(ui.ctx());
-        }
-        if out.editing && ui.is_enabled() {
-            ui.data_mut(|d| d.insert_temp(mem, TitleDraft { text: draft.clone(), model: value.to_owned(), pass, native }));
-        } else {
-            ui.data_mut(|d| d.remove::<TitleDraft>(mem));
-        }
-        out.committed().then_some(draft)
-    } else {
+    let committed = {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
         let out = craft::ui::text::TextField::new(crate::i18n::tr("Title text"), Bind::bound(&mut draft))
             .id(crate::text_field::id(&widget))
@@ -147,7 +128,7 @@ fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &
             if out.events.ended().is_some() || !ui.is_enabled() {
                 ui.data_mut(|d| d.remove::<TitleDraft>(mem));
             } else {
-                ui.data_mut(|d| d.insert_temp(mem, TitleDraft { text: draft, model: value.to_owned(), pass, native }));
+                ui.data_mut(|d| d.insert_temp(mem, TitleDraft { text: draft, model: value.to_owned(), pass }));
             }
         }
         out.events.committed().cloned()

@@ -64,17 +64,6 @@ fn aspect_real(ui: &egui::Ui) -> bool {
 /// The custom fields keep their public locators; the SDK owners are stable for this photo.
 /// Return/Enter submits the pair; Tab/blur only edits the local menu draft.
 fn aspect_field(ui: &mut egui::Ui, owner: PhotoId, widget: &str, label: &str, value: &mut String) -> bool {
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        if !aspect_real(ui) {
-            ui.add(egui::TextEdit::singleline(value).desired_width(34.0).interactive(false));
-            return false;
-        }
-        let out = crate::text_field::TextField::singleline(widget, value).label(crate::i18n::tr(label)).width(34.0).show(ui);
-        if out.cancelled() {
-            crate::widgets::take_escape(ui.ctx());
-        }
-        return ui.is_enabled() && out.ending == Some(crate::text_field::Ending::Return);
-    }
     let (rect, _) = ui.allocate_exact_size(egui::vec2(46.0, 24.0), egui::Sense::hover());
     let out = craft::ui::text::TextField::new(crate::i18n::tr(label).to_owned(), Bind::bound(value))
         .id_salt(("crop-custom-field", owner.0, widget))
@@ -101,19 +90,12 @@ fn custom_aspect(ui: &mut egui::Ui, owner: PhotoId) -> Option<serde_json::Value>
         apply |= aspect_field(ui, owner, "field:cropCustomW", "Width", &mut w);
         ui.label("×");
         apply |= aspect_field(ui, owner, "field:cropCustomH", "Height", &mut h);
-        if crate::panels::settings::native_controls_active(ui.ctx()) {
-            if aspect_real(ui) {
-                apply |= text_button(ui, "cropCustomApply", "Apply", false).clicked();
-            } else {
-                ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Apply")));
-            }
-        } else {
-            let go = craft::ui::buttons::Button::new(crate::i18n::tr("Apply")).id_salt(("crop-custom-apply", owner.0)).show(ui);
-            if aspect_real(ui) {
-                crate::widgets::register_response("button:cropCustomApply", go.response.rect, &go.response);
-                apply |= go.clicked();
-            }
+        let go = craft::ui::buttons::Button::new(crate::i18n::tr("Apply")).id_salt(("crop-custom-apply", owner.0)).show(ui);
+        if aspect_real(ui) {
+            crate::widgets::register_response("button:cropCustomApply", go.response.rect, &go.response);
+            apply |= go.clicked();
         }
+    
     });
     if !aspect_real(ui) || !ui.is_enabled() {
         return None;
@@ -143,97 +125,70 @@ fn aspect_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: PhotoId, ori
 
     let current = aspect_label(app.crop_tool_aspect(), original);
     let enabled = app.session.active() == Some(owner);
-    if !aspect_real(ui) && crate::panels::settings::native_controls_active(ui.ctx()) {
-        ui.add_enabled(false, egui::Button::new(crate::i18n::tr(&current)));
+    let mut picked = None;
+    let face = Button::new(crate::i18n::tr("Aspect Ratio"))
+        .painted(crate::i18n::tr(&current).to_owned())
+        .trailing_icon(DisclosureGlyph::dropdown())
+        .id_salt(("crop-aspect", owner.0))
+        .enabled(enabled)
+        .show(ui);
+    if !aspect_real(ui) {
         return;
     }
-    let mut picked = None;
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        ui.add_enabled_ui(enabled, |ui| {
-            let t = Tokens::get(ui.ctx());
-            let face = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&current), t.font(12.5), t.text);
-            egui::Popup::menu(&face).show(|ui| {
+    crate::widgets::register_response("dropdown:cropAspect", face.response.rect, &face.response);
+    let pass = ui.ctx().cumulative_pass_nr();
+    let slot = face.response.id.with("menu-open");
+    let mut open = ui
+        .data(|d| d.get_temp::<(u64, bool)>(slot))
+        .filter(|(last, _)| *last == pass || last.checked_add(1) == Some(pass))
+        .is_some_and(|(_, open)| open)
+        && enabled
+        && ui.is_enabled();
+    if enabled && ui.is_enabled() && face.clicked() {
+        open = !open;
+    }
+    // This popup includes a validating form, not just menu actions. Menu's default
+    // on-activate dismissal would close it even when Apply rejects invalid text.
+    // Keep preset roving in an inline Menu; only a successful app-level pick closes
+    // the form. The SDK's normal popup focus/escape/outside lifecycle stays in charge.
+    // Exit presence is paint-only. In particular, a retained text root must not
+    // receive typing or write the saved menu draft after the open binding closes.
+    let body_interactive = open;
+    Popover::new(crate::i18n::tr("Aspect Ratio"), Bind::bound(&mut open))
+        .id_salt(("crop-aspect-menu", owner.0))
+        .opened_by(&face.response)
+        .dismiss(Dismiss::new().outside(Outside::Absorb))
+        // Inline Menu supplies the roving group, but its host must supply the menu
+        // scope used by keyboard_in_menu and menu-level key routing.
+        .overlay(|overlay| overlay.focus(craft::ui::runtime::focus::FocusPolicy::MENU))
+        .show(ui, |ui, cx| {
+            if !body_interactive {
+                ui.disable();
+            }
+            Menu::inline(crate::i18n::tr("Aspect Ratio")).id_salt(("crop-aspect-presets", owner.0)).values().show(ui, |ui, _| {
                 for (label, value) in ASPECT_PRESETS {
-                    let row = ui.button(crate::i18n::tr(label));
+                    let item = MenuItem::new(crate::i18n::tr(label).replace('&', "&&"))
+                        .id_salt(("crop-aspect-preset", owner.0, value))
+                        .entry_checked(current == label)
+                        .keep_open(true)
+                        .show(ui);
                     if aspect_real(ui) {
-                        crate::widgets::register_response(format!("button:cropAspect-{value}"), row.rect, &row);
-                        if ui.is_enabled() && row.clicked() {
+                        crate::widgets::register_response(format!("button:cropAspect-{value}"), item.response.rect, &item.response);
+                        if ui.is_enabled() && item.ran {
                             picked = Some(json!({"aspect": value}));
                         }
                     }
                 }
-                ui.separator();
-                if let Some(custom) = custom_aspect(ui, owner) {
-                    picked = Some(custom);
-                    ui.close();
-                }
             });
+            ui.separator();
+            if let Some(custom) = custom_aspect(ui, owner) {
+                picked = Some(custom);
+            }
+            if picked.is_some() {
+                cx.request_close();
+            }
         });
-    } else {
-        let face = Button::new(crate::i18n::tr("Aspect Ratio"))
-            .painted(crate::i18n::tr(&current).to_owned())
-            .trailing_icon(DisclosureGlyph::dropdown())
-            .id_salt(("crop-aspect", owner.0))
-            .enabled(enabled)
-            .show(ui);
-        if !aspect_real(ui) {
-            return;
-        }
-        crate::widgets::register_response("dropdown:cropAspect", face.response.rect, &face.response);
-        let pass = ui.ctx().cumulative_pass_nr();
-        let slot = face.response.id.with("menu-open");
-        let mut open = ui
-            .data(|d| d.get_temp::<(u64, bool)>(slot))
-            .filter(|(last, _)| *last == pass || last.checked_add(1) == Some(pass))
-            .is_some_and(|(_, open)| open)
-            && enabled
-            && ui.is_enabled();
-        if enabled && ui.is_enabled() && face.clicked() {
-            open = !open;
-        }
-        // This popup includes a validating form, not just menu actions. Menu's default
-        // on-activate dismissal would close it even when Apply rejects invalid text.
-        // Keep preset roving in an inline Menu; only a successful app-level pick closes
-        // the form. The SDK's normal popup focus/escape/outside lifecycle stays in charge.
-        // Exit presence is paint-only. In particular, a retained text root must not
-        // receive typing or write the saved menu draft after the open binding closes.
-        let body_interactive = open;
-        Popover::new(crate::i18n::tr("Aspect Ratio"), Bind::bound(&mut open))
-            .id_salt(("crop-aspect-menu", owner.0))
-            .opened_by(&face.response)
-            .dismiss(Dismiss::new().outside(Outside::Absorb))
-            // Inline Menu supplies the roving group, but its host must supply the menu
-            // scope used by keyboard_in_menu and menu-level key routing.
-            .overlay(|overlay| overlay.focus(craft::ui::runtime::focus::FocusPolicy::MENU))
-            .show(ui, |ui, cx| {
-                if !body_interactive {
-                    ui.disable();
-                }
-                Menu::inline(crate::i18n::tr("Aspect Ratio")).id_salt(("crop-aspect-presets", owner.0)).values().show(ui, |ui, _| {
-                    for (label, value) in ASPECT_PRESETS {
-                        let item = MenuItem::new(crate::i18n::tr(label).replace('&', "&&"))
-                            .id_salt(("crop-aspect-preset", owner.0, value))
-                            .entry_checked(current == label)
-                            .keep_open(true)
-                            .show(ui);
-                        if aspect_real(ui) {
-                            crate::widgets::register_response(format!("button:cropAspect-{value}"), item.response.rect, &item.response);
-                            if ui.is_enabled() && item.ran {
-                                picked = Some(json!({"aspect": value}));
-                            }
-                        }
-                    }
-                });
-                ui.separator();
-                if let Some(custom) = custom_aspect(ui, owner) {
-                    picked = Some(custom);
-                }
-                if picked.is_some() {
-                    cx.request_close();
-                }
-            });
-        ui.data_mut(|d| d.insert_temp(slot, (pass, open)));
-    }
+    ui.data_mut(|d| d.insert_temp(slot, (pass, open)));
     if ui.is_enabled()
         && enabled
         && app.session.active() == Some(owner)
@@ -437,16 +392,7 @@ fn crop_overlay_choices(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: Photo
             (O::None, "None", "none"),
         ];
         let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-        let picked = if crate::panels::settings::native_controls_active(ui.ctx()) {
-            if real {
-                let items: Vec<(&str, &str)> = opts.iter().map(|(_, label, key)| (*label, *key)).collect();
-                crate::widgets::segmented(ui, "cropOverlay", &items, active, 4)
-            } else {
-                // Preserve native layout without running its geometry-only automation registration.
-                ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0 + ui.spacing().item_spacing.y), egui::Sense::hover());
-                None
-            }
-        } else {
+        let picked = {
             let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0)).max(1.0);
             let cell_width = ((width - 12.0) / 4.0).max(1.0);
             let body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
@@ -603,9 +549,6 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // Local model mapping only: the SDK owns editing/gestures and the existing
     // apply_slider_out adapter owns engine begin/update/end and Undo grouping.
     let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64, enabled: bool| {
-        if crate::dialogs::settings::native_controls_active(ui.ctx()) {
-            return (slider(ui, spec, value, interactive && enabled, None), false);
-        }
         let number_spec = *spec;
         let record_key = ui.scope_id().with(("remove-field", id, selected, spec.id));
         let (out, record) = craft::ui::runtime::inspect::record(ui, record_key, |ui| {
@@ -782,28 +725,6 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut picked = None;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
-        if crate::panels::settings::native_controls_active(ui.ctx()) {
-            if !real {
-                ui.add_enabled(false, egui::Button::new(crate::i18n::tr(current.label())));
-                return;
-            }
-            let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
-                .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
-            let enabled = eligible && ui.is_enabled();
-            egui::Popup::menu(&r).show(|ui| {
-                let body_real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-                for mode in ToolOverlay::ALL {
-                    let row = ui.selectable_label(mode == current, crate::i18n::tr(mode.label()));
-                    if body_real {
-                        crate::widgets::register_response(format!("toolOverlay:{}", mode.name()), row.rect, &row);
-                        if enabled && ui.is_enabled() && row.clicked() {
-                            picked = Some(mode);
-                        }
-                    }
-                }
-            });
-            return;
-        }
         let face = Button::new(crate::i18n::tr("Tool Overlay"))
             .painted(crate::i18n::tr(current.label()).to_owned())
             .trailing_icon(DisclosureGlyph::dropdown())
@@ -975,13 +896,6 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // find(indexed id) returns a TEMPLATE spec: retain the old unindexed
     // sliderLabel:/slider:/sliderValue: aliases; only the command payload is indexed.
     let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64| {
-        if crate::dialogs::settings::native_controls_active(ui.ctx()) {
-            if !real {
-                ui.allocate_exact_size(egui::vec2(ui.available_width(), Tokens::get(ui.ctx()).slider_row_h), egui::Sense::hover());
-                return (SliderOut::default(), false);
-            }
-            return (slider(ui, spec, value, interactive, None), false);
-        }
         let number_spec = *spec;
         let record_key = egui::Id::unique(("red-eye-field-record", id, i, spec.id));
         let (out, record) = craft::ui::runtime::inspect::record(ui, record_key, |ui| {

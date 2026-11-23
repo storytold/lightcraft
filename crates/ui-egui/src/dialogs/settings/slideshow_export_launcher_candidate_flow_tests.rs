@@ -109,7 +109,6 @@ impl Fixture {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let mut present = || {
                         let mut draw = |ui: &mut egui::Ui| {
-                            assert_eq!(super::super::native_controls_active(ui.ctx()), native);
                             export_section(app, ui, &Tokens::get(ui.ctx()));
                             let receipt = ui
                                 .ctx()
@@ -143,7 +142,7 @@ impl Fixture {
                         }
                     };
                     if native {
-                        super::super::native_controls::scope(&ctx, present);
+                        (present)();
                     } else {
                         present();
                     }

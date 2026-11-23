@@ -245,31 +245,25 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
     heading(ui, t, "Templates");
     let mut close = false;
     ui.horizontal(|ui| {
-        if crate::panels::settings::native_controls_active(ui.ctx()) {
-            crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
-                .hint(crate::i18n::tr("Template name"))
-                .width(140.0)
-                .show(ui);
-        } else {
-            let (rect, _) = ui.allocate_exact_size(vec2(140.0, ui.spacing().interact_size.y.max(24.0)), Sense::hover());
-            let real = !measuring(ui);
-            let eligible = real && ui.is_enabled() && ui.is_visible() && ui.clip_rect().intersects(rect);
-            let shown = craft::ui::text::TextField::new(crate::i18n::tr("Template name").to_owned(), Bind::bound(&mut pu.template_name))
-                .id_salt("field:printTemplateName")
-                .placeholder(crate::i18n::tr("Template name").to_owned())
-                // A disabled adapter can still cancel its old focused gesture. Protect the
-                // mutable binding as well so the first covered Escape cannot clear Name.
-                .read_only(!ui.is_enabled())
-                .limit(None)
-                .show_at(ui, rect);
-            if real {
-                crate::widgets::register_response("field:printTemplateName", shown.response.rect, &shown.response);
-            }
-            // Preserve the observed native one-Escape parent dismissal for this plain Name.
-            // `escaped` also includes Escape-reason Revert; no such programmatic path is
-            // installed here, and this is not a general physical-key discriminator.
-            close |= eligible && shown.escaped;
+        let (rect, _) = ui.allocate_exact_size(vec2(140.0, ui.spacing().interact_size.y.max(24.0)), Sense::hover());
+        let real = !measuring(ui);
+        let eligible = real && ui.is_enabled() && ui.is_visible() && ui.clip_rect().intersects(rect);
+        let shown = craft::ui::text::TextField::new(crate::i18n::tr("Template name").to_owned(), Bind::bound(&mut pu.template_name))
+            .id_salt("field:printTemplateName")
+            .placeholder(crate::i18n::tr("Template name").to_owned())
+            // A disabled adapter can still cancel its old focused gesture. Protect the
+            // mutable binding as well so the first covered Escape cannot clear Name.
+            .read_only(!ui.is_enabled())
+            .limit(None)
+            .show_at(ui, rect);
+        if real {
+            crate::widgets::register_response("field:printTemplateName", shown.response.rect, &shown.response);
         }
+        // Preserve the observed native one-Escape parent dismissal for this plain Name.
+        // `escaped` also includes Escape-reason Revert; no such programmatic path is
+        // installed here, and this is not a general physical-key discriminator.
+        close |= eligible && shown.escaped;
+    
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }

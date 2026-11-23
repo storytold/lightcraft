@@ -153,9 +153,6 @@ impl Outcome for TextButtonOutput {
 }
 
 pub(super) fn show(ui: &mut Ui, id: &str, label: &str, active: bool) -> TextButtonOutput {
-    if crate::panels::settings::native_controls_active(ui.ctx()) {
-        return native(ui, id, label, active);
-    }
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
     let button = DenseTextButton::new(ui, label, active);
     // Use the existing egui allocation, not SDK flow allocation, to retain horizontal_wrapped

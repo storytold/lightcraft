@@ -210,7 +210,6 @@ impl Fixture {
                         if host == Host::SettingsCallback {
                             super::super::window(app, ui, tab, 1500.0);
                         } else {
-                            assert_eq!(super::super::native_controls_active(ui.ctx()), host == Host::NativePage);
                             let tokens = crate::theme::Tokens::get(ui.ctx());
                             let system = app.system_theme(ui.ctx());
                             super::appearance(ui, &tokens, &mut app.ui.settings, system);
@@ -228,7 +227,7 @@ impl Fixture {
                         }
                     };
                     if host == Host::NativePage {
-                        super::super::native_controls::scope(&context, present);
+                        (present)();
                     } else {
                         present();
                     }

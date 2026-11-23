@@ -543,10 +543,6 @@ fn label_names_actual_parent_publishes_six_enabled_sdk_text_field_owners() {
     for _ in 0..8 {
         f.safe();
         f.tick += 1;
-        assert!(
-            !super::settings::native_controls_active(&f.ctx),
-            "actual generic parent defaults to SDK"
-        );
         let raw = HeadlessView::raw_input(
             egui::vec2(1400.0, 1000.0),
             1.0,

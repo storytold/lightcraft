@@ -202,7 +202,6 @@ impl Fixture {
                     panel = ui.max_rect();
                     ui.set_clip_rect(ui.clip_rect().intersect(panel));
                     let mut draw = |ui: &mut egui::Ui| {
-                        assert!(!crate::panels::settings::native_controls_active(ui.ctx()));
                         let (_, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("section-solo-actual-parent"), |ui| {
                             crate::panels::right::show(app, ui);
                         });

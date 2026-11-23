@@ -161,7 +161,6 @@ impl Fixture {
                     panel = ui.max_rect();
                     ui.set_clip_rect(ui.clip_rect().intersect(panel));
                     let mut draw = |ui: &mut egui::Ui| {
-                        assert!(!crate::panels::settings::native_controls_active(ui.ctx()));
                         let initial_target = app.session.active().and_then(|id| app.session.develop_of(id)).map(|develop| {
                             (MIXER_BANDS.iter().find(|band| **band == app.ui.mixer_mode).copied().unwrap_or("red").to_owned(), crate::is_bw(&develop))
                         });

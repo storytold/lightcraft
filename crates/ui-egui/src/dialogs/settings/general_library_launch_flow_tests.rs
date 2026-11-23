@@ -226,7 +226,7 @@ impl Fixture {
                         }
                     };
                     if native {
-                        super::super::native_controls::scope(&ctx, || run(ui));
+                        (|| run(ui))();
                     } else {
                         run(ui);
                     }
@@ -517,7 +517,6 @@ fn general_library_live_window_retains_native_dispatch() {
     }
     assert_eq!(f.observations.len(), 2);
     assert!(f.observations.iter().all(|o| o["native"] == true));
-    assert!(!super::super::native_controls_active(&f.ctx), "native scope restores the outer SDK context");
 }
 
 #[test]

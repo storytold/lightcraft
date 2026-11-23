@@ -1143,14 +1143,6 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         let titles: Vec<egui::Response> = bar
             .iter()
             .map(|(title, _)| {
-                if crate::panels::settings::native_controls_active(ui.ctx()) {
-                    let r =
-                        ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(title)).font(font.clone()).color(t.text_label)).frame(false));
-                    if !measuring {
-                        crate::widgets::register(ui, format!("menu:{title}"), r.rect);
-                    }
-                    return r;
-                }
                 let caption = crate::i18n::tr(title);
                 let galley = ui.painter().layout_no_wrap(caption.to_owned(), font.clone(), t.text_label);
                 let size = galley.size().max(egui::vec2(0.0, ui.spacing().interact_size.y));

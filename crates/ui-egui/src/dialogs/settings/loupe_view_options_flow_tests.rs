@@ -74,12 +74,11 @@ impl Fixture {
                     let mut draw = |ui: &mut egui::Ui| {
                         ui.add_enabled_ui(enabled, |ui| {
                             let mut body = || {
-                                assert_eq!(super::super::native_controls_active(&ctx), native);
                                 view_options(app, ui, &Tokens::get(&ctx));
                             };
                             if native {
                                 // Retain the actual Settings boundary; this tests fallback, not SDK adoption.
-                                super::super::native_controls::scope(&ctx, body);
+                                (body)();
                             } else {
                                 body();
                             }

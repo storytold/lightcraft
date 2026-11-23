@@ -176,74 +176,72 @@ fn focus_shape_row(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_de
     use lightcraft_develop::FocusShape;
     let t = Tokens::get(ui.ctx());
 
-    if !crate::panels::settings::native_controls_active(ui.ctx()) {
-        use craft::behavior::Proposal;
-        use craft::theme::{Emphasis, Variant, variant::Tone};
-        use craft::ui::buttons::Button;
-        use craft::ui::contract::{Props as _, Show as _};
+    use craft::behavior::Proposal;
+    use craft::theme::{Emphasis, Variant, variant::Tone};
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
 
-        let owner = app.session.active();
-        let real = !lens_blur_measuring(ui);
-        let interactive = real && ui.is_enabled() && owner.is_some();
-        // The existing picture stays an image-domain glyph; the SDK owns its ordinary button face.
-        let button = |index: usize, shape: FocusShape| {
-            Button::new(crate::i18n::tr(shape.label()).to_owned())
-                .painted("")
-                .id_salt(("lens-blur-shape", owner.map(|id| id.0), index))
-                .variant(if b.shape == shape { Variant::look(Emphasis::Soft, Tone::Accent) } else { Variant::SECONDARY })
-                .enabled(interactive)
-                .tooltip(
-                    crate::i18n::tr(match shape {
-                        FocusShape::Auto => "Auto: the photo's subject, estimated",
-                        FocusShape::Round => "Round",
-                        FocusShape::Wide => "Horizontal oval",
-                        FocusShape::Tall => "Vertical oval",
-                    })
-                    .to_owned(),
-                )
-        };
-        ui.label(RichText::new(crate::i18n::tr("Shape")).font(t.font(13.0)).color(t.text_dim));
-        let face = FocusShape::ALL
-            .into_iter()
-            .enumerate()
-            .fold(vec2(36.0, 28.0), |size, (index, shape)| size.max(button(index, shape).measure_in(ui, Proposal::Ideal)));
-        let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0));
-        let columns = if 4.0 * face.x + 12.0 <= width {
-            4
-        } else if 2.0 * face.x + 4.0 <= width {
-            2
-        } else {
-            1
-        };
-        for (row, shapes) in FocusShape::ALL.chunks(columns).enumerate() {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                for (column, shape) in shapes.iter().copied().enumerate() {
-                    let (rect, _) = ui.allocate_exact_size(face, Sense::hover());
-                    if !real {
-                        // External SDK measurement can use an ordinary Ui: measure/allocate, never sense or publish.
-                        continue;
-                    }
-                    let out = button(row * columns + column, shape).show_at(ui, rect);
-                    let name = serde_json::to_value(shape).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
-                    crate::widgets::register_response(format!("lensBlurShape:{name}"), out.response.interact_rect, &out.response);
-                    let selected = b.shape == shape;
-                    let colour = match (interactive, selected) {
-                        (false, _) => t.icon.gamma_multiply(0.4),
-                        (true, true) => t.accent,
-                        (true, false) => t.icon,
-                    };
-                    paint_focus_shape(ui.painter(), out.response.rect.shrink(5.0), shape, colour);
-                    // A selected preset is an action when moved, but a genuine no-op while already centered.
-                    if interactive && app.session.active() == owner && out.clicked() && (!selected || b.area.is_some()) {
-                        let _ =
-                            app.run("develop.merge", json!({"settings": {"lens_blur": {"shape": name, "area": null}}, "label": "Lens Blur Shape"}));
-                    }
+    let owner = app.session.active();
+    let real = !lens_blur_measuring(ui);
+    let interactive = real && ui.is_enabled() && owner.is_some();
+    // The existing picture stays an image-domain glyph; the SDK owns its ordinary button face.
+    let button = |index: usize, shape: FocusShape| {
+        Button::new(crate::i18n::tr(shape.label()).to_owned())
+            .painted("")
+            .id_salt(("lens-blur-shape", owner.map(|id| id.0), index))
+            .variant(if b.shape == shape { Variant::look(Emphasis::Soft, Tone::Accent) } else { Variant::SECONDARY })
+            .enabled(interactive)
+            .tooltip(
+                crate::i18n::tr(match shape {
+                    FocusShape::Auto => "Auto: the photo's subject, estimated",
+                    FocusShape::Round => "Round",
+                    FocusShape::Wide => "Horizontal oval",
+                    FocusShape::Tall => "Vertical oval",
+                })
+                .to_owned(),
+            )
+    };
+    ui.label(RichText::new(crate::i18n::tr("Shape")).font(t.font(13.0)).color(t.text_dim));
+    let face = FocusShape::ALL
+        .into_iter()
+        .enumerate()
+        .fold(vec2(36.0, 28.0), |size, (index, shape)| size.max(button(index, shape).measure_in(ui, Proposal::Ideal)));
+    let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0));
+    let columns = if 4.0 * face.x + 12.0 <= width {
+        4
+    } else if 2.0 * face.x + 4.0 <= width {
+        2
+    } else {
+        1
+    };
+    for (row, shapes) in FocusShape::ALL.chunks(columns).enumerate() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (column, shape) in shapes.iter().copied().enumerate() {
+                let (rect, _) = ui.allocate_exact_size(face, Sense::hover());
+                if !real {
+                    // External SDK measurement can use an ordinary Ui: measure/allocate, never sense or publish.
+                    continue;
                 }
-            });
-        }
-        return;
+                let out = button(row * columns + column, shape).show_at(ui, rect);
+                let name = serde_json::to_value(shape).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+                crate::widgets::register_response(format!("lensBlurShape:{name}"), out.response.interact_rect, &out.response);
+                let selected = b.shape == shape;
+                let colour = match (interactive, selected) {
+                    (false, _) => t.icon.gamma_multiply(0.4),
+                    (true, true) => t.accent,
+                    (true, false) => t.icon,
+                };
+                paint_focus_shape(ui.painter(), out.response.rect.shrink(5.0), shape, colour);
+                // A selected preset is an action when moved, but a genuine no-op while already centered.
+                if interactive && app.session.active() == owner && out.clicked() && (!selected || b.area.is_some()) {
+                    let _ =
+                        app.run("develop.merge", json!({"settings": {"lens_blur": {"shape": name, "area": null}}, "label": "Lens Blur Shape"}));
+                }
+            }
+        });
     }
+    return;
 
     let enabled = ui.is_enabled();
     ui.horizontal(|ui| {

@@ -683,15 +683,12 @@ fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, draft: Draft, out: &mut
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(g.value_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
     // the old value is selected when the field takes the focus, so typing replaces it
     let field = crate::text_field::TextField::singleline(&format!("sliderField:{}", g.spec.id), &mut text)
-        .font(t.font(12.5))
-        .horizontal_align(egui::Align::RIGHT)
         .width(g.value_rect.width())
-        .margin(egui::Margin::ZERO)
         .select_on_focus(true)
         .begin_edit(frames == 0)
         .show(&mut child);
     if (frames < 2 || opening_release) && !matches!(field.ending, Some(crate::text_field::Ending::Return | crate::text_field::Ending::Escape)) {
-        field.response.request_focus();
+        crate::text_field::focus(ui.ctx(), &format!("sliderField:{}", g.spec.id));
         let draft = (text, frames.saturating_add(1), pressed);
         ui.data_mut(|m| m.insert_temp(g.typing_id(), draft.clone()));
         return Some(draft);

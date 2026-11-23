@@ -113,7 +113,7 @@ impl Fixture {
                     let mut draw = |ui: &mut egui::Ui| {
                         ui.add_enabled_ui(enabled, |ui| {
                             if mode == 2 {
-                                super::super::native_controls::scope(&ctx, || super::super::import::import_tab(app, ui, &Tokens::get(&ctx)));
+                                (|| super::super::import::import_tab(app, ui, &Tokens::get(&ctx)))();
                             } else {
                                 let current = if target == "rawPreset" {
                                     app.session.import_defaults.raw_preset.clone()
@@ -126,7 +126,7 @@ impl Fixture {
                                     ("settingsOtherPreset", "Other preset", "None")
                                 };
                                 let mut draw = || preset_combo(app, ui, id, crate::i18n::tr(label), current.as_deref(), none);
-                                let chosen = if mode == 1 { super::super::native_controls::scope(&ctx, draw) } else { draw() };
+                                let chosen = if mode == 1 { (draw)() } else { draw() };
                                 if let Some(next) = chosen {
                                     emitted.push(next.clone());
                                     app.run("library.preferences", json!({"import": {(target): next}})).unwrap();
