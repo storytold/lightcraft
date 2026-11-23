@@ -139,7 +139,9 @@ fn escape_pressed(ui: &egui::Ui) -> bool {
 pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSection]) {
     let Some(dragged) = app.ui.dragging_section else { return };
     let (released, pos) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos()));
-    let esc = escape_pressed(ui);
+    // (an Escape no component took reaches the window as its Cancel)
+    let esc = escape_pressed(ui)
+        || craft::ui::runtime::keys::with_window_intents(ui.ctx(), false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
     if esc {
         // the drag's Esc, not also a dialog's or a view's
         crate::widgets::take_escape(ui.ctx());
@@ -224,7 +226,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
         .unregistered();
     let salt = format!("section-{widget}-{id}");
     let mut header = ui.new_child(egui::UiBuilder::new().max_rect(list));
-    let out = side_list(&mut header, SideSpec::new(&salt, crate::i18n::tr("Sidebar section"), false), vec![row]);
+    let out = side_list(&mut header, SideSpec::new(&salt, crate::i18n::tr("Sidebar section"), false).keep_focus(), vec![row]);
     let live = !measuring(ui) && ui.is_enabled();
     if live {
         register(ui, format!("{widget}:{id}"), r);
@@ -413,7 +415,7 @@ pub(super) fn sidebar_title(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         row = row.tip(l.dir.display().to_string());
     }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(hr).layout(egui::Layout::top_down(egui::Align::Min)));
-    let out = side_list(&mut child, SideSpec::new("sidebar-title", crate::i18n::tr("My Photos"), false).flat(), vec![row]);
+    let out = side_list(&mut child, SideSpec::new("sidebar-title", crate::i18n::tr("My Photos"), false).flat().keep_focus(), vec![row]);
     if !measuring(ui) && ui.is_enabled() {
         register(ui, "sidebarTitle", hr);
         if library.is_some() {
