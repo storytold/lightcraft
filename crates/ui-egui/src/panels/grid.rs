@@ -686,21 +686,23 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
     let label = crate::i18n::date_group_label(&run.key, false);
     let n = run.count;
     let count = crate::i18n::tr_format!("· {n} photo{}", if n == 1 { "" } else { "s" }, n = n);
-    let resp = host::target(ui, ("group-header", run.start, pinned), r, host::Target::new(format!("{label} {count}")));
-    if !pinned && host::live(ui) {
-        crate::widgets::register_response(format!("group:{}", if run.key.is_empty() { "unknown" } else { &run.key }), r, &resp);
+    // sizing and SDK measuring passes only paint: they sense, publish and act on nothing
+    let resp = host::live(ui).then(|| host::target(ui, ("group-header", run.start, pinned), r, host::Target::new(format!("{label} {count}"))));
+    if !pinned && let Some(resp) = &resp {
+        crate::widgets::register_response(format!("group:{}", if run.key.is_empty() { "unknown" } else { &run.key }), r, resp);
     }
+    let hovered = resp.as_ref().is_some_and(|resp| resp.hovered());
     let p = ui.painter();
     if pinned {
         p.rect_filled(r, 0.0, t.canvas);
         p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, t.divider));
     }
-    let g = p.layout_no_wrap(label, t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
+    let g = p.layout_no_wrap(label, t.semibold(15.0), if hovered { t.text } else { t.text_label });
     let x = r.left() + 8.0;
     let gw = g.size().x;
     p.galley(pos2(x, r.center().y - g.size().y / 2.0), g, t.text);
     p.text(pos2(x + gw + 10.0, r.center().y), Align2::LEFT_CENTER, count, t.font(12.5), t.text_dim);
-    if resp.clicked() {
+    if resp.is_some_and(|resp| resp.clicked()) {
         let group: Vec<u64> = ids[run.start..(run.start + run.count).min(ids.len())].iter().map(|p| p.0).collect();
         let m = ui.input(|i| i.modifiers);
         let mode = if m.command || m.shift { "add" } else { "replace" };
@@ -792,10 +794,12 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let state = app.session.selection.state_of(id);
     let selected = state != lightcraft_engine::SelectionState::NotSelected;
     let spoken = cell_description(app, &photo);
-    let resp = host::target(ui, ("cell", id.0), r, host::Target::new(spoken).drag().selected(selected));
-    if host::live(ui) {
-        crate::widgets::register_response(format!("thumb:{}", id.0), r, &resp);
+    // sizing and SDK measuring passes only paint: they sense, publish and act on nothing
+    let resp = host::live(ui).then(|| host::target(ui, ("cell", id.0), r, host::Target::new(spoken).drag().selected(selected)));
+    if let Some(resp) = &resp {
+        crate::widgets::register_response(format!("thumb:{}", id.0), r, resp);
     }
+    let hovered = resp.as_ref().is_some_and(|resp| resp.hovered());
     let p = ui.painter();
     let img_rect = if square {
         let base = if selected { t.cell_selected } else { t.cell };
@@ -807,7 +811,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
-    paint_cell_badges(app, p, &t, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
+    paint_cell_badges(app, p, &t, &photo, photo_rect, BadgeFlags { square, selected, hovered });
     if let Some(name) = &photo.copy_name {
         paint_copy_tag(p, &t, name, img_rect, square);
     }
@@ -817,7 +821,9 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
-    cell_interaction(app, ui, &resp, id, &photo);
+    if let Some(resp) = &resp {
+        cell_interaction(app, ui, resp, id, &photo);
+    }
 }
 
 pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
@@ -1327,17 +1333,20 @@ pub fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, sid:
     let origin = if square { r.min + vec2(10.0, 26.0) } else { r.min + vec2(5.0, 5.0) };
     let br = Rect::from_min_size(origin, vec2(g.size().x + 30.0, 20.0));
     let tooltip = if collapsed { "Stack — click to expand (S)" } else { "Stack — click to collapse (S)" };
-    let resp = host::target(
-        ui,
-        ("stack-badge", id.0),
-        br,
-        host::Target::new(crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" })).tooltip(tooltip),
-    );
-    if host::live(ui) {
-        crate::widgets::register_response(format!("stack:{}", id.0), br, &resp);
+    // sizing and SDK measuring passes only paint: they sense, publish and act on nothing
+    let resp = host::live(ui).then(|| {
+        host::target(
+            ui,
+            ("stack-badge", id.0),
+            br,
+            host::Target::new(crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" })).tooltip(tooltip),
+        )
+    });
+    if let Some(resp) = &resp {
+        crate::widgets::register_response(format!("stack:{}", id.0), br, resp);
     }
     let p = ui.painter();
-    let fill = if resp.hovered() { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(165) };
+    let fill = if resp.as_ref().is_some_and(|resp| resp.hovered()) { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(165) };
     p.rect_filled(br, 10.0, fill);
     if pos == 0 && !collapsed {
         p.rect_stroke(br, 10.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
@@ -1345,7 +1354,10 @@ pub fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, sid:
     paint(p, Rect::from_min_size(br.min + vec2(6.0, 3.0), vec2(14.0, 14.0)), Icon::Stack, Color32::WHITE);
     p.galley(pos2(br.min.x + 24.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
     // a double-click (Lightroom's way) toggles once: its second click would undo the first
-    if resp.clicked() && !resp.double_clicked() {
+    if let Some(resp) = &resp
+        && resp.clicked()
+        && !resp.double_clicked()
+    {
         toggle_stack(app, ui.ctx(), id);
     }
 }
