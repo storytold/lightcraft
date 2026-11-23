@@ -199,3 +199,27 @@ fn the_marketplace_lists_installs_updates_and_removes() {
     assert_eq!(version(), None);
     assert!(has(&h, &format!("button:marketplaceInstall:{TOOLS}")));
 }
+
+/// The footer's Plug-in Manager… button opens the manager (a UI command, not the engine's) and
+/// leaves no "unknown command" behind.
+#[test]
+fn the_footer_button_opens_the_plug_in_manager() {
+    let _turn = FETCHER_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    lcc_engine::cmd::plugins::use_in_memory_manager();
+    lcc_engine::cmd::marketplace::reset_for_test();
+    let mut market = Market { served: Arc::new(Served::default()), entries: Vec::new() };
+    market.list(TOOLS, "1.0.0", "vetted", &plugin(TOOLS, "1.0.0"), json!({}));
+    let _restore = Restore;
+    lcc_engine::cmd::plugins::manager().as_mut().unwrap().set_fetcher(market.served.clone());
+    window::LIVE.set(true);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    h.settle(T);
+    open(&mut h, true, None);
+    assert!(!has(&h, "plugin-manager:close"), "the manager starts closed");
+    let r = h.request("ui.clickWidget", json!({"id": "button:marketplaceOpenManager"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    assert!(!shown(&h, "unknown command"), "{:?}", h.painted_text());
+    assert!(has(&h, "plugin-manager:close"), "the manager opened");
+}
