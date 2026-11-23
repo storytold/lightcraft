@@ -4112,12 +4112,8 @@ mod tests {
         let (img, info) = crate::files::load_bytes(&bytes, 400).unwrap();
         assert_eq!((img.width, img.height), (400, 300), "framed in the in-camera aspect ratio");
         assert!(info.camera_tone.is_some(), "no camera look fitted");
-        // white balance: no measured matrices or presets for this body, but (G7) the camera database's matrices give
-        // it a Kelvin scale; relative to the as-shot look only without them
-        let meta = lcc_meta::extract(&bytes);
-        let model = meta.model.as_deref().unwrap_or_default();
-        let in_db = lcc_camdb::find(meta.make.as_deref(), model).is_some_and(|e| lcc_raw::color::has_matrix(&e.color_data()));
-        assert!(in_db, "{model}: expected in the camera database");
+        // white balance: this body has a Kelvin scale for its as-shot multipliers (since G7, 28ab04873, the camera
+        // database's matrices are the last way to one), so it edits in Kelvin from the as-shot reading, not relative
         assert!(!info.relative_wb && info.legacy_relative_wb, "{info:?}");
         assert!(info.as_shot_temp != 6500.0 && (2000.0..50000.0).contains(&info.as_shot_temp) && info.as_shot_tint.abs() < 100.0, "{info:?}");
     }
