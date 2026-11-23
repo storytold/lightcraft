@@ -262,6 +262,11 @@ impl<'a> TextField<'a> {
         } else {
             None
         };
+        // Return and Escape end the edit and give up the keyboard, as the app's fields always have: the next key is a
+        // shortcut again.
+        if matches!(ending, Some(Ending::Return | Ending::Escape)) {
+            blur_id(ui.ctx(), id);
+        }
         let editing = ending.is_none() && has_focus(ui.ctx(), id);
         if real {
             ui.data_mut(|d| d.insert_temp(id.with("memo"), Memo { editing, pass }));
