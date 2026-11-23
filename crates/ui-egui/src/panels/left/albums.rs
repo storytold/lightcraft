@@ -217,7 +217,7 @@ fn drop_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, target: 
     finish_drop(app, ui, dragged, r);
 }
 
-/// Places the dragged album in `parent` before the sibling `before` (`None`: last of its kind), by
+/// Places the dragged album in `parent` before the sibling `before` (`None`: last), by
 /// hand (`album.reorder`, one undo step).
 fn place_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, parent: Option<AlbumId>, before: Option<AlbumId>) {
     let r = app.run("album.reorder", json!({"id": dragged.0, "parent": parent.map(|p| p.0), "before": before.map(|b| b.0)}));
@@ -229,30 +229,27 @@ fn place_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, parent:
 enum AlbumDrop {
     /// Into the folder.
     Into(AlbumId),
-    /// Beside the row: in `parent`, before `before` (`None`: last of its kind); the line is drawn
+    /// Beside the row: in `parent`, before `before` (`None`: last); the line is drawn
     /// above the row (`above`) or below it.
     Place { parent: Option<AlbumId>, before: Option<AlbumId>, above: bool },
 }
 
 /// What dropping `dragged` at `frac` (0 = top edge, 1 = bottom edge) of the row of `target` does,
-/// if anything. An album over a folder goes inside it; a folder over a folder goes inside by its
-/// middle and beside it by its edges; an album over an album goes before it by its top half and
-/// after it by its bottom half; a folder over an album does nothing. Placing where it already
-/// is, or inside itself, is nothing too. `expanded`: `target` is a folder shown open.
+/// if anything. Over a folder: inside it by its middle, beside it by its edges. Over an album:
+/// before it by its top half, after it by its bottom half. Folders and albums mix: either kind
+/// can be put before or after the other. Placing where it already is, or inside itself, is
+/// nothing. `expanded`: `target` is a folder shown open (its bottom edge then means inside: its
+/// first child is next).
 fn album_drop_at(app: &LightcraftApp, dragged: AlbumId, target: &Album, frac: f32, expanded: bool) -> Option<AlbumDrop> {
     let cat = &app.session.catalog;
-    let d = cat.album(dragged)?;
-    let into = || can_drop_album(app, dragged, Some(target.id)).then_some(AlbumDrop::Into(target.id));
-    if d.folder != target.folder {
-        return if target.folder { into() } else { None };
-    }
+    cat.album(dragged)?;
     if target.id == dragged {
         return None;
     }
     let after = frac >= if target.folder { 0.7 } else { 0.5 };
     // the middle of a folder, and the bottom of an open one (its first child is next), mean inside
     if target.folder && frac >= 0.3 && (!after || expanded) {
-        return into();
+        return can_drop_album(app, dragged, Some(target.id)).then_some(AlbumDrop::Into(target.id));
     }
     let parent = target.parent;
     if parent.is_some_and(|p| is_within(app, p, dragged)) {
@@ -264,7 +261,7 @@ fn album_drop_at(app: &LightcraftApp, dragged: AlbumId, target: &Album, frac: f3
     if !after {
         (was.map(|w| w + 1) != Some(at)).then_some(AlbumDrop::Place { parent, before: Some(target.id), above: true })
     } else {
-        let next = sibs.iter().skip(at + 1).find(|a| a.id != dragged).filter(|a| a.folder == target.folder).map(|a| a.id);
+        let next = sibs.iter().skip(at + 1).find(|a| a.id != dragged).map(|a| a.id);
         (was != Some(at + 1)).then_some(AlbumDrop::Place { parent, before: next, above: false })
     }
 }

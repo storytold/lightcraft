@@ -1210,6 +1210,10 @@ impl AlbumTree {
     fn id_of(&self, name: &str) -> u64 {
         self.h.app.session.catalog.albums().find(|a| a.name == name).unwrap_or_else(|| panic!("no album {name}")).id.0
     }
+    /// The names inside `parent`, folders and albums as listed.
+    fn all_kids(&self, parent: Option<u64>) -> Vec<String> {
+        self.h.app.session.catalog.album_children(parent.map(lightcraft_catalog::AlbumId)).iter().map(|a| a.name.clone()).collect()
+    }
     /// The names inside `parent`, folders or albums only.
     fn kids(&self, parent: Option<u64>, folders: bool) -> Vec<String> {
         let cat = &self.h.app.session.catalog;
@@ -1319,7 +1323,7 @@ fn dropping_where_it_already_is_changes_nothing() {
 }
 
 /// The bottom of an open folder is inside it; from the bottom edge of a closed one a folder goes
-/// after it (last of the folders); a folder over an album does nothing.
+/// after it; over an album's halves a folder goes before or after the album.
 #[test]
 fn folders_go_after_a_closed_folder_and_inside_an_open_one() {
     let mut t = album_tree();
@@ -1334,9 +1338,13 @@ fn folders_go_after_a_closed_folder_and_inside_an_open_one() {
     t.drag_to(travel, t.trips, 0.9);
     assert_eq!(t.kids(None, true), ["Trips", "Travel 2026"], "after Trips, the last folder");
     assert_eq!(t.parent(travel), None);
-    // folders are not placed among albums
-    t.drag_to(t.trips, t.loose, 0.5);
-    assert_eq!(t.kids(None, true), ["Trips", "Travel 2026"]);
+    // a folder goes after an album, among the albums
+    t.drag_to(t.trips, t.loose, 0.8);
+    let all = t.all_kids(None);
+    let at = |name: &str| all.iter().position(|n| n == name).unwrap();
+    assert_eq!(at("Trips"), at("Loose") + 1, "Trips right after Loose: {all:?}");
+    assert!(at("Trips") > at("Garden"), "below an album: {all:?}");
+    assert_eq!(t.parent(t.trips), None);
 }
 
 /// Resting on a closed folder's edge (where the drop goes beside it) does not open it: the rows
@@ -1354,8 +1362,8 @@ fn hovering_a_folders_edge_does_not_open_it() {
     assert_eq!(t.kids(None, true), ["Travel 2026", "Trips", "Archive"]);
 }
 
-/// Folders are placed among folders by their edges; their middle still means "inside"; an album
-/// over a folder is always "inside"; where nothing would change nothing is done or ordered.
+/// Folders and albums are placed beside a folder by its edges; its middle still means "inside";
+/// where nothing would change nothing is done or ordered.
 #[test]
 fn folders_are_placed_by_their_edges_and_entered_by_their_middle() {
     let mut t = album_tree();
@@ -1365,8 +1373,10 @@ fn folders_are_placed_by_their_edges_and_entered_by_their_middle() {
     assert_eq!(t.parent(t.trips), None);
     t.drag_to(t.sub, t.archive, 0.5);
     assert_eq!(t.parent(t.sub), Some(t.archive), "the middle of a folder is inside it");
-    // an album anywhere over a folder row goes inside, even at its edge
-    t.drag_to(t.loose, t.archive, 0.05);
+    // an album by a folder's top edge goes above it, by its middle inside it
+    t.drag_to(t.loose, t.trips, 0.1);
+    assert_eq!((t.parent(t.loose), t.all_kids(None)[0].as_str()), (None, "Loose"), "an album above the folders");
+    t.drag_to(t.loose, t.archive, 0.5);
     assert_eq!(t.parent(t.loose), Some(t.archive));
     // already in place: no change, so no hand order is made
     let mut t = album_tree();

@@ -89,3 +89,8 @@ display_name = "Brian Wang"
 
 [people.Terra854]
 display_name = "Terra854"
+
+[people.SamLovick]
+real_name = "Sam Lovick"
+display_name = "Sam Lovick"
+sync_github_name = false
