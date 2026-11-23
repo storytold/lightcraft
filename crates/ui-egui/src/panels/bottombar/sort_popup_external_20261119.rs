@@ -44,6 +44,8 @@ struct Frames {
     rects: Vec<(String, Rect)>,
     hits: Vec<(String, WidgetHit)>,
     rows: Vec<(String, Response)>,
+    /// Rows the framework reports as disabled.
+    disabled: Vec<String>,
 }
 
 impl Frames {
@@ -54,7 +56,7 @@ impl Frames {
         crate::theme::apply(&ctx);
         ctx.enable_accesskit();
         app.install_framework(&ctx);
-        let mut f = Self { ctx, app, time: 0.0, scale, rects: vec![], hits: vec![], rows: vec![] };
+        let mut f = Self { ctx, app, time: 0.0, scale, rects: vec![], hits: vec![], rows: vec![], disabled: vec![] };
         f.settle();
         f
     }
@@ -64,6 +66,7 @@ impl Frames {
         self.time += 0.04;
         let raw = HeadlessView::raw_input(vec2(1000.0, 700.0), self.scale, self.time, events);
         self.rows.clear();
+        self.disabled.clear();
         let mut output = self.ctx.run_ui(raw, |ui| {
             let (_, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("sort-popup-test-inspection"), |ui| {
                 match pass {
@@ -84,6 +87,9 @@ impl Frames {
                         && let Some(name) = element.facts.as_ref().and_then(|facts| facts.name.as_ref())
                         && let Some(response) = ui.ctx().read_response(element.id)
                     {
+                        if element.facts.as_ref().is_some_and(|facts| facts.disabled) {
+                            self.disabled.push(name.clone());
+                        }
                         self.rows.push((name.clone(), response));
                     }
                 }
@@ -292,7 +298,7 @@ fn library_sort_choices_change_order_direction_and_group_without_photo_edits() {
         if id == "sort:key:random" {
             if !f.is_open() { f.open(); }
             let dir = f.row("Ascending").clone();
-            assert!(!dir.enabled());
+            assert!(f.disabled.iter().any(|name| name == "Ascending"), "a shuffle has no direction to choose: the row is disabled");
             f.click_at(dir.interact_rect.center(), false);
             assert_eq!(f.app.session.sort, oracle.session.sort);
             assert_eq!(f.app.session.journal, oracle.session.journal);

@@ -286,11 +286,12 @@ impl Review {
             println!("PICK_CALLBACK_OWNER {trace}");
         }
         for alias in ["flag:unflag", PICK, "flag:reject"] {
-            let expected = usize::from(!(SDK_PICK && alias == PICK && matches!(self.pass, Pass::Measure | Pass::Sizing)));
+            // the three flags are framework buttons: none publishes a target in a measuring or sizing pass
+            let expected = usize::from(!(SDK_PICK && matches!(self.pass, Pass::Measure | Pass::Sizing)));
             assert_eq!(
                 rects.iter().filter(|(name, _)| name == alias).count(),
                 expected,
-                "only real Pick passes publish an interactive target; neighbors stay native"
+                "only real passes publish an interactive flag target"
             );
         }
         self.rects = rects.into_iter().collect();
@@ -677,11 +678,15 @@ fn pick_actual_egui_sizing_press_real_release_no_replay_then_fresh_positive() {
 fn pick_actual_frozen_native_focus_order_with_only_pick_insertion() {
     for compare in [false, true] {
         let mut r = Review::new(compare);
+        // Tab visits the right-hand group first (it is shown first), then the view buttons and Sort, then the three
+        // flags, Copy and the gear. The thumbnail slider and the zoom menus are framework stops too.
         let native: Vec<&str> = if compare {
             vec![
                 "icon:autoAdvance",
                 "icon:beforeAfter",
                 "icon:filmstrip",
+                "dropdown:zoom",
+                "dropdown:clickZoom",
                 "icon:photoGrid",
                 "icon:squareGrid",
                 "icon:detail",
@@ -691,11 +696,10 @@ fn pick_actual_frozen_native_focus_order_with_only_pick_insertion() {
                 "icon:sort",
             ]
         } else {
-            vec!["icon:photoGrid", "icon:squareGrid", "icon:detail", "icon:compare", "icon:survey", "icon:people", "icon:sort"]
+            vec!["slider:thumbSize", "icon:photoGrid", "icon:squareGrid", "icon:detail", "icon:compare", "icon:survey", "icon:people", "icon:sort"]
         };
         let mut expected = native.clone();
-        expected.push(PICK);
-        // Joint-only expectation: the frozen Pick-only slice is not rewritten.
+        expected.extend(["flag:unflag", PICK, "flag:reject"]);
         expected.extend(["button:copySettings", "icon:copyGear"]);
         r.ready();
         r.frame(vec![Event::PointerGone]);
@@ -705,9 +709,9 @@ fn pick_actual_frozen_native_focus_order_with_only_pick_insertion() {
             forward.push(r.focus_name());
         }
         assert_eq!(forward, expected.iter().cycle().take(expected.len() * 2).map(|s| s.to_string()).collect::<Vec<_>>());
-        // Complete forward cycles end at gear. Reverse starts at Copy, then Pick,
-        // every original native stop in reverse order, and finally gear.
-        let mut expected_reverse = vec!["button:copySettings", PICK];
+        // Complete forward cycles end at gear. Reverse starts at Copy, then the flags,
+        // every native stop in reverse order, and finally gear.
+        let mut expected_reverse = vec!["button:copySettings", "flag:reject", PICK, "flag:unflag"];
         expected_reverse.extend(native.iter().rev().copied());
         expected_reverse.push("icon:copyGear");
         let mut reverse = Vec::new();
