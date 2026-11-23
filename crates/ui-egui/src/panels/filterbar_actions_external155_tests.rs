@@ -9,6 +9,13 @@ use serde_json::json;
 const SAVE: &str = "button:filterSave";
 const CLEAR: &str = "button:filterClear";
 
+/// Whether the control takes a click: the framework leaves a disabled control's egui widget registered as enabled (so
+/// it can keep keyboard focus), but it senses no click.
+fn clickable(h: &Headless, widget: &str) -> bool {
+    let r = response(h, widget);
+    r.enabled() && r.sense.senses_click()
+}
+
 fn response(h: &Headless, widget: &str) -> egui::Response {
     let hit = &h.app.widget_hits.iter().find(|(id, _)| id == widget).unwrap().1;
     h.view.ctx.read_response(hit.id).unwrap_or_else(|| panic!("actual response for {widget}"))
@@ -54,7 +61,7 @@ fn filterbar_actions_external155_default_disabled_pointer_actions_are_noops() {
         h.app.ui.search = "unsubmitted draft".into();
         h.step();
         for widget in [SAVE, CLEAR] {
-            assert!(!response(&h, widget).enabled());
+            assert!(!clickable(&h, widget), "{widget} is disabled");
             ask(&mut h, "ui.clickWidget", json!({"id": widget}));
             assert!(h.app.ui.dialog.is_none());
             assert_eq!(h.app.session.filter, Default::default());
@@ -139,8 +146,8 @@ fn filterbar_actions_external155_clear_real_release_resets_complete_filter_searc
         assert_eq!(h.app.session.active(), active);
         assert_eq!(h.app.session.undo.len(), undo);
         assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
-        assert!(!response(&h, CLEAR).enabled());
-        assert!(!response(&h, SAVE).enabled());
+        assert!(!clickable(&h, CLEAR));
+        assert!(!clickable(&h, SAVE));
         ask(&mut h, "ui.key", json!({"key": "2"}));
         assert_eq!(h.app.session.catalog.photo(PhotoId(102)).unwrap().rating, 2, "mouse Clear releases keyboard ownership to grid shortcuts");
     }
@@ -273,8 +280,8 @@ fn filterbar_actions_external155_no_match_filter_keeps_save_and_clear_enabled() 
     ask(&mut h, "engine.execute", json!({"command": "library.filter", "params": {"rating": 5}}));
     assert!(visible(&mut h).is_empty());
     let filter = h.app.session.filter.clone();
-    assert!(response(&h, SAVE).enabled());
-    assert!(response(&h, CLEAR).enabled());
+    assert!(clickable(&h, SAVE));
+    assert!(clickable(&h, CLEAR));
     ask(&mut h, "ui.clickWidget", json!({"id": SAVE}));
     assert!(matches!(h.app.ui.dialog, Some(Dialog::NewSmartAlbum { .. })));
     assert_eq!(h.app.session.filter, filter);

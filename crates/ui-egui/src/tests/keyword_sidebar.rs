@@ -50,6 +50,7 @@ fn keywords_section_draws_only_the_rows_near_the_screen() {
     let mut h = app(KEYWORDS / 6 + 1, KEYWORDS);
     assert_eq!(h.app.caches.keyword_tree(&h.app.session.catalog).len(), KEYWORDS as usize);
     let rows = keyword_rows(&h);
+    eprintln!("DBG sidebar widgets: {:?}", h.app.widgets.iter().filter(|(w, _)| w.contains("keyword") || w.starts_with("sidebarSection") || w.starts_with("section:")).map(|(w, r)| (w.clone(), *r)).take(40).collect::<Vec<_>>());
     assert!(!rows.is_empty() && rows.len() < 100, "{} of {KEYWORDS} keyword rows drawn", rows.len());
     assert!(rows.contains(&"Keyword 00000".to_string()), "{rows:?}");
     // all the way down

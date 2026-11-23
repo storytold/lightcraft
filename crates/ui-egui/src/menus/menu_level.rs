@@ -6,6 +6,8 @@
 //! it: wheel, dragging, and ▲ / ▼ strips that scroll while the pointer rests on them, like
 //! native menus on a small display. The same approach as PhotoCraft's menu bar (its #319).
 
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
 use egui::{Id, Rect, Sense, Ui, vec2};
 
 /// Height of a scroll-arrow strip.
@@ -122,11 +124,14 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
             if dir < 0.0 { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown },
             if live { t.text } else { t.text_disabled },
         );
-        let id = key.with(dir < 0.0);
-        let r = ui.interact(strip, id, Sense::hover());
-        r.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, live, crate::i18n::tr(if dir < 0.0 { "Scroll menu up" } else { "Scroll menu down" }))
-        });
+        // The strip is a framework button (named for assistive technology, inert while there is nothing to scroll to);
+        // the scrolling itself follows the pointer resting on it.
+        Button::new(crate::i18n::tr(if dir < 0.0 { "Scroll menu up" } else { "Scroll menu down" }))
+            .painted(String::new())
+            .variant(craft::theme::Variant::GHOST)
+            .id(key.with(dir < 0.0))
+            .enabled(live)
+            .show_at(ui, strip);
         if live && pointer_on(ui, strip) {
             target = (offset + dir * SPEED * dt.max(1.0 / 120.0)).clamp(0.0, max);
             ctx.request_repaint();

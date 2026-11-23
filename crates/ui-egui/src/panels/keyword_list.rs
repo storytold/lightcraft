@@ -3,6 +3,7 @@
 //! keyword gives it to the selected photos or takes it away; the arrow shows the photos with it.
 
 use craft::ui::buttons::Button;
+use craft::ui::display::Text;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::text::TextField;
@@ -28,7 +29,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     crate::widgets::divider(ui);
     // the title, where a dragged keyword goes back to the top level
-    let (title, title_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+    let (title, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
+    // (the framework button is the title's pointer and keyboard sensing; the fold title paints over it)
+    let title_resp = Button::new(crate::i18n::tr("Keyword List"))
+        .painted(String::new())
+        .variant(craft::theme::Variant::GHOST)
+        .id_salt("keyword-list-title")
+        .show_at(ui, title)
+        .response;
     register(ui, "keywordList:topLevel", title);
     let dragging = app.ui.dragging_keyword.clone();
     let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
@@ -361,10 +369,13 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     // part of the keyword shortcut (⇧K adds it): a + after the name
     if in_shortcut {
-        let plus = ui.painter().text(pos2(after + 5.0, cy), Align2::LEFT_CENTER, "+", font.clone(), t.accent);
+        let plus = Rect::from_min_size(pos2(after + 5.0, cy - 8.0), vec2(measure("+"), 16.0));
+        Text::new("+")
+            .tone(craft::theme::variant::Tone::Accent)
+            .id_salt(("keyword-list-shortcut", r.path.to_lowercase()))
+            .tooltip(crate::i18n::tr("Part of the keyword shortcut").to_owned())
+            .show_at(ui, plus);
         register(ui, format!("keywordShortcut:{}", r.path), plus);
-        ui.interact(plus, egui::Id::unique(("keyword-list-shortcut", r.path.to_lowercase())), Sense::hover())
-            .on_hover_text(crate::i18n::tr("Part of the keyword shortcut"));
     }
     let resp = resp.on_hover_text(r.path.replace('|', " › "));
     if resp.clicked() {

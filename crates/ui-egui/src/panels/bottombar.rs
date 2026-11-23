@@ -47,7 +47,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             }
                         }
                         ui.add_space(10.0);
-                        Divider::vertical().show(ui);
+                        // a rule of its own size: one that fills its row would take part in sizing the row
+                        let (rule, _) = ui.allocate_exact_size(vec2(1.0, 22.0), egui::Sense::hover());
+                        Divider::vertical().id_salt("view-sort-rule").show_at(ui, rule);
                         ui.add_space(10.0);
                         let sort = icon_button(ui, "sort", Icon::Sort, vec2(30.0, 30.0), false, true, "Sort");
                         let sort_enabled = ui.is_enabled();
