@@ -125,6 +125,42 @@ pub fn library_name(dir: &std::path::Path) -> String {
     dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string())
 }
 
+/// What File ▸ Open Recent Library calls each of the `recent` libraries, in order: the shortest end
+/// of its path that no other entry's path ends in, written with `/` like the grid's folder titles
+/// (`2025/work`, see `lightcraft_catalog::folders::folder_label`). A library whose name no other
+/// entry has is shown by its name alone. A path in `home` starts at `~`; one that is the end of
+/// another entry's path is shown whole (`/x/work` beside `/y/x/work`). Issue #4000.
+pub fn recent_library_labels(recent: &[String], home: Option<&str>) -> Vec<String> {
+    let names = |path: &str| -> Vec<String> { path.split(['/', '\\']).filter(|n| !n.is_empty()).map(str::to_string).collect() };
+    let home = home.map(names).filter(|h| !h.is_empty());
+    // each entry's names from the top, `~` in place of the home folder's
+    let entries: Vec<Vec<String>> = recent
+        .iter()
+        .map(|path| {
+            let n = names(path);
+            match &home {
+                Some(h) if n.starts_with(h) => std::iter::once("~".to_string()).chain(n.iter().skip(h.len()).cloned()).collect(),
+                _ => n,
+            }
+        })
+        .collect();
+    recent
+        .iter()
+        .zip(&entries)
+        .enumerate()
+        .map(|(i, (path, n))| {
+            let shared = |end: &[String]| entries.iter().enumerate().any(|(j, other)| j != i && other.ends_with(end));
+            let unique = (1..=n.len()).filter_map(|k| n.get(n.len().saturating_sub(k)..)).find(|end| !shared(end));
+            match unique {
+                Some(end) => end.join("/"),
+                // no end of it is its own (it is the end of another path, or listed twice): all of it
+                None if n.first().is_some_and(|f| f == "~") => n.join("/"),
+                None => path.clone(),
+            }
+        })
+        .collect()
+}
+
 /// The open library's name (`None`: in memory, nothing is saved).
 pub fn open_library_name(app: &LightcraftApp) -> Option<String> {
     app.session.library.as_ref().filter(|l| l.on_disk).map(|l| library_name(&l.dir))
@@ -272,6 +308,46 @@ mod tests {
         app.run("photo.setReference", json!({})).unwrap();
         app.import = Some(crate::import::ImportTask::new(vec!["a.jpg".into()], json!({"mode": "add"}), 0, false));
         app
+    }
+
+    fn labels(recent: &[&str], home: Option<&str>) -> Vec<String> {
+        recent_library_labels(&recent.iter().map(|p| p.to_string()).collect::<Vec<_>>(), home)
+    }
+
+    /// Issue #4000: names no other entry has are shown alone; shared ones get just enough of the
+    /// folders above them, written as a path.
+    #[test]
+    fn recent_libraries_are_named_by_the_shortest_end_of_their_path_that_is_their_own() {
+        assert_eq!(labels(&["/photos/holiday", "/Volumes/NAS/clients"], None), ["holiday", "clients"]);
+        assert_eq!(labels(&["/clients/2025/work", "/clients/2026/work"], None), ["2025/work", "2026/work"]);
+        // the folder above is shared too
+        assert_eq!(labels(&["/a/x/lib", "/b/x/lib"], None), ["a/x/lib", "b/x/lib"]);
+        // only the two that share a name get folders
+        assert_eq!(labels(&["/p/one", "/q/lib", "/r/lib"], None), ["one", "q/lib", "r/lib"]);
+        // one path is the end of the other: that one is shown whole
+        assert_eq!(labels(&["/x/lib", "/y/x/lib"], None), ["/x/lib", "y/x/lib"]);
+        // Windows paths are written with `/` too
+        assert_eq!(labels(&[r"C:\Users\me\2025\work", r"D:\2026\work"], None), ["2025/work", "2026/work"]);
+    }
+
+    #[test]
+    fn recent_libraries_in_the_home_folder_start_at_a_tilde() {
+        let home = Some("/Users/me");
+        assert_eq!(labels(&["/Users/me/lib", "/Volumes/Disk/lib"], home), ["~/lib", "Disk/lib"]);
+        assert_eq!(labels(&["/Users/me/a/lib", "/Users/me/b/lib"], home), ["a/lib", "b/lib"]);
+        // `/Users/meg` is not inside `/Users/me`
+        assert_eq!(labels(&["/Users/meg/lib", "/Users/me/lib"], home), ["meg/lib", "~/lib"]);
+        // shown whole: from the home folder
+        assert_eq!(labels(&["/Users/me/lib", "/Users/me/x/lib"], home), ["~/lib", "x/lib"]);
+    }
+
+    /// Odd entries from a hand-edited settings file still get a label, and nothing panics.
+    #[test]
+    fn recent_library_labels_cope_with_odd_entries() {
+        assert_eq!(labels(&[], None), Vec::<String>::new());
+        assert_eq!(labels(&["/", "", "lib"], Some("")), ["/", "", "lib"]);
+        assert_eq!(labels(&["/x/lib", "/x/lib"], None), ["/x/lib", "/x/lib"], "listed twice");
+        assert_eq!(labels(&["/Users/me"], Some("/Users/me/")), ["~"]);
     }
 
     #[test]
