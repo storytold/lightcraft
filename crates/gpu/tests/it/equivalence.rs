@@ -77,6 +77,52 @@ fn v3_luminance_cutoff_chroma_4() {
 }
 
 #[test]
+fn warm_green_wb_zero_crossing_gpu_matches_cpu_on_v10() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 160, 120);
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    let req = RenderRequest::fit(160, 120);
+    // Test normal WB, positive s[2] > 0, and negative s[2] <= 0 across the zero crossing on Process::V10.
+    for (temp, tint) in [(5500.0, 10.0), (2000.0, 0.0), (2000.0, 30.0), (3000.0, 100.0)] {
+        let mut s = DevelopSettings::default();
+        assert_eq!(s.process.process(), Process::V10);
+        (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
+        let cpu = render(&src, &info, &s, &req).image;
+        let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
+        let (mean, max, _) = diff(&cpu, &gpu);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "{temp} K tint {tint}: mean {mean:.3}, max {max}");
+    }
+}
+
+#[test]
+fn tone_curves_1024_lut_gpu_matches_cpu_without_fallback() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 160, 120);
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.curve.highlights = -30.0;
+    s.curve.shadows = 25.0;
+    s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.58), Point::new(1.0, 0.95)];
+    s.curve.red = vec![Point::new(0.0, 0.0), Point::new(0.4, 0.45), Point::new(1.0, 1.0)];
+    s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.42), Point::new(1.0, 1.0)];
+    s.curve.refine_saturation = 25.0;
+    let req = RenderRequest::fit(160, 120);
+    let cpu = render(&src, &info, &s, &req).image;
+    let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("1024-entry tone curves must run on GPU without CPU fallback").image;
+    let (mean, max, _) = diff(&cpu, &gpu);
+    assert!(mean < MEAN_LSB && max <= MAX_LSB, "mean {mean:.3}, max {max}");
+}
+
+#[test]
 fn camera_tone_and_relative_wb() {
     if !gpu() {
         return;
