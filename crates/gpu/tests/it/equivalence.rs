@@ -805,6 +805,9 @@ fn display_exposure_shoulder_matches() {
         let mut s = DevelopSettings { process: Process::V13.version(), ..Default::default() };
         s.light.exposure = ev;
         check(&format!("V13 display Exposure +{ev}"), &src, &info, &s, &req);
+        // Highlights after the compression takes the compressed luminance on both
+        s.light.highlights = -60.0;
+        check(&format!("V13 display Exposure +{ev}, Highlights -60"), &src, &info, &s, &req);
     }
 }
 

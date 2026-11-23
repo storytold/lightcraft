@@ -756,7 +756,8 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
     }
 
     let l0 = p.log_l.data[index] + fp.ev;
-    let log_luminance = if dehaze != 0.0 || l_exp != 0.0 { log_lum(color) } else { l0 };
+    // (Exposure's compression towards white changes the pixel's luminance from `l0`'s plain gain)
+    let log_luminance = if dehaze != 0.0 || l_exp != 0.0 || fp.expo_knee > 0.0 { log_lum(color) } else { l0 };
     (color, log_luminance)
 }
 
@@ -928,6 +929,33 @@ mod tests {
         // no kink at the knee: the slope just past it is the gain's
         let (a, b) = (expose([0.25; 3], gain, knee)[0], expose([0.2501; 3], gain, knee)[0]);
         assert!(((b - a) / 0.0001 - gain).abs() < 0.01);
+    }
+
+    #[test]
+    fn local_tone_sees_the_compressed_luminance_with_or_without_a_mask() {
+        // Highlights after a compressing Exposure: a mask with a negligible local Exposure over the whole frame
+        // must not change the render (the local tone took the plain gain's luminance without one, the compressed
+        // pixel's with one)
+        use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+        let src = lightcraft_raster::Rgb32f::from_fn(256, 4, |x, _| [(x as f32 / 255.0).powf(2.2); 3]);
+        let mut s = DevelopSettings { process: Process::V13.version(), ..Default::default() };
+        s.light.exposure = 1.5;
+        s.light.highlights = -60.0;
+        let req = crate::RenderRequest::fit(256, 4);
+        let plain = crate::render(&src, &SourceInfo::default(), &s, &req).image;
+        s.masks.push(Mask {
+            components: vec![MaskComponent {
+                name: None,
+                op: MaskOp::Add,
+                invert: false,
+                shape: MaskShape::Radial { center: lightcraft_geom::Point::new(0.5, 0.5), rx: 4.0, ry: 4.0, angle: 0.0, feather: 0.0, invert: false },
+            }],
+            adjust: LocalAdjustments { exposure: 0.001, ..Default::default() },
+            ..Default::default()
+        });
+        let masked = crate::render(&src, &SourceInfo::default(), &s, &req).image;
+        let worst = (0..256).map(|x| plain.get(x, 2)[1].abs_diff(masked.get(x, 2)[1])).max().unwrap_or(0);
+        assert!(worst <= 2, "a negligible mask moved a tone by {worst} codes");
     }
 
     #[test]
