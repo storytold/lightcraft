@@ -107,6 +107,12 @@ fn slideshow_controls_confirm_keeps_webm_picker_and_cancel_semantics() {
 fn slideshow_controls_radio_keyboard_selects_focused_format() {
     let (_files, mut h) = open("pdf", "wave110-slideshow-radio-keyboard");
     click(&mut h, "button:slideshowExportFormat-0");
+    // The framework convention: a pointer press picks without taking the keyboard, so the keys start from the
+    // radio given the focus.
+    let radio = h.app.widget_hits.iter().find(|(id, _)| id == "button:slideshowExportFormat-0").expect("the PDF radio").1.id;
+    assert!(craft::ui::runtime::focus::request(&h.view.ctx, craft::ui::runtime::focus::FocusTarget::Id(radio)));
+    h.step();
+    h.step();
     ask(&mut h, "ui.key", json!({"key": "right"}));
     ask(&mut h, "ui.key", json!({"key": "Space"}));
     assert_eq!(settings(&h).format, Format::Jpeg);

@@ -405,8 +405,12 @@ fn confirm_new_with_observed_focus(f: &mut Fixture) {
             "responseBox":[response.rect.left(),response.rect.top(),response.rect.right(),response.rect.bottom()],
             "registeredBox":[registered.left(),registered.top(),registered.right(),registered.bottom()]})
     );
-    assert_eq!(focused, Some(field_id), "the actual prompt field must own focus before Enter");
-    assert!(response.has_focus() && response.enabled(), "a genuinely focused enabled field, not its hover probe");
+    // The framework field keeps egui's focus on its text part, the part that types: the field or its text part.
+    assert!(
+        focused == Some(field_id) || focused == Some(crate::text_field::text_id(field_id)),
+        "the actual prompt field must own focus before Enter: {focused:?}"
+    );
+    assert!(crate::text_field::has_focus_id(&f.ctx, field_id) && response.enabled(), "a genuinely focused enabled field, not its hover probe");
     assert_eq!(response.rect, registered, "focus belongs to the actual current prompt geometry");
     f.key(Key::Enter, false);
 }

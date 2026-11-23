@@ -139,8 +139,10 @@ impl Review {
             // Name's x remains that content's left edge even while scrolled out of view.
             // The preview's page center is inside the shared body height, not the footer.
             let left = self.rect(NAME).left();
-            let at = egui::pos2(left + super::SETTINGS_W - 22.0, self.rect("print:page").center().y);
-            assert!(at.x > left && at.x < left + super::SETTINGS_W - 14.0);
+            // (over the column's own scroll bar, the 14 points beside the content: a framework control the focus is
+            // in takes the wheel, so the wheel must not land on one)
+            let at = egui::pos2(left + super::SETTINGS_W - 7.0, self.rect("print:page").center().y);
+            assert!(at.x > left + super::SETTINGS_W - 14.0 && at.x < left + super::SETTINGS_W);
             assert!(self.rect("dialog:window").contains(at) && self.ctx.content_rect().contains(at));
             let delta = if rect.center().y > at.y { -160.0 } else { 160.0 };
             let before = self.persisted();

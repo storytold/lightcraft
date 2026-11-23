@@ -130,11 +130,13 @@ impl Review {
             }
             let bottom = if footer { win.bottom() } else { body_bottom };
             let dy = if rect.bottom() > bottom { -300.0 } else { 300.0 };
-            let at = egui::pos2(win.right() - 24.0, win.center().y);
+            // The dialog's scroll bar, at its right edge: the framework controls fill the body's width, so the old
+            // blank spot 24 points in is a control now.
+            let at = egui::pos2(win.right() - 6.0, win.center().y);
             let draft = self.draft().clone();
-            // NumberField intentionally owns the wheel anywhere while focused. Commit
-            // and blur it with an actual blank-background press before scrolling the window.
-            self.click_at(at);
+            // NumberField intentionally owns the wheel anywhere while focused. Commit and blur it with an actual
+            // press on the dialog's title, which is blank, before scrolling the window.
+            self.click_at(egui::pos2(win.center().x, win.top() + 14.0));
             self.frame(vec![
                 Event::PointerMoved(at),
                 Event::MouseWheel {

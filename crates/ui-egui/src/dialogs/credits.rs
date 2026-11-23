@@ -218,6 +218,14 @@ pub fn sorted(list: &[Contributor], mode: NameMode, key: SortKey, ascending: boo
         let o = if ascending { o } else { o.reverse() };
         o.then_with(|| compare(a, b, mode, SortKey::Name)).then_with(|| a.login.cmp(b.login))
     });
+    // Someone with no date for a date sort (credited only through a merged pull request) follows everyone with one in
+    // either direction, as the About dialog lists them.
+    let undated = |c: &&Contributor| match key {
+        SortKey::FirstCommit => c.first_commit.is_empty(),
+        SortKey::LastCommit => c.last_commit.is_empty(),
+        _ => false,
+    };
+    v.sort_by_key(|c| undated(c));
     v
 }
 

@@ -690,6 +690,7 @@ pub fn name_editor(
     let t = Tokens::get(ctx);
     let mut outcome = Editor::Open;
     let opening = edit.fresh;
+    let mut field_focused = false;
     let shown = egui::Area::new(egui::Id::unique("face-name-editor")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(230.0);
@@ -701,6 +702,7 @@ pub fn name_editor(
                 .submits()
                 .show_at(ui, rect);
             control_response(ui, "field:faceName", &r.response);
+            field_focused = craft::ui::runtime::focus::focused_rec(ui.ctx()).is_some_and(|rec| rec.stop.id == r.response.id);
             if !measuring(ui) {
                 if edit.fresh
                     && ui.is_enabled()
@@ -748,7 +750,12 @@ pub fn name_editor(
             ui.label(RichText::new(crate::i18n::tr("Enter to confirm, Esc to cancel")).font(t.font(11.0)).color(t.text_dim));
         });
     });
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // (the window's own Escape: the framework may already have taken it as a cancel for the field, which reports no
+    // escape once a Return has ended its edit)
+    if ctx.input(|i| {
+        i.key_pressed(egui::Key::Escape)
+            || (field_focused && i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, repeat: false, .. })))
+    }) {
         outcome = Editor::Cancel;
     }
     // a click anywhere else closes it (not on the frame it opened, which is the click that opened it)

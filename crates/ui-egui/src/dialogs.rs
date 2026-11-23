@@ -435,10 +435,12 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     let top = (screen.height() * 0.08).clamp(DIALOG_SCREEN_MARGIN, 96.0);
     // Every dialog fits the window (#781): the framework scrolls a body that doesn't. Settings is never taller than
     // `body_max`, so its tab bar stays put and its pages scroll by themselves.
-    let body_max =
-        if settings { screen.height() - top - DIALOG_SCREEN_MARGIN - DIALOG_CHROME_GUESS } else { screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - DIALOG_CHROME_GUESS }
-            .max(DIALOG_MIN_BODY);
     let id = dialog_id(&dlg);
+    // The dialog's title bar, padding and footer as measured last time it was shown (never less than the guess).
+    let chrome_id = id.with("chrome");
+    let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(DIALOG_CHROME_GUESS).max(DIALOG_CHROME_GUESS);
+    let body_max =
+        if settings { screen.height() - top - DIALOG_SCREEN_MARGIN - chrome } else { screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - chrome }.max(DIALOG_MIN_BODY);
     // A press held from before this dialog was shown (on the dialog it replaced, or on the window under it) is not
     // this dialog's either: its release must not land on what this dialog put under the pointer.
     let shown_id = egui::Id::unique("lightcraft.dialog.shown-id");
@@ -487,6 +489,7 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     let mut confirm = false;
     let mut close = false;
     let mut content_w = 0.0f32;
+    let mut content_h = 0.0f32;
     let mut dialog = FrameworkDialog::new(crate::i18n::tr(&title).to_owned())
         .id(id)
         .opened(Bind::bound(&mut open))
@@ -561,6 +564,7 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
             }
             if real {
                 content_w = ui.min_rect().width();
+                content_h = ui.min_rect().height();
             }
             can_now.set(Some(can_confirm(app, &dlg, informational)));
         })
@@ -582,6 +586,12 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     crate::widgets::register_response("dialog:window", window.rect, &window);
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
+    }
+    // The chrome round a body shown whole (not scrolled by the dialog): what the window takes beyond its body.
+    let measured_chrome = window_rect.height() - content_h;
+    if content_h > 0.0 && content_h <= body_max && measured_chrome > chrome + 0.5 && measured_chrome < screen.height() / 2.0 {
+        ctx.data_mut(|d| d.insert_temp(chrome_id, measured_chrome));
+        ctx.request_repaint();
     }
     // Grown once: content that fills whatever width it is given would otherwise widen the dialog every frame.
     if content_w > max_width + 0.5 && ctx.data(|d| d.get_temp::<f32>(grown_id)).is_none() {

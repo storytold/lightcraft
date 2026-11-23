@@ -213,7 +213,8 @@ pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<Str
                 continue;
             }
             let out = item().show(column);
-            crate::widgets::register_response(format!("{tag}:{key}"), out.response.rect, &out.response);
+            // The whole labelled row is the checkbox's hit (box and label): register that, not the box alone.
+            crate::widgets::register_response(format!("{tag}:{key}"), out.response.interact_rect, &out.response);
             if let Some(&on) = out.events.committed()
                 && enabled
                 && on != current

@@ -502,7 +502,10 @@ fn register(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
 
 fn check(ui: &mut egui::Ui, id: &str, label: &str, value: &mut bool, enabled: bool) {
     let shown = Checkbox::new(Bind::bound(value)).id_salt(id).label(crate::i18n::tr(label).to_owned()).enabled(enabled).show(ui);
-    register(ui, id, &shown.response);
+    // The labelled row is the checkbox's hit (box and label), as egui keeps its response: register that, not the box.
+    if !measuring(ui) {
+        crate::widgets::register_response(id, shown.response.interact_rect, &shown.response);
+    }
 }
 
 /// One keyboard group per parameter; retain the deghost button ids already used by scripts.
@@ -642,7 +645,10 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f6
         let record_id = ui.scope_id().with(("merge-track", spec.id));
         let (shown, record) = craft::ui::runtime::inspect::record(ui, record_id, |ui| {
             Slider::new(Bind::bound(&mut current).reset(spec.default), spec.min..=spec.max)
-                .id_salt(("merge-slider", spec.id)).label(crate::i18n::tr(spec.label)).step(spec.step).show_at(ui, rect)
+                .id_salt(("merge-slider", spec.id)).label(crate::i18n::tr(spec.label)).step(spec.step)
+                // LightCraft's slider keys: Shift steps five times, as the develop sliders do (`widgets::slider`).
+                .key_policy(craft::ui::runtime::keys::ScalarKeyPolicy::new(spec.step).model_step(spec.step).shift_factor(5.0))
+                .show_at(ui, rect)
         });
         // Automation fractions describe the value span, which runs between the endpoint thumb centres.
         let half_thumb = record.as_ref().and_then(|record| record.hits.iter().find(|hit| {
