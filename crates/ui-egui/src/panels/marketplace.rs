@@ -473,6 +473,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                 Ok(())
             }
             "market.manager" => crate::panels::plugins::run(app, "plugins.page", &json!({"id": at(&p, "id")})).unwrap_or(Ok(Value::Null)).map(|_| ()),
+            // a UI command: the engine doesn't know it, so it goes to the plug-in window's handler
+            "plugins.manager" => crate::panels::plugins::run(app, id, &p).unwrap_or(Ok(Value::Null)).map(|_| ()),
             "market.link" => open_link(app, &p).map(|_| ()),
             _ => app.session.execute(id, &p).map(|_| ()).map_err(|e| e.to_string()),
         };
