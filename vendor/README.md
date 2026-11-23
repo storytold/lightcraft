@@ -21,6 +21,19 @@ failed upload is logged (1st, 2nd, 4th… time) and leaves its slices empty, and
 when slices are missing: the frame is skipped instead of the app crashing. Marked
 `Patch (no panic on a lost device)`.
 
+Patch: unconfigured surface. wgpu attaches the device's error sink to a surface only when a
+`Surface::configure` succeeds, and `get_current_texture` on a surface without one panics ("Surface
+is not configured for presentation"); inside winit's callbacks that panic can't unwind, so the app
+aborted when the window's first configure failed at launch (the GPU still busy). `configure_surface`
+now runs the configure in Validation and OutOfMemory error scopes, logs a failure once per run of
+failures and records it (`SurfaceState::configured`; the `on_surface_configured` hook and the HDR
+re-query run only after a configure that worked), and `acquire_frame` configures the surface again
+before a frame when the last configure failed, skipping the frame (a repaint 100 ms later) until one
+works. A configure on a lost device reports no error, so it still counts as configured: that case
+isn't covered. Its test (`winit::tests`, macOS: a `CAMetalLayer` with no window) runs with
+`cargo test -p egui-wgpu` from the workspace root; the workspace's own test runs don't include
+vendored crates. Marked `Patch (unconfigured surface)`.
+
 Patch: HDR display output (LR-VIEW-HDR-DISPLAY). Upstream egui-wgpu always picks an
 8-bit surface in the default colour space and never hands the surface to the app. The changes,
 each marked `Patch (HDR display output)` in the source:
@@ -45,7 +58,7 @@ each marked `Patch (HDR display output)` in the source:
 
 To upgrade egui: copy the new egui-wgpu release over `vendor/egui-wgpu` (drop `.cargo-ok`,
 `.cargo_vcs_info.json`, `Cargo.lock`, `Cargo.toml.orig` and the `include` list), re-apply the
-marked changes, and run the app's HDR tests (`hdr_display`, `crates/hdrmeta`). Drop the patch once egui exposes the
+marked changes, and run the app's HDR tests (`hdr_display`, `crates/hdrmeta`) and `cargo test -p egui-wgpu`. Drop the patch once egui exposes the
 surface format, colour space and display HDR info itself.
 
 ## naga 30.0.1 (MIT OR Apache-2.0, `vendor/naga`)
