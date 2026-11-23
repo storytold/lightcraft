@@ -367,6 +367,9 @@ pub(super) struct SideOut {
     pub events: Vec<SideEvent>,
     /// The list's own response, which a menu hangs from.
     pub response: Option<egui::Response>,
+    /// The list holds a press on one of its rows (the button went down on it and is still down:
+    /// not when the press was ended by Escape).
+    pub pressed: bool,
 }
 
 impl SideOut {
@@ -500,11 +503,13 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if tree {
         list = list.tree(true).tree_leaves(TreeLeaves::Aligned);
     }
+    let mut pressed = false;
     let out = list.show_items(ui, &source, &mut |key, icx| {
         let item = &source.rows[source.index[key]];
         if item.fill.is_some() {
             return ListRow::spacer();
         }
+        pressed |= icx.row.pressed.is_some();
         if item.group {
             // Public ItemCx/CollectionResponse opener API returns the real
             // declared disclosure-part response; no invented hit geometry.
@@ -537,7 +542,7 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
             }
         }
     }
-    SideOut { shown, events, response: Some(out.response.clone()) }
+    SideOut { shown, events, response: Some(out.response.clone()), pressed }
 }
 
 /// The rows the list showed, listed under the names the control channel knows them by (and the
