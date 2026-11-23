@@ -22,6 +22,8 @@ pub(super) const SCROLL_TO_ROW: &str = "left-scroll-to-row";
 /// Temp-data key of the Folders choice whose rows above were last opened ([`reveal_chosen`]):
 /// removed, they open again.
 pub(super) const LIBFOLDER_REVEALED: &str = "libfolder-revealed";
+/// The folder (a path) whose rows above it open once, without choosing it.
+pub(super) const LIBFOLDER_OPEN_ABOVE: &str = "libfolder-open-above";
 
 /// The least of its name a row shows before its count gives way (about three letters and an
 /// ellipsis).

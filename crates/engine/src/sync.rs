@@ -176,7 +176,8 @@ fn invalid(msg: impl Into<String>) -> EngineError {
 }
 
 impl SyncInput {
-    /// The scan of folder `path`: a folder the library holds photos in, not the startup disk. A
+    /// The scan of folder `path`: a folder the library holds photos in (or one made through
+    /// LightCraft, which may still be empty), not the startup disk. A
     /// whole disk or share, or a folder that holds disks (`/Volumes`, `/mnt`…), only with `disk`
     /// (as for Remove Disk from Library: its missing photos can be a whole disk's).
     pub fn new(s: &mut Session, path: &str, disk: bool) -> Result<SyncInput> {
@@ -189,7 +190,7 @@ impl SyncInput {
         }
         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
         let ids = s.catalog.query(&f, &Sort::default());
-        if ids.is_empty() {
+        if ids.is_empty() && !s.catalog.holds_made_folder(path) {
             return Err(invalid(format!("{path}: no photo in the library was imported from it")));
         }
         if !disk && (lightcraft_catalog::folders::is_disk_root(path) || crate::cmd::library::covers_other_disks(s, path, &ids)) {

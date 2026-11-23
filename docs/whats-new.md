@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### A folder made with New Folder on Disk… appears in Folders at once
+- Right-click a folder, choose New Folder on Disk…, name it and Create: the new folder now has its own row in Folders
+  straight away, with 0 photos, and the sidebar scrolls to it (it is not chosen, so the photos you selected to move
+  into it stay selected). Before, no row appeared until a photo was in the folder, so there was
+  nothing to move photos into. Move Selected Photos Here and dragging photos onto the row work on the
+  empty folder, and it stays one row as it gains photos. If every photo later leaves it, the row stays
+  (it is yours) until you choose Remove from Library on it, which takes the row away, and Undo brings it back; Undo
+  of the creation removes the folder and its row, Redo brings both back. Renaming or moving the folder in
+  LightCraft takes the row along. A folder you rename or delete outside LightCraft keeps its row, empty, like a folder
+  whose photos are missing.
+  The catalog format is now version 14 (`FolderRecord.made`). Once this version has opened a library, older versions
+  refuse it, as with every format change.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

@@ -70,7 +70,19 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             let mut p = params.clone();
             p[key.as_str()] = json!(value.trim());
-            app.run(command, p)
+            let r = app.run(command, p)?;
+            if command == "folder.create"
+                && let Some(path) = r.get("path").and_then(serde_json::Value::as_str)
+            {
+                // the new folder has its row in Folders at once: bring it into view. It is not
+                // chosen: that would empty the grid and drop the photos selected to move into it.
+                let tree = app.caches.folder_tree(&app.session.catalog);
+                if let Some(row) = crate::panels::left::folder_row_of(&tree, path) {
+                    app.ui.left_panel = true;
+                    app.ui.reveal_folder = Some(row.path.clone());
+                }
+            }
+            Ok(r)
         }
         Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => app.run(
             "photo.setCaptureTime",

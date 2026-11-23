@@ -105,6 +105,19 @@ fn an_unchanged_folder_has_no_changes() {
     assert!(paths(&r, "new").is_empty() && paths(&r, "missing").is_empty() && paths(&r, "metadata").is_empty(), "{r}");
 }
 
+#[test]
+fn a_folder_made_in_the_library_can_be_synchronized_before_it_holds_a_photo() {
+    let dir = Scratch::new("made-empty");
+    let mut s = Session::new().with_fs();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "fresh"})).unwrap();
+    write_png(&dir.path("fresh/a.png"), 7);
+    let r = scan(&mut s, &dir.path("fresh"));
+    assert_eq!(paths(&r, "new"), vec![dir.path("fresh/a.png")], "{r}");
+    s.execute("folder.synchronize", &json!({"path": dir.path("fresh")})).unwrap();
+    assert_eq!(s.catalog.len(), 1);
+    assert!(s.execute("folder.scanChanges", &json!({"path": dir.path("nowhere")})).is_err(), "a folder the library never listed is still refused");
+}
+
 #[cfg(windows)]
 #[test]
 fn importing_and_synchronizing_with_different_windows_separators_keeps_photo_identity() {
