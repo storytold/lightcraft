@@ -175,6 +175,17 @@ painting on the current mask. `{"new": true}` creates a separate brush mask; `{"
 paint mode with the overlay visible. Brush Erase (or Alt while painting) removes strokes' coverage
 within that brush component; it is distinct from subtracting the component from the whole mask.
 
+AI masks (SAM 3) are `mask.add` / `mask.addComponent` with `kind: "object"`, `"prompt"` or `"people"`; see
+[ai-masks.md](ai-masks.md#commands-control-channel-mcp). A People mask selects parts of one person, picked by a face:
+`photo.faces {id?}` lists the active photo's face regions → `{faces: [{index, region, name, rect: {x0, y0, x1, y1},
+face: [x0, y0, x1, y1]}]}` (`rect` on the upright photo, as `photo.setRegion` takes it; `face` the same box in mask
+coordinates, after Rotate Left/Right), and `mask.add {kind: "people", person: index, parts: ["Hair", "Skin"]}` (or
+`face: [x0, y0, x1, y1]` instead of `person`; parts from `Entire Person`, `Face Skin`, `Body Skin`, `Hair`, `Clothes`, or `Skin`
+for both skins, default the entire person) makes the mask; `mask.addComponent {op: "subtract", kind: "people", …}` combines one into the selected mask.
+In the app both return `{pending: true}` and the mask appears when the person is found; otherwise a notice says no
+person was found at the face (or none of the parts on them). Without the model the error is `ModelMissing(Sam3)`, as
+for Object and Describe.
+
 ### When the library can't be saved
 
 With a persistent library, every command that changes something is written to the catalog journal (fsynced) before

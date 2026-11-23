@@ -260,6 +260,12 @@ impl Sam3 {
         Ok(detector::subject(&outs, threshold, focus))
     }
 
+    /// Every instance of the concept `text` names scoring above `threshold` (0..1), each on its
+    /// own, best first (People masks pick one person among them).
+    pub fn instances(&mut self, enc: &mut Encoded, text: &str, threshold: f32) -> Result<Vec<Instance>> {
+        detector::instances(&self.detect(enc, text)?, threshold)
+    }
+
     /// Raw detector outputs for `text` (tests and tools).
     pub fn detect(&mut self, enc: &mut Encoded, text: &str) -> Result<detector::Output> {
         let (det, tok) = self.detector_parts()?;
@@ -300,7 +306,7 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use detector::Output as DetectorOutput;
+pub use detector::{Instance, Output as DetectorOutput};
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Wait for queued GPU work to finish (benchmarks).
