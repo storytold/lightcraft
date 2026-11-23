@@ -21,6 +21,24 @@ fn dock(h: &mut Headless, p: serde_json::Value) {
 fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(key, _)| key == id).unwrap().1
 }
+/// The bounds of the AccessKit node with `role` and `label` in the last settled tree (AccessKit
+/// must be on: `h.view.ctx.enable_accesskit()` a few frames before).
+fn access_rect(h: &Headless, role: egui::accesskit::Role, label: &str) -> egui::Rect {
+    let tree = craft::ui::runtime::windows::WindowHost::of(&h.view.ctx).access_tree(egui::ViewportId::ROOT).expect("AccessKit is on");
+    let node = tree
+        .nodes
+        .iter()
+        .map(|(_, node)| node)
+        .find(|node| node.role() == role && node.label().is_some_and(|name| name == label))
+        .unwrap_or_else(|| panic!("no {role:?} named {label}"));
+    let bounds = node.bounds().expect("the node has bounds");
+    egui::Rect::from_min_max(egui::pos2(bounds.x0 as f32, bounds.y0 as f32), egui::pos2(bounds.x1 as f32, bounds.y1 as f32))
+}
+/// A point on the divider at the inner edge of the Library's dock column.
+fn library_divider(h: &Headless) -> egui::Pos2 {
+    let column = crate::docking::column_rect(&h.view.ctx, Panel::Library).expect("the Library's dock column is drawn");
+    egui::pos2(column.right() + 1.0, column.center().y)
+}
 
 #[test]
 fn the_gaps_between_dock_panes_show_chrome_not_the_dark_clear_colour() {
@@ -46,7 +64,7 @@ fn release(h: &mut Headless, pos: egui::Pos2) {
 
 #[test]
 fn window_menu_reopens_closed_panels_in_their_dock_columns() {
-    use craft_ui::docking::Side;
+    use craft::behavior::dock::DockEdge as Side;
     let mut h = app();
     let columns = |h: &Headless, side| {
         crate::docking::columns(h.app.ui.docking.as_ref().unwrap(), side).into_iter().map(|(_, groups)| groups).collect::<Vec<_>>()
@@ -119,7 +137,7 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     dock(&mut h, json!({"operation":"activate","panel":"presets"}));
     assert_eq!(h.app.ui.right, RightPanel::Crop);
     assert!(!crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools));
-    let library = h.app.ui.docking.as_ref().unwrap().layout.location(&Panel::Library).unwrap();
+    let library = h.app.ui.docking.as_ref().unwrap().layout().location(&Panel::Library).unwrap();
     let id = h.app.session.active().unwrap();
     let photo = serde_json::to_value(h.app.session.catalog.photo(id).unwrap().as_ref()).unwrap();
     let undo = h.app.session.undo.len();
@@ -132,8 +150,8 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     assert_eq!(h.app.ui.right, RightPanel::Edit, "the real Canvas double-click completes Crop");
     let workspace = h.app.ui.docking.as_ref().unwrap();
     assert!(crate::docking::exposed_in(workspace, Panel::Tools), "tool.done reveals Tools after the Canvas callback");
-    assert_eq!(workspace.layout.location(&Panel::Tools).unwrap().anchor, Some(Panel::Presets));
-    assert_eq!(workspace.layout.location(&Panel::Library).unwrap(), library);
+    assert_eq!(workspace.layout().location(&Panel::Tools).unwrap().anchor, Some(Panel::Presets));
+    assert_eq!(workspace.layout().location(&Panel::Library).unwrap(), library);
     assert_eq!(h.app.session.active(), Some(id));
     assert_eq!(h.app.session.undo.len(), undo);
     assert_eq!(serde_json::to_value(h.app.session.catalog.photo(id).unwrap().as_ref()).unwrap(), photo);
@@ -196,14 +214,17 @@ fn key(h: &mut Headless, key: egui::Key) {
 #[test]
 fn dock_tab_keeps_activation_keys_and_global_command_remains_reachable() {
     let mut h = app();
+    h.view.ctx.enable_accesskit();
     h.app.run("app.setShortcut", json!({"id":"panel.crop","shortcut":"K"})).unwrap();
     dock(&mut h, json!({"operation":"move","panel":"tools","target":"library","zone":"center"}));
     h.app.run("panel.crop", json!({})).unwrap();
     h.step();
-    // The test chooses the renderer's actual registered tab, rather than an arbitrary focus owner.
-    let id = egui::Id::unique("lightcraft-docking").with(("tab", Panel::Tools));
-    h.view.ctx.memory_mut(|memory| memory.request_focus(id));
     h.step();
+    // The renderer's actual Tools tab takes the focus with a click, rather than an arbitrary focus owner.
+    let tab = access_rect(&h, egui::accesskit::Role::Tab, "Tools").center();
+    release(&mut h, tab);
+    h.step();
+    assert_eq!(h.app.ui.right, RightPanel::Crop, "clicking the shown tab keeps the tool");
     key(&mut h, egui::Key::Enter);
     assert_eq!(h.app.ui.right, RightPanel::Crop, "Enter activates the tab without tool.done");
     key(&mut h, egui::Key::K);
@@ -308,19 +329,17 @@ fn covered_keyword_rejects_hierarchy_move_and_uncovered_target_moves_exact_keywo
 #[test]
 fn reset_during_held_divider_drag_keeps_replacement_layout_on_later_movement() {
     let mut h = app();
-    let divider = egui::Id::unique("lightcraft-docking").with(("column-resize", Some(Panel::Library)));
-    let from = h.view.ctx.read_response(divider).expect("the Library column's divider is rendered").rect.center();
-    let before = h.app.ui.docking.as_ref().unwrap().layout.clone();
+    let from = library_divider(&h);
+    let before = h.app.ui.docking.as_ref().unwrap().layout().clone();
     h.app.synthetic.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.step();
     h.app.synthetic.push(Event::PointerMoved(from + egui::vec2(40.0, 0.0)));
     h.step();
-    assert_ne!(h.app.ui.docking.as_ref().unwrap().layout, before, "fixture performs a real divider resize");
-    assert_eq!(h.view.ctx.dragged_id(), Some(divider));
-    let resized = h.app.ui.docking.as_ref().unwrap().layout.clone();
+    assert_ne!(*h.app.ui.docking.as_ref().unwrap().layout(), before, "fixture performs a real divider resize");
+    let resized = h.app.ui.docking.as_ref().unwrap().layout().clone();
     h.app.synthetic.push(Event::PointerMoved(from + egui::vec2(55.0, 0.0)));
     h.step();
-    assert_ne!(h.app.ui.docking.as_ref().unwrap().layout, resized, "renderer-generated actions preserve continuous dragging");
+    assert_ne!(*h.app.ui.docking.as_ref().unwrap().layout(), resized, "renderer-generated actions preserve continuous dragging");
     let undo = h.app.session.undo.len();
     h.app.run("ui.dock.reset", json!({})).unwrap();
     let reset = serde_json::to_value(&h.app.ui.docking).unwrap();
@@ -340,14 +359,14 @@ fn reset_during_held_divider_drag_keeps_replacement_layout_on_later_movement() {
 
 fn held_divider_replacement_route(route: &str) {
     let mut h = app();
-    let divider = egui::Id::unique("lightcraft-docking").with(("column-resize", Some(Panel::Library)));
-    let from = h.view.ctx.read_response(divider).unwrap().rect.center();
+    let from = library_divider(&h);
+    let before = serde_json::to_value(&h.app.ui.docking).unwrap();
     let photos = serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap();
     h.app.synthetic.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.step();
     h.app.synthetic.push(Event::PointerMoved(from + egui::vec2(40.0, 0.0)));
     h.step();
-    assert_eq!(h.view.ctx.dragged_id(), Some(divider));
+    assert_ne!(serde_json::to_value(&h.app.ui.docking).unwrap(), before, "fixture performs a real divider resize");
     let undo = h.app.session.undo.len();
     match route {
         "ui.set" => {
@@ -360,7 +379,8 @@ fn held_divider_replacement_route(route: &str) {
             h.step();
         }
         "public-action" => {
-            let action = craft_ui::docking::Action::Float { panel: Panel::Tools, rect: [800.0, 100.0, 330.0, 500.0] };
+            let action =
+                craft::behavior::dock::Action::float(Panel::Tools, egui::Rect::from_min_size(egui::pos2(800.0, 100.0), egui::vec2(330.0, 500.0)));
             h.app.run("ui.dock", json!({"action":action})).unwrap();
             h.step();
         }

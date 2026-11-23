@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 craft = { workspace = true }
-craft-ui = { workspace = true }
 craft-window = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-meta = { workspace = true }
@@ -31,6 +30,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+# `ScreenshotSlot::detached` stands in for the renderer in the screenshot lifecycle tests
+craft = { workspace = true, features = ["screen-testing"] }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 # The model-setup tests install and resume a real denoise model. Without this the engine's
