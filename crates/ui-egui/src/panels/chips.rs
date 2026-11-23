@@ -167,21 +167,28 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     child.spacing_mut().item_spacing.x = 8.0;
     let hidden = &chips[shown..];
     if !hidden.is_empty() {
-        let more = crate::widgets::text_button(&mut child, "chipsMore", &crate::i18n::tr_format!("+{} more", hidden.len()), false);
-        more.menu().show(|ui| {
-            for c in hidden {
-                if ui
-                    .button(format!("{}  ✕", display_label(c, &app.session.filter, &app.session.catalog)))
-                    .on_hover_text(crate::i18n::tr("Remove this filter"))
-                    .clicked()
-                {
-                    let _ = app.run("library.filter", c.clear.clone());
-                    if c.clear.get("text").is_some() {
-                        app.ui.search.clear();
+        let more_label = crate::i18n::tr_format!("+{} more", hidden.len());
+        let more = crate::widgets::text_button(&mut child, "chipsMore", &more_label, false);
+        // The framework menu the button opens by its own activation (pointer, long press, keyboard); a pick closes it.
+        if !child.is_sizing_pass() && !craft::ui::runtime::measure::active(child.ctx()) {
+            use craft::ui::contract::{ShowContainer as _, Trigger};
+            use craft::ui::menu::{Menu, MenuItem};
+            Menu::new(more_label.clone()).id_salt("lc-chips-more").opened_by(&more.response, Trigger::Click).show(&mut child, |ui, _| {
+                for (i, c) in hidden.iter().enumerate() {
+                    let label = display_label(c, &app.session.filter, &app.session.catalog).replace('&', "&&");
+                    let item = MenuItem::new(format!("{label}  ✕"))
+                        .id_salt(("lc-chips-more-item", i))
+                        .tooltip(crate::i18n::tr("Remove this filter").to_owned())
+                        .show(ui);
+                    if item.ran {
+                        let _ = app.run("library.filter", c.clear.clone());
+                        if c.clear.get("text").is_some() {
+                            app.ui.search.clear();
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
     }
     if crate::widgets::text_button(&mut child, "chipsClearAll", crate::i18n::tr("Clear all"), false).clicked() {
         app.ui.search.clear();

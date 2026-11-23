@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use craft::behavior::Metrics;
 use craft::theme::{Stateful, States};
-use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _, clicked};
+use craft::ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _, clicked};
+use craft::ui::popover::Popover;
+use craft::ui::runtime::focus::Initial;
 use craft::ui::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
 use egui::{Color32, CornerRadius, Galley, Response, RichText, Stroke, Ui, Vec2, vec2};
 
@@ -304,21 +306,6 @@ fn option(ui: &mut Ui, id: String, text: RichText, label: String, selected: bool
     response
 }
 
-/// egui's consume_key matches extra Alt/Shift logically; a calendar must take only bare
-/// Tab or Shift+Tab. Remove one matching press, leaving all other events untouched.
-fn take_calendar_tab(input: &mut egui::InputState) -> Option<bool> {
-    let (at, forward) = input.events.iter().enumerate().find_map(|(at, event)| match event {
-        egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. }
-            if *modifiers == egui::Modifiers::NONE || *modifiers == egui::Modifiers::SHIFT =>
-        {
-            Some((at, !modifiers.shift))
-        }
-        _ => None,
-    })?;
-    input.events.remove(at);
-    Some(forward)
-}
-
 /// A calendar button that edits a [`PickedDate`]; see the module docs.
 pub struct DatePicker<'a> {
     id: String,
@@ -375,33 +362,42 @@ impl<'a> DatePicker<'a> {
         let enabled = ui.is_enabled() && env.enabled;
         let read_only = env.read_only;
         let state = egui::Id::unique(("datePicker", id.as_str()));
-        if button.clicked() {
-            // open on the value (or today), at its precision when it is one of those offered
-            let at = value.or(today).unwrap_or(PickedDate::year(2026));
-            let fallback = if precisions.contains(&Precision::Day) { Precision::Day } else { precisions.first().copied().unwrap_or(Precision::Day) };
-            let precision = value.map(|v| v.precision()).filter(|p| precisions.contains(p)).unwrap_or(fallback);
-            ui.data_mut(|d| d.insert_temp(state, View::open(at, precision)));
-        }
+        let open_state = state.with("open");
         let focus_state = state.with("focus-on-open");
+        let mut open = ui.data(|d| d.get_temp::<bool>(open_state)).unwrap_or(false);
         if button.clicked() {
-            ui.data_mut(|d| d.insert_temp(focus_state, true));
+            open = !open;
+            if open {
+                // open on the value (or today), at its precision when it is one of those offered
+                let at = value.or(today).unwrap_or(PickedDate::year(2026));
+                let fallback = if precisions.contains(&Precision::Day) { Precision::Day } else { precisions.first().copied().unwrap_or(Precision::Day) };
+                let precision = value.map(|v| v.precision()).filter(|p| precisions.contains(p)).unwrap_or(fallback);
+                ui.data_mut(|d| {
+                    d.insert_temp(state, View::open(at, precision));
+                    d.insert_temp(focus_state, true);
+                });
+            }
         }
         let mut focus_on_open = ui.data(|d| d.get_temp::<bool>(focus_state)).unwrap_or(false);
         let mut picked: Option<PickedDate> = None;
         let mut view = ui.data(|d| d.get_temp::<View>(state)).unwrap_or(View { precision: Precision::Day, year: 2026, month: 1 });
-        egui::Popup::from_response(&button.response)
-            .open_memory(button.clicked().then_some(egui::SetOpenCommand::Toggle))
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
+        // The framework popover hangs from the button, which opens and closes it by its own activation (a press, a long
+        // press or a key); Escape, a press outside and the focus leaving close it, and the press outside reaches what it
+        // landed on. Its focus goes to the selected (or today's) cell below, not to the first stop.
+        Popover::new(crate::i18n::tr("Pick a date").to_owned(), Bind::bound(&mut open))
+            .id(state.with("popover"))
+            .opened_by(&button.response)
+            .initial_focus(Initial::Keep)
+            .show(ui, |ui, cx| {
                 craft::ui::runtime::env::with_env(
                     ui,
                     |set| {
-                        // egui's popup is a new Ui, not a child of the opener's disabled/read-only scope.
+                        // the popover is a layer of its own, not a child of the opener's disabled/read-only scope.
                         set.enabled = Some(enabled);
                         set.read_only = Some(read_only);
                     },
                     |ui| {
-                        let mut stops = Vec::with_capacity(47);
+                        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
                         // as wide as a month of days, however much room the window has
                         ui.set_min_width(220.0);
                         ui.set_max_width(240.0);
@@ -418,9 +414,6 @@ impl<'a> DatePicker<'a> {
                                         true,
                                         0.0,
                                     );
-                                    if enabled {
-                                        stops.push(r.id);
-                                    }
                                     if clicked(&r) {
                                         view.precision = *p;
                                     }
@@ -438,11 +431,8 @@ impl<'a> DatePicker<'a> {
                                 true,
                                 "Previous page",
                             );
-                            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                            if real {
                                 crate::widgets::register_response(format!("datePickerPrev:{id}"), prev.rect, &prev.response);
-                            }
-                            if enabled {
-                                stops.push(prev.id);
                             }
                             let title = match view.precision {
                                 Precision::Day => crate::i18n::date_group_label(&format!("{:04}-{:02}", view.year, view.month), false),
@@ -463,11 +453,8 @@ impl<'a> DatePicker<'a> {
                                     true,
                                     "Next page",
                                 );
-                                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                                if real {
                                     crate::widgets::register_response(format!("datePickerNext:{id}"), next.rect, &next.response);
-                                }
-                                if enabled {
-                                    stops.push(next.id);
                                 }
                                 if next.clicked() {
                                     view = step(view, true);
@@ -484,9 +471,8 @@ impl<'a> DatePicker<'a> {
                             let text = if holds_today(&date, today) { RichText::new(text).strong().underline() } else { RichText::new(text) };
                             let r = option(ui, format!("datePickerCell:{}:{id}", date.iso()), text, date.iso(), *value == Some(date), allowed, 26.0);
                             // A root SDK Response retains the host Ui's enabled flag; bounds
-                            // are a component prop. Use that real prop when listing Tab stops.
+                            // are a component prop. Use that real prop when choosing the opening cell.
                             if allowed && enabled {
-                                stops.push(r.id);
                                 first_enabled.get_or_insert(r.id);
                                 if *value == Some(date) || (value.is_none() && holds_today(&date, today)) {
                                     preferred = Some(r.id);
@@ -543,43 +529,31 @@ impl<'a> DatePicker<'a> {
                             }
                         });
                         // Open on the selected/today cell, or the first permitted one. Do this only in
-                        // a real pass: a new popup can first run an invisible sizing pass.
-                        if focus_on_open && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                        // a real pass: a new popover can first run an invisible sizing pass.
+                        if focus_on_open && real {
                             if let Some(target) = preferred.or(first_enabled) {
                                 craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(target));
                             }
                             focus_on_open = false;
                         }
-                        // The SDK leaves Tab to egui while a legacy popup is open, but egui
-                        // cannot move a focused SDK stop. Route only this popup's bare Tab
-                        // through the SDK's focus service; activation remains the leaf's.
-                        if !ui.is_sizing_pass()
-                            && !craft::ui::runtime::measure::active(ui.ctx())
-                            && let Some(at) = ui.ctx().memory(|m| m.focused()).and_then(|id| stops.iter().position(|stop| *stop == id))
-                        {
-                            let direction = ui.input_mut(take_calendar_tab);
-                            if let Some(forward) = direction {
-                                let next = if forward { (at + 1) % stops.len() } else { (at + stops.len() - 1) % stops.len() };
-                                craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(stops[next]));
-                            }
-                        }
                         // Esc closes the calendar and stops there: the dialog around it keeps its edits.
                         // Restore the opener on selection/cancel, not on outside clicks (which can focus
                         // another field in the caller).
-                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        if real && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             crate::widgets::take_escape(ui.ctx());
                             craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(button.id));
-                            ui.close();
+                            cx.request_close();
                         }
-                        if picked.is_some() {
+                        if real && picked.is_some() {
                             craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(button.id));
-                            ui.close();
+                            cx.request_close();
                         }
                     },
                 )
             });
         ui.data_mut(|d| {
             d.insert_temp(state, view);
+            d.insert_temp(open_state, open);
             d.insert_temp(focus_state, focus_on_open);
         });
         if let Some(date) = picked {

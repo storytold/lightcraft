@@ -2,7 +2,7 @@
 //! flyout rows, bordered buttons. Every interactive widget registers an automation id + rect
 //! ([`register`]) so the control channel can find and click it by name.
 
-use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Response, Stroke, StrokeKind, Ui, pos2, vec2};
 use lightcraft_develop::{ControlSpec, Track};
 
 use crate::icons::{Icon, paint};
@@ -34,7 +34,7 @@ pub(crate) fn select<T: craft::behavior::Value>(
     }
     let shown = match width {
         Some(width) => {
-            let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()).max(1.0), 24.0), Sense::hover());
+            let (_, rect) = ui.allocate_space(vec2(width.min(ui.available_width()).max(1.0), 24.0));
             select.show_at(ui, rect)
         }
         None => select.show(ui),
@@ -56,7 +56,7 @@ pub(crate) fn dropdown_menu(ui: &mut Ui, name: &str, label: &str, face: &str, wi
     let button = Button::new(label.to_owned()).painted(face.to_owned()).id_salt(("lc-dropdown", name));
     let shown = match width {
         Some(width) => {
-            let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()).max(1.0), 24.0), Sense::hover());
+            let (_, rect) = ui.allocate_space(vec2(width.min(ui.available_width()).max(1.0), 24.0));
             button.show_at(ui, rect)
         }
         None => button.show(ui),
@@ -99,23 +99,28 @@ pub(crate) fn menu_divider(ui: &mut Ui) {
     craft::ui::display::Divider::horizontal().show(ui);
 }
 
-/// A native button with a vector arrow beside its text; egui reserves the icon's space.
-pub fn arrow_button<'a>(ui: &mut Ui, text: impl egui::IntoAtoms<'a>, icon: Icon, leading: bool) -> Response {
-    // 0.37 atoms take a local `IdSalt` (not a root `Id`); the button reports the custom atom's
-    // rect under the same salt.
-    let id = egui::IdSalt::new(("lc-arrow", ui.next_auto_id()));
-    let mut atoms = text.into_atoms();
-    let arrow = egui::Atom::custom(id, vec2(16.0, 16.0));
-    if leading {
-        atoms.push_left(arrow);
-    } else {
-        atoms.push_right(arrow);
+/// A button with a vector arrow beside its text, on the framework pipeline; the arrow takes the room an egui button
+/// gives an icon atom (16 points and the icon gap), and the face follows the ui's button visuals.
+pub fn arrow_button(ui: &mut Ui, text: &str, icon: Icon, leading: bool) -> HitAreaOutput {
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), egui::TextStyle::Button.resolve(ui.style()), Color32::PLACEHOLDER);
+    let padding = ui.spacing().button_padding;
+    let gap = ui.spacing().icon_spacing;
+    let content = vec2(galley.size().x + gap + 16.0, galley.size().y.max(16.0));
+    let size = (content + padding * 2.0).max(ui.spacing().interact_size);
+    let (id, rect) = ui.allocate_space(size);
+    let resp = HitArea::new(text.to_owned(), id).show_at(ui, rect);
+    if ui.is_rect_visible(rect) {
+        let visuals = *ui.style().interact(&resp);
+        let painter = ui.painter();
+        painter.rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, StrokeKind::Inside);
+        // the content sits centred as one run: the text, the gap, the arrow (or the arrow first)
+        let left = rect.center().x - content.x / 2.0;
+        let (text_x, arrow_x) = if leading { (left + 16.0 + gap, left) } else { (left, left + galley.size().x + gap) };
+        let centre_y = rect.center().y;
+        painter.galley_with_override_text_color(pos2(text_x, centre_y - galley.size().y / 2.0), galley, visuals.fg_stroke.color);
+        paint(painter, Rect::from_min_size(pos2(arrow_x, centre_y - 8.0), vec2(16.0, 16.0)), icon, visuals.fg_stroke.color);
     }
-    let r = egui::Button::new(atoms).atom_ui(ui);
-    if let Some(rect) = r.rect(id) {
-        paint(ui.painter(), rect, icon, ui.style().interact(&r.response).fg_stroke.color);
-    }
-    r.response
+    resp
 }
 
 /// Keep egui's submenu interaction and layout, using our vector chevron instead of a font glyph.
@@ -349,7 +354,7 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                let (_, ir) = ui.allocate_space(vec2(16.0, 16.0));
                 paint(ui.painter(), ir, Icon::Info, t.caution);
                 ui.label(egui::RichText::new(crate::i18n::tr("Preview only")).font(t.semibold(12.5)).color(t.text));
             });
@@ -450,14 +455,14 @@ pub(crate) fn announce_disclosure(resp: &egui::Response, enabled: bool, expanded
     resp.ctx.accesskit_node_builder(resp.id, |node| node.set_expanded(expanded));
 }
 
-/// Collapsible section header ("› Light"). Returns the response (click toggles).
-pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>) -> (Response, Option<bool>) {
+/// Collapsible section header ("› Light"). Returns the header's output (a click toggles) and, when its eye was
+/// clicked, the new state of the section's switch.
+pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>) -> (HitAreaOutput, Option<bool>) {
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
-    announce_disclosure(&resp, true, open, title);
-    register(ui, format!("section:{id}"), r);
+    let (_, r) = ui.allocate_space(vec2(w, 52.0));
+    let resp = HitArea::new(title.to_string(), ui.scope_id().with(("section", id))).widget(format!("section:{id}")).expanded(open).show_at(ui, r);
     let p = ui.painter();
     if ui.rect_contains_pointer(r) {
         p.rect_filled(r, 0.0, t.chrome.gamma_multiply(1.06));
@@ -473,9 +478,10 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
         && (ui.rect_contains_pointer(r) || !on)
     {
         let eye = Rect::from_center_size(pos2(r.right() - 34.0, r.center().y), vec2(18.0, 18.0));
-        let er = ui.interact(eye, ui.scope_id().with(("eye", id)), Sense::click());
-        crate::widgets::announce_selected(&er, crate::i18n::tr("Show / hide"), on);
-        register(ui, format!("sectionEye:{id}"), eye);
+        let er = HitArea::new(crate::i18n::tr("Show / hide").to_string(), ui.scope_id().with(("eye", id)))
+            .widget(format!("sectionEye:{id}"))
+            .selected(on)
+            .show_at(ui, eye);
         paint(ui.painter(), eye, Icon::Eye, if on { t.icon } else { t.text_disabled });
         if !on {
             ui.painter().line_segment([eye.left_bottom(), eye.right_top()], Stroke::new(1.5, t.text_disabled));
@@ -491,20 +497,18 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
 pub fn divider(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (r, _) = ui.allocate_exact_size(vec2(w, 1.0), Sense::hover());
+    let (_, r) = ui.allocate_space(vec2(w, 1.0));
     ui.painter().rect_filled(r, 0.0, t.divider);
 }
 
 /// A flyout row inside a section (Curve, Color Mixer, Color Grading…): inset dark box with icon tile.
-pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) -> Response {
+pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) -> HitAreaOutput {
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (outer, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+    let (_, outer) = ui.allocate_space(vec2(w, 40.0));
     let r = Rect::from_min_max(pos2(outer.left() + 16.0, outer.top() + 4.0), pos2(outer.right() - 16.0, outer.bottom() - 4.0));
-    let resp = ui.interact(r, ui.scope_id().with(("flyout", id)), Sense::click());
-    announce_disclosure(&resp, true, open, title);
-    register(ui, format!("flyout:{id}"), r);
+    let resp = HitArea::new(title.to_string(), ui.scope_id().with(("flyout", id))).widget(format!("flyout:{id}")).expanded(open).show_at(ui, r);
     let p = ui.painter();
     p.rect_filled(r, 4.0, if resp.hovered() { t.hover.gamma_multiply(0.8) } else { t.inset });
     let tile = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(r.height() - 8.0, r.height() - 8.0));
@@ -521,8 +525,8 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
 }
 
 /// A small bordered text button (Auto, B&W, HDR…) on the SDK interaction pipeline.
-/// Its output keeps framework activation through tooltip chains; open its popup with
-/// [`TextButtonOutput::menu`], not `egui::Popup::menu`, whose click rule is different.
+/// Its output keeps framework activation through tooltip chains; a menu it opens is a framework `Menu`
+/// opened by its response with `Trigger::Click`.
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> TextButtonOutput {
     text_button::show(ui, id, label, active)
 }
@@ -554,9 +558,11 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
             for (j, (label, key)) in row.iter().enumerate() {
                 let label = crate::i18n::tr(label);
                 let i = row_i * per_row + j;
-                let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
-                crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
-                register(ui, format!("button:{id}-{key}"), r);
+                let (_, r) = ui.allocate_space(vec2(seg_w, 24.0));
+                let resp = HitArea::new(label.to_string(), ui.scope_id().with(("segment", id, *key)))
+                    .widget(format!("button:{id}-{key}"))
+                    .selected(active == Some(i))
+                    .show_at(ui, r);
                 let fill = if active == Some(i) {
                     t.pressed
                 } else if resp.hovered() {
@@ -593,20 +599,22 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
 }
 
 /// A borderless dropdown button: `text` followed by a painted chevron (no font glyph needed).
-pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32) -> Response {
+pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32) -> HitAreaOutput {
     dropdown_within(ui, id, text, font, color, f32::INFINITY)
 }
 
 /// [`dropdown`] at most `max` wide, chevron included: a longer `text` is cut short with …, and
 /// shown in full on hover.
-pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32, max: f32) -> Response {
+pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32, max: f32) -> HitAreaOutput {
     let t = Tokens::get(ui.ctx());
     let galley = one_line(ui.painter(), text, font, color, max - 20.0);
     let elided = galley.elided;
     let size = vec2(galley.size().x + 20.0, galley.size().y.max(20.0));
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, text));
-    register(ui, format!("dropdown:{id}"), r);
+    let (_, r) = ui.allocate_space(size);
+    let resp = HitArea::new(text.to_owned(), ui.scope_id().with(("dropdown", id)))
+        .widget(format!("dropdown:{id}"))
+        .role(craft::ui::contract::Role::COMBO_BOX)
+        .show_at(ui, r);
     let c = if resp.hovered() { t.text } else { color };
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
@@ -833,12 +841,6 @@ pub(crate) fn describe_dialog(ctx: &egui::Context, response: &Response, text: &s
     ctx.accesskit_node_builder(response.id, |node| node.set_description(text));
 }
 
-/// The same for one that is on or off (a toggle, a selected row or swatch).
-pub(crate) fn announce_selected(resp: &egui::Response, name: impl Into<String>, selected: bool) {
-    let name = name.into();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, resp.enabled(), selected, name.clone()));
-}
-
 /// `r`, named `name` for screen readers: a plain egui field or slider whose caption is drawn
 /// beside it, or whose hint is all it shows.
 pub(crate) fn named(r: egui::Response, name: &str) -> egui::Response {
@@ -884,6 +886,7 @@ pub(crate) fn elide_head(text: &str, max: f32, width: impl Fn(&str) -> f32) -> S
 pub mod album_picker;
 pub mod button;
 pub mod date_picker;
+mod hit_area;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;
@@ -893,6 +896,7 @@ mod icon_button;
 mod slider;
 pub(crate) use slider::{Row as SliderRow, field as slider_field, slider_row, slider_salted};
 pub use slider::{SliderOut, slider};
+pub use hit_area::{HitArea, HitAreaOutput};
 pub use icon_button::IconButtonOutput;
 mod text_button;
 pub mod text_field;

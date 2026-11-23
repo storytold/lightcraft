@@ -120,9 +120,9 @@ impl Component for CompactIconButton {
     }
 }
 
-/// Preserve the SDK primary-release result through tooltip and popup chains.
+/// Preserve the SDK primary-release result through tooltip chains.
 /// `response` remains available for geometry and changed-state reporting;
-/// it must not replace `clicked()` or `menu()` as the activation oracle.
+/// it must not replace `clicked()` as the activation oracle.
 #[derive(Clone, Debug)]
 pub struct IconButtonOutput {
     pub response: Response,
@@ -136,11 +136,6 @@ impl IconButtonOutput {
     pub fn on_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
         self.response = self.response.on_hover_text(text);
         self
-    }
-
-    /// Keep the caller's egui popup placement/appearance, toggled by SDK activation.
-    pub fn menu(&self) -> egui::Popup<'_> {
-        egui::Popup::menu(&self.response).open_memory(self.clicked().then_some(egui::SetOpenCommand::Toggle))
     }
 }
 

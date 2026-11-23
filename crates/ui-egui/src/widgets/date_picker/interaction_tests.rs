@@ -148,7 +148,7 @@ impl Picker {
 
     fn open(&mut self, frames: &mut Frames) {
         frames.click("datePicker:fixture", PointerButton::Primary, |ui| self.show(ui));
-        assert!(egui::Popup::is_any_open(&frames.ctx));
+        assert!(crate::dialogs::popup_open(&frames.ctx));
     }
 }
 
@@ -170,7 +170,7 @@ fn long_primary_release_selects_exactly_once_at_each_precision() {
         frames.settle(|ui| picker.show(ui));
         assert_eq!(picker.value, PickedDate::parse(target));
         assert_eq!(picker.changes, 1, "one SDK release, one changed response");
-        assert!(!egui::Popup::is_any_open(&frames.ctx));
+        assert!(!crate::dialogs::popup_open(&frames.ctx));
         assert_eq!(frames.ctx.memory(|m| m.focused()), Some(frames.hit("datePicker:fixture").id));
     }
 }
@@ -220,7 +220,7 @@ fn keyboard_open_tab_shift_tab_pick_and_escape_keep_focus_and_selection_distinct
         assert_eq!(frames.ctx.memory(|m| m.focused()), Some(frames.hit("datePicker:fixture").id));
         frames.keyboard(Key::Enter, false, |ui| picker.show(ui));
         frames.keyboard(Key::Escape, false, |ui| picker.show(ui));
-        assert!(!egui::Popup::is_any_open(&frames.ctx));
+        assert!(!crate::dialogs::popup_open(&frames.ctx));
         assert_eq!(picker.changes, 1, "cancel is not another selection");
         assert_eq!(frames.ctx.memory(|m| m.focused()), Some(frames.hit("datePicker:fixture").id));
     }
@@ -264,7 +264,7 @@ fn bounds_disable_cells_but_keep_overlapping_months_and_years_selectable() {
         assert!(!frames.nodes.get(allowed).unwrap().is_disabled());
         frames.click(&format!("datePickerCell:{blocked}:fixture"), PointerButton::Primary, |ui| picker.show(ui));
         assert_eq!(picker.changes, 0);
-        assert!(egui::Popup::is_any_open(&frames.ctx));
+        assert!(crate::dialogs::popup_open(&frames.ctx));
         frames.focus(&format!("datePickerCell:{blocked}:fixture"), |ui| picker.show(ui));
         frames.keyboard(Key::Enter, false, |ui| picker.show(ui));
         assert_eq!(picker.changes, 0, "disabled cells cannot activate by key");
@@ -418,13 +418,13 @@ fn real_smart_rules_dialog_keyboard_navigation_pick_and_escape_preserve_unsaved_
     assert_eq!(rule_value(&app), serde_json::json!("2026-08-14T10:00"));
     frames.keyboard(Key::Enter, false, |ui| crate::dialogs::show(&mut app, ui.ctx(), false));
     assert_eq!(rule_value(&app), serde_json::json!("2026-08-15"), "caller still strips time only on a pick");
-    assert!(!egui::Popup::is_any_open(&frames.ctx));
+    assert!(!crate::dialogs::popup_open(&frames.ctx));
     assert_eq!(frames.ctx.memory(|m| m.focused()), Some(frames.hit("datePicker:rules-0").id));
     frames.keyboard(Key::Enter, false, |ui| crate::dialogs::show(&mut app, ui.ctx(), false));
     frames.keyboard(Key::Tab, false, |ui| crate::dialogs::show(&mut app, ui.ctx(), false));
     frames.keyboard(Key::Escape, false, |ui| crate::dialogs::show(&mut app, ui.ctx(), false));
     assert_eq!(rule_value(&app), serde_json::json!("2026-08-15"));
-    assert!(!egui::Popup::is_any_open(&frames.ctx));
+    assert!(!crate::dialogs::popup_open(&frames.ctx));
     assert_eq!(frames.ctx.memory(|m| m.focused()), Some(frames.hit("datePicker:rules-0").id));
 }
 
@@ -518,7 +518,7 @@ fn outside_click_dismisses_without_selecting_or_stealing_another_field_focus() {
     frames.click("datePicker:fixture", PointerButton::Primary, &mut draw);
     frames.click("datePickerNext:fixture", PointerButton::Primary, &mut draw);
     frames.click("outside", PointerButton::Primary, &mut draw);
-    assert!(!egui::Popup::is_any_open(&frames.ctx));
+    assert!(!crate::dialogs::popup_open(&frames.ctx));
     assert_eq!(frames.ctx.memory(|m| m.focused()), Some(frames.hit("outside").id));
     drop(draw);
     assert_eq!(picker.value, PickedDate::parse("2026-08-14"));
@@ -545,25 +545,4 @@ fn popup_tab_wraps_and_skips_disabled_dates_without_editing() {
         assert_eq!(frames.ctx.memory(|m| m.focused()), Some(frames.hit(expected).id), "shift={shift}, expected={expected}");
         assert_eq!(picker.changes, 0, "Tab only navigates");
     }
-}
-
-#[test]
-fn calendar_tab_bridge_takes_one_exact_press_and_preserves_modified_tab_events() {
-    let tab = |modifiers, pressed| Event::Key { key: Key::Tab, physical_key: Some(Key::Tab), pressed, repeat: false, modifiers };
-    let mut input = egui::InputState::default();
-    let modified = [
-        Modifiers { alt: true, ..Modifiers::NONE },
-        Modifiers { ctrl: true, ..Modifiers::NONE },
-        Modifiers { command: true, ..Modifiers::NONE },
-        Modifiers { alt: true, shift: true, ..Modifiers::NONE },
-    ]
-    .map(|modifiers| tab(modifiers, true));
-    input.events = modified.to_vec();
-    input.events.extend([tab(Modifiers::NONE, true), tab(Modifiers::SHIFT, true), tab(Modifiers::NONE, false)]);
-    assert_eq!(take_calendar_tab(&mut input), Some(true));
-    assert_eq!(input.events.len(), 6, "one event only");
-    assert_eq!(take_calendar_tab(&mut input), Some(false));
-    assert_eq!(take_calendar_tab(&mut input), None, "neither modified presses nor key releases are consumed");
-    assert_eq!(&input.events[..4], &modified);
-    assert_eq!(input.events.last(), Some(&tab(Modifiers::NONE, false)));
 }

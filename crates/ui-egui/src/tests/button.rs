@@ -12,13 +12,17 @@ use crate::theme::{ThemeKind, Tokens};
 fn frames<T: Default>(events: Vec<egui::Event>, mut draw: impl FnMut(&mut egui::Ui) -> T) -> (Vec<(String, String)>, T) {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx);
     ctx.enable_accesskit();
+    // the framework's runtime senses and builds the buttons
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut found = Vec::new();
     let mut last = T::default();
-    for frame in 0..3 {
+    // one event a frame from the second on: the framework counts a click from a press in one pass and a release in a later one
+    for frame in 0..events.len() + 3 {
         let raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
-            events: if frame == 1 { events.clone() } else { Vec::new() },
+            events: frame.checked_sub(1).and_then(|at| events.get(at)).cloned().into_iter().collect(),
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw, |ui| last = draw(ui));
@@ -139,7 +143,9 @@ fn a_button_in_a_disabled_part_of_the_window_says_it_is_disabled() {
     // (egui refuses the click there anyway: what the button adds is looking and reading disabled)
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx);
     ctx.enable_accesskit();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut disabled = None;
     for _ in 0..3 {
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() };

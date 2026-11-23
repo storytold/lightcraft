@@ -379,10 +379,11 @@ fn actual_chip_overflow_popup_opens_on_framework_release_and_escape_dismisses_it
     frames.frame(vec![], &mut draw);
     frames.frame(vec![pointer(at, PointerButton::Primary, false)], &mut draw);
     frames.frame(vec![], &mut draw);
-    assert!(egui::Popup::is_any_open(&frames.ctx), "actual +N more caller uses explicit SDK popup activation");
+    let open = |frames: &Frames| craft::ui::runtime::overlay::any_open(&frames.ctx, craft::ui::runtime::overlay::OpenFilter::Any);
+    assert!(open(&frames), "actual +N more caller opens its framework menu by SDK activation");
     frames.frame(key(Key::Escape, false), &mut draw);
     frames.frame(vec![], &mut draw);
-    assert!(!egui::Popup::is_any_open(&frames.ctx));
+    assert!(!open(&frames));
 }
 
 #[test]
