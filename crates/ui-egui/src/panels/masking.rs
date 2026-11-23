@@ -789,12 +789,14 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(w - 46.0, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
     let id = ui.scope_id().with(spec.id);
     let mut value = app.ui.mask_overlay_opacity as f64;
     let label = Hit::new("maskOverlayOpacityLabel", crate::i18n::tr_format!("Reset {name}", name = crate::i18n::tr("Opacity")))
         .id(id.with("label"))
         .enabled(real && enabled)
-        .show_at(ui, label_rect);
+        .show_at(ui, label_hit);
     let label = if enabled && real {
         label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = crate::i18n::tr("Opacity")))
     } else {
@@ -918,13 +920,15 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
         let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(width - 46.0, 18.0));
         let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
         let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
         let id = ui.scope_id().with(("mask-range", owner, comp, spec.id, visit.epoch));
         let enabled = real && ui.is_enabled();
         let caption = crate::i18n::tr(spec.label);
         let label = Hit::new(&format!("maskRangeLabel:{comp}:{}", spec.id), crate::i18n::tr_format!("Reset {name}", name = caption))
             .id(id.with("label"))
             .enabled(enabled)
-            .show_at(ui, label_rect);
+            .show_at(ui, label_hit);
         let label = label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = caption));
         ui.painter().text(
             label_rect.left_center(),
@@ -1073,6 +1077,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                     ui.data_mut(|d| d.insert_temp(handle_id, nearer_low(origin.x)));
                 }
                 let _ = app.run("develop.beginInteraction", json!({"label": "Luminance Range"}));
+                ui.data_mut(|d| d.insert_temp(handle_id.with("begun"), true));
             }
             if (resp.dragged() || resp.clicked())
                 && let Some(pos) = resp.interact_pointer_pos()
@@ -1083,8 +1088,11 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 let (nlo, nhi) = if low { (v.min((hi - 0.01).max(0.0)), hi) } else { (lo, v.max((lo + 0.01).min(1.0))) };
                 update(app, MaskShape::LuminanceRange { lo: nlo, hi: nhi, lo_feather: *lo_feather, hi_feather: *hi_feather });
             }
-            if resp.drag_stopped() {
-                ui.data_mut(|d| d.remove::<bool>(handle_id));
+            if resp.drag_ended() && ui.data(|d| d.get_temp::<bool>(handle_id.with("begun"))).is_some() {
+                ui.data_mut(|d| {
+                    d.remove::<bool>(handle_id);
+                    d.remove::<bool>(handle_id.with("begun"));
+                });
                 let _ = app.run("develop.endInteraction", json!({}));
             }
             // Smoothness: both falloffs at once
@@ -1662,12 +1670,14 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(width - 46.0, 18.0));
         let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
         let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
         let id = ui.scope_id().with(("mask-brush", owner, spec.id, visit.epoch));
         let caption = crate::i18n::tr(spec.label);
         let label = Hit::new(&format!("maskBrushLabel:{}", spec.id), crate::i18n::tr_format!("Reset {name}", name = caption))
             .id(id.with("label"))
             .enabled(enabled)
-            .show_at(ui, label_rect);
+            .show_at(ui, label_hit);
         let label = label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = caption));
         ui.painter().text(
             label_rect.left_center(),
