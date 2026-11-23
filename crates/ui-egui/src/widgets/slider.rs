@@ -125,6 +125,10 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
     let policy = ScalarKeyPolicy::new(nudge).model_step(spec.step).shift_factor(5.0).trigger(ScalarKeyTrigger::HoveredOrFocused);
     let id = ui.scope_id().with(("lc-slider", spec.id, row.salt));
     let enabled = row.enabled;
+    // A scrub of the value moves it as far as the same drag on the thumb: the range over the track's value span
+    // (as the last pass laid it out; before that, the row's width less its margins and a thumb).
+    let span = ui.data(|data| data.get_temp::<f32>(id.with("span"))).unwrap_or(ui.available_width() - 46.0 - 14.0).max(1.0);
+    let scrub_rate = (spec.max - spec.min) / f64::from(span);
     let (out, record) = craft::ui::runtime::inspect::record(ui, row.record.unwrap_or_else(|| id.with("record")), |ui| {
         // A vertical wheel edits only a row a press selected; a sideways swipe edits the row under the pointer.
         with_env(
@@ -145,6 +149,7 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
                             .wheel_step(nudge)
                             .key_policy(policy)
                             .pointer_model_step(spec.step)
+                            .scrub_step(scrub_rate)
                             // Shift drags a tenth as far, as Lightroom's sliders do
                             .pointer_modifiers(DragModifiers::new(Some(DragModifier::Shift), None))
                             // the product's whole-value grammar: +12 is absolute, either decimal separator, K or %
@@ -168,14 +173,14 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
     });
     let mut track = None;
     if let Some(record) = record {
-        track = publish(ui, row, &name, &out, &record);
+        track = publish(ui, row, id, &name, &out, &record);
     }
     Shown { out, track }
 }
 
 /// Names the row's real parts for automation, says how to reset it, keeps the shortcut gate's slider focus and
 /// gives the value field back after a typed edit ends. Returns the track's id.
-fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: &craft::ui::runtime::inspect::Recorded) -> Option<egui::Id> {
+fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOutput, record: &craft::ui::runtime::inspect::Recorded) -> Option<egui::Id> {
     let spec = row.spec;
     let ctx = ui.ctx();
     let focused = craft::ui::runtime::focus::focused_rec(ctx);
@@ -225,6 +230,7 @@ fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: 
                     // The thumb stays wholly inside the track: its values run between the centres of the two end
                     // thumbs. Naming that span keeps a fraction along `slider:` the same fraction of the scale.
                     target = rect.shrink2(egui::vec2((thumb.bounds.width() * 0.5).min(rect.width() * 0.5), 0.0));
+                    ctx.data_mut(|data| data.insert_temp(id.with("span"), target.width()));
                     super::register_geometry(ctx, format!("sliderThumb:{}", spec.id), thumb.bounds);
                     if row.enabled {
                         hint(ctx, &response, thumb.bounds, &reset_hint);
@@ -262,15 +268,29 @@ fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: 
     }
     // The readout goes back to showing the value once a typed edit ends (Return, a step): a field kept
     // focused would send the next Undo to its own text history instead of the photo's.
-    // (Escape keeps the field focused, as the framework's fields are: giving the focus up in the pass of an Escape
-    // the field has not applied yet would commit the draft as the field loses it.)
     let ended = out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }));
+    // Escape gives the readout back too, as LightCraft's did: the field has already put its text back. Not on the
+    // pass of the release that opens the edit, whose keys the field has not had yet.
+    let escaped = escape_pressed(ctx, spec.id, row.salt) && !ui.input(|input| input.pointer.any_released());
     if let Some(root) = number_focus
-        && ended
+        && (ended || escaped)
     {
         ui.memory_mut(|memory| memory.surrender_focus(root));
     }
     track
+}
+
+/// Whether Escape went down in this pass (the framework's key stage takes the key from egui's events; it still says
+/// which keys are down).
+fn escape_pressed(ctx: &egui::Context, control: &str, salt: egui::Id) -> bool {
+    let down = craft::ui::runtime::keys::down(ctx).iter().any(|key| key.code_name() == "Escape");
+    let key = egui::Id::unique(("lc-slider-escape-down", control)).with(salt);
+    let was = ctx.data_mut(|data| {
+        let was = data.get_temp::<bool>(key).unwrap_or(false);
+        data.insert_temp(key, down);
+        was
+    });
+    down && !was
 }
 
 /// Says how to reset the row while the pointer rests on `area` of the row's real part `response` (the caption, the
