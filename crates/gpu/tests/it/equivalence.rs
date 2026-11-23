@@ -86,8 +86,7 @@ fn warm_green_wb_zero_crossing_gpu_matches_cpu_on_v10() {
     let req = RenderRequest::fit(160, 120);
     // Test normal WB, positive s[2] > 0, and negative s[2] <= 0 across the zero crossing on Process::V10.
     for (temp, tint) in [(5500.0, 10.0), (2000.0, 0.0), (2000.0, 30.0), (3000.0, 100.0)] {
-        let mut s = DevelopSettings::default();
-        assert_eq!(s.process.process(), Process::V10);
+        let mut s = DevelopSettings { process: Process::V10.version(), ..Default::default() };
         (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
         let cpu = render(&src, &info, &s, &req).image;
         let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
@@ -789,6 +788,23 @@ fn cached_renders_match_uncached() {
         let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
         let fresh = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu");
         assert_eq!(warm.image, fresh.image, "step {k}");
+    }
+}
+
+/// Process V13's Exposure on a display-referred source compresses towards white instead of clipping
+/// (`lightcraft_pipeline::finish::expose`): the GPU kernel follows the CPU.
+#[test]
+fn display_exposure_shoulder_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 960, 640);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(960, 640);
+    for ev in [0.3, 1.0, 2.5] {
+        let mut s = DevelopSettings { process: Process::V13.version(), ..Default::default() };
+        s.light.exposure = ev;
+        check(&format!("V13 display Exposure +{ev}"), &src, &info, &s, &req);
     }
 }
 

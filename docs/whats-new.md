@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Exposure no longer burns out JPEGs (process V13)
+- Raising Exposure on a JPEG, PNG or TIFF used to turn every tone it lifted past white flat white, so a small
+  move could ruin the highlights. It now brightens the shadows and midtones by the full amount and eases the
+  highlights towards white, keeping their detail. Raws and darkening are unchanged. This is rendering process 13:
+  photos you already edited keep their look until you choose Photo ▸ Update to Current Process.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
