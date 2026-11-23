@@ -1300,3 +1300,20 @@ fn perspective_labels_are_translated_in_every_shipped_locale() {
         }
     }
 }
+
+/// The framework's own words read in LightCraft's language: by their English text, and a word with `{app}` by the
+/// app's name in its place, as LightCraft's catalogs write it.
+#[test]
+fn framework_words_follow_the_language() {
+    for language in [Locale::De, Locale::Uk, Locale::Fi] {
+        let about = language.tr("About LightCraft");
+        assert_ne!(about, "About LightCraft", "{language:?} translates the About title");
+        assert_eq!(framework_word(language, "", "About {app}").map(|text| text.replace("{app}", "LightCraft")).as_deref(), Some(about));
+        let settings = language.tr("Settings");
+        assert_eq!(framework_word(language, "", "Settings").as_deref(), (settings != "Settings").then_some(settings));
+        assert_eq!(framework_word(language, "", "no catalog has this text"), None);
+        // one set of words per language: the framework sees the same generation every frame
+        assert!(std::sync::Arc::ptr_eq(&framework_words(language), &framework_words(language)));
+    }
+    assert_eq!(framework_word(Locale::En, "", "About {app}"), None);
+}

@@ -226,6 +226,60 @@ pub fn language() -> Locale {
     LOCALE.with(std::cell::Cell::get)
 }
 
+/// The craft framework's own words (its dialogs' titles and buttons, table headers, common actions) in LightCraft's
+/// language. The framework asks for each word by its English text; LightCraft's catalogs are keyed by English text, so
+/// each word reads as `tr` of its English, and stays English where a catalog has no row. A word with `{app}` in it
+/// ("About {app}") is looked up with the app's name in its place, as LightCraft's own catalogs write it ("About
+/// LightCraft"). One `Words` per language, built once: a new one is a new generation to the framework, which builds
+/// every view that reads it again.
+pub(crate) fn framework_words(language: Locale) -> std::sync::Arc<craft::ui::runtime::env::Words> {
+    use craft::ui::runtime::env::Words;
+    use std::sync::{Arc, Mutex, PoisonError};
+    static WORDS: Mutex<BTreeMap<Locale, Arc<Words>>> = Mutex::new(BTreeMap::new());
+    let mut cache = WORDS.lock().unwrap_or_else(PoisonError::into_inner);
+    Arc::clone(cache.entry(language).or_insert_with(|| {
+        if language.catalog().is_empty() {
+            return Arc::new(Words::english());
+        }
+        Arc::new(
+            Words::new(move |word| framework_word(language, word.context, word.english)).with_plural(move |_, n, one, other| {
+                let form = if n == 1 { one } else { other };
+                let text = tr_in(language, form);
+                (text != form).then(|| text.replace("{n}", &n.to_string()))
+            }),
+        )
+    }))
+}
+
+/// The application name the framework's `{app}` words stand for.
+const APP_NAME: &str = "LightCraft";
+
+/// One framework word in `language`: `None` where LightCraft's catalog has no translation of it.
+fn framework_word(language: Locale, context: &str, english: &str) -> Option<String> {
+    let text = if !context.is_empty() {
+        // a word that reads only in its context ("key" for key caps): that row or English
+        language.catalog().get(&format!("{context}|{english}"))?.clone()
+    } else if english.contains("{app}") {
+        let named = english.replace("{app}", APP_NAME);
+        let translated = tr_in(language, &named);
+        if translated == named {
+            return None;
+        }
+        translated.replace(APP_NAME, "{app}")
+    } else {
+        tr_in(language, english).to_owned()
+    };
+    (text != english).then_some(text)
+}
+
+/// Runs `body` with the framework's words in the current language ([`framework_words`]): the framework surfaces
+/// shown inside it (dialogs, their menus and lists) read their built-in words in LightCraft's language.
+pub(crate) fn with_framework_words<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    use craft::ui::runtime::env::{WordsOverride, with_env};
+    let words = framework_words(language());
+    with_env(ui, |env| env.words = Some(WordsOverride::Replace(words)), body)
+}
+
 /// Translate a built-in display label, preserving unknown labels verbatim.
 /// Never call this on editable user text, filenames or command identifiers.
 pub fn tr(source: &str) -> &str {

@@ -22,7 +22,7 @@ pub(super) fn owner() -> egui::Id {
 /// Context-only legacy callers still mount the same real SDK shell, never an egui Window.
 /// The production root path below does not introduce this extra Area.
 pub(super) fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
-    egui::Area::new(egui::Id::unique("save-effect-host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| show_root(app, ui, blocked));
+    egui::Area::new(egui::Id::unique("save-effect-host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| crate::i18n::with_framework_words(ui, |ui| show_root(app, ui, blocked)));
 }
 
 pub(super) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: bool) {
