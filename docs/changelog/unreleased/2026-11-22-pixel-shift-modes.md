@@ -1,3 +1,0 @@
-## Fixes
-
-- **Pixel Shift: shot count from the mode byte:** the Nikon Z 8 writes 16 in the maker-note tag that Pixel Shift read as the shot count in every pixel-shift mode, so in 26.47.3 the first 16 frames of a 32-shot series were accepted and merged as a 16-shot series (a wrong image), and 4- and 8-shot series were refused with unrelated messages ("frame 5 is missing", "no frame number"). The mode is now read from its own byte, and a series of 4, 8 or 32 shots, or any frames of one, is refused with "n-shot pixel-shift series are not supported yet"; frames of different modes are refused as different shot counts, and a lone frame as not a pixel-shift frame. 16-shot series are unchanged.
