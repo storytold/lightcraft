@@ -155,10 +155,6 @@ impl Insets {
     }
 }
 
-// (derivable only where `cfg!(target_os = "android")` is false)
-
-// (derivable only where `cfg!(target_os = "android")` is false)
-#[allow(clippy::derivable_impls)]
 impl ModernUi {
     /// A touch gesture still needs frames without input: a glide after a swipe, a held press
     /// timing, a tap's delayed release (the headless harness waits for it to settle).
@@ -167,6 +163,8 @@ impl ModernUi {
     }
 }
 
+// (derivable only where `cfg!(target_os = "android")` is false)
+#[allow(clippy::derivable_impls)]
 impl Default for ModernUi {
     fn default() -> Self {
         ModernUi {
