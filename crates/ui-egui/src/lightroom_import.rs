@@ -307,9 +307,24 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
         app.lightroom_result = Some(result_dialog(&value, &message, &app.session.catalog));
         show_result(app);
     }
+    let imported = matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) && value.get("error").is_none();
     app.lightroom_last = Some(value);
     app.lightroom = None;
     app.toast_for(ctx, message, 6.0);
+    // several catalogs chosen: the next one merges into the library this one went into; a cancelled or failed
+    // import stops the batch
+    if matches!(kind, Kind::Import) {
+        if !imported {
+            app.lightroom_queue.clear();
+        } else if !app.lightroom_queue.is_empty() {
+            let next = app.lightroom_queue.remove(0);
+            let req = crate::lightroom_destination::Request { into: Some(crate::lightroom_destination::Destination::Open), ..Default::default() };
+            if let Err(e) = crate::lightroom_destination::import(app, &next, &req) {
+                app.lightroom_queue.clear();
+                app.toast_for(ctx, crate::i18n::tr_format!("{next} was not imported: {e}", next = next, e = e), 6.0);
+            }
+        }
+    }
 }
 
 fn show_result(app: &mut LightcraftApp) {
@@ -584,6 +599,33 @@ mod tests {
         // no render left running at exit (see tests_activity::demo)
         h.settle(std::time::Duration::from_secs(20));
         h
+    }
+
+    /// Several catalogs chosen (`file.importLightroom {paths}`): when one import ends, the next catalog starts,
+    /// merging into the library the first went into.
+    #[test]
+    fn the_next_chosen_catalog_starts_when_an_import_ends() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-lrqueue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let next = dir.join("Second.lrcat");
+        std::fs::write(&next, b"not really SQLite").unwrap();
+        let mut session = lightcraft_engine::Session::new().with_fs();
+        session.open_library(dir.join("Library"), false).unwrap();
+        let app = crate::LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.step();
+        let (task, tx, _, _) = fake_import(&h);
+        h.app.lightroom = Some(task);
+        h.app.lightroom_queue = vec![next.to_string_lossy().into_owned()];
+        tx.send(Message::Finalized(Ok(()))).unwrap();
+        h.step();
+        assert!(h.app.lightroom_queue.is_empty(), "the queued catalog was taken");
+        assert!(h.app.lightroom.as_ref().is_some_and(|t| t.path == next), "the queued catalog is importing");
+        assert!(h.step_until(std::time::Duration::from_secs(20), |h| h.app.lightroom.is_none()), "its import never ended");
+        let last = h.app.lightroom_last.clone().unwrap_or_default();
+        assert_eq!(last["path"], serde_json::json!(next.to_string_lossy()), "{last}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

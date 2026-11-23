@@ -120,6 +120,7 @@ impl LightcraftApp {
             sync_run: None,
             lightroom: None,
             lightroom_last: None,
+            lightroom_queue: Vec::new(),
             lightroom_result: None,
             review_pending: None,
             shown_library: None,

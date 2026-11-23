@@ -424,3 +424,20 @@ fn a_new_library_is_refused_when_another_library_was_opened_meanwhile() {
     assert_eq!(open_dir(&h), Some(other));
     assert!(!target.exists(), "no library was made at {}", target.display());
 }
+
+/// Several catalogs chosen: they are imported one after another into the library the first went into; one that
+/// fails stops the batch, so the rest isn't imported after a result nobody saw.
+#[test]
+fn several_catalogs_import_one_after_another_and_a_failure_stops_the_rest() {
+    let f = Fixture::new("several");
+    let second = f.root.join("Lightroom/Second.lrcat");
+    std::fs::write(&second, b"not really SQLite").unwrap();
+    let second = second.to_string_lossy().into_owned();
+    let mut h = f.app(false);
+    h.app.run("file.importLightroom", json!({"paths": [f.lrcat(), second], "into": "open"})).unwrap();
+    assert_eq!(h.app.lightroom_queue, vec![second.clone()], "the second waits for the first");
+    let last = import_ends(&mut h, &f.lrcat);
+    assert!(last.get("error").is_some(), "the fake catalog fails to read: {last}");
+    assert!(h.app.lightroom_queue.is_empty(), "the failed import stopped the batch");
+    assert!(h.app.lightroom.is_none(), "the second catalog was not started");
+}

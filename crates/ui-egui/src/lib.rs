@@ -347,6 +347,9 @@ pub struct LightcraftApp {
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
     pub lightroom_last: Option<Value>,
+    /// File ▸ Import Lightroom Catalog… with several catalogs chosen: the ones still to import, one after another
+    /// into the library the first went into.
+    pub lightroom_queue: Vec<String>,
     /// A completed import result waiting for another modal dialog to close.
     pub(crate) lightroom_result: Option<state::Dialog>,
     /// The import review of a finished scan, waiting for another dialog to close.
