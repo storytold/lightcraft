@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Adaptive presets
+- Presets has a new **Adaptive** group. Each preset adds one mask that is worked out again on every photo you apply it
+  to, so applying it to a whole shoot gives each photo its own mask: **Brighten Subject**, **Darken Background** and
+  **Deepen Sky** work on any photo; **Whiten Teeth**, **Smooth Skin** and **Enhance Hair** use the people mattes iPhone
+  ProRAW photos carry, and change nothing on a photo without them (Masking says so). Adjust or remove the mask in
+  Masking like any other.
+- Applying one of them to several photos now says how many it found nothing to select on ("Whiten Teeth found nothing
+  to select on 12 of 200 photos"). LightCraft notes which mattes a ProRAW carries when it is imported; for photos
+  imported earlier, Photo ▸ Reload from Disk notes them. The count stays under the preset's Amount slider with a
+  **Show** button, which leaves only those photos in the view (clear it like any filter).
+- For photos imported before LightCraft noted their mattes, the panel says "Can't tell yet for 40 photos" with a
+  **Check** button: it reloads those photos from disk in the background and the lines update when it is done.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

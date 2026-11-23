@@ -254,6 +254,40 @@ fn canonical_numbers(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// The Adaptive presets: each is one mask that is worked out again on every photo it is applied to (the photo's
+/// subject, background, sky, or a part of its people), with our own adjustments. Subject, Background and Sky use
+/// the photo's own mattes when it carries them and an estimate otherwise; the people parts need the photo's mattes
+/// (an iPhone Portrait HEIC or ProRAW DNG) and change nothing on a photo without them
+/// ([`lightcraft_pipeline::masks::needs_missing_matte`]).
+fn adaptive() -> Vec<Preset> {
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    let people = |part: &str| MaskShape::People { person: 0, parts: vec![part.into()] };
+    let preset = |id: &str, name: &str, shape: MaskShape, adjust: LocalAdjustments| {
+        let component = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+        let mask = Mask { name: name.into(), components: vec![component], adjust, ..Mask::default() };
+        p("Adaptive", id, name, json!({"masks": [mask]}))
+    };
+    let d = LocalAdjustments::default;
+    vec![
+        preset("adaptive-brighten-subject", "Brighten Subject", MaskShape::Subject, LocalAdjustments { exposure: 0.35, shadows: 15.0, ..d() }),
+        preset(
+            "adaptive-darken-background",
+            "Darken Background",
+            MaskShape::Background,
+            LocalAdjustments { exposure: -0.5, saturation: -10.0, ..d() },
+        ),
+        preset(
+            "adaptive-deepen-sky",
+            "Deepen Sky",
+            MaskShape::Sky,
+            LocalAdjustments { exposure: -0.3, highlights: -30.0, dehaze: 15.0, saturation: 15.0, ..d() },
+        ),
+        preset("adaptive-whiten-teeth", "Whiten Teeth", people("Teeth"), LocalAdjustments { exposure: 0.25, saturation: -45.0, ..d() }),
+        preset("adaptive-smooth-skin", "Smooth Skin", people("Face Skin"), LocalAdjustments { texture: -35.0, clarity: -15.0, ..d() }),
+        preset("adaptive-enhance-hair", "Enhance Hair", people("Hair"), LocalAdjustments { texture: 25.0, clarity: 15.0, sharpness: 20.0, ..d() }),
+    ]
+}
+
 fn p(group: &str, id: &str, name: &str, settings: serde_json::Value) -> Preset {
     Preset { id: format!("lc.{id}"), name: name.into(), group: group.into(), settings, favorite: false, builtin: true }
 }
@@ -509,6 +543,9 @@ pub fn builtin() -> Vec<Preset> {
             json!({"treatment": "bw", "grading": {"shadows": {"hue": 32.0, "sat": 22.0, "lum": 0.0}, "highlights": {"hue": 42.0, "sat": 18.0, "lum": 0.0}}, "curve": {"shadows": 10.0}}),
         ),
     ]
+    .into_iter()
+    .chain(adaptive())
+    .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -647,6 +684,82 @@ mod tests {
             let out = pr.apply(&base, 1.0);
             assert_ne!(out, base, "{} had no effect", pr.id);
         }
+    }
+
+    /// Issue #4356: an Adaptive preset adds one mask that is worked out on the photo it lands on. Darken Background
+    /// changes the render of any photo; Whiten Teeth needs the photo's teeth matte, so on a photo without mattes its
+    /// mask is there and changes nothing. Applying a preset again doesn't add its mask twice.
+    #[test]
+    fn adaptive_presets_add_a_mask_worked_out_per_photo() {
+        use lightcraft_develop::MaskShape;
+        let adaptive: Vec<Preset> = builtin().into_iter().filter(|p| p.group == "Adaptive").collect();
+        assert_eq!(adaptive.len(), 6);
+        for pr in &adaptive {
+            let out = pr.apply(&DevelopSettings::default(), 1.0);
+            assert_eq!(out.masks.len(), 1, "{}", pr.id);
+            assert_eq!(out.masks[0].name, pr.name);
+            assert_eq!(DevelopSettings { masks: Vec::new(), ..out.clone() }, DevelopSettings::default(), "{}: only a mask", pr.id);
+        }
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let plain = s.render_now(id, 96, 96).unwrap().image;
+        s.execute("preset.apply", &json!({"id": "lc.adaptive-whiten-teeth"})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert!(matches!(&d.masks[0].components[0].shape, MaskShape::People { parts, .. } if parts == &["Teeth".to_string()]));
+        assert_eq!(s.render_now(id, 96, 96).unwrap().image, plain, "no teeth matte on this photo: nothing changes");
+        s.execute("preset.apply", &json!({"id": "lc.adaptive-darken-background"})).unwrap();
+        assert_ne!(s.render_now(id, 96, 96).unwrap().image, plain, "the background is darkened");
+        s.execute("preset.apply", &json!({"id": "lc.adaptive-darken-background"})).unwrap();
+        assert_eq!(s.develop_of(id).unwrap().masks.len(), 2, "the same preset twice adds its mask once");
+    }
+
+    /// Issue #4361: `preset.apply` says on which photos an adaptive preset's mask selects nothing, from the mattes
+    /// the catalog recorded: a photo that carries the teeth matte isn't listed, one that carries others or none is,
+    /// and a DNG never looked at counts as unknown, not as without. A preset that needs no matte reports nothing.
+    #[test]
+    fn apply_reports_the_photos_an_adaptive_preset_found_nothing_on() {
+        use lightcraft_catalog::Op;
+        let mut s = Session::with_demo();
+        let template = lightcraft_catalog::Photo::clone(s.catalog.photos().next().unwrap());
+        let cases: [(Option<Vec<&str>>, &str); 4] =
+            [(Some(vec!["skin", "teeth"]), "DNG"), (Some(vec!["person", "skin"]), "DNG"), (None, "DNG"), (None, "JPEG")];
+        let mut ids = Vec::new();
+        for (mattes, format) in &cases {
+            let mut p = template.clone();
+            p.id = s.catalog.alloc_photo_id();
+            p.meta.mattes = mattes.as_ref().map(|m| m.iter().map(|k| k.to_string()).collect());
+            p.format = format.to_string();
+            ids.push(p.id);
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        let raw: Vec<u64> = ids.iter().map(|i| i.0).collect();
+        let r = s.execute("preset.apply", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        let r_teeth = r.clone();
+        assert_eq!(r["applied"], 4, "the mask is added to every photo all the same: {r}");
+        assert_eq!((r["unknown"].clone(), r["unknownIds"].clone()), (json!(1), json!([raw[2]])), "issue #4365: which one, too: {r}");
+        let nothing: Vec<u64> = r["nothing"].as_array().unwrap().iter().map(|n| n["id"].as_u64().unwrap()).collect();
+        assert_eq!(nothing, [raw[1], raw[3]], "{r}");
+        assert_eq!(r["nothing"][0]["masks"], json!(["Whiten Teeth"]));
+        let r = s.execute("preset.apply", &json!({"id": "lc.adaptive-darken-background", "ids": raw})).unwrap();
+        assert_eq!((r["nothing"].as_array().unwrap().len(), r["unknown"].as_u64()), (0, Some(0)), "{r}");
+
+        // issue #4365: the same question later, read-only, from the catalog as it is then. The mattes of the
+        // photo that couldn't be told are recorded meanwhile (as Reload from Disk does): it carries teeth
+        let before = s.commits();
+        let again = s.execute("preset.foundNothing", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        assert_eq!(again, r_teeth, "nothing changed yet: the same answer");
+        let mut meta = s.catalog.photo(ids[2]).unwrap().meta.clone();
+        meta.mattes = Some(vec!["teeth".into()]);
+        s.catalog.apply(Op::SetMeta { id: ids[2], meta: Box::new(meta) }).unwrap();
+        let again = s.execute("preset.foundNothing", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        assert_eq!((again["applied"].clone(), again["unknownIds"].clone()), (json!(4), json!([])), "{again}");
+        assert_eq!(again["nothing"].as_array().unwrap().len(), 2, "{again}");
+        assert_eq!(s.commits(), before, "read-only");
+        // only photos that still carry the preset's mask count: with it undone on all of them, none do
+        s.execute("edit.undo", &json!({})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        let none = s.execute("preset.foundNothing", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        assert_eq!((none["applied"].clone(), none["nothing"].clone()), (json!(0), json!([])), "{none}");
     }
 
     #[test]
