@@ -153,7 +153,7 @@ pub fn detail_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, on
             // Speculation receives real measured geometry without a live owner or proposal.
             let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
             let size = checkbox().measure_in(&child, Proposal::Ideal);
-            ui.allocate_exact_size(size, egui::Sense::hover());
+            ui.allocate_space(size);
             return;
         }
         let shown = ui.add_enabled_ui(applicable, |ui| checkbox().show(ui)).inner;
@@ -354,7 +354,7 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
             if !real {
                 let measure = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
                 let size = control().measure_in(&measure, Proposal::Width(ui.available_width()));
-                ui.allocate_exact_size(size, egui::Sense::hover());
+                ui.allocate_space(size);
                 false
             } else {
                 let shown = control().show(ui);
@@ -476,7 +476,7 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
             if !real {
                 let measure = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
                 let size = control().measure_in(&measure, Proposal::Width(ui.available_width()));
-                ui.allocate_exact_size(size, egui::Sense::hover());
+                ui.allocate_space(size);
                 None
             } else {
                 let shown = control().show(ui);
@@ -493,7 +493,7 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
             if !real {
                 let measure = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
                 let size = control().measure_in(&measure, Proposal::Width(ui.available_width()));
-                ui.allocate_exact_size(size, egui::Sense::hover());
+                ui.allocate_space(size);
                 false
             } else {
                 let shown = control().show(ui);
