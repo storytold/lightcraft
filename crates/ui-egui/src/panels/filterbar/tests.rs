@@ -177,6 +177,10 @@ fn filter_kind_tab_enter_navigation_preserves_opener_focus() {
     assert_eq!(h.app.session.filter, filter, "keyboard cancellation applies nothing");
     assert_eq!(h.view.ctx.memory(|memory| memory.focused()), Some(focused), "Escape returns focus to the opener");
     assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
+    // (a closed framework menu fades out for a few frames and holds Tab until it is gone)
+    for _ in 0..20 {
+        h.step();
+    }
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
     assert_ne!(h.view.ctx.memory(|memory| memory.focused()), Some(focused), "Tab can leave the opener");
 }
@@ -192,6 +196,9 @@ fn filter_kind_pointer_cancel_keeps_the_grid_keyboard_owner() {
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
     assert_eq!(h.app.session.filter, filter);
     assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
+    for _ in 0..20 {
+        h.step();
+    }
     ask(&mut h, "ui.key", json!({"key": "2"}));
     assert_eq!(h.app.session.catalog.photo(PhotoId(101)).unwrap().rating, 2, "cancelling the menu gives the next rating key to the grid");
 }

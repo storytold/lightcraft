@@ -104,6 +104,32 @@ fn dropdown_face(ui: &mut egui::Ui, id: &str, text: &str, active: bool) -> egui:
     shown.response
 }
 
+/// Before a dropdown's menu is shown: remember whether Enter or Space (rather than a press) is what opens it.
+fn note_opening(ui: &egui::Ui, opener: &egui::Response) {
+    let key = opener.id.with("lc-menu-by-key");
+    let focused = craft::ui::runtime::focus::focused_rec(ui.ctx()).is_some_and(|rec| rec.stop.id == opener.id);
+    let (typed, pressed) = ui.input(|i| (i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space), i.pointer.any_pressed()));
+    if focused && typed {
+        ui.data_mut(|d| d.insert_temp(key, true));
+    } else if pressed && opener.contains_pointer() {
+        ui.data_mut(|d| d.insert_temp(key, false));
+    }
+}
+
+/// When a dropdown's menu closes: one the pointer opened gives the keyboard back to the grid, so its shortcuts
+/// keep working; one Enter or Space opened leaves the focus on its opener, where the framework returns it.
+fn menu_closed(ui: &egui::Ui, opener: &egui::Response, closed: bool) {
+    if !closed {
+        return;
+    }
+    let key = opener.id.with("lc-menu-by-key");
+    let by_key = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    if !by_key && let Some(rec) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == opener.id) {
+        ui.memory_mut(|m| m.surrender_focus(rec.stop.root));
+    }
+    ui.data_mut(|d| d.remove::<bool>(key));
+}
+
 /// One row of a value menu: radio-marked while `checked`, the lead when the menu opens. `caption` is
 /// shown as it is (it may be a user's keyword or camera name). True when the row ran.
 fn value_row(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, caption: &str, checked: bool) -> bool {
@@ -119,7 +145,12 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     let shown = if active && user_names { current.to_owned() } else { crate::i18n::tr(current).to_owned() };
     let face = dropdown_face(ui, &format!("filter-{id}"), &shown, active);
     let mut chosen = None;
-    Menu::new(shown).id_salt(("filter-menu", id)).values().opened_by(&face, Trigger::Click).show(ui, |ui, _| {
+    // A measuring or sizing run shows no layer: its rows would claim the menu's ids a second time in the pass.
+    if measuring(ui) {
+        return;
+    }
+    note_opening(ui, &face);
+    let menu = Menu::new(shown).id_salt(("filter-menu", id)).values().opened_by(&face, Trigger::Click).show(ui, |ui, _| {
         for (label, patch, sel) in &items {
             // a camera, lens or keyword the library names is data; the "Any …" row is a built-in label
             let literal = user_names && patch.get(id).is_some_and(|value| !value.is_null());
@@ -129,6 +160,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
             }
         }
     });
+    menu_closed(ui, &face, menu.output.closed.is_some());
     if let Some(p) = chosen {
         filter(app, p);
     }
@@ -158,8 +190,12 @@ fn kind_picker(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let shown = choices.iter().find(|(value, _)| *value == current).map_or("Merged", |(_, label)| *label);
     let active = f.kind.is_some() || f.merged.is_some();
     let opener = dropdown_face(ui, "filter-kind", crate::i18n::tr(shown), active);
+    if measuring(ui) {
+        return;
+    }
     let mut chosen = None;
-    Menu::new(crate::i18n::tr("Type")).id_salt("filter-kind-menu").values().opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+    note_opening(ui, &opener);
+    let menu = Menu::new(crate::i18n::tr("Type")).id_salt("filter-kind-menu").values().opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
         for (value, label) in choices {
             let item = MenuItem::new(crate::i18n::tr(label).replace('&', "&&")).id_salt(value).entry_checked(value == current);
             let item = if value == current { item.default_stop() } else { item };
@@ -172,6 +208,7 @@ fn kind_picker(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     });
+    menu_closed(ui, &opener, menu.output.closed.is_some());
     if !measuring(ui)
         && ui.is_enabled()
         && let Some(value) = chosen
@@ -214,9 +251,13 @@ fn presets_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, filtering: bool) {
     if !measuring(ui) {
         register(ui, "button:filterPresets", face.rect);
     }
+    if measuring(ui) {
+        return;
+    }
     let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
     let mut action = None;
-    Menu::new(crate::i18n::tr("Presets")).id_salt("filter-presets-menu").opened_by(&face, Trigger::Click).show(ui, |ui, _| {
+    note_opening(ui, &face);
+    let menu = Menu::new(crate::i18n::tr("Presets")).id_salt("filter-presets-menu").opened_by(&face, Trigger::Click).show(ui, |ui, _| {
         // a preset's name is the user's: shown as written, never read for a mnemonic marker
         for name in &names {
             let row = MenuItem::new(name.replace('&', "&&")).id_salt(("filter-preset", name.as_str())).show(ui);
@@ -239,6 +280,7 @@ fn presets_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, filtering: bool) {
             action = Some(PresetAction::Save);
         }
     });
+    menu_closed(ui, &face, menu.output.closed.is_some());
     match action {
         Some(PresetAction::Apply(name)) => {
             let _ = app.run("filter.applyPreset", json!({"name": name}));

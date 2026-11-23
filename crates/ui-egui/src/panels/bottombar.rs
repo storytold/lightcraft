@@ -298,6 +298,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         };
         let zr = dropdown_face(&mut child, "zoom", crate::i18n::tr(&zoom_label));
         let mut zoom_pick = None;
+        if !measuring(&child) {
         Menu::new(crate::i18n::tr("Zoom")).id_salt("zoom-menu").values().opened_by(&zr, Trigger::Click).show(&mut child, |ui, _| {
             for (label, z) in [
                 ("Fit", Zoom::Fit),
@@ -312,6 +313,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
                 }
             }
         });
+        }
         if let Some(z) = zoom_pick {
             app.ui.zoom = z;
             app.ui.pan = (0.5, 0.5);
@@ -460,6 +462,10 @@ fn sort_rows(app: &LightcraftApp, ui: &mut egui::Ui, enabled: bool, pick: &mut O
 
 /// The Sort menu hanging from the Sort button `opener`.
 fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, opener: &egui::Response, enabled: bool) {
+    // A measuring or sizing run shows no layer: its rows would claim the menu's ids a second time in the pass.
+    if measuring(ui) {
+        return;
+    }
     let mut pick = None;
     Menu::new(crate::i18n::tr("Sort")).id_salt("sort-menu").opened_by(opener, Trigger::Click).show(ui, |ui, _| {
         sort_rows(app, ui, enabled, &mut pick);
@@ -472,6 +478,9 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, opener: &egui::Response
 /// The compact bar's View menu hanging from the view button `opener`: the view modes, then Sort and
 /// (when it is not on the bar) Click zoom as submenus.
 fn view_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, opener: &egui::Response, compact_zoom: bool, enabled: bool) {
+    if measuring(ui) {
+        return;
+    }
     let mut pick: Option<(&'static str, serde_json::Value)> = None;
     let mut view = None;
     Menu::new(crate::i18n::tr("View")).id_salt("view-options-menu").opened_by(opener, Trigger::Click).show(ui, |ui, _| {
@@ -614,6 +623,8 @@ mod visual_regressions {
                     if !ready {
                         crate::theme::install_fonts(ui.ctx());
                         crate::theme::apply(ui.ctx());
+                        // the framework menus need the runtime installed, as the app does at startup
+                        app.install_framework(ui.ctx());
                         ready = true;
                         return;
                     }

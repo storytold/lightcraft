@@ -107,6 +107,12 @@ impl Fixture {
         assert_eq!(found.len(), 1, "one presented locator for {id}, route={}", self.route);
         found[0].1
     }
+    /// Idle frames: a menu that closed or switched fades out for a few frames before it stops being drawn.
+    fn settle(&mut self) {
+        for _ in 0..20 {
+            self.frame(vec![], 0);
+        }
+    }
     fn click_at(&mut self, at: egui::Pos2) {
         for pressed in [true, false] {
             self.frame(
@@ -114,20 +120,20 @@ impl Fixture {
                 0,
             );
         }
-        self.frame(vec![], 0);
+        self.settle();
     }
     fn click(&mut self, id: &str) {
         self.click_at(self.rect(id).center());
     }
     fn hover(&mut self, id: &str) {
         self.frame(vec![Event::PointerMoved(self.rect(id).center())], 0);
-        self.frame(vec![], 0);
+        self.settle();
     }
     fn key(&mut self, key: Key) {
         for pressed in [true, false] {
             self.frame(vec![Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: Modifiers::NONE }], 0);
         }
-        self.frame(vec![], 0);
+        self.settle();
     }
     /// A menu is drawn: its level is published while it is open (and not otherwise).
     fn is_open(&self) -> bool {
@@ -146,17 +152,24 @@ impl Fixture {
         Some(matches[0].to_string())
     }
     fn tab_to_title(&mut self, title: &str) {
-        // The titles are parts of the framework bar: the bar's id, and the title's place among them.
+        // The framework bar is one Tab stop; the arrow keys move between its titles (one roving group).
         let id = self.hits.iter().find(|(name, _)| name == &format!("menu:{title}")).unwrap().1.id;
         let part = craft::behavior::PartKey::new("title").at(MENUS.iter().position(|m| *m == title).unwrap() as u64);
         self.frame(vec![Event::PointerGone], 0);
         for _ in 0..96 {
-            if craft::ui::runtime::focus::focused_rec(&self.ctx).is_some_and(|rec| rec.stop.id == id && rec.stop.part == Some(part)) {
-                return;
+            let rec = craft::ui::runtime::focus::focused_rec(&self.ctx);
+            if rec.as_ref().is_some_and(|rec| rec.stop.id == id) {
+                for _ in 0..MENUS.len() {
+                    if craft::ui::runtime::focus::focused_rec(&self.ctx).is_some_and(|rec| rec.stop.id == id && rec.stop.part == Some(part)) {
+                        return;
+                    }
+                    self.key(Key::ArrowRight);
+                }
+                panic!("the arrow keys did not reach title {title}, route={}", self.route);
             }
             self.key(Key::Tab);
         }
-        panic!("natural Tab did not reach title {title}, route={}", self.route);
+        panic!("natural Tab did not reach the menu bar for title {title}, route={}", self.route);
     }
     /// ArrowDown through the open menu's rows until the keyboard is on the row published as `id`.
     fn arrow_to_item(&mut self, id: &str) {
