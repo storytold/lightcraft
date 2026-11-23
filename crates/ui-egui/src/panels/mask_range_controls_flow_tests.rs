@@ -409,6 +409,8 @@ fn range_parent_stale_drafts_cannot_retarget_mask_photo_or_shifted_component() {
         f.frame(vec![]);
         f.key(Key::Enter);
         assert_eq!(f.domain(), baseline, "old numeric draft cannot apply after {switch}");
+        // Return may have activated the control focus fell back to (an Add menu opener): close what it opened.
+        f.key(Key::Escape);
         if switch == "photo" {
             f.app.run("library.select", json!({"ids":[f.photos[0].0,f.photos[1].0],"active":f.photos[0].0})).unwrap();
         }
