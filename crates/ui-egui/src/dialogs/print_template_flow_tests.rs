@@ -247,7 +247,8 @@ impl Review {
             "journal":self.app.session.journal,"toast":self.app.ui.toast.as_ref().map(|t|t.0.as_str()),"pendingPicks":self.app.pending_picks.len()})
     }
     fn popup_open(&self) -> bool {
-        egui::Popup::is_any_open(&self.ctx) || craft::ui::runtime::overlay::any_open(&self.ctx, craft::ui::runtime::overlay::OpenFilter::Any)
+        // (the Print dialog is a framework layer itself: a popup is one above it)
+        egui::Popup::is_any_open(&self.ctx) || crate::dialogs::popup_open(&self.ctx)
     }
     fn observation(&self, scenario: &str, stage: &str) {
         println!(

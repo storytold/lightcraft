@@ -17,6 +17,7 @@ use craft::ui::contract::overlay::{Dismiss, Outside};
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::popover::Popover;
+use craft::ui::runtime::focus::Initial;
 use craft::ui::primitives::{Glyph, HAlign, IconSpec};
 use egui::{Rect, Response, RichText, Ui, vec2};
 
@@ -255,10 +256,14 @@ impl<'a> AlbumPicker<'a> {
         let mut state = state;
         let mut picked: Option<u64> = None;
         let mut choices = choices;
+        let mut chose_extra = false;
+        let search_name = format!("albumPickerSearch:{id}");
         Popover::new(crate::i18n::tr("Albums").to_owned(), Bind::bound(&mut popup_open))
             .id(key.with("popover"))
             .opened_by(&button.response)
             .dismiss(Dismiss::new().outside(Outside::Absorb))
+            // the search field takes the keyboard when the popup opens, as typing is how most picks start
+            .initial_focus(Initial::FirstField)
             .show(ui, |ui, cx| {
                 // Exit presence is paint-only: the closing popup's search and rows take no input.
                 if !body_interactive {
@@ -272,6 +277,7 @@ impl<'a> AlbumPicker<'a> {
                 // the rest only, never runs the caller's actions or moves the keyboard.
                 let real = !measuring(ui);
                 if real && choices(ui) {
+                    chose_extra = true;
                     cx.request_close();
                     return;
                 }
@@ -282,19 +288,25 @@ impl<'a> AlbumPicker<'a> {
                     cx.request_close();
                     return;
                 }
-                // This editor's Enter remains available to the path-search navigator below.
-                let search_box = ui.add(
-                    egui::TextEdit::singleline(&mut state.query)
-                        .id(key.with("search"))
-                        .hint_text(crate::i18n::tr("Search albums"))
-                        .desired_width(f32::INFINITY),
-                );
-                register(ui, format!("albumPickerSearch:{id}"), &search_box);
+                // The project's framework text field, registered as `albumPickerSearch:<id>` on its text part. Its
+                // Return is the path-search navigator's Enter below; its Escape closes the popup.
+                let before = state.query.clone();
+                let field = crate::text_field::TextField::singleline(&search_name, &mut state.query)
+                    .hint(crate::i18n::tr("Search albums"))
+                    .width(f32::INFINITY)
+                    .show(ui);
+                let search_box = field.response.clone();
+                if real && field.cancelled() {
+                    cx.request_close();
+                    chose_extra = true;
+                    return;
+                }
+                let returned = real && field.ending == Some(crate::text_field::Ending::Return);
                 if real && state.focus {
-                    search_box.request_focus();
+                    crate::text_field::focus(ui.ctx(), &search_name);
                     state.focus = false;
                 }
-                if search_box.changed() {
+                if state.query != before {
                     state.highlight = 0;
                 }
                 // `scroll`: bring the row into view (the arrow keys just moved to it); never every frame,
@@ -374,7 +386,7 @@ impl<'a> AlbumPicker<'a> {
                                 (
                                     i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
                                     i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || returned,
                                 )
                             })
                         };
@@ -406,6 +418,10 @@ impl<'a> AlbumPicker<'a> {
                     cx.request_close();
                 }
             });
+        // A pick or a caller's choice closes the popup now, whatever pass the framework takes the close in.
+        if picked.is_some() || chose_extra {
+            popup_open = false;
+        }
         state.popup_open = popup_open;
         ui.data_mut(|d| d.insert_temp(key, state));
         if let Some(p) = picked {

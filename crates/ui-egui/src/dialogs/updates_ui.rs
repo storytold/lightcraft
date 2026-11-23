@@ -156,14 +156,7 @@ fn show_result(ctx: &egui::Context, status: &Status) -> CheckResultResponse {
             if !ui.is_sizing_pass() {
                 if let Some((_, _, choice)) = shown.output.picked.and_then(|at| choices.get(at)) {
                     answer = *choice;
-                } else if shown.output.closed.is_some()
-                    || (!notice
-                        && ui.input(|input| {
-                            input.pointer.primary_clicked()
-                                && input.pointer.press_origin().is_some_and(|at| !shown.output.response.rect.contains(at))
-                                && input.pointer.interact_pos().is_some_and(|at| !shown.output.response.rect.contains(at))
-                        }))
-                {
+                } else if shown.output.closed.is_some() || (!notice && outside_click(ui, &shown.output.response)) {
                     answer = CheckResultResponse::Close;
                 }
                 crate::widgets::register_response("dialog:updates", shown.output.response.rect, &shown.output.response);
@@ -197,6 +190,23 @@ fn show_result(ctx: &egui::Context, status: &Status) -> CheckResultResponse {
         }
     });
     answer
+}
+
+/// A primary click outside the result dialog: pressed outside it (the framework's modal takes that press from the
+/// window below and reports it to the dialog) and released in a later pass, as the old result card closed.
+#[cfg(not(target_arch = "wasm32"))]
+fn outside_click(ui: &egui::Ui, dialog: &egui::Response) -> bool {
+    let key = egui::Id::unique("lightcraft.updates.outside-press");
+    let rect = dialog.rect;
+    let pressed = craft::ui::runtime::overlay::pressed_outside(ui.ctx(), dialog.id)
+        || ui.input(|input| input.pointer.primary_pressed() && input.pointer.press_origin().is_some_and(|at| !rect.contains(at)));
+    if pressed {
+        ui.data_mut(|d| d.insert_temp(key, true));
+    }
+    let released = ui.input(|input| {
+        input.events.iter().any(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, pos, .. } if !rect.contains(*pos)))
+    });
+    released && !pressed && ui.data_mut(|d| d.remove_temp::<bool>(key)).unwrap_or(false)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

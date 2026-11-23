@@ -241,6 +241,8 @@ impl Drop for Review {
     }
 }
 
+/// The framework convention: Escape in a dialog field cancels the whole dialog, dirty draft and all, and saves
+/// nothing (`safety` holds the document and the last options unchanged every frame).
 #[test]
 fn panorama_actual_parent_dirty_escape_restores_committed_warp_then_clean_escape_reopen_cancel_never_save() {
     let mut r = Review::new();
@@ -251,8 +253,7 @@ fn panorama_actual_parent_dirty_escape_restores_committed_warp_then_clean_escape
     r.observe("committed-42");
     r.replace("73");
     r.observe("dirty-73-before-escape");
-    r.escape("dirty-escape", true);
-    r.escape("clean-escape", false);
+    r.escape("dirty-escape", false);
     r.open(); // unchanged last options, not the discarded draft, governs the real opener.
     r.observe("reopened-default-0");
     r.click("button:dialogCancel");
