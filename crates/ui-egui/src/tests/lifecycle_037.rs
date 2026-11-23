@@ -86,7 +86,7 @@ fn temp_png(name: &str) -> std::path::PathBuf {
 
 /// Bind a pending request to the geometry/library generation a real issue would have used.
 fn issue_into_slot(ctx: &egui::Context, shot: &mut PendingShot, issued: ShotGeometry, library: u64) -> egui::ScreenshotCallback {
-    let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, egui::ViewportId::ROOT, MAX_SHOT_BYTES);
+    let (slot, callback) = craft::ui::runtime::windows::ScreenshotSlot::detached(ctx, egui::ViewportId::ROOT, MAX_SHOT_BYTES);
     shot.slot = Some(slot);
     shot.sent_at_ms = Some(0.0);
     shot.issued = Some(issued);

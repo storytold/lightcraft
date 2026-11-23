@@ -551,7 +551,7 @@ struct PendingShot {
     /// Bytes this request reserves until it is drained or cancelled.
     reserved: usize,
     /// The one-shot completion slot; only the app owns the strong reference.
-    slot: Option<craft_ui::capture::CaptureSlot>,
+    slot: Option<craft::ui::runtime::windows::ScreenshotSlot>,
     /// The geometry and document generation the issued command was bound to.
     issued: Option<ShotGeometry>,
     /// Library generation at issue (a different library changed mid-capture).
