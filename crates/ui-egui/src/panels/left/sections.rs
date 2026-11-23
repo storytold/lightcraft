@@ -3,7 +3,7 @@ use craft::ui::menu::Menu;
 
 use super::albums::top_level_drop_target;
 use super::rows::{
-    MenuAt, ROW_HEIGHT, SideEvent, SideRow, SideSpec, drag_started_on, entry, host_menu, measuring, rule, side_list,
+    AlbumDrag, MenuAt, ROW_HEIGHT, SectionDrag, SideEvent, SideRow, SideSpec, entry, host_menu, measuring, rule, side_list,
 };
 use super::{Icon, LightcraftApp, Rect, SidebarSection, Tokens, icon_button, json, pos2, register, vec2};
 
@@ -123,22 +123,47 @@ pub(crate) fn section_drop_before(placed: &[PlacedSection], y: f32) -> Option<Si
     placed.iter().find(|p| y < (p.top + p.bottom) / 2.0).map(|p| p.section)
 }
 
-/// Remembers whether Escape was pressed this frame, before the framework's lists see the input.
-pub(super) fn note_escape(ui: &egui::Ui) {
-    // (the framework takes an Escape that ends a press out of the key events, but the key is still
-    // down: a key that went down since the last frame counts as pressed)
-    let down = ui.input(|i| i.key_down(egui::Key::Escape));
-    let was_down = ui.data(|d| d.get_temp::<bool>(egui::Id::unique("left-escape-down"))).unwrap_or(false);
-    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape)) || (down && !was_down);
-    ui.data_mut(|d| {
-        d.insert_temp(egui::Id::unique("left-escape"), esc);
-        d.insert_temp(egui::Id::unique("left-escape-down"), down);
-    });
-}
-
-/// Whether Escape was pressed this frame ([`note_escape`]).
-fn escape_pressed(ui: &egui::Ui) -> bool {
-    ui.data(|d| d.get_temp::<bool>(egui::Id::unique("left-escape"))).unwrap_or(false)
+/// The drags of sections and albums are the framework's drag sessions (so Escape and a lost press end
+/// them): the app's own `dragging_section` and `dragging_album` follow the session, which the drop
+/// targets, the auto-scroll and the tests read. Called first thing, before the lists are drawn.
+pub(super) fn adopt_drags(app: &mut LightcraftApp, ui: &egui::Ui) {
+    let ctx = ui.ctx();
+    let down = ui.input(|i| i.pointer.primary_down());
+    let (section, album) = (craft::ui::runtime::drag::active::<SectionDrag>(ctx), craft::ui::runtime::drag::active::<AlbumDrag>(ctx));
+    let (section_flag, album_flag) = (egui::Id::unique("left-section-from-session"), egui::Id::unique("left-album-from-session"));
+    let adopted = |flag: egui::Id| ui.data(|d| d.get_temp::<bool>(flag)).unwrap_or(false);
+    match (section, app.ui.dragging_section) {
+        (Some(p), None) if down => {
+            app.ui.dragging_section = Some(p.section);
+            // picked up by the pinned header, the drag starts inside the top edge (see `drag_auto_scroll`)
+            ui.data_mut(|d| {
+                d.insert_temp(egui::Id::unique("left-section-drag-from-pinned"), p.pinned);
+                d.insert_temp(section_flag, true);
+            });
+        }
+        (None, Some(_)) if adopted(section_flag) => {
+            app.ui.dragging_section = None;
+            ui.data_mut(|d| d.insert_temp(section_flag, false));
+        }
+        (None, None) => ui.data_mut(|d| {
+            d.insert_temp(section_flag, false);
+        }),
+        _ => {}
+    }
+    match (album, app.ui.dragging_album) {
+        (Some(p), None) if down => {
+            app.ui.dragging_album = Some(p.0);
+            ui.data_mut(|d| d.insert_temp(album_flag, true));
+        }
+        (None, Some(_)) if adopted(album_flag) => {
+            app.ui.dragging_album = None;
+            ui.data_mut(|d| d.insert_temp(album_flag, false));
+        }
+        (None, None) => ui.data_mut(|d| {
+            d.insert_temp(album_flag, false);
+        }),
+        _ => {}
+    }
 }
 
 /// While a section is dragged by its header: a line shows where it would go, releasing over the
@@ -146,9 +171,7 @@ fn escape_pressed(ui: &egui::Ui) -> bool {
 pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSection]) {
     let Some(dragged) = app.ui.dragging_section else { return };
     let (released, pos) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos()));
-    // (an Escape no component took reaches the window as its Cancel)
-    let esc = escape_pressed(ui)
-        || craft::ui::runtime::keys::with_window_intents(ui.ctx(), false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
+    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
     if esc {
         // the drag's Esc, not also a dialog's or a view's
         crate::widgets::take_escape(ui.ctx());
@@ -184,26 +207,17 @@ pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &
     }
 }
 
-/// The dragged section's name follows the pointer; a drag that ended anywhere (also outside the
-/// sidebar, or with the sidebar closed) is over.
+/// A drag that ended anywhere (also outside the sidebar, or with the sidebar closed) is over. The
+/// dragged section's name follows the pointer as the framework's drag ghost.
 pub fn section_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some(section) = app.ui.dragging_section else { return };
-    let (down, pos) = ctx.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
-    if !down || !app.ui.left_panel {
+    if app.ui.dragging_section.is_none() {
+        return;
+    }
+    if !ctx.input(|i| i.pointer.primary_down()) || !app.ui.left_panel {
         app.ui.dragging_section = None;
         return;
     }
-    let Some(pos) = pos else { return };
-    let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    egui::Area::new(egui::Id::unique("drag-section")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(
-        ctx,
-        |ui| {
-            egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr(section.title())).color(egui::Color32::WHITE).font(t.semibold(12.0)));
-            });
-        },
-    );
 }
 
 /// A section's header in `r`: a framework list row with a disclosure triangle in the gutter (where
@@ -233,7 +247,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
         .unregistered();
     let salt = format!("section-{widget}-{id}");
     let mut header = ui.new_child(egui::UiBuilder::new().max_rect(list));
-    let out = side_list(&mut header, SideSpec::new(&salt, crate::i18n::tr("Sidebar section"), false).keep_focus(), vec![row]);
+    let out = side_list(&mut header, SideSpec::new(&salt, crate::i18n::tr("Sidebar section"), false).keep_focus().section_drag(section, pinned), vec![row]);
     let live = !measuring(ui) && ui.is_enabled();
     if live {
         register(ui, format!("{widget}:{id}"), r);
@@ -252,24 +266,6 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     }
     if toggled {
         app.ui.sidebar.toggle_collapsed(section);
-    }
-    // dragged by its header, a section moves among the others (see `section_drag`); a press on
-    // the header's button is the button's
-    if live
-        && app.ui.dragging_section.is_none()
-        && drag_started_on(ui, &out.shown, pinned).is_some()
-    {
-        // picked up by the pinned header, the drag starts inside the top edge (see `drag_auto_scroll`)
-        ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-section-drag-from-pinned"), pinned));
-        app.ui.dragging_section = Some(section);
-    }
-    // a drag whose press the framework ended (Escape takes it out of the key events) while the
-    // button is still down is given up
-    let held = egui::Id::unique(("left-header-held", salt.clone()));
-    let was_held = ui.data(|d| d.get_temp::<bool>(held)).unwrap_or(false);
-    ui.data_mut(|d| d.insert_temp(held, out.pressed));
-    if live && was_held && !out.pressed && app.ui.dragging_section == Some(section) && ui.input(|i| i.pointer.primary_down()) {
-        app.ui.dragging_section = None;
     }
     host_menu(ui, &salt, crate::i18n::tr(section.title()), out.response.as_ref(), request, |ui, _| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
