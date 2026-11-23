@@ -992,7 +992,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         if let Some(e) = selected {
             refresh_page(app, &mut s, e);
         }
-        let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), ctx);
+        let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), app.text_focus, ctx);
         let mut closed = false;
         let shown = egui::Window::new(tr("Plug-in Manager"))
             .id(key())

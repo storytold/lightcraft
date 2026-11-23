@@ -1437,7 +1437,13 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     if !interacting && let Some(i) = here {
         look_ahead(app, &ids, i, want.max(8), !crop_tool);
     }
-    let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
+    // (held \ peeks only while the main window has the keys: not behind a window that waits over
+    // the app, not while typing or recording a shortcut; a selected slider still lets it peek.
+    // Not `keyboard::owner`: its docking check reads the focused widget's response, which mid-frame
+    // disturbs the focus egui is tracking)
+    let typing = ui.ctx().text_edit_focused() || app.recording_shortcut.is_some();
+    let peek = !crate::keyboard::modal_open(app) && !typing && ui.input(|i| i.key_down(egui::Key::Backslash));
+    let show_before = app.ui.before_after == BeforeAfter::Original || peek;
     let mut hdr_before_key = None;
     if (split || show_before || split_view)
         && let Some(job) = app.session.render_job(id, sw.max(8), sh.max(8), true, !crop_tool)

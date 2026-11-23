@@ -307,6 +307,24 @@ fn back_closes_a_tool_window_but_not_under_a_question() {
     assert!(h.app.duplicates.as_ref().is_some_and(|f| f.open), "in full screen, Back leaves the unseen Find Duplicates open");
 }
 
+/// Over the Plug-in Marketplace, Back answers its signer question first (Cancel, the Marketplace
+/// stays), then closes the Marketplace, and leaves the card behind it alone.
+#[test]
+fn back_cancels_the_marketplace_signer_question_then_closes_the_marketplace() {
+    use crate::panels::marketplace::{ask_signer, showing};
+    let mut h = develop([800.0, 1280.0]);
+    exec(&mut h, "modern.group", json!({"group": "light"}));
+    exec(&mut h, "plugins.marketplace", json!({"open": true}));
+    ask_signer();
+    h.settle(SETTLE);
+    exec(&mut h, "modern.back", json!({}));
+    let (open, asking, _) = showing();
+    assert!(open && !asking, "Back cancels the signer question and leaves the Marketplace open");
+    exec(&mut h, "modern.back", json!({}));
+    assert!(!showing().0, "a second Back closes the Marketplace");
+    assert!(h.app.ui.modern.group.is_some(), "Back leaves the card behind the Marketplace open");
+}
+
 #[test]
 fn back_closes_dialog_menu_card_and_develop_then_leaves_the_root_to_the_system() {
     let mut h = develop([800.0, 1280.0]);

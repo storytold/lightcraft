@@ -266,7 +266,7 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
     use crate::keyboard::{MenuChoice, Owner, menu_choice, owner};
     type Step = fn(&mut Headless);
     // (the ⌘/ shortcuts overlay closes on any key: `tests_module_help` checks that key runs nothing)
-    let rows: [(&str, Step, Step); 17] = [
+    let rows: [(&str, Step, Step); 19] = [
         ("the quit question", |h| h.app.quit_prompt = Some(crate::QuitPrompt::Unsaved("changes not saved".into())), |h| h.app.quit_prompt = None),
         ("the settings-file notice", |h| h.app.notices.push("settings file unreadable".into()), |h| h.app.notices.clear()),
         (
@@ -316,6 +316,20 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
             |h| click(h, "button:cameraRollNotNow"),
         ),
         ("Plug-in Manager", |h| drop(h.app.run("plugins.manager", json!({"open": true})).unwrap()), |h| click(h, "plugin-manager:close")),
+        ("Plug-in Marketplace", |h| drop(h.app.run("plugins.marketplace", json!({"open": true})).unwrap()), |h| click(h, "plugin-marketplace:close")),
+        (
+            "the Marketplace's signer question",
+            |h| {
+                h.app.run("plugins.marketplace", json!({"open": true})).unwrap();
+                crate::panels::marketplace::ask_signer();
+            },
+            // (Esc, above, answered the question; its Cancel: `the_marketplace_keeps_its_own_controls`)
+            |h| {
+                let (open, asking, _) = crate::panels::marketplace::showing();
+                assert!(open && !asking, "Esc answers the signer question and leaves the Marketplace open");
+                click(h, "plugin-marketplace:close");
+            },
+        ),
         (
             "a plug-in's permission question",
             |h| {
@@ -355,6 +369,7 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
         "the catalog chooser over the open library",
         "the Export sheet",
         "Plug-in Manager",
+        "Plug-in Marketplace",
         "a Dialog",
         "Edit Smart Collection…",
         "New Collection (a text field with the focus)",
@@ -485,6 +500,15 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
     h.app.ui.fullscreen = false;
     assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal, "and takes them once it shows");
     h.app.duplicates = None;
+    // (the Plug-in Marketplace, too)
+    h.app.ui.fullscreen = true;
+    h.app.run("plugins.marketplace", json!({"open": true})).unwrap();
+    h.step();
+    assert_eq!(owner(&h.app, &h.view.ctx), Owner::Window, "the Marketplace isn't drawn in full screen and leaves the keys alone");
+    h.app.ui.fullscreen = false;
+    assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal, "the Marketplace takes the keys once it shows");
+    h.app.run("plugins.marketplace", json!({"open": false})).unwrap();
+    h.step();
 
     // the catalog opening or upgrading (the owner only: with no open really running, the first
     // frame turns either into the window of a catalog that won't open)
@@ -520,6 +544,102 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
         h.app.catalog_ui.dialog = None;
         h.app.library_problem = None;
     }
+}
+
+/// Over the Plug-in Marketplace its own controls still work: the search field takes what is typed
+/// (5 there rates nothing), and its signer question's Cancel answers the question alone.
+#[test]
+fn the_marketplace_keeps_its_own_controls() {
+    use crate::panels::marketplace::{ask_signer, showing};
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    let active = h.app.session.active().unwrap();
+    h.app.session.execute("photo.rate", &json!({"ids": [active.0], "rating": 0})).unwrap();
+    h.app.run("plugins.marketplace", json!({"open": true})).unwrap();
+    h.settle(T);
+    click(&mut h, "marketplaceSearch");
+    let r = h.request("ui.text", json!({"text": "5ab"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(showing().2, "5ab", "the search field takes the typing");
+    assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, 0, "typing in the search field rates nothing behind it");
+    ask_signer();
+    h.settle(T);
+    // the question holds the pointer, not the Marketplace under it
+    let top = h.view.ctx.memory(|m| m.top_modal_layer()).map(|l| l.id);
+    assert_eq!(top, Some(egui::Id::new("plugin-marketplace").with("signer")), "the signer question holds the modal layer");
+    click(&mut h, "button:marketplaceSignerCancel");
+    let (open, asking, _) = showing();
+    assert!(open && !asking, "Cancel answers the question and leaves the Marketplace open");
+}
+
+/// In a window that closes on Esc, the first Esc in its text field only leaves the field.
+#[test]
+fn esc_in_a_marketplace_search_leaves_the_field_first() {
+    use crate::panels::marketplace::showing;
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.run("plugins.marketplace", json!({"open": true})).unwrap();
+    h.settle(T);
+    click(&mut h, "marketplaceSearch");
+    let r = h.request("ui.text", json!({"text": "abc"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(showing().2, "abc");
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(showing().0, "the first Esc leaves the search field, and the Marketplace stays open");
+    assert_eq!(showing().2, "", "the field's Esc takes back what was typed");
+    assert!(!h.view.ctx.egui_wants_keyboard_input(), "the field let go of the keys");
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(!showing().0, "the next Esc closes it");
+}
+
+/// Holding \ peeks at the Before view only when the main window has the keyboard: behind a
+/// window that waits over the app, or while typing in a text field, it shows nothing.
+#[test]
+fn holding_backslash_peeks_at_before_only_when_the_window_has_the_keys() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.settle(T);
+    // (with the keys, the press also runs the shortcut of `\`, the Before view, which stays on:
+    // back off before each look)
+    let peeks = |h: &mut Headless| {
+        h.app.ui.before_after = crate::state::BeforeAfter::Off;
+        h.step();
+        let r = h.request("ui.key", json!({"key": "\\", "action": "down"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        let before = h.painted_text().iter().any(|t| t == "Before");
+        let r = h.request("ui.key", json!({"key": "\\", "action": "up"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        h.app.ui.before_after = crate::state::BeforeAfter::Off;
+        before
+    };
+    assert!(peeks(&mut h), "with nothing open, holding \\ shows Before");
+    type Step = fn(&mut Headless);
+    let over: [(&str, Step, Step); 3] = [
+        ("Find Duplicates", |h| drop(h.app.run("library.findDuplicates", json!({})).unwrap()), |h| h.app.duplicates = None),
+        ("a Dialog", |h| drop(h.app.run("dialog.copySettings", json!({})).unwrap()), |h| h.app.ui.dialog = None),
+        (
+            "Plug-in Marketplace",
+            |h| drop(h.app.run("plugins.marketplace", json!({"open": true})).unwrap()),
+            |h| drop(h.app.run("plugins.marketplace", json!({"open": false})).unwrap()),
+        ),
+    ];
+    for (name, open, close) in over {
+        open(&mut h);
+        h.settle(T);
+        assert!(!peeks(&mut h), "{name}: holding \\ behind it shows no Before");
+        close(&mut h);
+        h.settle(T);
+    }
+    click(&mut h, "field:search");
+    assert!(!peeks(&mut h), "typing \\ in a text field shows no Before");
 }
 
 /// In a modal's text field the editing shortcuts edit the field: ⌘A selects its text, cut and

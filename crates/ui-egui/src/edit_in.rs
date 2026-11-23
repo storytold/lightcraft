@@ -524,7 +524,7 @@ fn combo(ui: &mut egui::Ui, id: &str, label: &str, value: &mut String, choices: 
 
 fn presets_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
     let list = app.session.execute("editIn.presets", &json!({})).ok();
-    let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), ctx);
+    let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), app.text_focus, ctx);
     let mut closed = false;
     egui::Window::new(tr("Edit In Presets"))
         .id(egui::Id::new("edit-in-presets"))
@@ -627,7 +627,7 @@ fn presets_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
 fn ask_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
     let Some(mut ask) = st.ask.take() else { return };
     let mut go = false;
-    let mut cancel = crate::dialog_frame::esc_closes(false, ctx);
+    let mut cancel = crate::dialog_frame::esc_closes(false, app.text_focus, ctx);
     egui::Window::new(tr("Edit Photo"))
         .id(egui::Id::new("edit-in-ask"))
         .title_bar(false)
@@ -710,7 +710,7 @@ fn choose(app: &mut LccApp, ctx: &egui::Context, ask: Ask) -> Result<Value, Stri
 
 fn actions_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
     let list = app.session.execute("actions.list", &json!({})).map_err(|e| e.to_string());
-    let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), ctx);
+    let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), app.text_focus, ctx);
     let mut closed = false;
     egui::Window::new(tr("Actions"))
         .id(egui::Id::new("actions-panel"))
