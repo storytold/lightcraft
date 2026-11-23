@@ -39,33 +39,30 @@ fn set(app: &mut LightcraftApp, p: Value) {
 }
 
 /// A layout slider (`slider:{id}`): `key`'s value, 0–`max` (percent) or −180–180° (degrees).
-fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, max: f64, unit: Unit) {
-    let (mut v, range, suffix) = match unit {
-        Unit::Percent => (value * 100.0, 0.0..=max * 100.0, " %"),
-        Unit::Degrees => (value, -180.0..=180.0, "°"),
+#[allow(clippy::too_many_arguments)]
+fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, key: &str, value: f64, max: f64, unit: Unit) {
+    use super::controls::{self, Shape, Step};
+    let (k, lo, hi, suffix) = match unit {
+        Unit::Percent => (100.0, 0.0, max * 100.0, "%"),
+        Unit::Degrees => (1.0, -180.0, 180.0, "°"),
     };
-    let r = ui.add(egui::Slider::new(&mut v, range).suffix(suffix).max_decimals(1));
-    register(ui, format!("slider:{id}"), r.rect);
-    let value = match unit {
-        Unit::Percent => v / 100.0,
-        Unit::Degrees => v,
-    };
-    if r.changed()
-        && let Ok(next) = app.session.slide_layout.merged(&json!({ key: value }))
-    {
-        app.session.slide_layout = next;
-    }
-    if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        set(app, json!({ key: value }));
+    let shape = Shape { label, lo, hi, unit: suffix, step: 0.1, log: false };
+    for step in controls::slider(ui, controls::owner(id), id, &shape, value * k) {
+        match step {
+            Step::Preview(v) => {
+                if let Ok(next) = app.session.slide_layout.merged(&json!({ key: v / k })) {
+                    app.session.slide_layout = next;
+                }
+            }
+            Step::Save(v) => set(app, json!({ key: v / k })),
+        }
     }
 }
 
-/// A colour button (`button:{id}`) for `key`.
-fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: [u8; 3]) {
-    let mut c = value;
-    let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-    register(ui, format!("button:{id}"), r.rect);
-    if r.changed() {
+/// A colour well (`button:{id}`) for `key`.
+fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, key: &str, value: [u8; 3]) {
+    use super::controls;
+    if let Some(c) = controls::colour(ui, controls::owner(id), id, label, value) {
         set(app, json!({ key: c }));
     }
 }
@@ -86,7 +83,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "Layout");
     let linked = toggle(app, ui, "slideshowLinkMargins", "linkMargins", s.link_margins, "Link all margins");
     if linked {
-        row(ui, t, "Margins", |ui| slider(app, ui, "slideshowMargins", "marginLeft", s.margin_left, MARGIN_MAX, Unit::Percent));
+        row(ui, t, "Margins", |ui| slider(app, ui, "slideshowMargins", "Margins", "marginLeft", s.margin_left, MARGIN_MAX, Unit::Percent));
     } else {
         for (id, key, label, v) in [
             ("slideshowMarginLeft", "marginLeft", "Left", s.margin_left),
@@ -94,7 +91,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ("slideshowMarginTop", "marginTop", "Top", s.margin_top),
             ("slideshowMarginBottom", "marginBottom", "Bottom", s.margin_bottom),
         ] {
-            row(ui, t, label, |ui| slider(app, ui, id, key, v, MARGIN_MAX, Unit::Percent));
+            row(ui, t, label, |ui| slider(app, ui, id, label, key, v, MARGIN_MAX, Unit::Percent));
         }
     }
     hint(ui, t, "Margins are a share of the slide's shorter side, so slides look the same on any screen.");
@@ -111,23 +108,27 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "Options");
     toggle(app, ui, "slideshowZoomToFill", "zoomToFill", s.zoom_to_fill, "Zoom to fill frame");
     if toggle(app, ui, "slideshowStroke", "strokeBorder", s.stroke_border, "Stroke border") {
-        row(ui, t, "Colour", |ui| colour(app, ui, "slideshowStrokeColor", "strokeColor", s.stroke_color));
-        row(ui, t, "Width", |ui| slider(app, ui, "slideshowStrokeWidth", "strokeWidth", s.stroke_width, STROKE_MAX, Unit::Percent));
+        row(ui, t, "Colour", |ui| colour(app, ui, "slideshowStrokeColor", "Colour", "strokeColor", s.stroke_color));
+        row(ui, t, "Width", |ui| slider(app, ui, "slideshowStrokeWidth", "Width", "strokeWidth", s.stroke_width, STROKE_MAX, Unit::Percent));
     }
     if toggle(app, ui, "slideshowShadow", "castShadow", s.cast_shadow, "Cast shadow") {
-        row(ui, t, "Opacity", |ui| slider(app, ui, "slideshowShadowOpacity", "shadowOpacity", s.shadow_opacity, 1.0, Unit::Percent));
-        row(ui, t, "Offset", |ui| slider(app, ui, "slideshowShadowOffset", "shadowOffset", s.shadow_offset, SHADOW_OFFSET_MAX, Unit::Percent));
-        row(ui, t, "Radius", |ui| slider(app, ui, "slideshowShadowRadius", "shadowRadius", s.shadow_radius, SHADOW_RADIUS_MAX, Unit::Percent));
-        row(ui, t, "Angle", |ui| slider(app, ui, "slideshowShadowAngle", "shadowAngle", s.shadow_angle, 180.0, Unit::Degrees));
+        row(ui, t, "Opacity", |ui| slider(app, ui, "slideshowShadowOpacity", "Opacity", "shadowOpacity", s.shadow_opacity, 1.0, Unit::Percent));
+        row(ui, t, "Offset", |ui| {
+            slider(app, ui, "slideshowShadowOffset", "Offset", "shadowOffset", s.shadow_offset, SHADOW_OFFSET_MAX, Unit::Percent)
+        });
+        row(ui, t, "Radius", |ui| {
+            slider(app, ui, "slideshowShadowRadius", "Radius", "shadowRadius", s.shadow_radius, SHADOW_RADIUS_MAX, Unit::Percent)
+        });
+        row(ui, t, "Angle", |ui| slider(app, ui, "slideshowShadowAngle", "Angle", "shadowAngle", s.shadow_angle, 180.0, Unit::Degrees));
     }
 
     ui.add_space(6.0);
     heading(ui, t, "Backdrop");
-    row(ui, t, "Background colour", |ui| colour(app, ui, "slideshowBackdropColor", "backdropColor", s.backdrop_color));
+    row(ui, t, "Background colour", |ui| colour(app, ui, "slideshowBackdropColor", "Background colour", "backdropColor", s.backdrop_color));
     if toggle(app, ui, "slideshowWash", "colorWash", s.color_wash, "Colour wash") {
-        row(ui, t, "Colour", |ui| colour(app, ui, "slideshowWashColor", "washColor", s.wash_color));
-        row(ui, t, "Opacity", |ui| slider(app, ui, "slideshowWashOpacity", "washOpacity", s.wash_opacity, 1.0, Unit::Percent));
-        row(ui, t, "Angle", |ui| slider(app, ui, "slideshowWashAngle", "washAngle", s.wash_angle, 180.0, Unit::Degrees));
+        row(ui, t, "Colour", |ui| colour(app, ui, "slideshowWashColor", "Colour", "washColor", s.wash_color));
+        row(ui, t, "Opacity", |ui| slider(app, ui, "slideshowWashOpacity", "Opacity", "washOpacity", s.wash_opacity, 1.0, Unit::Percent));
+        row(ui, t, "Angle", |ui| slider(app, ui, "slideshowWashAngle", "Angle", "washAngle", s.wash_angle, 180.0, Unit::Degrees));
     }
     background_photo_controls(app, ui, t, &s);
     reset_layout_button(app, ui);
@@ -142,7 +143,6 @@ fn background_photo_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tok
     let on = s.background_image.is_some();
     let enabled = on || active.is_some();
     let interactive = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    // Settings remains a native subtree until mixed SDK/native traversal is supported.
     let next = {
         let out = Checkbox::new(Bind::given(on))
             .id_salt(("settings-check", "settings.slideshowBackgroundImage"))
@@ -174,7 +174,9 @@ fn background_photo_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tok
                 set(app, json!({"backgroundImage": a.0}));
             }
         });
-        row(ui, t, "Opacity", |ui| slider(app, ui, "slideshowBackgroundOpacity", "backgroundOpacity", s.background_opacity, 1.0, Unit::Percent));
+        row(ui, t, "Opacity", |ui| {
+            slider(app, ui, "slideshowBackgroundOpacity", "Opacity", "backgroundOpacity", s.background_opacity, 1.0, Unit::Percent)
+        });
     } else {
         hint(ui, t, "Select a photo, then turn this on to fill the slide behind every photo with it.");
     }

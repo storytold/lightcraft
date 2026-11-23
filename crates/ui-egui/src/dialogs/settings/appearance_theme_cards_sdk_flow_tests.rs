@@ -424,7 +424,11 @@ fn appearance_sdk_settings_callback_pointer_and_keyboard_use_existing_native_sco
 fn native_journey(host: Host) {
     let mut f = Fixture::new(host);
     f.pick(ThemeKind::Paper);
-    f.tab_to(&Fixture::radio(ThemeKind::Silver));
+    // A family is one roving stop: Tab acquires its selected radio, an arrow moves to the
+    // neighbouring member and Space selects it.
+    f.tab_to(&Fixture::radio(ThemeKind::Paper));
+    f.key(Key::ArrowUp);
+    assert!(f.focused(&Fixture::radio(ThemeKind::Silver)), "arrow acquires the neighbouring family member; trace={:#?}", f.trace);
     let mut wanted = f.state();
     wanted["settings"]["lightTheme"] = json!("silver");
     f.key(Key::Space);

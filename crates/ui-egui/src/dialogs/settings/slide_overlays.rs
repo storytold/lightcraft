@@ -17,7 +17,6 @@ use crate::LightcraftApp;
 use crate::panels::settings::{check, choices, heading, hint, row};
 use crate::text_field::TextField;
 use crate::theme::Tokens;
-use crate::widgets::register;
 
 #[derive(Clone, Copy)]
 enum Unit {
@@ -38,31 +37,25 @@ struct Range {
 }
 
 /// A slider (`slider:{id}`) over `range`; `wrap(value)` makes the `slideshow.overlays` request.
-fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: f64, range: Range, wrap: &dyn Fn(f64) -> Value) {
+fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, value: f64, range: Range, wrap: &dyn Fn(f64) -> Value) {
+    use super::controls::{self, Shape, Step};
     let (k, suffix) = match range.unit {
-        Unit::Percent => (100.0, " %"),
+        Unit::Percent => (100.0, "%"),
         Unit::Degrees => (1.0, "°"),
     };
-    let mut v = value * k;
-    let r = ui.add(egui::Slider::new(&mut v, range.lo * k..=range.hi * k).suffix(suffix).max_decimals(1));
-    register(ui, format!("slider:{id}"), r.rect);
-    let p = wrap(v / k);
-    if r.changed()
-        && let Ok(next) = app.session.slide_overlays.merged(&p)
-    {
-        app.session.slide_overlays = next;
-    }
-    if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        set(app, p);
+    let shape = Shape { label, lo: range.lo * k, hi: range.hi * k, unit: suffix, step: 0.1, log: false };
+    for step in controls::slider(ui, controls::owner(id), id, &shape, value * k) {
+        match step {
+            Step::Preview(v) => text_row_preview(app, &wrap(v / k)),
+            Step::Save(v) => set(app, wrap(v / k)),
+        }
     }
 }
 
-/// A colour button (`button:{id}`).
-fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: [u8; 3], wrap: &dyn Fn([u8; 3]) -> Value) {
-    let mut c = value;
-    let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-    register(ui, format!("button:{id}"), r.rect);
-    if r.changed() {
+/// A colour well (`button:{id}`).
+fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, value: [u8; 3], wrap: &dyn Fn([u8; 3]) -> Value) {
+    use super::controls;
+    if let Some(c) = controls::colour(ui, controls::owner(id), id, label, value) {
         set(app, wrap(c));
     }
 }
@@ -132,14 +125,26 @@ fn placement(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &str, p
         });
     }
     row(ui, t, "Offset X", |ui| {
-        slider(app, ui, &format!("{id}OffsetX"), p.offset_x, Range { lo: -OFFSET_MAX / 2.0, hi: OFFSET_MAX / 2.0, unit: Unit::Percent }, &|v| {
-            wrap(json!({"offsetX": v}))
-        })
+        slider(
+            app,
+            ui,
+            &format!("{id}OffsetX"),
+            "Offset X",
+            p.offset_x,
+            Range { lo: -OFFSET_MAX / 2.0, hi: OFFSET_MAX / 2.0, unit: Unit::Percent },
+            &|v| wrap(json!({"offsetX": v})),
+        )
     });
     row(ui, t, "Offset Y", |ui| {
-        slider(app, ui, &format!("{id}OffsetY"), p.offset_y, Range { lo: -OFFSET_MAX / 2.0, hi: OFFSET_MAX / 2.0, unit: Unit::Percent }, &|v| {
-            wrap(json!({"offsetY": v}))
-        })
+        slider(
+            app,
+            ui,
+            &format!("{id}OffsetY"),
+            "Offset Y",
+            p.offset_y,
+            Range { lo: -OFFSET_MAX / 2.0, hi: OFFSET_MAX / 2.0, unit: Unit::Percent },
+            &|v| wrap(json!({"offsetY": v})),
+        )
     });
 }
 
@@ -180,13 +185,29 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             });
         } else {
             row(ui, t, "Text", |ui| text(app, ui, "slideshowPlateText", &p.text, "Your name or studio", &|v| plate(json!({"text": v}))));
-            row(ui, t, "Colour", |ui| colour(app, ui, "slideshowPlateColor", p.color, &|c| plate(json!({"color": c}))));
+            row(ui, t, "Colour", |ui| colour(app, ui, "slideshowPlateColor", "Colour", p.color, &|c| plate(json!({"color": c}))));
         }
         row(ui, t, "Size", |ui| {
-            slider(app, ui, "slideshowPlateSize", p.size, Range { lo: 0.01, hi: PLATE_SIZE_MAX, unit: Unit::Percent }, &|v| plate(json!({"size": v})))
+            slider(
+                app,
+                ui,
+                "slideshowPlateSize",
+                "Size",
+                p.size,
+                Range { lo: 0.01, hi: PLATE_SIZE_MAX, unit: Unit::Percent },
+                &|v| plate(json!({"size": v})),
+            )
         });
         row(ui, t, "Opacity", |ui| {
-            slider(app, ui, "slideshowPlateOpacity", p.opacity, Range { lo: 0.0, hi: 1.0, unit: Unit::Percent }, &|v| plate(json!({"opacity": v})))
+            slider(
+                app,
+                ui,
+                "slideshowPlateOpacity",
+                "Opacity",
+                p.opacity,
+                Range { lo: 0.0, hi: 1.0, unit: Unit::Percent },
+                &|v| plate(json!({"opacity": v})),
+            )
         });
         placement(app, ui, t, "slideshowPlate", &p.place, true, &plate);
         toggle(app, ui, "slideshowPlateBehind", p.behind, "Render behind image", &|v| plate(json!({"behind": v})));
@@ -197,9 +218,17 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let r = s.rating_stars.clone();
     let stars = |v: Value| json!({ "ratingStars": v });
     if toggle(app, ui, "slideshowStars", r.enabled, "Rating stars", &|v| stars(json!({"enabled": v}))) {
-        row(ui, t, "Colour", |ui| colour(app, ui, "slideshowStarsColor", r.color, &|c| stars(json!({"color": c}))));
+        row(ui, t, "Colour", |ui| colour(app, ui, "slideshowStarsColor", "Colour", r.color, &|c| stars(json!({"color": c}))));
         row(ui, t, "Size", |ui| {
-            slider(app, ui, "slideshowStarsSize", r.size, Range { lo: 0.01, hi: STAR_SIZE_MAX, unit: Unit::Percent }, &|v| stars(json!({"size": v})))
+            slider(
+                app,
+                ui,
+                "slideshowStarsSize",
+                "Size",
+                r.size,
+                Range { lo: 0.01, hi: STAR_SIZE_MAX, unit: Unit::Percent },
+                &|v| stars(json!({"size": v})),
+            )
         });
         placement(app, ui, t, "slideshowStars", &r.place, true, &stars);
     }
@@ -220,10 +249,18 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if toggle(app, ui, "slideshowWatermark", s.show_watermark, "Watermark", &|v| json!({"showWatermark": v})) {
         row(ui, t, "Text", |ui| text(app, ui, "slideshowWatermarkText", &w.text, "© Your Name", &|v| wm(json!({"text": v}))));
         row(ui, t, "Size", |ui| {
-            slider(app, ui, "slideshowWatermarkSize", w.size as f64, Range { lo: 0.01, hi: 0.15, unit: Unit::Percent }, &|v| wm(json!({"size": v})))
+            slider(
+                app,
+                ui,
+                "slideshowWatermarkSize",
+                "Size",
+                w.size as f64,
+                Range { lo: 0.01, hi: 0.15, unit: Unit::Percent },
+                &|v| wm(json!({"size": v})),
+            )
         });
         row(ui, t, "Opacity", |ui| {
-            slider(app, ui, "slideshowWatermarkOpacity", w.opacity as f64, Range { lo: 0.05, hi: 1.0, unit: Unit::Percent }, &|v| {
+            slider(app, ui, "slideshowWatermarkOpacity", "Opacity", w.opacity as f64, Range { lo: 0.05, hi: 1.0, unit: Unit::Percent }, &|v| {
                 wm(json!({"opacity": v}))
             })
         });
@@ -351,66 +388,18 @@ fn text_row_slider(
     wrap: &dyn Fn(Value) -> Value,
     key: &str,
 ) {
-    use craft::behavior::{EditEvent, Mixed};
-    use craft::ui::contract::{Bind, Props as _, Show as _, Sizing};
-    use craft::ui::form::{SliderField, SliderFieldLayout};
-    let real = real_pass(ui);
+    use super::controls::{self, Shape, Step};
     let (k, suffix) = match range.unit {
         Unit::Percent => (100.0, "%"),
         Unit::Degrees => (1.0, "°"),
     };
+    let shape = Shape { label, lo: range.lo * k, hi: range.hi * k, unit: suffix, step: 0.1, log: false };
+    // (the preview and the saved value are what `key` of this text overlay becomes)
     let patch = |value: f64| wrap(json!({key: value / k}));
-    let (out, record) = craft::ui::runtime::inspect::record(ui, owner.with((key, "inspect")), |ui| {
-        SliderField::new(crate::i18n::tr(label).to_owned(), Bind::given(value * k), range.lo * k..=range.hi * k)
-            .id(owner.with(key))
-            .layout(SliderFieldLayout::Inline)
-            .field_sizing(Sizing::Content)
-            .unit(suffix)
-            .step(0.1)
-            .sizing(Sizing::FillWidth)
-            .show(ui)
-    });
-    if !real {
-        return;
-    }
-    if let Some(record) = record {
-        for (index, element) in record.elements.iter().enumerate() {
-            let Some(facts) = &element.facts else { continue };
-            let prefix = match facts.role.as_str() {
-                "Slider" => "slider",
-                "SpinButton" => "sliderValue",
-                _ => continue,
-            };
-            // A composite child may have an SDK arena response rather than an egui read_response.
-            // Use that recorded child's real owner and stop bounds, as KeywordSet's footer does;
-            // this registers an alias only, never another interactive widget or a guessed target.
-            let mut response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
-                let mut response = out.response.clone();
-                response.id = element.id;
-                response.rect = record.stop_rect(index).unwrap_or(element.rect);
-                response.interact_rect = response.rect.intersect(ui.clip_rect());
-                response
-            });
-            response.interact_rect = response.interact_rect.intersect(ui.clip_rect());
-            crate::widgets::register_response(format!("{prefix}:{name}"), response.rect, &response);
-        }
-    }
-    for event in &out.events {
-        match event {
-            EditEvent::Update { value, .. } if ui.is_enabled() => text_row_preview(app, &patch(*value)),
-            EditEvent::Commit { before: Mixed::Same(before), after, .. } if ui.is_enabled() => {
-                text_row_preview(app, &patch(*before));
-                if after != before {
-                    set(app, patch(*after));
-                }
-            }
-            EditEvent::Set { before, after, .. } if ui.is_enabled() => {
-                if !matches!(before, Mixed::Same(value) if value == after) {
-                    set(app, patch(*after));
-                }
-            }
-            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => text_row_preview(app, &patch(*before)),
-            _ => {}
+    for step in controls::slider(ui, owner, name, &shape, value * k) {
+        match step {
+            Step::Preview(v) => text_row_preview(app, &patch(v)),
+            Step::Save(v) => set(app, patch(v)),
         }
     }
 }
@@ -522,16 +511,9 @@ fn text_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) -> bool
                         text_row_slider(app, ui, owner, &format!("{name}{suffix}"), label, value, Range { lo, hi, unit: Unit::Percent }, &wrap, key)
                     });
                 }
-                // Keep the existing platform-neutral egui colour picker; only accepted real changes
-                // enter the existing validated command. It is not a new SDK colour-dialog provider.
                 row(ui, t, "Colour", |ui| {
-                    let mut color = o.color;
-                    let response = ui.add_enabled_ui(real, |ui| egui::color_picker::color_edit_button_srgb(ui, &mut color)).inner;
-                    if real {
-                        crate::widgets::register_response(format!("button:{name}Color"), response.rect, &response);
-                        if ui.is_enabled() && response.changed() {
-                            set(app, wrap(json!({"color": color})));
-                        }
+                    if let Some(color) = super::controls::colour(ui, owner.with("colour"), &format!("{name}Color"), "Colour", o.color) {
+                        set(app, wrap(json!({"color": color})));
                     }
                 });
                 row(ui, t, "Opacity", |ui| {

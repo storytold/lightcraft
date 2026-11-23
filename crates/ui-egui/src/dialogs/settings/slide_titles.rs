@@ -15,7 +15,6 @@ use serde_json::{Value, json};
 use crate::LightcraftApp;
 use crate::panels::settings::{check, choices, heading, hint, row};
 use crate::theme::Tokens;
-use crate::widgets::register;
 
 /// Where the preview's choice lives (egui memory): `None` = the photo's slide.
 fn preview_key() -> egui::Id {
@@ -54,6 +53,7 @@ fn slider(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
     id: &str,
+    label: &str,
     t: Title,
     key: &str,
     value: f64,
@@ -61,27 +61,27 @@ fn slider(
     k: f64,
     suffix: &str,
 ) {
-    let mut v = value * k;
-    let r = ui.add(egui::Slider::new(&mut v, (range.start() * k)..=(range.end() * k)).suffix(suffix).max_decimals(1));
-    register(ui, format!("slider:{id}"), r.rect);
-    let p = json!({ t.id(): { key: v / k } });
-    if r.changed() {
-        if let Ok(next) = app.session.slide_titles.merged(&p) {
-            app.session.slide_titles = next;
+    use super::controls::{self, Shape, Step};
+    let shape = Shape { label, lo: range.start() * k, hi: range.end() * k, unit: suffix.trim(), step: 0.1, log: false };
+    for step in controls::slider(ui, controls::owner(id), id, &shape, value * k) {
+        match step {
+            Step::Preview(v) => {
+                if let Ok(next) = app.session.slide_titles.merged(&json!({ t.id(): { key: v / k } })) {
+                    app.session.slide_titles = next;
+                }
+                set_preview_shows(ui.ctx(), Some(t));
+            }
+            Step::Save(v) => {
+                let _ = app.run("slideshow.titles", json!({ t.id(): { key: v / k } }));
+            }
         }
-        set_preview_shows(ui.ctx(), Some(t));
-    }
-    if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        let _ = app.run("slideshow.titles", p);
     }
 }
 
-/// A colour button (`button:{id}`) for `key` of screen `t`.
-fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, key: &str, value: [u8; 3]) {
-    let mut c = value;
-    let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-    register(ui, format!("button:{id}"), r.rect);
-    if r.changed() {
+/// A colour well (`button:{id}`) for `key` of screen `t`.
+fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, t: Title, key: &str, value: [u8; 3]) {
+    use super::controls;
+    if let Some(c) = controls::colour(ui, controls::owner(id), id, label, value) {
         set(app, ui.ctx(), t, key, json!(c));
     }
 }
@@ -179,19 +179,19 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
     if !screen_enable(app, ui, title, s, name, label) {
         return;
     }
-    row(ui, t, "Colour", |ui| colour(app, ui, &format!("{name}Color"), title, "color", s.color));
+    row(ui, t, "Colour", |ui| colour(app, ui, &format!("{name}Color"), "Colour", title, "color", s.color));
     screen_content(app, ui, t, title, s, name, content_id);
     if s.content == TitleContent::None {
         return;
     }
-    row(ui, t, "Scale", |ui| slider(app, ui, &format!("{name}Scale"), title, "scale", s.scale, SIZE_MIN..=PLATE_SIZE_MAX, 100.0, " %"));
+    row(ui, t, "Scale", |ui| slider(app, ui, &format!("{name}Scale"), "Scale", title, "scale", s.scale, SIZE_MIN..=PLATE_SIZE_MAX, 100.0, "%"));
     ui.horizontal(|ui| {
         let mut over = s.override_color;
         if check(ui, &format!("settings.{name}Override"), &mut over, "Override colour") && title_input(ui) {
             set(app, ui.ctx(), title, "overrideColor", json!(over));
         }
         if over {
-            colour(app, ui, &format!("{name}TextColor"), title, "textColor", s.text_color);
+            colour(app, ui, &format!("{name}TextColor"), "Text colour", title, "textColor", s.text_color);
         }
     });
     let mut own = s.duration.is_some();
@@ -200,7 +200,7 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
         set(app, ui.ctx(), title, "duration", d);
     }
     if let Some(d) = s.duration {
-        row(ui, t, "Duration", |ui| slider(app, ui, &format!("{name}Duration"), title, "duration", d, SLIDE_MIN..=SLIDE_MAX, 1.0, " s"));
+        row(ui, t, "Duration", |ui| slider(app, ui, &format!("{name}Duration"), "Duration", title, "duration", d, SLIDE_MIN..=SLIDE_MAX, 1.0, "s"));
     }
 }
 

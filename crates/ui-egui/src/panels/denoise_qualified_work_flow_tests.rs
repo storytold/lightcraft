@@ -527,22 +527,12 @@ fn denoise_native_settings_natural_keyboard_acquires_intended_fifty_gb_row_and_c
     assert_eq!(r.settings()["cacheGb"], 20);
     assert_eq!(r.docs(), docs);
     assert_eq!(r.owned.cache(), cache);
-    // Native ComboBox ArrowDown acquires first row5, not a selected20GB lead.
-    // Walk the actual native rows5 ->10 ->20 ->50 before pressing Enter.
-    for intended in ["5 GB", "10 GB", "20 GB", "50 GB"] {
-        r.key(Key::ArrowDown, false);
-        let focused = r.ctx.memory(|m| m.focused()).expect("natural native row focus");
-        let response = r.ctx.read_response(focused).expect("real native row response");
-        assert!(response.enabled() && response.sense.senses_click());
-        assert!(
-            r.nodes.iter().any(|node| node.name.as_deref() == Some(intended)
-                && node.rect.is_some_and(|rect| rect == response.rect || rect == response.interact_rect)),
-            "natural focus must acquire intended native row {intended}"
-        );
-        assert_eq!(r.settings()["cacheGb"], 20, "native row traversal only focuses, never commits");
-        assert_eq!(r.docs(), docs);
-        assert_eq!(r.owned.cache(), cache);
-    }
+    // The framework list opens on the current 20 GB row: one ArrowDown reaches 50 GB, and only
+    // Enter commits it.
+    r.key(Key::ArrowDown, false);
+    assert_eq!(r.settings()["cacheGb"], 20, "row traversal only highlights, never commits");
+    assert_eq!(r.docs(), docs);
+    assert_eq!(r.owned.cache(), cache);
     r.key(Key::Enter, false);
     assert_eq!(r.settings()["cacheGb"], 50);
     r.tab_to(CLEAR, false);

@@ -1,6 +1,6 @@
-//! Actual native Titles-section coverage plus SDK-only enable/content/editor leaf coverage.
-//! SDK leaves intentionally exclude the native colour picker and sliders: this is not shipped
-//! Settings mixed traversal, desktop playback, or preview/render acceptance.
+//! The whole Titles section plus the enable/content/editor leaves on their own.
+//! Every control is a framework control, so keyboard traversal is one focus chain; this is not
+//! desktop playback or preview/render acceptance.
 use super::*;
 use crate::headless::HeadlessView;
 use egui::{Event, Key, Modifiers, PointerButton, Rect};
@@ -225,13 +225,10 @@ impl Fixture {
         self.frame(vec![Event::PointerGone]);
         for _ in 0..64 {
             let hit = self.hits.iter().find(|(name, _)| name == id).unwrap().1;
-            let native_focus = self.ctx.memory(|m| m.focused()).and_then(|id| self.ctx.read_response(id));
+            // The whole section is framework controls now (the colour wells and sliders too), so
+            // both presentations walk one focus chain.
             let sdk_focus = craft::ui::runtime::focus::focused_rec(&self.ctx);
-            let reached = match self.presentation {
-                Presentation::NativeSections => native_focus.is_some_and(|r| r.rect == self.rect(id)),
-                Presentation::SdkWorkflow => sdk_focus.is_some_and(|r| r.stop.id == hit.id),
-            };
-            if reached {
+            if sdk_focus.is_some_and(|r| r.stop.id == hit.id) {
                 return;
             }
             self.key(Key::Tab);
