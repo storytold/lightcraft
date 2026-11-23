@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
-use craft::ui::list::ListRow;
 use craft::ui::menu::{Menu, MenuItem};
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
@@ -424,68 +423,6 @@ fn grouped(ctx: &egui::Context, presets: &PresetList) -> Arc<Vec<Group>> {
     let groups = Arc::new(favorites.into_iter().chain(by_name.into_values()).collect::<Vec<_>>());
     ctx.data_mut(|d| d.insert_temp(id, (presets.generation(), groups.clone())));
     groups
-}
-
-/// The presets as the rows of a picker (a combo box's list), in list order with a header row
-/// wherever the group changes. Only the rows in view are built (10 000+ presets made an open
-/// picker take seconds a frame). Returns the id of the preset clicked.
-pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected: Option<&str>) -> Option<String> {
-    let id = egui::Id::unique("preset-picker-rows");
-    let rows = match ui.ctx().data(|d| d.get_temp::<(u64, Arc<Vec<PickRow>>)>(id)) {
-        Some((generation, rows)) if generation == presets.generation() => rows,
-        _ => {
-            let mut rows = Vec::with_capacity(presets.len() + 16);
-            let mut group: Option<&str> = None;
-            for (i, p) in presets.iter().enumerate() {
-                if group != Some(p.group.as_str()) {
-                    group = Some(&p.group);
-                    rows.push(PickRow::Header(crate::i18n::builtin_label(&p.group, p.builtin).to_string()));
-                }
-                rows.push(PickRow::Preset(i));
-            }
-            let rows = Arc::new(rows);
-            ui.ctx().data_mut(|d| d.insert_temp(id, (presets.generation(), rows.clone())));
-            rows
-        }
-    };
-    let row_h = ui.spacing().interact_size.y;
-    let mut out = None;
-    egui::ScrollArea::vertical().id_salt(("preset-picker", salt)).max_height(300.0).auto_shrink([false, true]).show_rows(
-        ui,
-        row_h,
-        rows.len(),
-        |ui, range| {
-            for row in rows.get(range).unwrap_or_default() {
-                let size = vec2(ui.available_width(), row_h);
-                match row {
-                    PickRow::Header(g) => {
-                        ui.add_sized(size, egui::Label::new(egui::RichText::new(g).size(10.5).weak()));
-                    }
-                    PickRow::Preset(i) => {
-                        let Some(p) = presets.get(*i) else { continue };
-                        let label = crate::i18n::builtin_label(&p.name, p.builtin);
-                        let (_, rect) = ui.allocate_space(size);
-                        let row = ListRow::new(label.to_string())
-                            .id_salt(("preset-picker-row", salt, p.id.as_str()))
-                            .selected(selected == Some(p.id.as_str()))
-                            .show_at(ui, rect);
-                        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) && craft::ui::contract::clicked(&row.response) {
-                            out = Some(p.id.clone());
-                        }
-                    }
-                }
-            }
-        },
-    );
-    out
-}
-
-#[derive(Clone)]
-enum PickRow {
-    /// A group's name (in the UI language for stock groups).
-    Header(String),
-    /// An index into the session's presets.
-    Preset(usize),
 }
 
 /// The rows `first..end` of a block of `n` rows `row_h` high starting at `top` that meet

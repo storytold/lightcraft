@@ -578,25 +578,21 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     };
     let mut pick = false;
     row(ui, t, "Profile", |ui| {
-        let c = craft_ui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
+        crate::widgets::dropdown_menu(ui, "combo:printProfile", crate::i18n::tr("Profile"), &shown, Some(190.0), |ui| {
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
-                let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
-                register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
-                if r.clicked() && color.profile != managed(space) {
+                let name = format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default());
+                let current = color.profile == managed(space);
+                if crate::widgets::menu_row(ui, ("printProfile", label), Some(&name), crate::i18n::tr(label), None, current, true) && !current {
                     patch_color(app, &ctx, "profile", to_value(managed(space)));
                 }
             }
             if let PrintProfile::Icc { .. } = &color.profile {
-                let _ = ui.selectable_label(true, shown.as_str());
+                let _ = crate::widgets::menu_row(ui, ("printProfile", "icc"), None, &shown, None, true, true);
             }
             if app.services.pick_display_profile.is_some() {
-                let r = ui.selectable_label(false, crate::i18n::tr("Other…"));
-                register(ui, "item:printProfile-other", r.rect);
-                pick |= r.clicked();
+                pick |= crate::widgets::menu_row(ui, ("printProfile", "other"), Some("item:printProfile-other"), crate::i18n::tr("Other…"), None, false, true);
             }
         });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Profile"));
-        register(ui, "combo:printProfile", c.response.rect);
     });
     if pick && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next()) {
         patch_color(app, &ctx, "profile", json!({"kind": "icc", "path": path}));

@@ -4,7 +4,7 @@ use craft::ui::contract::{Bind, Props as _, Show as _};
 
 use super::general::{cameras, preset_combo};
 use super::widgets::{button_width, check, choices, field, heading, hint, path_label, row};
-use super::{LightcraftApp, RichText, Tokens, json, register};
+use super::{LightcraftApp, RichText, Tokens, json};
 
 fn auto_import_measuring(ui: &egui::Ui) -> bool {
     ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
@@ -29,6 +29,36 @@ fn auto_import_copy(ui: &mut egui::Ui, value: bool) -> Option<bool> {
     }
     crate::widgets::register_response("check:settingsAutoCopy", shown.response.rect, &shown.response);
     shown.events.committed().copied().filter(|next| ui.is_enabled() && *next != value)
+}
+
+/// The choices of a camera's default, the same for every camera: the raw default (`raw_default`), LightCraft's
+/// (`None`), then the presets under their group headings. Kept until the presets or the language change, since a
+/// library can hold thousands of presets.
+fn camera_entries(app: &LightcraftApp, ui: &egui::Ui, raw_default: &str) -> std::sync::Arc<Vec<craft::ui::contract::Entry<Option<String>>>> {
+    use craft::ui::contract::Entry;
+    use std::sync::Arc;
+    type Cached = (u64, crate::i18n::Locale, Arc<Vec<Entry<Option<String>>>>);
+    let generation = app.session.presets.generation();
+    let language = crate::i18n::language();
+    let cache = egui::Id::unique("settings-camera-entries");
+    if let Some((_, _, entries)) = ui.data(|data| data.get_temp::<Cached>(cache)).filter(|(old, locale, _)| *old == generation && *locale == language) {
+        return entries;
+    }
+    let mut entries = vec![
+        Entry::new(Some(raw_default.to_owned()), crate::i18n::tr("Same as raw default").to_owned()),
+        Entry::new(None, crate::i18n::tr("LightCraft Default").to_owned()),
+    ];
+    let mut group = None;
+    for preset in app.session.presets.iter() {
+        if group != Some(preset.group.as_str()) {
+            group = Some(preset.group.as_str());
+            entries.push(Entry::heading(crate::i18n::builtin_label(&preset.group, preset.builtin).to_owned()));
+        }
+        entries.push(Entry::new(Some(preset.id.clone()), crate::i18n::builtin_label(&preset.name, preset.builtin).to_owned()));
+    }
+    let entries = Arc::new(entries);
+    ui.data_mut(|data| data.insert_temp(cache, (generation, language, Arc::clone(&entries))));
+    entries
 }
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
@@ -61,32 +91,25 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                         None => Some(RAW_DEFAULT),
                         Some(e) => e.preset.as_deref(),
                     };
-                    let mut pick = None;
-                    let label = match current {
-                        Some(RAW_DEFAULT) => crate::i18n::tr("Same as raw default").to_string(),
-                        None => crate::i18n::tr("LightCraft Default").to_string(),
-                        Some(pid) => app
-                            .session
-                            .presets
-                            .iter()
-                            .find(|p| p.id == pid)
-                            .map(|p| crate::i18n::builtin_label(&p.name, p.builtin).to_string())
-                            .unwrap_or_else(|| pid.to_string()),
-                    };
+                    // The camera's own default is the raw default (no entry), LightCraft's, or a preset; a preset that
+                    // has gone keeps its id as the caption until another is chosen.
+                    let missing = current.filter(|pid| *pid != RAW_DEFAULT && !app.session.presets.iter().any(|p| p.id == *pid));
+                    let entries = camera_entries(app, ui, RAW_DEFAULT);
                     let id = format!("settingsCamera-{i}");
-                    let r = crate::widgets::combo_box(&id).width(240.0).selected_text(label).show_ui(ui, |ui| {
-                        if ui.selectable_label(current == Some(RAW_DEFAULT), crate::i18n::tr("Same as raw default")).clicked() {
-                            pick = Some(json!({"camera": cam, "remove": true}));
-                        }
-                        if ui.selectable_label(current.is_none(), crate::i18n::tr("LightCraft Default")).clicked() {
-                            pick = Some(json!({"camera": cam, "preset": null}));
-                        }
-                        if let Some(pid) = crate::panels::presets::picker_rows(ui, &id, &app.session.presets, current) {
-                            pick = Some(json!({"camera": cam, "preset": pid}));
-                        }
+                    let picked = crate::widgets::select(
+                        ui,
+                        &format!("combo:{id}"),
+                        crate::i18n::tr("Camera"),
+                        current.map(str::to_owned),
+                        entries.as_slice(),
+                        missing.map(str::to_owned),
+                        Some(240.0),
+                    );
+                    let pick = picked.map(|next| match next.as_deref() {
+                        Some(RAW_DEFAULT) => json!({"camera": cam, "remove": true}),
+                        None => json!({"camera": cam, "preset": null}),
+                        Some(pid) => json!({"camera": cam, "preset": pid}),
                     });
-                    crate::widgets::name_combo(&r.response, crate::i18n::tr("Camera"));
-                    register(ui, format!("combo:{id}"), r.response.rect);
                     if let Some(c) = pick {
                         let _ = app.run("library.preferences", json!({"camera": c}));
                     }
@@ -124,23 +147,11 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
     }
     if !app.session.metadata_presets.is_empty() {
         row(ui, t, crate::i18n::tr("Metadata preset"), |ui| {
-            let cur = d.metadata_preset.clone();
-            let mut pick = None;
-            let r = crate::widgets::combo_box("settingsMetaPreset")
-                .width(240.0)
-                .selected_text(cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into()))
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(cur.is_none(), crate::i18n::tr("None")).clicked() {
-                        pick = Some(String::new());
-                    }
-                    for m in &app.session.metadata_presets {
-                        if ui.selectable_label(cur.as_deref() == Some(m.name.as_str()), &m.name).clicked() {
-                            pick = Some(m.name.clone());
-                        }
-                    }
-                });
-            crate::widgets::name_combo(&r.response, crate::i18n::tr("Metadata preset"));
-            register(ui, "combo:settingsMetaPreset", r.response.rect);
+            // "" is no metadata preset, as the command takes it
+            let cur = d.metadata_preset.clone().unwrap_or_default();
+            let mut entries = vec![craft::ui::contract::Entry::new(String::new(), crate::i18n::tr("None").to_owned())];
+            entries.extend(app.session.metadata_presets.iter().map(|m| craft::ui::contract::Entry::new(m.name.clone(), m.name.clone())));
+            let pick = crate::widgets::select(ui, "combo:settingsMetaPreset", crate::i18n::tr("Metadata preset"), cur.clone(), &entries, Some(cur), Some(240.0));
             if let Some(n) = pick {
                 let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
             }
