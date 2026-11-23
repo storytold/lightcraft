@@ -296,6 +296,9 @@ pub struct Session {
     /// The host may offer the lens database at its start, and fetch it after the user's yes
     /// ([`Session::with_lens_auto_download`]; when: [`lensfun_download::fetch_on_start`]).
     pub lens_auto_download: bool,
+    /// The host may offer, at its start, to update photos imported before LightCraft recorded what their files carry
+    /// ([`Session::with_file_facts_offer`], `cmd::file_facts`). A host without a person to ask (CLI, MCP) never does.
+    pub file_facts_offer: bool,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
     pub place_names: cmd::geocode::PlaceNames,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
@@ -500,6 +503,7 @@ impl Session {
             face_downloads: Default::default(),
             lensfun: Default::default(),
             lens_auto_download: false,
+            file_facts_offer: false,
             place_names: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]

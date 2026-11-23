@@ -261,7 +261,7 @@ pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) ->
     };
     // lens profiles from the app's own lensfun copy, offered on the first launch (not for a throwaway session)
     if !in_memory {
-        s = s.with_default_lens_database().with_lens_auto_download();
+        s = s.with_default_lens_database().with_lens_auto_download().with_file_facts_offer();
     }
     s.face_models_dir = lightcraft_engine::config::default_face_models_dir();
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));

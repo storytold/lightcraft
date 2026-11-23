@@ -313,6 +313,23 @@ impl Metadata {
     }
 }
 
+/// Most semantic mask IFDs looked at in one DNG (an iPhone ProRAW has up to six).
+const MAX_SEMANTIC_MASKS: usize = 64;
+
+/// The `SemanticName` of each semantic mask a DNG carries (its segmentation mattes: iPhone ProRAW names them
+/// `urn:com:apple:photo:…:aux:semanticskinmatte` and the like), in file order. Only tags are read, no mask is
+/// decoded; empty for a file that isn't TIFF-based or carries none.
+pub fn dng_semantic_names(bytes: &[u8]) -> Vec<String> {
+    use craft_tiff::tags as t;
+    let Ok(tiff) = craft_tiff::Tiff::parse(bytes) else { return Vec::new() };
+    tiff.all_ifds()
+        .into_iter()
+        .filter(|i| i.u16(t::PHOTOMETRIC) == Some(t::photometric::MASK) || i.u32(t::NEW_SUBFILE_TYPE) == Some(t::SUBFILE_SEMANTIC_MASK))
+        .take(MAX_SEMANTIC_MASKS)
+        .filter_map(|i| i.string(t::SEMANTIC_NAME).filter(|n| !n.is_empty()))
+        .collect()
+}
+
 /// Read everything we understand from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG/raw).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {

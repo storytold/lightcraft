@@ -365,6 +365,12 @@ pub struct UiState {
     /// The first-run lens database download was considered this run (`crate::lens_db`).
     #[serde(skip)]
     pub lens_download_checked: bool,
+    /// Whether this run has decided about the offer to update photos imported earlier ([`crate::file_facts`]).
+    #[serde(skip)]
+    pub file_facts_checked: bool,
+    /// Bumped when an update of photos imported earlier finishes: what counts them (Settings) reads again.
+    #[serde(skip)]
+    pub file_facts_epoch: u64,
     /// The library, lens database generation and database replacement count whose raws were last looked up for a
     /// lens profile (`crate::lens_db::lookup_key`).
     #[serde(skip)]
@@ -531,6 +537,8 @@ impl Default for UiState {
             rechecked_library: None,
             seen_version: None,
             lens_download_checked: false,
+            file_facts_checked: false,
+            file_facts_epoch: 0,
             lens_refreshed: None,
             lens_lookup_ids: Vec::new(),
             status: String::new(),

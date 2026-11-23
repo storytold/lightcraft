@@ -19,6 +19,10 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         iso: m.iso,
         flash: m.flash.map(|f| f.fired),
         exposure_bias: m.exposure_bias.map(|v| v as f32),
+        // set by the probe for formats it looks into ([`dng_matte_kinds`])
+        mattes: None,
+        // stamped by [`probe_bytes`]
+        facts: 0,
         serial_number: m.serial_number.clone().unwrap_or_default(),
         location: m.sublocation.clone().unwrap_or_default(),
         city: m.city.clone().unwrap_or_default(),
@@ -121,6 +125,31 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     Some(lightcraft_pipeline::optics::reorient_lens(&lens, raw.orientation, cw, ch))
 }
 
+/// The kinds of segmentation matte a DNG carries that AI masks understand ([`super::load::matte_kind`]), each once,
+/// from the names of its semantic masks ([`lightcraft_meta::dng_semantic_names`]). Only tags are read, so this costs
+/// nothing beside the probe; a mask that later fails to decode, or selects nothing, still counts here.
+fn dng_matte_kinds(bytes: &[u8]) -> Vec<String> {
+    let mut kinds: Vec<String> = Vec::new();
+    for kind in lightcraft_meta::dng_semantic_names(bytes).iter().filter_map(|n| super::load::matte_kind(n)) {
+        if !kinds.iter().any(|k| k == kind.id()) {
+            kinds.push(kind.id().to_string());
+        }
+    }
+    kinds
+}
+
+/// The version of the set of facts the probe records about a file beyond its Exif (issue #4371). Each photo keeps the
+/// version that last looked at its file (`Meta::facts`), so a fact added later can be recorded for photos imported
+/// before it (`cmd::file_facts`). **Adding a fact:** raise this by one and add a row to [`FACTS_ADDED`].
+pub const FACTS_VERSION: u16 = 1;
+
+/// What each version of the probe started to record, and for which formats (as `Photo::format` spells them; an empty
+/// list: every format). A photo stamped below a row's version whose format the row names has a file worth reading
+/// again; other photos are left alone, so a fact about one format doesn't cost a pass over the whole library.
+///
+/// 1: the segmentation mattes a DNG carries (`Meta::mattes`, [`dng_matte_kinds`]).
+pub const FACTS_ADDED: [(u16, &[&str]); 1] = [(1, &["DNG"])];
+
 fn ext_upper(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default()
 }
@@ -129,7 +158,15 @@ fn ext_upper(name: &str) -> String {
 /// raws are described from their headers ([`lightcraft_raw::probe_info`]), other images too
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
+///
+/// The result carries [`FACTS_VERSION`]: whatever the file had, this version of the probe looked.
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
+    let mut info = probe_unstamped(name, bytes)?;
+    info.meta.facts = FACTS_VERSION;
+    Ok(info)
+}
+
+fn probe_unstamped(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
@@ -159,11 +196,15 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         };
         // what the Exif reader can't see, the decoder may have read from the raw's own records (a CRW keeps make,
         // model and capture time in CIFF records, no Exif): it fills the gaps, so the catalog knows the camera
-        let (meta, captured) = {
+        let (mut meta, captured) = {
             let mut m = m.clone();
             m.fill_missing(&raw.metadata);
             meta_of(&m)
         };
+        // which segmentation mattes the file carries (a DNG's semantic masks), by name: nothing is decoded
+        if raw.format == lightcraft_raw::RawFormat::Dng {
+            meta.mattes = Some(dng_matte_kinds(bytes));
+        }
         let (w, h) = raw.developed_size();
         let (mut w, mut h) = (w.max(1) as u32, h.max(1) as u32);
         if raw.orientation.swaps_axes() {
