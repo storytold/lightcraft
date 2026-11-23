@@ -5,8 +5,7 @@ use craft::ui::style::UiTokens;
 
 use super::sliders::control;
 use super::{
-    Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PhotoId, Pos2, Rect, Sense, Stroke, Tokens, Vertex, json, paint, pos2, register,
-    vec2,
+    Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PhotoId, Pos2, Rect, Sense, Stroke, Tokens, Vertex, json, paint, pos2, vec2,
 };
 
 // ------------------------------------------------------------------------------ colour grading
@@ -148,12 +147,27 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     let eye = Rect::from_center_size(r.left_bottom() + vec2(2.0, -2.0), vec2(16.0, 16.0));
     let wheel_input = !eye_measuring(ui) && ui.is_enabled() && !eye_owns_pointer(ui, key, eye);
     let hovering = ui.rect_contains_pointer(zone);
-    let resp = ui.interact(r, egui::Id::unique(("wheel", key)), Sense::click_and_drag());
-    crate::widgets::announce(&resp, format!("{} {key}", crate::i18n::tr("Color wheel")));
-    let resp = resp.on_hover_text(crate::i18n::tr(
-        "Drag to set hue and saturation. Hold Shift to keep the hue, Cmd/Ctrl to keep the saturation, Alt/Option to fine-adjust. Double-click to reset.",
-    ));
-    register(ui, format!("wheel:{key}"), r);
+    // The panel paints the wheel; the framework senses it (press, drag, double-click, its node and tooltip). A
+    // measuring run senses nothing.
+    let target = crate::panels::detail::host::live(ui).then(|| {
+        crate::panels::detail::host::target(
+            ui,
+            ("wheel", key),
+            r,
+            crate::panels::detail::host::Target::new(format!("{} {key}", crate::i18n::tr("Color wheel")))
+                .tooltip(crate::i18n::tr(
+                    "Drag to set hue and saturation. Hold Shift to keep the hue, Cmd/Ctrl to keep the saturation, Alt/Option to fine-adjust. Double-click to reset.",
+                ))
+                .drag(),
+        )
+    });
+    let resp = target.as_ref().map_or_else(|| ui.response(), |target| target.response.clone());
+    let double_clicked = target.as_ref().is_some_and(crate::panels::detail::host::HostOutput::double_clicked);
+    // the release of a drag (the framework's response reports no drag_stopped on that pass)
+    let drag_ended = resp.drag_stopped() || target.as_ref().is_some_and(crate::panels::detail::host::HostOutput::drag_ended);
+    if let Some(target) = &target {
+        crate::widgets::register_response(format!("wheel:{key}"), r, &target.response);
+    }
     paint_wheel(ui.painter(), c, rad);
     if hidden {
         ui.painter().circle_filled(c, rad, Color32::from_black_alpha(150));
@@ -219,17 +233,17 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
         let (hue, sat) = grab.map_or_else(|| wheel_pick(q - c, rad, None), |g| g.pick(q - c, rad));
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): hue.round(), format!("grading.{key}.sat"): sat.round()}}));
     }
-    if wheel_input && (resp.drag_stopped() || resp.clicked()) {
+    if wheel_input && (drag_ended || resp.clicked()) {
         let _ = app.run("develop.endInteraction", json!({}));
     }
     // released, or Esc (egui ends a drag on it)
-    if resp.drag_stopped()
+    if drag_ended
         && let Some(held) = ui.ctx().data_mut(|m| m.remove_temp::<WheelCapture>(egui::Id::unique(WHEEL_CAPTURE)))
         && !held.dropped
     {
         give_pointer_back(ui.ctx(), held.origin);
     }
-    if wheel_input && resp.double_clicked() {
+    if wheel_input && double_clicked {
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
     }
     // hue and saturation readout: centred above the wheel, shown like the eye (no fade)

@@ -227,7 +227,7 @@ fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: 
                     target = rect.shrink2(egui::vec2((thumb.bounds.width() * 0.5).min(rect.width() * 0.5), 0.0));
                     super::register_geometry(ctx, format!("sliderThumb:{}", spec.id), thumb.bounds);
                     if row.enabled {
-                        hint(ui, ui.id().with(("lc-slider-thumb-hint", spec.id, row.salt)), thumb.bounds, &reset_hint);
+                        hint(ctx, &response, thumb.bounds, &reset_hint);
                     }
                 }
                 if let Some(focus) = focus
@@ -250,7 +250,7 @@ fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: 
             }
             _ => {
                 if row.enabled {
-                    hint(ui, ui.id().with(("lc-slider-label-hint", spec.id, row.salt)), rect, &reset_hint);
+                    hint(ctx, &response, rect, &reset_hint);
                 }
             }
         }
@@ -273,13 +273,12 @@ fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: 
     track
 }
 
-/// A hover-only probe that says how to reset the row; it takes no press from the row.
-fn hint(ui: &Ui, id: egui::Id, rect: Rect, text: &str) {
-    if !rect.is_finite() || !rect.is_positive() {
-        return;
+/// Says how to reset the row while the pointer rests on `area` of the row's real part `response` (the caption, the
+/// thumb): the framework's tooltip on that owner, with no probe or second widget over it.
+fn hint(ctx: &egui::Context, response: &egui::Response, area: Rect, text: &str) {
+    if area.is_finite() && ctx.pointer_hover_pos().is_some_and(|at| area.contains(at)) {
+        craft::ui::contract::tooltip::attach(response, &text.to_owned().into());
     }
-    let response = ui.interact(rect, id, egui::Sense::hover());
-    craft::ui::contract::tooltip::attach(&response, &text.to_owned().into());
 }
 
 /// Lightroom's Kelvin track: 2000–7000 K over the left half, logarithmic up to 50000 K ([`ControlSpec::position`]).

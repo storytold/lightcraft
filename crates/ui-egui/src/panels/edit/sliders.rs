@@ -1,6 +1,6 @@
 use super::{
     Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
-    pos2, register, section_header, vec2,
+    pos2, section_header, vec2,
 };
 use crate::widgets::slider_salted;
 
@@ -74,57 +74,50 @@ pub(super) fn rel_to_k(r: f64) -> f64 {
     1e6 / (1e6 / 6500.0 - r * 0.8)
 }
 
-/// The profile dropdown: Favorites, Recent, one submenu per group, then favourite toggle and
-/// Browse…. Like the menu bar's menus, the dropdown and each submenu stay inside the window and
-/// scroll when their rows don't fit (issue #2059: a folder of many imported profiles ran past the
-/// window's bottom edge). `below` is the dropdown's bottom edge, which the menu hangs from.
-pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    crate::menu_level::level(ui, 1, Some(below), |ui| profile_menu_rows(app, ui, d, below));
-}
-
-fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
+/// The rows of the profile dropdown (a framework menu under the Profile opener): Favorites, Recent, one submenu per
+/// group, then the favourite toggle and Browse…. The framework keeps the menu and each submenu inside the window and
+/// scrolls them when their rows don't fit (issue #2059: a folder of many imported profiles).
+pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+    use craft::ui::contract::{Props as _, Show as _};
+    use craft::ui::menu::{Menu, MenuItem};
     use lightcraft_engine::presets::{PROFILES, profile_groups};
-    let t = Tokens::get(ui.ctx());
-    ui.set_min_width(200.0);
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let cur = d.profile.id.as_str();
     // (clicked, hovered)
     let mut pick: (Option<String>, Option<String>) = (None, None);
     let item = |ui: &mut egui::Ui, key: &str, id: &str, name: &str, pick: &mut (Option<String>, Option<String>)| {
-        let r = ui.selectable_label(id == cur, crate::i18n::profile_label(id, name));
-        register(ui, format!("profileMenu:{key}:{id}"), r.rect);
-        if r.clicked() {
-            pick.0 = Some(id.to_string());
+        let row = MenuItem::new(crate::i18n::profile_label(id, name).to_string()).id_salt(("profile-row", key, id)).entry_checked(id == cur).show(ui);
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            crate::widgets::register_response(format!("profileMenu:{key}:{id}"), row.response.rect, &row.response);
+            if row.ran {
+                pick.0 = Some(id.to_string());
+            }
+            if row.response.hovered() {
+                pick.1 = Some(id.to_string());
+            }
         }
-        if r.hovered() {
-            pick.1 = Some(id.to_string());
-        }
-    };
-    let heading = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
         let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
         if list.is_empty() {
             continue;
         }
-        heading(ui, title);
+        let _ = MenuItem::heading(crate::i18n::tr(title).to_owned()).id_salt(("profile-heading", key)).show(ui);
         for (id, name) in list {
             item(ui, key, id, name, &mut pick);
         }
-        ui.separator();
+        crate::widgets::menu_divider(ui);
     }
     for g in profile_groups() {
-        let r = crate::widgets::menu_button(ui, crate::i18n::tr(g), |ui| {
-            crate::menu_level::level(ui, 2, Some(below), |ui| {
-                ui.set_min_width(170.0);
+        let row = ui.push_id(("profile-group", g), |ui| {
+            Menu::submenu_row(ui, crate::i18n::tr(g).to_owned(), |ui, _| {
                 for p in PROFILES.iter().filter(|p| p.group == g) {
                     item(ui, "group", p.id, p.name, &mut pick);
                 }
-            });
+            })
         });
-        register(ui, format!("profileMenu:groupMenu:{g}"), r.response.rect);
-        if r.inner.is_some() {
-            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
+        if real {
+            crate::widgets::register_response(format!("profileMenu:groupMenu:{g}"), row.inner.response.rect, &row.inner.response);
         }
     }
     // imported profile groups: LUT folders, then camera profiles
@@ -137,20 +130,18 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     }
     for g in &lut_groups {
         // a folder's name as it is, and its own widget id even when it matches a built-in group
-        let r = crate::widgets::menu_button(ui, g.as_str(), |ui| {
-            crate::menu_level::level(ui, 2, Some(below), |ui| {
-                ui.set_min_width(170.0);
+        let row = ui.push_id(("profile-lut-group", g.as_str()), |ui| {
+            Menu::submenu_row(ui, g.clone(), |ui, _| {
                 for (id, name, _) in imported.iter().filter(|p| &p.2 == g) {
                     item(ui, "group", id, name, &mut pick);
                 }
-            });
+            })
         });
-        register(ui, format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
-        if r.inner.is_some() {
-            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
+        if real {
+            crate::widgets::register_response(format!("profileMenu:lutGroupMenu:{g}"), row.inner.response.rect, &row.inner.response);
         }
     }
-    ui.separator();
+    crate::widgets::menu_divider(ui);
     if let Some((name, _)) = app.session.profile_info(cur) {
         let fav = app.session.profile_favorites.iter().any(|f| f == cur);
         let label = if fav {
@@ -158,16 +149,15 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         } else {
             crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label(cur, name))
         };
-        let r = ui.button(label);
-        register(ui, "profileMenu:toggleFavorite", r.rect);
-        if r.clicked() {
+        if crate::widgets::menu_row(ui, "profile-toggle-favorite", Some("profileMenu:toggleFavorite"), &label, None, false, true) {
             let _ = app.run("profile.favorite", json!({"id": cur}));
         }
     }
-    let r = ui.button(crate::i18n::tr("Browse…"));
-    register(ui, "profileMenu:browse", r.rect);
-    if r.clicked() {
+    if crate::widgets::menu_row(ui, "profile-browse", Some("profileMenu:browse"), crate::i18n::tr("Browse…"), None, false, true) {
         let _ = app.run("panel.profiles", json!({}));
+    }
+    if !real {
+        return;
     }
     // resting on a profile previews it in the loupe
     if let Some(hovered_id) = &pick.1
