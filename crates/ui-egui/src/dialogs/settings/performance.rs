@@ -244,18 +244,13 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mut result = None;
     ui.horizontal(|ui| {
         ui.add_space(LABEL_W);
-        if app.services.pick_folder.is_some() {
-            let r = ui.button(crate::i18n::tr("Choose Folder…"));
-            register(ui, "button:settingsSmartChoose", r.rect);
-            if r.clicked()
-                && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
-            {
-                result = Some(app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing})));
-            }
+        if app.services.pick_folder.is_some()
+            && super::controls::button(ui, "settingsSmartChoose", "Choose Folder…", true)
+            && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
+        {
+            result = Some(app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing})));
         }
-        let r = ui.add_enabled(custom, egui::Button::new(crate::i18n::tr("Use Library Folder")));
-        register(ui, "button:settingsSmartReset", r.rect);
-        if r.clicked() {
+        if super::controls::button(ui, "settingsSmartReset", "Use Library Folder", custom) {
             result = Some(app.run("library.smartPreviewsLocation", json!({"reset": true, "existing": existing})));
         }
     });
@@ -303,8 +298,6 @@ mod tests {
 fn clear_preview_cache_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use craft::ui::contract::{Props as _, Show as _};
     let label = crate::i18n::tr("Clear Cache");
-    // Keep Settings a single native keyboard traversal domain. A lone SDK stop would
-    // consume Tab without reaching any of the size buttons that precede this action.
     let (response, clicked) = {
         let out = craft::ui::buttons::Button::new(label).id_salt("settingsClearCache").show(ui);
         let clicked = out.clicked();

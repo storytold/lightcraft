@@ -21,6 +21,7 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 mod appearance;
+mod controls;
 mod display;
 mod general;
 mod import;

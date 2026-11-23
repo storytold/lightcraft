@@ -275,12 +275,8 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .unwrap_or_default();
     heading(ui, t, "Your own model (optional)");
     let installing = downloads.iter().any(|d| d["id"] == "local-install" && d["state"].as_str() == Some("installing"));
-    let r = crate::button::Button::new("Install from file…")
-        .enabled(runtime && app.services.pick_denoise_model.is_some())
-        .busy(installing)
-        .widget("denoise:installFile")
-        .show(ui);
-    if r.clicked()
+    let can_install = runtime && app.services.pick_denoise_model.is_some();
+    if install_button(ui, can_install, installing)
         && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
     {
         match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
@@ -524,6 +520,47 @@ fn device_line(d: &Value, run_on: &str) -> String {
     }
 }
 
+/// A model row's button: a framework button that keeps its activation through the tooltip chain.
+struct ModelButton {
+    response: egui::Response,
+    activated: bool,
+}
+
+impl ModelButton {
+    fn clicked(&self) -> bool {
+        self.activated
+    }
+
+    fn on_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.response = self.response.on_hover_text(text);
+        self
+    }
+}
+
+/// A button of a model row (`widget` names it for the control channel), never acting while the framework only measures.
+fn model_button(ui: &mut egui::Ui, widget: &str, label: &str) -> ModelButton {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let shown = Button::new(tr(label).to_owned()).id_salt(("denoise-model", widget)).show(ui);
+    if real {
+        crate::widgets::register_response(widget.to_owned(), shown.response.rect, &shown.response);
+    }
+    ModelButton { activated: real && ui.is_enabled() && shown.clicked(), response: shown.response }
+}
+
+/// Install from file… (`denoise:installFile`): busy while an installation runs, disabled without a model chooser.
+fn install_button(ui: &mut egui::Ui, enabled: bool, installing: bool) -> bool {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let shown = Button::new(tr("Install from file…").to_owned()).id_salt("denoise:installFile").enabled(enabled).loading(installing).show(ui);
+    if real {
+        crate::widgets::register_response("denoise:installFile", shown.response.rect, &shown.response);
+    }
+    real && enabled && ui.is_enabled() && shown.clicked()
+}
+
 fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
     let id = m["id"].as_str().unwrap_or("").to_string();
     let (installed, selected) = (m["installed"].as_bool() == Some(true), m["selected"].as_bool() == Some(true));
@@ -587,22 +624,19 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    let r = ui.button(tr("Remove"));
-                    register(ui, format!("denoise:remove:{id}"), r.rect);
+                    let r = model_button(ui, &format!("denoise:remove:{id}"), "Remove");
                     if r.clicked() {
                         let _ = app.run("denoise.models.remove", json!({"id": id}));
                         app.caches.denoise.epoch += 1;
                     }
                     if selected {
-                        let r = ui.button(tr("Stop using"));
-                        register(ui, format!("denoise:off:{id}"), r.rect);
+                        let r = model_button(ui, &format!("denoise:off:{id}"), "Stop using");
                         if r.clicked() {
                             let _ = app.run("denoise.models.select", json!({"id": null}));
                             app.caches.denoise.epoch += 1;
                         }
                     } else {
-                        let r = ui.button(tr("Use"));
-                        register(ui, format!("denoise:use:{id}"), r.rect);
+                        let r = model_button(ui, &format!("denoise:use:{id}"), "Use");
                         if r.clicked() {
                             let _ = app.run("denoise.models.select", json!({"id": id}));
                             app.caches.denoise.epoch += 1;
@@ -611,8 +645,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                 } else {
                     match dl_state {
                         Some("running") => {
-                            let r = ui.button(tr("Cancel"));
-                            register(ui, format!("denoise:cancelDownload:{id}"), r.rect);
+                            let r = model_button(ui, &format!("denoise:cancelDownload:{id}"), "Cancel");
                             if r.clicked() {
                                 let _ = app.run("denoise.models.downloadCancel", json!({"id": id}));
                                 app.caches.denoise.dl_watch.retain(|w| w != &id);
@@ -622,10 +655,8 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         Some("done" | "installing") => {}
                         _ => {
                             if let Some(url) = m["source"].as_str() {
-                                let r = ui
-                                    .button(tr("Open page"))
+                                let r = model_button(ui, &format!("denoise:get:{id}"), "Open page")
                                     .on_hover_text(tr("Opens the model's own page in your browser, to read about it or get the file yourself."));
-                                register(ui, format!("denoise:get:{id}"), r.rect);
                                 if r.clicked() {
                                     open_page(app, url);
                                 }
@@ -637,8 +668,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                     mb(m["sizeBytes"].as_u64()),
                                     host = host
                                 );
-                                let r = ui.button(tr(label)).on_hover_text(tip);
-                                register(ui, format!("denoise:download:{id}"), r.rect);
+                                let r = model_button(ui, &format!("denoise:download:{id}"), label).on_hover_text(tip);
                                 if r.clicked() {
                                     open_download_dialog(app, m);
                                 }

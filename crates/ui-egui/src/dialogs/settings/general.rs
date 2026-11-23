@@ -1,5 +1,5 @@
 use super::widgets::{check, choices, field, heading, hint, path_label, row};
-use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
+use super::{LightcraftApp, RichText, StartupView, Tokens, json};
 
 // ------------------------------------------------------------------------------------- General
 
@@ -168,9 +168,7 @@ fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     };
     row(ui, t, crate::i18n::tr("Lens database"), |ui| {
         ui.label(RichText::new(status).color(t.text));
-        let r = ui.add_enabled(!own && !running && !installed, egui::Button::new(crate::i18n::tr("Download Lens Database")));
-        register(ui, "button:settingsLensDatabase", r.rect);
-        if r.clicked()
+        if super::controls::button(ui, "settingsLensDatabase", "Download Lens Database", !own && !running && !installed)
             && let Err(e) = crate::lens_db::download_default(app)
         {
             app.toast(ui.ctx(), e);

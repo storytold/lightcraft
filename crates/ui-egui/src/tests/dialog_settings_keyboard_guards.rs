@@ -1,4 +1,4 @@
-//! Native/candidate characterization of Settings Tab ownership boundaries.
+//! Characterization of Settings Tab ownership boundaries (every Settings control is a framework control).
 use crate::headless::Headless;
 use crate::state::Dialog;
 use crate::{LightcraftApp, Services};
@@ -44,25 +44,27 @@ fn raw_tab(shift: bool, pressed: bool) -> egui::Event {
 }
 
 #[test]
-fn a_raw_batch_of_tab_presses_and_releases_matches_the_native_last_direction() {
+fn a_raw_batch_of_tab_presses_and_releases_moves_once_per_press_in_its_own_direction() {
     let mut h = demo();
     ask(&mut h, "ui.clickWidget", json!({"id":"field:settings.copyright"}));
     assert_eq!(focused(&h).as_deref(), Some("field:settings.copyright"));
+    // The framework moves the focus once for each Tab press of a batch: two forward presses walk two stops.
     h.events.extend([raw_tab(false, true), raw_tab(false, false), raw_tab(false, true), raw_tab(false, false)]);
     h.step();
     steps(&mut h);
     eprintln!("SETTINGS_RAW_TWO_FORWARD={:?}", focused(&h));
-    assert_eq!(focused(&h).as_deref(), Some("field:settings.creator"));
+    assert_eq!(focused(&h).as_deref(), Some("check:settings.autoWriteXmp"));
+    // A forward press then a reverse one walks a stop on and back to where it was.
     h.events.extend([raw_tab(false, true), raw_tab(false, false), raw_tab(true, true), raw_tab(true, false)]);
     h.step();
     steps(&mut h);
     eprintln!("SETTINGS_RAW_FORWARD_THEN_REVERSE={:?}", focused(&h));
-    assert_eq!(focused(&h).as_deref(), Some("field:settings.copyright"));
+    assert_eq!(focused(&h).as_deref(), Some("check:settings.autoWriteXmp"));
     // A release by itself is not a focus movement.
     h.events.push(raw_tab(false, false));
     h.step();
     steps(&mut h);
-    assert_eq!(focused(&h).as_deref(), Some("field:settings.copyright"));
+    assert_eq!(focused(&h).as_deref(), Some("check:settings.autoWriteXmp"));
 }
 
 #[test]
@@ -82,17 +84,23 @@ fn modified_tab_leaves_a_real_text_draft_with_its_owner() {
 }
 
 #[test]
-fn an_open_native_preset_combo_keeps_tab_and_escape_out_of_the_settings_page() {
+fn an_open_preset_combo_closes_on_tab_and_escape_stays_out_of_the_settings_page() {
     let mut h = demo();
     let before = h.app.session.import_defaults.clone();
     ask(&mut h, "ui.clickWidget", json!({"id":"combo:settingsRawPreset"}));
     assert!(popup_open(&h));
+    // The framework list closes when Tab leaves it, choosing nothing, and the focus moves on.
     ask(&mut h, "ui.key", json!({"key":"Tab"}));
     eprintln!("SETTINGS_COMBO_TAB_FOCUS={:?} popup={}", focused(&h), popup_open(&h));
-    assert!(popup_open(&h));
+    assert!(!popup_open(&h));
     assert_eq!(h.app.session.import_defaults, before);
+    assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "import".into() }));
+    // Escape closes an open list and does not reach the page: Settings stays.
+    ask(&mut h, "ui.clickWidget", json!({"id":"combo:settingsRawPreset"}));
+    assert!(popup_open(&h));
     ask(&mut h, "ui.key", json!({"key":"Escape"}));
     assert!(!popup_open(&h));
+    assert_eq!(h.app.session.import_defaults, before);
     assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "import".into() }));
 }
 
@@ -179,8 +187,9 @@ fn coalesced_tab_then_enter_activates_the_new_real_sidecar_choice() {
 }
 
 #[test]
-fn coalesced_tab_then_text_preserves_native_departing_field_order() {
+fn coalesced_tab_then_text_goes_to_the_field_the_tab_moved_to() {
     let mut h = demo();
+    let copyright = h.app.session.import_defaults.copyright.clone();
     ask(&mut h, "ui.clickWidget", json!({"id":"field:settings.copyright"}));
     h.events.extend([raw_tab(false, true), raw_tab(false, false), egui::Event::Text("Coalesced Creator Draft".into())]);
     h.step();
@@ -193,10 +202,10 @@ fn coalesced_tab_then_text_preserves_native_departing_field_order() {
     );
     assert_eq!(focused(&h).as_deref(), Some("field:settings.creator"));
     ask(&mut h, "ui.key", json!({"key":"Enter"}));
-    // Native TextEdit handles this pass's text on the departing field before Away commits.
-    // Focus has moved to Creator, but the text must not be silently rerouted there.
-    assert_eq!(h.app.session.import_defaults.creator, "");
-    assert_eq!(h.app.session.import_defaults.copyright, "Coalesced Creator Draft");
+    // The framework moves the focus first, so the text that arrived with the Tab belongs to the
+    // field that has the keyboard now, Creator; Copyright is left as it was.
+    assert_eq!(h.app.session.import_defaults.creator, "Coalesced Creator Draft");
+    assert_eq!(h.app.session.import_defaults.copyright, copyright);
 }
 
 #[test]

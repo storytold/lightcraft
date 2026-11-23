@@ -1,6 +1,6 @@
 use super::appearance::appearance;
 use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
+use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json};
 
 // ---------------------------------------------------------------------------------- Interface
 
@@ -237,17 +237,28 @@ mod loupe_view_options_flow_tests;
 
 /// A playback duration slider (`slider:{id}`). While it is dragged the value changes in memory
 /// (the slideshow reads it); letting go saves it through `slideshow.playback`.
-pub(super) fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, range: std::ops::RangeInclusive<f64>) {
-    let mut v = value;
-    let r = ui.add(egui::Slider::new(&mut v, range).logarithmic(key == "slideDuration").suffix(" s").max_decimals(1));
-    register(ui, format!("slider:{id}"), r.rect);
-    if r.changed()
-        && let Ok(next) = app.session.slideshow.merged(&json!({ key: v }))
-    {
-        app.session.slideshow = next;
-    }
-    if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        let _ = app.run("slideshow.playback", json!({ key: v }));
+pub(super) fn duration_slider(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    key: &str,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+) {
+    use super::controls::{self, Shape, Step};
+    let shape = Shape { label, lo: *range.start(), hi: *range.end(), unit: "s", step: 0.1, log: key == "slideDuration" };
+    for step in controls::slider(ui, controls::owner(id), id, &shape, value) {
+        match step {
+            Step::Preview(v) => {
+                if let Ok(next) = app.session.slideshow.merged(&json!({ key: v })) {
+                    app.session.slideshow = next;
+                }
+            }
+            Step::Save(v) => {
+                let _ = app.run("slideshow.playback", json!({ key: v }));
+            }
+        }
     }
 }
 

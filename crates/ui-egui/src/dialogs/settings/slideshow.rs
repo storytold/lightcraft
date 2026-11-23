@@ -1,6 +1,6 @@
 use super::display::duration_slider;
 use super::widgets::{check, choices, heading, hint, row};
-use super::{LightcraftApp, Tokens, Value, json, register};
+use super::{LightcraftApp, Tokens, Value, json};
 
 /// The Slideshow tab: the slide preview, then the settings, in one column the width of the page
 /// (the page scrolls; a column beside the preview would be wider than the window). Without
@@ -75,10 +75,10 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     hint(ui, t, crate::i18n::tr("A manual slideshow shows each slide until → or ← changes it. Exports still use the slide duration."));
     row(ui, t, crate::i18n::tr("Slide duration"), |ui| {
-        duration_slider(app, ui, "slideshowSlide", "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX)
+        duration_slider(app, ui, "slideshowSlide", "Slide duration", "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX)
     });
     row(ui, t, crate::i18n::tr("Fade duration"), |ui| {
-        duration_slider(app, ui, "slideshowFade", "fadeDuration", s.fade_duration, 0.0..=FADE_MAX.min(s.slide_duration))
+        duration_slider(app, ui, "slideshowFade", "Fade duration", "fadeDuration", s.fade_duration, 0.0..=FADE_MAX.min(s.slide_duration))
     });
     hint(ui, t, crate::i18n::tr("A slide stays up for its duration, its fade in included. A fade of 0 cuts."));
     row(ui, t, crate::i18n::tr("Fade"), |ui| {
@@ -106,13 +106,10 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let _ = app.run("slideshow.playback", json!({"fadeColor": c}));
         }
         if f == Fade::Color
-            && let Some(mut c) = s.fade_color
+            && let Some(c) = s.fade_color
+            && let Some(c) = super::controls::colour(ui, super::controls::owner("slideshowFadeColor"), "slideshowFadeColor", "Fade colour", c)
         {
-            let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-            register(ui, "button:slideshowFadeColor", r.rect);
-            if r.changed() {
-                let _ = app.run("slideshow.playback", json!({"fadeColor": c}));
-            }
+            let _ = app.run("slideshow.playback", json!({"fadeColor": c}));
         }
     });
     let mut v = s.random_order;
