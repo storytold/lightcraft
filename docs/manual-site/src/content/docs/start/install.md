@@ -3,7 +3,7 @@ title: Install
 description: Get Chromaforge running.
 ---
 
-- Download from the project's **Releases** page.
+- Easiest: the [Download](../../download/) page picks the right file for your computer. Everything is also on the project's **Releases** page.
 - **macOS**: download the `.dmg` for your Mac (`-macos-arm64` for Apple silicon, `-macos-x64` for Intel; `-macos-universal` runs on both and is twice the size), open it and drag the app to Applications. The app is not signed with an Apple developer certificate, so macOS warns first (see below). The [command-line tool](../../automate/cli/) is inside the app (see below).
 - **Windows**: run the installer, or unpack the portable zip. The files are not code-signed, so SmartScreen may warn: choose **More info ▸ Run anyway**. `<cli>.exe` beside the app is the command-line tool: a small launcher that runs the app as the tool.
 - **Linux**: AppImage, `.deb`, `.rpm`, Flatpak or a tarball. The `.deb`, `.rpm`, Flatpak and tarball put `<cli>` beside `<binary>` as a link to it: the app's program is the command-line tool when started under that name. An AppImage always starts the app (its `<cli>` link stays inside the image).
