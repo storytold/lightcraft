@@ -205,6 +205,11 @@ pub(crate) fn gpu_state(what: &str) -> Option<GpuState> {
     GPU_STATE.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(w, _)| *w == what).map(|(_, st)| st.clone())
 }
 
+#[cfg(test)]
+pub(crate) fn set_gpu_state_for_test(what: &'static str, st: GpuState) {
+    set_gpu_state(what, st);
+}
+
 fn set_gpu_state(what: &'static str, st: GpuState) {
     let mut all = GPU_STATE.lock().unwrap_or_else(PoisonError::into_inner);
     match all.iter_mut().find(|(w, _)| *w == what) {
@@ -444,13 +449,15 @@ pub(crate) fn detection_gpu_state(s: &Session) -> GpuState {
 
 /// Where face recognition runs, for Settings ▸ Faces and `faces.gpu`.
 pub(crate) fn recognition_gpu_state(s: &Session) -> GpuState {
+    // The user's CPU choice wins over the process-wide entry, which a background GPU check (or another session)
+    // can still write after the switch, as `detection_gpu_state` does.
+    if cpu_only(s) {
+        return GpuState { why: Some("the CPU is chosen in Settings".into()), ..GpuState::default() };
+    }
     if let Some(st) = gpu_state("recognition")
         && (st.device.is_some() || st.checking || st.why.is_some())
     {
         return st;
-    }
-    if cpu_only(s) {
-        return GpuState { why: Some("the CPU is chosen in Settings".into()), ..GpuState::default() };
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some((_, e)) = &s.faces.embedder

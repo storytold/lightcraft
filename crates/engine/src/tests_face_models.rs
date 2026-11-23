@@ -109,6 +109,16 @@ fn listing_inspecting_download_refusals_and_the_cpu_only_switch_before_anything_
     assert_eq!(list_gpu["cpuOnly"], true);
     assert_eq!(list_gpu["deviceChoice"], "cpu");
     assert_eq!(list_gpu["recognition"]["why"], "the CPU is chosen in Settings");
+    // a GPU check still finishing (or another session) leaves a device in the process-wide entry: the CPU
+    // choice still wins
+    crate::cmd::face_detect::set_gpu_state_for_test(
+        "recognition",
+        crate::cmd::face_detect::GpuState { device: Some("Test GPU".into()), ..Default::default() },
+    );
+    let list_gpu = again.execute("faces.models.list", &json!({})).unwrap()["gpu"].clone();
+    assert_eq!(list_gpu["recognition"]["why"], "the CPU is chosen in Settings");
+    assert!(list_gpu["recognition"]["device"].is_null(), "{list_gpu}");
+    crate::cmd::face_detect::set_gpu_state_for_test("recognition", Default::default());
     assert!(again.execute("faces.gpu", &json!({"cpuOnly": "yes"})).is_err());
     for bad in [
         json!({"device": 123}),
