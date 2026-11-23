@@ -1,3 +1,5 @@
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
 use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, register, text_button, vec2};
 
 pub(super) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -293,8 +295,12 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
 }
 
 /// Only the suggestion leaf changes: the caller keeps its full-path command and selection.
+/// Whether this pass draws nothing the user can reach: a sizing or measuring run.
+fn kw_measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
 fn suggestion_button(ui: &mut egui::Ui, owner: egui::Id, keyword: &str, name: &str, whole: &str, grouped: bool) -> bool {
-    use craft::ui::contract::{Props as _, Show as _};
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let enabled = ui.is_enabled();
     // The SDK owns the press lifecycle, keyboard activation and focus. Do not bridge keys or
@@ -411,8 +417,16 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         for (i, k) in kws.iter().enumerate() {
             // an empty slot: an idle button, so the others keep their ⌥ keys
             if k.is_empty() {
-                let r = ui.add_enabled_ui(false, |ui| ui.add_sized([bw, 22.0], egui::Button::new(""))).inner;
-                register(ui, format!("kwSetEmpty:{}", i + 1), r.rect);
+                let (rect, _) = ui.allocate_exact_size(vec2(bw, 22.0), egui::Sense::hover());
+                let shown = Button::new(crate::i18n::tr_format!("Keyword slot {n}, empty", n = i + 1))
+                    .painted(String::new())
+                    .id_salt(("kw-set-slot", i))
+                    .size(craft::theme::ControlSize::Sm)
+                    .enabled(false)
+                    .show_at(ui, rect);
+                if !kw_measuring(ui) {
+                    crate::widgets::register_response(format!("kwSetEmpty:{}", i + 1), rect, &shown.response);
+                }
                 if i % 3 == 2 {
                     ui.end_row();
                 }
@@ -422,20 +436,27 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let on = chip.is_some_and(|c| c.on_all());
             let some = chip.is_some() && !on;
             let short = format!("{}{}", k.rsplit('|').next().unwrap_or(k), if some { " *" } else { "" });
-            let r = ui
-                .add_sized(
-                    [bw, 22.0],
-                    egui::Button::new(egui::RichText::new(short).size(11.5).color(if on { t.text } else { t.text_label })).selected(on).truncate(),
-                )
-                .on_hover_text(format!("{} — ⌥{}", k.replace('|', " › "), i + 1));
-            register(ui, format!("kwSet:{}", i + 1), r.rect);
-            if on {
-                register(ui, format!("kwSetOn:{}", i + 1), r.rect);
-            } else if some {
-                register(ui, format!("kwSetSome:{}", i + 1), r.rect);
-            }
-            if r.clicked() {
-                let _ = app.run("keyword.toggleFromSet", json!({"index": i + 1}));
+            let (rect, _) = ui.allocate_exact_size(vec2(bw, 22.0), egui::Sense::hover());
+            let name = format!("{} — ⌥{}", k.replace('|', " › "), i + 1);
+            let shown = Button::new(name.clone())
+                .painted(short)
+                .id_salt(("kw-set-slot", i))
+                .size(craft::theme::ControlSize::Sm)
+                .variant(craft::theme::Variant::GHOST)
+                .selected(on)
+                .tooltip(name)
+                .show_at(ui, rect);
+            if !kw_measuring(ui) {
+                let r = &shown.response;
+                crate::widgets::register_response(format!("kwSet:{}", i + 1), rect, r);
+                if on {
+                    crate::widgets::register_response(format!("kwSetOn:{}", i + 1), rect, r);
+                } else if some {
+                    crate::widgets::register_response(format!("kwSetSome:{}", i + 1), rect, r);
+                }
+                if shown.clicked() {
+                    let _ = app.run("keyword.toggleFromSet", json!({"index": i + 1}));
+                }
             }
             if i % 3 == 2 {
                 ui.end_row();

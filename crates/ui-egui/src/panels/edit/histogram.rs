@@ -74,9 +74,17 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     // row under the plot
     let hdr = flow.hdr_bins();
     let legend = 26.0 * flow.morph;
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
-    crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
-    register(ui, "histogram", r);
+    let (r, _) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::hover());
+    // The panel paints the plot; the framework senses it (a click, the zones' drags and double-clicks, its node). A
+    // measuring run senses nothing.
+    let live = crate::panels::detail::host::live(ui);
+    let target = live.then(|| {
+        crate::panels::detail::host::target(ui, ("edit-histogram", id), r, crate::panels::detail::host::Target::new(crate::i18n::tr("Histogram")).drag())
+    });
+    let resp = target.as_ref().map_or_else(|| ui.response(), |target| target.response.clone());
+    if let Some(target) = &target {
+        crate::widgets::register_response("histogram", r, &target.response);
+    }
     // an owned painter: the clipping buttons below borrow the Ui mutably
     let p = &ui.painter().clone();
     p.rect_filled(r, 0.0, t.button);
@@ -109,15 +117,17 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         p.text(pos2((x0 + plot.right()) / 2.0, y), Align2::CENTER_CENTER, crate::i18n::tr("HDR"), t.font(12.5), t.text_label);
         let info = Rect::from_center_size(pos2(plot.right() - 16.0, y), vec2(14.0, 14.0));
         paint(p, info, Icon::Info, t.text_label);
-        let info_resp = ui.interact(info, egui::Id::unique("hdrHistogramInfo"), Sense::hover());
-        craft::ui::contract::tooltip::attach(
-            &info_resp,
-            &crate::i18n::tr(
-                "Left: the standard (SDR) range up to SDR white. Right: the HDR range, one band per stop above SDR white (the orange line: the HDR headroom). With Visualize HDR range on, the bands take its colours.",
-            )
-            .to_owned()
-            .into(),
-        );
+        // what the two ranges are: a framework target that carries the explanation as its tooltip (on hover or focus)
+        if live {
+            let _ = crate::panels::detail::host::target(
+                ui,
+                "hdrHistogramInfo",
+                info,
+                crate::panels::detail::host::Target::new(crate::i18n::tr("About the HDR histogram")).tooltip(crate::i18n::tr(
+                    "Left: the standard (SDR) range up to SDR white. Right: the HDR range, one band per stop above SDR white (the orange line: the HDR headroom). With Visualize HDR range on, the bands take its colours.",
+                )),
+            );
+        }
     }
     let clipping = hist.as_ref().map(|h| h.clipping());
     // mid-way with no histogram of the new kind yet, the one being left is drawn alone
@@ -144,7 +154,7 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         }
         flow.paint_curve(p, plot, &h);
     }
-    let mut clicked = resp.clicked();
+    let mut clicked = live && resp.clicked();
     // both buttons keep clear of the panel's right edge, where its floating scroll bar widens when
     // hovered beside the sliders, the left one too so they stay symmetric (#1640)
     let [shadow_rect, highlight_rect] = crate::panels::histogram::clipping_rects(ui, plot);

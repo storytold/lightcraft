@@ -4,7 +4,7 @@ use std::hash::{Hash as _, Hasher as _};
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, PartKey, Selection, SizeHint};
 use craft::ui::contract::overlay::Anchor;
 use craft::ui::contract::{
-    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger,
+    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger,
 };
 use craft::ui::display::Divider;
 use craft::ui::list::{List, ListRow, TreeLeaves};
@@ -12,7 +12,7 @@ use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::IconSpec;
 use egui::{Pos2, Rect};
 
-use super::{Tokens, pos2, register, vec2};
+use super::{SidebarSection, Tokens, pos2, register, vec2};
 
 /// Temp-data key of the row (its widget id after `source:`, lower-case) the sidebar scrolls to
 /// this frame: set before the sections are drawn, cleared after.
@@ -235,11 +235,6 @@ impl SideRow {
         self
     }
 
-    fn filler(key: &str, height: f32) -> Self {
-        let mut row = SideRow::new(key, "folder", "").no_icon().unregistered();
-        row.fill = Some(height.max(1.0).round() as u32);
-        row
-    }
 }
 
 /// The rows a sidebar list shows, as the framework's item source.
@@ -297,6 +292,18 @@ impl ItemSource<String> for SideRows {
     }
 }
 
+/// What dragging a section's header carries through the framework's drag session.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SectionDrag {
+    pub section: SidebarSection,
+    /// The drag began on the header pinned at the top of the sidebar.
+    pub pinned: bool,
+}
+
+/// What dragging an album's (or folder's) row carries: its id.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AlbumDrag(pub u64);
+
 /// How a sidebar list is shown.
 pub(super) struct SideSpec<'a> {
     /// Keeps the list's id apart from the others.
@@ -313,15 +320,31 @@ pub(super) struct SideSpec<'a> {
     /// A press on a row puts the keyboard focus on the list. A header that is dragged or given up
     /// with Escape keeps the focus where it was, so the Escape reaches the sidebar.
     pub focus_on_press: bool,
+    /// Dragging the list's row drags this section (and says it began on the pinned header or not).
+    pub section_drag: Option<(SidebarSection, bool)>,
+    /// Dragging a row drags the album or folder whose id ends its key.
+    pub album_drag: bool,
 }
 
 impl<'a> SideSpec<'a> {
     pub(super) fn new(salt: &'a str, name: &'a str, show_counts: bool) -> Self {
-        SideSpec { salt, name, selected: None, show_counts, tree: true, build_all: false, focus_on_press: true }
+        SideSpec { salt, name, selected: None, show_counts, tree: true, build_all: false, focus_on_press: true, section_drag: None, album_drag: false }
     }
 
     pub(super) fn selected(mut self, key: Option<&'a str>) -> Self {
         self.selected = key;
+        self
+    }
+
+    /// The row drags `section`: the drag is the framework's, so Escape and a lost press end it.
+    pub(super) fn section_drag(mut self, section: SidebarSection, pinned: bool) -> Self {
+        self.section_drag = Some((section, pinned));
+        self
+    }
+
+    /// The rows drag albums and folders.
+    pub(super) fn album_drag(mut self) -> Self {
+        self.album_drag = true;
         self
     }
 
@@ -367,9 +390,6 @@ pub(super) struct SideOut {
     pub events: Vec<SideEvent>,
     /// The list's own response, which a menu hangs from.
     pub response: Option<egui::Response>,
-    /// The list holds a press on one of its rows (the button went down on it and is still down:
-    /// not when the press was ended by Escape).
-    pub pressed: bool,
 }
 
 impl SideOut {
@@ -411,26 +431,22 @@ fn window(ui: &egui::Ui, total: usize, top: f32, height: f32, reveal: Option<usi
 /// The rows a list builds: all of them, or (for a long list) the ones in view with a filler as tall
 /// as the rest standing in for the others. The rows left out keep their `source:` names for the
 /// control channel, at where they would be.
-fn built_rows(ui: &egui::Ui, rows: Vec<SideRow>, salt: &str, want: Option<&String>) -> Vec<SideRow> {
+fn built_rows(ui: &egui::Ui, rows: Vec<SideRow>, salt: &str, want: Option<&String>) -> (Vec<SideRow>, f32, f32) {
     let total = rows.len();
     let height_id = egui::Id::unique(("side-row-height", salt.to_owned()));
     let height = ui.data(|d| d.get_temp::<f32>(height_id)).unwrap_or(ROW_HEIGHT).max(1.0);
     let top = ui.cursor().top();
     let reveal = want.and_then(|want| rows.iter().position(|row| row.id.to_lowercase() == *want));
     let built = window(ui, total, top, height, reveal);
-    let mut shown = Vec::with_capacity(built.len() + 2);
-    if built.start > 0 {
-        shown.push(SideRow::filler("\u{0}above", built.start as f32 * height));
-    }
-    shown.extend(rows[built.clone()].iter().cloned());
-    if built.end < total {
-        shown.push(SideRow::filler("\u{0}below", (total - built.end) as f32 * height));
-    }
+    let shown: Vec<SideRow> = rows[built.clone()].to_vec();
+    // The rows left out are plain space above and below the list, not rows of it: a list that measured their whole
+    // height would pass the framework's size guard (32,768 points) with a few thousand keywords and stop showing.
+    let (above, below) = (built.start as f32 * height, (total - built.end) as f32 * height);
     let (left, width) = (ui.cursor().left(), ui.available_width());
     for (at, row) in rows.iter().enumerate().filter(|(at, row)| !built.contains(at) && row.register) {
         register(ui, format!("source:{}", row.id), Rect::from_min_size(pos2(left, top + at as f32 * height), vec2(width, height)));
     }
-    shown
+    (shown, above, below)
 }
 
 /// The list row of `item`: its icon, label, count and the rest, in the columns `cells`.
@@ -472,9 +488,9 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if rows.is_empty() {
         return SideOut::default();
     }
-    let SideSpec { salt, name, selected, show_counts, tree, build_all, focus_on_press } = spec;
+    let SideSpec { salt, name, selected, show_counts, tree, build_all, focus_on_press, section_drag, album_drag } = spec;
     let want = scroll_target(ui);
-    let rows = if !build_all && rows.len() > WINDOW_FROM { built_rows(ui, rows, salt, want.as_ref()) } else { rows };
+    let (rows, above, below) = if !build_all && rows.len() > WINDOW_FROM { built_rows(ui, rows, salt, want.as_ref()) } else { (rows, 0.0, 0.0) };
     let has_notes = rows.iter().any(|row| row.note.is_some());
     let has_marks = rows.iter().any(|row| row.mark.is_some());
     if tree && let Some(deepest) = rows.iter().map(|row| row.depth).max() {
@@ -503,13 +519,20 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if tree {
         list = list.tree(true).tree_leaves(TreeLeaves::Aligned);
     }
-    let mut pressed = false;
+    if let Some((section, pinned)) = section_drag {
+        list = list.drag_payload(move |_drag: &ListDrag<String>| Some(SectionDrag { section, pinned }));
+    }
+    if album_drag {
+        list = list.drag_payload(|drag: &ListDrag<String>| drag.grabbed.rsplit(':').next().and_then(|id| id.parse::<u64>().ok()).map(AlbumDrag));
+    }
+    if above > 0.0 {
+        ui.add_space(above);
+    }
     let out = list.show_items(ui, &source, &mut |key, icx| {
         let item = &source.rows[source.index[key]];
         if item.fill.is_some() {
             return ListRow::spacer();
         }
-        pressed |= icx.row.pressed.is_some();
         if item.group {
             // Public ItemCx/CollectionResponse opener API returns the real
             // declared disclosure-part response; no invented hit geometry.
@@ -523,6 +546,9 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
         }
         list_row(item, icx.cells(), tree, show_counts)
     });
+    if below > 0.0 {
+        ui.add_space(below);
+    }
     let live = !measuring(ui) && ui.is_enabled() && ui.is_visible() && out.response.enabled();
     if !live {
         return SideOut::default();
@@ -542,7 +568,7 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
             }
         }
     }
-    SideOut { shown, events, response: Some(out.response.clone()), pressed }
+    SideOut { shown, events, response: Some(out.response.clone()) }
 }
 
 /// The rows the list showed, listed under the names the control channel knows them by (and the
@@ -620,32 +646,6 @@ fn list_events<E>(out: &CollectionResponse<String, E>, source: &SideRows) -> Vec
         }
     }
     events
-}
-
-// ------------------------------------------------------------------------------ drags
-
-/// The key of the row a drag of the primary button has just started on, from where the press began
-/// and the rows' places: once for each press (`pinned`: the rows are the pinned header's). Rows are the sidebar's own, so a press that began
-/// elsewhere (the photo grid) is none of this.
-pub(super) fn drag_started_on(ui: &egui::Ui, rows: &[SideShown], pinned: bool) -> Option<String> {
-    let (down, dragging, origin, since) =
-        ui.input(|i| (i.pointer.primary_down(), i.pointer.is_decidedly_dragging(), i.pointer.press_origin(), i.pointer.press_start_time()));
-    if !(down && dragging) {
-        return None;
-    }
-    let (origin, since) = (origin?, since?);
-    // a press on the header pinned over the rows is the header's, not the rows beneath it
-    let over_pinned = ui.data(|d| d.get_temp::<Option<Rect>>(egui::Id::unique("left-pinned-rect"))).flatten().is_some_and(|r| r.contains(origin));
-    if over_pinned && !pinned {
-        return None;
-    }
-    let latch = egui::Id::unique("left-drag-latch");
-    if ui.data(|d| d.get_temp::<f64>(latch)) == Some(since) {
-        return None;
-    }
-    let hit = rows.iter().find(|row| row.rect.contains(origin))?;
-    ui.data_mut(|d| d.insert_temp(latch, since));
-    Some(hit.key.clone())
 }
 
 // ------------------------------------------------------------------------------ menus

@@ -4,7 +4,7 @@
 
 use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::menu::MenuItem;
-use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Align2, Color32, Rect, Stroke, pos2, vec2};
 use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
 
@@ -242,11 +242,17 @@ fn photo_tile(
     area: Rect,
     label: &str,
     zoom: Zoom,
-) -> (Rect, Rect, egui::Response) {
+) -> (Rect, Rect, super::detail::host::HostOutput) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
-    let resp = ui.interact(area, egui::Id::unique(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
-    crate::widgets::announce(&resp, app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default());
+    // The pane is a pointer handle over a painted photo: it clicks (select, double-click zoom), drags (pan) and takes
+    // the menu, and leaves the keyboard focus alone.
+    let resp = super::detail::host::target(
+        ui,
+        ("cull-tile", slot_index(slot), id.0),
+        area,
+        super::detail::host::Target::new(app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default()).handle(),
+    );
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, area, resp) };
     let caption_h = 26.0;
     let img_area = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - caption_h));

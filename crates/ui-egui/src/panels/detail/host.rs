@@ -10,6 +10,7 @@ use std::ops::Deref;
 
 use craft::behavior::{Metrics, PressPhase, Sense};
 use craft::ui::contract::{Common, Component, Cx, NoValue, Outcome, PaintUi, Pointer as _, Props as _, Role, Show as _};
+use craft::ui::runtime::access::Access;
 use craft::ui::menu::Menu;
 use craft::ui::contract::ShowContainer as _;
 use craft::ui::style::{ComponentStyle, FocusLook, StyleCx};
@@ -25,6 +26,20 @@ struct TargetStyle {
     metrics: Metrics,
 }
 
+/// How a host-painted target takes part in input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// A control: it activates, takes the keyboard focus (a Tab stop) and shows the focus ring.
+    Control,
+    /// A pointer handle over a canvas (a minimap): it clicks and drags but leaves the keyboard focus where it is.
+    Handle,
+    /// A pointer-only control (a cell or a caption that resets on a double click): it activates from the pointer but is
+    /// no Tab stop.
+    Pointer,
+    /// A label over a canvas that only explains itself on hover; it takes no press, so the canvas beneath keeps its clicks.
+    Hover,
+}
+
 #[derive(craft::ui::contract::Component)]
 struct HostTarget {
     #[common]
@@ -32,8 +47,7 @@ struct HostTarget {
     #[style_key]
     accent: Color32,
     drag: bool,
-    /// Whether the keyboard can reach it (a Tab stop).
-    focus: bool,
+    mode: Mode,
 }
 
 impl Component for HostTarget {
@@ -47,9 +61,29 @@ impl Component for HostTarget {
         TargetStyle { focus: FocusLook::new(Stroke::new(2.0, key.accent), -2.0), metrics: Metrics::new() }
     }
 
+    const ALT_ROLES: &'static [Role] = &[Role::LABEL, Role::CANVAS];
+
     fn sense(&self) -> Sense {
-        let sense = if self.drag { Sense::CLICK | Sense::DRAG } else { Sense::CLICK };
-        if self.focus { sense | Sense::FOCUS } else { sense }
+        match self.mode {
+            Mode::Pointer if self.drag => Sense::CLICK | Sense::DRAG,
+            Mode::Pointer => Sense::CLICK,
+            Mode::Control if self.drag => Sense::CLICK | Sense::DRAG | Sense::FOCUS,
+            Mode::Control => Sense::CLICK | Sense::FOCUS,
+            Mode::Handle => Sense::CLICK | Sense::DRAG | Sense::KEEP_FOCUS,
+            Mode::Hover => Sense::HOVER,
+        }
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        match self.mode {
+            Mode::Control | Mode::Pointer => {}
+            Mode::Handle => {
+                access.role(Role::CANVAS);
+            }
+            Mode::Hover => {
+                access.role(Role::LABEL);
+            }
+        }
     }
 
     /// The host paints the face.
@@ -65,7 +99,10 @@ impl Component for HostTarget {
             0
         };
         let by_key = cx.activation().is_some_and(|activation| activation.by_key);
-        HostOutput { response: cx.response.clone(), clicks, by_key }
+        // egui's drag_stopped is only set while the press is still down, so the pass of the release is read from the
+        // press itself (as mask_controls' HitOutput does)
+        let drag_ended = matches!(cx.press().phase, PressPhase::Release { click: false, .. } | PressPhase::Cancel { .. });
+        HostOutput { response: cx.response.clone(), clicks, by_key, drag_ended }
     }
 }
 
@@ -75,6 +112,7 @@ pub(crate) struct HostOutput {
     pub response: Response,
     clicks: u32,
     by_key: bool,
+    drag_ended: bool,
 }
 
 impl HostOutput {
@@ -92,6 +130,12 @@ impl HostOutput {
     /// The activation was the second press of a double click.
     pub fn double_clicked(&self) -> bool {
         self.clicked() && self.clicks >= 2
+    }
+
+    /// A press that moved past the click slop ended this pass: released, or cancelled. This stands in for egui's
+    /// `drag_stopped`, which the framework's response does not report on the pass of the release.
+    pub fn drag_ended(&self) -> bool {
+        self.drag_ended
     }
 }
 
@@ -121,14 +165,14 @@ pub(crate) struct Target<'a> {
     pub drag: bool,
     /// Whether the target reads as the selected one.
     pub selected: bool,
-    /// Whether the keyboard reaches it; a pointer-only target (a caption that resets on a double click) is no Tab stop.
-    pub focus: bool,
+    /// How it takes part in input.
+    pub mode: Mode,
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> Target<'a> {
     pub fn new(label: impl Into<String>) -> Self {
-        Target { label: label.into(), tooltip: String::new(), drag: false, selected: false, focus: true, _lifetime: std::marker::PhantomData }
+        Target { label: label.into(), tooltip: String::new(), drag: false, selected: false, mode: Mode::Control, _lifetime: std::marker::PhantomData }
     }
 
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
@@ -141,6 +185,19 @@ impl<'a> Target<'a> {
         self
     }
 
+    /// A pointer handle over a canvas: clicks and drags, never takes the keyboard focus.
+    pub fn handle(mut self) -> Self {
+        self.mode = Mode::Handle;
+        self.drag = true;
+        self
+    }
+
+    /// A label that only shows its tooltip on hover.
+    pub fn hover_only(mut self) -> Self {
+        self.mode = Mode::Hover;
+        self
+    }
+
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
@@ -148,7 +205,7 @@ impl<'a> Target<'a> {
 
     /// Pointer-only: no Tab stop.
     pub fn pointer_only(mut self) -> Self {
-        self.focus = false;
+        self.mode = Mode::Pointer;
         self
     }
 
@@ -157,7 +214,7 @@ impl<'a> Target<'a> {
 /// Show a host-painted target over `rect`, named `key` for egui. The caller registers its automation name with
 /// `register_response` when the pass is a live one.
 pub(crate) fn target(ui: &mut Ui, key: impl Hash + std::fmt::Debug, rect: Rect, spec: Target<'_>) -> HostOutput {
-    let mut control = HostTarget { common: Common::new(), accent: Tokens::get(ui.ctx()).accent, drag: spec.drag, focus: spec.focus }
+    let mut control = HostTarget { common: Common::new(), accent: Tokens::get(ui.ctx()).accent, drag: spec.drag, mode: spec.mode }
         .id(egui::Id::unique(key))
         .label(spec.label)
         .selected(spec.selected)

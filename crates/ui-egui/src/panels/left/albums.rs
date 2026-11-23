@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::rows::{
-    MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, drag_started_on, entry, host_menu, rule, set_tree_open, side_list, submenu, tree_open,
+    AlbumDrag, MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, submenu, tree_open,
 };
 use super::{Album, AlbumId, Align2, LibrarySource, LightcraftApp, Rect, Tokens, json, pos2, register, vec2};
 
@@ -24,7 +24,7 @@ pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Op
     let mut meta = HashMap::new();
     flatten(app, ui, &kids, None, 0, &open_to, &mut rows, &mut meta);
     let selected = meta.iter().find(|(_, m)| !m.album.folder && app.session.source == LibrarySource::Album(m.album.id)).map(|(key, _)| key.clone());
-    let spec = SideSpec::new("albums", crate::i18n::tr("Albums"), app.ui.show_counts).selected(selected.as_deref());
+    let spec = SideSpec::new("albums", crate::i18n::tr("Albums"), app.ui.show_counts).selected(selected.as_deref()).album_drag();
     let out = side_list(ui, spec, rows);
     let mut request = None;
     for event in &out.events {
@@ -57,13 +57,6 @@ pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Op
         if m.problems {
             crate::widgets::register(ui, format!("albumProblem:{}", m.album.id.0), row.rect);
         }
-    }
-    // a drag of an album starts where the press began, and ends on its release
-    if app.ui.dragging_album.is_none()
-        && let Some(key) = drag_started_on(ui, &out.shown, false)
-        && let Some(m) = meta.get(&key)
-    {
-        app.ui.dragging_album = Some(m.album.id.0);
     }
     for row in &out.shown {
         let Some(m) = meta.get(&row.key) else { continue };
@@ -587,9 +580,13 @@ pub fn album_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
         forget_hover(app, ctx);
         return;
     }
+    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    // (the framework's drag ghost names the album when the drag is its session's)
+    if craft::ui::runtime::drag::active::<AlbumDrag>(ctx).is_some() {
+        return;
+    }
     let (Some(pos), Some(name)) = (pos, app.session.catalog.album(AlbumId(id)).map(|a| a.name.clone())) else { return };
     let t = Tokens::get(ctx);
-    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
     egui::Area::new(egui::Id::unique("drag-album")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(
         ctx,
         |ui| {

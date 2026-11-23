@@ -381,12 +381,18 @@ fn a_long_keyword_name_leaves_room_for_its_marks() {
     }
 }
 
+/// A right-click at the thumbnail's centre: the photo menu is the framework's, and opens from a real pointer press.
+fn right_click_thumb(h: &mut Headless, id: u64) {
+    let at = center(h, &format!("thumb:{id}"));
+    ask(h, "ui.click", json!({"x": at.x, "y": at.y, "button": "right"}));
+}
+
 /// With a keyword shortcut set, a photo's context menu offers Add Keyword with its keywords, which
 /// gives them to the selected photos; with none it offers nothing.
 #[test]
 fn a_photos_menu_adds_the_keyword_shortcut() {
     let (mut h, ids) = keywords_panel();
-    ask(&mut h, "ui.clickWidget", json!({"id": format!("thumb:{}", ids[0]), "button": "right"}));
+    right_click_thumb(&mut h, ids[0]);
     assert!(!has(&h, "button:contextAddKeywordShortcut"), "no keyword shortcut");
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
     // (the closed framework menu fades out for a few frames; a right-click on it meanwhile does not reopen it)
@@ -394,7 +400,7 @@ fn a_photos_menu_adds_the_keyword_shortcut() {
         h.step();
     }
     run(&mut h, "keyword.setShortcut", json!({"keywords": "Weddings, Events|Ceremony"}));
-    ask(&mut h, "ui.clickWidget", json!({"id": format!("thumb:{}", ids[0]), "button": "right"}));
+    right_click_thumb(&mut h, ids[0]);
     ask(&mut h, "ui.clickWidget", json!({"id": "button:contextAddKeywordShortcut"}));
     for id in &ids {
         let k = keywords_of(&h, *id);

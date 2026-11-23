@@ -1,7 +1,7 @@
 use super::geometry::CanvasMap;
 use crate::panels::masking::controls::Hit;
 use super::{
-    Color32, DevelopSettings, Gesture, LightcraftApp, MaskShape, Point, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, ToolOverlay, json, pos2,
+    Color32, DevelopSettings, Gesture, LightcraftApp, MaskShape, Point, Pos2, Rect, Stroke, StrokeKind, Tokens, ToolOverlay, json, pos2,
     register, vec2,
 };
 
@@ -52,7 +52,7 @@ pub(super) struct RegionContext<'a> {
 /// overlapping press. The press point and the box at press time are remembered, so the box follows the
 /// pointer from where it was grabbed. The move is reported on release, unless the box ends where it began.
 fn region_body_drag(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     map: &CanvasMap,
     rect: Rect,
     (index, norm): (usize, lightcraft_geom::Rect),
@@ -60,14 +60,15 @@ fn region_body_drag(
     drag_key: egui::Id,
 ) -> Option<RegionEdit> {
     let body_key = egui::Id::unique(("region-body", index));
-    let body_resp = ui.interact(rect, body_key, Sense::drag());
+    // the box's body: the pointer drags it (no keyboard stop), the framework owns the press
+    let body_resp = Hit::new(&format!("regionBody:{index}"), crate::i18n::tr("Move region")).drag(true).pointer_only(true).show_at(ui, rect);
     if body_resp.drag_started() {
         let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(body_resp.interact_pointer_pos().unwrap_or(rect.center()));
         let start = map.norm(press);
         ui.data_mut(|d| d.insert_temp(body_key, (start, norm)));
     }
     // (the release frame reports `dragged()` too, so the last position is taken before the stop)
-    if body_resp.dragged() || body_resp.drag_stopped() {
+    if body_resp.dragged() || body_resp.drag_ended() {
         let pp = body_resp.interact_pointer_pos();
         let shown = ui.data(|d| d.get_temp::<(Point, lightcraft_geom::Rect)>(body_key));
         if let (Some(pp), Some((start, shown))) = (pp, shown) {
@@ -83,7 +84,7 @@ fn region_body_drag(
             ui.ctx().request_repaint();
         }
     }
-    if !body_resp.drag_stopped() {
+    if !body_resp.drag_ended() {
         return None;
     }
     let edit = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)).map(|(i, new)| RegionEdit::Resize(i, new));
@@ -120,8 +121,10 @@ pub(super) fn region_overlay(
         if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
                 let c = pos2(rect.left() + fx * rect.width(), rect.top() + fy * rect.height());
-                let resp = ui.interact(Rect::from_center_size(c, vec2(14.0, 14.0)), egui::Id::unique(("region-handle", index, h)), Sense::drag());
-                crate::widgets::announce(&resp, crate::i18n::tr("Resize region"));
+                let resp = Hit::new(&format!("regionHandle:{index}:{h}"), crate::i18n::tr("Resize region"))
+                    .drag(true)
+                    .pointer_only(true)
+                    .show_at(ui, Rect::from_center_size(c, vec2(14.0, 14.0)));
                 if resp.hovered() || resp.dragged() {
                     ui.ctx().set_cursor_icon(*cursor);
                 }
@@ -155,7 +158,7 @@ pub(super) fn region_overlay(
                     ui.data_mut(|d| d.insert_temp(drag_key, (index, new)));
                     ui.ctx().request_repaint();
                 }
-                if resp.drag_stopped() {
+                if resp.drag_ended() {
                     if let Some((i, new)) = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)) {
                         edit = Some(RegionEdit::Resize(i, new));
                     }

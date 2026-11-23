@@ -135,9 +135,9 @@ impl Fixture {
         }
         self.settle();
     }
-    /// A menu is drawn: its level is published while it is open (and not otherwise).
+    /// A menu of the bar is open (the collapsed bar's own menu holds only submenu rows, so it publishes no level).
     fn is_open(&self) -> bool {
-        self.rects.iter().any(|(name, _)| name.starts_with("menu-level:"))
+        craft::ui::menu::bar::is_open(&self.ctx)
     }
     fn open_title(&self) -> Option<String> {
         if !self.is_open() {

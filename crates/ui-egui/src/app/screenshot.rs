@@ -270,7 +270,18 @@ impl LightcraftApp {
         // The copied memory carries the framework's record of the main window's current pass (the ids it has
         // claimed). An empty pass first moves the shadow context on to a pass of its own, so drawing the window here
         // claims its ids afresh instead of twice in what the runtime takes for the main window's pass.
-        view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |_| {});
+        // The framework's records are stamped with the pass number of the context that wrote them, and reset only
+        // when the pass number changes. The shadow context counts its own passes, so a pass of it numbered like one
+        // of the window's last passes would take the copied claims for its own: pass on to a number past them (an
+        // empty pass costs next to nothing).
+        let window_pass = main.cumulative_pass_nr_for(egui::ViewportId::ROOT);
+        loop {
+            view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |_| {});
+            let draw = view.ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT) + 1;
+            if draw + 2 < window_pass || draw > window_pass {
+                break;
+            }
+        }
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();

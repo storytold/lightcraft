@@ -79,16 +79,19 @@ fn texts_painted(shape: &egui::Shape, out: &mut Vec<(String, Rect)>) {
 fn a_long_library_count_stays_inside_a_narrow_header() {
     for width in [crate::state::MIN_PHOTO_WIDTH, 590.0] {
         for scale in [1.0, 2.0] {
-            let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
             let ctx = egui::Context::default();
             crate::i18n::set_language(Locale::De);
             crate::theme::install_fonts(&ctx);
             crate::theme::apply(&ctx);
             let counted = crate::i18n::tr_format!("{matching} of {t} photos", matching = 123_456_789, t = 987_654_321);
             let cnt = crate::i18n::tr_format!("{sel_n} selected · {counted}", sel_n = 123_456_789, counted = counted);
-            let frame = |time: f64, events: Vec<egui::Event>| {
+            // the count's hover tip is the framework's: it needs the runtime installed, as a window has it
+            let mut frame = |time: f64, events: Vec<egui::Event>| {
                 let mut header = Rect::NOTHING;
-                let raw = HeadlessView::raw_input(vec2(width, 300.0), scale, time, events);
+                let mut raw = HeadlessView::raw_input(vec2(width, 300.0), scale, time, events);
+                app.install_framework(&ctx);
+                app.raw_input_hook(&ctx, &mut raw);
                 let mut out = ctx.run_ui(raw, |ui| {
                     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                         header = super::library_header(&app, ui, &cnt);

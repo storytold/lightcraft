@@ -11,7 +11,6 @@
 use craft::ui::buttons::{Button, Link};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _};
-use craft::ui::text::TextField;
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -690,32 +689,31 @@ pub fn name_editor(
     let t = Tokens::get(ctx);
     let mut outcome = Editor::Open;
     let opening = edit.fresh;
-    let mut field_focused = false;
     let shown = egui::Area::new(egui::Id::unique("face-name-editor")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(230.0);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
-            let r = TextField::new(crate::i18n::tr("Name"), Bind::bound(&mut edit.text))
-                .id_salt("face-name")
-                .placeholder(crate::i18n::tr("Name"))
-                .limit(None)
-                .submits()
-                .show_at(ui, rect);
-            control_response(ui, "field:faceName", &r.response);
-            field_focused = craft::ui::runtime::focus::focused_rec(ui.ctx()).is_some_and(|rec| rec.stop.id == r.response.id);
+            // the app's own field: it reads how the edit ended (Return, Esc, or the focus going elsewhere)
+            let was_editing = crate::text_field::was_editing(ui.ctx(), "field:faceName");
+            let r = crate::text_field::TextField::singleline("field:faceName", &mut edit.text)
+                .hint(crate::i18n::tr("Name"))
+                .width(220.0)
+                .begin_edit(edit.fresh)
+                .show(ui);
             if !measuring(ui) {
-                if edit.fresh
-                    && ui.is_enabled()
-                    && craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(r.response.id))
-                {
+                if edit.fresh && r.editing {
                     edit.fresh = false;
                 }
-                if r.submitted {
-                    outcome = Editor::Submit(edit.text.trim().to_string());
-                } else if r.escaped {
-                    outcome = Editor::Cancel;
+                match r.ending {
+                    Some(crate::text_field::Ending::Return) => outcome = Editor::Submit(edit.text.trim().to_string()),
+                    Some(crate::text_field::Ending::Escape) => outcome = Editor::Cancel,
+                    // Esc with nothing typed has no edit to cancel: the field just lets go of the keyboard
+                    // with no ending (a click or Tab away reports its own ending), so a box that was being
+                    // edited a pass ago and is not now has been dismissed.
+                    None if was_editing && !r.editing && !edit.fresh => outcome = Editor::Cancel,
+                    _ => {}
                 }
             }
+
             let typed = edit.text.trim().to_lowercase();
             let mut offered: Vec<(String, Option<f32>)> = candidates.iter().take(3).map(|(n, s)| (n.clone(), Some(*s))).collect();
             if !typed.is_empty() {
@@ -750,14 +748,6 @@ pub fn name_editor(
             ui.label(RichText::new(crate::i18n::tr("Enter to confirm, Esc to cancel")).font(t.font(11.0)).color(t.text_dim));
         });
     });
-    // (the window's own Escape: the framework may already have taken it as a cancel for the field, which reports no
-    // escape once a Return has ended its edit)
-    if ctx.input(|i| {
-        i.key_pressed(egui::Key::Escape)
-            || (field_focused && i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, repeat: false, .. })))
-    }) {
-        outcome = Editor::Cancel;
-    }
     // a click anywhere else closes it (not on the frame it opened, which is the click that opened it)
     if !opening && ctx.input(|i| i.pointer.any_pressed()) && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !shown.response.rect.contains(p))
     {
