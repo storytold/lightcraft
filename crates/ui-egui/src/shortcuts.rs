@@ -287,11 +287,17 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
 }
 
 fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
+    matches_with(i, &[], m, k)
+}
+
+/// [`matches`] over the input's events and `extra`: the clipboard events the runtime routed to the window as edit
+/// commands (it keeps them from the raw input when no framework component takes them).
+fn matches_with(i: &egui::InputState, extra: &[egui::Event], m: Modifiers, k: Key) -> bool {
     // the windowing layer turns ⌘C / ⌘X / ⌘V (with any other modifiers held) and the keyboard's
     // Copy / Cut / Paste keys into these on Windows and Linux (macOS's menu bar takes them first);
     // without ⌘/Ctrl held they came from a key that is the plain command (Windows' ⇧Insert pastes)
     let clipboard = if i.modifiers.command { i.modifiers } else { Modifiers::COMMAND };
-    i.events.iter().any(|e| {
+    i.events.iter().chain(extra).any(|e| {
         let (key, physical_key, modifiers) = match e {
             egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => (key, physical_key, modifiers),
             egui::Event::Copy => (&Key::C, &None, &clipboard),
@@ -418,6 +424,19 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     // An Escape no framework component took reaches the app as the window's Cancel (the runtime keeps the raw key):
     // the app's own Escape bindings (View ▸ Back and the like) read it there, last in the pass.
     let window_escape = craft::ui::runtime::keys::with_window_intents(ctx, false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
+    // The same for the clipboard events the runtime routed to the window as edit commands.
+    let mut window_edits: Vec<egui::Event> = Vec::new();
+    craft::ui::runtime::keys::with_window_intents(ctx, false, |w| {
+        while let Some(edit) = w.take_edit() {
+            match edit {
+                craft::behavior::EditCommand::Copy => window_edits.push(egui::Event::Copy),
+                craft::behavior::EditCommand::Cut => window_edits.push(egui::Event::Cut),
+                craft::behavior::EditCommand::Paste => window_edits.push(egui::Event::Paste(String::new())),
+                _ => {}
+            }
+        }
+        !window_edits.is_empty()
+    });
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&'static str, serde_json::Value)> = Vec::new();
@@ -452,7 +471,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
-                && (matches(i, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
+                && (matches_with(i, &window_edits, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 if id == "view.zoomToggle" && k == Key::Space {
@@ -471,7 +490,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && !(k == Key::Escape && popup_open)
                 && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
-                && (matches(i, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
+                && (matches_with(i, &window_edits, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
             }
