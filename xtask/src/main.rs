@@ -52,9 +52,10 @@ commands:
   fidelity [--regen] [--refs DIR]
                   render-fidelity suite: tools × processes × scenes/corpus against local references
                   (default fidelity-refs/); --regen writes them from the current renderer (docs/testing-sil.md)
-  fuzz [TARGET…|all] [--secs N] [--rng N] [--list]
+  fuzz [TARGET…|all] [--secs N] [--rng N] [--parallel] [--list]
                   time-boxed pure-Rust fuzzing (default 60 s per target, all targets): raw, tiff, codecs,
-                  meta, develop, lightroom, peer; crash inputs in target/fuzz/crashes/<target>/ (docs/testing-sil.md)
+                  meta, develop, lightroom, peer; --parallel builds all, then runs them at once;
+                  crash inputs in target/fuzz/crashes/<target>/ (docs/testing-sil.md)
   bench-catalog [--photos N,N…] [--backend v3|v4] [--dir DIR]
                   catalog scale benchmark: import throughput, snapshot time, then (in a fresh process)
                   open time, peak RSS and filter latency (default 250000,1000000 photos, backend v4)
