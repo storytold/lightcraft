@@ -28,7 +28,7 @@ If you did not choose a folder, the window stays open and shows an error, so you
 ## Reuse your settings
 
 - To keep a set of choices, type a name next to **Save preset** and click **Save**. Pick it again later with **Preset** at the top of the window.
-- **File** > **Export with Previous** repeats your last export. It tells you to use **Export…** first if you have not exported yet.
+- **File** > **Export with Previous** repeats your last export. If the last folder is missing, **Export…** opens with your settings so you can choose another folder. If you have not exported yet, use **Export…** first.
 
 ## Contact sheet
 

@@ -1851,6 +1851,41 @@ fn rename_dialog_renames_the_selection() {
     h.settle(SETTLE);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_renamed_export_folder_prompts_for_a_replacement() {
+    use crate::state::Dialog;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let base = std::env::temp_dir().join(format!("lc-renamed-export-{}", std::process::id()));
+    let previous = base.join("exports");
+    std::fs::create_dir_all(&previous).unwrap();
+    std::fs::rename(&previous, base.join("renamed")).unwrap();
+
+    let wrote = Arc::new(AtomicBool::new(false));
+    let writer = wrote.clone();
+    let services = crate::Services {
+        write: Some(Box::new(move |_, _| {
+            writer.store(true, Ordering::Relaxed);
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.session.last_export = Some(json!({"dir": previous.to_str().unwrap(), "format": "png", "width": 32}));
+
+    app.run("app.exportPrevious", json!({})).unwrap();
+    assert!(!wrote.load(Ordering::Relaxed), "no files go to the old folder");
+    assert!(
+        matches!(&app.ui.dialog, Some(Dialog::Export { opts, dir, .. }) if dir.is_empty() && opts.format == lightcraft_engine::export::ExportFormat::Png)
+    );
+    app.ui.dialog = None;
+    app.run("dialog.export", json!({})).unwrap();
+    assert!(matches!(&app.ui.dialog, Some(Dialog::Export { dir, .. }) if dir.is_empty()));
+
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
 /// The Export dialog hands its batch to a worker thread: the UI keeps drawing frames, shows
 /// progress, and reports the result when the files are written.
 #[test]

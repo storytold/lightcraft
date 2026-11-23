@@ -1262,19 +1262,66 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
     Some(r)
 }
 
+fn previous_export_folder_is_missing(prev: &Value) -> Result<bool, String> {
+    use lightcraft_engine::export::{DestinationMode, ExportOptions};
+
+    // Only a native export to a specific folder needs the saved path to still exist.
+    if cfg!(target_arch = "wasm32") || ExportOptions::from_json(prev).destination_mode != DestinationMode::SpecificFolder {
+        return Ok(false);
+    }
+    let Some(dir) = prev.get("dir").and_then(Value::as_str).map(str::trim).filter(|dir| !dir.is_empty()) else { return Ok(false) };
+    export_folder_is_missing(std::fs::metadata(dir).map(|metadata| metadata.is_dir())).map_err(|err| format!("{dir}: {err}"))
+}
+
+fn export_folder_is_missing(directory: std::io::Result<bool>) -> std::io::Result<bool> {
+    use std::io::ErrorKind;
+    match directory {
+        Ok(true) => Ok(false),
+        Ok(false) => Err(ErrorKind::NotADirectory.into()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod export_folder_tests {
+    use super::export_folder_is_missing;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn only_a_missing_export_folder_requires_replacement() {
+        assert!(export_folder_is_missing(Err(ErrorKind::NotFound.into())).unwrap());
+        assert!(!export_folder_is_missing(Ok(true)).unwrap());
+        assert_eq!(export_folder_is_missing(Ok(false)).unwrap_err().kind(), ErrorKind::NotADirectory);
+
+        let err = export_folder_is_missing(Err(Error::new(ErrorKind::PermissionDenied, "permission to inspect the folder was denied"))).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::PermissionDenied);
+        assert_eq!(err.to_string(), "permission to inspect the folder was denied");
+    }
+}
+
+fn open_export_dialog(app: &mut LightcraftApp, prev: &Value, dir: String) {
+    // Stored settings: a depth the format lacks (saved before #1952) opens at the format's own.
+    let opts = lightcraft_engine::export::ExportOptions::from_json(&lightcraft_engine::export::ExportOptions::known_keys_only(prev));
+    // No previous export: 2048 px long edge. A previous full-size export keeps full size.
+    let full_size = opts.resize.is_none() && lightcraft_engine::export::ExportOptions::has_size_param(prev);
+    let resize = opts.resize.unwrap_or_default();
+    let limit_kb = prev.get("limitKb").and_then(Value::as_u64).unwrap_or(0) as u32;
+    app.ui.dialog = Some(Dialog::Export { opts, full_size, resize, preset_name: String::new(), limit_kb, dir });
+}
+
 /// Part 10 of 12 of the UI commands; `None` means the id is not one of this part's.
 fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let r: Result<Value, String> = match id {
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
-            let u = |k: &str, d: u64| prev.get(k).and_then(Value::as_u64).unwrap_or(d);
-            let dir = prev.get("dir").and_then(Value::as_str).map(str::to_string).unwrap_or_else(crate::control::default_export_dir);
-            // stored settings: a depth the format lacks (saved before #1952) opens at the format's own
-            let opts = lightcraft_engine::export::ExportOptions::from_json(&lightcraft_engine::export::ExportOptions::known_keys_only(&prev));
-            // no previous export: 2048 px long edge; a previous full-size export: full size
-            let full_size = opts.resize.is_none() && lightcraft_engine::export::ExportOptions::has_size_param(&prev);
-            let resize = opts.resize.unwrap_or_default();
-            app.ui.dialog = Some(Dialog::Export { opts, full_size, resize, preset_name: String::new(), limit_kb: u("limitKb", 0) as u32, dir });
+            let mut dir = prev.get("dir").and_then(Value::as_str).map(str::to_string).unwrap_or_else(crate::control::default_export_dir);
+            match previous_export_folder_is_missing(&prev) {
+                Ok(true) => dir.clear(),
+                Ok(false) => {}
+                Err(err) => app.toast_error(ctx, err),
+            }
+            open_export_dialog(app, &prev, dir);
             Ok(Value::Null)
         }
         "merge.hdrLast" => crate::merge::start_last(app, "merge.hdr"),
@@ -1500,7 +1547,15 @@ fn ui_commands_12(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             crate::links::open(app, url)
         }
         "app.exportPrevious" => match app.session.last_export.clone() {
-            Some(prev) => crate::control::export_active(app, &lightcraft_engine::export::ExportOptions::known_keys_only(&prev)),
+            Some(prev) => match previous_export_folder_is_missing(&prev) {
+                Ok(true) => {
+                    open_export_dialog(app, &prev, String::new());
+                    app.toast_error(ctx, crate::i18n::tr("The previous export folder is no longer available. Choose another folder."));
+                    Ok(json!({"dialog": "export"}))
+                }
+                Ok(false) => crate::control::export_active(app, &lightcraft_engine::export::ExportOptions::known_keys_only(&prev)),
+                Err(err) => Err(err),
+            },
             None => Err("nothing exported yet — use Export…".into()),
         },
         _ => return None,
