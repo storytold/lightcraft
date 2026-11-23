@@ -539,6 +539,25 @@ fn on_drive(root: &str, rest: &str) -> String {
     format!("{}{sep}{rest}", root.trim_end_matches(['\\', '/']))
 }
 
+/// Whether `path` starts with a Windows drive (`D:\`, `d:/`).
+fn windows_drive(path: &str) -> bool {
+    let b = path.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b.len() == 2 || b[2] == b'\\' || b[2] == b'/')
+}
+
+/// Whether drive roots `a` and `b` are the same drive: Windows drive letters in any case, mount points exactly
+/// (`/media/Photos` and `/media/photos` are two disks).
+fn same_root(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_end_matches(['\\', '/']), b.trim_end_matches(['\\', '/']));
+    if windows_drive(a) && windows_drive(b) { a.eq_ignore_ascii_case(b) } else { a == b }
+}
+
+/// The key two spellings of one file share: a Windows path (`E:/Photos/a.ARW`, `e:\photos\a.arw`) in one case
+/// with `\`; any other path as it is.
+pub fn path_key(path: &str) -> String {
+    if windows_drive(path) { path.replace('/', "\\").to_lowercase() } else { path.to_string() }
+}
+
 /// The seconds of a capture time (`2024-05-01T12:34:56.78`, `2024:05:01 12:34:56`…) as its 14 digits; `None` when it
 /// doesn't hold a date and a time to the second.
 fn capture_key(t: &str) -> Option<String> {
@@ -585,9 +604,11 @@ pub struct DriveIo<'a> {
 ///    read). Found on several drives, a file whose hash confirms it everywhere is taken from the first; otherwise
 ///    the photo is ambiguous and skipped, never guessed.
 ///
-/// Files that are already some photo's original, or that another photo was just matched with, are not used.
+/// Files that are already some photo's original (in any spelling, [`path_key`]), or that another photo was just
+/// matched with, are not used. With `only` (keys of [`path_key`]), just the missing photos at those paths are
+/// looked for (after a Lightroom import, the originals it couldn't find); the files every photo uses still count.
 /// Touches only the disk, so the app runs it on a worker thread and relinks with `library.findMissing {found, …}`.
-pub fn plan_other_drives(candidates: &[FindCandidate], roots: &[String], verify_hash: bool) -> FindPlan {
+pub fn plan_other_drives(candidates: &[FindCandidate], roots: &[String], verify_hash: bool, only: Option<&HashSet<String>>) -> FindPlan {
     if cfg!(target_arch = "wasm32") {
         return FindPlan::default();
     }
@@ -599,27 +620,35 @@ pub fn plan_other_drives(candidates: &[FindCandidate], roots: &[String], verify_
         captured: &file_capture_time,
         hash: &file_hash,
     };
-    plan_other_drives_with(candidates, roots, verify_hash, user.as_deref(), &io)
+    plan_other_drives_with(candidates, roots, verify_hash, only, user.as_deref(), &io)
 }
 
 /// [`plan_other_drives`] with the disk and the account's name supplied (tests use a pretend disk).
-pub fn plan_other_drives_with(candidates: &[FindCandidate], roots: &[String], verify_hash: bool, user: Option<&str>, io: &DriveIo<'_>) -> FindPlan {
-    let lost: Vec<&FindCandidate> = candidates.iter().filter(|c| !(io.exists)(&c.path)).collect();
-    let in_use: HashSet<&str> = candidates.iter().map(|c| c.path.as_str()).collect();
+pub fn plan_other_drives_with(
+    candidates: &[FindCandidate],
+    roots: &[String],
+    verify_hash: bool,
+    only: Option<&HashSet<String>>,
+    user: Option<&str>,
+    io: &DriveIo<'_>,
+) -> FindPlan {
+    let lost: Vec<&FindCandidate> =
+        candidates.iter().filter(|c| only.is_none_or(|o| o.contains(&path_key(&c.path))) && !(io.exists)(&c.path)).collect();
+    let in_use: HashSet<String> = candidates.iter().map(|c| path_key(&c.path)).collect();
     let mut used: HashSet<String> = HashSet::new();
     let mut plan = FindPlan::default();
     for c in &lost {
         let Some((root, rest)) = split_volume(&c.path, user) else { continue };
-        let root_key = root.trim_end_matches(['\\', '/']).to_lowercase();
         let want_time = c.captured.as_deref().and_then(capture_key);
         let hash = c.hash.as_deref().filter(|_| verify_hash);
         let mut hits: Vec<(String, bool)> = Vec::new();
         for r in roots {
-            if r.trim_end_matches(['\\', '/']).to_lowercase() == root_key {
+            if same_root(r, root) {
                 continue;
             }
             let file = on_drive(r, rest);
-            if in_use.contains(file.as_str()) || used.contains(&file) || !(io.is_file)(&file) {
+            let key = path_key(&file);
+            if in_use.contains(&key) || used.contains(&key) || !(io.is_file)(&file) {
                 continue;
             }
             // 1. the size on record
@@ -653,7 +682,7 @@ pub fn plan_other_drives_with(candidates: &[FindCandidate], roots: &[String], ve
             }
         };
         if let Some(to) = pick {
-            used.insert(to.clone());
+            used.insert(path_key(&to));
             plan.found.push(FoundFile { id: c.id, from: c.path.clone(), to, by: MatchBy::Drive });
         }
     }
@@ -661,10 +690,15 @@ pub fn plan_other_drives_with(candidates: &[FindCandidate], roots: &[String], ve
     plan
 }
 
-/// `library.findMissingOnOtherDrives {hash?}`: [`plan_other_drives`] over [`drive_roots`], relinked in one undo step.
+/// The `paths` of a `findMissingOnOtherDrives` request, as [`path_key`]s (`None`: every missing photo).
+pub fn only_paths(p: &Value) -> Option<HashSet<String>> {
+    p.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(path_key).collect())
+}
+
+/// `library.findMissingOnOtherDrives {hash?, paths?}`: [`plan_other_drives`] over [`drive_roots`], relinked in one undo step.
 fn find_missing_on_other_drives(s: &mut Session, p: &Value) -> Result<Value> {
     let verify_hash = p.get("hash").and_then(Value::as_bool).unwrap_or(true);
-    let plan = plan_other_drives(&find_candidates(&s.catalog), &drive_roots(), verify_hash);
+    let plan = plan_other_drives(&find_candidates(&s.catalog), &drive_roots(), verify_hash, only_paths(p).as_ref());
     commit_find(s, plan)
 }
 
@@ -676,18 +710,18 @@ fn find_missing_on_other_drives(s: &mut Session, p: &Value) -> Result<Value> {
 /// among the photos the plan names.
 fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
     let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| checked_path(p)) == Some(from);
-    let mut in_use: HashSet<String> = candidates(&s.catalog).into_iter().collect();
+    let mut in_use: HashSet<String> = candidates(&s.catalog).iter().map(|c| path_key(c)).collect();
     let mut found = Vec::new();
     let mut missing = plan.missing;
     for f in plan.found {
         if !still_at(&s.catalog, f.id, &f.from) {
             continue;
         }
-        if in_use.contains(&f.to) {
+        if in_use.contains(&path_key(&f.to)) {
             missing += 1;
             continue;
         }
-        in_use.insert(f.to.clone());
+        in_use.insert(path_key(&f.to));
         found.push(f);
     }
     let planned = plan.ambiguous.len();
@@ -735,7 +769,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Missing Photos on Other Drives",
             [],
             None,
-            "{hash?} — relink every missing photo whose file is at the same path on another drive (another drive letter, or another mount under /Volumes, /media, /run/media or /mnt), when its size, and the capture time in its Exif, are the ones on record; with hash (default true) also its content hash, when the library knows one (the whole file is read) → {found: [{id, from, to, by: drive}], missing, ambiguous}",
+            "{hash?, paths?} — relink every missing photo (with paths, only those at these paths) whose file is at the same path on another drive (another drive letter, or another mount under /Volumes, /media, /run/media or /mnt), when its size, and the capture time in its Exif, are the ones on record; with hash (default true) also its content hash, when the library knows one (the whole file is read) → {found: [{id, from, to, by: drive}], missing, ambiguous}",
             always,
             find_missing_on_other_drives
         ),
@@ -784,7 +818,12 @@ mod drive_tests {
 
     impl Disk {
         fn plan(&self, candidates: &[FindCandidate], roots: &[&str], verify_hash: bool) -> FindPlan {
+            self.plan_only(candidates, roots, verify_hash, None)
+        }
+
+        fn plan_only(&self, candidates: &[FindCandidate], roots: &[&str], verify_hash: bool, only: Option<&[&str]>) -> FindPlan {
             let roots: Vec<String> = roots.iter().map(|r| r.to_string()).collect();
+            let only: Option<HashSet<String>> = only.map(|o| o.iter().map(|p| path_key(p)).collect());
             let io = DriveIo {
                 exists: &|f| self.0.contains_key(f),
                 is_file: &|f| self.0.contains_key(f),
@@ -792,7 +831,7 @@ mod drive_tests {
                 captured: &|f| self.0.get(f).and_then(|e| e.1.map(str::to_string)),
                 hash: &|f| self.0.get(f).map(|e| e.2.to_string()),
             };
-            plan_other_drives_with(candidates, &roots, verify_hash, Some("john"), &io)
+            plan_other_drives_with(candidates, &roots, verify_hash, only.as_ref(), Some("john"), &io)
         }
     }
 
@@ -813,6 +852,48 @@ mod drive_tests {
             [(1, r"E:\Photos\2020\a.ARW", MatchBy::Drive), (2, r"E:\Photos\2020\b.ARW", MatchBy::Drive)]
         );
         assert_eq!(plan.missing, 0);
+    }
+
+    #[test]
+    fn the_search_can_be_limited_to_some_photos_and_still_respects_every_photos_files() {
+        let disk = Disk(HashMap::from([
+            (r"E:\Import\a.ARW".to_string(), (100, None, "ha")),
+            (r"E:\Old\b.ARW".to_string(), (100, None, "hb")),
+            (r"E:\Import\c.ARW".to_string(), (100, None, "hc")),
+        ]));
+        let photos = [
+            photo(1, r"D:\Import\a.ARW", 100, None, None),
+            // missing before the import: not in the scope, so left alone
+            photo(2, r"D:\Old\b.ARW", 100, None, None),
+            // in the scope, but its file on E: is another photo's original (outside the scope)
+            photo(3, r"D:\Import\c.ARW", 100, None, None),
+            photo(4, r"E:\Import\c.ARW", 100, None, None),
+        ];
+        let plan = disk.plan_only(&photos, &[r"E:\"], true, Some(&[r"d:/import/a.arw", r"D:\Import\c.ARW"]));
+        assert_eq!(plan.found.iter().map(|f| f.id.0).collect::<Vec<_>>(), [1]);
+        assert_eq!(plan.missing, 1, "photo 3 stays missing; photo 2 wasn't looked for");
+        assert_eq!(disk.plan_only(&photos, &[r"E:\"], true, Some(&[])).missing, 0, "an empty scope looks for nothing");
+    }
+
+    #[test]
+    fn mount_points_differing_in_case_are_different_disks() {
+        let disk = Disk(HashMap::from([("/media/john/photos/2020/a.ARW".to_string(), (100, None, "h1"))]));
+        let lost = [photo(1, "/media/john/Photos/2020/a.ARW", 100, None, None)];
+        let plan = disk.plan(&lost, &["/media/john/photos"], true);
+        assert_eq!(plan.found.iter().map(|f| f.to.as_str()).collect::<Vec<_>>(), ["/media/john/photos/2020/a.ARW"]);
+        // a Windows drive letter in another case is the same drive, not another one
+        let disk = Disk(HashMap::from([(r"d:\2020\a.ARW".to_string(), (100, None, "h1"))]));
+        let plan = disk.plan(&[photo(1, r"D:\2020\a.ARW", 100, None, None)], &[r"d:\"], true);
+        assert!(plan.found.is_empty(), "{:?}", plan.found);
+    }
+
+    #[test]
+    fn a_file_in_use_under_another_spelling_is_not_taken() {
+        let disk = Disk(HashMap::from([(r"E:\Photos\a.ARW".to_string(), (100, None, "h1"))]));
+        // photo 2 has the same file, written with forward slashes and in lower case
+        let photos = [photo(1, r"D:\Photos\a.ARW", 100, None, None), photo(2, "e:/photos/a.arw", 100, None, None)];
+        let plan = disk.plan(&photos, &[r"E:\"], true);
+        assert!(plan.found.is_empty(), "{:?}", plan.found);
     }
 
     #[test]
