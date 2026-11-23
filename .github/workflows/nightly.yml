@@ -73,6 +73,7 @@ jobs:
         with:
           tool: cargo-deny,cargo-nextest
       - name: Raw corpus (pinned, sha256-checked)
+        timeout-minutes: 45 # a stalled mirror once held the whole 300-minute job
         run: cargo xtask corpus --download
       - name: cargo xtask ci
         run: cargo xtask ci
