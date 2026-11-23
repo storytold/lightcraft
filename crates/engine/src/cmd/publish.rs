@@ -368,10 +368,13 @@ pub fn plan(s: &mut Session, album: AlbumId) -> Result<Plan> {
     let link = |cat: &Catalog, id: PhotoId| cat.remote_links().get(&(id, lcc_publish::SERVICE.to_string(), acct.clone())).cloned();
     let mut jobs = Vec::new();
     let mut failed = Vec::new();
+    // One look at the library's originals for the whole run: a guard per photo cost memory and time in proportion
+    // to photos x library size (issue #1375).
+    let guard = std::sync::Arc::new(s.original_guard());
     for (i, id) in st.new.iter().chain(&st.modified).enumerate() {
         let Some(fp) = s.catalog.photo(*id).map(|p| lcc_publish::fingerprint(p)) else { continue };
         let previous = link(&s.catalog, *id).map(|l| l.remote_id);
-        match crate::export::prepare_export(s, *id, &opts, i + 1) {
+        match crate::export::prepare_guarded(s, *id, &opts, i + 1, guard.clone()) {
             Ok(prepared) => jobs.push(Job { photo: *id, prepared, previous, fingerprint: fp }),
             Err(e) => failed.push((*id, e)),
         }

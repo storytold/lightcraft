@@ -115,6 +115,34 @@ fn hard_drive_publish_cycle() {
     assert!(s2.catalog.album(lcc_catalog::AlbumId(set)).is_none());
 }
 
+/// Issue #1375: a publish looks at the library's originals once, not once per photo (each look walks the whole
+/// library, and every job kept its own copy until the run ended).
+#[test]
+fn a_publish_run_shares_one_view_of_the_originals() {
+    let (root, mut s) = library("guard");
+    let ids = import(&mut s, &root, 4);
+    let out = root.join("published");
+    s.execute(
+        "publish.createService",
+        &json!({"name": "Disk", "dir": out.to_string_lossy(), "export": {"format": "jpeg", "longEdge": 20, "naming": "{name}"}}),
+    )
+    .unwrap();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    let st = s.execute("publish.createCollection", &json!({"service": "Disk", "name": "Web", "addSelected": true})).unwrap();
+    let coll = lcc_catalog::AlbumId(st["collection"].as_u64().unwrap());
+
+    let plan = super::plan(&mut s, coll).unwrap();
+    assert_eq!(plan.jobs.len(), ids.len(), "every photo should be prepared");
+    let first = &plan.jobs[0].prepared;
+    assert!(plan.jobs.iter().all(|j| j.prepared.shares_guard(first)), "the jobs of one run should share one originals index");
+    drop(plan);
+
+    // and the run still sends every photo
+    let r = s.execute("publish.run", &json!({"collection": coll.0})).unwrap();
+    assert_eq!(r["runs"][0]["published"].as_array().unwrap().len(), ids.len(), "{r}");
+    assert_eq!(files(&out.join("Web")), vec!["p0.jpg", "p1.jpg", "p2.jpg", "p3.jpg"]);
+}
+
 /// IMM-PUBLISH: collection sets inside the service's set prefix the Immich album name, which
 /// follows the collection's current name.
 #[test]
