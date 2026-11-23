@@ -525,7 +525,6 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if album_drag {
         list = list.drag_payload(|drag: &ListDrag<String>| drag.grabbed.rsplit(':').next().and_then(|id| id.parse::<u64>().ok()).map(AlbumDrag));
     }
-    let mut pressed = false;
     if above > 0.0 {
         ui.add_space(above);
     }
