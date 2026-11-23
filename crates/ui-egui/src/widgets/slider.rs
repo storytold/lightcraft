@@ -129,7 +129,11 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
         // A vertical wheel edits only a row a press selected; a sideways swipe edits the row under the pointer.
         with_env(
             ui,
-            |set| set.wheel = Some(WheelScope::Directional),
+            |set| {
+                set.wheel = Some(WheelScope::Directional);
+                // Lightroom's dense rows: the caption line and the track at the small control size
+                set.size = Some(craft::theme::ControlSize::Sm);
+            },
             |ui| {
                 egui::Frame::NONE
                     .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
@@ -256,10 +260,11 @@ fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: 
             super::register_response(format!("sliderField:{}", spec.id), target, &response);
         }
     }
-    // The readout goes back to showing the value once a typed edit ends (Return, Escape, a step): a field kept
+    // The readout goes back to showing the value once a typed edit ends (Return, a step): a field kept
     // focused would send the next Undo to its own text history instead of the photo's.
-    let ended = out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }))
-        || ui.input(|input| input.raw.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. })));
+    // (Escape keeps the field focused, as the framework's fields are: giving the focus up in the pass of an Escape
+    // the field has not applied yet would commit the draft as the field loses it.)
+    let ended = out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }));
     if let Some(root) = number_focus
         && ended
     {
