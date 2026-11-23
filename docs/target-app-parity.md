@@ -102,7 +102,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | Dust detection | ✅ | ✅ |
 | Faces / People | YuNet detection, SFace / AuraFace recognition (opt-in downloads), People view | ✅ (MVP, [faces.md](faces.md)) |
 | Assisted culling | focus, bursts | 🟡 (no eyes-open / aesthetics scores) |
-| Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); no adaptive presets | 🟡 |
+| Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); adaptive presets for subject, background and sky on any photo, and for teeth, skin and hair on photos that carry people mattes (#4356); none yet for people parts without mattes or for Object / Describe masks | 🟡 |
 | Natural-language search | — | ⬜ |
 
 **Blocked on a model strategy** (maintainer decision): licensable weights or our own training;
@@ -301,6 +301,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 |---|---|---|
 | 2026-11-15 | minor | Lens Blur renders with AI subject focus and per-mask bokeh (the AI table's 🟡 and the missing depth map are unchanged); survey layout, opened-library folder safety, direct Lightroom backup-zip import, legacy shutter repair and the Highlights/Shadows block fix landed; craft-libs cutover (TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata, gain maps); v0.21.0 and v0.21.1 released. Headline numbers, coverage and estimates were not re-measured. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
+| 2026-11-15 | patch | AI table: an Adaptive group of built-in presets whose masks are worked out per photo (#4356); status and headline numbers unchanged |
 | 2026-11-05 | minor | AI table: Lens Blur ⬜ → 🟡 (subject- or mask-focused disc blur, no depth map); headline numbers unchanged |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |

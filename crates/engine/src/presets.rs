@@ -254,6 +254,40 @@ fn canonical_numbers(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// The Adaptive presets: each is one mask that is worked out again on every photo it is applied to (the photo's
+/// subject, background, sky, or a part of its people), with our own adjustments. Subject, Background and Sky use
+/// the photo's own mattes when it carries them and an estimate otherwise; the people parts need the photo's mattes
+/// (an iPhone Portrait HEIC or ProRAW DNG) and change nothing on a photo without them
+/// ([`lightcraft_pipeline::masks::needs_missing_matte`]).
+fn adaptive() -> Vec<Preset> {
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    let people = |part: &str| MaskShape::People { person: 0, parts: vec![part.into()] };
+    let preset = |id: &str, name: &str, shape: MaskShape, adjust: LocalAdjustments| {
+        let component = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+        let mask = Mask { name: name.into(), components: vec![component], adjust, ..Mask::default() };
+        p("Adaptive", id, name, json!({"masks": [mask]}))
+    };
+    let d = LocalAdjustments::default;
+    vec![
+        preset("adaptive-brighten-subject", "Brighten Subject", MaskShape::Subject, LocalAdjustments { exposure: 0.35, shadows: 15.0, ..d() }),
+        preset(
+            "adaptive-darken-background",
+            "Darken Background",
+            MaskShape::Background,
+            LocalAdjustments { exposure: -0.5, saturation: -10.0, ..d() },
+        ),
+        preset(
+            "adaptive-deepen-sky",
+            "Deepen Sky",
+            MaskShape::Sky,
+            LocalAdjustments { exposure: -0.3, highlights: -30.0, dehaze: 15.0, saturation: 15.0, ..d() },
+        ),
+        preset("adaptive-whiten-teeth", "Whiten Teeth", people("Teeth"), LocalAdjustments { exposure: 0.25, saturation: -45.0, ..d() }),
+        preset("adaptive-smooth-skin", "Smooth Skin", people("Face Skin"), LocalAdjustments { texture: -35.0, clarity: -15.0, ..d() }),
+        preset("adaptive-enhance-hair", "Enhance Hair", people("Hair"), LocalAdjustments { texture: 25.0, clarity: 15.0, sharpness: 20.0, ..d() }),
+    ]
+}
+
 fn p(group: &str, id: &str, name: &str, settings: serde_json::Value) -> Preset {
     Preset { id: format!("lc.{id}"), name: name.into(), group: group.into(), settings, favorite: false, builtin: true }
 }
@@ -509,6 +543,9 @@ pub fn builtin() -> Vec<Preset> {
             json!({"treatment": "bw", "grading": {"shadows": {"hue": 32.0, "sat": 22.0, "lum": 0.0}, "highlights": {"hue": 42.0, "sat": 18.0, "lum": 0.0}}, "curve": {"shadows": 10.0}}),
         ),
     ]
+    .into_iter()
+    .chain(adaptive())
+    .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -647,6 +684,33 @@ mod tests {
             let out = pr.apply(&base, 1.0);
             assert_ne!(out, base, "{} had no effect", pr.id);
         }
+    }
+
+    /// Issue #4356: an Adaptive preset adds one mask that is worked out on the photo it lands on. Darken Background
+    /// changes the render of any photo; Whiten Teeth needs the photo's teeth matte, so on a photo without mattes its
+    /// mask is there and changes nothing. Applying a preset again doesn't add its mask twice.
+    #[test]
+    fn adaptive_presets_add_a_mask_worked_out_per_photo() {
+        use lightcraft_develop::MaskShape;
+        let adaptive: Vec<Preset> = builtin().into_iter().filter(|p| p.group == "Adaptive").collect();
+        assert_eq!(adaptive.len(), 6);
+        for pr in &adaptive {
+            let out = pr.apply(&DevelopSettings::default(), 1.0);
+            assert_eq!(out.masks.len(), 1, "{}", pr.id);
+            assert_eq!(out.masks[0].name, pr.name);
+            assert_eq!(DevelopSettings { masks: Vec::new(), ..out.clone() }, DevelopSettings::default(), "{}: only a mask", pr.id);
+        }
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let plain = s.render_now(id, 96, 96).unwrap().image;
+        s.execute("preset.apply", &json!({"id": "lc.adaptive-whiten-teeth"})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert!(matches!(&d.masks[0].components[0].shape, MaskShape::People { parts, .. } if parts == &["Teeth".to_string()]));
+        assert_eq!(s.render_now(id, 96, 96).unwrap().image, plain, "no teeth matte on this photo: nothing changes");
+        s.execute("preset.apply", &json!({"id": "lc.adaptive-darken-background"})).unwrap();
+        assert_ne!(s.render_now(id, 96, 96).unwrap().image, plain, "the background is darkened");
+        s.execute("preset.apply", &json!({"id": "lc.adaptive-darken-background"})).unwrap();
+        assert_eq!(s.develop_of(id).unwrap().masks.len(), 2, "the same preset twice adds its mask once");
     }
 
     #[test]

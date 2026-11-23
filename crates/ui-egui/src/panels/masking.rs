@@ -307,6 +307,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
     divider(ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
+        // a people part (teeth, skin, hair…) from an adaptive preset, on a photo that doesn't carry its matte: say
+        // why the mask changes nothing here
+        let mattes = app.session.source_info(id).mattes;
+        if m.components.iter().any(|c| lightcraft_pipeline::masks::needs_missing_matte(&c.shape, mattes.as_deref())) {
+            let note =
+                "This photo doesn't carry the people mattes this mask needs (iPhone Portrait and ProRAW photos do), so it changes nothing here.";
+            let r = ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim).size(11.0)).wrap());
+            register(ui, "maskNeedsMatte", r.rect);
+            ui.add_space(4.0);
+        }
         for (i, c) in m.components.iter().enumerate() {
             let (kind, icon) = kind_label(&c.shape);
             let label = c.name.clone().unwrap_or_else(|| match &c.shape {

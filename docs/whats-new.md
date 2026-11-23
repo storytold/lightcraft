@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Adaptive presets
+- Presets has a new **Adaptive** group. Each preset adds one mask that is worked out again on every photo you apply it
+  to, so applying it to a whole shoot gives each photo its own mask: **Brighten Subject**, **Darken Background** and
+  **Deepen Sky** work on any photo; **Whiten Teeth**, **Smooth Skin** and **Enhance Hair** use the people mattes iPhone
+  ProRAW photos carry, and change nothing on a photo without them (Masking says so). Adjust or remove the mask in
+  Masking like any other.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

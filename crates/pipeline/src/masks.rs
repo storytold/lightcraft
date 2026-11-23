@@ -111,24 +111,38 @@ impl Mattes {
             MaskShape::Sky => self.of(&[Sky]),
             MaskShape::Subject => person(),
             MaskShape::People { parts, .. } => {
-                let wanted: Vec<MatteKind> = parts
-                    .iter()
-                    .filter_map(|p| {
-                        let p = p.to_ascii_lowercase();
-                        [("skin", Skin), ("hair", Hair), ("teeth", Teeth), ("glasses", Glasses)]
-                            .into_iter()
-                            .find(|(n, _)| p.contains(n))
-                            .map(|(_, k)| k)
-                    })
-                    .collect();
-                let whole =
-                    parts.is_empty() || parts.iter().any(|p| matches!(p.to_ascii_lowercase().as_str(), "person" | "entire person" | "entireperson"));
+                let wanted: Vec<MatteKind> = parts.iter().filter_map(|p| part_matte(p)).collect();
                 // parts without a matte (lips, clothes, …) keep the heuristic
-                if whole { person() } else { self.of(&wanted) }
+                if whole_person(parts) { person() } else { self.of(&wanted) }
             }
             _ => Vec::new(),
         }
     }
+}
+
+/// The matte kind that selects a People part by name (`Face Skin`, `Hair`, `Teeth`, `Glasses`…); `None` for a part
+/// no matte covers (lips, clothes, …).
+fn part_matte(part: &str) -> Option<MatteKind> {
+    use MatteKind::*;
+    let p = part.to_ascii_lowercase();
+    [("skin", Skin), ("hair", Hair), ("teeth", Teeth), ("glasses", Glasses)].into_iter().find(|(n, _)| p.contains(n)).map(|(_, k)| k)
+}
+
+/// Whether People `parts` mean the whole person: none named, or the entire person among them.
+fn whole_person(parts: &[String]) -> bool {
+    parts.is_empty() || parts.iter().any(|p| matches!(p.to_ascii_lowercase().as_str(), "person" | "entire person" | "entireperson"))
+}
+
+/// Whether `shape` selects nothing on a photo with these `mattes` because the photo doesn't carry what it needs: a
+/// People shape whose parts are all ones a matte selects (skin, hair, teeth, glasses), on a photo without any of
+/// those mattes (issue #4356). The whole-subject estimate is no stand-in for a person's teeth: a Whiten Teeth mask
+/// then changes nothing, instead of the middle of the photo. Parts no matte covers keep the estimate.
+pub fn needs_missing_matte(shape: &MaskShape, mattes: Option<&Mattes>) -> bool {
+    let MaskShape::People { parts, .. } = shape else { return false };
+    if whole_person(parts) || !parts.iter().all(|p| part_matte(p).is_some()) {
+        return false;
+    }
+    mattes.is_none_or(|m| m.for_shape(shape).is_empty())
 }
 
 pub struct Evaluated {
@@ -221,6 +235,9 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         return matte_alpha(&fitting, frame, w, h);
     }
     let mut out = Plane::new(w, h);
+    if needs_missing_matte(shape, mattes) {
+        return out;
+    }
     let to_long = |p: Point| frame.norm_to_long(p);
     // `img`/`log_l` are before exposure: range masks select on the exposed values.
     let gain = ev.exp2();
