@@ -10,6 +10,20 @@ fn test_image() -> Rgba8 {
     img
 }
 
+#[test]
+fn export_subfolders_keep_literal_components_and_sanitize_expanded_values() {
+    let mut photo = crate::rename::sample_photo();
+    photo.meta.title = "Client/Proof".into();
+    let literal = ExportOptions::from_json(&json!({"subfolder": ".archive/{draft}"}));
+    assert_eq!(literal.subfolder_for(&photo, 1), ".archive/{draft}");
+
+    let mixed = ExportOptions::from_json(&json!({"subfolder": ".archive/{draft}/{TITLE}/{N:02}"}));
+    assert_eq!(mixed.subfolder_for(&photo, 7), ".archive/{draft}/Client-Proof/07");
+
+    let unclosed = ExportOptions::from_json(&json!({"subfolder": ".archive{draft/{date:%Y}"}));
+    assert_eq!(unclosed.subfolder_for(&photo, 1), ".archive{draft/2026");
+}
+
 /// Issue #1670: removing a redundant alpha channel preserves samples and metadata.
 #[test]
 fn opaque_eight_bit_exports_are_rgb() {

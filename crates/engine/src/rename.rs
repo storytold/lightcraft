@@ -57,6 +57,7 @@ pub use tokens::{
     DATE_DIRECTIVES, TEMPLATE_NOTES, TOKENS, TokenHelp, expand, expand_folder, expand_tokens, expand_tokens_with, folder_template_error,
     sample_photo, token_example, token_help_json, token_summary, unknown_tokens,
 };
+pub(crate) use tokens::{expand_folder_component, has_known_token};
 
 /// One planned rename.
 #[derive(Clone, Debug, PartialEq, Serialize)]

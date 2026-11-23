@@ -189,6 +189,38 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+#[test]
+fn export_subfolder_tokens_are_expanded_per_photo() {
+    use crate::export::{Destination, export_batch};
+    use lightcraft_catalog::Op;
+
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.visible().iter().copied().take(2).collect();
+    for (&id, captured) in ids.iter().zip(["2025-12-31T12:00:00", "2026-01-01T12:00:00"]) {
+        s.catalog.apply(Op::SetCaptured { id, captured: Some(captured.into()) }).unwrap();
+    }
+    let o = ExportOptions::from_params(&json!({
+        "format": "png", "width": 32, "naming": "photo", "startNumber": 7,
+        "subfolder": "{date:%Y}/{date:%Y-%m-%d}-{seq:02}"
+    }))
+    .unwrap();
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut written = Vec::new();
+    export_batch(
+        &mut s,
+        &ids,
+        &o,
+        &to,
+        &mut |path, _| {
+            written.push(path.to_string());
+            Ok(())
+        },
+        &|_| false,
+    )
+    .unwrap();
+    assert_eq!(written, ["out/2025/2025-12-31-07/photo.png", "out/2026/2026-01-01-08/photo.png"]);
+}
+
 /// Each of the four named delivery-target built-ins: listed as built-in, expanded to the settings the
 /// issue asks for, valid as `app.export` params, round-tripped through a user preset, and rendered at
 /// its size. A long edge is all a preset sets, so none of them crops the photo.
