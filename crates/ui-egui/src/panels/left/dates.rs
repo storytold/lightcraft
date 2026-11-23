@@ -1,4 +1,4 @@
-use super::rows::{INDENT_STEP, Row, tree_open, tree_toggle};
+use super::rows::tree_open;
 use super::{Icon, LibrarySource, LightcraftApp, json};
 
 
