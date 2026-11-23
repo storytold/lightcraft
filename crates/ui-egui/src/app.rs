@@ -243,9 +243,17 @@ impl LightcraftApp {
             self.ui.tool.clear();
         }
         if r.is_ok()
-            && matches!(id, "mask.adjust" | "mask.pointColor.pick" | "mask.pointColor.set" | "mask.pointColor.delete" | "mask.pointColor.clear")
+            && matches!(
+                id,
+                "mask.adjust"
+                    | "mask.sectionEnabled"
+                    | "mask.pointColor.pick"
+                    | "mask.pointColor.set"
+                    | "mask.pointColor.delete"
+                    | "mask.pointColor.clear"
+            )
         {
-            // Judge local adjustments on the photo, without the selection overlay obscuring them.
+            // Judge local adjustments on the photo (a section eye included), without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
             self.ui.mask_overlay = false;
         }

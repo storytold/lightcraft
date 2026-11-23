@@ -87,6 +87,15 @@ fn the_selected_mask_shows_a_header_with_an_eye_per_section() {
 }
 
 #[test]
+fn a_header_eye_hides_the_selection_overlay() {
+    // the eye is for judging the section's effect on the photo, which the overlay would cover
+    let mut h = mask_panel();
+    assert!(h.app.ui.mask_overlay, "a new mask shows its overlay");
+    click_eye(&mut h, "tone");
+    assert!(!h.app.ui.mask_overlay, "the eye hides the overlay, as a slider does");
+}
+
+#[test]
 fn a_header_eye_toggles_that_masks_section_in_one_undo_step() {
     let mut h = mask_panel();
     exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
