@@ -1,55 +1,97 @@
-use super::dates::browse_all_photos;
-use super::rows::{INDENT_STEP, Row, out_of_sight, tree_open, tree_toggle};
-use super::{Icon, KeywordNode, LightcraftApp, json};
+use std::collections::HashMap;
 
-/// "Keywords": the library's keyword tree with photo counts (`a|b|c` keywords nest). A click
-/// filters the grid by the keyword (children included), the triangle opens a level, and the
-/// context menu renames, merges or deletes the keyword across the library.
-pub(super) fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode], indent: f32) {
+use super::dates::browse_all_photos;
+use super::rows::{MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, tree_open};
+use super::{KeywordNode, LightcraftApp, json};
+
+/// The widget id of a keyword's row: `keyword:<path>`.
+fn row_id(path: &str) -> String {
+    format!("keyword:{path}")
+}
+
+/// Whether the keyword `path` is open: what the user last chose this session (leaves have no
+/// open state to look up).
+fn open_key(path: &str) -> egui::Id {
+    egui::Id::unique(("kw-open", path.to_lowercase()))
+}
+
+/// The rows of `nodes` and, for the open ones, of the keywords inside them; `paths` maps each
+/// row's key back to its keyword.
+fn flatten(ui: &egui::Ui, nodes: &[KeywordNode], depth: usize, rows: &mut Vec<SideRow>, paths: &mut HashMap<String, String>) {
     for n in nodes {
-        // leaves (most keywords) have no open state to look up
-        let open_id = (!n.children.is_empty()).then(|| egui::Id::unique(("kw-open", n.path.to_lowercase())));
-        let mut open = open_id.is_some_and(|k| tree_open(ui, k, false));
-        let id = format!("keyword:{}", n.path);
-        if !out_of_sight(app, ui, &id, &n.name, Some(n.count), indent, false) {
-            keyword_row(app, ui, n, &id, indent, open_id, &mut open);
+        let id = row_id(&n.path);
+        let has_children = !n.children.is_empty();
+        let open = has_children && tree_open(ui, open_key(&n.path), false);
+        let tip = if has_children { format!("{} (includes the keywords below it)", n.path) } else { n.path.clone() };
+        let mut row = SideRow::new(id.clone(), "pin", n.name.clone()).count(Some(n.count)).depth(depth).tip(tip);
+        if has_children {
+            row = row.group(open, format!("keywordToggle:{}", n.path));
         }
-        if open {
-            keyword_rows(app, ui, &n.children, indent + INDENT_STEP);
+        paths.insert(id, n.path.clone());
+        rows.push(row);
+        if open && depth < MAX_DEPTH {
+            flatten(ui, &n.children, depth + 1, rows, paths);
         }
     }
 }
 
-/// One drawn row of [`keyword_rows`]; `open_id` and `open` are its triangle's when it has rows inside it.
-fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: &str, indent: f32, open_id: Option<egui::Id>, open: &mut bool) {
-    let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
-    let resp = Row::new(id, Icon::Tag, &n.name).count(Some(n.count)).selected(sel).indent(indent).show(app, ui);
-    if let Some(k) = open_id {
-        tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path), &n.name);
+/// "Keywords": the library's keyword tree with photo counts (`a|b|c` keywords nest). A click
+/// filters the grid by the keyword (children included), the triangle opens a level, and the
+/// context menu renames, merges or deletes the keyword across the library.
+pub(super) fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode]) {
+    let chosen = app.session.filter.keyword.clone();
+    let mut rows = Vec::new();
+    let mut paths = HashMap::new();
+    flatten(ui, nodes, 0, &mut rows, &mut paths);
+    // the chosen keyword's row, however its path is cased
+    let selected = rows
+        .iter()
+        .find(|row| paths.get(&row.key).zip(chosen.as_deref()).is_some_and(|(path, k)| k.eq_ignore_ascii_case(path)))
+        .map(|row| row.key.clone());
+    let spec = SideSpec::new("keywords", crate::i18n::tr("Keywords"), app.ui.show_counts).selected(selected.as_deref());
+    let out = side_list(ui, spec, rows);
+    let mut request = None;
+    for event in &out.events {
+        match event {
+            SideEvent::Open { key, open } => {
+                if let Some(path) = paths.get(key) {
+                    set_tree_open(ui, open_key(path), *open);
+                }
+            }
+            SideEvent::Activate(key) => {
+                let Some(path) = paths.get(key) else { continue };
+                let sel = selected.as_deref() == Some(key.as_str());
+                let v = if sel { serde_json::Value::Null } else { json!(path) };
+                browse_all_photos(app, !sel);
+                let _ = app.run("library.filter", json!({"keyword": v}));
+            }
+            SideEvent::Menu { key, at } => request = Some((key.clone(), MenuAt::Point(*at))),
+        }
     }
-    let resp = resp.on_hover_text(if n.children.is_empty() { n.path.clone() } else { format!("{} (includes the keywords below it)", n.path) });
-    if resp.clicked() {
-        let v = if sel { serde_json::Value::Null } else { json!(n.path) };
-        browse_all_photos(app, !sel);
-        let _ = app.run("library.filter", json!({"keyword": v}));
-    }
-    crate::widgets::context_menu(&resp, |ui| {
-        let has_sel = app.session.active().is_some();
-        if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Add to Selected Photos"))).clicked() {
-            let _ = app.run("photo.setMeta", json!({"addKeywords": [n.path]}));
-        }
-        if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Remove from Selected Photos"))).clicked() {
-            let _ = app.run("photo.setMeta", json!({"removeKeywords": [n.path]}));
-        }
-        ui.separator();
-        if ui.button(crate::i18n::tr("Rename Keyword…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: n.path.clone(), to: n.path.clone() });
-        }
-        if ui.button(crate::i18n::tr("Merge into…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::MergeKeywords { from: vec![n.path.clone()], into: String::new() });
-        }
-        if ui.button(crate::i18n::tr("Delete Keyword")).clicked() {
-            let _ = app.run("keyword.delete", json!({"keyword": n.path}));
-        }
+    host_menu(ui, "keywords", crate::i18n::tr("Keyword"), out.response.as_ref(), request, |ui, key| {
+        let Some(path) = paths.get(key) else { return };
+        keyword_menu(app, ui, path);
     });
+}
+
+/// A keyword's context menu: give or take the keyword on the selected photos, and rename, merge or
+/// delete it across the library.
+fn keyword_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
+    let has_sel = app.session.active().is_some();
+    if entry("keyword", crate::i18n::tr("Add to Selected Photos")).enabled(has_sel).show(ui) {
+        let _ = app.run("photo.setMeta", json!({"addKeywords": [path]}));
+    }
+    if entry("keyword", crate::i18n::tr("Remove from Selected Photos")).enabled(has_sel).show(ui) {
+        let _ = app.run("photo.setMeta", json!({"removeKeywords": [path]}));
+    }
+    rule(ui);
+    if entry("keyword", crate::i18n::tr("Rename Keyword…")).show(ui) {
+        app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: path.to_string(), to: path.to_string() });
+    }
+    if entry("keyword", crate::i18n::tr("Merge into…")).show(ui) {
+        app.ui.dialog = Some(crate::state::Dialog::MergeKeywords { from: vec![path.to_string()], into: String::new() });
+    }
+    if entry("keyword", crate::i18n::tr("Delete Keyword")).show(ui) {
+        let _ = app.run("keyword.delete", json!({"keyword": path}));
+    }
 }
