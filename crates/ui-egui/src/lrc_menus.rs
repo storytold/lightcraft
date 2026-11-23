@@ -351,6 +351,7 @@ const WINDOW: &[&str] = &[
 
 const HELP: &[&str] = &[
     "app.whatsNew",
+    "app.gettingStarted",
     "app.help",
     "---",
     "module.help",

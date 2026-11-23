@@ -758,7 +758,7 @@ fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// A language's name as the picker shows it: its own name (`Deutsch`), or, when no loaded font
 /// has that script's glyphs (Georgian has no face in this build's fonts; Chinese and Japanese in a
 /// build without craft-fonts), its English name, so it never draws as empty boxes.
-fn language_label(ctx: &egui::Context, language: crate::i18n::Locale) -> String {
+pub(crate) fn language_label(ctx: &egui::Context, language: crate::i18n::Locale) -> String {
     let own = language.name();
     let font = egui::FontId::proportional(13.0);
     if ctx.fonts_mut(|f| f.has_glyphs(&font, own)) {

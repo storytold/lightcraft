@@ -50,8 +50,10 @@ fn settings_help_links_name_known_topics_and_open_the_manual() {
     // And the significant groups have one (a few depend on what this build or computer has)
     let conditional =
         ["autoImport", "folderPolling", "xmpSidecars", "importMetadata", "smartPreviews", "sam3", "semanticSearch", "faceScan", "denoiseModels"];
+    // Getting Started's pages link to the manual, not Settings (`onboarding`)
+    let guide = ["gettingStarted", "tourImport", "tourLibrary", "tourDevelop", "tourAi", "tourOutput", "tourExport"];
     for (topic, _) in crate::help_link::TOPICS {
-        if !conditional.contains(topic) {
+        if !conditional.contains(topic) && !guide.contains(topic) {
             assert!(shown.contains(*topic), "no Settings page shows the help link {topic}; shown: {shown:?}");
         }
     }

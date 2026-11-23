@@ -43,6 +43,11 @@ holding the catalog (`<name>.<catalog_ext>` and its store), previews and backups
 unless you copy them on import. File → New Catalog… and File → Open Catalog… switch libraries
 ([catalogs.md](catalogs.md)).
 
+On the first start a **Welcome** window creates or opens the library, and a short guide follows it: which AI
+features to download (each with its size and memory use, nothing downloads until **Finish**), the layout, colour
+scheme, text size and language, a few key settings, and one page per module. **Skip** or Esc closes it;
+Help → Getting Started… opens it again.
+
 To try things without your own photos, use the procedural demo library: `<cli> run --demo …`,
 `<cli> snapshot --demo` and `<cli> mcp --demo` all start with it.
 

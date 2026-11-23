@@ -90,6 +90,8 @@ pub fn welcome(app: &mut LccApp, foreign: Vec<String>) {
         .unwrap_or_default();
     app.catalog_ui.dialog =
         Some(CatalogDialog::Welcome { parent, name: lcc_brand::LIBRARY_DEFAULT.to_string(), demo: false, updates: false, foreign });
+    // Getting Started follows once the library is open (`onboarding`)
+    app.onboarding.after_welcome = true;
 }
 
 /// What [`carry_over_recent_catalogs`] did.

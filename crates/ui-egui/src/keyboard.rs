@@ -48,6 +48,7 @@ pub(crate) fn answer_waiting(app: &LccApp) -> bool {
         || app.quit_prompt.is_some()
         || !app.notices.is_empty()
         || catalog_dialog_modal(app)
+        || app.onboarding.wizard.is_some()
         || library_problem_modal(app)
         // the Modern layout's Export sheet
         || app.modern_sheets.export.is_some()

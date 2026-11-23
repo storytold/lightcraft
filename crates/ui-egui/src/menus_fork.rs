@@ -32,6 +32,7 @@ pub(super) fn commands() -> impl Iterator<Item = &'static UiCommand> {
         .chain(crate::tool_profiles::COMMANDS)
         .chain(crate::quick_bar::COMMANDS)
         .chain(crate::help_link::COMMANDS)
+        .chain(crate::onboarding::COMMANDS)
         .chain(crate::lrc_menus::SOON_COMMANDS.iter())
 }
 
@@ -134,6 +135,9 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
         return Some(r);
     }
     if let Some(r) = crate::help_link::run(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::onboarding::run(app, id, p) {
         return Some(r);
     }
     #[cfg(not(target_arch = "wasm32"))]

@@ -104,6 +104,7 @@ pub mod modern_sheets;
 mod modern_sources;
 pub mod module;
 pub mod motion;
+pub mod onboarding;
 pub mod overlay;
 pub mod panels;
 pub mod pick;
@@ -377,6 +378,8 @@ mod tests_modules;
 mod tests_mouse_nav;
 #[cfg(test)]
 mod tests_offline;
+#[cfg(test)]
+mod tests_onboarding;
 #[cfg(test)]
 mod tests_open_lightroom;
 #[cfg(test)]
@@ -1038,6 +1041,8 @@ pub struct LccApp {
     pub lightroom_last: Option<Value>,
     /// Catalog dialogs and the Open Recent list (`catalog_ui`).
     pub catalog_ui: catalog_ui::CatalogUi,
+    /// Getting Started, the guide after a first start (`onboarding`).
+    pub onboarding: onboarding::Onboarding,
     /// A completed import result waiting for another modal dialog to close.
     pub(crate) lightroom_result: Option<state::Dialog>,
     /// The import review of a finished scan, waiting for another dialog to close.
@@ -1377,6 +1382,7 @@ impl LccApp {
             lightroom: None,
             lightroom_last: None,
             catalog_ui: Default::default(),
+            onboarding: Default::default(),
             lightroom_result: None,
             review_pending: None,
             shown_library: None,
@@ -3180,6 +3186,7 @@ impl LccApp {
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
             catalog_ui::show(self, &ctx);
+            onboarding::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
             pick::poll(self, &ctx);
             help_link::poll(self, &ctx);
@@ -3238,6 +3245,7 @@ impl LccApp {
         comments_ui::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         catalog_ui::show(self, &ctx);
+        onboarding::show(self, &ctx);
         plate::show_setup(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         panels::plugins::show(self, &ctx);
