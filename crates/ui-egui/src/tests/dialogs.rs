@@ -140,13 +140,14 @@ fn a_click_outside_an_open_dropdown_keeps_the_dialog() {
     let r = h.request("ui.clickWidget", json!({"id": "combo:exportPreset"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "the preset dropdown is open");
+    // (the dropdown is a framework menu above the framework dialog)
+    assert!(crate::dialogs::popup_open(&h.view.ctx), "the preset dropdown is open");
     let at = egui::pos2(10.0, 990.0);
     let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     h.events.extend([egui::Event::PointerMoved(at), press(true), press(false)]);
     h.step();
     h.step();
-    assert!(!egui::Popup::is_any_open(&h.view.ctx), "the click closes the dropdown");
+    assert!(!crate::dialogs::popup_open(&h.view.ctx), "the click closes the dropdown");
     assert!(h.app.ui.dialog.is_some(), "but not the dialog");
 }
 
@@ -156,10 +157,11 @@ fn modal_dialogs_close_background_menus() {
     let r = h.request("ui.clickWidget", json!({"id": "menu:Photo"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert!(egui::Popup::is_any_open(&h.view.ctx));
+    // (the menu bar's menus are framework popups)
+    assert!(crate::dialogs::popup_open(&h.view.ctx));
     h.app.run("dialog.copySettings", json!({})).unwrap();
     h.step();
-    assert!(!egui::Popup::is_any_open(&h.view.ctx), "background menus cannot remain above the modal window");
+    assert!(!crate::dialogs::popup_open(&h.view.ctx), "background menus cannot remain above the modal window");
 }
 
 /// The Create Preset name box is a `dialog_field` registered under `field:presetName`: Esc

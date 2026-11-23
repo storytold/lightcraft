@@ -1021,8 +1021,7 @@ fn chooser_keys(app: &mut LightcraftApp, ctx: &egui::Context) {
         let up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
         let down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
         let enter = !focused && i.consume_key(Modifiers::NONE, Key::Enter);
-        // (taken here too, so no shortcut under the window acts on it)
-        i.consume_key(Modifiers::NONE, Key::Escape);
+        // (Escape is left for the framework dialog, which reads it during the pass)
         (up, down, enter)
     });
     if (up || down) && n > 0 {
@@ -1367,11 +1366,11 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         .color(t.canvas),
                 );
                 register(ui, "indicator:temporarySession", r.rect);
-                let b = ui.add(
-                    egui::Button::new(RichText::new(crate::i18n::tr("Open Library…")).color(t.canvas)).fill(egui::Color32::from_black_alpha(40)),
-                );
-                register(ui, "button:libraryReopen", b.rect);
-                reopen = b.clicked();
+                let b = Button::new(crate::i18n::tr("Open Library…").to_owned()).id_salt("libraryReopen").size(craft::theme::ControlSize::Sm).show(ui);
+                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                    crate::widgets::register_response("button:libraryReopen", b.response.rect, &b.response);
+                    reopen = b.clicked();
+                }
             });
         });
     if reopen && let Some(p) = app.library_problem.as_mut() {

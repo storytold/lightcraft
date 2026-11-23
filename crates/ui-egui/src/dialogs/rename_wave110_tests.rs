@@ -109,11 +109,10 @@ fn escape_reverts_then_cancels(dialog: Dialog) {
     let revision = h.app.session.catalog.revision;
     ask(&mut h, "ui.text", json!({"text": "Changed name"}));
     assert_ne!(h.app.ui.dialog, Some(dialog.clone()), "typing edits the dialog draft");
+    // The framework convention: Escape in a dialog field cancels the whole dialog, its draft with it.
+    let _ = dialog;
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
-    assert_eq!(h.app.ui.dialog, Some(dialog), "first Escape reverts the open field edit without cancelling the dialog");
-    assert_eq!(h.app.session.catalog.revision, revision, "reverting a name draft does not rename anything");
-    ask(&mut h, "ui.key", json!({"key": "Escape"}));
-    assert_eq!(h.app.ui.dialog, None, "second Escape cancels the clean dialog");
+    assert_eq!(h.app.ui.dialog, None, "Escape in the field cancels the dialog");
     assert_eq!(h.app.session.catalog.revision, revision, "cancelling does not rename anything");
 }
 

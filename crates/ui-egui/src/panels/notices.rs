@@ -260,6 +260,10 @@ pub(crate) struct PromptInput {
     /// drawn (egui's `Response::clicked` needs `pointer_events`), then hidden again for the
     /// dialogs and overlays drawn after it.
     pointer: Option<egui::PointerState>,
+    /// The prompt's own keys, pointer events and AccessKit actions of this pass, taken out of the
+    /// live input before the background draws and given back while the prompt draws: the
+    /// framework dialog reads them during the pass.
+    events: Vec<egui::Event>,
 }
 
 impl PromptInput {
@@ -274,6 +278,7 @@ impl PromptInput {
         self.activate = None;
         self.button_ids.clear();
         self.pointer = None;
+        self.events.clear();
     }
 }
 
@@ -360,6 +365,15 @@ pub(crate) fn prompt_allows_event(app: &LightcraftApp, event: &egui::Event) -> b
     }
 }
 
+/// Whether `event` is one the prompt's framework dialog reads while it draws: a key, a pointer
+/// event or an AccessKit action (the host barrier already let only the prompt's own through).
+fn prompt_event(event: &egui::Event) -> bool {
+    matches!(
+        event,
+        egui::Event::Key { .. } | egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::PointerGone | egui::Event::AccessKitActionRequest(_)
+    )
+}
+
 /// Restore the pointer state saved for the prompt just before it is drawn. The background has
 /// already drawn with no pointer; egui's `Response::clicked` still needs the pass's pointer events
 /// to turn the interaction snapshot into a click on a prompt button.
@@ -418,6 +432,9 @@ pub(crate) fn prepare_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) -> b
     // (`prompt_allows_event` let only those through); none is left here for a covered panel.
     if laid_out {
         app.notice_input.pointer = Some(ctx.input(|input| input.pointer.clone()));
+        app.notice_input.events = ctx.input(|input| input.events.iter().filter(|event| prompt_event(event)).cloned().collect());
+    } else {
+        app.notice_input.events.clear();
     }
     ctx.input_mut(|input| {
         if shield || !laid_out {
@@ -508,6 +525,12 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
         .collect();
     let picked = Cell::new(None);
     let responses: RefCell<Vec<egui::Response>> = RefCell::new(Vec::new());
+    // The prompt's own input of this pass, taken from the background, is the prompt's while it draws.
+    let restored = std::mem::take(&mut input.events);
+    let gave_back = !restored.is_empty();
+    if gave_back {
+        ctx.input_mut(|live| live.events.extend(restored));
+    }
     crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
         let output = Dialog::new(crate::i18n::tr(title).to_owned())
             .id(egui::Id::unique(id))
@@ -552,6 +575,10 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
             chosen = picked.get().filter(|index| *index <= last).or(output.closed.map(|_| cancel_index));
         }
     });
+    if gave_back {
+        // and nothing drawn after the prompt sees it
+        ctx.input_mut(|live| live.events.retain(|event| !prompt_event(event)));
+    }
     if chosen.is_some() {
         // The focused prompt button is about to disappear. Drop its focus now so this pass's
         // `egui_wants_keyboard_input` (and `text_focus`) does not make the next Esc look like it

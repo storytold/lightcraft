@@ -214,8 +214,8 @@ pub(crate) fn framework_dialog_layer(id: egui::Id) -> egui::LayerId {
 }
 
 /// Whether a popup (a menu, a dropdown, a list) is open above the open dialog: the layer that takes the keys is not
-/// the dialog's own modal layer. Tests read it where they read "no overlay is open" before the dialog was one.
-#[cfg(test)]
+/// the dialog's own modal layer, as of the last pass. Tests read it where they read "no overlay is open" before the
+/// dialog was one.
 pub(crate) fn popup_open(ctx: &egui::Context) -> bool {
     use craft::ui::runtime::overlay;
     overlay::top(ctx).and_then(|id| overlay::entry(ctx, id)).is_some_and(|entry| !entry.rank.is_modal())
@@ -376,6 +376,11 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     use craft::ui::runtime::overlay::CloseReason;
 
     let ctx = host.ctx().clone();
+    // A caller's measuring run of the whole dialog shows nothing the user can reach, and the dialog's id may open only
+    // one stage a pass: the real run of the same pass shows it.
+    if craft::ui::runtime::measure::active(&ctx) {
+        return;
+    }
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
     let at_start = dlg.clone();
     let raw_blocked = blocked || crate::panels::library_problem::blocks_dialog_input(app);
@@ -401,8 +406,13 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     let widest_id = id.with("widest");
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
     let width = dialog_width(&dlg).min(screen.width() - 2.0 * DIALOG_SCREEN_MARGIN).max(widest).max(1.0);
+    // As the old window did, the dialog starts at its width and grows to what its content needs, never to the
+    // window's: a field that fills the width it is given fills the dialog's.
+    let grown_id = id.with("grown");
+    let grown = ctx.data(|d| d.get_temp::<f32>(grown_id)).unwrap_or(0.0).min(screen.width() - 2.0 * DIALOG_SCREEN_MARGIN);
+    let max_width = width.max(grown);
     // before the dialog: drawing it closes a dropdown the key or click lands outside of
-    let popup_was_open = egui::Popup::is_any_open(&ctx);
+    let popup_was_open = egui::Popup::is_any_open(&ctx) || popup_open(&ctx);
     let mut footer = Footer::of(app, &dlg);
     let (informational, ok_at) = (footer.informational, footer.ok);
     // The backdrop dims the window under the dialog. Like a macOS sheet, the dialog leaves the integrated title bar
@@ -465,6 +475,7 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
                 shown_layer.set(Some(ui.layer_id()));
             }
             ui.set_min_width(width);
+            ui.set_max_width(max_width);
             ui.spacing_mut().item_spacing.y = 8.0;
             // (the import review and Print size their own lists to the dialog)
             fit_lists(ui, !import && !print, body_max, |ui| dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg));
@@ -482,14 +493,22 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     }
     // The window's hit belongs to the dialog's own layer, where its controls are.
     let layer = shown_layer.get().unwrap_or_else(|| framework_dialog_layer(id));
+    // The dialog's own rect is its layer's: the area the overlay host shows it in.
+    let window_rect = ctx.memory(|m| m.area_rect(layer.id)).unwrap_or(output.response.rect);
     let mut window = output.response.clone();
     window.layer_id = layer;
+    window.rect = window_rect;
+    window.interact_rect = window_rect;
     crate::widgets::register_response("dialog:window", window.rect, &window);
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
+    if content_w > max_width + 0.5 {
+        ctx.data_mut(|d| d.insert_temp(grown_id, content_w));
+        ctx.request_repaint();
+    }
     if !popup_was_open && let Some(band) = title_bar {
-        title_bar_handle(&ctx, band, output.response.rect);
+        title_bar_handle(&ctx, band, window_rect);
     }
     // The startup dialog is recorded once it was presented, not when the logic tick picked it: a host that runs
     // `logic` and quits before a visible frame does not burn the tour, and a crash while it is up still does not
@@ -506,7 +525,7 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("dialog-backdrop-press")));
     } else {
         // (the import review keeps its hand-picked photos however the click lands; the title bar is not the backdrop)
-        if app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(&ctx, output.response.rect, title_bar, popup_was_open) {
+        if app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(&ctx, window_rect, title_bar, popup_was_open) {
             close = true;
         }
         match output.closed {

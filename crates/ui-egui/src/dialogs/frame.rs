@@ -167,6 +167,11 @@ pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, h
 /// The dialog part `key` is drawn this frame but wasn't the frame before: the dialog has just
 /// opened (to give its first field the focus once).
 pub(super) fn just_opened(ui: &egui::Ui, key: &str) -> bool {
+    // A measuring run of the dialog's body (the framework measures it before it places the layer) is not a showing:
+    // it must neither take the opening nor use it up for the real run of the same pass.
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
     let id = egui::Id::unique(("dialog-shown", key));
     let pass = ui.ctx().cumulative_pass_nr();
     let last: Option<u64> = ui.data_mut(|d| d.get_temp(id));
