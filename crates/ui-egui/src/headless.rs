@@ -271,6 +271,27 @@ pub struct Headless {
     after_raw_input_hook: Option<Box<dyn FnMut(&mut LightcraftApp)>>,
 }
 
+/// How much longer this crate's own tests wait for [`Headless::settle`] and
+/// [`Headless::step_until`] in a coverage run. Instrumentation makes the demo library's
+/// procedural pixels and the render pipeline several times slower, and CI runs four such tests
+/// per 4-CPU runner: settles that take seconds natively come near two minutes there. Native runs
+/// keep their timeouts exactly. Test builds only, so the timeout a caller passes to a real host
+/// (`ui.settle {timeoutMs}` in `lightcraft-cli snapshot`) is never stretched.
+#[cfg(test)]
+pub(crate) const COVERAGE_SLOWDOWN: u32 = 5;
+
+/// `timeout`, stretched by [`COVERAGE_SLOWDOWN`] in a coverage run.
+#[cfg(test)]
+pub(crate) fn coverage_timeout(timeout: Duration, coverage: bool) -> Duration {
+    if coverage { timeout.saturating_mul(COVERAGE_SLOWDOWN) } else { timeout }
+}
+
+/// A coverage run: `cargo llvm-cov` sets `LLVM_PROFILE_FILE` for the tests it runs.
+#[cfg(test)]
+pub(crate) fn coverage_run() -> bool {
+    std::env::var_os("LLVM_PROFILE_FILE").is_some()
+}
+
 /// A headless run (`lightcraft-cli snapshot`, tests) is a one-shot process: however it ends, it
 /// first waits for an Apple Photos import its script left running (`export.addToPhotos {wait:
 /// false}`), bounded, so it never abandons osascript or the import's result.
@@ -411,6 +432,8 @@ impl Headless {
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
     /// a row, or `timeout` passes. Returns whether it settled.
     pub fn settle(&mut self, timeout: Duration) -> bool {
+        #[cfg(test)]
+        let timeout = coverage_timeout(timeout, coverage_run());
         let t0 = Instant::now();
         let mut quiet = 0;
         loop {
@@ -434,6 +457,8 @@ impl Headless {
     /// Run frames until `done` holds or `timeout` passes (a render that finishes on a busy machine
     /// after a quiet spell, where [`Self::settle`] alone would stop too early). Returns `done`.
     pub fn step_until(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
+        #[cfg(test)]
+        let timeout = coverage_timeout(timeout, coverage_run());
         let t0 = Instant::now();
         while !done(self) {
             if t0.elapsed() > timeout {

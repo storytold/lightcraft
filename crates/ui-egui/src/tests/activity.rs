@@ -11,6 +11,7 @@ use crate::{LightcraftApp, Services};
 
 // generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
 const T: Duration = Duration::from_secs(60);
+const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
@@ -452,7 +453,7 @@ fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
     std::fs::rename(&file, &away).unwrap();
     crate::merge::open(&mut h.app, "merge.panorama").unwrap();
     h.step();
-    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.step_until(SETTLE, |h| h.app.merge.preview_task.is_none()));
     assert!(h.app.merge.error.is_some(), "the preview failed");
     h.app.ui.dialog = None;
     h.step();
@@ -464,7 +465,7 @@ fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
         h.app.merge.preview.is_some() || h.app.merge.preview_task.is_some() || h.app.merge.error.is_some(),
         "the dialog shows a preview, one being made, or why not"
     );
-    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.step_until(SETTLE, |h| h.app.merge.preview_task.is_none()));
     assert!(h.app.merge.preview.is_some(), "{:?}", h.app.merge.error);
     h.app.ui.dialog = None;
     h.step();
@@ -509,7 +510,7 @@ fn batch_merge_runs_each_set_in_turn() {
     let rows = h.app.session.activity.list();
     assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
     // the first merge finishes and the second starts by itself
-    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert!(h.step_until(SETTLE, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
     assert_eq!(h.app.session.catalog.len(), 10);
     // cancelling the second drops the third
     let rows = h.app.session.activity.list();

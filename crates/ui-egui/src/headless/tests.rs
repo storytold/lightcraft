@@ -5238,3 +5238,13 @@ fn export_sizes_keep_the_pixels_typed() {
     type_value(&mut h, "sliderValue:export.sizeH", "1350");
     assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));
 }
+
+/// One rule for every settle and wait in this crate's tests: native runs keep the timeout they
+/// ask for; coverage runs (much slower) wait five times as long, once.
+#[test]
+fn coverage_runs_stretch_settle_timeouts_and_native_runs_keep_them() {
+    let two_minutes = Duration::from_secs(120);
+    assert_eq!(coverage_timeout(two_minutes, false), two_minutes);
+    assert_eq!(coverage_timeout(two_minutes, true), Duration::from_secs(600));
+    assert_eq!(coverage_timeout(Duration::MAX, true), Duration::MAX, "saturates, never overflows");
+}

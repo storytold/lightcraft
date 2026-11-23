@@ -13,18 +13,10 @@ use lightcraft_engine::import::ImportCandidate;
 
 const T: Duration = Duration::from_secs(30);
 
-fn import_preview_settle_timeout_for_instrumentation(instrumented: bool) -> Duration {
-    Duration::from_secs(if instrumented { 600 } else { 30 })
-}
-
+/// 30 s natively and 600 s in a coverage run, as chosen for these previews: `Headless` stretches
+/// coverage runs five times itself, so this passes 120 s there.
 fn import_preview_settle_timeout() -> Duration {
-    import_preview_settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
-}
-
-#[test]
-fn import_preview_setup_timeout_only_expands_for_llvm_coverage_runs() {
-    assert_eq!(import_preview_settle_timeout_for_instrumentation(false), Duration::from_secs(30));
-    assert_eq!(import_preview_settle_timeout_for_instrumentation(true), Duration::from_secs(600));
+    if crate::headless::coverage_run() { Duration::from_secs(120) } else { T }
 }
 
 /// Size buckets follow physical pixels, with finite fallbacks and a fixed allocation ceiling.
