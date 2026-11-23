@@ -8,27 +8,94 @@ use lightcraft_develop::{ControlSpec, Track};
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 
-/// Standard dropdown chevrons, including settings, import/export and rule editors.
-pub fn combo_box(id: impl egui::AsIdSalt) -> craft_ui::ComboBox<'static> {
-    craft_ui::ComboBox::from_id_salt(id)
-        .icon(|ui, rect, visuals, _| {
-            paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, visuals.fg_stroke.color);
-        })
-        .popup_style(list_style.into())
+/// Whether this run draws nothing the user can reach: a sizing or measuring run registers no automation name and
+/// takes no pick.
+fn measuring(ui: &Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
 }
 
-/// Name a dropdown for screen readers. egui 0.37's `ComboBox::from_id_salt` publishes only the
-/// selected text as the node's value, so an otherwise unlabelled combo has no accessible name and
-/// the strict kittest check rejects it. Call this on the response returned by `show_ui`.
-pub fn name_combo(response: &egui::Response, label: &str) {
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, response.enabled(), label));
+/// A framework dropdown (`Select`) named `label` over `entries`, showing `current` (or `placeholder` while `current` is
+/// none of them), registered as `name` with its real response. `width` fixes the field's width; without it the field
+/// is as wide as its widest entry. Returns the entry picked in this pass when it differs from `current`.
+pub(crate) fn select<T: craft::behavior::Value>(
+    ui: &mut Ui,
+    name: &str,
+    label: &str,
+    current: T,
+    entries: &[craft::ui::contract::Entry<T>],
+    placeholder: Option<String>,
+    width: Option<f32>,
+) -> Option<T> {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::pickers::Select;
+    let mut select = Select::new(label.to_owned(), Bind::given(current.clone()), entries).id_salt(("lc-select", name));
+    if let Some(text) = placeholder {
+        select = select.placeholder(text);
+    }
+    let shown = match width {
+        Some(width) => {
+            let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()).max(1.0), 24.0), Sense::hover());
+            select.show_at(ui, rect)
+        }
+        None => select.show(ui),
+    };
+    if measuring(ui) {
+        return None;
+    }
+    register_response(name, shown.response.rect, &shown.response);
+    shown.events.committed().cloned().filter(|next| ui.is_enabled() && *next != current)
 }
 
-/// A dropdown's list and its submenus: items without the resting border of a button, as egui's
-/// own menus draw them. An unhovered item gives up its border's width of padding, so with one it
-/// grew 2 points when hovered, and the longest name of a list sized to it wrapped (#2354).
-fn list_style(style: &mut egui::Style) {
-    style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+/// A framework dropdown whose list is a menu of rows the caller fills (choices with automation names of their own,
+/// actions after a divider): a field showing `face`, named `label`, registered as `name` with its real response;
+/// `rows` runs while the menu is open. `width` fixes the field's width.
+pub(crate) fn dropdown_menu(ui: &mut Ui, name: &str, label: &str, face: &str, width: Option<f32>, mut rows: impl FnMut(&mut Ui)) -> Response {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
+    use craft::ui::menu::Menu;
+    let button = Button::new(label.to_owned()).painted(face.to_owned()).id_salt(("lc-dropdown", name));
+    let shown = match width {
+        Some(width) => {
+            let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()).max(1.0), 24.0), Sense::hover());
+            button.show_at(ui, rect)
+        }
+        None => button.show(ui),
+    };
+    if !measuring(ui) {
+        register_response(name, shown.response.rect, &shown.response);
+    }
+    Menu::new(label.to_owned()).id_salt(("lc-dropdown-menu", name)).values().opened_by(&shown.response, Trigger::Click).show(ui, |ui, _| rows(ui));
+    shown.response
+}
+
+/// One row of a [`dropdown_menu`], checked when it is the current choice, with `tooltip` on hover, registered as
+/// `name` when it has one. True when it ran in a real run.
+pub(crate) fn menu_row(
+    ui: &mut Ui,
+    salt: impl egui::AsIdSalt,
+    name: Option<&str>,
+    label: &str,
+    tooltip: Option<&str>,
+    checked: bool,
+    enabled: bool,
+) -> bool {
+    use craft::ui::contract::{Props as _, Show as _};
+    use craft::ui::menu::MenuItem;
+    let row = MenuItem::new(label.to_owned()).id_salt(salt).entry_checked(checked).enabled(enabled).show(ui);
+    let real = !measuring(ui);
+    if real && let Some(name) = name {
+        register_response(name, row.response.rect, &row.response);
+    }
+    if real && let Some(tooltip) = tooltip {
+        craft::ui::contract::tooltip::attach(&row.response, &tooltip.to_owned().into());
+    }
+    real && enabled && row.ran
+}
+
+/// A divider between groups of [`dropdown_menu`] rows.
+pub(crate) fn menu_divider(ui: &mut Ui) {
+    use craft::ui::contract::Show as _;
+    craft::ui::display::Divider::horizontal().show(ui);
 }
 
 /// A native button with a vector arrow beside its text; egui reserves the icon's space.
@@ -184,18 +251,6 @@ pub fn register_response(id: impl Into<String>, rect: Rect, response: &egui::Res
 pub fn register_geometry(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
     let id = id.into();
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry")).rects.push((id, rect)));
-}
-
-/// The keyboard-focus ring, drawn on top of whatever the control paints so a focused control reads
-/// as focused whether it is idle, hovered or selected. It is drawn inside `rect`, so it survives a
-/// painter clipped to the control. [`crate::check`] draws the same stroke around its box.
-pub fn focus_ring(p: &egui::Painter, rect: Rect, t: &Tokens) {
-    p.rect_stroke(rect, CornerRadius::same(4), focus_stroke(t), StrokeKind::Inside);
-}
-
-/// The stroke of every focus ring: 2 px in the accent colour.
-pub fn focus_stroke(t: &Tokens) -> Stroke {
-    Stroke::new(2.0, t.accent)
 }
 
 /// Esc was handled this frame by something nested (an open popup closed on it): containers such
@@ -495,19 +550,6 @@ fn split_key_hint(tip: &str) -> (&str, Option<&str>) {
     let Some((label, hint)) = split else { return (tip, None) };
     let label = label.trim_end();
     if label.is_empty() || hint.is_empty() { (tip, None) } else { (label, Some(hint)) }
-}
-
-/// The accessible name for an icon-only control whose tooltip is `tip`, and the one place the key
-/// hint leaves it. The name is the bare label, because a screen reader reads it every time it
-/// lands on the control; the hint goes into the description (macOS `AXHelp`, read after a pause).
-/// Sighted users keep the whole tooltip. Call it before `on_hover_text`, which would otherwise make
-/// the description the whole tooltip.
-pub(crate) fn accessible_label<'a>(resp: &egui::Response, tip: &'a str) -> &'a str {
-    let (label, hint) = split_key_hint(tip);
-    if let Some(hint) = hint {
-        resp.ctx.accesskit_node_builder(resp.id, |node| node.set_description(hint.to_string()));
-    }
-    label
 }
 
 /// An icon-only SDK button. `active` keeps the selected tool-strip face.

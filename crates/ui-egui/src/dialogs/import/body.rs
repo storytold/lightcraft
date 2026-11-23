@@ -106,6 +106,32 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     }
 }
 
+/// The import review's preset choices: None (""), then the presets under their group headings. Kept until the presets
+/// or the language change, since a library can hold thousands of presets.
+fn preset_entries(app: &LightcraftApp, ui: &egui::Ui) -> std::sync::Arc<Vec<craft::ui::contract::Entry<String>>> {
+    use craft::ui::contract::Entry;
+    use std::sync::Arc;
+    type Cached = (u64, crate::i18n::Locale, Arc<Vec<Entry<String>>>);
+    let generation = app.session.presets.generation();
+    let language = crate::i18n::language();
+    let cache = egui::Id::unique("import-preset-entries");
+    if let Some((_, _, entries)) = ui.data(|data| data.get_temp::<Cached>(cache)).filter(|(old, locale, _)| *old == generation && *locale == language) {
+        return entries;
+    }
+    let mut entries = vec![Entry::new(String::new(), crate::i18n::tr("None").to_owned())];
+    let mut group = None;
+    for preset in app.session.presets.iter() {
+        if group != Some(preset.group.as_str()) {
+            group = Some(preset.group.as_str());
+            entries.push(Entry::heading(crate::i18n::builtin_label(&preset.group, preset.builtin).to_owned()));
+        }
+        entries.push(Entry::new(preset.id.clone(), crate::i18n::builtin_label(&preset.name, preset.builtin).to_owned()));
+    }
+    let entries = Arc::new(entries);
+    ui.data_mut(|data| data.insert_temp(cache, (generation, language, Arc::clone(&entries))));
+    entries
+}
+
 fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
     let n = d.candidates.len();
@@ -406,28 +432,11 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
         });
     });
     field(ui, "Preset", |ui| {
-        let cur = app
-            .session
-            .presets
-            .iter()
-            .find(|p| p.id == d.preset)
-            .map(|p| crate::i18n::builtin_label(&p.name, p.builtin).to_string())
-            .unwrap_or_else(|| crate::i18n::tr("None").into());
-        if controls::measuring(ui) {
-            let width = ui.painter().layout_no_wrap(cur, Tokens::get(ui.ctx()).font(12.5), Tokens::get(ui.ctx()).text).size().x + 32.0;
-            ui.allocate_exact_size(vec2(width.max(ui.spacing().combo_width).min(ui.available_width()), ui.spacing().interact_size.y), Sense::hover());
-            return;
+        // "" is no preset; a preset that has gone shows as None until another is chosen
+        let entries = preset_entries(app, ui);
+        if let Some(pid) = crate::widgets::select(ui, "combo:importPreset", crate::i18n::tr("Preset"), d.preset.clone(), entries.as_slice(), Some(crate::i18n::tr("None").to_owned()), None) {
+            d.preset = pid;
         }
-        let combo = crate::widgets::combo_box("import-preset").selected_text(cur).height(300.0).show_ui(ui, |ui| {
-            if ui.selectable_label(d.preset.is_empty(), crate::i18n::tr("None")).clicked() {
-                d.preset.clear();
-            }
-            let selected = (!d.preset.is_empty()).then_some(d.preset.as_str());
-            if let Some(pid) = crate::panels::presets::picker_rows(ui, "import-preset", &app.session.presets, selected) {
-                d.preset = pid;
-            }
-        });
-        crate::widgets::name_combo(&combo.response, crate::i18n::tr("Preset"));
     });
     if !app.session.metadata_presets.is_empty() {
         field(ui, "Metadata", |ui| {

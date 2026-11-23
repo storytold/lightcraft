@@ -189,25 +189,20 @@ fn export_preset_row(
             return;
         }
         let mut chosen = None;
-        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).show_ui(ui, |ui| {
+        let presets = app.session.all_export_presets();
+        crate::widgets::dropdown_menu(ui, "combo:exportPreset", crate::i18n::tr("Preset"), crate::i18n::tr("Choose…"), Some(220.0), |ui| {
             let mut builtin = true;
-            for (p, b) in app.session.all_export_presets() {
-                if builtin && !b {
-                    ui.separator();
+            for (at, (p, b)) in presets.iter().enumerate() {
+                if builtin && !*b {
+                    crate::widgets::menu_divider(ui);
                 }
-                builtin = b;
-                let r = ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b));
-                let r = match preset_lzw_note(&p.params) {
-                    Some(note) => r.on_hover_text(crate::i18n::tr(note)),
-                    None => r,
-                };
-                if r.clicked() {
-                    chosen = Some(p.name);
+                builtin = *b;
+                let note = preset_lzw_note(&p.params).map(crate::i18n::tr);
+                if crate::widgets::menu_row(ui, ("exportPreset", at), None, crate::i18n::builtin_label(&p.name, *b), note, false, true) {
+                    chosen = Some(p.name.clone());
                 }
             }
         });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Preset"));
-        register("combo:exportPreset", &c.response);
         if let Some(name) = chosen
             && let Ok(params) = app.session.export_params(&json!({"preset": name}))
         {

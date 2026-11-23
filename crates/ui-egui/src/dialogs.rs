@@ -301,12 +301,12 @@ pub(crate) struct FooterSpec {
 /// Draws `buttons` in a framework dialog's footer at their natural size (their labels are never cut short), in the
 /// order given, each registered under its automation name with its real response. Returns the index of the one
 /// clicked in a real run.
-pub(crate) fn footer_buttons(ui: &mut egui::Ui, salt: impl std::hash::Hash, buttons: &[FooterSpec]) -> Option<usize> {
+pub(crate) fn footer_buttons(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, buttons: &[FooterSpec]) -> Option<usize> {
     footer_button_responses(ui, salt, buttons).0
 }
 
 /// [`footer_buttons`], with each button's response in a real run (none in a measuring run).
-pub(crate) fn footer_button_responses(ui: &mut egui::Ui, salt: impl std::hash::Hash, buttons: &[FooterSpec]) -> (Option<usize>, Vec<egui::Response>) {
+pub(crate) fn footer_button_responses(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, buttons: &[FooterSpec]) -> (Option<usize>, Vec<egui::Response>) {
     use craft::theme::Variant;
     use craft::ui::buttons::Button;
     use craft::ui::contract::{Props as _, Show as _};
@@ -1444,11 +1444,13 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
     let pages = n.div_ceil(options.columns * options.rows);
     ui.label(contact_sheet_summary(n, pages));
     field(ui, "Paper", |ui| {
-        let c = crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
-            ui.selectable_value(&mut options.paper, "a4".into(), "A4");
-            ui.selectable_value(&mut options.paper, "letter".into(), crate::i18n::tr("Letter"));
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
+        let entries = [
+            craft::ui::contract::Entry::new("a4".to_owned(), "A4".to_owned()),
+            craft::ui::contract::Entry::new("letter".to_owned(), crate::i18n::tr("Letter").to_owned()),
+        ];
+        if let Some(paper) = crate::widgets::select(ui, "combo:contactSheetPaper", crate::i18n::tr("Paper"), options.paper.clone(), &entries, Some(options.paper.clone()), None) {
+            options.paper = paper;
+        }
     });
     ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
     field(ui, "Columns", |ui| {
