@@ -156,7 +156,7 @@ fn run_parallel(root: &Path, o: &Options, corpus: &Path, crashes: &Path) -> Resu
         built.push((*name, *pkg, exe.clone(), filter));
     }
     // Phase 2: run every binary at once.
-    let mut running = Vec::new();
+    let mut running: Vec<(&str, std::process::Child, PathBuf)> = Vec::new();
     for (name, pkg, exe, filter) in built {
         println!("fuzz: {name} ({pkg}) for {}s, LCC_FUZZ_RNG={}", o.secs, o.rng);
         let log_path = logs.join(format!("{name}.log"));
@@ -172,7 +172,17 @@ fn run_parallel(root: &Path, o: &Options, corpus: &Path, crashes: &Path) -> Resu
         if corpus.is_dir() {
             c.env("LCC_FUZZ_CORPUS", corpus);
         }
-        let child = c.spawn().map_err(|e| format!("fuzz: starting {}: {e}", exe.display()))?;
+        let child = match c.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                // Don't leave the already-started targets running unattended.
+                for (_, mut started, _) in running {
+                    let _ = started.kill();
+                    let _ = started.wait();
+                }
+                return Err(format!("fuzz: starting {}: {e}", exe.display()));
+            }
+        };
         running.push((name, child, log_path));
     }
     let mut failed = Vec::new();
