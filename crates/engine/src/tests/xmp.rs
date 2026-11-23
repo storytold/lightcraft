@@ -511,25 +511,26 @@ fn foreign_profile_and_upright_import_diagnostics_are_actionable() {
 }
 
 /// Unmapped XMP splits into adjustments that may make the photo differ and non-rendering
-/// bookkeeping that cannot: each kind is its own report warning with its own code (#3050).
+/// bookkeeping that cannot: each kind is its own report warning with its own code (#3050, #4434).
 #[test]
-fn digests_report_as_skipped_metadata_next_to_real_adjustments() {
+fn analysis_and_seed_join_the_digest_as_skipped_metadata() {
     let src = temp_dir("xmp-metadata-split");
     let both = src.join("both.png");
     write_png(&both, 6);
     let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-        crs:Exposure2012="0.50" crs:ColorVariance="-50" crs:AutoToneDigest="0123456789ABCDEF0123456789ABCDEF"/>
+        crs:Exposure2012="0.50" crs:ColorVariance="-50" crs:GrainSeed="12345"
+        crs:AutoToneDigest="0123456789ABCDEF0123456789ABCDEF"/>
     </rdf:RDF></x:xmpmeta>"#;
     std::fs::write(src.join("both.xmp"), xmp).unwrap();
     let mut s = Session::new().with_fs();
     let r = s.execute("library.import", &json!({"paths": [both.to_string_lossy()]})).unwrap();
     let warnings = r["warnings"].as_array().unwrap();
-    let adjustment = warnings.iter().find(|w| w["code"] == "unmappedXmp").unwrap_or_else(|| panic!("{r}"));
-    assert_eq!(adjustment["fields"], json!(["ColorVariance"]), "{r}");
+    // the mapped exposure reports nothing; analysis and seed join the digest as skipped metadata
+    assert!(warnings.iter().all(|w| w["code"] != "unmappedXmp"), "{r}");
     let metadata = warnings.iter().find(|w| w["code"] == "skippedXmpMetadata").unwrap_or_else(|| panic!("{r}"));
-    assert_eq!(metadata["fields"], json!(["AutoToneDigest"]), "{r}");
-    assert_eq!(warnings.len(), 2, "each kind is one warning: {r}");
+    assert_eq!(metadata["fields"], json!(["AutoToneDigest", "ColorVariance", "GrainSeed"]), "{r}");
+    assert_eq!(warnings.len(), 1, "one warning: {r}");
 
     // A packet with only bookkeeping never claims an adjustment was dropped.
     let quiet = src.join("quiet.png");

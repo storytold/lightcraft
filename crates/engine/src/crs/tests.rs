@@ -358,15 +358,21 @@ fn lightroom_profile_bookkeeping_is_not_reported() {
     assert_eq!(unmapped(&scaled), ["LensProfileDistortionScale"]);
 }
 
-/// Only outright digests of LightCraft's own state are non-rendering: a dropped local
-/// correction changes the render whatever its component is named (#3050).
+/// Non-rendering fields are the digests of LightCraft's own state and Lightroom's analysis and
+/// seed values; a dropped local correction changes the render whatever its component is named
+/// (#3050, #4434).
 #[test]
-fn only_outright_digests_are_non_rendering() {
+fn digests_and_analysis_are_non_rendering_but_adjustments_are_not() {
     assert!(non_rendering("AutoToneDigest"));
     // Lightroom writes these beside their digests: checksums too, just not suffix-shaped
     assert!(non_rendering("AutoToneDigestNoSat"));
     assert!(non_rendering("InputDigestVersion"));
-    assert!(!non_rendering("ColorVariance"), "the Variance slider is an adjustment");
+    // constant -50 on every photo of a shoot, element-form: Lightroom's analysis, not an adjustment
+    assert!(non_rendering("ColorVariance"));
+    // the grain RNG seed only reproduces the grain pattern another app generated
+    assert!(non_rendering("GrainSeed"));
+    // a real adjustment and any dropped component stay adjustments
+    assert!(!non_rendering("Vibrance"));
     assert!(!non_rendering("Spot: FutureDigest"), "a dropped spot changes the render");
     assert!(!non_rendering("Mask: FutureDigest"), "so does a dropped mask");
 }
