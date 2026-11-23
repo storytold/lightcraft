@@ -9,12 +9,17 @@ mod flow_tests;
 
 pub(crate) use add::{add_field, field_focused, painter_field};
 
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::{Badge, Divider, Elide, Shade, Text};
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::primitives::{HAlign, IconSpec};
+use craft::ui::style::TypeRole;
 use lightcraft_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::theme::Tokens;
-use crate::widgets::register;
 
 /// The Keywording box's view: the keywords as text (Enter Keywords), the keywords (chips), them
 /// with the keywords containing them, or what exported files will carry.
@@ -29,8 +34,6 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             (V::WillExport, "willExport", "Will Export"),
         ]
         {
-            use craft::ui::buttons::Button;
-            use craft::ui::contract::{Props as _, Show as _};
             let key = format!("keywordView:{id}");
             let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(&key).selected(app.ui.keywording_view == view).show(ui);
             if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { continue; }
@@ -42,27 +45,39 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// Whether this pass draws nothing the user can reach: a sizing or measuring run publishes no
+/// automation names and runs no command.
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// A caption in the framework's text in `shade`; the response is its box.
+fn note(ui: &mut egui::Ui, text: String, role: TypeRole, shade: Shade) -> egui::Response {
+    Text::new(text).role(role).shade(shade).show(ui)
+}
+
 /// A read-only view of the selection's keywords: with the keywords containing them, or what
 /// exported files will carry. One only some of the photos have is marked with an asterisk.
 pub fn names_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     let selection = app.session.selected();
     let export = app.ui.keywording_view == crate::state::KeywordingView::WillExport;
     let names = app.caches.keyword_names(&app.session.catalog, &selection, export);
     if names.is_empty() {
-        ui.label(egui::RichText::new(crate::i18n::tr(if export { "No keywords are exported" } else { "No keywords yet" })).color(t.text_dim));
+        note(ui, crate::i18n::tr(if export { "No keywords are exported" } else { "No keywords yet" }).to_owned(), TypeRole::Body, Shade::Muted);
         return;
     }
     let prefix = if export { "keywordExport" } else { "keywordContaining" };
     ui.horizontal_wrapped(|ui| {
         for n in names.iter() {
-            let (body, _) = chip(ui, &n.path, &n.path, !n.on_all(), false, ui.max_rect().width());
-            register(ui, format!("{prefix}:{}", n.path), body.rect);
-            if n.on_all() {
-                body.on_hover_text(&n.path);
+            let tip = if n.on_all() {
+                n.path.clone()
             } else {
                 let count = crate::i18n::tr_format!("On {have} of {of} selected photos", have = n.have, of = n.of);
-                body.on_hover_text(format!("{}\n{count}", n.path));
+                format!("{}\n{count}", n.path)
+            };
+            let drawn = chip(ui, &n.path, &n.path, !n.on_all(), false, ui.max_rect().width(), tip);
+            if !measuring(ui) {
+                crate::widgets::register_response(format!("{prefix}:{}", n.path), drawn.body.rect, &drawn.body);
             }
         }
     });
@@ -89,57 +104,43 @@ fn chip_size(ui: &egui::Ui, name: &str, partial: bool, cross: bool, row_w: f32) 
     (shown, w)
 }
 
+/// What [`chip`] drew: the name's response, and for a chip with a × the ×'s response and whether
+/// this pass pressed it.
+struct Drawn {
+    body: egui::Response,
+    cross: Option<egui::Response>,
+    removed: bool,
+}
+
 /// One chip of the keyword `path`, measured before it is placed so that a wrapping row moves it
 /// whole to the next line: `name` (the path, or what the grouped box shows of it; cut short to fit
 /// a row `row_w` wide) and, with `cross`, a × at its end. A `partial` one (only some of the
-/// selected photos) is dimmed and marked with an asterisk. Returns the name's response and the ×'s.
-fn chip(ui: &mut egui::Ui, path: &str, name: &str, partial: bool, cross: bool, row_w: f32) -> (egui::Response, Option<egui::Response>) {
-    use egui::{Align2, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-    let t = Tokens::get(ui.ctx());
-    let font = t.font(13.0);
-    let color = if partial { t.text_dim } else { t.text_label };
-    let cross_w = if cross { CROSS_W } else { 0.0 };
+/// selected photos) is marked with an asterisk. `tip` is the name's tooltip. A chip with a ×
+/// is the framework's push button for the name beside its close button; one without is a badge.
+fn chip(ui: &mut egui::Ui, path: &str, name: &str, partial: bool, cross: bool, row_w: f32, tip: String) -> Drawn {
+    use egui::{Rect, Sense, pos2, vec2};
     let (shown, w) = chip_size(ui, name, partial, cross, row_w);
     // the row places it; its name and × answer under ids of their own keyword, so an open menu
     // stays with its keyword when the chips change
     let (rect, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
     let id = egui::Id::unique(("keyword-chip", path.to_lowercase(), cross));
-    let body = Rect::from_min_max(rect.min, pos2(rect.right() - cross_w, rect.bottom()));
     let full = path.replace('|', " › ");
-    let resp = ui.interact(body, id, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &full));
+    if !cross {
+        let body = Badge::new(shown).id(id).variant(craft::theme::Variant::SECONDARY).tooltip(tip).show_at(ui, rect);
+        return Drawn { body, cross: None, removed: false };
+    }
     // the ×: the whole end of the chip, so that it is hard to miss and easy to tell from the name
-    let x = cross.then(|| {
-        let xr = Rect::from_min_max(pos2(rect.right() - cross_w, rect.top()), rect.max);
-        let xresp = ui.interact(xr, id.with("remove"), Sense::click());
-        let said = crate::i18n::tr_format!("Remove “{name}”", name = full);
-        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &said));
-        xresp
-    });
-    let p = ui.painter();
-    p.rect_stroke(rect, 10.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
-    if resp.hovered() {
-        p.rect_filled(rect.shrink(1.0), 10.0, t.hover.gamma_multiply(0.5));
-    }
-    p.text(pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER, &shown, font, color);
-    if let Some(x) = &x {
-        // under the pointer the × lights up on its own: this click removes, the name's doesn't
-        if x.hovered() {
-            p.rect_filled(x.rect.shrink(1.0), CornerRadius { nw: 0, sw: 0, ne: 10, se: 10 }, t.hover);
-        }
-        let (c, arm) = (x.rect.center(), 3.5);
-        let stroke = Stroke::new(1.5, if x.hovered() || x.has_focus() { t.text } else { t.text_dim });
-        p.line_segment([c + vec2(-arm, -arm), c + vec2(arm, arm)], stroke);
-        p.line_segment([c + vec2(-arm, arm), c + vec2(arm, -arm)], stroke);
-        if x.has_focus() {
-            p.rect_stroke(x.rect, CornerRadius { nw: 4, sw: 4, ne: 10, se: 10 }, Stroke::new(1.5, t.accent), StrokeKind::Inside);
-        }
-    }
-    // reached with Tab, a chip shows where the keyboard is
-    if resp.has_focus() {
-        p.rect_stroke(rect, 10.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
-    }
-    (resp, x)
+    let body = Rect::from_min_max(rect.min, pos2(rect.right() - CROSS_W, rect.bottom()));
+    let end = Rect::from_min_max(pos2(rect.right() - CROSS_W, rect.top()), rect.max);
+    let name = Button::new(full.clone()).painted(shown).id(id).size(craft::theme::ControlSize::Sm).tooltip(tip).show_at(ui, body);
+    let said = crate::i18n::tr_format!("Remove “{name}”", name = full);
+    let x = IconButton::new(IconSpec::svg(craft::behavior::IconId::new("close")))
+        .id(id.with("remove"))
+        .label(said)
+        .tooltip(crate::i18n::tr("Remove from Selected Photos").to_owned())
+        .show_at(ui, end);
+    let removed = !measuring(ui) && ui.is_enabled() && x.clicked();
+    Drawn { body: name.response, cross: Some(x.response), removed }
 }
 
 /// Take the chip's keyword off the selected photos. Several photos losing it at once is said, with
@@ -163,9 +164,12 @@ fn remove(app: &mut LightcraftApp, ctx: &egui::Context, chip: &Chip) {
 /// Keyword List's).
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
     let item = |ui: &mut egui::Ui, id: &str, label: &str| {
-        let r = ui.button(label);
-        register(ui, format!("keywordChipMenu:{id}"), r.rect);
-        r.clicked()
+        let row = MenuItem::new(label.replace('&', "&&")).id_salt(id).show(ui);
+        if measuring(ui) {
+            return false;
+        }
+        crate::widgets::register_response(format!("keywordChipMenu:{id}"), row.response.rect, &row.response);
+        row.ran
     };
     if !chip.on_all() && item(ui, "add", crate::i18n::tr("Add to All Selected Photos")) {
         let _ = app.run("photo.setMeta", json!({"addKeywords": [chip.path]}));
@@ -177,7 +181,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
         super::left::browse_all_photos(app, true);
         let _ = app.run("library.filter", json!({"keyword": chip.path}));
     }
-    ui.separator();
+    Divider::horizontal().show(ui);
     if item(ui, "edit", crate::i18n::tr("Edit Keyword Tag…")) {
         app.ui.dialog = Some(super::keyword_list::edit_dialog(app, &chip.path));
     }
@@ -190,10 +194,11 @@ pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) 
     if photos < 2 {
         return;
     }
-    let t = Tokens::get(ui.ctx());
     let said = crate::i18n::tr_format!("Keywords of {n} selected photos", n = photos);
-    let r = ui.label(egui::RichText::new(said).size(11.5).color(t.text_label));
-    register(ui, "keywordScope", r.rect);
+    let r = note(ui, said, TypeRole::Caption, Shade::Normal);
+    if !measuring(ui) {
+        crate::widgets::register_response("keywordScope", r.rect, &r);
+    }
     ui.add_space(4.0);
 }
 
@@ -203,9 +208,10 @@ pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) 
 pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     if chips.is_empty() {
-        let t = Tokens::get(ui.ctx());
-        let r = ui.label(egui::RichText::new(crate::i18n::tr("No keywords yet")).color(t.text_dim));
-        register(ui, "keywordChipsEmpty", r.rect);
+        let r = note(ui, crate::i18n::tr("No keywords yet").to_owned(), TypeRole::Body, Shade::Muted);
+        if !measuring(ui) {
+            crate::widgets::register_response("keywordChipsEmpty", r.rect, &r);
+        }
         return;
     }
     if app.ui.settings.keyword_chips == crate::state::KeywordChips::Grouped {
@@ -215,33 +221,46 @@ pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId
     }
     ui.horizontal_wrapped(|ui| {
         for c in chips.iter() {
-            let (body, x) = chip(ui, &c.path, &c.path, !c.on_all(), true, ui.max_rect().width());
-            chip_acts(app, ui, c, body, x);
+            let drawn = chip(ui, &c.path, &c.path, !c.on_all(), true, ui.max_rect().width(), chip_tip(c));
+            chip_acts(app, ui, c, drawn);
         }
     });
 }
 
+/// One tooltip for a chip: the whole name (it may be cut short), and how many photos have it.
+fn chip_tip(c: &Chip) -> String {
+    let full = c.path.replace('|', " › ");
+    if c.on_all() {
+        full
+    } else {
+        let n = crate::i18n::tr_format!("On {have} of {of} selected photos", have = c.have, of = c.of);
+        format!("{full}\n{n}")
+    }
+}
+
 /// A drawn chip does its work: its × takes the keyword off the selected photos, its name has the
-/// tooltip and the menu.
-fn chip_acts(app: &mut LightcraftApp, ui: &egui::Ui, c: &Chip, body: egui::Response, x: Option<egui::Response>) {
-    register(ui, format!("keywordChip:{}", c.path), body.rect);
-    if let Some(x) = x {
-        register(ui, format!("keywordChipRemove:{}", c.path), x.rect);
-        if x.on_hover_text(crate::i18n::tr("Remove from Selected Photos")).clicked() {
-            remove(app, ui.ctx(), c);
+/// menu.
+fn chip_acts(app: &mut LightcraftApp, ui: &mut egui::Ui, c: &Chip, drawn: Drawn) {
+    if !measuring(ui) {
+        crate::widgets::register_response(format!("keywordChip:{}", c.path), drawn.body.rect, &drawn.body);
+        if !c.on_all() {
+            crate::widgets::register_response(format!("keywordChipPartial:{}", c.path), drawn.body.rect, &drawn.body);
+        }
+        if let Some(x) = &drawn.cross {
+            crate::widgets::register_response(format!("keywordChipRemove:{}", c.path), x.rect, x);
         }
     }
-    // one tooltip: the whole name (it may be cut short), and how many have it
-    let full = c.path.replace('|', " › ");
-    let body = if c.on_all() {
-        body.on_hover_text(full)
-    } else {
-        register(ui, format!("keywordChipPartial:{}", c.path), body.rect);
-        let n = crate::i18n::tr_format!("On {have} of {of} selected photos", have = c.have, of = c.of);
-        body.on_hover_text(format!("{full}\n{n}"))
-    };
+    if drawn.removed {
+        remove(app, ui.ctx(), c);
+    }
+    // While photos are carried (dragged from the grid) a right-click opens nothing here.
+    if measuring(ui) || (drawn.body.secondary_clicked() && crate::widgets::carrying(ui.ctx())) {
+        return;
+    }
     let c = c.clone();
-    crate::widgets::context_menu(&body, |ui| menu(app, ui, &c));
+    Menu::context(crate::i18n::tr("Keyword"), &drawn.body)
+        .id_salt(("keyword-chip-menu", c.path.to_lowercase()))
+        .show(ui, |ui, _| menu(app, ui, &c));
 }
 
 /// When a list is shortened, only this many chips are measured for it: more than the lines it
@@ -257,8 +276,7 @@ pub(crate) fn measured(avail: f32) -> usize {
 /// The grouped box: each group's parent on a line of its own, its chips under it side by side,
 /// and "+N more" where a long list stops.
 fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], selection: u64) {
-    use egui::{Align2, Sense, vec2};
-    let t = Tokens::get(ui.ctx());
+    use egui::{Sense, vec2};
     let avail = ui.available_width();
     // the whole list only for the selection it was asked of
     let all = app.ui.keyword_chips_all == Some(selection);
@@ -279,23 +297,18 @@ fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], sel
             (!g.parent.is_empty(), widths)
         })
         .collect();
-    let small = t.font(11.5);
     for (i, line) in lines(&sizes, avail, GAP, all).into_iter().enumerate() {
         match line {
             Line::Heading(g) => {
                 let Some(group) = groups.get(g) else { continue };
                 ui.add_space(if i == 0 { 0.0 } else { 8.0 });
-                let (r, resp) = ui.allocate_exact_size(vec2(avail, 18.0), Sense::hover());
-                let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), small.clone(), t.text_label).size().x;
-                let shown = chip_label(&group.parent, false, avail, measure);
+                let (r, _) = ui.allocate_exact_size(vec2(avail, 18.0), Sense::hover());
+                // (cut short at its start, it says its whole name on hover, as a chip does)
                 let full = group.parent.replace('|', " › ");
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &full));
-                ui.painter().text(r.left_center(), Align2::LEFT_CENTER, &shown, small.clone(), t.text_label);
-                // (cut short, it says its whole name on hover, as a chip does)
-                if shown != full {
-                    resp.on_hover_text(&full);
+                Text::new(full).role(TypeRole::Caption).shade(Shade::Muted).elide(Elide::Start).show_at(ui, r);
+                if !measuring(ui) {
+                    crate::widgets::register(ui, format!("keywordGroup:{}", group.parent), r);
                 }
-                register(ui, format!("keywordGroup:{}", group.parent), r);
             }
             Line::Chips(g, row) => {
                 let Some(group) = groups.get(g) else { continue };
@@ -303,26 +316,34 @@ fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], sel
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
                     for (name, c) in group.chips.get(row).into_iter().flatten() {
-                        let (body, x) = chip(ui, &c.path, name, !c.on_all(), true, avail);
-                        chip_acts(app, ui, c, body, x);
+                        let drawn = chip(ui, &c.path, name, !c.on_all(), true, avail, chip_tip(c));
+                        chip_acts(app, ui, c, drawn);
                     }
                 });
             }
             Line::More(n) => {
                 ui.add_space(6.0);
                 let label = crate::i18n::tr_format!("+{n} more", n = n);
-                let r = ui.add(egui::Button::new(egui::RichText::new(label).color(t.text_label)).corner_radius(10.0));
-                register(ui, "keywordChipsMore", r.rect);
-                if r.on_hover_text(crate::i18n::tr("Show every keyword of the selected photos")).clicked() {
-                    app.ui.keyword_chips_all = Some(selection);
+                let shown = Button::new(label)
+                    .id(egui::Id::unique(("keyword-chips-more", selection)))
+                    .size(craft::theme::ControlSize::Sm)
+                    .tooltip(crate::i18n::tr("Show every keyword of the selected photos").to_owned())
+                    .show(ui);
+                if !measuring(ui) {
+                    crate::widgets::register_response("keywordChipsMore", shown.response.rect, &shown.response);
+                    if ui.is_enabled() && shown.clicked() {
+                        app.ui.keyword_chips_all = Some(selection);
+                    }
                 }
             }
             Line::Fewer => {
                 ui.add_space(6.0);
-                let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Show fewer")).color(t.text_label)).corner_radius(10.0));
-                register(ui, "keywordChipsFewer", r.rect);
-                if r.clicked() {
-                    app.ui.keyword_chips_all = None;
+                let shown = Button::new(crate::i18n::tr("Show fewer")).id(egui::Id::unique(("keyword-chips-fewer", selection))).size(craft::theme::ControlSize::Sm).show(ui);
+                if !measuring(ui) {
+                    crate::widgets::register_response("keywordChipsFewer", shown.response.rect, &shown.response);
+                    if ui.is_enabled() && shown.clicked() {
+                        app.ui.keyword_chips_all = None;
+                    }
                 }
             }
         }
@@ -467,7 +488,7 @@ pub(crate) enum Picked {
 /// They go above the box where the window has no room for them under it. Returns the offer
 /// clicked and where the offers were drawn.
 pub(crate) fn offers_below(ui: &egui::Ui, below: egui::Rect, offers: &Offers, at: Option<&str>) -> (Option<Picked>, egui::Rect) {
-    use egui::{Align2, Sense, pos2, vec2};
+    use egui::{Align2, Sense, vec2};
     use lightcraft_catalog::keywords::SEP;
     let t = Tokens::get(ui.ctx());
     let mut picked = None;
@@ -499,49 +520,48 @@ pub(crate) fn offers_below(ui: &egui::Ui, below: egui::Rect, offers: &Offers, at
         egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 0.0;
-            // a line: the keyword's own name, then (dimmer, cut from the front) where it is
-            let line = |ui: &mut egui::Ui, id: egui::Id, name: &str, place: &str, said: &str, lit: bool| {
-                let (r, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
-                let resp = ui.interact(r, id, Sense::click()).union(resp);
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, lit, said));
-                if lit || resp.hovered() {
-                    ui.painter().rect_filled(r, 4.0, if lit { t.pressed } else { t.hover });
+            // a line: the keyword's own name, then (dimmer, cut from the front) where it is; the framework's
+            // push button, as wide as the offers, whose text starts at its edge
+            let line = |ui: &mut egui::Ui, id: egui::Id, name: &str, place: &str, said: &str, lit: bool, tip: Option<String>| {
+                let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+                let shown_name = chip_label(name, false, width - 16.0, |s| ui.painter().layout_no_wrap(s.to_string(), t.font(13.0), t.text).size().x);
+                let text = if place.is_empty() { shown_name } else { format!("{shown_name}   ·   {}", place.replace(SEP, " › ")) };
+                let mut button = Button::new(said.to_owned())
+                    .painted(text)
+                    .id(id)
+                    .variant(craft::theme::Variant::GHOST)
+                    .align(HAlign::Start)
+                    .selected(lit);
+                if let Some(tip) = tip {
+                    button = button.tooltip(tip);
                 }
-                let font = t.font(13.0);
-                let measure = |s: &str, f: &egui::FontId| ui.painter().layout_no_wrap(s.to_string(), f.clone(), t.text).size().x;
-                let name = chip_label(name, false, width - 16.0, |s| measure(s, &font));
-                let end = r.left() + 8.0 + measure(&name, &font);
-                ui.painter().text(pos2(r.left() + 8.0, r.center().y), Align2::LEFT_CENTER, &name, font, t.text);
-                let small = t.font(11.5);
-                let room = r.right() - 8.0 - (end + 10.0);
-                if !place.is_empty() && room >= 30.0 {
-                    let place = chip_label(place, false, room, |s| measure(s, &small));
-                    ui.painter().text(pos2(r.right() - 8.0, r.center().y), Align2::RIGHT_CENTER, place, small, t.text_label);
-                }
-                resp
+                let shown = button.show_at(ui, r);
+                (r, shown)
             };
             for k in listed {
                 let (place, name) = k.rsplit_once(SEP).unwrap_or(("", k));
                 let whole = k.replace(SEP, " › ");
                 let lit = at == Some(k.as_str());
-                let r = line(ui, egui::Id::unique(("keyword-offer", k.to_lowercase())), name, place, &whole, lit);
-                register(ui, format!("kwComplete:{k}"), r.rect);
-                if lit {
-                    register(ui, format!("kwCompleteAt:{k}"), r.rect);
-                }
-                if r.clicked() {
-                    picked = Some(Picked::Keyword(k.clone()));
+                let (_, shown) = line(ui, egui::Id::unique(("keyword-offer", k.to_lowercase())), name, place, &whole, lit, None);
+                if !measuring(ui) {
+                    crate::widgets::register_response(format!("kwComplete:{k}"), shown.response.rect, &shown.response);
+                    if lit {
+                        crate::widgets::register_response(format!("kwCompleteAt:{k}"), shown.response.rect, &shown.response);
+                    }
+                    if shown.clicked() {
+                        picked = Some(Picked::Keyword(k.clone()));
+                    }
                 }
             }
             if let Some(new) = &offers.create {
                 if count > 0 {
                     ui.add_space(3.0);
-                    let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), Sense::hover());
-                    ui.painter().rect_filled(r, 0.0, t.field_border);
+                    Divider::horizontal().show(ui);
                     ui.add_space(3.0);
                 }
                 let (place, name) = new.rsplit_once(SEP).unwrap_or(("", new));
                 let whole = new.replace(SEP, " › ");
+                // (its place is said in words: not a path to cut from the front)
                 let (place, said) = if place.is_empty() {
                     (crate::i18n::tr("new keyword").to_string(), crate::i18n::tr_format!("Create the keyword “{name}”", name = whole))
                 } else {
@@ -551,19 +571,14 @@ pub(crate) fn offers_below(ui: &egui::Ui, below: egui::Rect, offers: &Offers, at
                         crate::i18n::tr_format!("Create the keyword “{name}”", name = whole),
                     )
                 };
-                // (its place is said in words: not a path to cut from the front)
-                let r = line(ui, egui::Id::unique("keyword-offer-create"), name, "", &said, false);
-                let small = t.font(11.5);
-                ui.painter().text(pos2(r.rect.right() - 8.0, r.rect.center().y), Align2::RIGHT_CENTER, place, small, t.text_label);
-                register(ui, "kwCompleteCreate", r.rect);
                 // (Return gives the highlighted offer instead, while there is one)
-                let r = if at.is_none() {
-                    r.on_hover_text(crate::i18n::tr("Return creates this keyword and gives it to the selected photos"))
-                } else {
-                    r
-                };
-                if r.clicked() {
-                    picked = Some(Picked::Typed);
+                let tip = at.is_none().then(|| crate::i18n::tr("Return creates this keyword and gives it to the selected photos").to_owned());
+                let (_, shown) = line(ui, egui::Id::unique("keyword-offer-create"), name, &place, &said, false, tip);
+                if !measuring(ui) {
+                    crate::widgets::register_response("kwCompleteCreate", shown.response.rect, &shown.response);
+                    if shown.clicked() {
+                        picked = Some(Picked::Typed);
+                    }
                 }
             }
         });

@@ -63,6 +63,18 @@ impl Frames {
         }
     }
 
+    /// Whether the last frame painted `text` as a line of text.
+    fn painted(&self, text: &str) -> bool {
+        fn found(shape: &egui::Shape, text: &str) -> bool {
+            match shape {
+                egui::Shape::Text(t) => t.galley.job.text == text,
+                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| found(shape, text)),
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|clipped| found(&clipped.shape, text))
+    }
+
     fn rect(&self, id: &str) -> Rect {
         self.rects.iter().find(|(name, _)| name == id).unwrap_or_else(|| panic!("missing {id}: {:?}", self.rects)).1
     }
@@ -342,11 +354,15 @@ fn real_bottom_bar_sort_and_compact_view_options_open_and_dismiss() {
         frames.frame(vec![], &mut draw);
         frames.frame(vec![pointer(at, PointerButton::Primary, false)], &mut draw);
         frames.frame(vec![], &mut draw);
-        assert!(egui::Popup::is_any_open(&frames.ctx), "{target}");
+        // The bottom bar's menus are framework menus now, not egui popups: a menu is open while its rows are painted.
+        assert!(frames.painted(content), "actual {target} menu content is painted");
         assert!(frames.nodes.contains_key(content), "actual {target} popup content: {:?}", frames.nodes.keys());
         frames.frame(key(Key::Escape, false), &mut draw);
-        frames.frame(vec![], &mut draw);
-        assert!(!egui::Popup::is_any_open(&frames.ctx), "{target}");
+        // (a closing menu fades out for a few frames)
+        for _ in 0..12 {
+            frames.frame(vec![], &mut draw);
+        }
+        assert!(!frames.painted(content), "Escape dismisses the {target} menu");
     }
 }
 

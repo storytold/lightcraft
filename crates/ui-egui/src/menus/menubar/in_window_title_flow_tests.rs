@@ -1,4 +1,4 @@
-//! Production show_in_window and installed topbar; no substitute menu, logic loop, OS host or file services.
+//! Production show_in_window and installed topbar over the framework menu bar; no substitute menu, logic loop, OS host or file services.
 use super::{LightcraftApp, MENUS, MenuNode, menu_bar, show_in_window};
 use crate::headless::HeadlessView;
 use egui::{Event, Key, Modifiers, PointerButton, Rect};
@@ -129,8 +129,12 @@ impl Fixture {
         }
         self.frame(vec![], 0);
     }
+    /// A menu is drawn: its level is published while it is open (and not otherwise).
+    fn is_open(&self) -> bool {
+        self.rects.iter().any(|(name, _)| name.starts_with("menu-level:"))
+    }
     fn open_title(&self) -> Option<String> {
-        if !egui::Popup::is_any_open(&self.ctx) {
+        if !self.is_open() {
             return None;
         }
         let level = self.rect("menu-level:1");
@@ -142,33 +146,33 @@ impl Fixture {
         Some(matches[0].to_string())
     }
     fn tab_to_title(&mut self, title: &str) {
+        // The titles are parts of the framework bar: the bar's id, and the title's place among them.
         let id = self.hits.iter().find(|(name, _)| name == &format!("menu:{title}")).unwrap().1.id;
+        let part = craft::behavior::PartKey::new("title").at(MENUS.iter().position(|m| *m == title).unwrap() as u64);
         self.frame(vec![Event::PointerGone], 0);
         for _ in 0..96 {
-            if craft::ui::runtime::focus::focused_rec(&self.ctx).is_some_and(|rec| rec.stop.id == id) {
+            if craft::ui::runtime::focus::focused_rec(&self.ctx).is_some_and(|rec| rec.stop.id == id && rec.stop.part == Some(part)) {
                 return;
             }
             self.key(Key::Tab);
         }
         panic!("natural Tab did not reach title {title}, route={}", self.route);
     }
-    fn arrow_to_native_item(&mut self, id: &str) {
+    /// ArrowDown through the open menu's rows until the keyboard is on the row published as `id`.
+    fn arrow_to_item(&mut self, id: &str) {
+        let row = self.hits.iter().find(|(name, _)| name == id).unwrap_or_else(|| panic!("row {id} is published")).1.id;
         self.frame(vec![Event::PointerGone], 0);
         let mut trace = Vec::new();
         for _ in 0..96 {
-            let native = self.ctx.memory(|memory| memory.focused());
-            let focused = native.and_then(|id| self.ctx.read_response(id));
             let sdk = craft::ui::runtime::focus::focused_rec(&self.ctx).map(|rec| rec.stop.id);
-            trace.push((native, focused.as_ref().map(|response| response.rect), sdk));
-            assert!(egui::Popup::is_any_open(&self.ctx), "native popup closed during natural navigation: {trace:?}");
-            if focused.is_some_and(|response| response.rect == self.rect(id)) {
+            trace.push(sdk);
+            assert!(self.is_open(), "the menu closed during natural navigation: {trace:?}");
+            if sdk == Some(row) {
                 return;
             }
-            // Native MenuState::handle_keyboard accepts cardinal directions, not Tab's
-            // Next/Previous direction. Enter from the opener and traverse real rows with Down.
             self.key(Key::ArrowDown);
         }
-        panic!("native popup ArrowDown did not reach {id}, route={}; native/SDK focus trace: {trace:?}; no forced focus fallback", self.route);
+        panic!("ArrowDown did not reach {id}, route={}; focus trace: {trace:?}; no forced focus fallback", self.route);
     }
     fn document(&self) -> Value {
         let s = &self.app.session;
@@ -203,8 +207,10 @@ fn in_window_titles_pointer_hover_switch_confirmation_and_dismissal_keep_one_men
             f.hover(&format!("menu:{title}"));
             assert_eq!(f.open_title().as_deref(), Some(title));
         }
+        // The framework bar opens a menu on the press: a press on the open title closes it (the native
+        // bar's confirmation of a hover-opened menu is gone).
         f.click("menu:Help");
-        assert_eq!(f.open_title().as_deref(), Some("Help"), "click confirms a hover-opened menu");
+        assert_eq!(f.open_title(), None, "a press on the open title closes its menu");
         f.frame(vec![Event::PointerMoved(egui::pos2(1800.0, 900.0))], 0);
         f.click("menu:Edit");
         assert_eq!(f.open_title().as_deref(), Some("Edit"), "one click switches an existing menu");
@@ -236,7 +242,7 @@ fn in_window_titles_opening_never_executes_and_one_real_item_executes_exactly_on
         assert_eq!(f.app.session.selection.active, active);
         assert_eq!(f.app.session.selection.ids.iter().copied().collect::<Vec<_>>(), active.into_iter().collect::<Vec<_>>());
         assert_eq!(f.document(), before, "only the non-destructive selection command runs");
-        assert!(!egui::Popup::is_any_open(&f.ctx));
+        assert!(!f.is_open());
         for _ in 0..3 {
             f.frame(vec![], 0);
         }
@@ -253,13 +259,18 @@ fn in_window_titles_natural_tab_enter_space_open_then_native_keyboard_executes_o
             let journal = f.app.session.journal.len();
             f.tab_to_title("Edit");
             f.key(activation);
+            // Enter opens the focused title's menu; Space stays the app's key (the bar leaves it to the shortcuts)
+            if activation == Key::Space {
+                assert_eq!(f.open_title(), None, "Space opens no menu");
+                f.key(Key::Enter);
+            }
             assert_eq!(f.open_title().as_deref(), Some("Edit"));
             assert_eq!(f.app.session.journal.len(), journal, "keyboard title only opens");
-            f.arrow_to_native_item("menuitem:library.selectNone");
+            f.arrow_to_item("menuitem:library.selectNone");
             f.key(Key::Enter);
             assert_eq!(f.app.session.journal.get(journal..).unwrap(), &[("library.selectNone".into(), json!({}))]);
             assert_eq!(f.document(), before);
-            assert!(!egui::Popup::is_any_open(&f.ctx));
+            assert!(!f.is_open());
         }
     }
 }
@@ -300,7 +311,7 @@ fn in_window_titles_disabled_sizing_and_outside_release_do_not_open_or_execute()
         f.enabled = false;
         f.frame(vec![], 0);
         f.click("menu:Edit");
-        assert!(!egui::Popup::is_any_open(&f.ctx));
+        assert!(!f.is_open());
         assert_eq!(f.app.session.journal, journal);
         f.enabled = true;
         f.frame(vec![], 0);
@@ -320,7 +331,7 @@ fn in_window_titles_disabled_sizing_and_outside_release_do_not_open_or_execute()
             ],
             0,
         );
-        assert!(!egui::Popup::is_any_open(&f.ctx));
+        assert!(!f.is_open());
         assert_eq!(f.document(), before);
         assert_eq!(f.app.session.journal, journal);
     }
@@ -336,7 +347,7 @@ fn in_window_titles_disabled_sizing_and_outside_release_do_not_open_or_execute()
             assert!(!f.rects.iter().any(|(name, _)| name.starts_with("menu:")));
         }
         f.frame(vec![], 0);
-        assert!(!egui::Popup::is_any_open(&f.ctx));
+        assert!(!f.is_open());
         assert_eq!(f.app.session.journal, journal);
     }
 }
@@ -344,8 +355,13 @@ fn in_window_titles_disabled_sizing_and_outside_release_do_not_open_or_execute()
 #[test]
 fn in_window_titles_narrow_overflow_remains_native_and_full_width_keeps_title_gaps() {
     let mut f = Fixture::new(0);
+    // The framework's title face pads each caption on both sides, so the boxes touch and the
+    // caption gap is the padding.
     for pair in MENUS.windows(2) {
-        assert!(f.rect(&format!("menu:{}", pair[1])).left() - f.rect(&format!("menu:{}", pair[0])).right() >= 23.5);
+        assert!(f.rect(&format!("menu:{}", pair[1])).left() - f.rect(&format!("menu:{}", pair[0])).right() >= -0.5);
+    }
+    for title in MENUS {
+        assert!(f.rect(&format!("menu:{title}")).width() >= 30.0, "{title} has room around its caption");
     }
     f.narrow = true;
     f.frame(vec![], 0);
@@ -353,8 +369,8 @@ fn in_window_titles_narrow_overflow_remains_native_and_full_width_keeps_title_ga
     assert!(!f.rects.iter().any(|(name, _)| name == "menu:File"));
     let journal = f.app.session.journal.clone();
     f.click("menu:all");
-    assert!(egui::Popup::is_any_open(&f.ctx));
+    assert!(f.is_open());
     f.key(Key::Escape);
-    assert!(!egui::Popup::is_any_open(&f.ctx));
+    assert!(!f.is_open());
     assert_eq!(f.app.session.journal, journal);
 }
