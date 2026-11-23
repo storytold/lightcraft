@@ -382,11 +382,7 @@ impl Fixture {
     }
     fn numeric(&mut self, control: &str, value: f64) {
         self.click(&format!("sliderValue:{control}"));
-        assert_eq!(
-            self.ctx.memory(|memory| memory.focused()),
-            Some(crate::text_field::id(&format!("sliderField:{control}"))),
-            "real value click must focus the existing editor"
-        );
+        assert!(self.focused(&format!("sliderField:{control}")), "real value click must focus the existing editor");
         self.key_mod(Key::A, Modifiers { ctrl: true, command: true, ..Default::default() });
         let before = self.document();
         self.frame(vec![Event::Text(value.to_string())]);

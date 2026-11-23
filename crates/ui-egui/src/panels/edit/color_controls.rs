@@ -3,12 +3,10 @@
 //! keeps a second value: each pass reads the current photo's real DevelopSettings.
 
 use super::sliders::{REL_TEMP, REL_TINT, k_to_rel, rel_to_k};
-use craft::behavior::{EditEvent, NumberCodec, Reader};
+use craft::behavior::EditEvent;
 use craft::ui::contract::overlay::Trigger;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
-use craft::ui::form::SliderField;
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft::ui::menu::{Menu, MenuItem};
-use craft::ui::value_drag::SliderScale;
 use lightcraft_develop::{ControlSpec, DevelopSettings, WbMode, controls};
 use serde_json::json;
 
@@ -177,14 +175,6 @@ fn spec(id: &str) -> Option<&'static ControlSpec> {
     }
 }
 
-fn kelvin_position(value: f64, _min: f64, _max: f64) -> f64 {
-    controls::find("wb.temp").map_or(0.0, |spec| spec.position(value))
-}
-
-fn kelvin_value_at(position: f64, _min: f64, _max: f64) -> f64 {
-    controls::find("wb.temp").map_or(6500.0, |spec| spec.value_at(position))
-}
-
 /// Match the panel's effective As Shot/preset numbers, including embedded-JPEG raws.
 fn shown_wb(app: &LightcraftApp, photo: lightcraft_catalog::PhotoId, settings: &DevelopSettings) -> (bool, f64, f64) {
     let raw = app.session.catalog.photo(photo).is_some_and(|p| p.develops_raw() && !p.relative_wb());
@@ -266,248 +256,31 @@ pub(super) fn preset(app: &mut LightcraftApp, ui: &mut egui::Ui, mode: WbMode) {
     }
 }
 
-/// Only the four WB controls get semantic tracks. No host painter draws over the SDK.
-fn wb_track_face(id: &str) -> Option<craft::ui::value_drag::TrackFace<'static>> {
-    let stops = match id {
-        "wb.temp" | "wb.tempRel" => ["#193961", "#47566a", "#60666d", "#70705b", "#737339", "#75742a"],
-        "wb.tint" | "wb.tintRel" => ["#246123", "#2c552c", "#394739", "#4a3d4c", "#6b336b", "#872c87"],
-        _ => return None,
-    };
-    Some(craft::ui::value_drag::TrackFace::new(wb_track::Face::new(stops)))
-}
-
-/// A passive, unregistered SDK face: no binding, hit parts, focus stops or accessibility node.
-/// The real Slider owns the groove geometry, handle, focus ring, gestures and numeric value.
-mod wb_track {
-    use craft::behavior::{Input, Metrics, Sense};
-    use craft::theme::Contrast;
-    use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role, Styled as _};
-    use craft::ui::primitives::PaintShape;
-    use craft::ui::style::{ComponentStyle, DataColor, StyleCx, TrackLook};
-    use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
-
-    #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-    pub(super) struct FaceStyle {
-        #[style(metrics)]
-        metrics: Metrics,
-        track: TrackLook,
-        high_contrast: bool,
-    }
-
-    #[derive(Clone, Component)]
-    #[component(unregistered)]
-    pub(super) struct Face {
-        #[common]
-        common: Common,
-        stops: [Color32; 6],
-    }
-
-    impl Face {
-        pub(super) fn new(stops: [&str; 6]) -> Self {
-            Self { common: Common::new(), stops: stops.map(crate::widgets::hex) }
-        }
-    }
-
-    impl Component for Face {
-        const ROLE: Role = Role::None;
-        const INPUT: Input = Input::Display;
-        const PARTS: bool = false;
-        const STOPS: bool = false;
-        const OVERLAYS: bool = false;
-        const SHOWS_LABEL: bool = false;
-        type Style = FaceStyle;
-        type Output = Response;
-
-        fn style(cx: &StyleCx<'_>, _: FaceStyleKey) -> FaceStyle {
-            FaceStyle { metrics: Metrics::new(), track: cx.track(), high_contrast: cx.contrast() == Contrast::High }
-        }
-
-        fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-            Vec2::splat(cx.style.track.thickness)
-        }
-
-        fn sense(&self) -> Sense {
-            Sense::empty()
-        }
-
-        fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-            let track = &cx.style.track;
-            // Use the theme's normal groove thickness, even when its ramp face is taller.
-            let rect = track.groove(cx.rect);
-            let draw = ui.draw();
-            if cx.style.high_contrast || cx.state().is_disabled() {
-                // Do not replace contrast/disabled cues with low-contrast colour data.
-                let round = CornerRadius::same((track.thickness / 2.0).round() as u8);
-                draw.fill(&PaintShape::Rect(rect, round), cx.resolve(&track.unfilled));
-                return;
-            }
-            // Match the existing LightCraft palette. Bound work to 48 strips, independent of
-            // viewport size; min/max colours mirror with the real Slider's value direction.
-            for i in 0..48 {
-                let a = i as f32 / 48.0;
-                let b = (i + 1) as f32 / 48.0;
-                let position = if cx.flow.is_rtl() { 1.0 - a } else { a };
-                let along = position * 5.0;
-                let index = (along.floor() as usize).min(4);
-                let color = crate::widgets::lerp(self.stops[index], self.stops[index + 1], along - index as f32);
-                let strip = Rect::from_min_max(pos2(rect.left() + rect.width() * a, rect.top()), pos2(rect.left() + rect.width() * b, rect.bottom()));
-                draw.data_fill(&PaintShape::Rect(strip, CornerRadius::ZERO), DataColor::new(color));
-            }
-        }
-
-        fn finish(self, cx: Cx<'_, Self>) -> Response {
-            cx.response.clone()
-        }
-    }
-}
-
-/// A numeric value in the existing Color section, on its original displayed scale.
+/// A numeric value in the existing Color section, on its original displayed scale, on the shared develop slider
+/// row (the Kelvin temperature has Lightroom's track there).
 fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &ControlSpec, value: f64, enabled: bool) {
-    let photo = app.session.active();
-    let number_spec = *spec;
-    let record_key = ui.scope_id().with(("framework-color", spec.id));
-    let (out, record) = craft::ui::runtime::inspect::record(ui, record_key, |ui| {
-        craft::ui::runtime::env::with_env(
-            ui,
-            |set| set.wheel = Some(craft::ui::runtime::env::WheelScope::Directional),
-            |ui| {
-                egui::Frame::NONE
-                    .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
-                    .show(ui, |ui| {
-                        let mut field = SliderField::new(crate::i18n::tr(spec.label), Bind::given(value).reset(spec.default), spec.min..=spec.max)
-                            .id_salt((spec.id, photo))
-                            .step(spec.step)
-                            // Preserve the product's complete-value grammar (+12 is absolute;
-                            // optional K/% and either decimal separator), without rewriting keys.
-                            .number_codec(
-                                NumberCodec::new(Reader::new(), usize::from(spec.decimals))
-                                    .parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
-                            )
-                            .scale(if spec.id == "wb.temp" {
-                                SliderScale::Custom { position: kelvin_position, value_at: kelvin_value_at }
-                            } else {
-                                SliderScale::Linear
-                            })
-                            .fill(false)
-                            .tooltip(crate::i18n::tr("Click to type a value, drag to change it").to_string())
-                            .enabled(enabled)
-                            .sizing(Sizing::FillWidth);
-                        // Disabled controls keep the SDK's original track, untouched.
-                        if enabled
-                            && ui.is_enabled()
-                            && craft::ui::runtime::env::Env::of(ui).enabled
-                            && let Some(face) = wb_track_face(spec.id)
-                        {
-                            field = field.track_face(face);
-                        }
-                        field.show(ui)
-                    })
-                    .inner
-            },
-        )
-    });
-    let mut number_focus = None;
-    if let Some(record) = record {
-        // Preserve the product's automation names using the SDK's actual laid-out hit areas,
-        // not guessed rectangles or duplicate interactive controls.
-        for (index, element) in record.elements.iter().enumerate() {
-            let Some(facts) = &element.facts else { continue };
-            // The native text menu is recorded inside this composite's overlay hook. Its
-            // real menu row receives the press; this only preserves the product locator.
-            if element.component == "MenuItem" {
-                let paste = craft::ui::runtime::commands::resolve(ui.ctx(), craft::ui::runtime::commands::EditCommands::Paste);
-                if element.part.is_none()
-                    && facts.name.as_deref() == Some(paste.label.as_ref())
-                    && let Some(response) = ui.ctx().read_response(element.id)
-                {
-                    crate::widgets::register_response(format!("sliderField:{}:paste", spec.id), element.rect, &response);
-                }
-                continue;
+    let row = crate::widgets::SliderRow { spec, value, enabled, label: None, salt: egui::Id::new(app.session.active()) };
+    let shown = crate::widgets::slider_field(ui, &row);
+    if let Some(track) = shown.track
+        && let Some(index) = NUMERIC.iter().position(|id| *id == spec.id)
+    {
+        // the host's hovered-or-focused arrow keys find the row by its real track
+        ui.ctx().data_mut(|data| {
+            let key = egui::Id::unique(TRACKS);
+            let mut tracks = data.get_temp::<[Option<egui::Id>; 6]>(key).unwrap_or([None; 6]);
+            if let Some(slot) = tracks.get_mut(index) {
+                *slot = Some(track);
             }
-            let prefix = match facts.role.as_str() {
-                "Slider" => "slider",
-                "SpinButton" => "sliderValue",
-                "Label" => "sliderLabel",
-                _ => continue,
-            };
-            if prefix == "slider"
-                && let Some(index) = NUMERIC.iter().position(|id| *id == spec.id)
-            {
-                ui.ctx().data_mut(|data| {
-                    let key = egui::Id::unique(TRACKS);
-                    let mut tracks = data.get_temp::<[Option<egui::Id>; 6]>(key).unwrap_or([None; 6]);
-                    if let Some(slot) = tracks.get_mut(index) {
-                        *slot = Some(element.id);
-                    }
-                    data.insert_temp(key, tracks);
-                });
-            }
-            if prefix == "sliderValue"
-                && let Some(focused) = craft::ui::runtime::focus::focused_rec(ui.ctx())
-                && focused.stop.id == element.id
-            {
-                number_focus = Some(focused.stop.root);
-            }
-            if prefix == "slider"
-                && let Some(focused) = craft::ui::runtime::focus::focused_rec(ui.ctx())
-                && focused.stop.id == element.id
-                && !focused.stop.text
-            {
-                // LightCraft's shortcut gate distinguishes sliders from text fields. The
-                // runtime may put egui focus on an arena root rather than this component id.
-                crate::widgets::note_slider_focus(ui.ctx(), focused.stop.root);
-            }
-            let mut rect = record.stop_rect(index).unwrap_or(element.rect);
-            if prefix == "slider"
-                && let Some(thumb) = record
-                    .hits
-                    .iter()
-                    .find(|part| part.owner == element.id && part.part.is_some_and(|part| part.key == craft::ui::value_drag::Slider::THUMB))
-            {
-                // SDK thumbs stay wholly inside the track. Its value span runs between the
-                // centres of the two endpoint thumbs, not across the full component box.
-                // Name that actual span so a fractional automation click means the same
-                // fraction of the value range, with no invented hit owner or input mapping.
-                let half = (thumb.bounds.width() * 0.5).min(rect.width() * 0.5);
-                rect = rect.shrink2(egui::vec2(half, 0.0));
-            }
-            let label = crate::i18n::tr(spec.label).to_string();
-            let reset_hint = crate::i18n::tr_format!("{name} — double-click to reset it", name = label);
-            let on_thumb = prefix == "slider"
-                && record.hits.iter().any(|hit| {
-                    hit.owner == element.id
-                        && hit.part.is_some_and(|part| part.key == craft::ui::value_drag::Slider::THUMB)
-                        && ui.ctx().pointer_hover_pos().is_some_and(|at| hit.bounds.contains(at))
-                });
-            let hint = (enabled && (prefix == "sliderLabel" || on_thumb)).then_some(reset_hint.as_str());
-            crate::widgets::register_with_tooltip(ui, format!("{prefix}:{}", spec.id), rect, hint);
-            if prefix == "slider"
-                && let Some(thumb) = record
-                    .hits
-                    .iter()
-                    .find(|hit| hit.owner == element.id && hit.part.is_some_and(|part| part.key == craft::ui::value_drag::Slider::THUMB))
-            {
-                crate::widgets::register_geometry(ui.ctx(), format!("sliderThumb:{}", spec.id), thumb.bounds);
-            }
-            if prefix == "sliderValue" {
-                crate::widgets::register(ui, format!("sliderField:{}", spec.id), rect);
-            }
-        }
+            data.insert_temp(key, tracks);
+        });
     }
-    if !craft::ui::runtime::measure::active(ui.ctx()) {
-        for event in &out.events {
+    if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+        for event in &shown.out.events {
             // Disabling a running control cancels its SDK gesture; that cancellation must
             // still close the existing engine transaction, while disabled edits never run.
             if enabled && ui.is_enabled() || matches!(event, EditEvent::Cancel { .. }) {
                 apply_number(app, ui.ctx(), spec, event);
             }
-        }
-        // LightCraft's readout returns to display mode after a numeric commit or cancellation;
-        // leaving the SDK field focused would send the next Undo to its private text history.
-        if let Some(root) = number_focus
-            && out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }))
-        {
-            ui.memory_mut(|memory| memory.surrender_focus(root));
         }
     }
 }

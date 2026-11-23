@@ -29,7 +29,7 @@ fn a_disabled_sliders_name_ignores_a_double_click() {
                 Some(pressed) => vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }],
             };
             let (out, _) = frame(&mut view, time, enabled, events);
-            reset |= out.reset || out.value.is_some();
+            reset |= out.value.is_some();
         }
         assert_eq!(reset, enabled, "enabled: {enabled}");
     }
