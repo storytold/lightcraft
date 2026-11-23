@@ -86,7 +86,15 @@ pub(super) fn number(ui: &mut egui::Ui, spec: &lightcraft_develop::controls::Con
         let label = ui.label(crate::i18n::tr(spec.label));
         // Main also resets by double-clicking the painted label. Keep that native-row
         // compatibility hit only in a real pass; the SDK track owns its own reset.
-        if !measuring(ui) && label.interact(egui::Sense::click()).double_clicked() {
+        if !measuring(ui)
+            && crate::panels::detail::host::target(
+                ui,
+                ("import-caption", spec.id),
+                label.rect,
+                crate::panels::detail::host::Target::new(crate::i18n::tr(spec.label)).pointer_only(),
+            )
+            .double_clicked()
+        {
             current = spec.default;
         }
         let width = (ui.available_width() - 72.0).clamp(40.0, 180.0);

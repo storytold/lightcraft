@@ -182,19 +182,15 @@ pub(super) fn rename_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     let Dialog::Rename { template, start } = dlg else { return };
     let n = app.session.selected().len();
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
-    // The shared tag helper edits native TextEditState at this exact id. Keep this one
-    // field native until that helper accepts SDK replace_selection proposals.
+    // The template is the framework's text field; a tag from the Tags list goes in at its caret.
     let template_id = egui::Id::unique("rename-template");
     let tags_open = field(ui, "Template", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let mut open = false;
         super::frame::trailing_button_row(ui, |ui| {
             open = tags_toggle(ui);
-            let r = crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(template).id(template_id).hint_text("{name}").desired_width(ui.available_width())),
-                crate::i18n::tr("Template"),
-            );
-            register(ui, "field:renameTemplate", &r);
+            let width = ui.available_width();
+            crate::import::template_field(ui, "field:renameTemplate", crate::i18n::tr("Template"), template, template_id, "{name}", width);
         });
         open
     });

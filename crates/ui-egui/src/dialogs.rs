@@ -310,6 +310,34 @@ pub(crate) const STACK_DIALOG: usize = 0;
 pub(crate) const STACK_LIBRARY: usize = 1;
 pub(crate) const STACK_PROMPT: usize = 2;
 
+/// A framework button in a dialog body, registered as `name` with its real response. True when it was clicked in a
+/// real run.
+fn dialog_button(ui: &mut egui::Ui, name: &str, label: &str) -> bool {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(("lc-dialog-button", name)).show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    crate::widgets::register_response(name, shown.response.rect, &shown.response);
+    ui.is_enabled() && shown.clicked()
+}
+
+/// A framework checkbox in a dialog body, registered as `name`; a measuring run edits nothing.
+fn dialog_check(ui: &mut egui::Ui, name: &str, label: &str, value: &mut bool) {
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let mut draft = *value;
+    let shown = Checkbox::new(Bind::bound(&mut draft)).id_salt(("lc-dialog-check", name)).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    crate::widgets::register_response(name, shown.response.interact_rect, &shown.response);
+    if ui.is_enabled() {
+        *value = draft;
+    }
+}
+
 /// One button of a framework dialog footer drawn by the app: its shown label, its automation name, whether it can be
 /// used and whether it has the accent fill.
 pub(crate) struct FooterSpec {
@@ -1040,14 +1068,15 @@ pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
 fn auto_stack_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::AutoStack { gap } = dlg else { return };
     ui.label(egui::RichText::new(crate::i18n::tr("Stack photos taken within this time of each other:")).color(t.text_label));
-    let r = ui.add(
-        egui::Slider::new(gap, 0.0..=86400.0)
-            .logarithmic(true)
-            .smallest_positive(1.0)
-            .custom_formatter(|v, _| crate::panels::dialogs::fmt_gap(v))
-            .custom_parser(crate::panels::dialogs::parse_gap),
+    cull::gap_control(
+        ui,
+        "slider:autoStackGap",
+        "value:autoStackGap",
+        crate::i18n::tr("Stack photos taken within this time of each other:"),
+        gap,
+        1.0..=86400.0,
+        false,
     );
-    crate::widgets::named(r, crate::i18n::tr("Stack photos taken within this time of each other:"));
     let preview = app.session.execute("stack.auto", &json!({"gap": *gap, "preview": true})).unwrap_or_default();
     let scope = if app.session.selection.ids.len() > 1 { "the selected photos" } else { "the photos in view" };
     ui.label(
@@ -1119,7 +1148,7 @@ fn system_info_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             ui.end_row();
         }
     });
-    if ui.button(crate::i18n::tr("Copy to Clipboard")).clicked() {
+    if dialog_button(ui, "button:systemInfoCopy", "Copy to Clipboard") {
         let text: String = rows.iter().map(|(k, v)| format!("{k}: {v}\n")).collect();
         ui.ctx().copy_text(text);
     }
@@ -1129,11 +1158,11 @@ fn system_info_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::AllMetadata { title, rows, search } = dlg else { return };
     ui.label(egui::RichText::new(title.as_str()).color(t.text_label));
-    let r = crate::widgets::named(
-        ui.add(egui::TextEdit::singleline(search).hint_text(crate::i18n::tr("Filter fields")).desired_width(f32::INFINITY)),
-        crate::i18n::tr("Filter fields"),
-    );
-    crate::widgets::register(ui, "field:metadataSearch", r.rect);
+    crate::text_field::TextField::singleline("field:metadataSearch", search)
+        .hint(crate::i18n::tr("Filter fields"))
+        .label(crate::i18n::tr("Filter fields"))
+        .width(f32::INFINITY)
+        .show(ui);
     let q = search.trim().to_lowercase();
     let keep = |n: &str, v: &str| q.is_empty() || n.to_lowercase().contains(&q) || v.to_lowercase().contains(&q);
     let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -1252,6 +1281,54 @@ fn new_smart_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, 
     );
 }
 
+/// A framework number field over a whole number, `suffix` written after it (" d"), registered as `name`.
+fn whole_number(ui: &mut egui::Ui, name: &str, label: &str, value: &mut i32, range: std::ops::RangeInclusive<i32>, suffix: &str) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::text::NumberField;
+    let mut exact = Some(f64::from(*value));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(72.0, 24.0), egui::Sense::hover());
+    let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut exact))
+        .id_salt(("lc-whole-number", name))
+        .range(f64::from(*range.start())..=f64::from(*range.end()))
+        .step(1.0)
+        .snap_typed(true)
+        .commit_decimals(0)
+        .fixed_decimals(0)
+        .show_at(ui, rect);
+    if !suffix.trim().is_empty() {
+        ui.label(suffix.trim());
+    }
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    crate::widgets::register_response(name, rect, &shown.response);
+    if let Some(v) = exact.filter(|v| v.is_finite()) {
+        *value = (v.round() as i64).clamp(i64::from(*range.start()), i64::from(*range.end())) as i32;
+    }
+}
+
+/// A framework number field over a decimal value with `decimals` places, stepping by `step`, registered as `name`.
+fn decimal_number(ui: &mut egui::Ui, name: &str, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f64>, step: f64, decimals: usize) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::text::NumberField;
+    let mut exact = Some(f64::from(*value));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(80.0, 24.0), egui::Sense::hover());
+    let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut exact))
+        .id_salt(("lc-decimal-number", name))
+        .range(range)
+        .step(step)
+        .commit_decimals(decimals)
+        .fixed_decimals(decimals)
+        .show_at(ui, rect);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    crate::widgets::register_response(name, rect, &shown.response);
+    if let Some(v) = exact.filter(|v| v.is_finite()) {
+        *value = v as f32;
+    }
+}
+
 /// The body of the CaptureTime dialog.
 fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::CaptureTime { mode, time, days, hours, minutes, zone } = dlg else { return };
@@ -1267,21 +1344,24 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
     let params = match mode.as_str() {
         "set" => {
             field(ui, "New time", |ui| {
-                let r = ui.add(egui::TextEdit::singleline(time).hint_text("2026-09-30 14:05:00").desired_width(f32::INFINITY));
-                crate::widgets::register(ui, "field:captureTime", r.rect);
+                crate::text_field::TextField::singleline("field:captureTime", time)
+                    .hint("2026-09-30 14:05:00")
+                    .label(crate::i18n::tr("New time"))
+                    .width(f32::INFINITY)
+                    .show(ui);
             });
             json!({"time": time})
         }
         "shift" => {
             field(ui, "Shift", |ui| {
-                ui.add(egui::DragValue::new(days).suffix(" d"));
-                ui.add(egui::DragValue::new(hours).suffix(" h"));
-                ui.add(egui::DragValue::new(minutes).suffix(" min"));
+                whole_number(ui, "field:captureDays", "Days", days, -36_500..=36_500, " d");
+                whole_number(ui, "field:captureHours", "Hours", hours, -100_000..=100_000, " h");
+                whole_number(ui, "field:captureMinutes", "Minutes", minutes, -1_000_000..=1_000_000, " min");
             });
             json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60})
         }
         _ => {
-            field(ui, "Hours", |ui| ui.add(egui::DragValue::new(zone).range(-26.0..=26.0).speed(0.25).fixed_decimals(2)));
+            field(ui, "Hours", |ui| decimal_number(ui, "field:captureZone", "Hours", zone, -26.0..=26.0, 0.25, 2));
             json!({"hours": zone})
         }
     };
@@ -1454,8 +1534,14 @@ fn merge_keywords_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, c
         .collect();
     ui.horizontal_wrapped(|ui| {
         for k in options {
-            if ui.add(egui::Button::new(egui::RichText::new(&k).color(t.text_label)).corner_radius(10.0)).clicked() {
-                *into = k;
+            use craft::ui::contract::{Props as _, Show as _};
+            // a keyword chip: a small framework button named by the keyword
+            let chip = craft::ui::buttons::Button::new(k.clone()).id_salt(("keywordIntoChip", &k)).size(craft::theme::ControlSize::Sm).show(ui);
+            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                crate::widgets::register_response(format!("button:keywordInto-{k}"), chip.response.rect, &chip.response);
+                if chip.clicked() {
+                    *into = k;
+                }
             }
         }
     });
@@ -1573,14 +1659,18 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
             options.paper = paper;
         }
     });
-    ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
+    dialog_check(ui, "check:contactSheetLandscape", "Landscape", &mut options.landscape);
     field(ui, "Columns", |ui| {
-        ui.add(egui::DragValue::new(&mut options.columns).range(1..=8));
+        let mut columns = options.columns as i32;
+        whole_number(ui, "field:contactSheetColumns", "Columns", &mut columns, 1..=8, "");
+        options.columns = columns.clamp(1, 8) as usize;
     });
     field(ui, "Rows", |ui| {
-        ui.add(egui::DragValue::new(&mut options.rows).range(1..=10));
+        let mut rows = options.rows as i32;
+        whole_number(ui, "field:contactSheetRows", "Rows", &mut rows, 1..=10, "");
+        options.rows = rows.clamp(1, 10) as usize;
     });
-    ui.checkbox(&mut options.captions, crate::i18n::tr("Filename captions"));
+    dialog_check(ui, "check:contactSheetCaptions", "Filename captions", &mut options.captions);
     ui.label(crate::i18n::tr("150 dpi · sRGB · current edits · fit without cropping"));
     ui.label(crate::i18n::tr("Choose a PDF destination after confirming. Print the PDF from your viewer."));
 }
@@ -1902,10 +1992,11 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             if dialog_field(ui, "field:presetName", name, "Preset name") {
                 *confirm = true;
             }
-            crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(group).hint_text(crate::i18n::tr("Group")).desired_width(f32::INFINITY)),
-                crate::i18n::tr("Group"),
-            );
+            crate::text_field::TextField::singleline("field:presetGroup", group)
+                .hint(crate::i18n::tr("Group"))
+                .label(crate::i18n::tr("Group"))
+                .width(f32::INFINITY)
+                .show(ui);
             ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
             group_checklist(ui, "presetInclude", groups);
         }

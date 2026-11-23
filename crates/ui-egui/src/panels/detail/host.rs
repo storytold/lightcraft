@@ -32,6 +32,8 @@ struct HostTarget {
     #[style_key]
     accent: Color32,
     drag: bool,
+    /// Whether the keyboard can reach it (a Tab stop).
+    focus: bool,
 }
 
 impl Component for HostTarget {
@@ -46,7 +48,8 @@ impl Component for HostTarget {
     }
 
     fn sense(&self) -> Sense {
-        if self.drag { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
+        let sense = if self.drag { Sense::CLICK | Sense::DRAG } else { Sense::CLICK };
+        if self.focus { sense | Sense::FOCUS } else { sense }
     }
 
     /// The host paints the face.
@@ -118,12 +121,14 @@ pub(crate) struct Target<'a> {
     pub drag: bool,
     /// Whether the target reads as the selected one.
     pub selected: bool,
+    /// Whether the keyboard reaches it; a pointer-only target (a caption that resets on a double click) is no Tab stop.
+    pub focus: bool,
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> Target<'a> {
     pub fn new(label: impl Into<String>) -> Self {
-        Target { label: label.into(), tooltip: String::new(), drag: false, selected: false, _lifetime: std::marker::PhantomData }
+        Target { label: label.into(), tooltip: String::new(), drag: false, selected: false, focus: true, _lifetime: std::marker::PhantomData }
     }
 
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
@@ -141,12 +146,18 @@ impl<'a> Target<'a> {
         self
     }
 
+    /// Pointer-only: no Tab stop.
+    pub fn pointer_only(mut self) -> Self {
+        self.focus = false;
+        self
+    }
+
 }
 
 /// Show a host-painted target over `rect`, named `key` for egui. The caller registers its automation name with
 /// `register_response` when the pass is a live one.
 pub(crate) fn target(ui: &mut Ui, key: impl Hash + std::fmt::Debug, rect: Rect, spec: Target<'_>) -> HostOutput {
-    let mut control = HostTarget { common: Common::new(), accent: Tokens::get(ui.ctx()).accent, drag: spec.drag }
+    let mut control = HostTarget { common: Common::new(), accent: Tokens::get(ui.ctx()).accent, drag: spec.drag, focus: spec.focus }
         .id(egui::Id::unique(key))
         .label(spec.label)
         .selected(spec.selected)
