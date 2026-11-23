@@ -288,6 +288,11 @@ fn env_disabled() -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 static GPU: std::sync::OnceLock<Result<ctx::Gpu, String>> = std::sync::OnceLock::new();
 
+/// A [`warm_up`] thread in flight. [`warm_up`] enters it before the thread exists, so
+/// [`wait_warm_up`] sees the warm-up from the moment [`warm_up`] returns.
+#[cfg(not(target_arch = "wasm32"))]
+static WARM_UP: exit::Gate = exit::Gate::new();
+
 /// Set while [`adopt_window_device`] is about to run or running: [`device`] and [`warm_up`] then
 /// don't create a device of their own (review of PR #1065: the settings' warm-up raced the
 /// adoption thread and could win, so the window's device went unused).
@@ -349,7 +354,11 @@ pub fn warm_up() {
         if STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
-        let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(|| {
+        // in flight from here, not from when the thread first runs: a host that ends the process
+        // right after this returns must find it with `wait_warm_up` (dropped if the spawn fails)
+        let in_flight = WARM_UP.enter();
+        let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(move || {
+            let _in_flight = in_flight;
             loop {
                 let _ = device();
                 if GPU.get().is_some() || shutting_down() || env_disabled() {
@@ -380,6 +389,22 @@ pub fn ready() -> bool {
     }
     #[cfg(target_arch = "wasm32")]
     {
+        true
+    }
+}
+
+/// Wait up to `timeout` for a [`warm_up`] thread to finish (the device created, or given up).
+/// `true`: none is running. That thread loads the driver, and a process that ends meanwhile crashes
+/// inside it (issue #620): a host that ends the process without [`begin_shutdown`] and
+/// [`wait_idle`] (a test, a headless run) waits for it first.
+pub fn wait_warm_up(timeout: std::time::Duration) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        WARM_UP.wait_idle(timeout)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeout;
         true
     }
 }

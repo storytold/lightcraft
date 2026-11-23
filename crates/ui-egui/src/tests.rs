@@ -49,6 +49,7 @@ mod filmstrip_drag;
 mod find_similar;
 mod focus_point;
 mod folder_drop;
+mod gpu_warm_up;
 mod grading;
 mod grid;
 mod grid_drag;
