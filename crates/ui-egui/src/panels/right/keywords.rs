@@ -215,8 +215,17 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
     let library = app.session.library_generation();
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     let fid = crate::text_field::id(ENTER_FIELD);
-    let focused = crate::text_field::has_focus_id(ui.ctx(), fid);
+    // (was the box drawn in the frame before? a panel that hid it for a frame left its field's cursor behind, and
+    // the framework keeps that focus record until the field is drawn again)
+    let frame = ui.ctx().cumulative_frame_nr();
+    let drawn_key = id.with("drawn-frame");
+    let drawn_before = ui.data(|d| d.get_temp::<u64>(drawn_key)).is_some_and(|last| frame <= last.saturating_add(1));
+    ui.data_mut(|d| d.insert_temp(drawn_key, frame));
     let kept: Option<EnterEdit> = ui.data(|d| d.get_temp(id));
+    if !drawn_before && kept.is_some() {
+        crate::text_field::blur_id(ui.ctx(), fid);
+    }
+    let focused = drawn_before && crate::text_field::has_focus_id(ui.ctx(), fid);
     // (an edit of another selection or library is given up, never applied to this one)
     if kept.as_ref().is_some_and(|e| !e.is_for(app, key)) && focused {
         crate::text_field::blur_id(ui.ctx(), fid);

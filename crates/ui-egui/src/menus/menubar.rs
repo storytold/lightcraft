@@ -1081,8 +1081,9 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let clicked: Clicked = Default::default();
     let start = ui.cursor().left();
-    // A dialog or the shortcut recorder owns the keys: no F10, Alt or Alt+letter for the bar then.
-    let keys = app.ui.dialog.is_none() && app.recording_shortcut.is_none();
+    // The bar's own keys (F10, a lone Alt, Alt+letter or digit) are off: the app binds Alt+digit and holds Alt for
+    // its tools, and the old bar had none. Tab and the arrow keys still reach and move through the titles.
+    let keys = false;
     let room = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(if max_width >= bar_width(ui) { max_width } else { MENU_MIN }, ui.available_height()));
     let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lc-menubar-inspect"), |ui| {
         ui.scope_builder(egui::UiBuilder::new().max_rect(room), |ui| {
@@ -1093,7 +1094,8 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
                     MenuTitle::new(literal(crate::i18n::tr(title)), move |ui: &mut egui::Ui| nodes_ui(ui, items, mac, clicked, 1))
                 })
                 .collect();
-            MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles).keyboard(keys).show(ui)
+            // A measuring or sizing run must never open a menu: disabled, its titles sense nothing.
+            MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles).keyboard(keys).enabled(!measuring(ui)).show(ui)
         })
         .inner
     });

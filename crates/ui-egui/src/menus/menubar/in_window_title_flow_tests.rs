@@ -383,7 +383,8 @@ fn in_window_titles_narrow_overflow_remains_native_and_full_width_keeps_title_ga
         assert!(f.rect(&format!("menu:{title}")).width() >= 30.0, "{title} has room around its caption");
     }
     f.narrow = true;
-    f.frame(vec![], 0);
+    // (the bar lays its titles out from the previous pass: it takes a few frames to collapse)
+    f.settle();
     f.rect("menu:all");
     assert!(!f.rects.iter().any(|(name, _)| name == "menu:File"));
     let journal = f.app.session.journal.clone();

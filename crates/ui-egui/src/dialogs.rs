@@ -260,6 +260,8 @@ fn dialog_width(dlg: &Dialog) -> f32 {
         Dialog::Welcome { .. } => 460.0,
         Dialog::LensDatabase { .. } => 440.0,
         Dialog::ManageEffects { .. } => 560.0,
+        // its format row on one line (#780): 615 wide with the dialog's padding, as before
+        Dialog::Export { .. } => 599.2,
         _ => 380.0,
     }
 }
@@ -271,7 +273,11 @@ fn dialog_width(dlg: &Dialog) -> f32 {
 /// library-problem/launch-list window gets the same treatment while it is actually on screen over
 /// this dialog.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
-    let Some(dlg) = &app.ui.dialog else { return };
+    let Some(dlg) = &app.ui.dialog else {
+        // the next dialog shown is a new one, whichever it is
+        ctx.data_mut(|d| d.remove::<egui::Id>(egui::Id::unique("lightcraft.dialog.shown-id")));
+        return;
+    };
     if save_effect::active(app, ctx) {
         return save_effect::show(app, ctx, blocked);
     }
@@ -286,8 +292,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     }
     // The framework dialog mounts its own modal layer; this area only gives it a parent `Ui` (the root `Ui` is
     // disabled under a dialog by `prepare`).
-    host_ui(ctx, egui::Id::unique("lightcraft.dialog.host"), |ui| shell(app, ui, blocked));
+    host_ui(ctx, egui::Id::unique("lightcraft.dialog.host"), |ui| {
+        craft::ui::runtime::overlay::stack_place(ctx, STACK_DIALOG, egui::Id::unique("lightcraft.dialog"), || shell(app, ui, blocked));
+    });
 }
+
+/// The places on the window's dialog stack, bottom first: the framework stacks the modal layers shown at them in this
+/// order, whichever appeared or was pressed last. The app's dialog, then the blocking library window, then a quit
+/// prompt or settings notice.
+pub(crate) const STACK_DIALOG: usize = 0;
+pub(crate) const STACK_LIBRARY: usize = 1;
+pub(crate) const STACK_PROMPT: usize = 2;
 
 /// One button of a framework dialog footer drawn by the app: its shown label, its automation name, whether it can be
 /// used and whether it has the accent fill.
@@ -322,7 +337,7 @@ pub(crate) fn footer_button_responses(ui: &mut egui::Ui, salt: impl egui::AsIdSa
             .show(ui);
         if real {
             crate::widgets::register_response(button.name.clone(), shown.response.rect, &shown.response);
-            if button.enabled && ui.is_enabled() && shown.clicked() {
+            if button.enabled && ui.is_enabled() && (shown.clicked() || crate::widgets::same_pass_click(&shown.response)) {
                 clicked = Some(at);
             }
             responses.push(shown.response.clone());
@@ -368,6 +383,9 @@ impl Footer {
 
 /// The generic dialog in one framework `Dialog`: the body is `dialog_content`, the footer the Cancel/confirm pair,
 /// Escape and Enter are the framework's, and the open state is `app.ui.dialog`.
+/// The framework dialog's padding on both sides of its body, together.
+const DIALOG_PADDING: f32 = 16.0;
+
 fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     use std::cell::Cell;
 
@@ -378,12 +396,24 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     let ctx = host.ctx().clone();
     // A caller's measuring run of the whole dialog shows nothing the user can reach, and the dialog's id may open only
     // one stage a pass: the real run of the same pass shows it.
+    // A press made in such a run is not the dialog's: until it is released, the dialog takes no input, so the release
+    // of that press cannot click what lies under it.
+    let speculative_id = egui::Id::unique("lightcraft.dialog.speculative-press");
     if craft::ui::runtime::measure::active(&ctx) {
+        if ctx.input(|i| i.pointer.any_pressed()) {
+            ctx.data_mut(|d| d.insert_temp(speculative_id, true));
+        }
         return;
+    }
+    let speculative = ctx.data(|d| d.get_temp::<bool>(speculative_id)).unwrap_or(false);
+    let released = ctx.input(|i| i.pointer.any_released());
+    let held = speculative && (released || ctx.input(|i| i.pointer.any_down()));
+    if speculative && (released || !held) {
+        ctx.data_mut(|d| d.remove_temp::<bool>(speculative_id));
     }
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
     let at_start = dlg.clone();
-    let raw_blocked = blocked || crate::panels::library_problem::blocks_dialog_input(app);
+    let mut raw_blocked = blocked || held || crate::panels::library_problem::blocks_dialog_input(app);
     let real = !host.is_sizing_pass() && !craft::ui::runtime::measure::active(&ctx);
     let t = Tokens::get(&ctx);
     let screen = ctx.content_rect();
@@ -403,13 +433,31 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         if settings { screen.height() - top - DIALOG_SCREEN_MARGIN - DIALOG_CHROME_GUESS } else { screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - DIALOG_CHROME_GUESS }
             .max(DIALOG_MIN_BODY);
     let id = dialog_id(&dlg);
+    // A press held from before this dialog was shown (on the dialog it replaced, or on the window under it) is not
+    // this dialog's either: its release must not land on what this dialog put under the pointer.
+    let shown_id = egui::Id::unique("lightcraft.dialog.shown-id");
+    let replaced = ctx.data(|d| d.get_temp::<egui::Id>(shown_id)) != Some(id);
+    ctx.data_mut(|d| d.insert_temp(shown_id, id));
+    let now = ctx.input(|i| i.time);
+    if replaced {
+        ctx.data_mut(|d| d.insert_temp(shown_id.with("at"), now));
+    }
+    // A click that opened the dialog may be the first of a double click: the bar's handle waits out that double click,
+    // so its second half is not taken as a double click on the bar (which zooms the window).
+    let settled = now - ctx.data(|d| d.get_temp::<f64>(shown_id.with("at"))).unwrap_or(now) > ctx.options(|o| o.input_options.max_double_click_delay);
+    if replaced && ctx.input(|i| i.pointer.any_down() && !i.pointer.any_pressed()) {
+        ctx.data_mut(|d| d.insert_temp(speculative_id, true));
+        raw_blocked = true;
+    }
     let widest_id = id.with("widest");
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
-    let width = dialog_width(&dlg).min(screen.width() - 2.0 * DIALOG_SCREEN_MARGIN).max(widest).max(1.0);
+    // (the body's width: the dialog's padding comes on top of it)
+    let room = screen.width() - 2.0 * DIALOG_SCREEN_MARGIN - DIALOG_PADDING;
+    let width = dialog_width(&dlg).min(room).max(widest).max(1.0);
     // As the old window did, the dialog starts at its width and grows to what its content needs, never to the
     // window's: a field that fills the width it is given fills the dialog's.
     let grown_id = id.with("grown");
-    let grown = ctx.data(|d| d.get_temp::<f32>(grown_id)).unwrap_or(0.0).min(screen.width() - 2.0 * DIALOG_SCREEN_MARGIN);
+    let grown = ctx.data(|d| d.get_temp::<f32>(grown_id)).unwrap_or(0.0).min(room);
     let max_width = width.max(grown);
     // before the dialog: drawing it closes a dropdown the key or click lands outside of
     let popup_was_open = egui::Popup::is_any_open(&ctx) || popup_open(&ctx);
@@ -434,7 +482,10 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         .id(id)
         .opened(Bind::bound(&mut open))
         .enabled(!raw_blocked)
-        .closable(false);
+        .closable(false)
+        // The dialog's own name field takes the focus when it opens (`dialog_field`); a dialog without one opens with
+        // nothing focused, so the first Tab reaches its first control, as before.
+        .initial_focus(craft::ui::runtime::focus::Initial::Keep);
     if !footer.buttons.is_empty() {
         let (buttons, can_now, picked) = (&mut footer.buttons, &can_now, &picked);
         let (ok, primary) = (footer.ok, footer.primary);
@@ -468,6 +519,18 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     if settings {
         dialog = dialog.first_place(egui::pos2(screen.center().x, screen.top() + top), egui::Align2::CENTER_TOP);
     }
+    // A covered dialog takes no keys: its focused field must not read the Escape or the typing meant for what covers it.
+    let withheld: Vec<egui::Event> = if raw_blocked {
+        ctx.input_mut(|input| {
+            let (keys, rest) = std::mem::take(&mut input.events)
+                .into_iter()
+                .partition(|event| matches!(event, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Ime(_) | egui::Event::Paste(_)));
+            input.events = rest;
+            keys
+        })
+    } else {
+        Vec::new()
+    };
     let output = dialog
         .show(host, |ui, _| {
             let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
@@ -476,6 +539,11 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
             }
             ui.set_min_width(width);
             ui.set_max_width(max_width);
+            if import {
+                // The review sizes its photo grid to the height it is given: give it the dialog's, not the endless
+                // height of a scrolling body.
+                ui.set_max_height((crate::import::DIALOG_SIZE[1] - DIALOG_CHROME_GUESS).min(body_max).max(DIALOG_MIN_BODY));
+            }
             ui.spacing_mut().item_spacing.y = 8.0;
             // (the import review and Print size their own lists to the dialog)
             fit_lists(ui, !import && !print, body_max, |ui| dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg));
@@ -488,6 +556,9 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
             can_now.set(Some(can_confirm(app, &dlg, informational)));
         })
         .output;
+    if !withheld.is_empty() {
+        ctx.input_mut(|input| input.events.extend(withheld));
+    }
     if !real {
         return;
     }
@@ -503,11 +574,12 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
-    if content_w > max_width + 0.5 {
+    // Grown once: content that fills whatever width it is given would otherwise widen the dialog every frame.
+    if content_w > max_width + 0.5 && ctx.data(|d| d.get_temp::<f32>(grown_id)).is_none() {
         ctx.data_mut(|d| d.insert_temp(grown_id, content_w));
         ctx.request_repaint();
     }
-    if !popup_was_open && let Some(band) = title_bar {
+    if !popup_was_open && settled && let Some(band) = title_bar {
         title_bar_handle(&ctx, band, window_rect);
     }
     // The startup dialog is recorded once it was presented, not when the logic tick picked it: a host that runs
@@ -585,14 +657,22 @@ fn below_title_bar(screen: egui::Rect, band: Option<egui::Rect>) -> egui::Rect {
 fn title_bar_handle(ctx: &egui::Context, band: egui::Rect, dialog: egui::Rect) {
     // (egui lifts an area that wasn't there the frame before above the rest: a handle drawn again as the pointer leaves
     // the dialog would sit over an open dropdown and take the press meant for its item)
-    if egui::Popup::is_any_open(ctx) || ctx.pointer_hover_pos().is_some_and(|p| dialog.contains(p)) {
+    if ctx.pointer_hover_pos().is_some_and(|p| dialog.contains(p) && band.contains(p)) {
+        // The pointer is on the dialog where it reaches into the bar: a press there is the dialog's, so the window
+        // may not move. (The bar's own empty area cannot tell: a framework modal is not a `Middle` panel over it.)
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("title_bar_window_movable"), (pass, false)));
+    }
+    if egui::Popup::is_any_open(ctx) || popup_open(ctx) || ctx.pointer_hover_pos().is_some_and(|p| dialog.contains(p)) {
         return;
     }
     let sides =
         if band.intersects(dialog) { [(band.min.x, dialog.min.x), (dialog.max.x, band.max.x)] } else { [(band.min.x, band.max.x), (0.0, 0.0)] };
     for (i, (from, to)) in sides.into_iter().enumerate().filter(|(_, (from, to))| to - from > 1.0) {
         let part = egui::Rect::from_x_y_ranges(from..=to, band.y_range());
-        egui::Area::new(egui::Id::unique("dialog-title-bar").with(i)).order(egui::Order::Foreground).fixed_pos(part.min).show(ctx, |ui| {
+        // (above the order the framework's dialogs are in: it lists its layers above every other area of their order,
+        // and egui gives the layers under its modal no hits)
+        egui::Area::new(egui::Id::unique("dialog-title-bar").with(i)).order(egui::Order::Tooltip).fixed_pos(part.min).show(ctx, |ui| {
             craft_window::title_bar::empty_area(ui, part);
         });
     }
@@ -1673,14 +1753,17 @@ fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     // A measuring or disabled run edits a copy only; the draft takes the real run's answer.
     let mut candidate = *dont_ask;
-    let shown = Checkbox::new(Bind::bound(&mut candidate)).id_salt("moveDontAsk").label(crate::i18n::tr("Don't ask again").to_owned()).show(ui);
+    let hint = crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on");
+    let shown = Checkbox::new(Bind::bound(&mut candidate))
+        .id_salt("moveDontAsk")
+        .label(crate::i18n::tr("Don't ask again").to_owned())
+        .tooltip(hint.to_owned())
+        .show(ui);
     if real && ui.is_enabled() {
         *dont_ask = candidate;
     }
     if real {
         crate::widgets::register_response("check:moveDontAsk", shown.response.rect, &shown.response);
-        let hint = crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on");
-        craft::ui::contract::tooltip::attach(&shown.response, &hint.to_owned().into());
     }
 }
 
@@ -1738,10 +1821,21 @@ pub(crate) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: b
         ])
         .built_with(crate::i18n::tr_format!("MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.", crate::theme::font_credits(app.chinese_font.is_some())));
     let dialog = AboutDialog::new(&info, credits::framework_credits());
-    #[cfg(test)]
-    let (out, _) = craft::ui::runtime::inspect::record(root, egui::Id::unique("about-app-contract"), |ui| dialog.show(ui));
-    #[cfg(not(test))]
-    let out = dialog.show(root);
+    let ctx = root.ctx().clone();
+    let (out, record) = craft::ui::runtime::inspect::record(root, egui::Id::unique("about-app-contract"), |ui| {
+        craft::ui::runtime::overlay::stack_place(&ctx, STACK_DIALOG, egui::Id::unique("lightcraft.dialog"), || dialog.show(ui))
+    });
+    // The framework dialog's window and its OK under the names every dialog has, with their real responses.
+    if !root.is_sizing_pass() && !craft::ui::runtime::measure::active(root.ctx()) {
+        crate::widgets::register_response("dialog:window", out.response.rect, &out.response);
+        let ok = [crate::i18n::tr("OK"), crate::i18n::tr("Close")];
+        if let Some(element) = record.iter().flat_map(|record| record.elements.iter()).find(|element| {
+            element.component == "Button" && element.part.is_none() && element.facts.as_ref().and_then(|facts| facts.name.as_deref()).is_some_and(|name| ok.contains(&name))
+        }) && let Some(response) = root.ctx().read_response(element.id)
+        {
+            crate::widgets::register_response("button:dialogOk", element.rect, &response);
+        }
+    }
     if let Some(url) = out.link {
         let _ = crate::links::open(app, &url);
     }

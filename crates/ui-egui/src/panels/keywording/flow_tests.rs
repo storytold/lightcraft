@@ -281,10 +281,10 @@ fn tab_between_add_and_painter_preserves_distinct_drafts_and_native_caret_edits(
     let before: Vec<_> = photos.iter().map(|id| keywords(&h, *id)).collect();
     let undo = h.app.session.undo.len();
     type_keywords(&mut h, "kept add draft");
-    // The three view choices are now real keyboard stops between the two text fields.
+    // The four view choices are real keyboard stops between the two text fields.
     // Follow their displayed order and assert the actual focused owner at every step.
     let through_views = |h: &mut Headless, reverse: bool| {
-        let names = if reverse { ["willExport", "containing", "keywords"] } else { ["keywords", "containing", "willExport"] };
+        let names = if reverse { ["willExport", "containing", "keywords", "enter"] } else { ["enter", "keywords", "containing", "willExport"] };
         for name in names {
             ask(h, "ui.key", json!({"key": "Tab", "shift": reverse}));
             let key = format!("keywordView:{name}");
