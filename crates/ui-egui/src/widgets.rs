@@ -856,7 +856,7 @@ pub mod progress;
 pub mod rating;
 mod icon_button;
 mod slider;
-pub(crate) use slider::{Row as SliderRow, field as slider_field, slider_salted};
+pub(crate) use slider::{Row as SliderRow, field as slider_field, slider_row, slider_salted};
 pub use slider::{SliderOut, slider};
 pub use icon_button::IconButtonOutput;
 mod text_button;

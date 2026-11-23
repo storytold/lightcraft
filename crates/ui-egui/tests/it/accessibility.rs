@@ -16,7 +16,10 @@ fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp>
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
-    let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
+    // the framework runtime routes keys and AccessKit actions; it installs before the first pass, as the app's host does
+    let mut builder = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx));
     // text such as "▸" in the Reference view's hint has its glyph only in the craft-fonts faces (releases
     // always have them): without them it is drawn as a box, which this audit of names doesn't need
     if lightcraft_engine::CRAFT_FONTS.is_empty() {

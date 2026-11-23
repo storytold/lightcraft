@@ -10,7 +10,7 @@ use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
+use crate::widgets::{divider, icon_button, one_line, register, text_button};
 
 #[path = "mask_controls.rs"]
 pub(in crate::panels) mod controls;
@@ -688,7 +688,8 @@ fn lens_blur_block(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_de
         });
         for s in LENS_BLUR {
             let v = local_get(a, s.id);
-            let out = slider(ui, s, v, true, None);
+            // a draft or gesture belongs to the photo and mask it began on
+            let out = crate::widgets::slider_salted(ui, s, v, true, None, egui::Id::new((app.session.active(), m.id)));
             apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
         }
     });

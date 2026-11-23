@@ -141,7 +141,7 @@ pub(super) fn apply_pending(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub(super) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &DevelopSettings, id: &str, enabled: bool) {
     let Some(spec) = controls::find(id) else { return };
     let value = controls::get(settings, id).unwrap_or(spec.default);
-    let row = crate::widgets::SliderRow { spec, value, enabled, label: None, salt: egui::Id::new(app.session.active()) };
+    let row = crate::widgets::SliderRow { spec, value, enabled, label: None, salt: egui::Id::new(app.session.active()), record: None };
     let shown = crate::widgets::slider_field(ui, &row);
     if let Some(track) = shown.track
         && let Some(index) = TONAL.iter().position(|id| *id == spec.id)

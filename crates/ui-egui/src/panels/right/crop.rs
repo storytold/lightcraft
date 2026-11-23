@@ -811,7 +811,16 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // find(indexed id) returns a TEMPLATE spec: retain the old unindexed
     // sliderLabel:/slider:/sliderValue: aliases; only the command payload is indexed.
     let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64| {
-        let out = crate::widgets::slider_salted(ui, spec, value, interactive, None, egui::Id::new(("red-eye-field", selected, epoch)));
+        // the record key callers read the row's parts under
+        let row = crate::widgets::SliderRow {
+            spec,
+            value,
+            enabled: interactive,
+            label: None,
+            salt: egui::Id::new(("red-eye-field", selected, epoch)),
+            record: Some(egui::Id::unique(("red-eye-field-record", id, i, spec.id))),
+        };
+        let out = crate::widgets::slider_row(ui, &row);
         (out, out.cancelled)
     };
     for k in ["pupilSize", "darken"] {

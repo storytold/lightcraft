@@ -3165,7 +3165,8 @@ fn reset_button_wins_over_an_active_numeric_draft() {
     }
     ask(&mut h, "ui.clickWidget", json!({"id": "sliderValue:light.exposure"}));
     ask(&mut h, "ui.text", json!({"text": "2.0"}));
-    assert_eq!(h.view.ctx.memory(|m| m.focused()), Some(crate::text_field::id("sliderField:light.exposure")));
+    // the framework value field's text part holds the focus while the draft is typed
+    assert!(craft::ui::runtime::focus::focused_rec(&h.view.ctx).is_some_and(|rec| rec.stop.text), "the value field has the focus");
     assert!(h.app.widgets.iter().any(|(id, _)| id == "sliderField:light.exposure"));
     assert!(h.painted_text().iter().any(|text| text == "2.0"), "the replacement draft must be visible before Reset");
     assert_eq!(h.app.session.develop_of(active).unwrap().light.exposure, 0.75, "the draft is not committed yet");
