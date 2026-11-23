@@ -995,7 +995,8 @@ fn library_recovery_actions_155_quit_requests_only_the_headless_host() {
 #[test]
 fn library_recovery_sdk_155_four_unique_real_foreground_responses_preserve_height_and_labels() {
     let h = recovery_actions_155_fixture("never-open-this-fixture", true, true);
-    let foreground = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("library-problem"));
+    // The error window is a framework dialog: its buttons are on the dialog's own modal layer.
+    let foreground = crate::panels::library_problem::window_layer(true);
     let mut ids = std::collections::HashSet::new();
     let text = h.painted_text().join("\n");
     for (id, label) in [

@@ -65,36 +65,32 @@ pub fn list_height(ui: &egui::Ui, preferred: f32) -> f32 {
     height
 }
 
-/// A dialog's options: in a vertical scroll area at most `max_height` tall when `scroll` names
-/// the dialog (it shrinks to its content, so a dialog that fits looks as it would without it;
-/// each dialog keeps a scroll position of its own), drawn directly otherwise. Returns the height
-/// they took when scrolled.
-pub(super) fn dialog_body(ui: &mut egui::Ui, scroll: Option<&str>, max_height: f32, body: impl FnOnce(&mut egui::Ui)) -> Option<f32> {
-    let Some(name) = scroll else {
+/// A dialog's options: when `fit` names the dialog, the lists in it that scroll on their own give up the room it
+/// needs to fit `max_height`, as measured on the previous frame (so on a short window a list gets shorter rather than
+/// scrolling inside the scrolling dialog: the framework dialog scrolls what is still too tall). Drawn directly
+/// otherwise. Measuring runs only draw.
+pub(super) fn fit_lists(ui: &mut egui::Ui, fit: bool, max_height: f32, body: impl FnOnce(&mut egui::Ui)) {
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    if !real {
+        body(ui);
+        return;
+    }
+    if !fit {
         ui.data_mut(|d| d.remove_temp::<f32>(list_shrink_id()));
         body(ui);
-        return None;
-    };
+        return;
+    }
     ui.data_mut(|d| d.insert_temp(list_applied_id(), 0.0_f32));
     let top = ui.cursor().top();
-    // (an auto-sized window offers its content last frame's height; the minimum lets a dialog
-    // that grows take its full height at once, and the area still shrinks to fit its content)
-    let out = egui::ScrollArea::vertical()
-        .id_salt(("dialog-body", name))
-        .max_height(max_height)
-        .min_scrolled_height(max_height)
-        .auto_shrink([true, true])
-        .show(ui, body);
+    body(ui);
     // what the lists that scroll on their own gave up this frame, and what they should next frame
     let applied = ui.data(|d| d.get_temp::<f32>(list_applied_id())).unwrap_or(0.0);
     let was = ui.data(|d| d.get_temp::<f32>(list_shrink_id())).unwrap_or(0.0);
-    let shrink = (out.content_size.y + applied - max_height).max(0.0);
+    let shrink = (ui.min_rect().bottom() - top + applied - max_height).max(0.0);
     if (shrink - was).abs() > 0.5 {
         ui.data_mut(|d| d.insert_temp(list_shrink_id(), shrink));
         ui.ctx().request_repaint();
     }
-    // (the room the scroll area took: its `inner_rect` can be taller than what it allocated)
-    Some(ui.min_rect().bottom() - top)
 }
 
 /// Open a one-field dialog that runs `command` with `params` + `{key: typed value}`.

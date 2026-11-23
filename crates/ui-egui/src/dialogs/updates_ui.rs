@@ -2,16 +2,11 @@
 
 use serde_json::Value;
 
-#[cfg(target_arch = "wasm32")]
-use craft::ui::buttons::Button;
-#[cfg(not(target_arch = "wasm32"))]
-use craft::ui::contract::{Bind, ShowContainer as _};
-use craft::ui::contract::{Props as _, Show as _};
-#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::Dialog;
 #[cfg(not(target_arch = "wasm32"))]
-use craft::ui::display::{Spinner, Text};
-#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::display::Spinner;
+use craft::ui::display::Text;
 use craft::ui::sections::{DialogRole, FooterButton};
 
 use crate::LightcraftApp;
@@ -303,34 +298,39 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 
     #[cfg(target_arch = "wasm32")]
-    if app.updates_rt.manual_window_open {
-        let mut open = true;
-        let shown = egui::Window::new(crate::i18n::tr("LightCraft Updates"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .show(ctx, |ui| {
-                if let Some(msg) = &app.updates_rt.status_message {
-                    ui.label(msg);
-                }
-                ui.add_space(8.0);
-                let shown = Button::new(crate::i18n::tr("OK").to_owned()).id_salt("updatesWebOk").show(ui);
-                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
-                    crate::widgets::register_response("button:updatesWebOk", shown.response.rect, &shown.response);
-                    if shown.clicked() {
-                        app.updates_rt.manual_window_open = false;
-                    }
-                }
-            });
-        if let Some(w) = &shown {
-            crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Window);
-        }
-        if !open {
-            app.updates_rt.manual_window_open = false;
-        }
+    if app.updates_rt.manual_window_open && show_web_result(ctx, app.updates_rt.status_message.as_deref()) {
+        app.updates_rt.manual_window_open = false;
     }
+}
+
+/// The browser's answer to a requested check, in a modeless framework dialog with one OK: true once it is dismissed
+/// (OK, Escape or Enter).
+#[cfg(target_arch = "wasm32")]
+fn show_web_result(ctx: &egui::Context, message: Option<&str>) -> bool {
+    let mut dismissed = false;
+    egui::Area::new(egui::Id::unique("lightcraft.updates.host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
+        let ok = crate::i18n::tr("OK").to_owned();
+        let (output, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lightcraft.updates.inspect"), |ui| {
+            Dialog::new(crate::i18n::tr("LightCraft Updates").to_owned())
+                .id_salt("lightcraft.updates.web")
+                .opened(Bind::given(true))
+                .buttons([FooterButton::new(ok.clone(), DialogRole::Accept)])
+                .close_on_enter(true)
+                // the rest of the application stays reachable, as before
+                .modeless()
+                .show(ui, |ui, _| {
+                    if let Some(message) = message {
+                        Text::new(message.to_owned()).show(ui);
+                    }
+                })
+                .output
+        });
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
+            crate::dialogs::register_footer_buttons(&output.response, None, record.as_deref(), &[(ok, "button:updatesWebOk".to_owned())]);
+            dismissed = output.closed.is_some() || output.picked.is_some();
+        }
+    });
+    dismissed
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
