@@ -684,3 +684,28 @@ fn star_and_flag_filters_narrow_all_photographs() {
     click(&mut h, "button:filterClear");
     assert_eq!(h.app.session.visible_cloned().len(), all);
 }
+
+/// Issue #1385: with no photo to show, the Versions and History panels' "No photo selected" line
+/// sits in the margins their rows have — where Create Version starts — not against the column's edge.
+#[test]
+fn the_no_photo_line_starts_where_the_panels_rows_do() {
+    let mut h = demo();
+    let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"));
+    let first = h.app.session.visible_cloned().first().copied().expect("the demo library has photos");
+    h.app.session.selection = lcc_engine::Selection { ids: vec![first], active: Some(first) };
+    h.step();
+    h.step();
+    let row_left = rect(&h, "button:versionCreate").left();
+    h.app.session.selection = Default::default();
+    h.step();
+    h.step();
+    assert!(!has(&h, "button:versionCreate"), "no photo: no version rows");
+    let versions = rect(&h, "label:noPhoto:versions");
+    let edge = rect(&h, "classicPanel:versions").left();
+    assert!(versions.left() >= edge + 8.0, "the line is clear of the column's edge: {} vs {edge}", versions.left());
+    assert!((versions.left() - row_left).abs() < 1.0, "the line starts where the rows do: {} vs {row_left}", versions.left());
+    // History's line, when its panel is in this column too, lines up with it
+    if has(&h, "label:noPhoto:history") {
+        assert!((rect(&h, "label:noPhoto:history").left() - versions.left()).abs() < 1.0);
+    }
+}

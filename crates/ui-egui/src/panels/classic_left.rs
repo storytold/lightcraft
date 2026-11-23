@@ -224,13 +224,13 @@ fn columns(app: &mut LccApp, ui: &mut egui::Ui, viewport: Rect, side: &[PanelId]
             }
             PanelId::Versions => {
                 if crate::panels::classic::header(app, ui, p, side).1 {
-                    versions_or_history(app, ui, crate::panels::right::versions_body);
+                    versions_or_history(app, ui, "versions", crate::panels::right::versions_body);
                     ui.add_space(6.0);
                 }
             }
             PanelId::History => {
                 if crate::panels::classic::header(app, ui, p, side).1 {
-                    versions_or_history(app, ui, crate::panels::right::history_body);
+                    versions_or_history(app, ui, "history", crate::panels::right::history_body);
                     ui.add_space(6.0);
                 }
             }
@@ -251,16 +251,16 @@ fn columns(app: &mut LccApp, ui: &mut egui::Ui, viewport: Rect, side: &[PanelId]
     ui.add_space(10.0);
 }
 
-/// The Versions or History rows of the photo being edited; with no photo, what to do about it.
-fn versions_or_history(app: &mut LccApp, ui: &mut egui::Ui, rows: fn(&mut LccApp, &mut egui::Ui, lcc_catalog::PhotoId)) {
+/// The Versions or History rows of the photo being edited; with no photo, a line saying so (`label:noPhoto:{panel}`).
+fn versions_or_history(app: &mut LccApp, ui: &mut egui::Ui, panel: &str, rows: fn(&mut LccApp, &mut egui::Ui, lcc_catalog::PhotoId)) {
     match app.session.active() {
         Some(id) => rows(app, ui, id),
-        None => {
+        // in the rows' own margins, not against the column's edge (issue #1385)
+        None => crate::panels::right::padded(ui, |ui| {
             let t = crate::theme::Tokens::get(ui.ctx());
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(crate::i18n::tr("No photo selected")).color(t.text_dim));
-            ui.add_space(4.0);
-        }
+            let r = ui.label(egui::RichText::new(crate::i18n::tr("No photo selected")).color(t.text_dim));
+            crate::widgets::register(ui.ctx(), format!("label:noPhoto:{panel}"), r.rect);
+        }),
     }
 }
 

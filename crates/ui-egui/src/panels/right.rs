@@ -257,7 +257,9 @@ pub fn label_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.painter().text(pos2(r.left() + 110.0, r.center().y), Align2::LEFT_CENTER, value, t.font(12.5), t.text_label);
 }
 
-fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+/// A panel body's margins: what the Versions and History rows sit in, and what a message standing in for them takes
+/// too, so it starts where they would (issue #1385).
+pub(crate) fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 6, bottom: 6 }, 3, 3)).show(ui, add);
 }
 
