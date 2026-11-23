@@ -421,6 +421,9 @@ impl Headless {
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.events.is_empty()
+            // a swipe's glide moves the grid for a second after the finger lifts: a test that
+            // reads a widget's rect meanwhile would tap where it was, not where it is
+            || self.app.ui.modern.gesture_busy()
             || marketplace_busy()
     }
 

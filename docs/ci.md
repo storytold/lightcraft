@@ -331,6 +331,8 @@ A test that can't run here calls `lcc_testkit::skip!(Need, "why")`; `cargo xtask
 `target/ci/report.json` and `summary.md`. Timing probes and benchmarks are not `#[ignore]`d: they start with
 `if !lcc_testkit::probe("what") { return; }`, which records a `probe` skip unless `<PREFIX>_PROBES=1` is set. Run them
 in release, for example `<PREFIX>_PROBES=1 cargo test --release -p lcc-pipeline --lib bench_ -- --nocapture`.
+The nightly skip gate (`cargo xtask skips check`) does not count `probe` skips: they are opt-in by design, not a
+missing corpus, font or GPU.
 
 ## Dependency updates
 

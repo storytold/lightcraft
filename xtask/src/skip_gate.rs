@@ -92,10 +92,17 @@ pub fn parse_caps(text: &str) -> Result<BTreeMap<String, usize>, String> {
     Ok(caps)
 }
 
-/// The needs whose skips exceed their cap: (need, skips, cap). A need without a cap allows none.
+/// Needs the gate never counts: a `probe` skip is an opt-in timing probe or benchmark
+/// (`lcc_testkit::probe`) that runs only with `<PREFIX>_PROBES=1`, not a test that lost its data or
+/// hardware, so how many there are says nothing about the corpus run.
+pub const UNGATED: &[&str] = &["probe"];
+
+/// The needs whose skips exceed their cap: (need, skips, cap). A need without a cap allows none;
+/// [`UNGATED`] needs are ignored.
 pub fn over_caps(counts: &BTreeMap<String, usize>, caps: &BTreeMap<String, usize>) -> Vec<(String, usize, usize)> {
     counts
         .iter()
+        .filter(|(need, _)| !UNGATED.contains(&need.as_str()))
         .filter_map(|(need, &n)| {
             let cap = caps.get(need).copied().unwrap_or(0);
             (n > cap).then(|| (need.clone(), n, cap))
@@ -110,7 +117,7 @@ fn render_caps(counts: &BTreeMap<String, usize>) -> String {
          # Written by `cargo xtask skips write` from a green nightly's report; lower caps by hand as\n\
          # tests stop skipping, never raise one without saying why in the commit.\n\n[max]\n",
     );
-    for (need, n) in counts {
+    for (need, n) in counts.iter().filter(|(need, _)| !UNGATED.contains(&need.as_str())) {
         s.push_str(&format!("{need} = {n}\n"));
     }
     s
@@ -135,6 +142,12 @@ mod tests {
         let over = over_caps(&counts, &caps);
         let needs: Vec<&str> = over.iter().map(|o| o.0.as_str()).collect();
         assert_eq!(needs, ["fonts", "gpu"]);
+    }
+
+    #[test]
+    fn opt_in_probe_skips_are_not_gated() {
+        let counts = counts(&report(&["probe", "probe"])).unwrap();
+        assert!(over_caps(&counts, &BTreeMap::new()).is_empty());
     }
 
     #[test]

@@ -76,9 +76,11 @@ fn a_swipe_scrolls_the_grid_without_picking_or_dragging_a_photo() {
     assert_eq!(h.app.ui.module, ModuleId::Library, "a swipe opens nothing");
     assert_eq!(h.app.session.selection.ids, selected, "a swipe picks nothing");
     assert!(h.app.ui.dragging_photos.is_none(), "a swipe drags no photos");
-    // a tap still opens the photo under it
+    // a tap still opens the photo under it: on the part of the cell the grid shows (a cell cut
+    // off at the grid's top has its centre under the bar above it)
     let (cell, id) = first_thumb(&h);
-    ask(&mut h, "ui.clickWidget", json!({"id": cell}));
+    let shown = rect(&h, &cell).unwrap().intersect(rect(&h, "grid:scroll").unwrap()).center();
+    ask(&mut h, "ui.click", json!({"x": shown.x, "y": shown.y}));
     assert_eq!(h.app.ui.module, ModuleId::Develop);
     assert_eq!(h.app.session.active().map(|p| p.0), Some(id));
 }
