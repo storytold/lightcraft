@@ -488,67 +488,68 @@ pub(crate) fn apply_completion(app: &mut LightcraftApp, completion: PromptComple
     }
 }
 
-/// The framework role of a prompt button: the answer Return picks is the accepting one; quitting
-/// is destructive; Cancel is the dialog's cancel.
-fn role(choice: Choice) -> craft::ui::sections::DialogRole {
-    use craft::ui::sections::DialogRole;
-    match choice {
-        Choice::Ok => DialogRole::Accept,
-        Choice::QuitAnyway => DialogRole::Destructive,
-        Choice::Cancel => DialogRole::Cancel,
-        Choice::Retry | Choice::Settings => DialogRole::Other,
-    }
-}
-
 /// Draw one modal prompt, a framework alert dialog over a scrim, and return the index of the chosen
-/// button. Escape, and Return in a prompt with no accepting button (a quit prompt), give the safe
-/// Cancel/OK; a sizing pass is discarded so the first interactive pass has settled geometry.
+/// button. The safe Cancel/OK takes the keyboard focus, so Return and Space press it; Escape gives
+/// it too. A sizing pass is discarded so the first interactive pass has settled geometry.
 fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&str, &str, Choice)], input: &mut PromptInput) -> Option<usize> {
     use craft::ui::contract::{Bind, Props as _, ShowContainer as _};
     use craft::ui::dialog::Dialog;
+    use craft::ui::runtime::focus::{self, FocusTarget};
     use craft::ui::runtime::overlay::Backdrop;
-    use craft::ui::sections::FooterButton;
+    use std::cell::{Cell, RefCell};
     let t = Tokens::get(ctx);
     let last = buttons.len().checked_sub(1)?;
     input.drawn = true;
     let cancel_index = buttons.iter().position(|(_, _, choice)| matches!(choice, Choice::Cancel | Choice::Ok)).unwrap_or(last);
     let mut chosen = input.activate.take().filter(|index| *index <= last);
-    let labels: Vec<String> = buttons.iter().map(|(_, label, _)| crate::i18n::tr(label).to_string()).collect();
-    let footer: Vec<FooterButton> = buttons.iter().zip(&labels).map(|((_, _, choice), label)| FooterButton::new(label.clone(), role(*choice))).collect();
-    let dialog_id = egui::Id::unique(id);
-    // The dialog mounts its own modal layer; this area only gives it a parent `Ui`.
-    egui::Area::new(egui::Id::unique((id, "host"))).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
-        let (output, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique((id, "inspect")), |ui| {
-            Dialog::new(crate::i18n::tr(title).to_owned())
-                .id(dialog_id)
-                .opened(Bind::given(true))
-                .closable(false)
-                .backdrop(Backdrop::Scrim)
-                .buttons(footer)
-                .close_on_enter(true)
-                .show(ui, |ui, _| {
-                    // The first layout of a new layer is a sizing pass: finish its real hit areas in this same frame.
-                    if ui.is_sizing_pass() {
-                        ctx.request_discard("notice prompt: settle its buttons before input");
-                    }
-                    // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-                    ui.set_width(420.0);
-                    ui.spacing_mut().item_spacing.y = 8.0;
-                    ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
-                })
-                .output
-        });
+    let specs: Vec<crate::dialogs::FooterSpec> = buttons
+        .iter()
+        .map(|(bid, label, _)| crate::dialogs::FooterSpec { label: crate::i18n::tr(label).to_string(), name: format!("button:{bid}"), enabled: true, primary: false })
+        .collect();
+    let picked = Cell::new(None);
+    let responses: RefCell<Vec<egui::Response>> = RefCell::new(Vec::new());
+    crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
+        let output = Dialog::new(crate::i18n::tr(title).to_owned())
+            .id(egui::Id::unique(id))
+            .opened(Bind::given(true))
+            .closable(false)
+            .backdrop(Backdrop::Scrim)
+            .footer(|ui, _| {
+                let (clicked, shown) = crate::dialogs::footer_button_responses(ui, id, &specs);
+                if clicked.is_some() {
+                    picked.set(clicked);
+                }
+                if !shown.is_empty() {
+                    *responses.borrow_mut() = shown;
+                }
+            })
+            .show(ui, |ui, _| {
+                // The first layout of a new layer is a sizing pass: finish its real hit areas in this same frame.
+                if ui.is_sizing_pass() {
+                    ctx.request_discard("notice prompt: settle its buttons before input");
+                }
+                // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
+                ui.set_width(420.0);
+                ui.spacing_mut().item_spacing.y = 8.0;
+                ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
+            })
+            .output;
         if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
             return;
         }
-        // The buttons' real access nodes are what a screen reader targets.
-        let names: Vec<(String, String)> = buttons.iter().zip(&labels).map(|((bid, _, _), label)| (label.clone(), format!("button:{bid}"))).collect();
-        let layer = crate::dialogs::framework_dialog_layer(dialog_id);
-        input.button_ids = crate::dialogs::register_footer_buttons(&output.response, Some(layer), record.as_deref(), &names);
+        let responses = responses.borrow();
+        // The real response ids are the AccessKit nodes a screen reader targets.
+        input.button_ids = specs.iter().zip(responses.iter()).map(|(spec, response)| (spec.name.clone(), response.id)).collect();
+        // The safe Cancel/OK starts focused, and takes the focus back while nothing in the prompt has it.
+        if let Some(safe) = responses.get(cancel_index)
+            && !responses.iter().any(egui::Response::has_focus)
+        {
+            focus::request(ctx, FocusTarget::Id(safe.id));
+        }
         crate::widgets::announce_dialog(ctx, &output.response, crate::widgets::Modal::Alert);
         crate::widgets::describe_dialog(ctx, &output.response, text);
         if chosen.is_none() {
-            chosen = output.picked.filter(|index| *index <= last).or(output.closed.map(|_| cancel_index));
+            chosen = picked.get().filter(|index| *index <= last).or(output.closed.map(|_| cancel_index));
         }
     });
     if chosen.is_some() {

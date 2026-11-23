@@ -140,8 +140,8 @@ impl Fixture {
             // Presence is not liveness: the SDK keeps a closed menu body for its exit fade.
             // any_open excludes exiting layers, unlike locator publication or overlay::is_open.
             assert!(
-                !craft::ui::runtime::overlay::any_open(&self.ctx, craft::ui::runtime::overlay::OpenFilter::Any),
-                "no active SDK popup remains after cancellation"
+                !crate::dialogs::popup_open(&self.ctx),
+                "no active SDK popup remains above the dialog after cancellation"
             );
         }
         assert_eq!(self.app.ui.dialog, Some(crate::state::Dialog::ViewOptions), "child cancellation must not close parent");

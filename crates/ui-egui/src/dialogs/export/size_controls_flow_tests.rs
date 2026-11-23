@@ -184,7 +184,8 @@ impl Review {
         }
         self.key(Key::Enter);
         assert_eq!(self.size().1.mode, mode, "the real compact SDK Select picked the intended mode");
-        assert!(!craft::ui::runtime::overlay::any_open(&self.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
+        // (the dialog is a framework layer itself: no popup stays above it)
+        assert!(!crate::dialogs::popup_open(&self.ctx));
         assert!(self.app.ui.toast.is_none(), "dropdown Enter must not attempt Export");
     }
     fn unchanged_document(&self) -> Value {

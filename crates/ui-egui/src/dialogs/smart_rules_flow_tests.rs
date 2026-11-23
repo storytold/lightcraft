@@ -161,7 +161,8 @@ impl Review {
     fn choose(&mut self, face: &str, item: &str) {
         self.click(face);
         self.click(item);
-        assert!(!craft::ui::runtime::overlay::any_open(&self.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
+        // (the dialog is a framework layer itself: no popup stays above it)
+        assert!(!crate::dialogs::popup_open(&self.ctx));
     }
     fn field(&mut self, salt: &str, group: Option<&str>, field: &str) {
         self.click(&format!("ruleField:{salt}"));
@@ -394,10 +395,10 @@ fn smart_rules_sdk_name_child_menu_escape_dismisses_only_the_popup_and_retains_t
     let before = r.document();
     r.replace_text("field:smartName", "Keep while menu closes");
     r.click("ruleMatch:rules");
-    assert!(craft::ui::runtime::overlay::any_open(&r.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
+    assert!(crate::dialogs::popup_open(&r.ctx));
     let draft = r.draft().clone();
     r.key(Key::Escape);
-    assert!(!craft::ui::runtime::overlay::any_open(&r.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
+    assert!(!crate::dialogs::popup_open(&r.ctx));
     r.idle();
     assert_eq!(r.draft(), &draft, "child menu Escape cannot become Name/parent dismissal");
     assert_eq!(r.name(), "Keep while menu closes");
