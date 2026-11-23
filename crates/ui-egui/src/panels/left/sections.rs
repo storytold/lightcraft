@@ -125,8 +125,15 @@ pub(crate) fn section_drop_before(placed: &[PlacedSection], y: f32) -> Option<Si
 
 /// Remembers whether Escape was pressed this frame, before the framework's lists see the input.
 pub(super) fn note_escape(ui: &egui::Ui) {
-    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-    ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-escape"), esc));
+    // (the framework takes an Escape that ends a press out of the key events, but the key is still
+    // down: a key that went down since the last frame counts as pressed)
+    let down = ui.input(|i| i.key_down(egui::Key::Escape));
+    let was_down = ui.data(|d| d.get_temp::<bool>(egui::Id::unique("left-escape-down"))).unwrap_or(false);
+    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape)) || (down && !was_down);
+    ui.data_mut(|d| {
+        d.insert_temp(egui::Id::unique("left-escape"), esc);
+        d.insert_temp(egui::Id::unique("left-escape-down"), down);
+    });
 }
 
 /// Whether Escape was pressed this frame ([`note_escape`]).
@@ -255,6 +262,14 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
         // picked up by the pinned header, the drag starts inside the top edge (see `drag_auto_scroll`)
         ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-section-drag-from-pinned"), pinned));
         app.ui.dragging_section = Some(section);
+    }
+    // a drag whose press the framework ended (Escape takes it out of the key events) while the
+    // button is still down is given up
+    let held = egui::Id::unique(("left-header-held", salt.clone()));
+    let was_held = ui.data(|d| d.get_temp::<bool>(held)).unwrap_or(false);
+    ui.data_mut(|d| d.insert_temp(held, out.pressed));
+    if live && was_held && !out.pressed && app.ui.dragging_section == Some(section) && ui.input(|i| i.pointer.primary_down()) {
+        app.ui.dragging_section = None;
     }
     host_menu(ui, &salt, crate::i18n::tr(section.title()), out.response.as_ref(), request, |ui, _| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);

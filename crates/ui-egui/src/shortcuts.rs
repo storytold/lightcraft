@@ -342,7 +342,14 @@ fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static 
 fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     // A framework stop keeps the keys it uses (the runtime takes them); only one that types owns the rest.
     if craft::ui::runtime::focus::focused_rec(ctx).is_some() {
-        return crate::text_field::typing(ctx);
+        // A focused control that doesn't type still owns activation and navigation (Enter, Space, Tab and the
+        // arrows: a host target reads them from egui's input too); its letters and Escape stay the app's.
+        return crate::text_field::typing(ctx)
+            || ctx.input(|input| {
+                [Key::Enter, Key::Space, Key::Tab, Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown]
+                    .iter()
+                    .any(|key| input.key_pressed(*key))
+            });
     }
     if !ctx.egui_wants_keyboard_input() {
         // Escape drops egui focus before shortcuts run; keep the numeric edit's whole input batch.

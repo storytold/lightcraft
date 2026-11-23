@@ -239,22 +239,26 @@ fn import_thumbnail_slider_keeps_the_shared_keyboard_contract() {
     assert_eq!(review.checks(), checked);
 }
 
-/// Escape cancels the numeric draft before a later Escape dismisses the enclosing review.
+/// Enter applies the typed exact value and keeps the review open; Escape drops a typed draft and, by the framework
+/// dialog convention (Escape in a dialog field cancels the dialog), closes the review without applying it.
 #[test]
 fn import_thumbnail_exact_entry_escape_keeps_the_review_open() {
     let mut review = Review::new(1.0);
     let checked = review.checks();
-    for (key, expected) in [("Escape", 116.0), ("Enter", 240.0)] {
-        review.request("ui.clickWidget", json!({"id": "sliderValue:importThumbSize"}));
-        review.request("ui.key", json!({"key": "a", "cmd": true}));
-        review.request("ui.text", json!({"text": "240"}));
-        review.request("ui.key", json!({"key": key}));
-        assert!(review.h.settle(import_preview_settle_timeout()));
-        assert_eq!(review.h.app.ui.import_thumb_size, expected);
-        assert_eq!(review.checks(), checked, "the review remains open after exact-value editing");
-    }
+    review.request("ui.clickWidget", json!({"id": "sliderValue:importThumbSize"}));
+    review.request("ui.key", json!({"key": "a", "cmd": true}));
+    review.request("ui.text", json!({"text": "240"}));
+    review.request("ui.key", json!({"key": "Enter"}));
+    assert!(review.h.settle(import_preview_settle_timeout()));
+    assert_eq!(review.h.app.ui.import_thumb_size, 240.0);
+    assert_eq!(review.checks(), checked, "the review remains open after exact-value editing");
+    review.request("ui.clickWidget", json!({"id": "sliderValue:importThumbSize"}));
+    review.request("ui.key", json!({"key": "a", "cmd": true}));
+    review.request("ui.text", json!({"text": "300"}));
     review.request("ui.key", json!({"key": "Escape"}));
-    assert!(review.h.app.ui.dialog.is_none(), "a later Escape still dismisses the review");
+    assert!(review.h.settle(import_preview_settle_timeout()));
+    assert_eq!(review.h.app.ui.import_thumb_size, 240.0, "Escape never applies the typed draft");
+    assert!(review.h.app.ui.dialog.is_none(), "Escape in the field dismisses the review");
 }
 
 /// Every shipped language translates the slider and command labels, with the real control visible at high density.

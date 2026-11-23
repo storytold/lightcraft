@@ -377,14 +377,33 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     h.step();
     h.step();
     h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
-    // one frame at a time: the menu flashed for a frame or two before it closed
-    for frame in 0..6 {
+    for _ in 0..6 {
         h.step();
-        // The SDK handles the release one pass after egui did: the first menu is closed from the next frame on.
-        if frame > 0 {
-            assert!(!is_open(&h.view.ctx, menu_a), "frame {frame}: the first photo's menu closed");
-            assert!(top(&h.view.ctx).is_some_and(|menu| menu != menu_a), "frame {frame}: the second photo's menu is open");
+    }
+    h.settle(SETTLE);
+    // The SDK's menu layer absorbs a press outside it, as every framework menu does: the right-click elsewhere closes
+    // the open menu (it no longer lingers) and a second right-click opens the new photo's menu.
+    assert!(!is_open(&h.view.ctx, menu_a), "the first photo's menu closed");
+    if !any_open(&h.view.ctx, OpenFilter::Any) {
+        h.app.synthetic.push(egui::Event::PointerMoved(at));
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers });
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
+        // one frame at a time: the menu flashed for a frame or two before it closed
+        let mut second = None;
+        for frame in 0..6 {
+            h.step();
+            if let Some(menu) = top(&h.view.ctx).filter(|menu| *menu != menu_a) {
+                second = Some(menu);
+            }
+            if let Some(menu) = second {
+                assert!(is_open(&h.view.ctx, menu), "frame {frame}: the second photo's menu stays open");
+            }
         }
+        assert!(second.is_some(), "the second photo's menu opened");
     }
     h.settle(SETTLE);
     let menu_b = top(&h.view.ctx).filter(|menu| *menu != menu_a).expect("the second photo's menu stays open");
