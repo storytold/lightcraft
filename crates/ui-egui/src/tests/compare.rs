@@ -292,14 +292,37 @@ fn deleting_the_pinned_reference_stops_drawing_it_and_reentry_uses_a_live_photo(
 #[test]
 fn compare_zoom_window_tracks_the_zoomed_pane() {
     use crate::render::Slot;
-    let mut h = demo();
+    // a small window: a pane's whole-frame render is capped at four times the pane's size, so
+    // small panes want a zoom window at a low zoom, cut from a small frame (see below)
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [900.0, 600.0], 1.0);
     let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.app.ui.zoom = Zoom::Percent(100.0);
-    h.settle(SETTLE);
+    // 30 %: a zoom window is wanted once the drawn frame is 1.25 times the pane's whole-frame
+    // render, which follows the drawn size up to four times the pane (here about 1200 px). In this window
+    // that is first true at 30 %: the window is cut from an 1800 px frame (2.2 MP of procedural
+    // pixels). At 100 % in the 1400x900 window it was the photo's full 24 MP, minutes per pane on
+    // a loaded or instrumented runner.
+    h.app.ui.zoom = Zoom::Percent(30.0);
     let candidate = vis[1];
+    // exactly what is read below: the candidate pane's window, and its window and whole-frame
+    // textures, rendered for the current request (thumbnails elsewhere may still be rendering)
+    let ready = |h: &Headless| {
+        let id = lightcraft_catalog::PhotoId(candidate);
+        let current = |slot: Slot| {
+            h.app.renderer.textures.get(&slot).is_some_and(|t| t.photo == id && Some(t.key) == h.app.renderer.wanted(slot))
+                && !h.app.renderer.is_pending(slot)
+        };
+        h.app.compare_windows[1].is_some_and(|w| w.photo == id) && current(Slot::CompareRegion(1)) && current(Slot::Compare(1))
+    };
+    assert!(
+        h.step_until(SETTLE, ready),
+        "the candidate pane's zoom window and whole-frame render arrive: window {:?}, pending {:?}",
+        h.app.compare_windows[1],
+        h.app.renderer.pending_slots()
+    );
     let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(candidate)).cloned().expect("photo");
     let frame = lightcraft_pipeline::geometry::Frame::with_lens(
         photo.width.max(1) as usize,
