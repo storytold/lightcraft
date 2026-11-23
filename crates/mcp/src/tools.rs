@@ -364,7 +364,7 @@ pub fn command_tools(backend: &mut dyn Backend) -> Vec<Value> {
                 "name": command_tool_name(id),
                 "title": label,
                 "description": d,
-                "inputSchema": {"type": "object", "additionalProperties": true},
+                "inputSchema": crate::command_params::schema(c["params"].as_str().unwrap_or("")),
             }))
         })
         .collect()
@@ -606,7 +606,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let s = |k: &str| args.get(k).and_then(Value::as_str);
     if let Some(rest) = name.strip_prefix(COMMAND_TOOL_PREFIX) {
         // Command ids never contain `_`, so the mapping is reversible.
-        return ToolResult::from(exec(b, &rest.replace('_', "."), args.clone()));
+        // clients stringify arguments a free-form schema doesn't type (`"11"` for 11): undo that
+        return ToolResult::from(exec(b, &rest.replace('_', "."), crate::command_params::repair_args(args)));
     }
     match name {
         "list_commands" | "command_list" => {

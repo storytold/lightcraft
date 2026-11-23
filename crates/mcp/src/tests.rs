@@ -313,6 +313,40 @@ fn import_tool_moves_with_a_folder_template() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Clients send the untyped arguments of a `cmd_*` tool as strings (`{"id": "11"}`); the command
+/// still gets numbers, lists and objects, and text keys keep their text (an album named `2008`).
+#[test]
+fn command_tools_accept_stringified_arguments() {
+    let mut b = Headless::demo();
+    let r = call_tool(&mut b, "cmd_album_create", &json!({"name": "2008"}));
+    assert!(!r.is_error, "{r:?}");
+    let album = r.structured.as_ref().and_then(|v| v["id"].as_u64()).expect("album id");
+    assert!(b.session.catalog.albums().any(|a| a.name == "2008"), "the name stays text");
+    let photos: Vec<u64> = b.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    let r = call_tool(&mut b, "cmd_album_addPhotos", &json!({"id": album.to_string(), "ids": json!(photos).to_string()}));
+    assert!(!r.is_error, "{r:?}");
+    assert_eq!(r.structured.as_ref().map(|v| v["added"].clone()), Some(json!(2)));
+    let r = call_tool(&mut b, "cmd_catalog_query", &json!({"filter": json!({"album": album}).to_string(), "limit": "1"}));
+    assert!(!r.is_error, "{r:?}");
+    let v = r.structured.expect("query result");
+    assert_eq!(v["total"], 2, "the filter object reached the command: {v}");
+    assert_eq!(v["photos"].as_array().map(Vec::len), Some(1), "the limit number reached the command: {v}");
+}
+
+/// Each generated tool lists the keys its params doc names, typed where the doc is certain.
+#[test]
+fn command_tool_schemas_list_documented_keys() {
+    let mut b = Headless::demo();
+    let tools = crate::tool_definitions(&mut b, true);
+    let schema = |name: &str| tools.iter().find(|t| t["name"] == name).map(|t| t["inputSchema"].clone()).unwrap();
+    let s = schema("cmd_album_create");
+    assert_eq!(s["properties"]["name"]["type"], "string");
+    assert_eq!(s["properties"]["folder"]["type"], "boolean");
+    assert!(s["properties"]["parent"].is_object());
+    assert_eq!(s["additionalProperties"], true);
+    assert!(schema("cmd_album_addPhotos")["properties"]["id"].is_object());
+}
+
 #[test]
 fn command_tools_run_commands() {
     let mut b = Headless::demo();
