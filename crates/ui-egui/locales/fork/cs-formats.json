@@ -314,5 +314,6 @@
   "“{name}” added to Camera Profiles": "„{name}“ přidán do profilů fotoaparátu",
   "“{name}” has its old settings again": "„{name}“ má opět původní nastavení",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "„{name}“ je nová. Co z ní smějí mít ostatní zařízení synchronizující tento katalog?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}“ přebírá nastavení aktivní fotky. Název, skupina, místo a značky zůstávají."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}“ přebírá nastavení aktivní fotky. Název, skupina, místo a značky zůstávají.",
+  "★{n} at or above": "★{n} a výše"
 }

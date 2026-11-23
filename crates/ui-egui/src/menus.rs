@@ -2628,7 +2628,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         }
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
         "dialog.qualityScan" => {
-            let s = app.ui.quality_scan_settings.clone().unwrap_or_default();
+            let s = crate::panels::dialogs::QualityScanSettings::remembered(app);
             app.ui.dialog = Some(Dialog::QualityScanner {
                 scope: s.scope,
                 accepted: s.accepted,
@@ -2636,6 +2636,9 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 apply_flags: s.apply_flags,
                 rescan: s.rescan,
                 weights: s.weights,
+                auto_rate: s.auto_rate,
+                overwrite_metadata: s.overwrite_metadata,
+                star_breaks: s.star_breaks,
             });
             Ok(Value::Null)
         }

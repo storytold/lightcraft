@@ -340,5 +340,6 @@
   "“{name}” added to Camera Profiles": "”{name}” har lagts till i kameraprofiler",
   "“{name}” has its old settings again": "”{name}” har sina gamla inställningar igen",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "”{name}” är ny. Vad får de andra enheterna som synkar den här katalogen ha av den?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” tar det aktiva fotots inställningar. Namn, grupp, plats och markeringar behålls."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” tar det aktiva fotots inställningar. Namn, grupp, plats och markeringar behålls.",
+  "★{n} at or above": "★{n} eller fler"
 }

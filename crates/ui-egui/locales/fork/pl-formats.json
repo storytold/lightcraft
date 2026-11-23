@@ -314,5 +314,6 @@
   "“{name}” added to Camera Profiles": "Dodano „{name}” do profili aparatu",
   "“{name}” has its old settings again": "„{name}” ma znów dawne ustawienia",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "„{name}” jest nowa. Co mogą z niej mieć inne urządzenia synchronizujące ten katalog?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}” przejmuje ustawienia aktywnego zdjęcia. Nazwa, grupa, miejsce i oznaczenia zostają."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}” przejmuje ustawienia aktywnego zdjęcia. Nazwa, grupa, miejsce i oznaczenia zostają.",
+  "★{n} at or above": "★{n} i więcej"
 }

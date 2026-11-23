@@ -532,6 +532,73 @@ fn sil_workflow() {
     s.ok("library.sort", json!({"key": "captureDate"}));
     s.consistent();
 
+    // --- quality scan with autoRate (issue #1362): the scan writes star ratings the filter bar
+    // sees, and never onto the photos rated here by hand
+    // (the whole catalog, not the page in view: the filter bar at the end counts against it)
+    let before = s.ok("catalog.query", json!({"filter": {}, "limit": 100_000}));
+    let rating_of = |photos: &Value, id: u64| -> u64 {
+        photos["photos"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p["id"].as_u64() == Some(id))
+            .and_then(|p| p["rating"].as_u64())
+            .unwrap_or(0)
+    };
+    // (photos the user rated above — 5, 3, 3, 5 — and one the shoot left unrated, which a scan may rate;
+    // the fallback is only a last resort: that photo was rejected and a scan leaves that flag alone)
+    let mine: Vec<u64> = ids.iter().copied().filter(|id| rating_of(&before, *id) > 0).collect();
+    let unrated = ids.iter().copied().find(|id| rating_of(&before, *id) == 0).unwrap_or(ids[7]);
+    let mine_before: Vec<u64> = mine.iter().map(|id| rating_of(&before, *id)).collect();
+    // (breakpoints low enough that every score earns a star: the rating each photo takes is then
+    // definite, and the scan's answer can be checked against it; a test on a card no one has seen
+    // should not rest on how a procedural photo happens to score)
+    let breaks = [0, 1, 2, 3, 4];
+    let q = s.ok("photo.qualityScan", json!({"scope": "catalog", "wait": true, "rescan": true, "autoRate": true, "starBreaks": breaks}));
+    s.check(q["failed"].as_u64().unwrap_or(1) == 0, "the auto-rate rescan failed", &q.to_string());
+    let after = s.ok("catalog.query", json!({"filter": {}, "limit": 100_000}));
+    let mine_after: Vec<u64> = mine.iter().map(|id| rating_of(&after, *id)).collect();
+    s.check(mine_after == mine_before, "the scan overwrote a rating set by hand", &format!("{mine_before:?} -> {mine_after:?}"));
+    // a photo nobody rated takes the scan's stars instead
+    let star_of = |score: f64| breaks.iter().filter(|b| score >= **b as f64).count() as u64;
+    let unrated_after = rating_of(&after, unrated);
+    let row = q["photos"].as_array().cloned().unwrap_or_default().into_iter().find(|p| p["id"].as_u64() == Some(unrated));
+    s.check(row.is_some(), "the scan did not answer for the unrated photo", &format!("{unrated}: {q}"));
+    let row = row.unwrap_or(Value::Null);
+    let wanted = star_of(row["score"].as_f64().unwrap_or(-1.0));
+    s.check(wanted > 0, "the test's breakpoints did not earn a star", &format!("{row}"));
+    s.check(unrated_after == wanted, "an unrated photo did not take the stars its score asks for", &format!("{unrated_after} vs {row}"));
+    s.check(row["rating"].as_u64() == Some(unrated_after), "the scan's answer and the photo disagree", &format!("{unrated_after} vs {row}"));
+    // the rated count is the number of photos whose rating actually changed
+    let changed = after["photos"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| {
+            let id = p["id"].as_u64().unwrap_or(0);
+            p["rating"].as_u64().unwrap_or(0) != rating_of(&before, id)
+        })
+        .count() as u64;
+    let rated = q["rated"].as_u64().unwrap_or(u64::MAX);
+    s.check(rated == changed, "the rated count is not what changed", &format!("{rated} vs {changed}: {q}"));
+    // the filter bar sees the scan's ratings: at least one star shows exactly the photos the
+    // catalog's own query for that filter holds
+    let rated_filter = json!({"rating": 1, "ratingOp": "atLeast"});
+    let want_visible = s.ok("catalog.query", json!({"filter": rated_filter}))["total"].as_u64().unwrap_or(u64::MAX);
+    s.ok("library.filter", rated_filter);
+
+    let st = s.ok("library.state", json!({}));
+    s.check(
+        st["visibleCount"].as_u64() == Some(want_visible),
+        "the rating filter does not see the scan's ratings",
+        &format!("{want_visible}: {st}: {q}"),
+    );
+    s.check(want_visible >= 1, "the scan rated no photo at all", &q.to_string());
+    s.ok("library.clearFilter", json!({}));
+    s.consistent();
+
     // --- develop: auto, sliders, white-balance picker, crop, a mask, a preset
     s.ok("library.select", json!({"ids": [ids[0]], "active": ids[0]}));
     let r = s.request("ui.set", json!({"view": "detail"}));
