@@ -271,8 +271,22 @@ pub fn instance_flags(flags: wgpu::InstanceFlags, env: Option<&str>) -> wgpu::In
 /// `WGPU_VALIDATION_INDIRECT_CALL` read from the environment. The compute devices pass wgpu's defaults here,
 /// so this is where those variables reach them: a Vulkan driver that reports no conformance version, like
 /// Mesa's Dozen (the only one on WSL2), is listed only with `WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER=1`.
+///
+/// API validation (the Vulkan validation layer, the DX12 debug layer) is on only when `WGPU_VALIDATION`
+/// asks for it ([`without_implicit_validation`]).
 pub fn instance_flags_from_env(flags: wgpu::InstanceFlags) -> wgpu::InstanceFlags {
+    let flags = without_implicit_validation(flags, std::env::var_os("WGPU_VALIDATION").is_some());
     instance_flags(flags.with_env(), std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
+}
+
+/// `flags` without the API validation wgpu turns on by itself in debug builds, unless
+/// `WGPU_VALIDATION` is set (`asked`; its value then decides, in `with_env`). With validation on,
+/// wgpu loads whatever validation layer is installed: on Windows with the Vulkan SDK that is the C++
+/// `VkLayer_khronos_validation`, whose allocator crashed debug test processes with an access
+/// violation when a new render worker thread first recorded commands (Nightly 45122572113, the
+/// headless pixel-bounds test aborting with no panic). Release builds never had it.
+pub fn without_implicit_validation(flags: wgpu::InstanceFlags, asked: bool) -> wgpu::InstanceFlags {
+    if asked { flags } else { flags - (wgpu::InstanceFlags::VALIDATION | wgpu::InstanceFlags::GPU_BASED_VALIDATION) }
 }
 
 /// The graphics card `<PREFIX>_GPU_ADAPTER` asks for: (part of) its name, trimmed and in lower
@@ -606,6 +620,15 @@ mod tests {
         assert_eq!(instance_flags(base, Some("0")), F::DEBUG);
         assert_eq!(instance_flags(F::empty(), Some("1")), F::VALIDATION_INDIRECT_CALL);
         assert_eq!(instance_flags(F::empty(), None), F::empty());
+    }
+
+    /// Debug builds' implicit API validation is off unless `WGPU_VALIDATION` asks; other flags stay.
+    #[test]
+    fn api_validation_is_off_unless_asked_for() {
+        use wgpu::InstanceFlags as F;
+        let debug_build = F::VALIDATION | F::GPU_BASED_VALIDATION | F::DEBUG;
+        assert_eq!(without_implicit_validation(debug_build, false), F::DEBUG);
+        assert_eq!(without_implicit_validation(debug_build, true), debug_build);
     }
     use super::*;
 
