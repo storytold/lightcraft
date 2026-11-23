@@ -1098,7 +1098,7 @@ mod tests {
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ui.set_max_width(120.0);
                 let path = "Places|Portugal|Lisbon|Belém tower";
-                let _ = chip(ui, path, "Belém tower", true, true, 120.0);
+                let _ = chip(ui, path, "Belém tower", true, true, 120.0, path.to_owned());
             });
             out.textures_delta.clear();
             if let Some(update) = out.platform_output.accesskit_update.take() {

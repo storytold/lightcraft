@@ -378,10 +378,10 @@ fn value_row(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, caption: &str, checke
 }
 
 /// The click-zoom ratios as value rows; the command that sets the one that ran.
-fn click_zoom_rows(app: &LightcraftApp, ui: &mut egui::Ui) -> Option<serde_json::Value> {
+fn click_zoom_rows(current: u32, ui: &mut egui::Ui) -> Option<serde_json::Value> {
     let mut ran = None;
     for pct in crate::state::CLICK_ZOOMS {
-        if value_row(ui, ("click-zoom", pct), &format!("{}:1", pct / 100), app.ui.click_zoom == pct) {
+        if value_row(ui, ("click-zoom", pct), &format!("{}:1", pct / 100), current == pct) {
             ran = Some(json!({"ratio": pct / 100}));
         }
     }
@@ -487,7 +487,7 @@ fn view_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, opener: &egui::Response
         if compact_zoom && matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
             let label = crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100);
             Menu::submenu_row_enabled(ui, label, enabled, |ui, _| {
-                if let Some(params) = click_zoom_rows(app, ui) {
+                if let Some(params) = click_zoom_rows(app.ui.click_zoom, ui) {
                     pick = Some(("view.clickZoom", params));
                 }
             });
