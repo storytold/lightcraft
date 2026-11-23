@@ -390,32 +390,6 @@ impl RawImage {
         Ok(self.finish_demosaiced(rgb))
     }
 
-    /// [`Self::develop`] with white balance `wb` applied to the mosaic before directional demosaicing,
-    /// then divided back to camera RGB.
-    pub fn develop_balanced(&self, method: Method, wb: [f32; 3]) -> Result<Rgb32f> {
-        let mut craft = bridge::to_craft_raw_header(self);
-        craft.data = self.data.clone();
-        craft_develop::sensor::RawDevelopExt::develop_balanced(&craft, method, wb).map(bridge::from_craft_rgb32f)
-    }
-
-    /// [`Self::develop_balanced`] with a per-pixel sensor clip mask for [`highlight::reconstruct_masked`].
-    pub fn develop_balanced_masked(&self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
-        let mut craft = bridge::to_craft_raw_header(self);
-        craft.data = self.data.clone();
-        let (rgb, mask) = craft_develop::sensor::RawDevelopExt::develop_balanced_masked(&craft, method, wb, clip)?;
-        Ok((bridge::from_craft_rgb32f(rgb), mask))
-    }
-
-    /// Like [`Self::develop_balanced_masked`], moving `self.data` temporarily to avoid cloning raw samples.
-    pub fn take_develop_balanced_masked(&mut self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
-        let mut craft = bridge::to_craft_raw_header(self);
-        craft.data = std::mem::replace(&mut self.data, RawData::U16(Vec::new()));
-        let res = craft_develop::sensor::RawDevelopExt::develop_balanced_masked(&craft, method, wb, clip);
-        self.data = craft.data;
-        let (rgb, mask) = res?;
-        Ok((bridge::from_craft_rgb32f(rgb), mask))
-    }
-
     /// The last steps of [`Self::develop`] for camera RGB made some other way (a denoiser that demosaics too) from
     /// [`Self::normalized`]'s mosaic: apply `OpcodeList3`, then the default crop.
     pub fn finish_demosaiced(&self, mut rgb: Rgb32f) -> Rgb32f {

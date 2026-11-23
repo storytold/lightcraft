@@ -600,16 +600,3 @@ fn probe_rejects_junk() {
     assert!(decode(b"FUJIFILMCCD-RAW 0201").is_err());
     assert_eq!(decode(b"junk"), Err(RawError::NotRaw));
 }
-
-#[test]
-fn develop_balanced_and_masked_match_take_variant() {
-    let bytes = plain_cfa_tiff(1, le_words(&cfa_samples()), None);
-    let mut raw = decode(&bytes).expect("decode");
-    let wb = [2.5, 1.0, 1.6];
-    let balanced = raw.develop_balanced(Method::Ahd, wb).expect("develop_balanced");
-    let (masked, mask_a) = raw.develop_balanced_masked(Method::Ahd, wb, 0.99).expect("develop_balanced_masked");
-    let (taken, mask_b) = raw.take_develop_balanced_masked(Method::Ahd, wb, 0.99).expect("take_develop_balanced_masked");
-    assert_eq!(balanced.data, masked.data);
-    assert_eq!(masked.data, taken.data);
-    assert_eq!(mask_a, mask_b);
-}

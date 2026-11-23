@@ -180,7 +180,7 @@ fn load_bytes_now(
             Some((img, mask)) => (img, Some(mask)),
             None => {
                 let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                raw.take_develop_balanced_masked(method, t.wb, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?
+                (raw.develop(method).map_err(|e| e.to_string())?, None)
             }
         };
         // the same development from the denoised mosaic, when the photo has been denoised

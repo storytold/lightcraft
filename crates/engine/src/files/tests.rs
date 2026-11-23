@@ -588,11 +588,10 @@ fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_r
     raw.color.profile.look_table =
         Some(HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[23.0, 0.65, 0.8]; 2], srgb_value: false });
     let bytes = write_dng(&raw, &DngWriteOptions::default()).unwrap();
-    let mut decoded = lightcraft_raw::decode(&bytes).unwrap();
+    let decoded = lightcraft_raw::decode(&bytes).unwrap();
     assert!(decoded.color.profile.look_table.is_some());
     // A cache containing the ordinary demosaic must undergo the identical downstream finish.
-    let (_, t, _) = crate::camera_preview::starting_colour(&mut decoded, &bytes, None, None);
-    let (camera_rgb, _) = decoded.take_develop_balanced_masked(Method::Ahd, t.wb, super::HIGHLIGHT_CLIP).unwrap();
+    let camera_rgb = decoded.develop(Method::Ahd).unwrap();
     let key = "synthetic-color-finish";
     let path = dir.join("same.lcdn");
     product::write(&path, &camera_rgb, key).unwrap();
