@@ -238,6 +238,52 @@ impl Meta {
             .filter(|t| lightcraft_meta::format_exposure_time(*t).is_some_and(|text| text == self.shutter.trim()))
             .or_else(|| parse_shutter_seconds(&self.shutter))
     }
+
+    /// The camera's maker and model as people name them, for display; None when the file names no camera. The maker
+    /// loses its company words ("OLYMPUS IMAGING CORP." is Olympus) and a name in capitals is written as a name
+    /// ("SONY" is Sony; an initialism such as "DJI" stays); the model is kept as the camera writes it, without the
+    /// maker said again ("NIKON CORPORATION NIKON Z 8" is Nikon Z 8). [`Meta::make`] says which words of `camera` are
+    /// the maker's; for a photo added before it was kept, the first word is.
+    pub fn camera_name(&self) -> Option<String> {
+        let (camera, make) = (self.camera.trim(), self.make.trim());
+        let after_make = camera.strip_prefix(make).filter(|rest| !make.is_empty() && (rest.is_empty() || rest.starts_with(' ')));
+        let (maker, model) = match after_make {
+            Some(model) => (make, model),
+            None => camera.split_once(' ').unwrap_or((camera, "")),
+        };
+        let maker: Vec<&str> = maker.split_whitespace().filter(|w| !company_word(w)).collect();
+        let said: Vec<String> = maker.iter().map(|w| word_key(w)).collect();
+        let model = model.split_whitespace().skip_while(|w| company_word(w) || said.contains(&word_key(w)));
+        let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.map(str::to_string)).collect();
+        (!words.is_empty()).then(|| words.join(" "))
+    }
+}
+
+/// A word of a camera's name as words are compared: its letters and digits in lower case ("CORP." is corp, "CO.,LTD."
+/// coltd).
+fn word_key(w: &str) -> String {
+    w.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// Is `w` a word of a maker's company name ("IMAGING CORP.", "COMPANY, LTD.", "CAMERA AG"), or punctuation alone?
+fn company_word(w: &str) -> bool {
+    const WORDS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag imaging camera optical electronics";
+    let key = word_key(w);
+    key.is_empty() || WORDS.split(' ').any(|c| c == key)
+}
+
+/// A word of a maker's name as a name: one in capitals of more than three letters ("OLYMPUS") or in lower case
+/// ("samsung") with only its first letter a capital; an initialism ("DJI"), a name in mixed case ("GoPro") and a word
+/// with digits or punctuation as written.
+fn maker_word(w: &str) -> String {
+    let letters = w.chars().all(char::is_alphabetic);
+    let capitals = w.chars().all(char::is_uppercase) && w.chars().count() > 3;
+    let lower = w.chars().all(char::is_lowercase);
+    if !(letters && (capitals || lower)) {
+        return w.to_string();
+    }
+    let mut chars = w.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars.flat_map(char::to_lowercase)).collect()).unwrap_or_default()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -806,5 +852,42 @@ mod shutter_tests {
             assert_eq!(parse_shutter_seconds(s), None, "{s}");
         }
         assert_eq!(parse_shutter_seconds("1/250"), Some(0.004));
+    }
+}
+
+#[cfg(test)]
+mod camera_name_tests {
+    use super::*;
+
+    fn name(make: &str, camera: &str) -> Option<String> {
+        Meta { make: make.into(), camera: camera.into(), ..Default::default() }.camera_name()
+    }
+
+    #[test]
+    fn a_cameras_name_is_its_maker_once_without_company_words_then_its_model_as_written() {
+        for (make, camera) in [
+            ("OLYMPUS IMAGING CORP.", "OLYMPUS IMAGING CORP. E-M5MarkII"),
+            ("NIKON CORPORATION", "NIKON CORPORATION NIKON Z 8"),
+            ("RICOH IMAGING COMPANY, LTD.", "RICOH IMAGING COMPANY, LTD. PENTAX K-1"),
+            ("LEICA CAMERA AG", "LEICA CAMERA AG LEICA Q3"),
+            ("Canon", "Canon Canon EOS R5"),
+        ] {
+            // the maker known, and a photo added before it was kept (its first word taken for the maker)
+            for make in [make, ""] {
+                let shown = name(make, camera).unwrap_or_else(|| panic!("{camera}: no name"));
+                let (maker, model) = shown.split_once(' ').unwrap_or_else(|| panic!("{shown}: no model"));
+                assert!(camera.ends_with(model), "{shown}: the model as {camera:?} writes it");
+                assert!(!model.to_lowercase().contains(&maker.to_lowercase()), "{shown}: the maker said once");
+                assert!(camera.to_lowercase().starts_with(&maker.to_lowercase()), "{shown}");
+            }
+        }
+        // a maker in capitals is written as a name, an initialism or a name in mixed case as it is
+        assert!(name("SONY", "SONY ILCE-7M4").is_some_and(|n| n.starts_with("Sony ")));
+        assert!(name("DJI", "DJI FC3582").is_some_and(|n| n.starts_with("DJI ")));
+        assert_eq!(name("", "Apple iPhone 15 Pro").as_deref(), Some("Apple iPhone 15 Pro"));
+        // a maker of several words, and a model with no maker before it, as written
+        assert_eq!(name("OM Digital Solutions", "OM Digital Solutions OM-1").as_deref(), Some("OM Digital Solutions OM-1"));
+        assert_eq!(name("", "ILCE-7M4").as_deref(), Some("ILCE-7M4"));
+        assert_eq!(name("", " "), None, "no camera");
     }
 }
