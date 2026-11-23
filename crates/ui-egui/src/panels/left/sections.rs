@@ -145,7 +145,9 @@ pub(super) fn adopt_drags(app: &mut LightcraftApp, ui: &egui::Ui) {
             app.ui.dragging_section = None;
             ui.data_mut(|d| d.insert_temp(section_flag, false));
         }
-        (None, None) => ui.data_mut(|d| d.insert_temp(section_flag, false)),
+        (None, None) => ui.data_mut(|d| {
+            d.insert_temp(section_flag, false);
+        }),
         _ => {}
     }
     match (album, app.ui.dragging_album) {
@@ -157,7 +159,9 @@ pub(super) fn adopt_drags(app: &mut LightcraftApp, ui: &egui::Ui) {
             app.ui.dragging_album = None;
             ui.data_mut(|d| d.insert_temp(album_flag, false));
         }
-        (None, None) => ui.data_mut(|d| d.insert_temp(album_flag, false)),
+        (None, None) => ui.data_mut(|d| {
+            d.insert_temp(album_flag, false);
+        }),
         _ => {}
     }
 }

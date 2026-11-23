@@ -306,7 +306,7 @@ impl LightcraftApp {
                 hit.map(|h| (h.layer_id, h.interact_rect)),
                 at_layer,
                 ctx.memory(|m| m.top_modal_layer()),
-                ctx.memory(|m| m.areas().order().iter().rev().take(6).copied().collect::<Vec<_>>()),
+                ctx.memory(|m| m.areas().visible_layer_ids().into_iter().collect::<Vec<_>>()),
             );
         }
         let outside_registered = !target.rect.contains(target.at);
