@@ -1290,6 +1290,16 @@ fn component_row_popup(
     if row.secondary_clicked() && crate::widgets::carrying(ui.ctx()) {
         return;
     }
+    // A row slot that was not drawn on the frame before (another photo or mask was shown, the panel was
+    // closed) starts with a closed menu of its own: the framework keeps a menu's open state under its id, so
+    // a menu left open when its row went away would otherwise open again, unasked, when the row returns.
+    let frame = ui.ctx().cumulative_frame_nr();
+    let visit_key = ui.scope_id().with(("mask-component-menu-visit", row.id, more.id));
+    let (mut epoch, last) = ui.data(|d| d.get_temp::<(u64, u64)>(visit_key)).unwrap_or((0, frame));
+    if last != frame && last.saturating_add(1) != frame {
+        epoch += 1;
+    }
+    ui.data_mut(|d| d.insert_temp(visit_key, (epoch, frame)));
     let owner_key = ui.scope_id().with(("mask-component-captured-owner", row.id, more.id));
     let mut captured = ui.data(|d| d.get_temp::<ComponentMenuTarget>(owner_key)).unwrap_or(target);
     let interactive = captured == target && captured.live(app);
@@ -1300,7 +1310,7 @@ fn component_row_popup(
     // This id belongs to the opener slot, not the target currently occupying that row.
     let shown = craft::ui::menu::Menu::context(crate::i18n::tr("Component options"), row)
         .opened_by(more, Trigger::Click)
-        .id_salt(("mask-component-menu", row.id, more.id))
+        .id_salt(("mask-component-menu", row.id, more.id, epoch))
         .show(ui, |ui, menu| {
             if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                 body_layer = Some(ui.layer_id());
@@ -1572,40 +1582,18 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     }
 }
 
-/// The menu a button opens: the framework's, kept open by the button's own activation (the
-/// pointer, a long press and the keyboard alike), and closed by Escape or a click away. `key`
-/// tells this opener's menu from the others'. Nothing is drawn while only measuring.
+/// The menu a button opens: the framework's, opened by the button's own activation (the pointer, a long
+/// press and the keyboard alike) and closed by Escape, a click away or a pick. `key` tells this opener's
+/// menu from the others'. Nothing is drawn while only measuring.
 fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key: impl std::hash::Hash + std::fmt::Debug, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
-    use craft::ui::contract::{Bind, Trigger};
+    use craft::ui::contract::Trigger;
     if measuring(ui) {
         return;
     }
-    let pass = ui.ctx().cumulative_pass_nr();
-    let open_id = opener.response.id.with("mask-opener-menu-open");
-    let mut open = ui
-        .data(|d| d.get_temp::<(u64, bool)>(open_id))
-        .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
-        .is_some_and(|(_, open)| open);
-    // The button's own activation toggles; Manual keeps the menu's pointer trigger from toggling a second time.
-    if opener.clicked() {
-        open = !open;
-    }
-    // Escape closes it even while the keyboard is still on the button, which is not inside the menu.
-    if open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        open = false;
-    }
     Menu::new(crate::i18n::tr(label).to_owned())
         .id_salt(("mask-opener-menu", key))
-        .opened_by(&opener.response, Trigger::Manual)
-        .open(Bind::bound(&mut open))
+        .opened_by(&opener.response, Trigger::Click)
         .show(ui, |ui, _| body(ui));
-    ui.data_mut(|d| {
-        if open {
-            d.insert_temp(open_id, (pass, true));
-        } else {
-            d.remove::<(u64, bool)>(open_id);
-        }
-    });
 }
 
 /// The choices of a component menu: Object, Describe… and the shapes. `scope` tells this menu's
