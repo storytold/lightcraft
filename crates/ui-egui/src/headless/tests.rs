@@ -340,31 +340,30 @@ fn click_widget_right_clicks() {
     h.request("ui.set", json!({"view": "detail"}), t);
     h.settle(SETTLE);
     let cell = h.app.widgets.iter().find(|(w, _)| w.starts_with("film:")).map(|(w, _)| w.clone()).expect("a filmstrip photo");
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     let r = h.request("ui.clickWidget", json!({"id": cell, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "its context menu");
+    assert!(craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any), "its context menu");
 }
 
 /// #1877: a right-click while another photo's context menu is open closes that menu and
 /// opens this photo's, which stays open (it flashed and closed again).
 #[test]
 fn right_clicking_elsewhere_moves_the_context_menu() {
+    use craft::ui::runtime::overlay::{OpenFilter, any_open, entry, is_open, top};
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
     h.settle(SETTLE);
     let thumbs: Vec<String> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).collect();
     let (Some(a), Some(b)) = (thumbs.first().cloned(), thumbs.get(1).cloned()) else { panic!("two grid photos: {thumbs:?}") };
-    let popup = |w: &str| {
-        let id: u64 = w.trim_start_matches("thumb:").parse().expect("a photo id");
-        egui::Id::unique(("cell", id)).with("popup")
-    };
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!any_open(&h.view.ctx, OpenFilter::Any));
     let r = h.request("ui.clickWidget", json!({"id": a, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "the first photo's menu is open");
+    // The SDK menu's layer is named by the photo it hangs from: the first photo's menu is the one open.
+    let menu_a = top(&h.view.ctx).expect("the first photo's menu is open");
+    assert!(is_open(&h.view.ctx, menu_a) && any_open(&h.view.ctx, OpenFilter::Any), "the first photo's menu is open");
     // A real click: the press and the release reach the UI on different frames, with the
     // pointer resting on the photo in between (`ui.clickWidget` sends both on one frame).
     let rect = h.app.widgets.iter().find(|(w, _)| *w == b).map(|(_, r)| *r).expect("the second photo on screen");
@@ -381,16 +380,16 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     // one frame at a time: the menu flashed for a frame or two before it closed
     for frame in 0..6 {
         h.step();
-        assert!(!egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "frame {frame}: the first photo's menu closed");
+        assert!(!is_open(&h.view.ctx, menu_a), "frame {frame}: the first photo's menu closed");
         if frame > 0 {
-            assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the second photo's menu is open");
+            assert!(top(&h.view.ctx).is_some_and(|menu| menu != menu_a), "frame {frame}: the second photo's menu is open");
         }
     }
     h.settle(SETTLE);
-    assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the second photo's menu stays open");
+    let menu_b = top(&h.view.ctx).filter(|menu| *menu != menu_a).expect("the second photo's menu stays open");
     // The same photo again, elsewhere on it (the menu that is open belongs to this very
     // widget): the menu moves to the pointer and stays.
-    let before = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+    let before = entry(&h.view.ctx, menu_b).map(|e| e.rect).expect("the menu's layer");
     let at = egui::pos2(rect.left() + rect.width() * 0.2, rect.center().y);
     h.app.synthetic.push(egui::Event::PointerMoved(at));
     h.step();
@@ -402,12 +401,12 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     for frame in 0..6 {
         h.step();
         if frame > 0 {
-            assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the menu is open after a right-click on the same photo");
+            assert!(is_open(&h.view.ctx, menu_b), "frame {frame}: the menu is open after a right-click on the same photo");
         }
     }
     h.settle(SETTLE);
-    assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the menu stays open");
-    let after = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+    assert!(is_open(&h.view.ctx, menu_b), "the menu stays open");
+    let after = entry(&h.view.ctx, menu_b).map(|e| e.rect).expect("the menu's layer");
     assert!((after.left() - at.x).abs() < 4.0, "the menu moved to the pointer: {after:?} vs {at:?} (was {before:?})");
 }
 
@@ -3939,11 +3938,11 @@ fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
     h.request("ui.set", json!({"view": "detail"}), t);
     h.settle(SETTLE);
     let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("filmstrip cell");
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     let r = h.request("ui.click", json!({"x": cell.center().x, "y": cell.center().y, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "filmstrip context menu");
+    assert!(craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any), "filmstrip context menu");
 
     // Empty Recently Deleted is offered while the trash is the source
     assert!(photo_items(&h.app).contains(&"library.emptyRecentlyDeleted".to_string()));
