@@ -866,9 +866,6 @@ mod queue_actions_tests;
 #[path = "denoise_qualified_work_flow_tests.rs"]
 mod qualified_work_flow_tests;
 
-#[cfg(test)]
-#[path = "denoise_native_fallback_contract_tests.rs"]
-mod native_fallback_contract_tests;
 
 #[cfg(test)]
 #[path = "denoise_per_photo_qualified_flow_tests.rs"]

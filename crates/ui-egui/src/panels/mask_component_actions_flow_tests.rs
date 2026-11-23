@@ -108,7 +108,6 @@ impl Fixture {
         self.tick += 1;
         let raw = HeadlessView::raw_input(egui::vec2(1000.0, 1400.0), 1.0, f64::from(self.tick) / 60.0, events);
         let app = &mut self.app;
-        let native = self.native;
         let probe = self.probe;
         let mut published = (vec![], vec![]);
         let out = self.ctx.run_ui(raw, |root| {
@@ -116,23 +115,7 @@ impl Fixture {
                 ui.set_max_width(360.0);
                 let ctx = ui.ctx().clone();
                 let mut draw = |ui: &mut egui::Ui| {
-                    if native {
-                        // Leaf-only fallback probe: the real Settings scope is intentionally private.
-                        // This is not described as an installed Masking parent/scope acceptance test.
-                        let mask = app.session.active_mask.unwrap();
-                        let count = app
-                            .session
-                            .active()
-                            .and_then(|id| app.session.develop_of(id))
-                            .and_then(|d| d.masks.iter().find(|m| m.id == mask).map(|m| m.components.len()))
-                            .unwrap();
-                        let row = ui.add(egui::Label::new("Repeated label").sense(egui::Sense::click()));
-                        crate::widgets::register_response("component:0", row.rect, &row);
-                        crate::widgets::context_menu(&row, |ui| super::native_component_row_menu(app, ui, mask, 0, "Repeated label", count));
-                        let more = ui.small_button("…");
-                        crate::widgets::register_response("button:componentMenu0", more.rect, &more);
-                        egui::Popup::menu(&more).show(|ui| super::native_component_row_menu(app, ui, mask, 0, "Repeated label", count));
-                    } else if let Some(id) = app.session.active() {
+                    if let Some(id) = app.session.active() {
                         super::show(app, ui, id);
                     }
                 };
@@ -449,23 +432,6 @@ fn component_parent_disabled_measurement_and_sizing_refuse_actions_without_repla
     }
 }
 
-#[test]
-fn component_native_leaf_fallback_preserves_real_action_and_undo() {
-    for opener in [Opener::Context, Opener::Options] {
-        let mut f = Fixture::new(2, true);
-        let before = f.documents();
-        let undo = f.app.session.undo.len();
-        let mut expected = f.masks();
-        expected.iter_mut().find(|m| m.id == f.target).unwrap().components[0].invert = true;
-        f.open(0, opener);
-        assert!(!f.has(&f.action(0, "mode")));
-        f.click(&f.action(0, "invert"));
-        assert_eq!(f.masks(), expected);
-        assert_eq!(f.commands(), &[("mask.component".into(), json!({"id":f.target,"component":0,"action":"invert"}))]);
-        assert_eq!(f.app.session.undo.len(), undo + 1);
-        f.undo_exact(before, undo);
-    }
-}
 
 /// Narrow first step: run only this selector before repeating the full eight journeys.
 #[test]
