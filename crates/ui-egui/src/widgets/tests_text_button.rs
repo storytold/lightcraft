@@ -472,11 +472,16 @@ fn actual_masking_plus_and_minus_popups_open_on_long_release_and_escape_dismisse
         frames.frame(vec![pointer(at, PointerButton::Primary, false)], &mut draw);
         assert!(!frames.ctx.input(|i| i.pointer.primary_clicked()), "the real release exceeds egui's duration limit");
         frames.frame(vec![], &mut draw);
-        assert!(egui::Popup::is_any_open(&frames.ctx), "actual {button} caller must keep SDK activation through its tooltip");
+        // the menu is the framework's, not an egui popup: its rows are what shows it is open
         let entry = format!("maskComp:{operation}:brush");
-        assert!(frames.rects.iter().any(|(id, _)| id == &entry), "the real {operation} component menu is shown: {:?}", frames.rects);
+        assert!(
+            frames.rects.iter().any(|(id, _)| id == &entry),
+            "actual {button} caller must keep SDK activation through its tooltip; the real {operation} component menu is shown: {:?}",
+            frames.rects
+        );
         frames.frame(key(Key::Escape, false), &mut draw);
-        frames.frame(vec![], &mut draw);
-        assert!(!egui::Popup::is_any_open(&frames.ctx), "Escape dismisses the {operation} menu");
+        frames.time += 2.0;
+        frames.settle(&mut draw);
+        assert!(!frames.rects.iter().any(|(id, _)| id == &entry), "Escape dismisses the {operation} menu");
     }
 }

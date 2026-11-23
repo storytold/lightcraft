@@ -1,4 +1,5 @@
 use super::geometry::CanvasMap;
+use crate::panels::masking::controls::Hit;
 use super::{
     Color32, DevelopSettings, Gesture, LightcraftApp, MaskShape, Point, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, ToolOverlay, json, pos2,
     register, vec2,
@@ -92,7 +93,7 @@ fn region_body_drag(
 }
 
 pub(super) fn region_overlay(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     p: &egui::Painter,
     map: &CanvasMap,
     regions: &RegionContext,
@@ -164,9 +165,8 @@ pub(super) fn region_overlay(
         }
         if dragging.is_none() && live.is_none() && pointer.is_some_and(|h| rect.expand(3.0).contains(h)) {
             let xr = Rect::from_center_size(pos2(rect.right() - 13.0, rect.top() + 13.0), vec2(16.0, 16.0));
-            let resp = ui.interact(xr, egui::Id::unique(("region-x", index)), Sense::click());
-            crate::widgets::announce(&resp, crate::i18n::tr("Remove region"));
-            register(ui, format!("regionRemove:{index}"), xr);
+            // the framework owns this button's press, focus and activation; the cross is painted over it
+            let resp = Hit::new(&format!("regionRemove:{index}"), crate::i18n::tr("Remove region")).show_at(ui, xr);
             let fill = Color32::from_black_alpha(if resp.hovered() { 235 } else { 190 });
             p.rect_filled(xr, 2.0, fill);
             p.rect_stroke(xr, 2.0, Stroke::new(1.0, Color32::from_white_alpha(120)), StrokeKind::Inside);
@@ -214,9 +214,7 @@ pub(super) fn region_overlay(
         p.galley(label.min + pad, g, text_color);
         if is_face && live.is_none() {
             // a click on the label opens the name box, filled with the name or the guess
-            let resp = ui.interact(label, egui::Id::unique(("region-label", index)), Sense::click());
-            crate::widgets::announce(&resp, crate::i18n::tr("Click to name this face"));
-            register(ui, format!("regionLabel:{index}"), label);
+            let resp = Hit::new(&format!("regionLabel:{index}"), crate::i18n::tr("Click to name this face")).show_at(ui, label);
             if resp.on_hover_text(crate::i18n::tr("Click to name this face")).clicked() {
                 let start = r.name.clone().or_else(|| hint.and_then(|h| h.suggestion.as_ref().map(|(n, _)| n.clone()))).unwrap_or_default();
                 *editing = Some(crate::state::NameEdit { photo: photo.id.0, index, text: start, fresh: true });
@@ -967,6 +965,8 @@ mod region_drag_tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
+        // the face box's × is a framework control: its runtime is installed before the first pass
+        crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default()).install_framework(&ctx);
         let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0));
         let frame = lightcraft_pipeline::geometry::Frame::new(100, 100, &DevelopSettings::default(), true);
         let map = CanvasMap::new(&frame, canvas);
