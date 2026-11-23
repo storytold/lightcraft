@@ -263,6 +263,14 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
         ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-section-drag-from-pinned"), pinned));
         app.ui.dragging_section = Some(section);
     }
+    // a drag whose press the framework ended (Escape takes it out of the key events) while the
+    // button is still down is given up
+    let held = egui::Id::unique(("left-header-held", salt.clone()));
+    let was_held = ui.data(|d| d.get_temp::<bool>(held)).unwrap_or(false);
+    ui.data_mut(|d| d.insert_temp(held, out.pressed));
+    if live && was_held && !out.pressed && app.ui.dragging_section == Some(section) && ui.input(|i| i.pointer.primary_down()) {
+        app.ui.dragging_section = None;
+    }
     host_menu(ui, &salt, crate::i18n::tr(section.title()), out.response.as_ref(), request, |ui, _| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
     if section == SidebarSection::Albums {
