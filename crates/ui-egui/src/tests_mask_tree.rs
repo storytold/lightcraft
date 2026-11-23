@@ -99,14 +99,27 @@ fn component_rows_show_their_operation_invert_alone_and_the_mask_renames() {
     exec(&mut h, "mask.rename", json!({"name": "Vignette"}));
     assert_eq!(masks(&h)[0].name, "Vignette");
     let mid = masks(&h)[0].id;
-    let r = h.request("ui.clickWidget", json!({"id": format!("mask:{mid}"), "count": 2}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(Duration::from_secs(5));
+    // the row's rect comes from the last frame: under load the panel can still be moving (a background job's
+    // row, a scroll), so a double-click can land beside the row; aim again at the fresh rect until it starts
+    for _ in 0..5 {
+        let r = h.request("ui.clickWidget", json!({"id": format!("mask:{mid}"), "count": 2}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        if h.step_until(Duration::from_secs(5), |h| h.app.ui.renaming_mask.is_some()) {
+            break;
+        }
+        h.settle(SETTLE);
+    }
     assert_eq!(h.app.ui.renaming_mask.as_ref().map(|r| r.0), Some(mid), "double-click starts renaming");
-    h.request("ui.key", json!({"key": "A", "cmd": true}), T);
-    h.request("ui.key", json!({"key": "Backspace"}), T);
-    h.request("ui.key", json!({"key": "Enter"}), T);
-    h.settle(Duration::from_secs(5));
+    // the field takes focus a frame after it appears: typing before that loses keys
+    let focused = h.step_until(T, |h| h.view.ctx.memory(|m| m.focused().is_some()));
+    assert!(focused, "the rename field takes the keyboard focus");
+    for key in [json!({"key": "A", "cmd": true}), json!({"key": "Backspace"}), json!({"key": "Enter"})] {
+        let r = h.request("ui.key", key, T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
+    assert!(h.step_until(T, |h| h.app.ui.renaming_mask.is_none()), "Enter ends renaming");
+    h.settle(SETTLE);
     assert!(h.app.ui.renaming_mask.is_none());
     assert_eq!(masks(&h)[0].name, automatic, "an empty name: the automatic one again");
 }
