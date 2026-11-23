@@ -16,6 +16,7 @@
 </p>
 
 <p align="center">
+  <a href="https://emmertex.github.io/chromaforge/download/"><b>Download</b></a> ·
   <a href="#features">Features</a> ·
   <a href="#install">Install</a> ·
   <a href="docs/manual/README.md">Manual</a> ·
@@ -168,7 +169,8 @@ See [docs/video.md](docs/video.md).
 # Install
 
 
-Release builds are listed on the project's releases page. `<ver>` in the file names is the version number,
+Not sure which file you need? The [Download page](https://emmertex.github.io/chromaforge/download/) picks the right
+one for your computer. Release builds are listed on the project's releases page. `<ver>` in the file names is the version number,
 `<binary>`/`<cli>` are the brand binary names, and `SHA256SUMS.txt` lists a checksum for every file. Build them yourself
 with `cargo xtask package`.
 

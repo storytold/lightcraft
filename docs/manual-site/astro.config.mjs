@@ -36,6 +36,7 @@ export default defineConfig({
       plugins: [starlightImageZoom()],
       customCss: ['./src/styles/manual.css'],
       sidebar: [
+        { label: 'Download', slug: 'download' },
         { label: 'Start here', items: [{ slug: 'start/install' }, { slug: 'start/getting-started' }, { slug: 'start/layouts' }, { slug: 'start/tour' }] },
         { label: 'Library', items: [{ autogenerate: { directory: 'library' } }] },
         { label: 'Develop', items: [{ autogenerate: { directory: 'develop' } }] },

@@ -11,7 +11,10 @@ with the manual: each feature there needs a page or a line, and stale text is fi
 ## Page shape
 - One `.mdx` (or `.md` when it has no components) per feature or small group, in the section folder
   (`library/`, `develop/`, `ai/`, `output/`, `sync/`, `automate/`, `platforms/`, `reference/`). The sidebar builds itself
-  from the folders; use `sidebar: { order: N }` in the frontmatter to order pages.
+  from the folders; use `sidebar: { order: N }` in the frontmatter to order pages. `download.mdx` is the one top-level
+  page (first in the sidebar, the home page's main button); its buttons live in `src/components/Download.astro`, which
+  reads the repository from `brand.toml` and finds each file in the GitHub API's latest release by its name's ending
+  (`-windows-x64.msi`, `-macos-arm64.dmg`, ...). Renaming a release asset means updating that list.
 - Frontmatter: `title` (2–4 words) and a one-line `description`.
 - Bullets, not paragraphs. Bold the feature name, then a few words. Tables for lookups. Aside notes for Modern-layout menu
   paths. No marketing words.
