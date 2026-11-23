@@ -222,6 +222,8 @@
   "{label} {d:+} on every selected photo": "{label} {d:+} trên mọi ảnh đã chọn",
   "{label} {index} of {n}": "{label} {index} / {n}",
   "{label}, {n} photos": "{label}, {n} ảnh",
+  "{name} found nothing to select on {n} of {total} photos": "{name} không tìm thấy gì để chọn trên {n} trong {total} ảnh",
+  "Found nothing to select on {n} of {total} photos": "Không có gì để chọn trên {n} trong {total} ảnh",
   "{matching} of {t} photos": "{matching} / {t} ảnh",
   "{matching} photos": "{matching} ảnh",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",

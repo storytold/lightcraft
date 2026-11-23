@@ -145,6 +145,8 @@
   "{label} {d:+} on every selected photo": "{label} {d:+} su ogni foto selezionata",
   "{label} {index} of {n}": "{label} {index} di {n}",
   "{label}, {n} photos": "{label}, {n} foto",
+  "{name} found nothing to select on {n} of {total} photos": "{name} non ha trovato nulla da selezionare in {n} di {total} foto",
+  "Found nothing to select on {n} of {total} photos": "Nulla da selezionare in {n} di {total} foto",
   "{matching} of {t} photos": "{matching} di {t} foto",
   "{matching} photos": "{matching} foto",
   "{mode} spot {} of {}": "{mode}: macchia {} di {}",
