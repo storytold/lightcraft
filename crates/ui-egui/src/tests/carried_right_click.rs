@@ -46,6 +46,12 @@ fn app(tag: &str) -> (Headless, PathBuf, [String; 3]) {
     (h, root, [format!("source:album:{album}"), folder, "source:keyword:Travel".into()])
 }
 
+/// A context menu is open: an egui popup, or a layer of the framework's that takes keys (the sidebar rows'
+/// menus are the framework's).
+fn menu_open(h: &Headless) -> bool {
+    egui::Popup::is_any_open(&h.view.ctx) || craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Keys)
+}
+
 fn widget(h: &Headless, id: &str) -> Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no {id}"))
 }
@@ -80,7 +86,7 @@ fn check(row: usize, tag: &str) {
     let (mut h, root, rows) = app(tag);
     let id = &rows[row];
     right_click_while_carrying(&mut h, id);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx), "{id}: no context menu opens while photos are carried");
+    assert!(!menu_open(&h), "{id}: no context menu opens while photos are carried");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -109,7 +115,7 @@ fn right_click_on_rows_still_opens_the_menu_without_a_drag() {
         for _ in 0..4 {
             h.step();
         }
-        assert!(egui::Popup::is_any_open(&h.view.ctx), "{}: its context menu", rows[row]);
+        assert!(menu_open(&h), "{}: its context menu", rows[row]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
@@ -136,6 +142,6 @@ fn a_drag_left_over_without_its_button_does_not_hold_back_the_menu() {
     }
     h.step();
     h.step();
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "the album row's menu opens");
+    assert!(menu_open(&h), "the album row's menu opens");
     let _ = std::fs::remove_dir_all(&root);
 }
