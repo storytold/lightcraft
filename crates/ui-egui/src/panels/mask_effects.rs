@@ -608,6 +608,8 @@ pub fn save_body(
 
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     Stack::new().id_salt("save-effect-include-block").show(ui, |ui, cx| {
+        // This body also runs in the framework's invisible measuring and sizing passes: only the real one publishes or acts.
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
         ui.columns(2, |cols| {
             for (i, k) in list.iter().enumerate() {
                 let mut on = fields.iter().any(|field| field == k);

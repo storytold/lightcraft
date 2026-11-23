@@ -92,7 +92,14 @@ impl Component for MaskHit {
         } else {
             0
         };
-        HitOutput { response: cx.response.clone(), clicks, cancelled: matches!(cx.press().phase, PressPhase::Cancel { .. }) }
+        let phase = cx.press().phase;
+        HitOutput {
+            response: cx.response.clone(),
+            clicks,
+            cancelled: matches!(phase, PressPhase::Cancel { .. }),
+            // egui's drag_stopped is only set while the press is still down, so the pass of the release is read from the press itself
+            drag_ended: matches!(phase, PressPhase::Release { click: false, .. } | PressPhase::Cancel { .. }),
+        }
     }
 }
 
@@ -106,11 +113,18 @@ pub(in crate::panels) struct HitOutput {
     /// The captured press was cancelled (Escape, focus loss or removal of the control).
     pub cancelled: bool,
     clicks: u32,
+    drag_ended: bool,
 }
 
 impl HitOutput {
     pub fn clicked(&self) -> bool {
         craft::ui::contract::clicked(&self.response)
+    }
+
+    /// A press that moved past the click slop ended this pass: released, or cancelled. This stands in for
+    /// egui's `drag_stopped`, which the framework's response does not report on the pass of the release.
+    pub fn drag_ended(&self) -> bool {
+        self.drag_ended
     }
 
     pub fn double_clicked(&self) -> bool {

@@ -417,6 +417,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let _ = Stroke::NONE;
 }
 
+/// LightCraft's shortcut gate lets a focused develop slider keep only its arrow keys; the framework may put
+/// the focus on an arena root rather than the slider's own id, so adopt the root the focus is on.
+fn note_focused_slider(ctx: &egui::Context, slider: egui::Id) {
+    if let Some(focused) = craft::ui::runtime::focus::focused_rec(ctx)
+        && focused.stop.id == slider
+        && !focused.stop.text
+    {
+        crate::widgets::note_slider_focus(ctx, focused.stop.root);
+    }
+}
+
 /// Only the selected mask's seventeen local adjustments, Amount and Refine use this binding.
 /// Scalar keys belong to the SDK's real composite row; no app key handler or hover proxy routes them.
 fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoId, u32), spec: &ControlSpec, current: f64) {
@@ -487,6 +498,9 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
     // aliases never stand in for a synthetic hit, layout guess, or the composite's non-slider group.
     for (prefix, child) in [("slider", "slider"), ("sliderValue", "field"), ("sliderField", "field")] {
         if let Some(response) = ui.ctx().read_response(id.with(child)) {
+            if prefix == "slider" {
+                note_focused_slider(ui.ctx(), response.id);
+            }
             crate::widgets::register_response(format!("{prefix}:{}", spec.id), response.rect, &response);
             crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), response.rect, &response);
         }
@@ -495,6 +509,7 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
     // The composite's typing proposal is local until Commit. Pointer scrubs and wheel runs remain live.
     let live = ui.input(|input| input.pointer.primary_down() || input.events.iter().any(|event| matches!(event, egui::Event::MouseWheel { .. })));
     if enabled {
+        let mut pending: Option<f64> = None;
         for event in &out.events {
             match event {
                 EditEvent::Begin { .. } if live => {
@@ -505,6 +520,11 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
                 }
                 EditEvent::Update { value, .. } if visit.editing && value.is_finite() => {
                     let _ = set(app, spec, *value);
+                }
+                EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } if after.is_finite() && !visit.editing => {
+                    // Typed commits and a step of the editor can arrive together (the pending text, then its
+                    // nudge): they are one edit of this row, so only the last value is set, as one Undo step.
+                    pending = Some(*after);
                 }
                 EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } if after.is_finite() => {
                     let actual = app.session.develop_of(target.0).and_then(|settings| {
@@ -517,11 +537,9 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
                     if actual.is_some_and(|value| (value - *after).abs() > 1e-12) {
                         let _ = set(app, spec, *after);
                     }
-                    if visit.editing {
-                        let _ = app.run("develop.endInteraction", json!({}));
-                        app.ui.dragging_control = None;
-                        visit.editing = false;
-                    }
+                    let _ = app.run("develop.endInteraction", json!({}));
+                    app.ui.dragging_control = None;
+                    visit.editing = false;
                 }
                 EditEvent::Cancel { .. } if visit.editing => {
                     let _ = app.run("develop.cancelInteraction", json!({}));
@@ -529,6 +547,18 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
                     visit.editing = false;
                 }
                 _ => {}
+            }
+        }
+        if let Some(after) = pending {
+            let actual = app.session.develop_of(target.0).and_then(|settings| {
+                settings
+                    .masks
+                    .iter()
+                    .find(|mask| mask.id == target.1)
+                    .map(|mask| if spec.id == "refine" { mask.refine } else { local_get(&mask.adjust, spec.id) })
+            });
+            if actual.is_some_and(|value| (value - after).abs() > 1e-12) {
+                let _ = set(app, spec, after);
             }
         }
     }
@@ -789,12 +819,14 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(w - 46.0, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
     let id = ui.scope_id().with(spec.id);
     let mut value = app.ui.mask_overlay_opacity as f64;
     let label = Hit::new("maskOverlayOpacityLabel", crate::i18n::tr_format!("Reset {name}", name = crate::i18n::tr("Opacity")))
         .id(id.with("label"))
         .enabled(real && enabled)
-        .show_at(ui, label_rect);
+        .show_at(ui, label_hit);
     let label = if enabled && real {
         label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = crate::i18n::tr("Opacity")))
     } else {
@@ -813,6 +845,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .step(spec.step)
         .enabled(real && enabled)
         .show_at(ui, track_rect);
+    note_focused_slider(ui.ctx(), out.response.id);
     let field = NumberField::new(
         crate::i18n::tr_format!("{name} value", name = crate::i18n::tr("Opacity")),
         Bind::given(Some(value)).reset(Some(spec.default)),
@@ -918,13 +951,15 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
         let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(width - 46.0, 18.0));
         let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
         let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
         let id = ui.scope_id().with(("mask-range", owner, comp, spec.id, visit.epoch));
         let enabled = real && ui.is_enabled();
         let caption = crate::i18n::tr(spec.label);
         let label = Hit::new(&format!("maskRangeLabel:{comp}:{}", spec.id), crate::i18n::tr_format!("Reset {name}", name = caption))
             .id(id.with("label"))
             .enabled(enabled)
-            .show_at(ui, label_rect);
+            .show_at(ui, label_hit);
         let label = label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = caption));
         ui.painter().text(
             label_rect.left_center(),
@@ -939,6 +974,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             .step(spec.step)
             .enabled(enabled)
             .show_at(ui, track_rect);
+        note_focused_slider(ui.ctx(), track.response.id);
         let number_spec = *spec;
         let field = NumberField::new(crate::i18n::tr_format!("{name} value", name = caption), Bind::given(Some(value)).reset(Some(spec.default)))
             .id(id.with("value"))
@@ -1073,6 +1109,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                     ui.data_mut(|d| d.insert_temp(handle_id, nearer_low(origin.x)));
                 }
                 let _ = app.run("develop.beginInteraction", json!({"label": "Luminance Range"}));
+                ui.data_mut(|d| d.insert_temp(handle_id.with("begun"), true));
             }
             if (resp.dragged() || resp.clicked())
                 && let Some(pos) = resp.interact_pointer_pos()
@@ -1083,8 +1120,11 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 let (nlo, nhi) = if low { (v.min((hi - 0.01).max(0.0)), hi) } else { (lo, v.max((lo + 0.01).min(1.0))) };
                 update(app, MaskShape::LuminanceRange { lo: nlo, hi: nhi, lo_feather: *lo_feather, hi_feather: *hi_feather });
             }
-            if resp.drag_stopped() {
-                ui.data_mut(|d| d.remove::<bool>(handle_id));
+            if resp.drag_ended() && ui.data(|d| d.get_temp::<bool>(handle_id.with("begun"))).is_some() {
+                ui.data_mut(|d| {
+                    d.remove::<bool>(handle_id);
+                    d.remove::<bool>(handle_id.with("begun"));
+                });
                 let _ = app.run("develop.endInteraction", json!({}));
             }
             // Smoothness: both falloffs at once
@@ -1662,12 +1702,14 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(width - 46.0, 18.0));
         let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
         let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
         let id = ui.scope_id().with(("mask-brush", owner, spec.id, visit.epoch));
         let caption = crate::i18n::tr(spec.label);
         let label = Hit::new(&format!("maskBrushLabel:{}", spec.id), crate::i18n::tr_format!("Reset {name}", name = caption))
             .id(id.with("label"))
             .enabled(enabled)
-            .show_at(ui, label_rect);
+            .show_at(ui, label_hit);
         let label = label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = caption));
         ui.painter().text(
             label_rect.left_center(),
@@ -1683,6 +1725,7 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .step(spec.step)
             .enabled(enabled)
             .show_at(ui, track_rect);
+        note_focused_slider(ui.ctx(), track.response.id);
         let number_spec = *spec;
         let field = NumberField::new(crate::i18n::tr_format!("{name} value", name = caption), Bind::given(Some(current)).reset(Some(spec.default)))
             .id(id.with("value"))
