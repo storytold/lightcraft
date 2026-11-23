@@ -142,6 +142,21 @@ thread_local! {
     static STATE: RefCell<WorkflowUi> = RefCell::new(WorkflowUi::default());
 }
 
+/// The Edit Photo question or Edit In Presets is open ([`crate::keyboard::modal_open`]). Not Actions:
+/// what it records are the keys and clicks on the photos, so they reach them.
+pub(crate) fn modal_open() -> bool {
+    STATE.with_borrow(|s| s.ask.is_some() || s.presets_open)
+}
+
+/// The Edit Photo question, as Edit In from the menu asks it.
+#[cfg(test)]
+pub(crate) fn ask_for_test() {
+    update(|s| {
+        s.ask =
+            Some(Ask { params: json!({}), mode: "copyWithAdjustments".into(), editor: Some(false), file_editable: true, count: 1, remember: false })
+    });
+}
+
 /// A copy of the windows' state (tests, `ui.inspect`-style checks).
 #[cfg(test)]
 pub fn state() -> WorkflowUi {
@@ -526,7 +541,7 @@ fn presets_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
     let list = app.session.execute("editIn.presets", &json!({})).ok();
     let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), app.text_focus, ctx);
     let mut closed = false;
-    egui::Window::new(tr("Edit In Presets"))
+    let shown = egui::Window::new(tr("Edit In Presets"))
         .id(egui::Id::new("edit-in-presets"))
         .title_bar(false)
         .frame(crate::dialog_frame::card_frame(ctx))
@@ -620,6 +635,10 @@ fn presets_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
                 ui.label(egui::RichText::new(&st.message).small());
             }
         });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     st.presets_open = open && !closed;
 }
 
@@ -628,7 +647,7 @@ fn ask_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
     let Some(mut ask) = st.ask.take() else { return };
     let mut go = false;
     let mut cancel = crate::dialog_frame::esc_closes(false, app.text_focus, ctx);
-    egui::Window::new(tr("Edit Photo"))
+    let shown = egui::Window::new(tr("Edit Photo"))
         .id(egui::Id::new("edit-in-ask"))
         .title_bar(false)
         .frame(crate::dialog_frame::card_frame(ctx))
@@ -683,6 +702,10 @@ fn ask_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
                 }
             });
         });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if go {
         let _ = choose(app, ctx, ask);
     } else if !cancel {

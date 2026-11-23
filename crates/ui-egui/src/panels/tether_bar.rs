@@ -45,6 +45,17 @@ fn live_id() -> egui::Id {
     egui::Id::new("tether-live")
 }
 
+thread_local! {
+    /// The settings window is open: its form lives in egui's data, which [`settings_open`] can't
+    /// read while egui holds its context.
+    static SETTINGS_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tethered Capture Settings is open ([`crate::keyboard::modal_open`]).
+pub(crate) fn settings_open() -> bool {
+    SETTINGS_OPEN.get()
+}
+
 fn form_id() -> egui::Id {
     egui::Id::new("tether-form")
 }
@@ -78,6 +89,7 @@ pub fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value, String
         same_as_previous: cur.field("sameAsPrevious").as_bool().unwrap_or(false),
     };
     ctx.data_mut(|d| d.insert_temp(form_id(), form));
+    SETTINGS_OPEN.set(true);
     ctx.request_repaint();
     Some(Ok(json!({"dialog": "tether.start"})))
 }
@@ -304,8 +316,12 @@ fn bar(app: &mut LccApp, ctx: &egui::Context, st: &Value, cam: &Value) {
 }
 
 fn settings_window(app: &mut LccApp, ctx: &egui::Context) {
-    let Some(mut form) = ctx.data(|d| d.get_temp::<Form>(form_id())).filter(|f| f.open) else { return };
-    let mut open = true;
+    let Some(mut form) = ctx.data(|d| d.get_temp::<Form>(form_id())).filter(|f| f.open) else {
+        SETTINGS_OPEN.set(false);
+        return;
+    };
+    // (Esc is its ✕: no session starts)
+    let mut open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), app.text_focus, ctx);
     let mut start = false;
     let window_id = egui::Id::new("tether-settings");
     let shown = egui::Window::new(crate::i18n::tr("Tethered Capture Settings"))
@@ -414,6 +430,10 @@ fn settings_window(app: &mut LccApp, ctx: &egui::Context) {
             });
         });
     crate::dialog_frame::ModalLayout::finish(ctx, window_id, shown.as_ref().map(|w| w.response.rect));
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if start {
         let opt = |s: &str| if s.trim().is_empty() { Value::Null } else { json!(s.trim()) };
         let p = json!({
@@ -444,5 +464,6 @@ fn settings_window(app: &mut LccApp, ctx: &egui::Context) {
     if !open {
         form.open = false;
     }
+    SETTINGS_OPEN.set(form.open);
     ctx.data_mut(|d| d.insert_temp(form_id(), form));
 }

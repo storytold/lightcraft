@@ -266,7 +266,7 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
     use crate::keyboard::{MenuChoice, Owner, menu_choice, owner};
     type Step = fn(&mut Headless);
     // (the ⌘/ shortcuts overlay closes on any key: `tests_module_help` checks that key runs nothing)
-    let rows: [(&str, Step, Step); 19] = [
+    let rows: [(&str, Step, Step); 28] = [
         ("the quit question", |h| h.app.quit_prompt = Some(crate::QuitPrompt::Unsaved("changes not saved".into())), |h| h.app.quit_prompt = None),
         ("the settings-file notice", |h| h.app.notices.push("settings file unreadable".into()), |h| h.app.notices.clear()),
         (
@@ -330,6 +330,17 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
                 click(h, "plugin-marketplace:close");
             },
         ),
+        ("Install Plug-in", |h| crate::panels::plugins::show_for_test(&h.view.ctx, "approve"), |h| click(h, "button:pluginInstallCancel")),
+        ("A plug-in's own window", |h| crate::panels::plugins::show_for_test(&h.view.ctx, "dialog"), |h| click(h, "button:pluginRunCancel")),
+        (
+            "a plug-in update's question",
+            |h| crate::panels::plugins::show_for_test(&h.view.ctx, "update"),
+            |h| {
+                click(h, "button:pluginUpdateCancel");
+                click(h, "plugin-manager:close");
+            },
+        ),
+        ("Getting Started", |h| crate::onboarding::open(&mut h.app, 0), |h| drop(crate::onboarding::close(&mut h.app, false))),
         (
             "a plug-in's permission question",
             |h| {
@@ -344,6 +355,15 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
                 assert_eq!(r["ok"], true, "{r}");
             },
         ),
+        ("Edit In Presets", |h| drop(h.app.run("dialog.editInPresets", json!({})).unwrap()), |h| click(h, "edit-in-presets:close")),
+        ("Edit Photo", |_| crate::edit_in::ask_for_test(), |h| click(h, "button:editInCancel")),
+        (
+            "Edited Version Saved Again",
+            |h| crate::panels::connections::ask_resave(h.app.session.active().unwrap().0),
+            |h| click(h, "immich-resave:close"),
+        ),
+        ("Share the New Collection?", |h| h.app.peer_sync.set_status_for_test(new_collection_undecided()), |h| click(h, "button:syncUndecidedLater")),
+        ("Tethered Capture Settings", |h| drop(h.app.run("tether.start", json!({})).unwrap()), |h| click(h, "tether-settings:close")),
         ("a Dialog", |h| drop(h.app.run("dialog.copySettings", json!({})).unwrap()), |h| h.app.ui.dialog = None),
         ("Edit Smart Collection…", |h| drop(h.app.run("dialog.smartAlbum", json!({"name": "Dates"})).unwrap()), |h| h.app.ui.dialog = None),
         (
@@ -370,6 +390,14 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
         "the Export sheet",
         "Plug-in Manager",
         "Plug-in Marketplace",
+        // (the manager under it closes on Esc, and the question goes with it)
+        "a plug-in update's question",
+        "Getting Started",
+        "Edit In Presets",
+        "Edit Photo",
+        "Edited Version Saved Again",
+        "Share the New Collection?",
+        "Tethered Capture Settings",
         "a Dialog",
         "Edit Smart Collection…",
         "New Collection (a text field with the focus)",
@@ -381,7 +409,18 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
         let active = h.app.session.active().unwrap();
         (h, active)
     };
-    for (name, open, close) in rows {
+    // every modal windows.json lists has a row here (or an owner check below: the catalog opening or
+    // upgrading)
+    let owner_checked = ["the catalog opening", "the catalog upgrading"];
+    for w in crate::window_list::WINDOWS.iter().filter(|w| w.modal) {
+        let survey = w.survey.as_str();
+        assert!(
+            rows.iter().any(|(name, ..)| *name == survey) || owner_checked.contains(&survey),
+            "{}: windows.json lists it as a modal, but the survey has no row \"{survey}\"",
+            w.name
+        );
+    }
+    for &(name, open, close) in &rows {
         // a session of its own: a key that got through must not change what the next row sees
         let (mut h, active) = fresh();
         h.app.session.execute("photo.rate", &json!({"ids": [active.0], "rating": 0})).unwrap();
@@ -509,10 +548,32 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
     assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal, "the Marketplace takes the keys once it shows");
     h.app.run("plugins.marketplace", json!({"open": false})).unwrap();
     h.step();
+    // the questions and the Edit In, Immich and tethering windows show in full screen too, and keep
+    // the keys there
+    // (their state outlives a session: each closes before the next)
+    for (name, id) in [
+        ("Edit In Presets", "edit-in-presets"),
+        ("Edit Photo", "edit-in-ask"),
+        ("Edited Version Saved Again", "immich-resave"),
+        ("Share the New Collection?", "syncUndecided"),
+        ("Tethered Capture Settings", "tether-settings"),
+    ] {
+        let Some(&(_, open, close)) = rows.iter().find(|row| row.0 == name) else { panic!("the survey has a row \"{name}\"") };
+        let (mut h, _) = fresh();
+        h.app.ui.fullscreen = true;
+        open(&mut h);
+        h.settle(T);
+        assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal, "{name}: in full screen it keeps the keys");
+        let top = h.view.ctx.memory(|m| m.top_modal_layer()).map(|l| l.id);
+        assert_eq!(top, Some(egui::Id::new(id)), "{name}: it shows in full screen, holding the pointer");
+        close(&mut h);
+        h.step();
+        assert_eq!(owner(&h.app, &h.view.ctx), Owner::Window, "{name}: closed, it gives the keys back");
+    }
 
     // the catalog opening or upgrading (the owner only: with no open really running, the first
     // frame turns either into the window of a catalog that won't open)
-    for (name, opening) in [("the catalog opening", true), ("the catalog upgrading", false)] {
+    for (name, opening) in owner_checked.into_iter().zip([true, false]) {
         let p = crate::panels::library_problem::LibraryProblem::new("/nowhere", "");
         h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem { opening, upgrading: !opening, ..p });
         assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal, "{name}: nothing runs behind it");
@@ -544,6 +605,63 @@ fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
         h.app.catalog_ui.dialog = None;
         h.app.library_problem = None;
     }
+}
+
+/// The windows `windows.json` makes exceptions leave the keys with the photos: with Actions (it
+/// records them), Roles (it follows the photo) or Live View (shooting) open, 5 still rates the photo.
+#[test]
+fn the_exception_windows_leave_the_keys_with_the_photos() {
+    use crate::keyboard::{Owner, owner};
+    let shows = |h: &Headless, id: &str| h.view.ctx.memory(|m| m.areas().visible_layer_ids()).iter().any(|l| l.id == egui::Id::new(id));
+    let rates = |h: &mut Headless, name: &str| {
+        let active = h.app.session.active().unwrap();
+        h.app.session.execute("photo.rate", &json!({"ids": [active.0], "rating": 0})).unwrap();
+        assert_eq!(owner(&h.app, &h.view.ctx), Owner::Window, "{name}: the keys stay with the photos");
+        let r = h.request("ui.key", json!({"key": "5"}), T);
+        assert_eq!(r["ok"], true, "{name}: {r}");
+        h.step();
+        assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, 5, "{name}: with it open, 5 rates the photo");
+    };
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.run("panel.actions", json!({"show": true})).unwrap();
+    h.settle(T);
+    assert!(shows(&h, "actions-panel"), "Actions is open");
+    rates(&mut h, "Actions");
+    h.app.run("panel.actions", json!({"show": false})).unwrap();
+    // (the masking panel draws it, under a mask)
+    let r = h.request("engine.execute", json!({"command": "panel.masking"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.run("mask.add", json!({"kind": "radial"})).unwrap();
+    h.app.ui.roles_window = true;
+    h.settle(T);
+    assert!(shows(&h, "rolesWindow"), "Roles is open");
+    rates(&mut h, "Roles");
+
+    // Live View: the simulated Nikon (it has live view), tethered into a catalog on disk
+    let dir = lcc_testkit::TempDir::new("lcc-ui-live-view");
+    let mut session = lcc_engine::Session::new().with_fs();
+    session.open_library(dir.join("lib"), false).unwrap();
+    let photo = dir.join("a.jpg");
+    let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 13) as u8, 90, 255]);
+    std::fs::write(&photo, lcc_engine::export::encode_image(&img, &lcc_engine::export::ExportOptions::default()).unwrap()).unwrap();
+    session.execute("library.import", &json!({"paths": [photo.to_string_lossy()]})).unwrap();
+    let mut h = Headless::new(LccApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 1000.0], 1.0);
+    h.app.ui.view = crate::state::ViewMode::Detail;
+    h.app.run("tether.connect", json!({"device": "sim-nikon"})).unwrap();
+    h.settle(T);
+    click(&mut h, "tetherLiveView");
+    h.settle(T);
+    assert!(shows(&h, "tether-live-window"), "Live View is open");
+    rates(&mut h, "Live View");
+    let _ = h.app.run("tether.disconnect", json!({}));
+    let _ = h.app.run("tether.stop", json!({}));
+}
+
+/// A syncing catalog with a new collection to ask about (Share the New Collection?).
+fn new_collection_undecided() -> serde_json::Value {
+    let group = json!({"id": "g", "mode": "catalogue", "keeper": "me", "invited": [], "devices": []});
+    json!({"running": false, "paired": [],
+        "catalogue": {"name": "Main", "photos": 0, "unkeyed": 0, "group": group, "collections": [], "undecided": [{"album": 7, "name": "New"}]}})
 }
 
 /// Over the Plug-in Marketplace its own controls still work: the search field takes what is typed
