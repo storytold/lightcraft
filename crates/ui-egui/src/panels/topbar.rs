@@ -100,12 +100,18 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
         crate::text_field::focus(ui.ctx(), "field:search");
     }
     let before = app.ui.search.clone();
+    let carrying = app.ui.dragging_photos.is_some() && ui.input(|i| i.pointer.primary_down());
     let (shown, record) = craft::ui::runtime::inspect::record(ui, crate::text_field::id("field:search").with("inspect"), |ui| {
-        craft::ui::text::TextField::search(crate::i18n::tr("Search Photos"), Bind::bound(&mut app.ui.search))
+        let mut field = craft::ui::text::TextField::search(crate::i18n::tr("Search Photos"), Bind::bound(&mut app.ui.search))
             .id(crate::text_field::id("field:search"))
             .placeholder(crate::i18n::tr("Search Photos"))
-            .limit(None)
-            .show_at(ui, sr)
+            .limit(None);
+        // A right-click while photos are carried (the primary button held) opens no Cut / Copy / Paste menu: the
+        // field's own menu is asked for and none is given.
+        if carrying {
+            field = field.own_context_menu();
+        }
+        field.show_at(ui, sr)
     });
     crate::text_field::register_field(ui, "field:search", &shown.response, record.as_deref());
     // Escape (which clears the text) and Return leave the field, so the next key is a shortcut again.

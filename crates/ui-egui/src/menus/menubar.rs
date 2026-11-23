@@ -1080,25 +1080,28 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     let bar = menu_bar(app);
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let clicked: Clicked = Default::default();
-    let start = ui.cursor().left();
     // The bar's own keys (F10, a lone Alt, Alt+letter or digit) are off: the app binds Alt+digit and holds Alt for
     // its tools, and the old bar had none. Tab and the arrow keys still reach and move through the titles.
     let keys = false;
-    let room = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(if max_width >= bar_width(ui) { max_width } else { MENU_MIN }, ui.available_height()));
+    // (the panel's own height: not the row's, which this bar helps to size)
+    let height = ui.max_rect().height().min(48.0);
+    let width = if max_width >= bar_width(ui) { max_width } else { MENU_MIN };
+    let room = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, height));
     let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lc-menubar-inspect"), |ui| {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(room), |ui| {
-            let titles: Vec<MenuTitle<'_>> = bar
-                .iter()
-                .map(|(title, items)| {
-                    let clicked = &clicked;
-                    MenuTitle::new(literal(crate::i18n::tr(title)), move |ui: &mut egui::Ui| nodes_ui(ui, items, mac, clicked, 1))
-                })
-                .collect();
-            // A measuring or sizing run must never open a menu: disabled, its titles sense nothing.
-            MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles).keyboard(keys).enabled(!measuring(ui)).show(ui)
-        })
-        .inner
+        let titles: Vec<MenuTitle<'_>> = bar
+            .iter()
+            .map(|(title, items)| {
+                let clicked = &clicked;
+                MenuTitle::new(literal(crate::i18n::tr(title)), move |ui: &mut egui::Ui| nodes_ui(ui, items, mac, clicked, 1))
+            })
+            .collect();
+        // The bar is placed in its room, so the titles that do not fit go into its "…" or "Menu" title. A measuring
+        // or sizing run must never open a menu: disabled, its titles sense nothing.
+        MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles).id_salt("in-window-menu-bar").keyboard(keys).enabled(!measuring(ui)).show_at(ui, room)
     });
+    // the titles' own width is what the bar takes of the row
+    let used = shown.titles.width().max(0.0);
+    ui.allocate_exact_size(egui::vec2(used, height), egui::Sense::hover());
     // The titles are parts of the bar: their automation names come from the bar's own recorded
     // parts and hit areas, never from guessed rectangles or substitute widgets.
     if let Some(record) = record.filter(|_| !measuring(ui)) {
@@ -1136,7 +1139,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             app.toast(ui.ctx(), e);
         }
     }
-    ui.cursor().left() - start
+    used
 }
 
 /// One level of a menu: its rows, separators and submenu rows. `depth` is 1 for a top-level

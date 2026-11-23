@@ -226,6 +226,9 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
         crate::text_field::blur_id(ui.ctx(), fid);
     }
     let focused = drawn_before && crate::text_field::has_focus_id(ui.ctx(), fid);
+    if kept.is_some() {
+        eprintln!("DBG enter kept refused={} drawn_before={drawn_before} focused={focused} frame={frame}", kept.as_ref().is_some_and(|e| e.refused));
+    }
     // (an edit of another selection or library is given up, never applied to this one)
     if kept.as_ref().is_some_and(|e| !e.is_for(app, key)) && focused {
         crate::text_field::blur_id(ui.ctx(), fid);

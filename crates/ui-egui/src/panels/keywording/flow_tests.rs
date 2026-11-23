@@ -286,16 +286,27 @@ fn tab_between_add_and_painter_preserves_distinct_drafts_and_native_caret_edits(
     let through_views = |h: &mut Headless, reverse: bool| {
         let names = if reverse { ["willExport", "containing", "keywords", "enter"] } else { ["enter", "keywords", "containing", "willExport"] };
         for name in names {
-            ask(h, "ui.key", json!({"key": "Tab", "shift": reverse}));
             let key = format!("keywordView:{name}");
             let expected = h.app.widget_hits.iter().find(|(k, _)| k == &key).expect("real view choice").1.id;
+            // (the keyword chips are real stops too, between the last view choice and the painter's field)
+            for _ in 0..8 {
+                ask(h, "ui.key", json!({"key": "Tab", "shift": reverse}));
+                if craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id) == Some(expected) {
+                    break;
+                }
+            }
             assert_eq!(craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id), Some(expected), "Tab at {name}");
             assert_eq!(h.app.ui.keywording_view, crate::state::KeywordingView::Keywords, "focus alone does not select a view");
         }
     };
     through_views(&mut h, false);
-    ask(&mut h, "ui.key", json!({"key": "Tab"}));
     let painter = crate::text_field::id("field:keywordPainter");
+    for _ in 0..8 {
+        ask(&mut h, "ui.key", json!({"key": "Tab"}));
+        if craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|rec| rec.stop.id) == Some(painter) {
+            break;
+        }
+    }
     assert_eq!(craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|rec| rec.stop.id), Some(painter));
     ask(&mut h, "ui.text", json!({"text": "Weddings"}));
     through_views(&mut h, true);

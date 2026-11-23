@@ -377,6 +377,9 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 /// text field, name edit or shortcut recording owns input, then fires saved command bindings,
 /// aliases and fixed photo keys, respecting native menu ownership and open popups.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Num0, pressed: true, .. }))) {
+        eprintln!("DBG handle num0: events={:?} dialog={} blocks={} text_focus={}", ctx.input(|i| i.events.clone()), app.ui.dialog.is_some(), crate::panels::notices::blocks_input(app), app.text_focus);
+    }
     // Space held over a tool ends when the key is up, whoever has the keyboard by then
     crate::space_hand::tick(app, ctx);
     if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
@@ -395,10 +398,16 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     // don't steal keys from text fields or from the keymap editor recording a shortcut
+    if ctx.input(|i| i.modifiers.alt && i.key_pressed(Key::Num0)) {
+        eprintln!("DBG alt0 owned={} rec={} name_edit={} focused_rec={:?} egui_wants={}", keyboard_owned(app, ctx), app.recording_shortcut.is_some(), app.ui.name_edit.is_some(), craft::ui::runtime::focus::focused_rec(ctx).map(|r| r.stop.id), ctx.egui_wants_keyboard_input());
+    }
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
     let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
+    if ctx.input(|i| i.modifiers.alt && i.key_pressed(Key::Num0)) {
+        eprintln!("DBG alt0 fire={fire:?} aliased={}", aliased.len());
+    }
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
     }

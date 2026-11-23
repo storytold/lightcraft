@@ -235,11 +235,6 @@ impl SideRow {
         self
     }
 
-    fn filler(key: &str, height: f32) -> Self {
-        let mut row = SideRow::new(key, "folder", "").no_icon().unregistered();
-        row.fill = Some(height.max(1.0).round() as u32);
-        row
-    }
 }
 
 /// The rows a sidebar list shows, as the framework's item source.
@@ -408,26 +403,22 @@ fn window(ui: &egui::Ui, total: usize, top: f32, height: f32, reveal: Option<usi
 /// The rows a list builds: all of them, or (for a long list) the ones in view with a filler as tall
 /// as the rest standing in for the others. The rows left out keep their `source:` names for the
 /// control channel, at where they would be.
-fn built_rows(ui: &egui::Ui, rows: Vec<SideRow>, salt: &str, want: Option<&String>) -> Vec<SideRow> {
+fn built_rows(ui: &egui::Ui, rows: Vec<SideRow>, salt: &str, want: Option<&String>) -> (Vec<SideRow>, f32, f32) {
     let total = rows.len();
     let height_id = egui::Id::unique(("side-row-height", salt.to_owned()));
     let height = ui.data(|d| d.get_temp::<f32>(height_id)).unwrap_or(ROW_HEIGHT).max(1.0);
     let top = ui.cursor().top();
     let reveal = want.and_then(|want| rows.iter().position(|row| row.id.to_lowercase() == *want));
     let built = window(ui, total, top, height, reveal);
-    let mut shown = Vec::with_capacity(built.len() + 2);
-    if built.start > 0 {
-        shown.push(SideRow::filler("\u{0}above", built.start as f32 * height));
-    }
-    shown.extend(rows[built.clone()].iter().cloned());
-    if built.end < total {
-        shown.push(SideRow::filler("\u{0}below", (total - built.end) as f32 * height));
-    }
+    let shown: Vec<SideRow> = rows[built.clone()].to_vec();
+    // The rows left out are plain space above and below the list, not rows of it: a list that measured their whole
+    // height would pass the framework's size guard (32,768 points) with a few thousand keywords and stop showing.
+    let (above, below) = (built.start as f32 * height, (total - built.end) as f32 * height);
     let (left, width) = (ui.cursor().left(), ui.available_width());
     for (at, row) in rows.iter().enumerate().filter(|(at, row)| !built.contains(at) && row.register) {
         register(ui, format!("source:{}", row.id), Rect::from_min_size(pos2(left, top + at as f32 * height), vec2(width, height)));
     }
-    shown
+    (shown, above, below)
 }
 
 /// The list row of `item`: its icon, label, count and the rest, in the columns `cells`.
@@ -471,7 +462,7 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     }
     let SideSpec { salt, name, selected, show_counts, tree, build_all, focus_on_press } = spec;
     let want = scroll_target(ui);
-    let rows = if !build_all && rows.len() > WINDOW_FROM { built_rows(ui, rows, salt, want.as_ref()) } else { rows };
+    let (rows, above, below) = if !build_all && rows.len() > WINDOW_FROM { built_rows(ui, rows, salt, want.as_ref()) } else { (rows, 0.0, 0.0) };
     let has_notes = rows.iter().any(|row| row.note.is_some());
     let has_marks = rows.iter().any(|row| row.mark.is_some());
     if tree && let Some(deepest) = rows.iter().map(|row| row.depth).max() {
@@ -500,6 +491,9 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if tree {
         list = list.tree(true).tree_leaves(TreeLeaves::Aligned);
     }
+    if above > 0.0 {
+        ui.add_space(above);
+    }
     let out = list.show_items(ui, &source, &mut |key, icx| {
         let item = &source.rows[source.index[key]];
         if item.fill.is_some() {
@@ -518,7 +512,13 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
         }
         list_row(item, icx.cells(), tree, show_counts)
     });
+    if below > 0.0 {
+        ui.add_space(below);
+    }
     let live = !measuring(ui) && ui.is_enabled() && ui.is_visible() && out.response.enabled();
+    if salt == "keywords" {
+        eprintln!("DBGLIVE keywords live={live} measuring={} enabled={} visible={} resp_enabled={} shown={}", measuring(ui), ui.is_enabled(), ui.is_visible(), out.response.enabled(), out.shown.len());
+    }
     if !live {
         return SideOut::default();
     }
