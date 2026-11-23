@@ -63,6 +63,21 @@ pub(crate) fn look_again() {
     set_state(s);
 }
 
+/// Puts the "A different signer" question up, as an install refused for its signer does.
+#[cfg(test)]
+pub(crate) fn ask_signer() {
+    let mut s = state();
+    s.ask = Some(SignerAsk { id: "test.signer".into(), name: "Signed Elsewhere".into(), reason: "Signed by a different key.".into() });
+    set_state(s);
+}
+
+/// Whether the window is open, whether the signer question is up, and the text in the search field.
+#[cfg(test)]
+pub(crate) fn showing() -> (bool, bool, String) {
+    let s = state();
+    (s.open, s.ask.is_some(), s.query)
+}
+
 fn live() -> bool {
     #[cfg(test)]
     return LIVE.get();
@@ -85,6 +100,15 @@ fn set_state(s: State) {
     }
     #[cfg(test)]
     STATE.set(Some(s));
+}
+
+/// Whether the window is open (its signer question only comes up over it): the keyboard is its
+/// ([`crate::keyboard::modal_open`]).
+pub(crate) fn modal_open() -> bool {
+    #[cfg(not(test))]
+    return STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|s| s.open);
+    #[cfg(test)]
+    STATE.with_borrow(|s| s.as_ref().is_some_and(|s| s.open))
 }
 
 fn app_ctx(app: &LccApp) -> egui::Context {
@@ -334,9 +358,13 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     }
     let selected = entries.iter().find(|e| s.selected.as_deref() == at(e, "id").as_str()).copied();
     let busy = running();
-    let open = !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), ctx);
+    // Esc answers the signer question first (its Cancel), and closes the window only with none up
+    let mut open = true;
+    if crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), app.text_focus, ctx) {
+        open = s.ask.take().is_some();
+    }
     let mut closed = false;
-    egui::Window::new(tr("Plug-in Marketplace"))
+    let shown = egui::Window::new(tr("Plug-in Marketplace"))
         .id(key())
         .title_bar(false)
         .frame(crate::dialog_frame::card_frame(ctx))
@@ -416,6 +444,10 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             ui.separator();
             footer_ui(ui, &list, &mut actions);
         });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     s.open = open && !closed;
     signer_ask_ui(ctx, &mut s, &mut actions);
     for (id, p) in actions {
@@ -822,7 +854,7 @@ fn signer_ask_ui(ctx: &egui::Context, s: &mut State, actions: &mut Vec<(&'static
     use crate::button::{Button, Kind};
     let Some(ask) = s.ask.clone() else { return };
     let mut keep = true;
-    egui::Window::new(tr("A different signer"))
+    let shown = egui::Window::new(tr("A different signer"))
         .id(key().with("signer"))
         .title_bar(false)
         .frame(crate::dialog_frame::card_frame(ctx))
@@ -844,6 +876,10 @@ fn signer_ask_ui(ctx: &egui::Context, s: &mut State, actions: &mut Vec<(&'static
                 }
             });
         });
+    // drawn over the Marketplace, so its layer wins over the Marketplace's
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if !keep {
         s.ask = None;
     }

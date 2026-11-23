@@ -518,8 +518,12 @@ pub fn card_header(ui: &mut Ui, title: &str, close: Option<&str>) -> bool {
 
 /// Esc for a tool window (Edit In Presets, Actions, Plug-ins): true, and the key taken, when it
 /// should close: no popup is open, no text is being typed and no dialog sits over it.
-pub fn esc_closes(app_dialog_open: bool, ctx: &egui::Context) -> bool {
+/// `text_focus` is whether a widget had the keyboard at the end of the last frame (`LccApp::text_focus`):
+/// egui takes the focus off a text field as Esc comes in, before any window sees the key, so that
+/// Esc is the field's (it leaves the field) and the next one closes the window.
+pub fn esc_closes(app_dialog_open: bool, text_focus: bool, ctx: &egui::Context) -> bool {
     !app_dialog_open
+        && !text_focus
         && !egui::Popup::is_any_open(ctx)
         && !ctx.egui_wants_keyboard_input()
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))

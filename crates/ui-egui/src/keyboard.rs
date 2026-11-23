@@ -54,7 +54,7 @@ pub(crate) fn answer_waiting(app: &LccApp) -> bool {
 }
 
 /// Identity Plate Editor, Find Duplicates, Review Comments, Import Warnings, the camera-roll
-/// question, the Plug-in Manager and the plug-ins' own windows.
+/// question, the Plug-in Manager, the Plug-in Marketplace and the plug-ins' own windows.
 fn tool_window_open(app: &LccApp) -> bool {
     app.ui.identity_plate.setup.is_some()
         || app.duplicates.as_ref().is_some_and(|f| f.open)
@@ -96,10 +96,11 @@ fn native_window_open(_: &LccApp) -> bool {
     false
 }
 
-/// The Plug-in Manager or one of the plug-ins' windows ([`crate::panels::plugins::modal_open`]).
+/// The Plug-in Manager or one of the plug-ins' windows ([`crate::panels::plugins::modal_open`]), or
+/// the Plug-in Marketplace ([`crate::panels::marketplace::modal_open`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn plugin_window_open(app: &LccApp) -> bool {
-    crate::panels::plugins::modal_open(app)
+    crate::panels::plugins::modal_open(app) || crate::panels::marketplace::modal_open()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -109,9 +110,9 @@ pub(crate) fn plugin_window_open(_: &LccApp) -> bool {
 
 /// Closes the tool window Back closes as it closes a dialog, when nothing else waits over it:
 /// the Identity Plate Editor (cancelled), Import Warnings, Review Comments, Find Duplicates, each
-/// as its own Cancel or ✕ closes it. The questions that need an answer, and the plug-ins' windows,
-/// keep their own Esc; in the full-screen preview the tool windows wait unseen, and stay. Returns
-/// what it closed.
+/// as its own Cancel or ✕ closes it. The questions that need an answer, the plug-ins' windows and
+/// the Plug-in Marketplace keep their own Esc; in the full-screen preview the tool windows wait
+/// unseen, and stay. Returns what it closed.
 pub(crate) fn close_tool_window(app: &mut LccApp) -> Option<&'static str> {
     if app.ui.fullscreen || answer_waiting(app) || plugin_window_open(app) || crate::camera_roll::prompt_due(app) {
         return None;
