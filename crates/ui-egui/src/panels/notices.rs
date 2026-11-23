@@ -198,7 +198,8 @@ fn prompt_id(app: &LightcraftApp) -> Option<&'static str> {
 /// pointer input to the prompt. The control channel and raw keyboard/event handlers do not go
 /// through that hit test, however: they must consult this explicit barrier as well.
 pub(crate) fn prompt_layer(app: &LightcraftApp) -> Option<egui::LayerId> {
-    prompt_id(app).map(|id| crate::dialogs::framework_dialog_layer(egui::Id::unique(id)))
+    // The layer it was shown on, once drawn; before that, the one the framework shows a dialog of its id on.
+    prompt_id(app).map(|id| app.notice_input.layer.unwrap_or_else(|| crate::dialogs::framework_dialog_layer(egui::Id::unique(id))))
 }
 
 /// Whether a prompt is on screen and owns all pointer and keyboard input.
@@ -264,6 +265,8 @@ pub(crate) struct PromptInput {
     /// live input before the background draws and given back while the prompt draws: the
     /// framework dialog reads them during the pass.
     events: Vec<egui::Event>,
+    /// The egui layer the prompt's framework dialog was shown on in its latest real draw.
+    layer: Option<egui::LayerId>,
 }
 
 impl PromptInput {
@@ -279,6 +282,7 @@ impl PromptInput {
         self.button_ids.clear();
         self.pointer = None;
         self.events.clear();
+        self.layer = None;
     }
 }
 
@@ -524,6 +528,7 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
         .map(|(bid, label, _)| crate::dialogs::FooterSpec { label: crate::i18n::tr(label).to_string(), name: format!("button:{bid}"), enabled: true, primary: false })
         .collect();
     let picked = Cell::new(None);
+    let shown_layer: Cell<Option<egui::LayerId>> = Cell::new(None);
     let responses: RefCell<Vec<egui::Response>> = RefCell::new(Vec::new());
     // The prompt's own input of this pass, taken from the background, is the prompt's while it draws.
     let restored = std::mem::take(&mut input.events);
@@ -531,7 +536,9 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
     if gave_back {
         ctx.input_mut(|live| live.events.extend(restored));
     }
-    crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
+    // The prompt is the top of the dialog stack (`STACK_PROMPT`), above a dialog or library window under it, however
+    // the layers appeared.
+    craft::ui::runtime::overlay::stack_place(ctx, crate::dialogs::STACK_PROMPT, egui::Id::unique(id), || crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
         let output = Dialog::new(crate::i18n::tr(title).to_owned())
             .id(egui::Id::unique(id))
             .opened(Bind::given(true))
@@ -550,6 +557,8 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
                 // The first layout of a new layer is a sizing pass: finish its real hit areas in this same frame.
                 if ui.is_sizing_pass() {
                     ctx.request_discard("notice prompt: settle its buttons before input");
+                } else if !craft::ui::runtime::measure::active(ui.ctx()) {
+                    shown_layer.set(Some(ui.layer_id()));
                 }
                 // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
                 ui.set_width(420.0);
@@ -559,6 +568,9 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
             .output;
         if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
             return;
+        }
+        if let Some(layer) = shown_layer.get() {
+            input.layer = Some(layer);
         }
         let responses = responses.borrow();
         // The real response ids are the AccessKit nodes a screen reader targets.
@@ -574,7 +586,7 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
         if chosen.is_none() {
             chosen = picked.get().filter(|index| *index <= last).or(output.closed.map(|_| cancel_index));
         }
-    });
+    }));
     if gave_back {
         // and nothing drawn after the prompt sees it
         ctx.input_mut(|live| live.events.retain(|event| !prompt_event(event)));

@@ -479,6 +479,10 @@ impl LightcraftApp {
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(background, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
             panels::second::show(self, &ctx);
+            panels::dialogs::show_root(self, ui, notice_blocks);
+            updates_ui::show(self, &ctx);
+            panels::library_problem::show(self, &ctx, notice_blocks);
+            // (the prompt last, above every other modal of the pass)
             if notice_blocks {
                 panels::notices::restore_prompt_pointer(self, &ctx);
             }
@@ -486,9 +490,6 @@ impl LightcraftApp {
             if notice_blocks {
                 panels::notices::hide_background_pointer(&ctx);
             }
-            panels::dialogs::show_root(self, ui, notice_blocks);
-            updates_ui::show(self, &ctx);
-            panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
             drop_overlay::show(self, &ctx);
             if notice_blocks {
@@ -505,6 +506,11 @@ impl LightcraftApp {
         super::shell::show(self, background);
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
+        panels::dialogs::show_root(self, ui, notice_blocks);
+        updates_ui::show(self, &ctx);
+        panels::library_problem::show(self, &ctx, notice_blocks);
+        // The prompt is shown after every other modal of the pass: the framework makes the last modal shown the one
+        // that takes the window's hits, and the prompt stands above whatever dialog it covers.
         if notice_blocks {
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
@@ -512,9 +518,6 @@ impl LightcraftApp {
         if notice_blocks {
             panels::notices::hide_background_pointer(&ctx);
         }
-        panels::dialogs::show_root(self, ui, notice_blocks);
-        updates_ui::show(self, &ctx);
-        panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);

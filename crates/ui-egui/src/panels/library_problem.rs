@@ -1059,7 +1059,7 @@ fn action_button(ui: &mut egui::Ui, window: &str, id: &str, label: &str, enabled
     if real {
         crate::widgets::register_response(format!("button:{id}"), r.response.rect, &r.response);
     }
-    real && enabled && r.clicked()
+    real && enabled && (r.clicked() || crate::widgets::same_pass_click(&r.response))
 }
 
 /// A blocking window: a modal framework dialog over a scrim that covers everything behind it, so
@@ -1082,7 +1082,8 @@ fn blocking_window(
     let (mut body, mut footer) = (body, footer);
     let mut shown = None;
     // The dialog mounts its own modal layer; this area only gives it a parent `Ui`.
-    crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
+    // Above the dialog it covers on the dialog stack, below a prompt.
+    craft::ui::runtime::overlay::stack_place(ctx, crate::dialogs::STACK_LIBRARY, window_id(id), || crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
         let output = Dialog::new(crate::i18n::tr(title).to_owned())
             .id(window_id(id))
             .opened(Bind::given(true))
@@ -1099,7 +1100,7 @@ fn blocking_window(
         if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
             shown = Some((output.closed, output.response));
         }
-    });
+    }));
     shown
 }
 
@@ -1369,7 +1370,7 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let b = Button::new(crate::i18n::tr("Open Library…").to_owned()).id_salt("libraryReopen").size(craft::theme::ControlSize::Sm).show(ui);
                 if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                     crate::widgets::register_response("button:libraryReopen", b.response.rect, &b.response);
-                    reopen = b.clicked();
+                    reopen = b.clicked() || crate::widgets::same_pass_click(&b.response);
                 }
             });
         });
