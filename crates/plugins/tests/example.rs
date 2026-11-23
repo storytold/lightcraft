@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use lcc_plugins::publish::{PluginPublisher, PublishItem, PublishProvider};
 use lcc_plugins::{HostApi, Manager, Permissions};
@@ -566,20 +567,27 @@ fn job_tools_example_works_through_the_photos_and_stops_when_asked() {
 }
 
 /// Builds the SDK's stamp tool (`sdk/stamp`) on its own, from its own lockfile, as an author's CI does.
+/// Built once per test binary: tests in this file run in parallel, and two cargo builds into one
+/// directory would replace the binary while the other test is running it.
 fn build_stamp_tool() -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/stamp");
-    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plugin-stamp-tool");
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let status = Command::new(cargo)
-        .current_dir(&root)
-        .args(["build", "--locked"])
-        .env("CARGO_TARGET_DIR", &target)
-        .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .status()
-        .unwrap();
-    assert!(status.success(), "building plugin-stamp on its own failed");
-    target.join("debug").join(format!("plugin-stamp{}", std::env::consts::EXE_SUFFIX))
+    static STAMP_TOOL: OnceLock<PathBuf> = OnceLock::new();
+    STAMP_TOOL
+        .get_or_init(|| {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/stamp");
+            let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plugin-stamp-tool");
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let status = Command::new(cargo)
+                .current_dir(&root)
+                .args(["build", "--locked"])
+                .env("CARGO_TARGET_DIR", &target)
+                .env_remove("RUSTFLAGS")
+                .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                .status()
+                .unwrap();
+            assert!(status.success(), "building plugin-stamp on its own failed");
+            target.join("debug").join(format!("plugin-stamp{}", std::env::consts::EXE_SUFFIX))
+        })
+        .clone()
 }
 
 #[test]
