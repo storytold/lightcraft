@@ -100,6 +100,8 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
         crate::text_field::focus(ui.ctx(), "field:search");
     }
     let before = app.ui.search.clone();
+    let field_id = crate::text_field::id("field:search");
+    let had_focus = crate::text_field::has_focus_id(ui.ctx(), field_id);
     let (shown, record) = craft::ui::runtime::inspect::record(ui, crate::text_field::id("field:search").with("inspect"), |ui| {
         craft::ui::text::TextField::search(crate::i18n::tr("Search Photos"), Bind::bound(&mut app.ui.search))
             .id(crate::text_field::id("field:search"))
@@ -108,6 +110,13 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
             .show_at(ui, sr)
     });
     crate::text_field::register_field(ui, "field:search", &shown.response, record.as_deref());
+    // Escape leaves the field: it gives up the keyboard focus, so the next Escape reaches the window (View ▸ Back).
+    if had_focus && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.ctx().memory_mut(|memory| {
+            memory.surrender_focus(field_id);
+            memory.surrender_focus(crate::text_field::text_id(field_id));
+        });
+    }
     if app.ui.search != before {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));
