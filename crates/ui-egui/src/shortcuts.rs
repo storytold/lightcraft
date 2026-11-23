@@ -431,7 +431,8 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     let taken: Vec<(Modifiers, Key)> = saved_keys(keymap).map(|(_, k)| k).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
-    let popup_open = egui::Popup::is_any_open(ctx);
+    // (the in-window menu bar's menus are the framework's, not egui popups)
+    let popup_open = egui::Popup::is_any_open(ctx) || craft::ui::menu::bar::is_open(ctx);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
     let popup_open = popup_open || app.text_focus;
     ctx.input(|i| {

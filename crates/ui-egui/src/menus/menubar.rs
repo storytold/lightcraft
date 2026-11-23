@@ -1043,8 +1043,9 @@ pub fn shortcut_text(sc: &str, mac: bool) -> String {
 /// caption on both sides, and [`bar_width`] keeps the top bar's search field clear of the titles.
 const TITLE_GAP: f32 = 24.0;
 
-/// The least room the in-window bar is given: enough for its collapsed "Menu" title.
-const MENU_MIN: f32 = 64.0;
+/// The room the in-window bar is given when its titles do not fit: enough for its collapsed "Menu" title and too
+/// little for a title beside the "…" one, as the old bar showed one "Menu" button whatever the room.
+const MENU_MIN: f32 = 48.0;
 
 /// Width of the in-window menu bar's titles.
 pub fn bar_width(ui: &egui::Ui) -> f32 {
@@ -1082,7 +1083,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     let start = ui.cursor().left();
     // A dialog or the shortcut recorder owns the keys: no F10, Alt or Alt+letter for the bar then.
     let keys = app.ui.dialog.is_none() && app.recording_shortcut.is_none();
-    let room = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(max_width.max(MENU_MIN), ui.available_height()));
+    let room = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(if max_width >= bar_width(ui) { max_width } else { MENU_MIN }, ui.available_height()));
     let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lc-menubar-inspect"), |ui| {
         ui.scope_builder(egui::UiBuilder::new().max_rect(room), |ui| {
             let titles: Vec<MenuTitle<'_>> = bar

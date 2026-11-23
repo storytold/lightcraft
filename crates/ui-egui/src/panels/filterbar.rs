@@ -104,30 +104,33 @@ fn dropdown_face(ui: &mut egui::Ui, id: &str, text: &str, active: bool) -> egui:
     shown.response
 }
 
-/// Before a dropdown's menu is shown: remember whether Enter or Space (rather than a press) is what opens it.
+/// Before a dropdown's menu is shown: remember that a press on its opener (rather than a key) opens it.
 fn note_opening(ui: &egui::Ui, opener: &egui::Response) {
-    let key = opener.id.with("lc-menu-by-key");
-    let focused = craft::ui::runtime::focus::focused_rec(ui.ctx()).is_some_and(|rec| rec.stop.id == opener.id);
-    let (typed, pressed) = ui.input(|i| (i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space), i.pointer.any_pressed()));
-    if focused && typed {
-        ui.data_mut(|d| d.insert_temp(key, true));
-    } else if pressed && opener.contains_pointer() {
-        ui.data_mut(|d| d.insert_temp(key, false));
+    if ui.input(|i| i.pointer.any_pressed()) && opener.contains_pointer() {
+        ui.data_mut(|d| d.insert_temp(opener.id.with("lc-menu-by-pointer"), true));
     }
 }
 
 /// When a dropdown's menu closes: one the pointer opened gives the keyboard back to the grid, so its shortcuts
-/// keep working; one Enter or Space opened leaves the focus on its opener, where the framework returns it.
+/// keep working, even when the framework returns the focus to the opener a few frames after the close; one a key
+/// opened leaves the focus on its opener, where the framework returns it.
 fn menu_closed(ui: &egui::Ui, opener: &egui::Response, closed: bool) {
-    if !closed {
-        return;
+    let by_pointer = opener.id.with("lc-menu-by-pointer");
+    let release = opener.id.with("lc-menu-release");
+    let pass = ui.ctx().cumulative_pass_nr();
+    if closed {
+        if ui.data(|d| d.get_temp::<bool>(by_pointer)).unwrap_or(false) {
+            ui.data_mut(|d| d.insert_temp(release, pass));
+        }
+        ui.data_mut(|d| d.remove::<bool>(by_pointer));
     }
-    let key = opener.id.with("lc-menu-by-key");
-    let by_key = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
-    if !by_key && let Some(rec) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == opener.id) {
+    let Some(since) = ui.data(|d| d.get_temp::<u64>(release)) else { return };
+    if let Some(rec) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == opener.id) {
         ui.memory_mut(|m| m.surrender_focus(rec.stop.root));
+        ui.data_mut(|d| d.remove::<u64>(release));
+    } else if pass.saturating_sub(since) > 60 {
+        ui.data_mut(|d| d.remove::<u64>(release));
     }
-    ui.data_mut(|d| d.remove::<bool>(key));
 }
 
 /// One row of a value menu: radio-marked while `checked`, the lead when the menu opens. `caption` is
