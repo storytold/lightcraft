@@ -1,23 +1,33 @@
 use super::{
     Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
-    pos2, register, section_header, slider, vec2,
+    pos2, register, section_header, vec2,
 };
+use crate::widgets::slider_salted;
 
-/// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
+/// Commit a slider interaction: begin → live updates → end, so a drag is one undo step, and a typed value, a key
+/// step or a reset (which begin and stop at once) is one too. An abandoned drag cancels the interaction it began,
+/// which restores the settings from before it without an undo step.
 pub fn apply_slider_out(
     app: &mut LightcraftApp,
     spec: &ControlSpec,
     out: SliderOut,
     mut set: impl FnMut(&mut LightcraftApp, f64) -> Result<Value, String>,
 ) {
-    if out.drag_started && !out.reset {
+    if out.cancelled {
+        if app.ui.dragging_control.as_deref() == Some(spec.id) {
+            let _ = app.run("develop.cancelInteraction", json!({}));
+            app.ui.dragging_control = None;
+        }
+        return;
+    }
+    if out.drag_started {
         let _ = app.run("develop.beginInteraction", json!({"label": spec.label}));
         app.ui.dragging_control = Some(spec.id.to_string());
     }
     if let Some(v) = out.value {
         let _ = set(app, v);
     }
-    if out.drag_stopped || out.reset {
+    if out.drag_stopped {
         let _ = app.run("develop.endInteraction", json!({}));
         app.ui.dragging_control = None;
     }
@@ -26,7 +36,8 @@ pub fn apply_slider_out(
 pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool) {
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
-    let out = slider(ui, spec, v, enabled, None);
+    // a typed draft or a gesture belongs to the photo it began on
+    let out = slider_salted(ui, spec, v, enabled, None, egui::Id::new(app.session.active()));
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
 }
 

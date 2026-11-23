@@ -269,7 +269,8 @@ fn tab_walks_the_right_panels_top_to_bottom() {
 fn a_slider_value_field_is_named_value_and_describes_how_to_use_it() {
     const INSTRUCTION: &str = "Click to type a value, drag to change it";
     let h = harness(ViewMode::Detail, RightPanel::Edit);
-    let buttons: Vec<_> = h.root().children_recursive().filter(|n| n.accesskit_node().role() == Role::Button).collect();
+    // the framework's value field is a spin button (a typed number), the old readout was a button
+    let buttons: Vec<_> = h.root().children_recursive().filter(|n| matches!(n.accesskit_node().role(), Role::Button | Role::SpinButton)).collect();
     let names: Vec<String> = buttons.iter().filter_map(|n| n.accesskit_node().label()).collect();
     let field = buttons
         .iter()

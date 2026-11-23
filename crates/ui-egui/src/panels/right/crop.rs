@@ -454,11 +454,6 @@ fn crop_overlay_choices(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: Photo
 }
 
 pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    use crate::widgets::SliderOut;
-    use craft::behavior::{EditEvent, Mixed, NumberCodec, Reader};
-    use craft::ui::contract::Sizing;
-    use craft::ui::form::SliderField;
-
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let interactive = real && ui.is_enabled() && app.session.active() == Some(id);
     let gesture_key = egui::Id::unique("remove-brush-interaction-owner");
@@ -549,85 +544,9 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // Local model mapping only: the SDK owns editing/gestures and the existing
     // apply_slider_out adapter owns engine begin/update/end and Undo grouping.
     let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64, enabled: bool| {
-        let number_spec = *spec;
-        let record_key = ui.scope_id().with(("remove-field", id, selected, spec.id));
-        let (out, record) = craft::ui::runtime::inspect::record(ui, record_key, |ui| {
-            egui::Frame::NONE
-                .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
-                .show(ui, |ui| {
-                    SliderField::new(crate::i18n::tr(spec.label).to_owned(), Bind::given(value).reset(spec.default), spec.min..=spec.max)
-                        .id_salt(("remove-field", id, selected, spec.id))
-                        .step(spec.step)
-                        .number_codec(
-                            NumberCodec::new(Reader::new(), usize::from(spec.decimals))
-                                .parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
-                        )
-                        .fill(false)
-                        .tooltip(crate::i18n::tr("Click to type a value, drag to change it").to_owned())
-                        .enabled(interactive && enabled)
-                        .sizing(Sizing::FillWidth)
-                        .show(ui)
-                })
-                .inner
-        });
-        if real && let Some(record) = record {
-            for (index, element) in record.elements.iter().enumerate() {
-                let Some(facts) = &element.facts else { continue };
-                let prefix = match facts.role.as_str() {
-                    "Slider" => "slider",
-                    "SpinButton" => "sliderValue",
-                    "Label" => "sliderLabel",
-                    _ => continue,
-                };
-                let rect = record.stop_rect(index).unwrap_or(element.rect);
-                // The recorded composite child is the actual SDK owner, including
-                // arena children with no native read_response. This is an alias,
-                // not an additional interactive widget or an input intent.
-                let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
-                    let mut response = out.response.clone();
-                    response.id = element.id;
-                    response.rect = rect;
-                    response.interact_rect = rect.intersect(ui.clip_rect());
-                    response
-                });
-                let mut target = rect;
-                if prefix == "slider"
-                    && let Some(thumb) = record
-                        .hits
-                        .iter()
-                        .find(|part| part.owner == element.id && part.part.is_some_and(|part| part.key == craft::ui::value_drag::Slider::THUMB))
-                {
-                    // Preserve the old locator's model-value span: SDK endpoints
-                    // are the centres of the endpoint thumbs, not the box edges.
-                    target = rect.shrink2(egui::vec2((thumb.bounds.width() * 0.5).min(rect.width() * 0.5), 0.0));
-                    crate::widgets::register_geometry(ui.ctx(), format!("sliderThumb:{}", spec.id), thumb.bounds);
-                }
-                crate::widgets::register_response(format!("{prefix}:{}", spec.id), target, &response);
-            }
-        }
-        let mut result = SliderOut::default();
-        let mut cancelled = false;
-        if real {
-            for event in &out.events {
-                match event {
-                    EditEvent::Begin { .. } if interactive && enabled => result.drag_started = true,
-                    EditEvent::Update { value, .. } if interactive && enabled => result.value = Some(*value),
-                    EditEvent::Commit { after, .. } if interactive && enabled => {
-                        result.value = Some(*after);
-                        result.drag_stopped = true;
-                    }
-                    EditEvent::Set { after, .. } if interactive && enabled => result.value = Some(*after),
-                    EditEvent::Cancel { before, .. } => {
-                        if let Some(Mixed::Same(value)) = before {
-                            result.value = Some(*value);
-                        }
-                        cancelled = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        (result, cancelled)
+        // a draft or gesture belongs to the photo and spot it began on
+        let out = crate::widgets::slider_salted(ui, spec, value, interactive && enabled, None, egui::Id::new(("remove-field", id, selected)));
+        (out, out.cancelled)
     };
     let sliders = [
         (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", sel.as_ref().map_or(app.ui.remove_size as f64, |(_, sp)| sp.size) * 1000.0),
@@ -660,7 +579,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.data_mut(|d| d.insert_temp(gesture_key, (id, index, spec.id.to_owned())));
             }
             crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| app.run("spot.update", json!({key: v / scale})));
-            if out.drag_stopped || out.reset {
+            if out.drag_stopped {
                 ui.data_mut(|d| d.remove::<(PhotoId, usize, String)>(gesture_key));
             }
         }
@@ -799,10 +718,6 @@ mod shared_tool_overlay_flow_tests;
 
 pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
-    use crate::widgets::SliderOut;
-    use craft::behavior::{EditEvent, Mixed, NumberCodec, Reader};
-    use craft::ui::contract::Sizing;
-    use craft::ui::form::SliderField;
 
     // Numeric ownership belongs to the actual bound interaction. The earlier
     // mode/delete controls and commands only gain real-pass action eligibility.
@@ -896,85 +811,8 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // find(indexed id) returns a TEMPLATE spec: retain the old unindexed
     // sliderLabel:/slider:/sliderValue: aliases; only the command payload is indexed.
     let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64| {
-        let number_spec = *spec;
-        let record_key = egui::Id::unique(("red-eye-field-record", id, i, spec.id));
-        let (out, record) = craft::ui::runtime::inspect::record(ui, record_key, |ui| {
-            egui::Frame::NONE
-                .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
-                .show(ui, |ui| {
-                    SliderField::new(crate::i18n::tr(spec.label).to_owned(), Bind::given(value).reset(spec.default), spec.min..=spec.max)
-                        .id_salt(("red-eye-field", selected, epoch, spec.id))
-                        .step(spec.step)
-                        .number_codec(
-                            NumberCodec::new(Reader::new(), usize::from(spec.decimals))
-                                .parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
-                        )
-                        .fill(false)
-                        .tooltip(crate::i18n::tr("Click to type a value, drag to change it").to_owned())
-                        .enabled(interactive)
-                        .sizing(Sizing::FillWidth)
-                        .show(ui)
-                })
-                .inner
-        });
-        if real && let Some(record) = record {
-            for (index, element) in record.elements.iter().enumerate() {
-                let Some(facts) = &element.facts else { continue };
-                let prefix = match facts.role.as_str() {
-                    "Slider" => "slider",
-                    "SpinButton" => "sliderValue",
-                    "Label" => "sliderLabel",
-                    _ => continue,
-                };
-                let rect = record.stop_rect(index).unwrap_or(element.rect);
-                // The recorded composite child is the actual SDK owner, including
-                // arena children with no native read_response. This is an alias,
-                // not an additional interactive widget or an input intent.
-                let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
-                    let mut response = out.response.clone();
-                    response.id = element.id;
-                    response.rect = rect;
-                    response.interact_rect = rect.intersect(ui.clip_rect());
-                    response
-                });
-                let mut target = rect;
-                if prefix == "slider"
-                    && let Some(thumb) = record
-                        .hits
-                        .iter()
-                        .find(|part| part.owner == element.id && part.part.is_some_and(|part| part.key == craft::ui::value_drag::Slider::THUMB))
-                {
-                    // Preserve the old locator's model-value span: SDK endpoints
-                    // are the centres of the endpoint thumbs, not the box edges.
-                    target = rect.shrink2(egui::vec2((thumb.bounds.width() * 0.5).min(rect.width() * 0.5), 0.0));
-                    crate::widgets::register_geometry(ui.ctx(), format!("sliderThumb:{}", spec.id), thumb.bounds);
-                }
-                crate::widgets::register_response(format!("{prefix}:{}", spec.id), target, &response);
-            }
-        }
-        let mut result = SliderOut::default();
-        let mut cancelled = false;
-        if real {
-            for event in &out.events {
-                match event {
-                    EditEvent::Begin { .. } if interactive => result.drag_started = true,
-                    EditEvent::Update { value, .. } if interactive => result.value = Some(*value),
-                    EditEvent::Commit { after, .. } if interactive => {
-                        result.value = Some(*after);
-                        result.drag_stopped = true;
-                    }
-                    EditEvent::Set { after, .. } if interactive => result.value = Some(*after),
-                    EditEvent::Cancel { before, .. } => {
-                        if let Some(Mixed::Same(value)) = before {
-                            result.value = Some(*value);
-                        }
-                        cancelled = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        (result, cancelled)
+        let out = crate::widgets::slider_salted(ui, spec, value, interactive, None, egui::Id::new(("red-eye-field", selected, epoch)));
+        (out, out.cancelled)
     };
     for k in ["pupilSize", "darken"] {
         let cid = format!("redEye.{i}.{k}");
@@ -1004,7 +842,7 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     )
                 });
             }
-            if out.drag_stopped || out.reset {
+            if out.drag_stopped {
                 ui.data_mut(|data| data.remove::<Gesture>(gesture_key));
             }
         }

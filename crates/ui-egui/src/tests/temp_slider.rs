@@ -41,21 +41,13 @@ fn widget(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
-/// Where the slider's thumb (the hollow ring on the track's centre line) is drawn, from 0 to 1 along the track.
+/// Where the slider's thumb is, from 0 to 1 along the track: the framework slider's real thumb (`sliderThumb:`),
+/// whose centre runs along the span `slider:` names.
 fn thumb(h: &Headless, control: &str) -> f32 {
     let track = widget(h, &format!("slider:{control}"));
-    let rings: Vec<f32> = h
-        .view
-        .painted_shapes()
-        .iter()
-        .filter_map(|s| match s {
-            egui::epaint::Shape::Circle(c) if c.radius == 7.0 && (c.center.y - track.center().y).abs() < 0.5 => Some(c.center.x),
-            _ => None,
-        })
-        .filter(|x| (track.left() - 0.5..=track.right() + 0.5).contains(x))
-        .collect();
-    assert!(!rings.is_empty() && rings.iter().all(|x| (x - rings[0]).abs() < 0.01), "one thumb on {control}: {rings:?}");
-    (rings[0] - track.left()) / track.width()
+    let thumbs: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| *w == format!("sliderThumb:{control}")).map(|(_, r)| *r).collect();
+    assert_eq!(thumbs.len(), 1, "one thumb on {control}: {thumbs:?}");
+    (thumbs[0].center().x - track.left()) / track.width()
 }
 
 fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
@@ -102,9 +94,8 @@ fn the_kelvin_temp_slider_has_lightrooms_scale() {
 #[test]
 fn other_sliders_stay_linear() {
     let mut h = edit_panel(true);
-    // The ported control exposes the SDK's actual thumb sensing geometry. The old hollow
-    // circle painter is intentionally not its interface; both unported Temp tests above/below
-    // retain their existing ring/scale checks.
+    // The framework slider exposes its actual thumb geometry (`sliderThumb:`), as the Temp
+    // tests read it too.
     for value in [-4.0, -2.5, 0.0, 1.0, 3.75] {
         set(&mut h, "light.exposure", value);
         let track = widget(&h, "slider:light.exposure");

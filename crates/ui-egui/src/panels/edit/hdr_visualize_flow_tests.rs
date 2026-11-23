@@ -355,7 +355,12 @@ impl Fixture {
     }
     fn numeric(&mut self, value: f64) {
         self.click("sliderValue:hdr.maxEv");
-        assert_eq!(self.ctx.memory(|m| m.focused()), Some(crate::text_field::id("sliderField:hdr.maxEv")), "real numeric owner");
+        let field = self.rect("sliderField:hdr.maxEv").expand(1.0);
+        let focused = craft::ui::runtime::focus::focused_rec(&self.ctx);
+        assert!(
+            focused.is_some_and(|rec| rec.stop.text && self.ctx.read_response(rec.stop.root).is_some_and(|r| field.contains_rect(r.rect))),
+            "real numeric owner"
+        );
         self.key_mod(Key::A, Modifiers { ctrl: true, command: true, ..Default::default() });
         let before = self.document();
         self.frame(vec![Event::Text(value.to_string())]);
