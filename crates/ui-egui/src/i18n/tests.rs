@@ -1301,19 +1301,23 @@ fn perspective_labels_are_translated_in_every_shipped_locale() {
     }
 }
 
-/// The framework's own words read in LightCraft's language: by their English text, and a word with `{app}` by the
-/// app's name in its place, as LightCraft's catalogs write it.
+/// The framework's own words read in LightCraft's language: its catalogs, as craft-i18n reads them, translate the
+/// framework's English text, and a word with `{app}` reads as LightCraft's catalogs write the app's name.
 #[test]
 fn framework_words_follow_the_language() {
-    for language in [Locale::De, Locale::Uk, Locale::Fi] {
+    let i18n = framework_catalogs();
+    assert!(i18n.check_all().is_empty(), "every row given to craft-i18n reads: {:?}", i18n.check_all());
+    for language in [Locale::De, Locale::Uk, Locale::Fi, Locale::It, Locale::Vi] {
+        let lang = framework_lang(language).unwrap_or_else(|| panic!("{language:?} is offered"));
         let about = language.tr("About LightCraft");
         assert_ne!(about, "About LightCraft", "{language:?} translates the About title");
-        assert_eq!(framework_word(language, "", "About {app}").map(|text| text.replace("{app}", "LightCraft")).as_deref(), Some(about));
-        let settings = language.tr("Settings");
-        assert_eq!(framework_word(language, "", "Settings").as_deref(), (settings != "Settings").then_some(settings));
-        assert_eq!(framework_word(language, "", "no catalog has this text"), None);
-        // one set of words per language: the framework sees the same generation every frame
-        assert!(std::sync::Arc::ptr_eq(&framework_words(language), &framework_words(language)));
+        assert_eq!(i18n.t(lang, "About {app}").replace("{app}", "LightCraft"), about);
+        assert_eq!(i18n.t(lang, "Settings"), language.tr("Settings"));
+        assert_eq!(i18n.t(lang, "no catalog has this text"), "no catalog has this text");
+        // one host per language: the framework sees the same generation every frame
+        let host = framework_host(language).expect("a translated language has a host");
+        assert!(std::sync::Arc::ptr_eq(&host, &framework_host(language).expect("again")));
+        assert_eq!(host.lang(), lang);
     }
-    assert_eq!(framework_word(Locale::En, "", "About {app}"), None);
+    assert!(framework_host(Locale::En).is_none(), "English keeps the framework's own words");
 }
