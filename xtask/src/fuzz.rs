@@ -4,9 +4,13 @@
 //! `cargo test` runs it briefly; this driver runs it in release mode with `LCC_FUZZ_SECS` (time box),
 //! `LCC_FUZZ_RNG` (a fresh mutation stream per run), `LCC_FUZZ_CORPUS` (the gitignored `corpus/`, when
 //! present) and `LCC_FUZZ_CRASH_DIR` (`target/fuzz/crashes/<target>/`). Docs: `docs/testing-sil.md`.
+//!
+//! `--parallel` builds every selected target first, one `cargo test --no-run` after another (no two cargo
+//! builds race on one target dir), then runs the built test binaries at once, each single-threaded, so N
+//! targets take one time box instead of N. Each target's output goes to `target/fuzz/logs/<target>.log`.
 
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// (name, package, test selector): `--test fuzz_target` for integration tests, `--lib` + a filter for
 /// targets that need crate-private seeds.
@@ -25,10 +29,11 @@ pub struct Options {
     pub secs: u64,
     pub rng: u64,
     pub list: bool,
+    pub parallel: bool,
 }
 
 pub fn parse(args: &[&str]) -> Result<Options, String> {
-    let mut o = Options { targets: Vec::new(), secs: 60, rng: rng_from_clock(), list: false };
+    let mut o = Options { targets: Vec::new(), secs: 60, rng: rng_from_clock(), list: false, parallel: false };
     let mut i = 0;
     while i < args.len() {
         let a = args.get(i).copied().unwrap_or("");
@@ -44,6 +49,7 @@ pub fn parse(args: &[&str]) -> Result<Options, String> {
                 i += 1;
             }
             "--list" => o.list = true,
+            "--parallel" => o.parallel = true,
             "all" => o.targets.extend(TARGETS.iter().map(|t| t.0)),
             s if !s.starts_with('-') => {
                 let t = TARGETS.iter().find(|t| t.0 == s).ok_or_else(|| format!("fuzz: unknown target `{s}` (targets: {})", names()))?;
@@ -78,6 +84,9 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     }
     let corpus = root.join("corpus");
     let crashes = root.join("target").join("fuzz").join("crashes");
+    if o.parallel {
+        return run_parallel(root, &o, &corpus, &crashes);
+    }
     let mut failed = Vec::new();
     for name in &o.targets {
         let Some((_, pkg, sel)) = TARGETS.iter().find(|t| t.0 == *name) else { continue };
@@ -93,6 +102,10 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
             failed.push(*name);
         }
     }
+    report(&o, &failed, &crashes)
+}
+
+fn report(o: &Options, failed: &[&str], crashes: &Path) -> Result<(), String> {
     if failed.is_empty() {
         println!("fuzz: all {} target(s) ran {}s each without a crash", o.targets.len(), o.secs);
         Ok(())
@@ -105,6 +118,89 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// The test executable(s) a `cargo test --no-run --message-format=json` build produced.
+fn test_executables(json: &str) -> Vec<PathBuf> {
+    json.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.get("reason").and_then(|r| r.as_str()) == Some("compiler-artifact"))
+        .filter(|v| v.pointer("/profile/test").and_then(|t| t.as_bool()) == Some(true))
+        .filter_map(|v| v.get("executable").and_then(|e| e.as_str()).map(PathBuf::from))
+        .collect()
+}
+
+fn run_parallel(root: &Path, o: &Options, corpus: &Path, crashes: &Path) -> Result<(), String> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let logs = root.join("target").join("fuzz").join("logs");
+    std::fs::create_dir_all(&logs).map_err(|e| format!("fuzz: {}: {e}", logs.display()))?;
+    // Phase 1: build, one cargo at a time (shared dependencies compile once).
+    let mut built = Vec::new();
+    for name in &o.targets {
+        let Some((_, pkg, sel)) = TARGETS.iter().find(|t| t.0 == *name) else { continue };
+        println!("fuzz: building {name} ({pkg})");
+        let (cargo_sel, filter): (Vec<&str>, Option<&str>) =
+            if sel.first() == Some(&"--lib") { (vec!["--lib"], sel.get(1).copied()) } else { (sel.to_vec(), None) };
+        let out = Command::new(&cargo)
+            .current_dir(root)
+            .args(["test", "--release", "--no-run", "--message-format=json", "-p", pkg])
+            .args(&cargo_sel)
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(|e| format!("cargo test --no-run: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("fuzz: building {name} ({pkg}) failed"));
+        }
+        let exes = test_executables(&String::from_utf8_lossy(&out.stdout));
+        let [exe] = exes.as_slice() else {
+            return Err(format!("fuzz: {name}: expected one test binary, cargo built {}", exes.len()));
+        };
+        built.push((*name, *pkg, exe.clone(), filter));
+    }
+    // Phase 2: run every binary at once.
+    let mut running: Vec<(&str, std::process::Child, PathBuf)> = Vec::new();
+    for (name, pkg, exe, filter) in built {
+        println!("fuzz: {name} ({pkg}) for {}s, LCC_FUZZ_RNG={}", o.secs, o.rng);
+        let log_path = logs.join(format!("{name}.log"));
+        let log = std::fs::File::create(&log_path).map_err(|e| format!("fuzz: {}: {e}", log_path.display()))?;
+        let err = log.try_clone().map_err(|e| format!("fuzz: {}: {e}", log_path.display()))?;
+        let mut c = Command::new(&exe);
+        c.current_dir(root.join("crates").join(pkg.trim_start_matches("lcc-")));
+        if let Some(f) = filter {
+            c.arg(f);
+        }
+        c.args(["--nocapture", "--test-threads", "1"]).stdout(log).stderr(err);
+        c.env("LCC_FUZZ_SECS", o.secs.to_string()).env("LCC_FUZZ_RNG", o.rng.to_string()).env("LCC_FUZZ_CRASH_DIR", crashes.join(name));
+        if corpus.is_dir() {
+            c.env("LCC_FUZZ_CORPUS", corpus);
+        }
+        let child = match c.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                // Don't leave the already-started targets running unattended.
+                for (_, mut started, _) in running {
+                    let _ = started.kill();
+                    let _ = started.wait();
+                }
+                return Err(format!("fuzz: starting {}: {e}", exe.display()));
+            }
+        };
+        running.push((name, child, log_path));
+    }
+    let mut failed = Vec::new();
+    for (name, mut child, log_path) in running {
+        let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+        let tail: Vec<String> = std::fs::read_to_string(&log_path).unwrap_or_default().lines().map(str::to_owned).collect();
+        let from = if ok { tail.len().saturating_sub(3) } else { tail.len().saturating_sub(60) };
+        println!("--- fuzz {name}: {} ({}) ---", if ok { "ok" } else { "FAILED" }, log_path.display());
+        for l in tail.get(from..).unwrap_or_default() {
+            println!("{l}");
+        }
+        if !ok {
+            failed.push(name);
+        }
+    }
+    report(o, &failed, crashes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +211,7 @@ mod tests {
         assert_eq!((o.targets, o.secs, o.rng), (vec!["raw", "peer"], 1800, 7));
         assert_eq!(parse(&[]).unwrap().targets.len(), TARGETS.len());
         assert!(parse(&["nope"]).is_err());
+        assert!(parse(&["all", "--parallel"]).unwrap().parallel);
         assert!(parse(&["--secs", "x"]).is_err());
     }
 
