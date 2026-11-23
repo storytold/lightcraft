@@ -1007,7 +1007,15 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &host::Hos
     if resp.secondary_clicked() && !crate::widgets::carrying(ui.ctx()) && !app.session.selection.contains(id) {
         let _ = app.run("library.select", json!({"ids": [id.0]}));
     }
-    host::context_menu(ui, resp, crate::i18n::tr("Photo"), |ui| context_menu(app, ui, id));
+    // The photo menu is built for the cell that was right-clicked or focused last (Shift+F10 and the Menu key open
+    // the focused one's, and it stays while the menu is open), not for every photo on screen, each frame.
+    let owner = egui::Id::unique("grid-menu-owner");
+    if resp.secondary_clicked() || resp.has_focus() {
+        ui.data_mut(|d| d.insert_temp(owner, id));
+    }
+    if ui.data(|d| d.get_temp::<PhotoId>(owner)) == Some(id) {
+        host::context_menu(ui, resp, crate::i18n::tr("Photo"), |ui| context_menu(app, ui, id));
+    }
 }
 
 struct ThumbFlags {
