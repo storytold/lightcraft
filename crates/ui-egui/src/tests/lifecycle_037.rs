@@ -529,6 +529,7 @@ impl egui::DroppedFile for TestDropped {
 #[test]
 fn one_synthetic_batch_until_a_completed_pass_and_drops_wait_for_the_ui_phase() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     app.fonts_ready = true;
     app.synthetic.push(egui::Event::PointerMoved(egui::pos2(4.0, 4.0)));
@@ -1022,6 +1023,7 @@ fn a_gesture_cancels_when_the_view_changes_before_the_fresh_layout() {
 #[test]
 fn a_widget_gesture_cancels_if_its_target_moves_between_resolution_and_the_press() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
@@ -2028,6 +2030,7 @@ fn a_discarded_layout_does_not_publish_its_widget_registry() {
 #[test]
 fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     // a headless host never gains the first-run tour: its modal would sit over the passes this
     // test drives (screenshot tests elsewhere in this file need the host not headless)
@@ -2059,6 +2062,7 @@ fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
 #[test]
 fn a_delivered_gesture_may_change_the_state_it_acted_on() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     // a headless host never gains the first-run tour: its modal would take the dialog this
     // delivered gesture opens (screenshot tests elsewhere in this file need the host not
@@ -2091,6 +2095,7 @@ fn a_delivered_gesture_may_change_the_state_it_acted_on() {
 #[test]
 fn a_gesture_cancels_when_the_view_changes_before_its_batch_is_injected() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);

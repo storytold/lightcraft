@@ -171,25 +171,3 @@ pub(super) fn show(ui: &mut Ui, id: &str, label: &str, active: bool) -> TextButt
 #[path = "tests_text_button.rs"]
 mod tests;
 
-// Retained native Settings boundary until mixed traversal is supported by the SDK.
-fn native(ui: &mut Ui, id: &str, label: &str, active: bool) -> TextButtonOutput {
-    let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
-    let t = Tokens::get(ui.ctx());
-    let font = t.semibold(11.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
-    let size = vec2(super::text_button_width(galley.size().x), 24.0);
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
-    super::register(ui, format!("button:{id}"), r);
-    let fill = if active {
-        t.pressed
-    } else if resp.hovered() {
-        t.hover
-    } else {
-        t.button
-    };
-    let p = ui.painter();
-    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
-    p.galley(r.center() - galley.size() / 2.0, galley, t.text);
-    TextButtonOutput { response: resp, native: true }
-}

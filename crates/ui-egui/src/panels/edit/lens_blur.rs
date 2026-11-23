@@ -241,49 +241,6 @@ fn focus_shape_row(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_de
             }
         });
     }
-    return;
-
-    let enabled = ui.is_enabled();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(crate::i18n::tr("Shape")).font(t.font(13.0)).color(t.text_dim));
-        ui.add_space(4.0);
-        for shape in FocusShape::ALL {
-            let selected = b.shape == shape;
-            let (r, resp) = ui.allocate_exact_size(vec2(36.0, 28.0), Sense::click());
-            let name = serde_json::to_value(shape).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-            register(ui, format!("lensBlurShape:{name}"), r);
-            crate::widgets::announce(&resp, crate::i18n::tr(shape.label()));
-            let resp = resp.on_hover_text(crate::i18n::tr(match shape {
-                FocusShape::Auto => "Auto: the photo's subject, estimated",
-                FocusShape::Round => "Round",
-                FocusShape::Wide => "Horizontal oval",
-                FocusShape::Tall => "Vertical oval",
-            }));
-            let p = ui.painter();
-            let fill = if selected {
-                t.pressed
-            } else if resp.hovered() && enabled {
-                t.hover
-            } else {
-                t.button
-            };
-            p.rect_filled(r, 4.0, fill);
-            if selected {
-                p.rect_stroke(r, 4.0, Stroke::new(1.0, if enabled { t.accent } else { t.text_dim }), egui::StrokeKind::Inside);
-            }
-            // (dimmed while the blur is off, in the theme's colours)
-            let colour = match (enabled, selected) {
-                (false, _) => t.icon.gamma_multiply(0.4),
-                (true, true) => t.accent,
-                (true, false) => t.icon,
-            };
-            paint_focus_shape(p, r.shrink(5.0), shape, colour);
-            // a preset puts the shape back in the middle at its size (also the one in use, once moved)
-            if resp.clicked() && (!selected || b.area.is_some()) {
-                let _ = app.run("develop.merge", json!({"settings": {"lens_blur": {"shape": name, "area": null}}, "label": "Lens Blur Shape"}));
-            }
-        }
-    });
 }
 
 /// A focus shape's picture in `r`: the oval in its proportions (the largest fills the height), or

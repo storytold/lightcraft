@@ -1212,11 +1212,6 @@ impl ComponentMenuTarget {
     }
 }
 
-#[derive(Clone, Copy)]
-struct NativeComponentMenuVisit {
-    target: ComponentMenuTarget,
-    pass: u64,
-}
 
 enum ComponentRowAction {
     Command(serde_json::Value),
@@ -1377,54 +1372,6 @@ fn component_row_menu(
     action
 }
 
-/// The right-click / "…" menu of one component of the selected mask.
-fn native_component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
-    let mut run = |ui: &mut egui::Ui, text: &str, p: serde_json::Value| {
-        let response = ui.button(menu_label(text));
-        let key = p
-            .get("op")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_else(|| p.get("action").and_then(serde_json::Value::as_str).unwrap_or("action"));
-        crate::widgets::register_response(format!("maskComponent:{mask}:{k}:{key}"), response.rect, &response);
-        if response.clicked() {
-            let mut p = p;
-            p["id"] = json!(mask);
-            p["component"] = json!(k);
-            let _ = app.run("mask.component", p);
-            ui.close();
-        }
-    };
-    run(ui, "Invert", json!({"action": "invert"}));
-    run(ui, &crate::i18n::tr_format!("Duplicate \"{label}\"", label = label), json!({"action": "duplicate"}));
-    if k > 0 {
-        let mode = crate::widgets::menu_button(ui, crate::i18n::tr("Mode"), |ui| {
-            for (op, text) in [("add", "Add"), ("subtract", "Subtract"), ("intersect", "Intersect")] {
-                run(ui, text, json!({"action": "op", "op": op}));
-            }
-        });
-        crate::widgets::register_response(format!("maskComponent:{mask}:{k}:mode"), mode.response.rect, &mode.response);
-    }
-    crate::widgets::menu_button(ui, crate::i18n::tr("Intersect with"), |ui| component_menu(app, ui, "intersect"));
-    crate::widgets::menu_button(ui, crate::i18n::tr("Subtract"), |ui| component_menu(app, ui, "subtract"));
-    ui.separator();
-    let rename = ui.button(crate::i18n::tr("Rename…"));
-    crate::widgets::register_response(format!("maskComponent:{mask}:{k}:rename"), rename.rect, &rename);
-    if rename.clicked() {
-        app.ui.renaming_component = Some((mask, k, label.to_string()));
-        ui.close();
-    }
-    let del = if count == 1 {
-        crate::i18n::tr_format!("Delete \"{label}\" (and the mask)", label = label)
-    } else {
-        crate::i18n::tr_format!("Delete \"{label}\"", label = label)
-    };
-    let response = ui.button(del);
-    crate::widgets::register_response(format!("maskComponent:{mask}:{k}:delete"), response.rect, &response);
-    if response.clicked() {
-        let _ = app.run("mask.component", json!({"id": mask, "component": k, "action": "delete"}));
-        ui.close();
-    }
-}
 
 /// Whether the SAM 3 model is missing in a build that could use it: then the download is
 /// offered (with `then` to start afterwards) instead of starting an AI mask.

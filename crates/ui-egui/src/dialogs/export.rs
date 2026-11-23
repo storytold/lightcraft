@@ -184,37 +184,6 @@ pub(super) fn export_dialog_params(
 
 /// Two columns of settings-group checkboxes (Copy Settings, Create Preset) plus All / None.
 pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>) {
-    // Keep the existing native-presentation route exact; the three ordinary dialog callers use SDK controls.
-    fn native(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>) {
-        let key_of = |g: &SettingsGroup| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-        ui.columns(2, |cols| {
-            for (i, g) in SettingsGroup::ALL.iter().enumerate() {
-                let key = key_of(g);
-                let mut on = groups.contains(&key);
-                let r = cols[i % 2].checkbox(&mut on, crate::i18n::tr(g.label()));
-                crate::widgets::register_response(format!("{tag}:{key}"), r.rect, &r);
-                if r.changed() {
-                    if on {
-                        groups.push(key);
-                    } else {
-                        groups.retain(|x| *x != key);
-                    }
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            let all = ui.small_button(crate::i18n::tr("All"));
-            crate::widgets::register(ui, format!("{tag}:all"), all.rect);
-            if all.clicked() {
-                *groups = SettingsGroup::ALL.iter().map(key_of).collect();
-            }
-            let none = ui.small_button(crate::i18n::tr("None"));
-            crate::widgets::register(ui, format!("{tag}:none"), none.rect);
-            if none.clicked() {
-                groups.clear();
-            }
-        });
-    }
     use craft::behavior::Proposal;
     use craft::ui::buttons::Button;
     use craft::ui::choice::Checkbox;

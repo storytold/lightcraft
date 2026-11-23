@@ -747,97 +747,31 @@ fn button_row(
         buttons_w += ok_button.desired_size(ui).x;
     }
     ui.add_space((ui.available_width() - buttons_w).max(0.0));
-    // The LabelNames SDK inputs and footer share one traversal without carrying a
-    // footer's place from another dialog kind in the generic dialog window.
-    if matches!(dlg, Dialog::LabelNames { .. }) {
-        let cancel_size = cancel_button.desired_size(ui);
-        let ok_size = ok_button.desired_size(ui);
-        ui.push_id(kind, |ui| {
-            if !informational
-                && new_album_footer_button(
-                    ui,
-                    cancel,
-                    "button:dialogCancel",
-                    cancel_size,
-                    true,
-                    false,
-                )
-            {
-                *close = true;
-            }
-            if !ok.is_empty()
-                && new_album_footer_button(ui, ok, "button:dialogOk", ok_size, can_confirm, primary)
-            {
-                if informational {
-                    *close = true;
-                } else {
-                    *confirm = true;
-                }
-            }
-        });
-        return;
-    }
-    let sdk_album =
-        matches!(dlg, Dialog::NewAlbum { .. });
+    // Every dialog's footer is framework buttons, so Tab runs from the dialog's controls into Cancel and the
+    // confirm. Each kind of dialog (and each Keyword caller) keeps its own footer ids, so the keyboard's place
+    // doesn't carry from one dialog to the one it opens.
     let keyword_footer = match dlg {
-        Dialog::KeywordTag { editing, parent, .. } => Some((editing.as_deref(), parent.as_deref())),
+        Dialog::KeywordTag { editing, parent, .. } => Some((editing.as_deref().map(str::to_owned), parent.as_deref().map(str::to_owned))),
         _ => None,
     };
-    let cancel_clicked = !informational
-        && if sdk_album {
-            let size = cancel_button.desired_size(ui);
-            new_album_footer_button(
-                ui,
-                cancel,
-                "button:dialogCancel",
-                size,
-                true,
-                false,
-            )
-        } else if let Some(caller) = keyword_footer {
-            let size = cancel_button.desired_size(ui);
-            ui.push_id(("keyword-tag-footer", caller, "button:dialogCancel"), |ui| {
-                new_album_footer_button(ui, cancel, "button:dialogCancel", size, true, false)
-            })
-            .inner
-        } else {
-            cancel_button.show(ui).clicked()
-        };
-    if cancel_clicked {
-        *close = true;
-    }
-    let ok_clicked = !ok.is_empty()
-        && if sdk_album {
-            let size = ok_button.desired_size(ui);
-            new_album_footer_button(
-                ui,
-                ok,
-                "button:dialogOk",
-                size,
-                can_confirm,
-                primary,
-            )
-        } else if let Some(caller) = keyword_footer {
-            let size = ok_button.desired_size(ui);
-            ui.push_id(("keyword-tag-footer", caller, "button:dialogOk"), |ui| {
-                new_album_footer_button(ui, ok, "button:dialogOk", size, can_confirm, primary)
-            })
-            .inner
-        } else {
-            ok_button.show(ui).clicked()
-        };
-    if ok_clicked {
-        if informational {
+    let cancel_size = cancel_button.desired_size(ui);
+    let ok_size = ok_button.desired_size(ui);
+    ui.push_id(("dialog-footer", kind, keyword_footer), |ui| {
+        if !informational && footer_button(ui, cancel, "button:dialogCancel", cancel_size, true, false) {
             *close = true;
-        } else {
-            *confirm = true;
         }
-    }
+        if !ok.is_empty() && footer_button(ui, ok, "button:dialogOk", ok_size, can_confirm, primary) {
+            if informational {
+                *close = true;
+            } else {
+                *confirm = true;
+            }
+        }
+    });
 }
 
-/// The two NewAlbum footer owners join its public SDK field/checkbox Tab chain.
-/// Other dialogs and the existing native rollout path retain the original Button adapter.
-fn new_album_footer_button(
+/// A dialog footer button: a framework button in the dialog's Tab chain, registered for automation.
+fn footer_button(
     ui: &mut egui::Ui,
     label: &str,
     alias: &'static str,
@@ -1377,46 +1311,6 @@ fn label_name_field(
     eligible && shown.escaped
 }
 
-fn label_names_native_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::LabelNames { names, save_as } = dlg else { return };
-    names.resize(5, String::new());
-    // start from a set
-    let sets = lightcraft_engine::cmd::manage::label_sets_json(&app.session);
-    field(ui, "Set", |ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for set in sets["sets"].as_array().into_iter().flatten() {
-            let name = set["name"].as_str().unwrap_or_default();
-            if crate::widgets::text_button(ui, &format!("labelSet-{name}"), name, false).clicked() {
-                *names = set["names"].as_array().into_iter().flatten().map(|n| n.as_str().unwrap_or_default().to_string()).collect();
-            }
-        }
-    });
-    for (i, l) in lightcraft_catalog::ColorLabel::ALL.iter().enumerate() {
-        let colour = format!("{l:?}");
-        field(ui, &colour, |ui| {
-            let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-            ui.painter().circle_filled(r.center(), 6.0, crate::panels::grid::label_color(*l));
-            let te = crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(&mut names[i]).hint_text(colour.as_str()).desired_width(f32::INFINITY)),
-                crate::i18n::tr(&colour),
-            );
-            crate::widgets::register(ui, format!("field:labelName-{}", colour.to_lowercase()), te.rect);
-        });
-    }
-    field(ui, "Save as set", |ui| {
-        let te = crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(save_as).hint_text(crate::i18n::tr("Optional name")).desired_width(f32::INFINITY)),
-            crate::i18n::tr("Save as set"),
-        );
-        crate::widgets::register(ui, "field:labelSetName", te.rect);
-    });
-    ui.label(
-        egui::RichText::new(crate::i18n::tr(
-            "Names appear in the label menu, the filter bar and the Info panel, and are written to XMP. Empty = the colour's name.",
-        ))
-        .color(t.text_dim),
-    );
-}
 
 /// The body of the MergeKeywords dialog.
 fn merge_keywords_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut Dialog) {
@@ -1523,18 +1417,6 @@ fn new_album_name_field(ui: &mut egui::Ui, value: &mut String) -> bool {
     real && ui.is_enabled() && shown.submitted
 }
 
-fn new_album_native_body(app: &mut LightcraftApp, ui: &mut egui::Ui, confirm: &mut bool, dlg: &mut Dialog) {
-    let Dialog::NewAlbum { name, folder, include_selected, .. } = dlg else { return };
-    if dialog_field(ui, "field:albumName", name, "Name") {
-        *confirm = true;
-    }
-    // as in Lightroom, the option is only there when something is selected
-    if !*folder && !app.session.selected().is_empty() {
-        ui.add_space(6.0);
-        let r = ui.checkbox(include_selected, crate::i18n::tr("Include selected photos"));
-        crate::widgets::register(ui, "check:albumIncludeSelected", r.rect);
-    }
-}
 
 /// The body of the PasteSettings dialog.
 fn paste_settings_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {

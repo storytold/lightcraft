@@ -418,31 +418,6 @@ fn photos_queue_actions(ui: &mut egui::Ui, running: Option<(u64, u64)>, queued: 
     });
 }
 
-/// Match the existing all-native Settings presentation boundary. Outside it the SDK row above
-/// remains authoritative. This renderer owns no queue state, persistence or background work.
-fn native_photos_queue_actions(ui: &mut egui::Ui, running: Option<(u64, u64)>, queued: u64, mut run: impl FnMut(&str, Value)) {
-    ui.horizontal(|ui| {
-        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        let interactive = real && ui.is_enabled();
-        let queue =
-            ui.push_id("denoise:queueAll", |ui| ui.add_enabled(interactive, egui::Button::new(tr("Denoise all photos with an Amount")))).inner;
-        if real {
-            crate::widgets::register_response("denoise:queueAll", queue.interact_rect, &queue);
-        }
-        if interactive && queue.clicked() {
-            run("denoise.queue", json!({"scope":"withAmount"}));
-        }
-        if running.is_some() || queued > 0 {
-            let stop = ui.push_id("denoise:stop", |ui| ui.add_enabled(interactive, egui::Button::new(tr("Stop")))).inner;
-            if real {
-                crate::widgets::register_response("denoise:stop", stop.interact_rect, &stop);
-            }
-            if interactive && stop.clicked() {
-                run("denoise.cancel", json!({}));
-            }
-        }
-    });
-}
 
 /// "Denoising {photo}: {done} of {total} tiles", and how many photos wait.
 fn running_text(app: &LightcraftApp, status: &Value, done: u64, total: u64, queued: u64) -> String {
