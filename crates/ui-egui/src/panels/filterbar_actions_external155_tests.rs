@@ -118,6 +118,8 @@ fn filterbar_actions_external155_clear_real_release_resets_complete_filter_searc
         ask(&mut h, "engine.execute", json!({"command": "library.toggleFilters", "params": {}}));
         assert!(h.app.session.filters_off(), "public toggle really shelved the filter");
         h.app.session.filter = filter.clone();
+        // (the toggle emptied the search field with the shelved filter; the restored filter brings its text back)
+        h.app.ui.search = "fixture".into();
         h.step();
         assert_eq!(h.app.session.filter, filter);
         assert!(h.app.session.filters_off(), "fixture retains the shelved filter until Clear releases");
