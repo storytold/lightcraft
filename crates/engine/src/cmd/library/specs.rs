@@ -293,6 +293,44 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "library.groupRawJpeg",
+            "Stack Raw + JPEG Pairs",
+            ["View"],
+            None,
+            "{on?: bool (toggles when omitted)} → {group, stacks} — when turned on, every raw is stacked with the JPEG beside it (same folder, same file name but for the extension): one collapsed stack per shot, the raw on top, so the grids and the filmstrip show the shot once; photos an import or a folder synchronisation adds after that are stacked the same way. When turned off, the JPEGs are taken out of those stacks again. `stacks` is how many stacks the call changed; either is one undo step. These are ordinary stacks (`stack.toggle`, `stack.setTop`, `stack.ungroup` work on them). A shot whose raw or JPEG is stacked with other photos (a bracket set, a burst) is left as it is, both ways. Local browse records of a browsed folder are stacked among themselves, and such a stack does not keep them from being forgotten. Off by default. Kept with the library's preferences; asking for the state it already has changes nothing",
+            always,
+            |s, p| {
+                let on = match p.get("on") {
+                    None | Some(Value::Null) => !s.group_raw_jpeg,
+                    Some(Value::Bool(on)) => *on,
+                    Some(_) => return Err(bad("library.groupRawJpeg", "on must be true or false")),
+                };
+                let mut stacks = 0;
+                if on != s.group_raw_jpeg {
+                    let was = s.group_raw_jpeg;
+                    s.group_raw_jpeg = on;
+                    if let Err(e) = s.save_prefs() {
+                        // not kept: not changed either, so asking again does what was asked
+                        s.group_raw_jpeg = was;
+                        return Err(e);
+                    }
+                    stacks = if on {
+                        s.stack_raw_jpeg_pairs(None)?
+                    } else {
+                        let ops = s.catalog.raw_jpeg_unpair_ops();
+                        let n = ops.len();
+                        if n > 0 {
+                            s.commit("Unstack Raw + JPEG Pairs", Op::Batch { ops })?;
+                        }
+                        n
+                    };
+                    // a JPEG folded under its raw can't stay the active photo: its stack's top is
+                    crate::cmd::organize::fix_active(s);
+                }
+                Ok(json!({"group": s.group_raw_jpeg, "stacks": stacks}))
+            }
+        ),
+        cmd!(
             "library.shuffle",
             "Reshuffle",
             ["View", "Sort"],

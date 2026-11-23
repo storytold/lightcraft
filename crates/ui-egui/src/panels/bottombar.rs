@@ -19,6 +19,9 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("people", Icon::Subject, ViewMode::People, "People"),
 ];
 
+/// Tooltip of the raw + JPEG toggle.
+const GROUP_RAW_JPEG_TIP: &str = "Stack Raw + JPEG Pairs: a raw and the JPEG beside it as one stack";
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("bottom_bar")
@@ -46,6 +49,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         ui.add_space(10.0);
                         let sort = icon_button(ui, "sort", Icon::Sort, vec2(30.0, 30.0), false, true, "Sort");
                         egui::Popup::menu(&sort).show(|ui| sort_menu(app, ui));
+                        // (wherever Sort is: the filmstrip shows stacks as the grids do)
+                        if icon_button(ui, "groupRawJpeg", Icon::Stack, vec2(30.0, 30.0), app.session.group_raw_jpeg, true, GROUP_RAW_JPEG_TIP)
+                            .clicked()
+                        {
+                            let _ = app.run("library.groupRawJpeg", json!({}));
+                        }
                     } else {
                         let current_icon = VIEW_MODES.iter().find(|(_, _, mode, _)| *mode == app.ui.view).map_or(Icon::More, |(_, icon, _, _)| *icon);
                         let more = icon_button(ui, "viewOptions", current_icon, vec2(40.0, 32.0), true, true, "View");
@@ -64,6 +73,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             }
                             ui.separator();
                             crate::widgets::menu_button(ui, crate::i18n::tr("Sort"), |ui| sort_menu(app, ui));
+                            if ui.selectable_label(app.session.group_raw_jpeg, crate::i18n::tr("Stack Raw + JPEG Pairs")).clicked() {
+                                let _ = app.run("library.groupRawJpeg", json!({}));
+                                ui.close();
+                            }
                             if compact_zoom && matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
                                 crate::widgets::menu_button(ui, crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100), |ui| {
                                     click_zoom_menu(app, ui)
@@ -421,6 +434,25 @@ mod visual_regressions {
                 }
             }
         }
+    }
+
+    #[test]
+    fn raw_jpeg_toggle_shows_wherever_sort_does() {
+        for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail, ViewMode::Compare, ViewMode::Survey, ViewMode::People] {
+            for width in [280.0, 400.0, 600.0, 1000.0] {
+                let ctx = egui::Context::default();
+                crate::theme::install_fonts(&ctx);
+                crate::theme::apply(&ctx);
+                let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+                app.ui.view = view;
+                let mut output = ctx.run_ui(scaled_input(vec2(width, 100.0), 1.0), |ui| show(&mut app, ui));
+                output.textures_delta.clear();
+                let controls = crate::widgets::take_registry(&ctx);
+                let has = |name: &str| controls.iter().any(|(id, _)| id == name);
+                assert_eq!(has("icon:groupRawJpeg"), has("icon:sort"), "{view:?} at {width}");
+            }
+        }
+        // (where neither is, the compact View menu has both)
     }
 
     #[test]

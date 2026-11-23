@@ -252,6 +252,10 @@ pub struct Session {
     /// A view holds the photos it shows until it is refreshed (`library.holdView`): an edit that makes a photo stop
     /// matching a smart album's rules, Picks or the filter bar leaves it where it is. Off: the photo goes at once.
     pub hold_view: bool,
+    /// A raw and the JPEG the camera wrote beside it (same folder, same name) are kept as one collapsed stack, the
+    /// raw on top (`library.groupRawJpeg`): the pairs the library has when it is turned on, and those an import or
+    /// a folder synchronisation adds after that ([`Session::stack_raw_jpeg_pairs`]).
+    pub group_raw_jpeg: bool,
     /// The view last worked out, the catalog's revision then, and the photos in it before stacks are arranged.
     /// A small edit is followed from it: only the photos the edit touched are asked about again and put at their
     /// place in the order ([`Session::visible`]). It is also what a held view holds ([`Session::hold_view`]).
@@ -480,6 +484,7 @@ impl Session {
             visible_key: None,
             visible_clock_minute: None,
             hold_view: false,
+            group_raw_jpeg: false,
             base: None,
             view_followed: 0,
             view_worked_out: 0,
@@ -1181,6 +1186,7 @@ impl Session {
     pub fn visible(&mut self) -> &[PhotoId] {
         let mut key =
             (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
+
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
@@ -1404,6 +1410,18 @@ impl Session {
             self.total = Some((key, n, clocked.then(|| clock_minute(&now).to_owned())));
         }
         self.total.as_ref().map(|t| t.1)
+    }
+
+    /// Stack every raw with the JPEG beside it, the raw on top, as one undo step; with `new`, only the shots one
+    /// of those photos belongs to. Returns how many stacks were made or added to
+    /// ([`lightcraft_catalog::Catalog::raw_jpeg_pair_ops`]).
+    pub fn stack_raw_jpeg_pairs(&mut self, new: Option<&[PhotoId]>) -> Result<usize> {
+        let ops = self.catalog.raw_jpeg_pair_ops(new);
+        let n = ops.len();
+        if n > 0 {
+            self.commit("Stack Raw + JPEG Pairs", Op::Batch { ops })?;
+        }
+        Ok(n)
     }
 
     pub fn visible_cloned(&mut self) -> Vec<PhotoId> {

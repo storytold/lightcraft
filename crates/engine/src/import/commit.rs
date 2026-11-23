@@ -334,7 +334,23 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    stack_raw_jpeg_pairs(s, &report, &format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }));
     Ok(report)
+}
+
+/// With Stack Raw + JPEG Pairs on (`library.groupRawJpeg`): the raws and JPEGs this batch added, each stacked
+/// with its other half (which an earlier batch or import may have added), as part of the import's undo step
+/// (`label`). The photos are in the library either way.
+fn stack_raw_jpeg_pairs(s: &mut Session, report: &ImportReport, label: &str) {
+    if !s.group_raw_jpeg || report.imported.is_empty() {
+        return;
+    }
+    let added: Vec<PhotoId> = report.imported.iter().map(|id| PhotoId(*id)).collect();
+    match s.stack_raw_jpeg_pairs(Some(&added)) {
+        Ok(0) => {}
+        Ok(_) => s.merge_undo(2, label),
+        Err(e) => log::warn!("import: raw + JPEG pairs not stacked: {e}"),
+    }
 }
 
 /// Move, after the commit: save the library, then remove each source whose destination is

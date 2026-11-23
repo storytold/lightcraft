@@ -28,6 +28,7 @@ mod log_writer;
 pub mod model;
 pub mod opened_folder;
 pub mod query;
+pub mod raw_jpeg;
 pub mod rules;
 pub mod safe_file;
 pub mod stacks;
