@@ -1093,7 +1093,8 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
                     MenuTitle::new(literal(crate::i18n::tr(title)), move |ui: &mut egui::Ui| nodes_ui(ui, items, mac, clicked, 1))
                 })
                 .collect();
-            MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles).keyboard(keys).show(ui)
+            // A measuring or sizing run must never open a menu: disabled, its titles sense nothing.
+            MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles).keyboard(keys).enabled(!measuring(ui)).show(ui)
         })
         .inner
     });
