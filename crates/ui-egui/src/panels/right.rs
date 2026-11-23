@@ -125,8 +125,9 @@ pub fn header(ui: &mut egui::Ui, title: &str) {
 /// A panel title that folds its section shut and open again (`section:{id}`; kept in
 /// [`crate::state::UiState::folded_sections`]). Says whether the section is open.
 pub fn fold_header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+    let (_, r) = ui.allocate_space(vec2(ui.available_width(), 46.0));
     let title = crate::i18n::tr(title);
+    let resp = crate::panels::detail::host::target(ui, ("fold-header", id), r, crate::panels::detail::host::Target::new(title));
     fold_title(app, ui, id, r, &resp, title)
 }
 
@@ -146,7 +147,7 @@ pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, res
     p.text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, title, t.semibold(15.0), t.text);
     let chevron = Rect::from_center_size(pos2(r.right() - 30.0, r.center().y + 2.0), vec2(14.0, 14.0));
     paint(p, chevron, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.icon);
-    if resp.clicked() {
+    if craft::ui::contract::clicked(resp) {
         app.ui.toggle_folded(id);
     }
     open

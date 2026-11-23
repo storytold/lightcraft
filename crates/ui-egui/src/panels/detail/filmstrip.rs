@@ -29,8 +29,7 @@ pub(super) fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
     p.rect_stroke(view, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
     p.rect_stroke(view.expand(1.5), 0.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Outside);
     register(ui, "canvas:navigator", frame);
-    let resp = ui.interact(frame.expand(5.0), egui::Id::unique("navigator"), Sense::click_and_drag());
-    crate::widgets::announce(&resp, crate::i18n::tr("Navigator"));
+    let resp = host::target(ui, "navigator", frame.expand(5.0), host::Target::new(crate::i18n::tr("Navigator")).handle());
     if (resp.clicked() || resp.dragged())
         && let Some(q) = resp.interact_pointer_pos()
     {
