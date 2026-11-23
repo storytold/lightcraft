@@ -125,8 +125,15 @@ pub(crate) fn section_drop_before(placed: &[PlacedSection], y: f32) -> Option<Si
 
 /// Remembers whether Escape was pressed this frame, before the framework's lists see the input.
 pub(super) fn note_escape(ui: &egui::Ui) {
-    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-    ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-escape"), esc));
+    // (the framework takes an Escape that ends a press out of the key events, but the key is still
+    // down: a key that went down since the last frame counts as pressed)
+    let down = ui.input(|i| i.key_down(egui::Key::Escape));
+    let was_down = ui.data(|d| d.get_temp::<bool>(egui::Id::unique("left-escape-down"))).unwrap_or(false);
+    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape)) || (down && !was_down);
+    ui.data_mut(|d| {
+        d.insert_temp(egui::Id::unique("left-escape"), esc);
+        d.insert_temp(egui::Id::unique("left-escape-down"), down);
+    });
 }
 
 /// Whether Escape was pressed this frame ([`note_escape`]).
