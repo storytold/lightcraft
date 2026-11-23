@@ -258,6 +258,11 @@ pub enum Dialog {
         dir: String,
         mirrors: Vec<String>,
     },
+    /// After an update, the offer to read again the `count` photos imported before LightCraft recorded what their
+    /// files carry (`crate::file_facts`): Update Now or Not Now.
+    FileFacts {
+        count: usize,
+    },
     /// Open Library was given a Lightroom Classic catalog (issue #891): offer File ▸ Import
     /// Lightroom Catalog… with `catalog` (the `.lrcat` found; `None`: ask for it) instead.
     /// `folder`: what was chosen.

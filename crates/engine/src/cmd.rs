@@ -19,6 +19,7 @@ mod export;
 pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
+pub mod file_facts;
 pub mod filters;
 mod focus;
 pub mod geocode;
@@ -173,6 +174,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(missing::specs());
         v.extend(recheck::specs());
         v.extend(lens_refresh::specs());
+        v.extend(file_facts::specs());
         v.extend(sync::specs());
         v.extend(metadata::specs());
         v.extend(geocode::specs());

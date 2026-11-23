@@ -197,6 +197,12 @@ pub struct Meta {
     /// The camera body's serial number.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub serial_number: String,
+    /// The segmentation mattes the file carries, by kind (`sky`, `person`, `skin`, `hair`, `teeth`, `glasses`: an
+    /// iPhone ProRAW DNG's semantic masks), read from the file's structure at import. `None`: not looked at (a file
+    /// imported before this was read, until Reload from Disk, or a format that isn't looked into); `Some` of an empty
+    /// list: looked at, none. Left out of the catalog JSON while `None`, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mattes: Option<Vec<String>>,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -686,6 +692,21 @@ mod edited_tests {
         d.light.exposure = 1.0;
         p.develop = Arc::new(d);
         assert!(p.is_edited(), "an edit still is one");
+    }
+
+    /// Issue #4361: the mattes a photo carries stay out of the catalog JSON until they were looked at; "looked at,
+    /// none" and a list both round-trip, and an older catalog reads as not looked at.
+    #[test]
+    fn mattes_are_left_out_until_looked_at() {
+        let mut m = Meta::default();
+        assert!(!serde_json::to_string(&m).unwrap().contains("mattes"));
+        let old: Meta = serde_json::from_str(r#"{"camera":"Apple iPhone 15 Pro Max"}"#).unwrap();
+        assert_eq!(old.mattes, None);
+        for known in [Some(Vec::new()), Some(vec!["skin".to_string(), "teeth".to_string()])] {
+            m.mattes = known.clone();
+            let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+            assert_eq!(back.mattes, known);
+        }
     }
 
     #[test]
