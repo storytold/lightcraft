@@ -90,7 +90,7 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                     let _ = app.run("version.restore", json!({"index": i}));
                 }
                 // Native egui popups route Tab away from SDK stops. The SDK menu must own this layer.
-                if !measuring && !(resp.secondary_clicked() && crate::widgets::carrying(ui.ctx())) {
+                if !measuring && !crate::widgets::carrying(ui.ctx()) {
                     let mut targets = Vec::new();
                     let mut layer = None;
                     let mut action = None;
@@ -217,7 +217,7 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                     let _ = app.run("history.restore", json!({"index": i}));
                 }
                 // Native egui popups route Tab away from SDK stops. The SDK menu must own this layer.
-                if !measuring && !(resp.secondary_clicked() && crate::widgets::carrying(ui.ctx())) {
+                if !measuring && !crate::widgets::carrying(ui.ctx()) {
                     let mut targets = Vec::new();
                     let mut layer = None;
                     let mut action = None;
