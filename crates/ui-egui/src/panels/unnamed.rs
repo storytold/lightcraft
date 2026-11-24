@@ -39,9 +39,22 @@ pub struct UnnamedFace {
 pub struct SuggestionGroup {
     /// The person suggested, as the faces named them.
     pub name: String,
-    /// How many of the listed faces are in this group (`faces.len()`, a face never in two).
+    /// How many faces the library has for this person within the filter (`faces.len()`, a face never in two), which
+    /// can be more than the listed page holds (issue #1365).
     pub total: usize,
     pub faces: Vec<UnnamedFace>,
+}
+
+/// How far the engine has got judging the library's unnamed faces against the named ones (`scan` of
+/// `faces.unnamed`): until it is complete the Suggested faces are what has been found so far, not the whole answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scan {
+    /// How many unnamed faces with an embedding the library has.
+    pub total: usize,
+    /// How many of them have been judged.
+    pub judged: usize,
+    /// Every one of them has been judged.
+    pub complete: bool,
 }
 
 /// What `faces.unnamed` said.
@@ -59,6 +72,8 @@ pub struct Unnamed {
     pub groups: Vec<SuggestionGroup>,
     /// How many listed faces carry no suggestion because the user rejected that person for them.
     pub rejected: usize,
+    /// How far the look for suggestions across the library has got; `None` when the engine did not say.
+    pub scan: Option<Scan>,
 }
 
 fn rect_of(v: &Value) -> Option<lcc_geom::Rect> {
@@ -98,6 +113,11 @@ fn count(v: &Value) -> usize {
     v.as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0))
 }
 
+fn scan_of(v: &Value) -> Option<Scan> {
+    let scan = v.get("scan")?;
+    Some(Scan { total: count(&scan["total"]), judged: count(&scan["judged"]), complete: scan["complete"] == true })
+}
+
 /// The engine's answer as a list (anything that does not make sense is left out).
 pub fn parse(v: &Value) -> Unnamed {
     let groups = v["groups"]
@@ -120,30 +140,47 @@ pub fn parse(v: &Value) -> Unnamed {
         ready: v["ready"] == true,
         groups,
         rejected: count(&v["rejected"]),
+        scan: scan_of(v),
     }
 }
 
+/// How often a listing is read again while the engine is still judging faces for suggestions: the judging goes on
+/// between answers, so a listing that waits for the next catalog change would show a part as though it were the whole.
+const SCANNING_SECS: f64 = 0.3;
+
 /// The unnamed faces, asked for again only when the catalog changed, or (while the scan runs and learns more faces) at
-/// most every few seconds, since putting look-alikes together looks at every pair.
+/// most every few seconds, since putting look-alikes together looks at every pair. While the engine is still judging
+/// the library for suggestions it is asked again every [`SCANNING_SECS`], so the Suggested faces fill in as it goes.
 pub fn faces(app: &mut LccApp, now: f64) -> Arc<Unnamed> {
     super::person::follow_filter(app);
-    let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
-    if let Some((r, i, at, list)) = &app.caches.unnamed
-        && *r == rev
-        && (*i == indexed || now - *at < 3.0)
-    {
-        return list.clone();
+    let (rev, indexed, epoch) = (app.session.catalog.revision, app.caches.faces_indexed, app.caches.faces_epoch);
+    if let Some((r, i, e, at, list)) = &app.caches.unnamed {
+        // while the engine is still judging, its answer changes without the catalog or the index changing
+        let anyway = if list.scan.is_some_and(|s| !s.complete) { now - *at < SCANNING_SECS } else { *i == indexed || now - *at < 3.0 };
+        if *r == rev && *e == epoch && anyway {
+            return list.clone();
+        }
     }
     let v = app.session.execute("faces.unnamed", &json!({"scope": "filter", "bySuggestion": true})).unwrap_or(Value::Null);
     let list = Arc::new(parse(&v));
     // what was selected and has since been named (or removed) is no longer selected; nor is a decision about a face
-    // that has left the list (a confirmed one is named by now, and the name is what keeps it out)
+    // that has left the list (a confirmed one is named by now, and the name is what keeps it out). A suggested face
+    // may be under Suggested without being on the listed page, so its decisions are kept by the groups too.
     let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
+    let suggested: std::collections::HashSet<(u64, usize)> = list.groups.iter().flat_map(|g| g.faces.iter().map(|f| (f.photo, f.index))).collect();
     app.ui.unnamed_selected.retain(|k| present.contains(k));
-    app.ui.confirmed_suggestions.retain(|k| present.contains(k));
-    app.ui.rejected_suggestions.retain(|k| present.contains(k));
-    app.caches.unnamed = Some((rev, indexed, now, list.clone()));
+    app.ui.confirmed_suggestions.retain(|k| present.contains(k) || suggested.contains(k));
+    app.ui.rejected_suggestions.retain(|k| present.contains(k) || suggested.contains(k));
+    app.caches.unnamed = Some((rev, indexed, epoch, now, list.clone()));
     list
+}
+
+/// The engine is still judging faces for suggestions: ask for a frame soon, so [`faces`] asks it again and the
+/// Suggested faces (and the progress beside them) catch up while it works.
+pub fn keep_scanning(ui: &egui::Ui, list: &Unnamed) {
+    if list.scan.is_some_and(|s| !s.complete) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SCANNING_SECS));
+    }
 }
 
 /// A click on face number `i` of the faces on screen (`visible`, a category's own slice of the listing, or the whole
@@ -188,7 +225,7 @@ pub fn naming_bar(app: &mut LccApp, ui: &mut egui::Ui) {
     };
     // the name the named faces suggest, when every selected face has the same one
     let suggested: Option<String> = {
-        let list = app.caches.unnamed.as_ref().map(|c| c.3.clone());
+        let list = app.caches.unnamed.as_ref().map(|c| c.4.clone());
         list.and_then(|l| {
             let names: std::collections::BTreeSet<Option<&str>> =
                 l.faces.iter().filter(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index))).map(|f| f.suggestion.as_deref()).collect();
@@ -434,5 +471,17 @@ mod tests {
         for bad in [Value::Null, json!([]), json!({"faces": 5, "total": -1})] {
             assert_eq!(parse(&bad), Unnamed::default(), "{bad}");
         }
+    }
+
+    /// Issue #1365: the engine says how far its judging of the library has got, so the view can say that what is on
+    /// screen is what has been found so far rather than the whole answer.
+    #[test]
+    fn the_scan_says_how_many_faces_were_judged_and_whether_that_is_all() {
+        let v = json!({"total": 0, "faces": [], "scan": {"total": 96_000, "judged": 12_000, "complete": false}});
+        assert_eq!(parse(&v).scan, Some(Scan { total: 96_000, judged: 12_000, complete: false }));
+        let v = json!({"faces": [], "scan": {"total": 40, "judged": 40, "complete": true}});
+        assert_eq!(parse(&v).scan, Some(Scan { total: 40, judged: 40, complete: true }));
+        // an answer from before the engine reported it: no word, and nothing to wait for
+        assert_eq!(parse(&json!({"faces": []})).scan, None);
     }
 }

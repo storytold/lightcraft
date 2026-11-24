@@ -93,7 +93,11 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
 /// shows that category (each a `button:peopleCategory-<id>`).
 fn category_header(app: &mut LccApp, ui: &mut egui::Ui) {
     let people = app.caches.people(&app.session.catalog, &app.session.people_filter());
-    let counts = category_counts(&categories(app, ui.input(|i| i.time)), people.len());
+    let list = super::unnamed::faces(app, ui.input(|i| i.time));
+    // the engine is still judging the library's faces for suggestions: keep asking, so they fill in while the view is
+    // open rather than waiting for the next catalog change
+    super::unnamed::keep_scanning(ui, &list);
+    let counts = category_counts_of(&list, &app.ui.rejected_suggestions, &app.ui.confirmed_suggestions, people.len());
     let labels: Vec<(String, String)> =
         [(PeopleCategory::Unknown, counts[0]), (PeopleCategory::Suggested, counts[1]), (PeopleCategory::Confirmed, counts[2])]
             .into_iter()
@@ -123,7 +127,9 @@ pub fn category_counts(faces: &CategoryFaces, people: usize) -> [usize; 3] {
 
 /// The unnamed faces of each category (issue #1050): one listing (`faces.unnamed {bySuggestion: true}`) split by what
 /// the named faces suggest for each face, with the session's own decisions applied on top, so a confirmation or a
-/// rejection shows at once rather than when the engine's next answer arrives.
+/// rejection shows at once rather than when the engine's next answer arrives. The Suggested faces are the listing's
+/// `groups`, which hold every suggestion in the library (within the sidebar's filter), not only the listed page's
+/// (issue #1365); Unknown is the listed page, since that is what it can show at a time.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CategoryFaces {
     /// Faces with no name and no suggestion.
@@ -148,29 +154,83 @@ pub fn category_faces(
     rejected: &std::collections::HashSet<(u64, usize)>,
     confirmed: &std::collections::HashSet<(u64, usize)>,
 ) -> CategoryFaces {
-    let mut unknown = Vec::new();
+    // the session's decisions over one of the engine's groups: what is left, and whether anything is
+    let decided = |g: &SuggestionGroup| -> Vec<UnnamedFace> {
+        g.faces.iter().filter(|f| !confirmed.contains(&(f.photo, f.index)) && !rejected.contains(&(f.photo, f.index))).cloned().collect()
+    };
     let mut suggested: Vec<SuggestionGroup> = Vec::new();
-    for face in &list.faces {
-        let key = (face.photo, face.index);
-        if confirmed.contains(&key) {
-            continue;
-        }
-        let name = face.suggestion.as_deref().map(str::trim).filter(|n| !n.is_empty()).filter(|_| !rejected.contains(&key));
-        match name {
-            Some(name) => match suggested.iter_mut().find(|g| g.name.eq_ignore_ascii_case(name)) {
+    if list.groups.is_empty() {
+        // a listing asked for without `bySuggestion` has no groups: its own faces are all it can offer
+        for face in &list.faces {
+            let key = (face.photo, face.index);
+            if confirmed.contains(&key) {
+                continue;
+            }
+            let name = face.suggestion.as_deref().map(str::trim).filter(|n| !n.is_empty()).filter(|_| !rejected.contains(&key));
+            let Some(name) = name else { continue };
+            match suggested.iter_mut().find(|g| g.name.eq_ignore_ascii_case(name)) {
                 Some(group) => {
                     group.faces.push(face.clone());
                     group.total = group.faces.len();
                 }
                 None => suggested.push(SuggestionGroup { name: name.to_string(), total: 1, faces: vec![face.clone()] }),
-            },
-            None => unknown.push(face.clone()),
+            }
         }
+    } else {
+        // every suggestion the library has within the filter, not only the faces on the listed page (issue #1365)
+        suggested = list
+            .groups
+            .iter()
+            .filter_map(|g| {
+                let faces = decided(g);
+                (!faces.is_empty()).then(|| SuggestionGroup { name: g.name.clone(), total: faces.len(), faces })
+            })
+            .collect();
     }
+    let unknown = unknown_faces(list, rejected, confirmed);
     // the most suggested faces first, then by name, as the engine orders the groups (a listing cached before a decision
     // must not move about)
     suggested.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     CategoryFaces { unknown, suggested, list: Arc::new(list.clone()) }
+}
+
+/// The Unknown faces of a listing: the listed faces no person is suggested for, or whose suggestion was rejected, with
+/// this session's decisions applied, so a face confirmed in the session is not one of them any more.
+pub fn unknown_faces(
+    list: &Unnamed,
+    rejected: &std::collections::HashSet<(u64, usize)>,
+    confirmed: &std::collections::HashSet<(u64, usize)>,
+) -> Vec<UnnamedFace> {
+    list.faces.iter().filter(|f| !confirmed.contains(&(f.photo, f.index)) && !is_suggested(f, rejected)).cloned().collect()
+}
+
+/// The counts the categories' picker shows, worked out from the listing alone: the picker shows them every frame, and
+/// the Suggested category holds every suggestion the library has within the filter (issue #1365), so they are counted
+/// rather than split into the faces themselves.
+pub fn category_counts_of(
+    list: &Unnamed,
+    rejected: &std::collections::HashSet<(u64, usize)>,
+    confirmed: &std::collections::HashSet<(u64, usize)>,
+    people: usize,
+) -> [usize; 3] {
+    let named = |f: &&UnnamedFace| confirmed.contains(&(f.photo, f.index));
+    let suggested = if list.groups.is_empty() {
+        // a listing asked for without `bySuggestion`: its own faces, less those already named in the session
+        list.faces.iter().filter(|f| !named(f) && is_suggested(f, rejected)).count()
+    } else {
+        // the engine's groups hold every suggestion, already without what the session decided about
+        list.groups.iter().flat_map(|g| g.faces.iter()).filter(|f| !named(f) && !rejected.contains(&(f.photo, f.index))).count()
+    };
+    // a rejected face is not gone: it is back in Unknown, with no name suggested for it
+    let unknown = list.faces.iter().filter(|f| !named(f) && !is_suggested(f, rejected)).count();
+    [unknown, suggested, people]
+}
+
+/// Whether a listed face is under some person in Suggested: it carries a suggestion and the user has not rejected that
+/// person for it.
+fn is_suggested(face: &UnnamedFace, rejected: &std::collections::HashSet<(u64, usize)>) -> bool {
+    let key = (face.photo, face.index);
+    face.suggestion.as_deref().map(str::trim).is_some_and(|n| !n.is_empty()) && !rejected.contains(&key)
 }
 
 /// Consecutive look-alike groups in the listed order. Faces with no embedding/group remain their own singleton, and
@@ -416,17 +476,17 @@ fn unknown(app: &mut LccApp, ui: &mut egui::Ui) {
     super::chips::show(app, ui, &chips);
     // what is selected below, and the box to name it with
     super::unnamed::naming_bar(app, ui);
-    let cats = categories(app, now);
-    let faces = cats.unknown.clone();
+    let list = super::unnamed::faces(app, now);
+    let faces = unknown_faces(&list, &app.ui.rejected_suggestions, &app.ui.confirmed_suggestions);
     // what this category is (and why it is empty), in the UI's language
     let tr = crate::i18n::tr;
-    let note = if !cats.list.ready && cats.list.faces.is_empty() {
+    let note = if !list.ready && list.faces.is_empty() {
         tr("Turn on face recognition in Settings ▸ Faces to find the faces in your photos.").to_string()
-    } else if faces.is_empty() && cats.list.total > 0 {
+    } else if faces.is_empty() && list.total > 0 {
         tr("No face here is unknown: the rest are named or suggested as someone (see Suggested).").to_string()
     } else if faces.is_empty() {
         tr("No unknown faces. Faces found in your photos appear here until you name them.").to_string()
-    } else if cats.list.ordered {
+    } else if list.ordered {
         tr("No name and no suggestion. Faces that look alike are next to each other: click to select, Shift-click for a range, then type a name.")
             .to_string()
     } else {
@@ -569,7 +629,7 @@ mod tests {
     }
 
     fn listing(faces: Vec<UnnamedFace>) -> Unnamed {
-        Unnamed { total: faces.len(), faces, ordered: true, ready: true, groups: Vec::new(), rejected: 0 }
+        Unnamed { total: faces.len(), faces, ordered: true, ready: true, groups: Vec::new(), rejected: 0, scan: None }
     }
 
     #[test]
@@ -642,6 +702,51 @@ mod tests {
         assert!(cats.unknown.is_empty() && cats.suggested.is_empty());
         // counts are the categories' faces and the people named (a person is a card, not a face)
         assert_eq!(category_counts(&cats, 12), [0, 0, 12]);
+    }
+
+    /// Issue #1365: the Suggested category is the engine's `groups`, which hold every suggestion in the library within
+    /// the filter, so a person's face that is not on the listed page is still counted and shown under Suggested.
+    #[test]
+    fn the_suggested_category_holds_faces_beyond_the_listed_page() {
+        // the page lists one Unknown face; the Suggested faces are the engine's groups
+        let mut l = listing(vec![face(1, 0, None)]);
+        l.total = 5000;
+        let mut beyond = face(900, 2, Some("Jane Doe"));
+        beyond.suggestion_similarity = Some(0.61);
+        l.groups = vec![SuggestionGroup { name: "Jane Doe".into(), total: 1, faces: vec![beyond] }];
+        let cats = category_faces(&l, &Default::default(), &Default::default());
+        assert_eq!((cats.unknown.len(), cats.suggested.len(), cats.list.total), (1, 1, 5000));
+        assert_eq!(category_counts(&cats, 3), [1, 1, 3]);
+        assert_eq!((cats.suggested[0].faces[0].photo, cats.suggested[0].faces[0].index), (900, 2));
+        // confirming it this session takes it out, and the page's Unknown face is untouched
+        let confirmed: std::collections::HashSet<(u64, usize)> = [(900, 2)].into_iter().collect();
+        let cats = category_faces(&l, &Default::default(), &confirmed);
+        assert!(cats.suggested.is_empty() && cats.unknown.len() == 1, "{cats:?}");
+        assert_eq!(category_counts(&cats, 3), [1, 0, 3], "the confirmed face is named by now");
+    }
+
+    /// Issue #1365: the picker's counts come from the listing alone (the header shows them every frame, while Suggested
+    /// can hold a library's worth of faces), and they are the numbers the split categories give.
+    #[test]
+    fn the_pickers_counts_are_the_categories_counts_without_splitting_the_faces() {
+        let mut l = listing(vec![face(1, 0, None), face(1, 1, Some("Jane Doe")), face(2, 0, Some("John Roe")), face(2, 1, Some("  "))]);
+        l.total = 5000;
+        let none: std::collections::HashSet<(u64, usize)> = Default::default();
+        let rejected: std::collections::HashSet<(u64, usize)> = [(2, 0)].into_iter().collect();
+        let confirmed: std::collections::HashSet<(u64, usize)> = [(1, 1)].into_iter().collect();
+        // the listing's own faces, as a listing asked for without `bySuggestion` has
+        for (r, c) in [(&none, &none), (&rejected, &none), (&none, &confirmed), (&rejected, &confirmed)] {
+            let cats = category_faces(&l, r, c);
+            assert_eq!(category_counts_of(&l, r, c, 4), category_counts(&cats, 4), "{r:?} {c:?}");
+        }
+        // the engine's groups, which hold the faces the listed page does not
+        let mut beyond = face(900, 2, Some("Jane Doe"));
+        beyond.suggestion_similarity = Some(0.61);
+        l.groups = vec![SuggestionGroup { name: "Jane Doe".into(), total: 1, faces: vec![beyond] }];
+        for (r, c) in [(&none, &none), (&none, &confirmed), (&rejected, &confirmed)] {
+            let cats = category_faces(&l, r, c);
+            assert_eq!(category_counts_of(&l, r, c, 4), category_counts(&cats, 4), "{r:?} {c:?}");
+        }
     }
 
     /// Issue #1050: the category row names the three categories, in the UI's language, with their counts; the ids the
