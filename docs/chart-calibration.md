@@ -60,3 +60,19 @@ provenance is `chart`, which ranks it as measured data for that model. It gives 
 Reference values: X-Rite's 2016 ColorChecker Classic data (CIE L*a*b*, ICC D50) for charts made before and after
 November 2014, as collected in colour-science (BSD-3-Clause). Sources: own design; DNG specification 1.7 chapter 6;
 CIEDE2000 (Sharma, Wu, Dalal 2005).
+
+## Bodies waiting for a chart shot
+
+Completion plan 3.1 asks for the 20 most used bodies to be chart-calibrated with a mean ΔE2000 ≤ 3. No ColorChecker
+shot of any of them is in `corpus/` or photocraft-corpus yet, so all 20 still use table or spectral matrices: Sony
+ILCE-7M3, ILCE-7M4, ILCE-7RM4, ILCE-1, ILCE-6400, ILCE-7RM5; Canon EOS R5, R6, 5D Mark IV, R, 90D; Nikon Z 6II, Z 8,
+D850, D750, Z 6; Fujifilm X-T4, X-T5; Olympus E-M1 Mark II; Panasonic DC-G9 (the list in
+`crates/camdb/tests/body_coverage.rs`). Each needs the shots described above: a ColorChecker Classic in daylight
+(and ideally under tungsten), raw files, with permission to keep the measured numbers in the camera database.
+
+Until then `cargo xtask sil camera_colour` checks two things: each top body's input transform renders the chart
+consistently, and the dcraw / LibRaw table matrices of bodies that also have measured spectral sensitivities agree
+with what those measured cameras record (median mean ΔE2000 ≤ 5, none above 10; on 2026-11-24 they ranged 2.4–9.2
+over about 60 bodies, median about 4). That guards against wrong rows; it is not the ΔE ≤ 3 chart criterion. `crates/camdb/tests/body_coverage.rs` keeps every
+body with a pinned raw sample off the neutral matrix; the Leica D-Lux 7, Nikon COOLPIX P1100 and Canon EOS 4000D /
+2000D have no allowed matrix source yet and are listed there.
