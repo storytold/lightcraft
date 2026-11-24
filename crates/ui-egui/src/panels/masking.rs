@@ -1317,26 +1317,8 @@ fn component_row_popup(
     if row.secondary_clicked() && crate::widgets::carrying(ui.ctx()) {
         return;
     }
-    // A row slot that was not drawn on the frame before (another photo or mask was shown, the panel was
-    // closed) starts with a closed menu of its own: the framework keeps a menu's open state under its id, so
-    // a menu left open when its row went away would otherwise open again, unasked, when the row returns.
-    let frame = ui.ctx().cumulative_frame_nr();
-    let visit_key = ui.scope_id().with(("mask-component-menu-visit", row.id, more.id));
-    let (mut epoch, last) = ui.data(|d| d.get_temp::<(u64, u64)>(visit_key)).unwrap_or((0, frame));
-    if last != frame && last.saturating_add(1) != frame {
-        epoch += 1;
-    }
     let owner_key = ui.scope_id().with(("mask-component-captured-owner", row.id, more.id));
     let mut captured = ui.data(|d| d.get_temp::<ComponentMenuTarget>(owner_key)).unwrap_or(target);
-    if captured != target {
-        // What the menu was opened for is gone (another photo, mask, component or revision holds this slot now):
-        // the slot starts again with a closed menu of its own, so the old one cannot come back by itself when
-        // the old target does, and a press held on its rows has nothing left to act on.
-        epoch += 1;
-        captured = target;
-        ui.data_mut(|d| d.insert_temp(owner_key, captured));
-    }
-    ui.data_mut(|d| d.insert_temp(visit_key, (epoch, frame)));
     let interactive = captured == target && captured.live(app);
     let mut pending = None;
     let mut targets = Vec::new();
@@ -1345,7 +1327,7 @@ fn component_row_popup(
     // This id belongs to the opener slot, not the target currently occupying that row.
     let shown = craft::ui::menu::Menu::context(crate::i18n::tr("Component options"), row)
         .opened_by(more, Trigger::Click)
-        .id_salt(("mask-component-menu", row.id, more.id, epoch))
+        .id_salt(("mask-component-menu", row.id, more.id))
         .show(ui, |ui, menu| {
             if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                 body_layer = Some(ui.layer_id());
