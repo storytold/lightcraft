@@ -32,16 +32,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ORF_DECODED = re.compile(r"^(E-1|E-10|E-20|EVOLT E-300|EVOLT E-330|EVOLT E-400|EVOLT E-500|E-300|E-330|E-500|Camedia C-\S.*|Stylus XZ-2 iHS)$")
 # Samsung SRW bodies with compressed raw data (32770 / 32772 / 32773, decoded by crates/raw/src/vendor/srwc.rs).
 SRW_COMPRESSED = re.compile(r"(^|\W)(NX1|NX30|NX300|NX300M|NX500|NX2000|NX3000|NX3300|NX mini|EK-GN\d+|EK-KN\d+)(\W|$)")
-# Fujifilm SuperCCD EXR bodies whose RAF stores an upright EXR array without a raw IFD (refused by
-# crates/raw/src/vendor/raf_superccd.rs). The other pre-X bodies decode: SuperCCD lattices in raf_superccd.rs,
-# the rest through the raw IFD in raf.rs.
-RAF_OLD = re.compile(r"^FinePix S20[05] EXR", re.I)
 
 # Canon CRW bodies with a CMYG colour filter (crates/raw/src/vendor/crw.rs refuses them).
 CRW_CMYG = {"PowerShot 600", "PowerShot A5", "PowerShot A50", "PowerShot G1", "PowerShot Pro70", "PowerShot Pro90 IS"}
 
 # Probability that an unverified body of a format decodes correctly, used for the use-weighted share only.
-CONFIDENCE = {"DNG": 0.95, "CR2": 0.95, "CR3": 0.6, "NEF": 0.9, "NRW": 0.9, "ARW": 0.9, "SR2": 0.8, "RAF": 0.95,
+CONFIDENCE = {"DNG": 0.95, "CR2": 0.95, "CR3": 0.6, "NEF": 0.9, "NRW": 0.9, "ARW": 0.9, "SR2": 0.8, "SRF": 0.6, "RAF": 0.95,
               "RW2": 0.95, "RWL": 0.95, "RAW": 0.95, "PEF": 0.9, "ORF": 0.8, "SRW": 0.8,
               "MRW": 0.9, "ERF": 0.9, "MEF": 0.9, "CRW": 0.9}
 
@@ -73,10 +69,8 @@ def classify(maker, camera, ext_field):
         if e == "SR2":
             return "unverified", "SR2", "SR2 decoder"
         if e == "SRF":
-            return "unsupported", "SRF", "SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file"
+            return "unverified", "SRF", "SRF decoder (crates/raw/src/vendor/srf.rs: encrypted 14-bit data; F828 emerald read as green)"
         if e == "RAF":
-            if RAF_OLD.search(camera):
-                return "preview", "RAF", "SuperCCD EXR RAF stored upright without a raw IFD"
             return "unverified", "RAF", "RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)"
         if e in ("RW2", "RWL") or (e == "RAW" and maker in ("Panasonic", "Leica")):
             return "unverified", e, "Panasonic decoder, every raw format"
@@ -183,6 +177,13 @@ def main():
         verified_share += w * v
         print(f"| {b['bucket']} | {w:g}% | {100 * s:.0f}% | {100 * v:.0f}% |")
     print(f"| **Weighted** | {total:g}% | **{100 * works / total:.0f}%** | **{100 * verified_share / total:.0f}%** |")
+
+    # The per-model verification target (completion plan, phase 3): either measure reaching it is enough.
+    model_share, body_share = tot["verified"] / n, verified_share / total
+    met = model_share >= 0.60 or body_share >= 0.95
+    print()
+    print(f"Verification target (verified models >= 60% or >= 95% of photographers on a verified body): "
+          f"{100 * model_share:.0f}% of models, {100 * body_share:.0f}% of photographers: {'met' if met else 'not met'}")
     return 0
 
 

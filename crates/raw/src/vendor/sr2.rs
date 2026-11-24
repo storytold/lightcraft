@@ -76,7 +76,7 @@ const SEED: [u32; 127] = [
 ];
 
 /// The seed (first 127 keystream words) for `key`, the little-endian `u32` of tag `0x7221`; see the module docs.
-fn seed_from_key(key: u32) -> [u32; 127] {
+pub(super) fn seed_from_key(key: u32) -> [u32; 127] {
     let mut p = [0u32; 128];
     let mut k = key;
     for w in p.iter_mut().take(4) {
@@ -109,7 +109,7 @@ fn apply_keystream(block: &mut [u8]) {
 }
 
 /// [`apply_keystream`] for the keystream starting with `seed`.
-fn apply_keystream_with(block: &mut [u8], seed: [u32; 127]) {
+pub(super) fn apply_keystream_with(block: &mut [u8], seed: [u32; 127]) {
     let mut ring = seed;
     for (n, word) in block.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         // `ring[i]` holds k[n − 127] until it is replaced by k[n]; k[n − 63] sits at (n − 63) mod 127

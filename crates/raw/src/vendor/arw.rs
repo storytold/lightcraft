@@ -744,6 +744,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         if ifd0.string(t::MODEL).as_deref().map(str::trim) == Some("DSLR-A100") {
             return decode_a100(bytes, &tiff, mode);
         }
+        if super::srf::applies(&ifd0.string(t::MODEL).unwrap_or_default()) {
+            return super::srf::decode(bytes, &tiff, mode);
+        }
         return Err(RawError::Unsupported("ARW without a CFA image IFD (old ARW or SR2)".into()));
     };
     let info = raw.image()?;
