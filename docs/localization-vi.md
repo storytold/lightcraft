@@ -1,6 +1,6 @@
 # LightCraft bằng tiếng Việt
 
-Chọn **Chỉnh sửa → Ngôn ngữ → Tiếng Việt** hoặc **Cài đặt → Chung → Ngôn ngữ**.
+Chọn **Cài đặt → Chung → Ngôn ngữ → Tiếng Việt**.
 Lựa chọn áp dụng ngay và được lưu cho lần mở sau (`language: "vi"` trong `ui.json`).
 
 Các tag locale hệ thống sau cũng chọn tiếng Việt: `vi`, `vi-VN`, `vi_VN`, `vi_VN.UTF-8`.
