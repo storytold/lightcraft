@@ -111,7 +111,7 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
 
 | Bucket | Weight | Camera fully works | On a verified body | Why |
 |---|---:|---:|---:|---|
-| Canon | 33% | 98% | 96% | 18 of the 22 popular bodies write CR3; 26 CR3 bodies verified (raw.pixls.us has a CC0 file for each), the rest at 0.6; CRW decodes |
+| Canon | 33% | 98% | 96% | 18 of the 22 popular bodies write CR3; 26 CR3 bodies verified (raw.pixls.us has a CC0 file for each), the rest at 0.7; CRW decodes |
 | Sony | 27% | 99% | 93% | bulk-checked; ARW version 1 (A100, A200…A390) decodes |
 | Nikon | 16% | 98% | 89% | decoders cover every NEF coding but HE; 77 bodies verified |
 | Fujifilm | 10% | 99% | 95% | X100V, X100VI, X-E4, X-S10, X-S20, X-T30 II added to the verified bodies; pre-X SuperCCD FinePix decode (12 bodies verified) |
