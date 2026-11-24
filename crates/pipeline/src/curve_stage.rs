@@ -1,15 +1,14 @@
-//! Process V9's tone-curve stage ([`lightcraft_develop::Process::V9`], `docs/curve-stage.md`): Whites, the
-//! parametric curve and the point curves, applied the way Lightroom applies them.
+//! Process V9's tone-curve stage ([`lightcraft_develop::Process::V9`]): Whites, the parametric curve and the point
+//! curves. `docs/curve-stage.md` records how the model was measured and fitted.
 //!
-//! Measured on Camera Raw renders of synthetic charts (`tools/lr_tone_charts.py`):
 //! - Whites, the parametric curve, the master point curve, Contrast and Blacks act hue-preserving on linear ProPhoto
 //!   RGB: the curve maps the largest and the smallest channel (on sRGB-encoded values), and the middle channel keeps
-//!   its relative position between them in linear light. Predicting coloured patches from the curve measured on
-//!   grey steps this way leaves 0.03 to 0.16 (OkLab × 100), against 0.3 to 3.4 for V8.
+//!   its relative position between them in linear light.
 //! - The red, green and blue curves act per channel on sRGB-encoded linear ProPhoto RGB, after the master curve.
-//! - Whites and the four parametric regions are tables of Camera Raw's measured output (`curve_stage_tables`):
-//!   Whites reaches into the midtones (Whites −50 lowers encoded 0.6 by about 10/255), and each region is broad and
-//!   overlapping. The regions add: the sum of single regions reproduces three at once within 1/255.
+//! - Whites reaches into the midtones, and each parametric region is broad and overlapping; the regions add.
+//! - Whites and the four regions come from a fitted model (`curve_stage_model`, written by `tools/lr_tone_charts.py
+//!   fit`): per slider direction, two smooth bumps whose gain, position and width change with the amount
+//!   ([`response`]).
 //!
 //! The stage runs after the tone map and Process V4's calibrated Contrast and Blacks, before the colour stage. It
 //! replaces V8's curves on encoded output values; the tone map leaves Whites to it.
@@ -20,7 +19,7 @@ use lightcraft_develop::{DevelopSettings, Process, ToneCurve};
 use lightcraft_geom::Point;
 
 use crate::curve::ParametricCurve;
-use crate::curve_stage_tables as t;
+use crate::curve_stage_model as m;
 use crate::light_v3::PRO_Y;
 
 /// Entries per table (as the shipping curve tables).
@@ -29,7 +28,7 @@ pub const N: usize = 1024;
 /// The least a region must be able to move the drawn parametric curve for a drag to move its slider: half an 8-bit level.
 const REACH_MIN: f64 = 0.5 / 255.0;
 
-/// Lightroom's default parametric splits: the measured region tables hold for them only.
+/// The default parametric splits (25, 50, 75): the fitted regions hold for them only.
 const DEFAULT_SPLITS: [f64; 3] = [25.0, 50.0, 75.0];
 
 /// The stage's tables: `base` (Whites, then the parametric curve, then the master point curve) acts hue-preserving,
@@ -42,101 +41,88 @@ pub struct CurveStage {
     pub refine: f32,
 }
 
-/// A measured delta table (257 entries over 0..1) at `x`.
-fn table_at(v: &[f32; 257], x: f32) -> f32 {
-    let p = x.clamp(0.0, 1.0) * 256.0;
-    let i = (p as usize).min(255);
-    let f = p - i as f32;
-    match (v.get(i), v.get(i + 1)) {
-        (Some(a), Some(b)) => a + (b - a) * f,
-        _ => 0.0,
-    }
-}
-
-/// The delta at `x` of a setting measured at `amounts` (ascending, without 0), linearly between the measured amounts
-/// and towards 0 below the smallest; clamped to the measured range. Runs per table sample, so it allocates nothing.
-fn measured_delta<const K: usize>(amounts: &[f32; K], tables: &[[f32; 257]; K], amount: f32, x: f32) -> f32 {
-    if amount == 0.0 || K == 0 {
+/// A bump of peak 1 at `p / (p + q)`, 0 at black and white and outside them.
+fn bump(x: f64, p: f64, q: f64) -> f64 {
+    if x <= 0.0 || x >= 1.0 {
         return 0.0;
     }
-    // the measured amounts with 0 (delta 0) between the negative and positive ones: key `i` of K + 1
-    let zero = amounts.partition_point(|a| *a < 0.0);
-    let key = |i: usize| -> (f32, f32) {
-        let k = match i.cmp(&zero) {
-            std::cmp::Ordering::Less => i,
-            std::cmp::Ordering::Equal => return (0.0, 0.0),
-            std::cmp::Ordering::Greater => i - 1,
-        };
-        (amounts.get(k).copied().unwrap_or(0.0), tables.get(k).map_or(0.0, |v| table_at(v, x)))
-    };
-    let (lo, hi) = (key(0).0, key(K).0);
-    let a = amount.clamp(lo, hi);
-    for i in 0..K {
-        let ((a0, v0), (a1, v1)) = (key(i), key(i + 1));
-        if a >= a0 && a <= a1 {
-            let f = if a1 > a0 { (a - a0) / (a1 - a0) } else { 0.0 };
-            return v0 * (1.0 - f) + v1 * f;
-        }
-    }
-    0.0
+    let peak = p / (p + q);
+    (p * (x / peak).ln() + q * ((1.0 - x) / (1.0 - peak)).ln()).exp()
 }
 
-/// Whether `c` holds Lightroom's default splits, the ones the region tables are measured with.
+/// The fitted response of a slider at `amount` (−100 to 100, clamped) for input `x`: output minus input on
+/// sRGB-encoded values. Per direction, two bumps with gain `a1 t + a2 t² + a3 t³` (t = |amount| / 100) and shape
+/// exponents `e^(p0 + p1 t)`, `e^(q0 + q1 t)`.
+fn response(fit: &[m::Response; 2], amount: f32, x: f32) -> f32 {
+    if amount == 0.0 || !amount.is_finite() {
+        return 0.0;
+    }
+    let [negative, positive] = fit;
+    let side = if amount < 0.0 { negative } else { positive };
+    let (t, x) = ((f64::from(amount) / 100.0).abs().min(1.0), f64::from(x));
+    let r: f64 = side
+        .iter()
+        .map(|[a1, a2, a3, p0, p1, q0, q1]| (a1 * t + a2 * t * t + a3 * t * t * t) * bump(x, (p0 + p1 * t).exp(), (q0 + q1 * t).exp()))
+        .sum();
+    r as f32
+}
+
+/// Whether `c` holds the default splits, the ones the regions are fitted for.
 fn default_splits(c: &ToneCurve) -> bool {
     [c.split_shadows, c.split_mid, c.split_highlights].iter().zip(DEFAULT_SPLITS).all(|(s, d)| (s - d).abs() <= 1e-6)
 }
 
-/// The measured regions at `x`, before the curve is kept monotone: the four deltas added to the diagonal.
+/// The fitted regions at `x`, before the curve is kept monotone: the four responses added to the diagonal.
 fn regions_at(amounts: [f32; 4], x: f32) -> f32 {
     (x + regions_delta(amounts, x)).clamp(0.0, 1.0)
 }
 
-/// The sum of the four measured region deltas at `x`.
+/// The sum of the four fitted region responses at `x`.
 fn regions_delta(amounts: [f32; 4], x: f32) -> f32 {
-    amounts.iter().zip(t::REGIONS.iter()).map(|(a, r)| measured_delta(&t::REGION_AMOUNTS, r, *a, x)).sum()
+    amounts.iter().zip(m::REGIONS.iter()).map(|(a, r)| response(r, *a, x)).sum()
 }
 
-/// The measured parametric curve at the default splits.
-fn measured_parametric(amounts: [f32; 4]) -> Lut1 {
+/// The fitted parametric curve at the default splits.
+fn fitted_parametric(amounts: [f32; 4]) -> Lut1 {
     let mut lut = Lut1::from_fn(N, |x| regions_at(amounts, x));
     monotone(&mut lut);
     lut
 }
 
-/// The parametric curve: the measured regions at the default splits, else the analytic model of earlier processes.
+/// The parametric curve: the fitted regions at the default splits, else the analytic model of earlier processes.
 fn parametric(c: &ToneCurve) -> Lut1 {
     if !default_splits(c) {
         return ParametricCurve::new(c).to_lut();
     }
-    measured_parametric([c.shadows, c.darks, c.lights, c.highlights].map(|v| v as f32))
+    fitted_parametric([c.shadows, c.darks, c.lights, c.highlights].map(|v| v as f32))
 }
 
-/// The parametric curve as `s`'s process renders it, for the Edit panel's graph and its drag: the measured regions
+/// The parametric curve as `s`'s process renders it, for the Edit panel's graph and its drag: the fitted regions
 /// under V9 at the default splits, else the analytic [`ParametricCurve`] (earlier processes, and V9 with moved
-/// splits). Whites is left out, as Lightroom's graph leaves it out.
+/// splits). Whites is left out of the graph.
 #[derive(Clone, Debug)]
 pub struct ParametricGraph {
     model: ParametricCurve,
-    /// The measured curve, when it is the one rendered.
-    measured: Option<Lut1>,
+    /// The fitted curve, when it is the one rendered.
+    fitted: Option<Lut1>,
 }
 
 impl ParametricGraph {
-    /// The graph for `s`: measured when `s`'s process is V9 or later and the splits are the defaults.
+    /// The graph for `s`: the fitted curve when `s`'s process is V9 or later and the splits are the defaults.
     pub fn new(s: &DevelopSettings) -> ParametricGraph {
         let model = ParametricCurve::new(&s.curve);
-        let measured = (s.process.process() >= Process::V9 && default_splits(&s.curve)).then(|| measured_parametric(model.amounts.map(|a| a as f32)));
-        ParametricGraph { model, measured }
+        let fitted = (s.process.process() >= Process::V9 && default_splits(&s.curve)).then(|| fitted_parametric(model.amounts.map(|a| a as f32)));
+        ParametricGraph { model, fitted }
     }
 
-    /// Whether the graph is the measured curve (else the analytic one).
-    pub fn is_measured(&self) -> bool {
-        self.measured.is_some()
+    /// Whether the graph is the fitted curve (else the analytic one).
+    pub fn is_fitted(&self) -> bool {
+        self.fitted.is_some()
     }
 
     /// The curve at `x` (0 = black, 1 = white).
     pub fn at(&self, x: f64) -> f64 {
-        match &self.measured {
+        match &self.fitted {
             Some(lut) => lut.eval(if x.is_nan() { 0.0 } else { x as f32 }) as f64,
             None => self.model.at(x),
         }
@@ -160,15 +146,15 @@ impl ParametricGraph {
         if delta == 0.0 || !delta.is_finite() {
             return from;
         }
-        if self.measured.is_none() {
+        if self.fitted.is_none() {
             let per_unit = self.model.level_per_unit(region, x);
             return if per_unit.abs() > f64::EPSILON { (from + delta / per_unit).clamp(-100.0, 100.0).round() } else { from };
         }
-        // The measured regions are tables, not linear in the amount: search the amount that puts the drawn curve at the
-        // target, on the side of `from` the drag goes to (so a flat stretch never makes the slider jump back). The drawn
-        // curve is kept monotone, a running maximum, so its level at `x` reads the table entries up to `x`; the other
+        // The fitted regions are not linear in the amount: search the amount that puts the drawn curve at the target,
+        // on the side of `from` the drag goes to (so a flat stretch never makes the slider jump back). The drawn curve
+        // is kept monotone, a running maximum, so its level at `x` reads the curve's entries up to `x`; the other
         // regions' share of them is the same for every amount tried.
-        let Some(table) = t::REGIONS.get(region) else { return from };
+        let Some(fit) = m::REGIONS.get(region) else { return from };
         let pos = x.clamp(0.0, 1.0) as f32 * (N - 1) as f32;
         let j = (pos as usize).min(N - 2);
         let f = pos - j as f32;
@@ -185,7 +171,7 @@ impl ParametricGraph {
         let level = |a: f64| {
             let (mut m, mut at) = (f32::NEG_INFINITY, [0.0f32; 2]);
             for (i, (g, rest)) in entries.iter().enumerate() {
-                m = m.max((g + rest + measured_delta(&t::REGION_AMOUNTS, table, a as f32, *g)).clamp(0.0, 1.0));
+                m = m.max((g + rest + response(fit, a as f32, *g)).clamp(0.0, 1.0));
                 if let Some(v) = i.checked_sub(j).and_then(|k| at.get_mut(k)) {
                     *v = m;
                 }
@@ -216,12 +202,12 @@ impl ParametricGraph {
     }
 }
 
-/// The measured Whites curve at `amount`, or `None` at 0.
+/// The fitted Whites curve at `amount`, or `None` at 0.
 fn whites(amount: f64) -> Option<Lut1> {
     if amount == 0.0 {
         return None;
     }
-    let mut lut = Lut1::from_fn(N, |x| (x + measured_delta(&t::WHITES_AMOUNTS, &t::WHITES, amount as f32, x)).clamp(0.0, 1.0));
+    let mut lut = Lut1::from_fn(N, |x| (x + response(&m::WHITES, amount as f32, x)).clamp(0.0, 1.0));
     monotone(&mut lut);
     Some(lut)
 }
@@ -393,45 +379,44 @@ mod tests {
         assert_eq!(stage.base.v, crate::curve::ParametricCurve::new(&s.curve).to_lut().v);
     }
 
-    /// The earlier implementation, which built and sorted the keys per call.
-    fn measured_delta_sorted<const K: usize>(amounts: &[f32; K], tables: &[[f32; 257]; K], amount: f32, x: f32) -> f32 {
-        if amount == 0.0 || K == 0 {
-            return 0.0;
-        }
-        // the measured amounts with 0 between the negative and positive ones
-        let mut keys: Vec<(f32, Option<&[f32; 257]>)> = amounts.iter().zip(tables.iter()).map(|(a, v)| (*a, Some(v))).collect();
-        keys.push((0.0, None));
-        keys.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let (lo, hi) = (keys.first().map_or(0.0, |k| k.0), keys.last().map_or(0.0, |k| k.0));
-        let a = amount.clamp(lo, hi);
-        let at = |k: &(f32, Option<&[f32; 257]>)| k.1.map_or(0.0, |v| table_at(v, x));
-        for w in keys.windows(2) {
-            if let [k0, k1] = w
-                && a >= k0.0
-                && a <= k1.0
-            {
-                let f = if k1.0 > k0.0 { (a - k0.0) / (k1.0 - k0.0) } else { 0.0 };
-                return at(k0) * (1.0 - f) + at(k1) * f;
+    /// Every fitted response grows with its slider in the slider's direction, never acts against it, and is 0 at black,
+    /// at white and at amount 0; amounts beyond ±100 act as ±100.
+    #[test]
+    fn fitted_responses_grow_with_the_slider_and_stay_inside_black_and_white() {
+        let fits = std::iter::once(&m::WHITES).chain(m::REGIONS.iter());
+        for (i, fit) in fits.enumerate() {
+            for sign in [-1.0f32, 1.0] {
+                for k in 0..=64 {
+                    let x = k as f32 / 64.0;
+                    let mut prev = 0.0f32;
+                    for a in (0..=20).map(|j| sign * 5.0 * j as f32) {
+                        let r = sign * response(fit, a, x);
+                        // steadily: never back by more than a twentieth of an 8-bit level
+                        assert!(r >= -1e-6 && r + 0.05 / 255.0 >= prev, "fit {i} at {x}, amount {a}: {r} after {prev}");
+                        prev = r;
+                    }
+                    assert_eq!(response(fit, sign * 150.0, x), response(fit, sign * 100.0, x));
+                }
+                assert_eq!(response(fit, sign * 60.0, 0.0), 0.0);
+                assert_eq!(response(fit, sign * 60.0, 1.0), 0.0);
             }
+            assert_eq!(response(fit, 0.0, 0.5), 0.0);
+            assert_eq!(response(fit, f32::NAN, 0.5), 0.0);
         }
-        0.0
     }
 
+    /// The four regions peak in tone order: Shadows lowest, then Darks, Lights, Highlights, each one's strongest lift
+    /// above the one before's.
     #[test]
-    fn measured_delta_reads_the_tables_as_the_sorting_version_did() {
-        assert!(t::REGION_AMOUNTS.windows(2).all(|w| w[0] < w[1]) && t::WHITES_AMOUNTS.windows(2).all(|w| w[0] < w[1]));
-        for amount in [-150.0f32, -100.0, -80.0, -75.0, -30.0, -1.0, 0.0, 0.5, 12.0, 25.0, 60.0, 100.0, 140.0] {
-            for i in 0..=40 {
-                let x = i as f32 / 40.0;
-                for r in &t::REGIONS {
-                    assert_eq!(measured_delta(&t::REGION_AMOUNTS, r, amount, x), measured_delta_sorted(&t::REGION_AMOUNTS, r, amount, x));
-                }
-                assert_eq!(
-                    measured_delta(&t::WHITES_AMOUNTS, &t::WHITES, amount, x),
-                    measured_delta_sorted(&t::WHITES_AMOUNTS, &t::WHITES, amount, x)
-                );
-            }
-        }
+    fn the_regions_peak_in_tone_order() {
+        let peak = |fit: &[m::Response; 2]| {
+            (0..=256)
+                .map(|k| k as f32 / 256.0)
+                .fold((0.0f32, 0.0f32), |b, x| if response(fit, 50.0, x) > b.1 { (x, response(fit, 50.0, x)) } else { b })
+                .0
+        };
+        let peaks = m::REGIONS.each_ref().map(peak);
+        assert!(peaks.windows(2).all(|w| w[0] < w[1]), "{peaks:?}");
     }
 
     /// What the graph draws is the stage's base curve, and the analytic one where the stage uses that.
@@ -440,7 +425,7 @@ mod tests {
         let mut s = v9();
         (s.curve.shadows, s.curve.darks, s.curve.lights, s.curve.highlights) = (40.0, -30.0, 25.0, -60.0);
         let graph = ParametricGraph::new(&s);
-        assert!(graph.is_measured());
+        assert!(graph.is_fitted());
         let stage = CurveStage::new(&s).expect("regions set");
         for i in 0..=64 {
             let x = i as f32 / 64.0;
@@ -449,16 +434,16 @@ mod tests {
         // moved splits and earlier processes draw the analytic curve, as they render it
         s.curve.split_mid = 40.0;
         let moved = ParametricGraph::new(&s);
-        assert!(!moved.is_measured());
+        assert!(!moved.is_fitted());
         assert_eq!(moved.at(0.6), ParametricCurve::new(&s.curve).at(0.6));
         s.curve.split_mid = 50.0;
         let v8 = DevelopSettings { process: Process::V8.version(), ..s };
-        assert!(!ParametricGraph::new(&v8).is_measured());
+        assert!(!ParametricGraph::new(&v8).is_fitted());
     }
 
     /// In every region, the amount a drag picks moves the drawn curve by the drag's motion.
     #[test]
-    fn a_graph_drag_puts_the_measured_curve_where_the_hand_is() {
+    fn a_graph_drag_puts_the_fitted_curve_where_the_hand_is() {
         let mut s = v9();
         s.curve.darks = 30.0;
         let graph = ParametricGraph::new(&s);
@@ -478,28 +463,32 @@ mod tests {
         }
     }
 
-    /// Where opposite regions fold the measured curve back, the drag follows the curve as drawn (held flat by the peak
-    /// to its left): Lights +100 and Highlights −100 fold it above 0.75.
+    /// Where opposite regions fold the fitted curve back, the drag follows the curve as drawn (held flat by the peak
+    /// to its left): Lights +80 and Highlights −100 fold it above 0.75. A region that reaches the peak moves the held
+    /// line with the hand; one that cannot reach it keeps its value instead of running to the end.
     #[test]
     fn a_graph_drag_follows_the_drawn_curve_where_it_is_flattened() {
         let mut s = v9();
-        (s.curve.shadows, s.curve.darks, s.curve.lights, s.curve.highlights) = (-50.0, 100.0, 100.0, -100.0);
+        (s.curve.shadows, s.curve.darks, s.curve.lights, s.curve.highlights) = (-50.0, 100.0, 80.0, -100.0);
         let graph = ParametricGraph::new(&s);
         let x = 0.86;
         let raw = regions_at(graph.model.amounts.map(|v| v as f32), x as f32) as f64;
-        assert!(graph.at(x) - raw > 0.1, "the stretch is flattened, or this proves nothing: {} vs {raw}", graph.at(x));
+        assert!(graph.at(x) - raw > 0.05, "the stretch is flattened, or this proves nothing: {} vs {raw}", graph.at(x));
         let drawn = |region: usize, a: f64| {
             let mut after = s.clone();
             let c = &mut after.curve;
             *[&mut c.shadows, &mut c.darks, &mut c.lights, &mut c.highlights][region] = a;
             ParametricGraph::new(&after).at(x)
         };
-        // Lights lowers the peak that holds the line: the drawn line moves with the hand
-        let a = graph.dragged_amount(2, x, 100.0, -0.03);
-        assert!((drawn(2, a) - graph.at(x) + 0.03).abs() < 0.004, "Lights {a} moved the line {}", drawn(2, a) - graph.at(x));
-        // Highlights hardly moves the held line at all, so its slider stays rather than running to the end
-        assert!(drawn(3, 100.0) - graph.at(x) < REACH_MIN, "Highlights cannot lift the held line");
-        assert_eq!(graph.dragged_amount(3, x, -100.0, 0.03), -100.0);
+        for (region, delta) in [(2usize, -0.03), (3, 0.03)] {
+            let from = graph.amount(region);
+            let a = graph.dragged_amount(region, x, from, delta);
+            let moved = drawn(region, a) - graph.at(x);
+            assert!((moved - delta).abs() < 0.004, "region {region}: {from} → {a} moved the line {moved}");
+        }
+        // Shadows does not reach the peak that holds the line, so its slider stays
+        assert!((drawn(0, 100.0) - graph.at(x)).abs() < REACH_MIN, "Shadows cannot move the held line");
+        assert_eq!(graph.dragged_amount(0, x, -50.0, 0.03), -50.0);
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub mod cull;
 pub mod curve;
 pub mod curve_stage;
 #[rustfmt::skip]
-mod curve_stage_tables;
+mod curve_stage_model;
 pub mod dust;
 pub mod finish;
 pub mod geometry;

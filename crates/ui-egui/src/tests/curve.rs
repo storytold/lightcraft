@@ -36,7 +36,7 @@ fn exec(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_jso
     r["result"].clone()
 }
 
-/// The parametric graph the panel draws for the selected photo's settings (its process decides measured or analytic).
+/// The parametric graph the panel draws for the selected photo's settings (its process decides fitted or analytic).
 fn graph(h: &Headless) -> ParametricGraph {
     ParametricGraph::new(&develop(h))
 }
@@ -280,7 +280,7 @@ fn the_parametric_graph_paints_the_model_the_renderer_uses() {
     let model = graph(&h);
     let rect = curve_graph_rect(&mut h);
     let painted = painted_param_curve(&h, rect);
-    assert!(model.is_measured(), "the demo photo is on the latest process, which renders the measured regions");
+    assert!(model.is_fitted(), "the demo photo is on the latest process, which renders the fitted regions");
     let mut checked = 0;
     for i in 0..=24 {
         let x = i as f64 / 24.0;

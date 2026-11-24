@@ -2,13 +2,12 @@
 
 ## Unreleased
 
-### Whites and the tone curves behave as in Lightroom (process V9)
-- Whites now reaches into the upper midtones as Lightroom's does, and the Highlights, Lights, Darks and Shadows
-  regions of the parametric curve are as broad as Lightroom's and add up the same way: both follow Lightroom's
-  measured response. A contrast curve no longer turns orange towards red: the point curve keeps colours' hue, and
-  the red, green and blue curves act on their channel after it. This is rendering process 9: new photos (and Reset)
-  get it, photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
-  [Whites and the tone curves](curve-stage.md).
+### Broader Whites and parametric curve, hue-preserving tone curves (process 9)
+- Whites now reaches into the upper midtones, and the Highlights, Lights, Darks and Shadows regions of the
+  parametric curve are broader, overlap and add up when several are set. A contrast curve no longer turns orange
+  towards red: the point curve keeps colours' hue, and the red, green and blue curves act on their channel after it.
+  This is rendering process 9: new photos (and Reset) get it, photos you already edited keep their look until you
+  choose Photo ▸ Update to Current Process. See [Whites and the tone curves](curve-stage.md).
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.

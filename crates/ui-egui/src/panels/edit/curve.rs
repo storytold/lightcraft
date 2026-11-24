@@ -238,7 +238,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     let from_screen = |q: Pos2| (((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64, ((r.bottom() - q.y) / r.height()).clamp(0.0, 1.0) as f64);
     if ch == "parametric" {
         // The Effective curve: the one the renderer builds from the four region sliders for this
-        // process (the measured regions under V9 at the default splits), sampled here and rebuilt every
+        // process (the fitted regions under V9 at the default splits), sampled here and rebuilt every
         // frame. The graph holds no state of its own, so a slider moved by hand, a Reset or an Undo
         // redraws it from the settings in the same frame it changes.
         let model = ParametricGraph::new(d);
