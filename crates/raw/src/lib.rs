@@ -28,6 +28,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod binned;
+mod bridge;
 pub mod color;
 mod convert;
 pub mod dcp;
@@ -248,17 +249,7 @@ pub struct RawImage {
     pub lens_metadata: LensMetadata,
 }
 
-/// Black-subtracted, white-normalised data covering the active area.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Normalized {
-    pub width: usize,
-    pub height: usize,
-    pub cpp: usize,
-    /// Nominal range [0, 1] (values may exceed 1 above white or be negative from noise).
-    pub data: Vec<f32>,
-    /// CFA anchored at (0, 0) of this buffer.
-    pub cfa: Option<Cfa>,
-}
+pub use craft_develop::sensor::Normalized;
 
 impl RawImage {
     /// The description without the samples (what [`probe_info`] returns for the same file).
@@ -394,15 +385,6 @@ impl RawImage {
     /// The result is camera RGB (not white balanced), white level = 1.0, not oriented.
     pub fn develop(&self, method: Method) -> Result<Rgb32f> {
         let n = self.normalized()?;
-        // with no `OpcodeList3` to apply to the whole picture first, AHD demosaics just the default crop (the same
-        // pixels, without demosaicing the margin and then copying the crop out of the full picture)
-        if self.opcodes.list3.is_empty() && method == Method::Ahd {
-            let c = self.develop_crop(n.width, n.height);
-            if let Some(rgb) = demosaic::ahd_window(&n, c) {
-                drop(n);
-                return Ok(self.stretched(rgb));
-            }
-        }
         let rgb = demosaic(&n, method);
         drop(n);
         Ok(self.finish_demosaiced(rgb))

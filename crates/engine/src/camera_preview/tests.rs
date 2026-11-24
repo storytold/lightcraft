@@ -1829,6 +1829,33 @@ fn conditional_median_refuses_a_curve_pooled_over_a_wide_scene_range() {
     assert!((1..=3).contains(&flat), "the dip pools into one short step: {knots:?}");
 }
 
+/// The pooling limit is half a stop between a block's first and last knot: the same five pooled bins are kept when
+/// their knots span just under it and refused just over it, so a `>=`, a knot off by one or another limit fails here.
+#[test]
+fn conditional_median_pooling_limit_is_half_a_stop() {
+    let curve = |x: f64| 1.0 - (-2.5 * x).exp();
+    // 32 bins of 100 samples, log-spaced over `range` stops. The JPEG falls a little over bins 12-16 (samples
+    // 1200-1699), so they pool into one block; the bins on either side stay below and above it, so it takes no more.
+    let falling_bins = |range: f64| -> (Vec<(f64, f64)>, f32) {
+        let n = 3200;
+        let x = |i: usize| 0.05 * 2f64.powf(range * i as f64 / (n - 1) as f64);
+        let top = curve(x(1200));
+        let pairs =
+            (0..n).map(|i| (x(i), if (1200..1700).contains(&i) { top * (1.0 - 1e-4 * (i - 1200) as f64 / 500.0) } else { curve(x(i)) })).collect();
+        // a bin's knot is its upper middle sample (`median`), so the block spans the knots of bins 12 and 16
+        (pairs, (x(1650) / x(1250)).log2() as f32)
+    };
+    let (below, span) = falling_bins(0.48 * 3199.0 / 400.0);
+    assert!((0.47..0.5).contains(&span), "just under half a stop: {span}");
+    let tone = fit_tone_conditional(below).expect("a block over just under half a stop is kept");
+    // pooled into one level (the elasticity limit then eases the step's last knot into the rise after it)
+    let knots = tone.knots();
+    assert!(knots[12..16].iter().all(|k| k[1] == knots[12][1]), "the bins pool into one step: {knots:?}");
+    let (above, span) = falling_bins(0.52 * 3199.0 / 400.0);
+    assert!((0.5..0.53).contains(&span), "just over half a stop: {span}");
+    assert!(fit_tone_conditional(above).is_none(), "a block over just over half a stop is refused");
+}
+
 /// The camera look of `scene` (the known matrix of these tests, then a bright camera curve).
 fn bright_camera(p: [f32; 3]) -> [f32; 3] {
     let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
