@@ -641,24 +641,7 @@ impl LightcraftApp {
         let idle = lightcraft_engine::gpu::wait_idle(timeout);
         stopped && idle
     }
-}
 
-/// Dropping the app (including in one-test `nextest` processes that never call [`Self::shutdown`])
-/// must not leave export workers, render workers, or the GPU warm-up thread inside the driver when
-/// the process exits (issue #620). Does not call [`lightcraft_engine::gpu::begin_shutdown`] so
-/// multiple tests in one `cargo test` process can still use the GPU afterwards.
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for LightcraftApp {
-    fn drop(&mut self) {
-        if let Some(export) = self.export.as_ref() {
-            export.cancel_and_wait(std::time::Duration::from_secs(30));
-        }
-        self.renderer.shutdown(std::time::Duration::from_secs(30));
-        let _ = lightcraft_engine::gpu::wait_idle(std::time::Duration::from_secs(30));
-    }
-}
-
-impl LightcraftApp {
     /// Background and queue work. Called before layout on every host pass and, while the window is
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.

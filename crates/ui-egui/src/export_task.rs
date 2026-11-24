@@ -35,14 +35,6 @@ impl ExportTask {
         let (done, current) = self.progress.lock().map(|g| g.clone()).unwrap_or_default();
         json!({"total": self.total, "done": done, "current": current})
     }
-
-    /// Signal cancellation and wait up to `timeout` for the background worker to finish so it
-    /// cannot enter the GPU driver after [`LightcraftApp`] is dropped.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn cancel_and_wait(&self, timeout: std::time::Duration) {
-        self.cancel.store(true, Ordering::Relaxed);
-        let _ = self.rx.recv_timeout(timeout);
-    }
 }
 
 /// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
