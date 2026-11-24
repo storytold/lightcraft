@@ -332,8 +332,8 @@ Fujifilm	FinePix S1	RAF	2013	verified	corpus: crates/raw/tests/it/corpus.rs corp
 Fujifilm	FinePix S100fs	RAF	2007	verified	corpus: crates/raw/tests/it/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, layout 0)
 Fujifilm	FinePix S2 Pro	RAF	2003	verified	corpus: crates/raw/tests/it/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, big-endian 12-bit, turned)
 Fujifilm	FinePix S20 Pro	RAF	2003	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
-Fujifilm	FinePix S200 EXR	RAF	2010	preview	SuperCCD EXR RAF stored upright without a raw IFD
-Fujifilm	FinePix S205 EXR	RAF	2013	preview	SuperCCD EXR RAF stored upright without a raw IFD
+Fujifilm	FinePix S200 EXR	RAF	2010	verified	corpus: crates/raw/tests/it/body_corpus.rs (upright EXR mosaic; green and red / blue checked against the camera JPEG)
+Fujifilm	FinePix S205 EXR	RAF	2013	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
 Fujifilm	FinePix S3 Pro	RAF	2005	verified	corpus: crates/raw/tests/it/corpus.rs corpus_fujifilm_superccd (SuperCCD SR Pro, S frame)
 Fujifilm	FinePix S5 Pro	RAF	2007	verified	corpus: crates/raw/tests/it/corpus.rs corpus_fujifilm_superccd (SuperCCD SR Pro, S frame)
 Fujifilm	FinePix S5000 Z	RAF	2003	verified	corpus: crates/raw/tests/it/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, layout 1)
@@ -683,7 +683,7 @@ Nikon	1 J3	NEF	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned 
 Nikon	1 J4	NEF	2013	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 J5	NEF	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 S1	NEF	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	1 S2	NEF	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE* decodes (four-component profile verified), HE unchecked
+Nikon	1 S2	NEF	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	1 V1	NEF	2010	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 V2	NEF	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 V3	NEF	2013	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -1306,10 +1306,10 @@ Sony	A6400 (ILCE-6400)	ARW	2018	verified	issue #535: raw.pixls.us bulk check of 
 Sony	A6500 (ILCE-6500)	ARW	2015	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6600 (ILCE-6600)	ARW	2019	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6700 (ILCE-6700)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-F828	SRF	2003	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
+Sony	DSC-F828	SRF	2003	verified	corpus: crates/raw/tests/it/body_corpus.rs (SRF decrypted; green and red / blue checked against the camera JPEG; emerald read as green)
 Sony	DSC-HX95	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	DSC-HX99	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-V3	SRF	2005	unsupported	SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file
+Sony	DSC-V3	SRF	2005	unverified	SRF decoder (crates/raw/src/vendor/srf.rs: encrypted 14-bit data; F828 emerald read as green)
 Sony	DSC-RX100M7A	ARW	2024	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
 Sony	FX3 (ILME-FX3)	ARW	2020	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	FX30 (ILME-FX30)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
