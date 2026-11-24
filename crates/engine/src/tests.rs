@@ -1351,6 +1351,39 @@ fn match_total_exposures() {
     assert_eq!(e, 5.0, "1.3 s against 1/100 s is 7.0 stops, clamped: {e}");
 }
 
+/// Match Look moves another demo photo's lightness, contrast and colour cast toward the active photo's, as one
+/// undo step, and touches nothing else.
+#[test]
+fn match_look_brings_photos_toward_the_reference() {
+    use crate::cmd::match_look::look_stats;
+    use lcc_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    let (r, t) = (PhotoId(ids[0]), PhotoId(ids[1]));
+    // the reference: darker and warm-graded
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": -1.0, "ids": [ids[0]]})).unwrap();
+    s.execute("develop.set", &json!({"control": "grading.global.hue", "value": 40.0, "ids": [ids[0]]})).unwrap();
+    s.execute("develop.set", &json!({"control": "grading.global.sat", "value": 30.0, "ids": [ids[0]]})).unwrap();
+    let look = |s: &mut Session, id| look_stats(&s.render_now(id, 160, 160).unwrap().image).unwrap();
+    let goal = look(&mut s, r);
+    let before = look(&mut s, t);
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    s.selection.active = Some(r);
+    let res = s.execute("develop.matchLook", &json!({})).unwrap();
+    assert_eq!(res["changed"].as_u64(), Some(1), "{res}");
+    let after = look(&mut s, t);
+    let dist = |x: &[f64; 4]| ((x[0] - goal[0]).powi(2) + (x[2] - goal[2]).powi(2) + (x[3] - goal[3]).powi(2)).sqrt();
+    assert!(dist(&after) < 0.5 * dist(&before), "closer to the reference: {before:?} → {after:?} (goal {goal:?})");
+    let d = s.develop_of(t).unwrap();
+    assert!(d.light.exposure < 0.0, "darker like the reference: {}", d.light.exposure);
+    assert!(d.grading.global.sat > 0.0, "a cast was added");
+    assert_eq!(d.light.highlights, 0.0, "only exposure, contrast and the global tint move");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(t).unwrap().light.exposure, 0.0, "one undo step takes it back");
+    // nothing to match is refused, not a no-op
+    assert!(s.execute("develop.matchLook", &json!({"tone": false, "color": false})).is_err());
+}
+
 /// One test: the first Find Similar makes a signature of every demo photo, which is the cost.
 #[test]
 fn find_similar_filters_to_look_alikes() {

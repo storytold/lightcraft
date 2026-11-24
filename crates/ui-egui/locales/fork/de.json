@@ -1613,6 +1613,7 @@
   "Mask Overlay Options": "Optionen der Maskenüberlagerung",
   "Masks that find the subject, the sky or an object you click, AI Denoise, face recognition and search by description. They run on this computer once their models are downloaded.": "Masken, die das Motiv, den Himmel oder ein angeklicktes Objekt finden, KI-Entrauschen, Gesichtserkennung und Suche per Beschreibung. Sie laufen auf diesem Computer, sobald ihre Modelle heruntergeladen sind.",
   "Masks the sky, water and vegetation more precisely. Uses under 1 GB of memory.": "Maskiert Himmel, Wasser und Vegetation genauer. Braucht unter 1 GB Arbeitsspeicher.",
+  "Match Look": "Look abgleichen",
   "Match all (AND)": "Alle erfüllen (UND)",
   "Match any (OR)": "Eines erfüllen (ODER)",
   "Matches a little more often, but scanning takes twice as long. Changing it scans the faces again.": "Erkennt etwas häufiger, aber das Scannen dauert doppelt so lange. Eine Änderung scannt die Gesichter erneut.",

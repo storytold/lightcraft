@@ -24,6 +24,7 @@ pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
 pub(crate) mod develop;
+pub(crate) mod match_look;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod device_sync;
 pub mod duplicates;
@@ -256,6 +257,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(alternatives::specs());
         v.extend(collections::specs());
         v.extend(develop::specs());
+        v.extend(match_look::specs());
         v.extend(color::specs());
         v.extend(plugin_filters::specs());
         v.extend(curves::specs());
