@@ -3905,7 +3905,9 @@ mod tests {
     #[test]
     fn a_sony_body_outside_the_table_takes_the_stand_in() {
         let stand_in = lcc_raw::spectral::stand_in(RawFormat::Arw).unwrap();
-        for (make, model) in [("SONY", "ILCE-1M2"), ("SONY", ""), ("HASSELBLAD", "Lunar")] {
+        // a body no table (camdb incl. LibRaw, spectral) knows; the guard keeps the test honest when tables grow
+        assert!(!lcc_camdb::has_matrices_camera("SONY ILCE-99M9"));
+        for (make, model) in [("SONY", "ILCE-99M9"), ("SONY", ""), ("HASSELBLAD", "Lunar")] {
             let mut raw = raw_of(RawFormat::Arw, make, model, Default::default());
             if model.is_empty() {
                 raw.metadata.model = None;
@@ -3927,12 +3929,12 @@ mod tests {
             let w = t.matrix.apply([1.0; 3]);
             assert!(w.iter().all(|v| (v - 1.0).abs() < 1e-4), "{w:?}");
         }
-        let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-1M2", Default::default());
+        let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-99M9", Default::default());
         let mut trace = StartTrace::default();
         starting_colour_traced_from(&mut raw, None, CameraColour::Auto, |_, _| (None, false), |_, _| None, |_, _| None, &mut trace);
         assert!(matches!(&trace.colour, ColourSource::SpectralStandIn { model, .. } if model == stand_in.model), "{trace:?}");
-        assert_eq!(lcc_raw::spectral::find(Some("SONY"), "ILCE-1M2"), None);
-        assert_eq!(lcc_catalog::relative_wb_camera("ARW", "SONY ILCE-1M2"), !lcc_raw::kelvin_presets::covers(Some("SONY"), "ILCE-1M2"));
+        assert_eq!(lcc_raw::spectral::find(Some("SONY"), "ILCE-99M9"), None);
+        assert_eq!(lcc_catalog::relative_wb_camera("ARW", "SONY ILCE-99M9"), !lcc_raw::kelvin_presets::covers(Some("SONY"), "ILCE-99M9"));
         // the same failure outside ARW keeps the neutral fallback
         let mut raw = raw_of(RawFormat::Nef, "NIKON CORPORATION", "NIKON D3Z", Default::default());
         let (_, t, _) = starting_colour_with(&mut raw, CameraColour::Auto, |_, _| (None, false), |_, _| None, |_, _| None);
