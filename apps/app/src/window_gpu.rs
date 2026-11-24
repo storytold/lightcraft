@@ -2,8 +2,8 @@
 //! to compile egui's own shaders on DX12 — "The parameter is incorrect. (0x80070057)" in
 //! `egui_pipeline` — and wgpu's default error handler panicked, killing the app at start-up).
 //!
-//! - **Windows:** each renderer of [`backend::window_renderer_order`] (Vulkan, DX12, GL, then; DX12 first on Windows on ARM, issue #1029,
-//!   eframe's glow) is *probed* before the window opens: a device is created with an error handler
+//! - **Windows:** each renderer of [`backend::window_renderer_order`] (Vulkan, DX12, GL, then
+//!   eframe's glow; DX12 first on Windows on ARM, issue #1029) is *probed* before the window opens: a device is created with an error handler
 //!   that logs instead of panicking, and egui's pipeline is built inside error scopes. The first
 //!   that builds cleanly is handed to eframe as an existing device (so its error handler stays).
 //! - **Everywhere:** a marker file names the renderer being started and is emptied once the
