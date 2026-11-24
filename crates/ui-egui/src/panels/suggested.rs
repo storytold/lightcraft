@@ -362,7 +362,13 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, group: &SuggestionGroup, f: &Unname
     tip(&cross_r, crate::i18n::tr_format!("Not {}: keep this face unknown", group.name));
     tip(&ignore_r, crate::i18n::tr("Ignore this face, so it is not found again").to_string());
     // pointed at: the whole photo, this face marked (#1147)
-    super::face_preview::on_hover(app, &resp, f.photo, f.view, None);
+    super::face_preview::on_hover(
+        app,
+        &resp,
+        f.photo,
+        f.view,
+        super::face_preview::suggestion_caption(f.suggestion.as_deref().zip(f.suggestion_similarity)),
+    );
     if check_r.clicked() {
         return Some(Verdict::Confirm);
     }
@@ -386,6 +392,8 @@ mod tests {
             rect: lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
             view: lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
             suggestion: suggestion.map(str::to_string),
+            similarity: None,
+            suggestion_similarity: None,
             group: None,
         }
     }

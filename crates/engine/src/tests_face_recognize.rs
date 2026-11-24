@@ -519,7 +519,11 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     // a face the named ones recognise carries the name they suggest
     let like_ann = faces.iter().find(|f| at(f) == (b.0, 0)).unwrap();
     assert_eq!(like_ann["suggestion"]["name"], "Ann", "{like_ann}");
-    assert!(faces.iter().find(|f| at(f) == (b.0, 1)).unwrap()["suggestion"].is_null(), "Bob is nobody the named faces know");
+    assert!(like_ann["similarity"]["score"].is_number(), "suggested faces expose their hover score: {like_ann}");
+    let unknown_bob = faces.iter().find(|f| at(f) == (b.0, 1)).unwrap();
+    assert!(unknown_bob["suggestion"].is_null(), "Bob is nobody the named faces know");
+    assert_eq!(unknown_bob["similarity"]["name"], "Ann", "Unknown also exposes its closest confirmed-person match");
+    assert!(unknown_bob["similarity"]["score"].is_number(), "{unknown_bob}");
     // each face says which box to show it by; with no scan view it is its own box
     for k in ["x0", "y0", "x1", "y1"] {
         assert!((like_ann["view"][k].as_f64().unwrap() - like_ann["rect"][k].as_f64().unwrap()).abs() < 1e-3, "{like_ann}");

@@ -25,6 +25,10 @@ pub struct UnnamedFace {
     /// The box to show it by (a little wider than `rect`, a recognition model's own crop where it has one).
     pub view: lcc_geom::Rect,
     pub suggestion: Option<String>,
+    /// Its best cosine similarity to a confirmed person, even when it does not pass the suggestion threshold.
+    pub similarity: Option<(String, f32)>,
+    /// The score for the name suggested for this face; separate from its best-person similarity.
+    pub suggestion_similarity: Option<f32>,
     /// Its look-alike group (#259), once recognition has compared it: faces sharing one can be selected at once.
     pub group: Option<usize>,
 }
@@ -61,13 +65,31 @@ fn rect_of(v: &Value) -> Option<lcc_geom::Rect> {
     Some(lcc_geom::Rect { x0: v["x0"].as_f64()?, y0: v["y0"].as_f64()?, x1: v["x1"].as_f64()?, y1: v["y1"].as_f64()? })
 }
 
-fn face_of(v: &Value) -> Option<UnnamedFace> {
+fn face_of(v: &Value, suggested_as: Option<&str>) -> Option<UnnamedFace> {
+    let suggestion = v.field("suggestion");
+    let match_info = v.field("similarity");
+    let match_name = match_info.field("name").as_str().or_else(|| suggestion.field("name").as_str()).or(suggested_as);
+    let match_score = match_info
+        .field("score")
+        .as_f64()
+        .or_else(|| suggestion.field("score").as_f64())
+        .or_else(|| v.field("score").as_f64())
+        .filter(|score| score.is_finite());
+    let similarity = match_name.zip(match_score).map(|(name, score)| (name.to_string(), score.clamp(0.0, 1.0) as f32));
+    let suggestion_similarity = suggestion
+        .field("score")
+        .as_f64()
+        .or_else(|| v.field("score").as_f64())
+        .filter(|score| score.is_finite())
+        .map(|score| score.clamp(0.0, 1.0) as f32);
     Some(UnnamedFace {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
         rect: rect_of(&v["rect"]).or_else(|| rect_of(&v["view"]))?,
         view: rect_of(&v["view"]).or_else(|| rect_of(&v["rect"]))?,
-        suggestion: v.field("suggestion").field("name").as_str().map(str::to_string),
+        suggestion: suggestion.field("name").as_str().or(suggested_as).map(str::to_string),
+        similarity,
+        suggestion_similarity,
         group: v["group"].as_u64().and_then(|g| usize::try_from(g).ok()),
     })
 }
@@ -84,11 +106,8 @@ pub fn parse(v: &Value) -> Unnamed {
             list.iter()
                 .filter_map(|g| {
                     let name = g["name"].as_str().map(str::trim).filter(|n| !n.is_empty())?;
-                    let mut faces: Vec<UnnamedFace> = g["faces"].as_array().map(|a| a.iter().filter_map(face_of).collect()).unwrap_or_default();
-                    // a group says who it is about, even where the faces carry only a score
-                    for face in &mut faces {
-                        face.suggestion.get_or_insert_with(|| name.to_string());
-                    }
+                    let faces: Vec<UnnamedFace> =
+                        g["faces"].as_array().map(|a| a.iter().filter_map(|face| face_of(face, Some(name))).collect()).unwrap_or_default();
                     Some(SuggestionGroup { name: name.to_string(), total: faces.len().max(count(&g["total"])), faces })
                 })
                 .collect()
@@ -96,7 +115,7 @@ pub fn parse(v: &Value) -> Unnamed {
         .unwrap_or_default();
     Unnamed {
         total: count(&v["total"]),
-        faces: v["faces"].as_array().map(|a| a.iter().filter_map(face_of).collect()).unwrap_or_default(),
+        faces: v["faces"].as_array().map(|a| a.iter().filter_map(|face| face_of(face, None)).collect()).unwrap_or_default(),
         ordered: v["ordered"] == true,
         ready: v["ready"] == true,
         groups,
@@ -244,7 +263,7 @@ pub fn naming_bar(app: &mut LccApp, ui: &mut egui::Ui) {
 }
 
 /// One face tile: face `i` of the faces on screen (`visible` — a category's slice of `list`, or all of it), drawn at `r`.
-pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[UnnamedFace], i: usize, r: Rect, ppp: f32) -> egui::Response {
+pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, visible: &[UnnamedFace], i: usize, r: Rect, ppp: f32) -> egui::Response {
     let keep;
     let f = match visible.get(i) {
         Some(f) => f,
@@ -255,6 +274,8 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[Unna
                 rect: lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
                 view: lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
                 suggestion: None,
+                similarity: None,
+                suggestion_similarity: None,
                 group: None,
             };
             &keep
@@ -305,7 +326,13 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[Unna
         return resp;
     }
     // hovered: the whole photo, this face marked (#1147)
-    super::face_preview::on_hover(app, &resp, f.photo, f.view, None);
+    super::face_preview::on_hover(
+        app,
+        &resp,
+        f.photo,
+        f.view,
+        super::face_preview::similarity_caption(f.similarity.as_ref().map(|(name, score)| (name.as_str(), *score))),
+    );
     // a double click opens the photo, as in the grid; its second click must not undo the first one's selection
     if resp.double_clicked() {
         let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
@@ -317,7 +344,7 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[Unna
         click(app, visible, i, shift);
     }
     // its look-alikes, selected at once to be named or ignored together (#259); or this face, ignored
-    let alikes = look_alikes(list, f);
+    let alikes = look_alikes(visible, f);
     crate::widgets::context_menu(&resp, |ui| {
         let n = alikes.len();
         let label = crate::i18n::tr_format!("Select {n} look-alikes", n = n);
@@ -340,14 +367,14 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[Unna
 }
 /// One face of a category of the People view: [`tile`], for a category showing its own faces (its own order and
 /// selection) in place of the whole unnamed list.
-pub fn tile_at(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[UnnamedFace], i: usize, r: Rect, ppp: f32) {
-    let _ = tile(app, ui, list, visible, i, r, ppp);
+pub fn tile_at(app: &mut LccApp, ui: &mut egui::Ui, visible: &[UnnamedFace], i: usize, r: Rect, ppp: f32) {
+    let _ = tile(app, ui, visible, i, r, ppp);
 }
 
 /// The faces in `f`'s look-alike group (`f` among them), or just `f` when it has none yet.
-fn look_alikes(list: &Unnamed, f: &UnnamedFace) -> Vec<(u64, usize)> {
+fn look_alikes(visible: &[UnnamedFace], f: &UnnamedFace) -> Vec<(u64, usize)> {
     match f.group {
-        Some(g) => list.faces.iter().filter(|o| o.group == Some(g)).map(|o| (o.photo, o.index)).collect(),
+        Some(g) => visible.iter().filter(|o| o.group == Some(g)).map(|o| (o.photo, o.index)).collect(),
         None => vec![(f.photo, f.index)],
     }
 }
@@ -365,9 +392,18 @@ mod tests {
             {"photo": 4, "index": 0, "rect": {"x0": 0.1, "y0": 0.1, "x1": 0.3, "y1": 0.4}},
         ]});
         let list = parse(&v);
-        assert_eq!(look_alikes(&list, &list.faces[0]), vec![(1, 0), (2, 0)]);
-        assert_eq!(look_alikes(&list, &list.faces[2]), vec![(3, 0)]);
-        assert_eq!(look_alikes(&list, &list.faces[3]), vec![(4, 0)], "no group yet: the face alone");
+        assert_eq!(look_alikes(&list.faces, &list.faces[0]), vec![(1, 0), (2, 0)]);
+        assert_eq!(look_alikes(&list.faces, &list.faces[2]), vec![(3, 0)]);
+        assert_eq!(look_alikes(&list.faces, &list.faces[3]), vec![(4, 0)], "no group yet: the face alone");
+
+        // A category passes only its visible faces: choosing an Unknown cluster must not select a Suggested face.
+        let mut mixed = list.faces.clone();
+        if let Some(suggested) = mixed.get_mut(1) {
+            suggested.suggestion = Some("Ann".into());
+            suggested.group = Some(0);
+        }
+        let unknown: Vec<_> = mixed.into_iter().filter(|face| face.suggestion.is_none()).collect();
+        assert_eq!(look_alikes(&unknown, &unknown[0]), vec![(1, 0)]);
     }
 
     #[test]
@@ -375,15 +411,22 @@ mod tests {
         let v = json!({
             "total": 9, "ordered": true, "ready": true,
             "faces": [
-                {"photo": 3, "index": 1, "rect": {"x0": 0.1, "y0": 0.1, "x1": 0.3, "y1": 0.4}, "view": {"x0": 0.12, "y0": 0.12, "x1": 0.28, "y1": 0.38}, "suggestion": {"name": "Jane Doe", "score": 0.7}},
-                {"photo": 4, "index": 0, "rect": {"x0": 0.1, "y0": 0.1, "x1": 0.3, "y1": 0.4}, "suggestion": null},
+                {"photo": 3, "index": 1, "rect": {"x0": 0.1, "y0": 0.1, "x1": 0.3, "y1": 0.4}, "view": {"x0": 0.12, "y0": 0.12, "x1": 0.28, "y1": 0.38}, "suggestion": {"name": "Jane Doe", "score": 0.7}, "similarity": {"name": "Jane Doe", "score": 0.73}},
+                {"photo": 4, "index": 0, "rect": {"x0": 0.1, "y0": 0.1, "x1": 0.3, "y1": 0.4}, "similarity": {"name": "Jane Doe", "score": 0.42}, "suggestion": null},
                 {"photo": 5, "index": 0},
                 {"index": 0, "rect": {"x0": 0.1, "y0": 0.1, "x1": 0.3, "y1": 0.4}},
             ],
+            "groups": [{"name": "Jane Doe", "total": 1, "faces": [{"photo": 6, "index": 0, "rect": {"x0": 0.1, "y0": 0.1, "x1": 0.3, "y1": 0.4}, "score": 0.91}]}],
         });
         let list = parse(&v);
         assert_eq!((list.total, list.ordered, list.ready, list.faces.len()), (9, true, true, 2));
         assert_eq!(list.faces[0].suggestion.as_deref(), Some("Jane Doe"));
+        assert_eq!(list.faces[0].similarity, Some(("Jane Doe".to_string(), 0.73)), "the best confirmed-person match keeps its name");
+        assert_eq!(list.faces[0].suggestion_similarity, Some(0.7), "a suggested face keeps the score of its suggested person");
+        assert_eq!(list.faces[1].similarity, Some(("Jane Doe".to_string(), 0.42)), "an Unknown face keeps its closest confirmed-person match");
+        let suggested = list.groups.first().and_then(|group| group.faces.first());
+        assert_eq!(suggested.and_then(|face| face.similarity.as_ref().map(|(name, score)| (name.as_str(), *score))), Some(("Jane Doe", 0.91)));
+        assert_eq!(suggested.and_then(|face| face.suggestion_similarity), Some(0.91));
         assert_eq!(list.faces[0].view.x0, 0.12, "the view box is used when there is one");
         assert_eq!(list.faces[0].rect.x0, 0.1, "the face's own box is kept for the commands that check it");
         assert_eq!((list.faces[1].view.x0, list.faces[1].suggestion.clone()), (0.1, None), "else the face's own box");

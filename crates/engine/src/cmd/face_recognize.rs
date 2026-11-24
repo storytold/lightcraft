@@ -498,6 +498,8 @@ struct Arranged {
     ready: bool,
     /// A name for some faces, when the faces already named say so with confidence: `(photo, index)` to `(name, score)`.
     suggestions: std::collections::HashMap<(u64, usize), (String, f32)>,
+    /// Best similarity to any named person for each embedded, listed face, including faces below the suggestion bars.
+    similarities: std::collections::HashMap<(u64, usize), (String, f32)>,
     /// Look-alike groups (#259): faces next to each other in the order that are as alike as a match needs share a
     /// group number, so a frontend can select (and name or ignore) a group at once. `(photo, index)` to the group.
     groups: std::collections::HashMap<(u64, usize), usize>,
@@ -579,8 +581,9 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|(photo, index, rect)| {
             let view = s.face_view(lcc_catalog::PhotoId(*photo), *rect);
             let suggestion = arranged.suggestions.get(&(*photo, *index)).map(|(name, score)| json!({"name": name, "score": score}));
+            let similarity = arranged.similarities.get(&(*photo, *index)).map(|(name, score)| json!({"name": name, "score": score}));
             let alike = arranged.groups.get(&(*photo, *index));
-            json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion, "group": alike})
+            json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion, "similarity": similarity, "group": alike})
         })
         .collect();
     // what the user said about a face's suggestion holds: a face rejected as the person it was suggested as is not put
@@ -1390,7 +1393,13 @@ mod imp {
     /// Put the unnamed faces `all` in order of likeness (the ones already embedded; the rest follow in photo order) and
     /// find a name for those the named faces recognise, for the first `limit` of them.
     pub fn arrange_unnamed(s: &mut Session, all: &mut Vec<(u64, usize, Rect)>, limit: usize) -> super::Arranged {
-        let none = super::Arranged { ordered: false, ready: false, suggestions: Default::default(), groups: Default::default() };
+        let none = super::Arranged {
+            ordered: false,
+            ready: false,
+            suggestions: Default::default(),
+            similarities: Default::default(),
+            groups: Default::default(),
+        };
         let Some(_) = s.face_models_dir.clone() else { return none };
         let Ok(manifest) = current_manifest(s, "faces.unnamed", false) else { return none };
         let (mut embedded, mut plain) = (Vec::new(), Vec::new());
@@ -1420,10 +1429,14 @@ mod imp {
         let refs: Vec<(&str, &[f32])> = gallery.iter().map(|(n, e)| (n.as_str(), &e[..])).collect();
         let threshold = manifest.thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD);
         let top = top_faces(s);
-        let mut suggestions = std::collections::HashMap::new();
+        let (mut suggestions, mut similarities) = (std::collections::HashMap::new(), std::collections::HashMap::new());
         if !refs.is_empty() {
             for ((photo, index, _), e) in ordered.iter().take(limit) {
-                if let Some(x) = matching::suggest(&matching::rank_top(e, &refs, top), threshold, DEFAULT_MARGIN) {
+                let ranked = matching::rank_top(e, &refs, top);
+                if let Some(best) = ranked.first() {
+                    similarities.insert((*photo, *index), (best.name.clone(), best.score));
+                }
+                if let Some(x) = matching::suggest(&ranked, threshold, DEFAULT_MARGIN) {
                     suggestions.insert((*photo, *index), (x.name, x.score));
                 }
             }
@@ -1433,7 +1446,7 @@ mod imp {
         all.extend(ordered.into_iter().map(|(f, _)| f));
         all.extend(beyond.into_iter().map(|(f, _)| f));
         all.extend(plain);
-        super::Arranged { ordered: grouped, ready: true, suggestions, groups }
+        super::Arranged { ordered: grouped, ready: true, suggestions, similarities, groups }
     }
 
     /// Number the runs of `chain` (faces in order of likeness) whose neighbours are at least `threshold` alike: each
@@ -1795,7 +1808,13 @@ mod imp {
     }
 
     pub fn arrange_unnamed(_: &mut Session, _: &mut Vec<(u64, usize, lcc_geom::Rect)>, _: usize) -> super::Arranged {
-        super::Arranged { ordered: false, ready: false, suggestions: Default::default(), groups: Default::default() }
+        super::Arranged {
+            ordered: false,
+            ready: false,
+            suggestions: Default::default(),
+            similarities: Default::default(),
+            groups: Default::default(),
+        }
     }
 }
 
@@ -1898,7 +1917,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Unnamed Faces",
             [],
             None,
-            "{limit?: 600, scope?: \"filter\", bySuggestion?: false} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready, groups?}: the faces nobody has named (with `scope: \"filter\"`, only in the photos the library filter shows, any person filter aside); with a recognition model chosen, look-alikes are next to each other and a face the named ones recognise carries the name they suggest, and with `bySuggestion: true` `groups` lists those faces under the person suggested ([{name, total, faces: [{photo, index, rect, view, score}]}], the most faces first). `view` is the box to show the face by. Name them with `faces.nameFaces`, ignore them with `faces.ignore`",
+            "{limit?: 600, scope?: \"filter\", bySuggestion?: false} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null, similarity: {name, score} | null}], ordered, ready, groups?}: the faces nobody has named (with `scope: \"filter\"`, only in the photos the library filter shows, any person filter aside); with a recognition model chosen, look-alikes are next to each other and a face the named ones recognise carries the name they suggest. `similarity` is the best confirmed-person match, including below-threshold matches. With `bySuggestion: true`, `groups` lists suggested faces under the person suggested ([{name, total, faces: [{photo, index, rect, view, score}]}], the most faces first). `view` is the box to show the face by. Name them with `faces.nameFaces`, ignore them with `faces.ignore`",
             super::always,
             unnamed
         ),

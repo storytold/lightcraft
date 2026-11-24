@@ -13,6 +13,7 @@
 //! every face is cut from the same kind of box (the detector's, once the scan has looked at it), so faces are shown
 //! equally close. Only the rows on screen ask for a face render (the engine caches them, memory and disk).
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
@@ -172,6 +173,25 @@ pub fn category_faces(
     CategoryFaces { unknown, suggested, list: Arc::new(list.clone()) }
 }
 
+/// Consecutive look-alike groups in the listed order. Faces with no embedding/group remain their own singleton, and
+/// filtering Suggested faces out of the list cannot pull separate clusters together.
+pub fn unknown_clusters(faces: &[UnnamedFace]) -> Vec<Range<usize>> {
+    let mut clusters = Vec::new();
+    let mut start = 0;
+    while start < faces.len() {
+        let group = faces.get(start).and_then(|face| face.group);
+        let mut end = start + 1;
+        if let Some(group) = group {
+            while faces.get(end).is_some_and(|face| face.group == Some(group)) {
+                end += 1;
+            }
+        }
+        clusters.push(start..end);
+        start = end;
+    }
+    clusters
+}
+
 /// The view's categories now: the unnamed faces (asked for again only when they change) split up.
 pub fn categories(app: &mut LccApp, now: f64) -> CategoryFaces {
     let list = super::unnamed::faces(app, now);
@@ -216,28 +236,53 @@ pub(super) fn heading_row(ui: &mut egui::Ui) -> Rect {
     ui.allocate_exact_size(vec2(ui.available_width(), SECTION_H), Sense::hover()).0
 }
 
-/// The faces a grid draws, in the order it draws them: the tiles only (their pictures, a click selecting them), the way
-/// the Unnamed faces section has always drawn them.
-pub(super) fn face_grid(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[UnnamedFace], top: f32, viewport: egui::Rect, ppp: f32) {
+/// Draws Unknown faces in a flat, virtualized grid with a border around each multi-face similarity cluster. The list
+/// keeps its original ordering and category-wide indices; faces outside the viewport are not requested.
+pub(super) fn clustered_face_grid(app: &mut LccApp, ui: &mut egui::Ui, visible: &[UnnamedFace], viewport: egui::Rect, ppp: f32) {
     let tile = tile_edge(app.ui.thumb_size);
     let width = ui.available_width();
     let cols = columns(width, tile);
     let rows = visible.len().div_ceil(cols);
-    let row_h = tile + GAP;
-    let (area, _) = ui.allocate_exact_size(vec2(width, top + rows as f32 * row_h + PAD), Sense::hover());
-    let first = ((viewport.top() - top) / row_h).floor().max(0.0) as usize;
-    let last = ((((viewport.bottom() - top) / row_h).ceil().max(0.0) as usize).min(rows)).max(first.min(rows));
+    let step = tile + GAP;
+    const CLUSTER_INSET: f32 = 4.0;
+    let (area, _) = ui.allocate_exact_size(vec2(width, rows as f32 * step + PAD + CLUSTER_INSET), Sense::hover());
+    let visible_rect = viewport.translate(area.min.to_vec2());
+    let t = Tokens::get(ui.ctx());
+    // Outline only genuine multi-face groups. Singletons and not-yet-embedded faces stay in the efficient flat grid.
+    for range in unknown_clusters(visible).into_iter().filter(|range| range.len() > 1) {
+        let mut start = range.start;
+        while start < range.end {
+            let row = start / cols;
+            let end = range.end.min(row.saturating_add(1).saturating_mul(cols));
+            let Some(last) = end.checked_sub(1) else { break };
+            let min = pos2(area.left() + PAD + (start % cols) as f32 * step - CLUSTER_INSET, area.top() + row as f32 * step);
+            let max = pos2(
+                area.left() + PAD + (last % cols) as f32 * step + tile + CLUSTER_INSET,
+                area.top() + row as f32 * step + tile + 2.0 * CLUSTER_INSET,
+            );
+            let bounds = Rect::from_min_max(min, max);
+            if bounds.intersects(visible_rect) {
+                ui.painter().rect_stroke(bounds, 5.0, Stroke::new(1.0, t.divider), StrokeKind::Inside);
+            }
+            start = end;
+        }
+    }
+    let first = ((viewport.top() - CLUSTER_INSET) / step).floor().max(0.0) as usize;
+    let last = ((viewport.bottom() - CLUSTER_INSET) / step).ceil().max(0.0) as usize;
+    let last = last.min(rows).max(first.min(rows));
+    let mut shown = 0usize;
     for row in first..last {
         for col in 0..cols {
             let Some(i) = row.checked_mul(cols).and_then(|n| n.checked_add(col)) else { break };
             if i >= visible.len() {
                 break;
             }
-            let min = area.min + vec2(PAD + col as f32 * row_h, top + row as f32 * row_h);
-            super::unnamed::tile_at(app, ui, list, visible, i, Rect::from_min_size(min, vec2(tile, tile)), ppp);
+            let min = area.min + vec2(PAD + col as f32 * step, CLUSTER_INSET + row as f32 * step);
+            super::unnamed::tile_at(app, ui, visible, i, Rect::from_min_size(min, vec2(tile, tile)), ppp);
+            shown = shown.saturating_add(1);
         }
     }
-    app.renderer.want_variants(visible.len().min(rows * cols));
+    app.renderer.want_variants(shown);
 }
 
 /// The Confirmed category: a card per named person (their face, the number of photos they are in, their name), with the
@@ -415,7 +460,7 @@ fn unknown(app: &mut LccApp, ui: &mut egui::Ui) {
         }
     }
     egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
-        face_grid(app, ui, &cats.list, &faces, 0.0, viewport, ppp);
+        clustered_face_grid(app, ui, &faces, viewport, ppp);
     });
 }
 
@@ -517,12 +562,26 @@ mod tests {
             rect: lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
             view: lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
             suggestion: suggestion.map(str::to_string),
+            similarity: None,
+            suggestion_similarity: None,
             group: None,
         }
     }
 
     fn listing(faces: Vec<UnnamedFace>) -> Unnamed {
         Unnamed { total: faces.len(), faces, ordered: true, ready: true, groups: Vec::new(), rejected: 0 }
+    }
+
+    #[test]
+    fn unknown_faces_are_partitioned_by_adjacent_similarity_group() {
+        let mut faces = vec![face(1, 0, None), face(2, 0, None), face(3, 0, None), face(4, 0, None), face(5, 0, None)];
+        faces[0].group = Some(0);
+        faces[1].group = Some(0);
+        faces[2].group = Some(1);
+        // A face without an embedding is kept on its own; same-id entries separated in the order stay separate.
+        faces[4].group = Some(0);
+        assert_eq!(unknown_clusters(&faces), vec![0..2, 2..3, 3..4, 4..5]);
+        assert!(unknown_clusters(&[]).is_empty());
     }
 
     #[test]
