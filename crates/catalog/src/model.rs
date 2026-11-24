@@ -555,9 +555,10 @@ pub struct Analysis {
     pub quality: Option<QualityScan>,
 }
 
-/// What the Image Quality Scanner measured on a photo, and what it asked its flag to be (issue
-/// #1313; catalog format 20). The factors are 0..100 where 100 is clean; `None` where a factor
-/// wasn't measured (compression on a raw photo).
+/// What the Image Quality Scanner measured on a photo, and what it asked its flag and its star
+/// rating to be (issue #1313; catalog format 20; format 21 added `rating_written`). The factors
+/// are 0..100 where 100 is clean; `None` where a factor wasn't measured (compression on a raw
+/// photo).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct QualityScan {
@@ -582,6 +583,12 @@ pub struct QualityScan {
     /// flag).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag_written: Option<Flag>,
+    /// The star rating (0–5) a scan wrote onto the photo, when it did (issue #1362): the
+    /// engine's record of its own rating, so a later scan may change it while a rating the user
+    /// set is never touched. Absent when the scan wrote none (it wasn't asked to write ratings,
+    /// the photo carried one, or the scan kept the user's). Catalog format 21.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating_written: Option<u8>,
 }
 
 /// What a photo's quality score asked of its Pick Flag: picked at or above the accepted cutoff,

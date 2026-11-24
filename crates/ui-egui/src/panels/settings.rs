@@ -2057,6 +2057,28 @@ fn shared_store(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     );
 }
 
+/// Whether a click in a background window also clicks what is under the pointer or only brings the
+/// window forward: a choice on macOS only, where the platform asks; Windows and Linux always pass
+/// the click on.
+fn background_clicks_row(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::AppSettings) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    row(ui, t, crate::i18n::tr("Click through"), |ui| {
+        choices(
+            ui,
+            "settingsBackgroundClicks",
+            &[(true, "Bring to front and click"), (false, "Only bring to front")],
+            &mut s.accept_background_clicks,
+        );
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr("A click in a background window brings it to the front. Choose whether the same click affects the window's contents."),
+    );
+}
+
 fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     let forced = forced_slider_layout(app);
@@ -2405,6 +2427,7 @@ fn appearance(
     }
     // (every slider, pills too)
     hint(ui, t, crate::i18n::tr("Hold Shift for fine control"));
+    background_clicks_row(ui, t, s);
     ui.add_space(2.0);
 }
 

@@ -1298,6 +1298,14 @@ fn overlays_match() {
         eprintln!("visualize spots t={t:<3}          white {:.3}%  differing {:.4}%", white * 100.0, differ * 100.0);
         assert!(differ < 0.002, "spots t={t}: {differ}");
     }
+    // The Sharpening views are drawn on the CPU by both renderers, from the band each computed
+    let mut s = DevelopSettings::default();
+    s.detail.sharpen_amount = 80.0;
+    s.detail.sharpen_masking = 60.0;
+    for v in lcc_pipeline::SharpenView::ALL {
+        let req = RenderRequest { overlay: lcc_pipeline::Overlay::Sharpen(v), ..RenderRequest::fit(640, 640) };
+        check(&format!("{v:?} view"), &src, &raw, &s, &req);
+    }
     // Mask overlays: the alpha the GPU evaluated (or, for a hidden mask, the CPU's) drawn the same way.
     let mut s = DevelopSettings::default();
     let stroke = BrushStroke { points: vec![Point::new(0.2, 0.3), Point::new(0.6, 0.5)], size: 0.05, ..Default::default() };

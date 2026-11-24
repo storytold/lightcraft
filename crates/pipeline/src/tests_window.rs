@@ -516,6 +516,12 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     hdr.hdr.max_ev = 3.0;
     hdr.light.exposure = 1.5;
     check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
+    // a Sharpening view comes from the render's own band, so the window shows what the full render does
+    let mut sharp = DevelopSettings::default();
+    sharp.detail.sharpen_amount = 80.0;
+    sharp.detail.sharpen_masking = 60.0;
+    check_overlay("sharpen masking", &sharp, Overlay::Sharpen(crate::SharpenView::Masking), MID, 2, 0.2);
+    check_overlay("sharpen radius", &sharp, Overlay::Sharpen(crate::SharpenView::Radius), MID, 2, 0.2);
 }
 // Given a mask with Whites and Blacks, whose tone range is fitted to the tones under it (decision of
 // 2026-10-17), a window matches the whole render: the range comes from the whole frame, not the window
