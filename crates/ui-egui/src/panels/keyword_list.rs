@@ -2,7 +2,8 @@
 //! keyword of the library, those without photos too, as a tree with photo counts. A tick box per
 //! keyword gives it to the selected photos or takes it away; the arrow shows the photos with it.
 
-use craft::ui::buttons::Button;
+use craft::ui::buttons::IconButton;
+use craft::ui::primitives::IconSpec;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::text::TextField;
@@ -162,7 +163,14 @@ fn live_filter(ui: &mut egui::Ui, filter: &mut String, width: f32) {
 /// A genuine SDK button: keyboard and pointer activation take the same caller action.
 fn header_action(ui: &mut egui::Ui, widget: &str, face: &'static str, label: &'static str, enabled: bool) -> bool {
     let (rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
-    let shown = Button::new(crate::i18n::tr(label)).painted(face).id(egui::Id::unique(widget)).enabled(enabled && ui.is_enabled()).show_at(ui, rect);
+    // (the glyph is LightCraft's own + or −: a text face does not fit the 24-point button and is cut to dots)
+    let icon = if face == "+" { crate::icons::Icon::Plus } else { crate::icons::Icon::Minus };
+    let glyph = crate::panels::detail::host::IconGlyph(icon);
+    let shown = IconButton::new(IconSpec::glyph(&glyph))
+        .id(egui::Id::unique(widget))
+        .label(crate::i18n::tr(label).to_owned())
+        .enabled(enabled && ui.is_enabled())
+        .show_at(ui, rect);
     if measuring(ui) {
         return false;
     }

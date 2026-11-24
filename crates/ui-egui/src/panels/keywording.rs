@@ -26,6 +26,7 @@ use crate::theme::Tokens;
 pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use crate::state::KeywordingView as V;
     ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
         for (view, id, label) in
             [
             (V::Enter, "enter", "Enter Keywords"),
@@ -35,7 +36,13 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ]
         {
             let key = format!("keywordView:{id}");
-            let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(&key).selected(app.ui.keywording_view == view).show(ui);
+            // (text buttons, the chosen one lit: a row of outlined pills does not say which view is shown)
+            let shown = Button::new(crate::i18n::tr(label).to_owned())
+                .id_salt(&key)
+                .size(craft::theme::ControlSize::Sm)
+                .variant(craft::theme::Variant::GHOST)
+                .selected(app.ui.keywording_view == view)
+                .show(ui);
             if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { continue; }
             crate::widgets::register_response(key, shown.response.rect, &shown.response);
             if ui.is_enabled() && shown.clicked() {
@@ -95,13 +102,24 @@ fn chip_edges(cross: bool) -> f32 {
 }
 
 /// What a chip shows of `name` in a row `row_w` wide (cut short to fit it), and the chip's width.
-fn chip_size(ui: &egui::Ui, name: &str, partial: bool, cross: bool, row_w: f32) -> (String, f32) {
+fn chip_size(ui: &mut egui::Ui, name: &str, partial: bool, cross: bool, row_w: f32) -> (String, f32) {
     let font = Tokens::get(ui.ctx()).font(13.0);
     let room = (row_w - chip_edges(cross)).max(24.0);
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE).size().x;
     let shown = chip_label(name, partial, room, measure);
-    let w = measure(&shown) + chip_edges(cross);
+    let w = if cross {
+        // (the name's button measures itself: its padding is the framework's, so the text is never cut to dots)
+        chip_button_width(ui, name, &shown) + CROSS_W
+    } else {
+        measure(&shown) + chip_edges(cross)
+    };
     (shown, w)
+}
+
+/// The width of the push button that shows `shown` for the keyword `name`.
+fn chip_button_width(ui: &mut egui::Ui, name: &str, shown: &str) -> f32 {
+    let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());
+    Button::new(name.to_owned()).painted(shown.to_owned()).size(craft::theme::ControlSize::Sm).measure_in(&child, craft::behavior::Proposal::Ideal).x
 }
 
 /// What [`chip`] drew: the name's response, and for a chip with a × the ×'s response and whether

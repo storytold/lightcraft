@@ -53,7 +53,10 @@ pub(crate) fn dropdown_menu(ui: &mut Ui, name: &str, label: &str, face: &str, wi
     use craft::ui::buttons::Button;
     use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
     use craft::ui::menu::Menu;
-    let button = Button::new(label.to_owned()).painted(face.to_owned()).id_salt(("lc-dropdown", name));
+    let button = Button::new(label.to_owned())
+        .painted(face.to_owned())
+        .trailing_icon(craft::ui::controls::disclosure::DisclosureGlyph::dropdown())
+        .id_salt(("lc-dropdown", name));
     let shown = match width {
         Some(width) => {
             let (_, rect) = ui.allocate_space(vec2(width.min(ui.available_width()).max(1.0), 24.0));
