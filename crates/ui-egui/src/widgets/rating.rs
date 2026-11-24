@@ -109,7 +109,10 @@ impl Rating {
         // The row takes the room it measures and is shown there. Shown in the flow instead, a framework body that
         // measures the app's window first (the shell's) finds this row missing from what it kept, and asks for
         // another pass every frame.
-        let size = stars.measure_in(ui, craft::behavior::Proposal::Ideal);
+        // (measured as a measuring run: a measure in a real run is checked against what the body kept, which holds no row
+        // of ours)
+        let ctx = ui.ctx().clone();
+        let size = craft::ui::runtime::measure::run(&ctx, || stars.measure_in(ui, craft::behavior::Proposal::Ideal));
         let (_, room) = ui.allocate_space(size);
         let shown = stars.show_at(ui, room);
         // a measuring run draws nothing the user can reach: no automation names, no change
