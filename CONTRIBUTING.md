@@ -25,8 +25,9 @@ issue. A checklist row with no issue is named in the PR title instead.
 - **Title:** task/checklist id first, as commits do (`LR-IMP-FORMATS: …`), or `Issue #123: …`.
 - **Description:** `Fixes #123` (or `Part of #123`); what you changed and how you checked it (tests, app,
   screenshots for UI).
-- **Green first** ([`docs/ci.md`](docs/ci.md)): *before pushing*, every commit passes `cargo xtask ci --fast`,
-  `cargo test -p <crate>` for touched crates, and `cargo xtask sil`. The full suite runs in cloud CI on the PR.
+- **Green first** ([`docs/ci.md`](docs/ci.md)): *before pushing*, run `cargo xtask ci --quick` (what your
+  changes can break: clippy on the changed crates and their dependents, their tests) and `cargo xtask sil` when
+  pipeline/develop changed. The PR's CI is the merge gate; open the PR when the work is ready.
   New features ship with a test that fails without them; crash fixes with a hostile-input no-panic check.
 - **One task id per commit**, with the docs it moves (parity-checklist rows, gaps entry, ROADMAP/target-app-parity
   numbers) in the same commit.
