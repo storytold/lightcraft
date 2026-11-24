@@ -172,9 +172,9 @@ mod tests_appearance;
 #[cfg(test)]
 mod tests_background_clicks;
 #[cfg(test)]
-mod tests_backgrounds;
-#[cfg(test)]
 mod tests_background_prep;
+#[cfg(test)]
+mod tests_backgrounds;
 #[cfg(test)]
 mod tests_bar_buttons;
 #[cfg(test)]

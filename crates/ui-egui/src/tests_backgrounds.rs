@@ -29,7 +29,7 @@ fn fills(h: &Headless) -> Vec<(egui::Rect, Color32)> {
 
 #[test]
 fn a_medium_grey_loupe_and_dark_grey_filmstrip_are_painted_and_saved() {
-    let session = lcc_engine::Session::with_demo();
+    let mut session = lcc_engine::Session::with_demo();
     let ids = session.visible_cloned();
     let app = LccApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
@@ -54,9 +54,25 @@ fn a_medium_grey_loupe_and_dark_grey_filmstrip_are_painted_and_saved() {
     assert!(fills(&h).iter().any(|(r, f)| *f == dark && *r == cell), "an unselected cell takes the strip's shade");
 
     // Window ▸ Appearance shows the choices, the current one checked
-    let menu = serde_json::to_value(crate::menubar::expanded(&h.app, "Appearance").unwrap()).unwrap().to_string();
-    assert!(menu.contains("Loupe Background") && menu.contains("Filmstrip Background"), "{menu}");
-    assert!(menu.contains(r#""id":"view.loupeBackground","params":{"shade":"mediumGray"},"label":"Medium Gray","enabled":true,"checked":true"#), "{menu}");
+    let menu = serde_json::to_value(crate::menubar::expanded(&h.app, "Appearance").unwrap()).unwrap();
+    let text = menu.to_string();
+    assert!(text.contains("Loupe Background") && text.contains("Filmstrip Background"), "{text}");
+    fn checked_shades(v: &serde_json::Value, id: &str, out: &mut Vec<String>) {
+        if let Some(a) = v.as_array() {
+            a.iter().for_each(|c| checked_shades(c, id, out));
+        } else if let Some(o) = v.as_object() {
+            if o.get("id").and_then(|i| i.as_str()) == Some(id) && o.get("checked") == Some(&json!(true)) {
+                out.push(o["params"]["shade"].as_str().unwrap_or_default().to_string());
+            }
+            o.values().for_each(|c| checked_shades(c, id, out));
+        }
+    }
+    let mut on = Vec::new();
+    checked_shades(&menu, "view.loupeBackground", &mut on);
+    assert_eq!(on, ["mediumGray"], "{text}");
+    let mut on = Vec::new();
+    checked_shades(&menu, "view.filmstripBackground", &mut on);
+    assert_eq!(on, ["darkGray"], "{text}");
 
     // saved with the settings and read back
     let saved = serde_json::to_value(&h.app.ui.settings).unwrap();
