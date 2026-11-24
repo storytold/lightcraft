@@ -74,7 +74,11 @@ impl Knob {
             Knob::Contrast => d.light.contrast = v.clamp(-100.0, 100.0),
             Knob::TintX | Knob::TintY => {
                 let (mut x, mut y) = (Knob::TintX.get(d), Knob::TintY.get(d));
-                if matches!(self, Knob::TintX) { x = v } else { y = v }
+                if matches!(self, Knob::TintX) {
+                    x = v
+                } else {
+                    y = v
+                }
                 let sat = x.hypot(y).min(100.0);
                 let w = &mut d.grading.global;
                 w.sat = sat;
@@ -130,7 +134,13 @@ fn solve(mut m: Vec<Vec<f64>>, mut r: Vec<f64>) -> Option<Vec<f64>> {
 }
 
 /// The settings that give photo `id` (rendered from `src`) the statistics `goal`, moving only `knobs`.
-fn matched(src: &lcc_raster::Rgb32f, info: &lcc_pipeline::SourceInfo, start: &DevelopSettings, goal: [f64; 4], knobs: &[Knob]) -> Option<DevelopSettings> {
+fn matched(
+    src: &lcc_raster::Rgb32f,
+    info: &lcc_pipeline::SourceInfo,
+    start: &DevelopSettings,
+    goal: [f64; 4],
+    knobs: &[Knob],
+) -> Option<DevelopSettings> {
     let req = lcc_pipeline::RenderRequest::fit(EDGE, EDGE);
     let stats = |d: &DevelopSettings| look_stats(&lcc_pipeline::render(src, info, d, &req).image);
     let mut d = start.clone();

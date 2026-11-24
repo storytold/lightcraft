@@ -1358,12 +1358,16 @@ fn match_look_brings_photos_toward_the_reference() {
     use crate::cmd::match_look::look_stats;
     use lcc_catalog::PhotoId;
     let mut s = demo();
-    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
-    let (r, t) = (PhotoId(ids[0]), PhotoId(ids[1]));
-    // the reference: darker and warm-graded
-    s.execute("develop.set", &json!({"control": "light.exposure", "value": -1.0, "ids": [ids[0]]})).unwrap();
-    s.execute("develop.set", &json!({"control": "grading.global.hue", "value": 40.0, "ids": [ids[0]]})).unwrap();
-    s.execute("develop.set", &json!({"control": "grading.global.sat", "value": 30.0, "ids": [ids[0]]})).unwrap();
+    // the reference is a virtual copy of the target, darker and warm-graded: the look to match is reachable
+    let t0 = s.catalog.photos().next().unwrap().id;
+    s.execute("library.select", &json!({"ids": [t0.0]})).unwrap();
+    let made = s.execute("photo.virtualCopy", &json!({})).unwrap();
+    let r = PhotoId(made["ids"][0].as_u64().unwrap());
+    let t = t0;
+    let ids = vec![r.0, t.0];
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": -1.0, "ids": [r.0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "grading.global.hue", "value": 40.0, "ids": [r.0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "grading.global.sat", "value": 30.0, "ids": [r.0]})).unwrap();
     let look = |s: &mut Session, id| look_stats(&s.render_now(id, 160, 160).unwrap().image).unwrap();
     let goal = look(&mut s, r);
     let before = look(&mut s, t);
@@ -1373,7 +1377,7 @@ fn match_look_brings_photos_toward_the_reference() {
     assert_eq!(res["changed"].as_u64(), Some(1), "{res}");
     let after = look(&mut s, t);
     let dist = |x: &[f64; 4]| ((x[0] - goal[0]).powi(2) + (x[2] - goal[2]).powi(2) + (x[3] - goal[3]).powi(2)).sqrt();
-    assert!(dist(&after) < 0.5 * dist(&before), "closer to the reference: {before:?} → {after:?} (goal {goal:?})");
+    assert!(dist(&after) < 0.3 * dist(&before), "closer to the reference: {before:?} → {after:?} (goal {goal:?})");
     let d = s.develop_of(t).unwrap();
     assert!(d.light.exposure < 0.0, "darker like the reference: {}", d.light.exposure);
     assert!(d.grading.global.sat > 0.0, "a cast was added");

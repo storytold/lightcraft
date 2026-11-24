@@ -24,7 +24,6 @@ pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
 pub(crate) mod develop;
-pub(crate) mod match_look;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod device_sync;
 pub mod duplicates;
@@ -57,6 +56,7 @@ pub mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod masks;
+pub(crate) mod match_look;
 mod merge;
 pub mod metadata;
 pub mod metadata_files;
