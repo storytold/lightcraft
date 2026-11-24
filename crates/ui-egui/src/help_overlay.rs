@@ -43,12 +43,18 @@ pub fn rows(app: &LccApp, module: ModuleId, mac: bool) -> (Vec<Row>, Vec<Row>) {
         };
         tr(source).to_string()
     };
-    let own: Vec<Row> = crate::module::get(module)
+    let mut own: Vec<Row> = crate::module::get(module)
         .keymap()
         .iter()
         .filter(|(_, id, _)| *id != COMMAND)
         .map(|(sc, id, _)| (crate::menubar::shortcut_text(sc, mac), label(id)))
         .collect();
+    // Develop's speed-edit keys: hold one and drag or scroll on the photo
+    if module == ModuleId::Develop {
+        for (key, _, control) in crate::speed_edit::rows(&app.ui.settings.speed_keys) {
+            own.push((crate::i18n::tr_format!("Hold {} and drag or scroll", crate::menubar::shortcut_text(&key, mac)), tr(control).to_string()));
+        }
+    }
     let taken: Vec<String> = crate::module::get(module).keymap().iter().map(|(sc, _, _)| crate::menubar::shortcut_text(sc, mac)).collect();
     let mut global: Vec<Row> = crate::shortcuts::bindable()
         .iter()

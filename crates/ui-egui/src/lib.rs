@@ -133,6 +133,7 @@ pub mod slideshow_ui;
 pub mod soft_keyboard;
 pub mod softpaint;
 pub mod space_hand;
+pub mod speed_edit;
 pub mod state;
 pub mod surface;
 pub mod surface_icons;
@@ -473,6 +474,8 @@ mod tests_solo_sections;
 mod tests_space_hand;
 #[cfg(test)]
 mod tests_space_hold;
+#[cfg(test)]
+mod tests_speed_edit;
 #[cfg(test)]
 mod tests_stand_in_crop;
 #[cfg(test)]
@@ -972,6 +975,8 @@ pub struct LccApp {
     pub crop_layout: Option<panels::detail::CropLayout>,
     /// Space is held over a tool on the photo: the view's hand has the pointer ([`space_hand`]).
     pub space_hand: Option<space_hand::SpaceHand>,
+    /// A speed-edit key is held in Develop: a drag or scroll on the photo moves its slider ([`speed_edit`]).
+    pub speed_edit: Option<speed_edit::SpeedEdit>,
     /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).
     pub brush_live: Option<brush_live::LiveStroke>,
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
@@ -1360,6 +1365,7 @@ impl LccApp {
             gesture: None,
             crop_layout: None,
             space_hand: None,
+            speed_edit: None,
             brush_live: None,
             loupe_shown: None,
             loupe_timing: Default::default(),

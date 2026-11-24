@@ -208,6 +208,19 @@ sidebar:
 | `Alt+V` | Show Unselected Mask Pins |
 | `W` | White Balance Selector |
 
+## Develop: speed edit
+
+Hold the key and drag sideways or scroll on the photo; a tap runs the key's shortcut. See [Speed-edit keys](../../develop/speed-edit/).
+
+| Hold | Slider |
+|---|---|
+| `E` | Exposure |
+| `C` | Contrast |
+| `H` | Highlights |
+| `S` | Shadows |
+| `W` | Whites |
+| `B` | Blacks |
+
 ## Other
 
 | Key | Command |
