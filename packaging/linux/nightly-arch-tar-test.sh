@@ -91,6 +91,9 @@ expect "$(printf 'CONFIG=<<unset>>\nLIBRARY=<<unset>>\n<--launch-profile>\n<nigh
 # A bare query is answered by the binary as usual, with no profile tokens and no env written.
 expect "$(printf 'CONFIG=<<unset>>\nLIBRARY=<<unset>>\n<--version>\n')" --version
 expect "$(printf 'CONFIG=<<unset>>\nLIBRARY=<<unset>>\n<-V>\n')" -V
+# The Launcher's own form arrives already shaped: its profile root wins and nothing is added.
+expect "$(printf 'CONFIG=<<unset>>\nLIBRARY=<<unset>>\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n</launcher/profiles/lightcraft>\n<--version>\n')" \
+  --launch-profile nightly-v1 --profile-root /launcher/profiles/lightcraft --version
 # An inherited stable variable is passed through untouched (the nightly build refuses it), never
 # silently reinterpreted as the profile.
 LIGHTCRAFT_CONFIG_DIR="$work/explicit with space" expect \

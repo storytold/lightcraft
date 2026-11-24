@@ -86,6 +86,10 @@ jobs:
           persist-credentials: false
       - name: Enforce nightly caller and synthetic packaging contracts
         run: python3 packaging/nightly-tests.py
+      - name: Nightly Linux launchers and the Arch handoff (recorded argv)
+        run: |
+          bash packaging/linux/nightly-launcher-test.sh
+          bash packaging/linux/nightly-arch-tar-test.sh
 
   nightly-windows-synthetic:
     name: Nightly Windows packaging contracts (no app build)

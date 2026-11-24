@@ -35,11 +35,7 @@ fn write_no_follow(path: &Path, data: &[u8]) -> io::Result<()> {
     let name = path.file_name().ok_or_else(|| io::Error::other("the session record has no name"))?;
     let mut staging = folder.join(name);
     staging.set_file_name(format!(".{}.{}.tmp", name.to_string_lossy(), std::process::id()));
-    let staged = OpenOptions::new().write(true).create_new(true).open(&staging);
-    let mut staged = match staged {
-        Ok(file) => file,
-        Err(error) => return Err(error),
-    };
+    let mut staged = OpenOptions::new().write(true).create_new(true).open(&staging)?;
     let result = staged.write_all(data).and_then(|()| staged.sync_all());
     drop(staged);
     if let Err(error) = result {

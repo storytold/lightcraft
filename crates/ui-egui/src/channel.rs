@@ -96,7 +96,7 @@ pub fn display_version() -> String {
 /// The title-bar caption: the channel name, then the open collection when one is named.
 pub fn window_title(collection: Option<&str>) -> String {
     match collection.filter(|name| !name.is_empty()) {
-        Some(name) => format!("{} \u{2014} {}", name, name_owned()),
+        Some(name) => format!("{} \u{2014} {}", name_owned(), name),
         None => name_owned(),
     }
 }
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(name(), APP_NAME);
         assert_eq!(window_title(None), "LightCraft");
         assert_eq!(window_title(Some("")), "LightCraft");
-        assert_eq!(window_title(Some("Wedding")), "Wedding \u{2014} LightCraft");
+        assert_eq!(window_title(Some("Wedding")), "LightCraft \u{2014} Wedding");
         assert_eq!(display_version(), env!("CARGO_PKG_VERSION"));
     }
 }

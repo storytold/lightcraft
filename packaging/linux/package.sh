@@ -122,33 +122,10 @@ stage_nightly() {
   cp -R "$STAGE" "$stage"
   install -Dm755 "$stage/usr/bin/lightcraft" "$stage/usr/lib/lightcraft-nightly/lightcraft"
   install -Dm755 "$stage/usr/bin/lightcraft-cli" "$stage/usr/lib/lightcraft-nightly/lightcraft-cli"
-  cat >"$stage/usr/bin/$NFPM_BIN" <<'WRAPPER'
-#!/bin/sh
-set -eu
-# The Nightly GUI owns its profile: the Launcher protocol selects it, so settings, models, logs,
-# the library lock and the default library all sit under $profile. The nightly build refuses
-# LIGHTCRAFT_CONFIG_DIR, so an inherited stable variable fails closed instead of silently
-# pointing this window at the stable app's folder.
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  exec /usr/lib/lightcraft-nightly/lightcraft "$@"
-fi
-profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/lightcraft-nightly"
-exec /usr/lib/lightcraft-nightly/lightcraft --launch-profile nightly-v1 --profile-root "$profile" -- "$@"
-WRAPPER
-  cat >"$stage/usr/bin/$NFPM_CLI" <<'WRAPPER'
-#!/bin/sh
-set -eu
-# The headless CLI is not the GUI's Launcher protocol: the same profile reaches it through its two
-# documented host variables, and an explicit value still wins.
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
-fi
-profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/lightcraft-nightly"
-if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then export LIGHTCRAFT_CONFIG_DIR="$profile/Settings"; fi
-if [ -z "${LIGHTCRAFT_LIBRARY+x}" ]; then export LIGHTCRAFT_LIBRARY="$profile/Library"; fi
-exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
-WRAPPER
-  chmod 755 "$stage/usr/bin/$NFPM_BIN" "$stage/usr/bin/$NFPM_CLI"
+  # The same launchers the unpacked tar runs (packaging/linux/nightly-*-launch.sh): they resolve the
+  # real binary beside themselves, so /usr and an unpacked tar behave alike.
+  install -Dm755 "$HERE/nightly-fhs-launch.sh" "$stage/usr/bin/$NFPM_BIN"
+  install -Dm755 "$HERE/nightly-fhs-cli-launch.sh" "$stage/usr/bin/$NFPM_CLI"
   rm -f "$stage/usr/bin/lightcraft" "$stage/usr/bin/lightcraft-cli"
   mv "$stage/usr/share/doc/lightcraft" "$stage/usr/share/doc/$NFPM_NAME"
   sed -e "s#^Exec=lightcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
@@ -201,9 +178,14 @@ if has deb || has rpm; then
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
   export VERSION
   export NFPM_ARCH="$DEB_ARCH"
-  export NFPM_NAME="lightcraft"
-  export NFPM_BIN="lightcraft"
-  export NFPM_CLI="lightcraft-cli"
+  # stage_nightly already exported the Nightly names: re-exporting the stable ones here pointed
+  # the rendered nfpm.yaml at files the Nightly stage has removed (and named the package
+  # `lightcraft`, colliding with stable).
+  if [[ -z "$NIGHTLY_STAGE" ]]; then
+    export NFPM_NAME="lightcraft"
+    export NFPM_BIN="lightcraft"
+    export NFPM_CLI="lightcraft-cli"
+  fi
   NFPM_STAGE="$STAGE"
   [[ -n "$NIGHTLY_STAGE" ]] && NFPM_STAGE="$NIGHTLY_STAGE"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
@@ -243,9 +225,9 @@ set -eu
 HERE="$(dirname "$(readlink -f "$0")")"
 # A real script (not the stable symlink), so an AppImage launch selects the Nightly profile even
 # when the desktop entry's Exec is bypassed; APPIMAGE/APPDIR stay untouched for the app.
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  exec "$HERE/usr/bin/lightcraft" "$@"
-fi
+case "${1:-}" in
+  --launch-profile | --profile-root | --version | -V | --help | -h) exec "$HERE/usr/bin/lightcraft" "$@" ;;
+esac
 profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/lightcraft-nightly"
 exec "$HERE/usr/bin/lightcraft" --launch-profile nightly-v1 --profile-root "$profile" -- "$@"
 APPRUN

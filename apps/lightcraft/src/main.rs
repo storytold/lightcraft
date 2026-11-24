@@ -103,6 +103,16 @@ struct NightlyExit {
 }
 
 impl NightlyExit {
+    /// A window with no Nightly session to finish: Stable, a `--memory` session, and the tests that
+    /// build an `App` without one.
+    #[cfg(test)]
+    fn none() -> Self {
+        Self {
+            session: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            notice_shown: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
     fn finish(&self) {
         nightly_session::finish_once(&self.session, self.notice_shown.load(std::sync::atomic::Ordering::Relaxed));
     }
@@ -285,7 +295,7 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     let argv: Vec<_> = std::env::args_os().skip(1).collect();
     if nightly_build && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
         use std::io::Write as _;
-        let _ = writeln!(std::io::stdout(), "LightCraft {} (nightly-v1)", env!("LIGHTCRAFT_BUILT_VERSION"));
+        let _ = writeln!(std::io::stdout(), "LightCraft {}", build_flavor::version(build_flavor::COMPILED, env!("LIGHTCRAFT_BUILT_VERSION")));
         return None;
     }
     let early = launch_profile::parse(argv)
@@ -309,7 +319,12 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
         .and_then(|()| lightcraft_ui_egui::channel::select_identity(identity))
         // The feed version and commit are what About and System Info report for this build.
         .and_then(|()| {
-            lightcraft_ui_egui::channel::select_version(env!("LIGHTCRAFT_BUILT_VERSION").to_owned(), Some(env!("LIGHTCRAFT_BUILD_COMMIT").to_owned()))
+            // The source commit is Nightly's (Stable's packagers export a SHA too, and About must not
+            // call a release a nightly build).
+            lightcraft_ui_egui::channel::select_version(
+                env!("LIGHTCRAFT_BUILT_VERSION").to_owned(),
+                nightly.then(|| env!("LIGHTCRAFT_BUILD_COMMIT").to_owned()),
+            )
         });
     // The settings folder, models, logs and the default library must all answer from the profile.
     let finish = finish.and_then(|()| match launch_profile::current().root() {
@@ -323,6 +338,55 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     Some(early.args)
 }
 
+/// What the app's own arguments ask for, once the launch profile's tokens are gone.
+#[derive(Debug, Default, PartialEq)]
+struct AppOptions {
+    files: Vec<String>,
+    /// The raw `--control` value; Stable only (Nightly consumes and ignores it).
+    control: Option<String>,
+    library: Option<std::path::PathBuf>,
+    seed_demo: bool,
+    in_memory: bool,
+}
+
+/// The app's own arguments: start with these options, or answer one of the two queries.
+#[derive(Debug, PartialEq)]
+enum AppCommand {
+    Start(AppOptions),
+    Version,
+    Help,
+}
+
+/// Parse the app's own arguments. Pure (no printing, no exit, no environment) so the loop — and the
+/// launch profile's `--` hand-off — is testable. Nightly's arguments arrive as `-- files…`, so the
+/// first `--` ends the options and every later word is a file, even one spelled like an option.
+fn app_command(args: &[String], nightly: bool) -> Result<AppCommand, String> {
+    let mut options = AppOptions { seed_demo: true, ..AppOptions::default() };
+    let mut args = args.iter();
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--control" => {
+                let value = args.next().cloned().unwrap_or_default();
+                if !nightly {
+                    options.control = Some(value);
+                }
+            }
+            "--library" => options.library = args.next().map(std::path::PathBuf::from),
+            "--no-demo" => options.seed_demo = false,
+            "--memory" | "--demo" => options.in_memory = true,
+            "--" => {
+                options.files.extend(args.by_ref().cloned());
+                break;
+            }
+            "--version" => return Ok(AppCommand::Version),
+            "-h" | "--help" => return Ok(AppCommand::Help),
+            option if option.starts_with("--") => return Err(format!("unknown option `{option}`")),
+            _ => options.files.push(argument.clone()),
+        }
+    }
+    Ok(AppCommand::Start(options))
+}
+
 fn main() -> eframe::Result {
     let Some(arguments) = prepare_launch() else { return Ok(()) };
     // Windows: the update helper is a copy of this program started with `--finish-update`.
@@ -334,7 +398,13 @@ fn main() -> eframe::Result {
     }
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
-    lightcraft_engine::guard::install_hook(panic_log_path_with(|name| std::env::var_os(name), std::env::temp_dir()));
+    // The crash log follows the profile: Nightly keeps it in <profile>/Settings, never in the shared
+    // system-temp file Stable writes.
+    lightcraft_engine::guard::install_hook(panic_log_path_with(
+        |name| std::env::var_os(name),
+        std::env::temp_dir(),
+        lightcraft_engine::config::profile_root().map(std::path::Path::to_path_buf),
+    ));
     if let Some(logger) = logger {
         logging::record_panics(logger);
     }
@@ -347,36 +417,26 @@ fn main() -> eframe::Result {
     } else {
         control_port_from("LIGHTCRAFT_CONTROL_PORT", std::env::var("LIGHTCRAFT_CONTROL_PORT").ok().filter(|v| !v.is_empty()))
     };
-    let mut files = Vec::new();
-    let mut seed_demo = true;
-    let mut in_memory = false;
-    let mut library_dir: Option<std::path::PathBuf> = None;
     // The selected profile's arguments (Stable's are the same ones the process was started with).
-    let mut args = arguments.into_iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().into_iter();
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--control" => {
-                if !nightly {
-                    control_port = control_port_from("--control", Some(args.next().unwrap_or_default()));
-                }
-            }
-            "--library" => library_dir = args.next().map(std::path::PathBuf::from),
-            "--no-demo" => seed_demo = false,
-            "--memory" | "--demo" => in_memory = true,
-            "--version" => {
-                println!("lightcraft {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
-            "-h" | "--help" => {
-                print!("{HELP}");
-                return Ok(());
-            }
-            o if o.starts_with("--") => {
-                eprintln!("lightcraft: unknown option `{o}`\n\n{HELP}");
-                std::process::exit(2);
-            }
-            _ => files.push(a),
+    let args = arguments.into_iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+    let (files, control, library_dir, seed_demo, in_memory) = match app_command(&args, nightly) {
+        Ok(AppCommand::Start(options)) => (options.files, options.control, options.library, options.seed_demo, options.in_memory),
+        Ok(AppCommand::Version) => {
+            println!("lightcraft {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
         }
+        Ok(AppCommand::Help) => {
+            print!("{HELP}");
+            return Ok(());
+        }
+        Err(problem) => {
+            eprintln!("lightcraft: {problem}\n\n{HELP}");
+            std::process::exit(2);
+        }
+    };
+    // Nightly has no control server: the option and its port are still consumed, and ignored.
+    if !nightly && let Some(value) = control {
+        control_port = control_port_from("--control", Some(value));
     }
     // The log file: opened after the arguments, so `--version`, `--help` and a usage error leave
     // no file behind. Records logged until now are written to it first.

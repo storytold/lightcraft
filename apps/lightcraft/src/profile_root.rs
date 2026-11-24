@@ -141,6 +141,13 @@ fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, 
             ]
         }
     };
+    // Stable's default library (`lightcraft_engine::library::default_dir`): its catalog, lock,
+    // presets and thumbnails. A Nightly profile inside it would write its own Library, Settings and
+    // session files into the folder Stable opens. A host with no home variable has no such library.
+    let home_key = if platform == Platform::Windows { "USERPROFILE" } else { "HOME" };
+    if let Some(home) = env(home_key).filter(|value| !value.is_empty()) {
+        roots.push(absolute(PathBuf::from(home), home_key)?.join("Pictures").join("LightCraft Library"));
+    }
     roots.push(installation_boundary(platform, exe)?);
     roots.into_iter().map(|p| canonical_future(&p)).collect()
 }
@@ -469,6 +476,23 @@ mod tests {
         assert!(!inside_resources.exists());
         let valid = library.join("Application Support/ArtCraftLauncher/nightly/profiles/lightcraft");
         assert_eq!(fixture.check(Platform::Mac, &valid).unwrap(), valid);
+    }
+
+    /// Stable's default library holds the user's photos and its catalog: a profile inside it would
+    /// write Nightly's Library and Settings there. Windows resolves the home folder as USERPROFILE.
+    #[test]
+    fn stable_default_library_folder_is_fenced_on_every_os() {
+        let mut fixture = Fixture::new();
+        let linux_library = fixture.home().join("Pictures/LightCraft Library");
+        assert!(fixture.check(Platform::Linux, &linux_library.join("nightly")).unwrap_err().contains("overlap"));
+        assert!(fixture.check(Platform::Mac, &linux_library.join("nightly")).unwrap_err().contains("overlap"));
+        assert!(!linux_library.exists(), "the fence is decided before anything is created");
+        fixture.env.insert("USERPROFILE".into(), fixture.root.join("users/skylar").into_os_string());
+        let windows_library = fixture.root.join("users/skylar/Pictures/LightCraft Library");
+        assert!(fixture.check(Platform::Windows, &windows_library.join("nightly")).unwrap_err().contains("overlap"));
+        assert!(fixture.check(Platform::Windows, &windows_library).is_err(), "the library folder itself is Stable's too");
+        // A merely similar folder next door stays available.
+        assert!(fixture.check(Platform::Linux, &fixture.home().join("Pictures/ArtCraftLauncher/nightly")).is_ok());
     }
 
     #[test]

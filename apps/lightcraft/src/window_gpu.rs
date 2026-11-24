@@ -256,7 +256,7 @@ pub fn check_pipeline(device: &wgpu::Device, build: impl FnOnce(&wgpu::Device)) 
 /// disk, or the retries are used up). `before_spawn` runs once the decision to retry is made and
 /// before the new process exists, so a resource the new process must own (the Nightly session
 /// lease) is released first.
-fn relaunch_after_failure(files: &Files, before_spawn: impl FnOnce()) -> bool {
+pub fn relaunch_after_failure(files: &Files, before_spawn: impl FnOnce()) -> bool {
     if !files.armed() {
         return false;
     }
@@ -321,7 +321,7 @@ mod tests {
         // nothing written without a settings folder
         let none = Files::new(None);
         none.arm(dx);
-        assert!(!none.armed() && !relaunch_after_failure(&none));
+        assert!(!none.armed() && !relaunch_after_failure(&none, || {}));
         let _ = std::fs::remove_dir_all(&d);
     }
 

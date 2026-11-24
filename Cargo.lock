@@ -3944,7 +3944,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "winit",
  "winresource",
  "winsafe",

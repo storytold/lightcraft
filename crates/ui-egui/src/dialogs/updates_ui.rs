@@ -1,4 +1,8 @@
 //! Software updates, background check at startup, and startup prompt modal.
+//!
+//! Nightly is updated by the ArtCraft Launcher, never by this app's stable release feed: every entry
+//! point below returns early on [`crate::channel::is_nightly`], so no check runs, no result dialog
+//! opens and a ready stable update is never installed under a Nightly build.
 
 use serde_json::Value;
 
@@ -57,6 +61,9 @@ impl LightcraftApp {
     /// in `on_exit` when the process ends there without dropping the app.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn start_pending_update(&mut self) {
+        if crate::channel::is_nightly() {
+            return;
+        }
         self.updates_rt.updater.start_pending_update();
     }
 }
@@ -65,7 +72,7 @@ impl LightcraftApp {
 pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        app.updates_rt.updater.prompt_open()
+        !crate::channel::is_nightly() && app.updates_rt.updater.prompt_open()
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -77,6 +84,10 @@ pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
 pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if crate::channel::is_nightly() {
+            // Also keeps a command-palette or shortcut invocation from asking the stable feed.
+            return Err("LightCraft Nightly is updated by the ArtCraft Launcher".into());
+        }
         app.updates_rt.check_requested = true;
         if let Some(ctx) = &app.updates_rt.repaint {
             ctx.request_repaint();
@@ -94,6 +105,9 @@ pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
 pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if crate::channel::is_nightly() {
+            return;
+        }
         let rt = &mut app.updates_rt;
         rt.repaint = Some(ctx.clone());
         if std::mem::take(&mut rt.check_requested) {
@@ -118,6 +132,9 @@ fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if crate::channel::is_nightly() {
+            return;
+        }
         // The close for a ready update waits until nothing is unsaved.
         let clean = app.session.unsaved().is_none();
         match app.updates_rt.updater.show_if(ctx, clean) {

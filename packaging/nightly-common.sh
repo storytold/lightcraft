@@ -51,6 +51,8 @@ nightly_build_gui() {
   launcher="$("$NIGHTLY_GUI" --launch-profile nightly-v1 --profile-root "$NIGHTLY_WORK/profile-query" --version)" \
     || nightly_die 'the Launcher profile version query failed'
   [[ "$launcher" == "$actual" ]] || nightly_die 'the Launcher profile query differs from the plain version query'
+  # prepare_launch answers that query before any profile work, so it must leave nothing behind.
+  [[ ! -e "$NIGHTLY_WORK/profile-query" ]] || nightly_die 'the Launcher version query created a profile'
   [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$LIGHTCRAFT_BUILD_SHA" && -z "$(git -C "$ROOT" status --porcelain)" ]] || nightly_die 'source changed during the version query'
 }
 
