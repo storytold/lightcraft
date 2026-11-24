@@ -34,6 +34,7 @@ mod raf_superccd;
 mod rafc;
 pub mod rw2;
 mod sr2;
+mod srf;
 pub mod srw;
 mod srwc;
 
