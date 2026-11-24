@@ -4291,6 +4291,8 @@ mod tests_modern_library;
 #[cfg(test)]
 mod tests_modern_sheets;
 #[cfg(test)]
+mod tests_phone_menus;
+#[cfg(test)]
 mod tests_pill_slider;
 #[cfg(test)]
 mod window_list;
