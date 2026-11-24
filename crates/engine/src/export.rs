@@ -749,6 +749,37 @@ impl HdrCurve {
     }
 }
 
+/// How an HDR export stores its dynamic range (`hdrMode`), for the formats that can do both,
+/// AVIF and JPEG XL. JPEG always writes a gain map; PNG, TIFF and DNG always one HDR image.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HdrMode {
+    /// One HDR image: AVIF and JPEG XL as 10- or 16-bit Rec. 2020 PQ (or HLG). The default, and
+    /// what earlier versions wrote. Viewers without HDR support show it washed out.
+    #[default]
+    #[serde(rename = "hdr")]
+    SingleLayer,
+    /// An SDR image plus an ISO 21496-1 gain map, as gain map JPEGs (Ultra HDR) do: the file
+    /// looks right everywhere and shows HDR on viewers that read gain maps (Android, Chrome,
+    /// Safari, recent Photos and image editors). The gain map is measured against the base as
+    /// written, so previews match exports.
+    #[serde(rename = "gainMap")]
+    GainMap,
+}
+
+impl HdrMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "hdr" => Some(Self::SingleLayer),
+            "gainmap" => Some(Self::GainMap),
+            _ => None,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::SingleLayer
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ExportOptions {
@@ -806,6 +837,10 @@ pub struct ExportOptions {
     /// TIFF with the highlights above SDR white kept. Other formats, and photos without an HDR
     /// edit, are SDR.
     pub hdr: bool,
+    /// AVIF and JPEG XL only: one HDR image (`hdr`, the default) or an SDR image with a gain map
+    /// (`gainMap`, see [`HdrMode`]). See [`ExportOptions::gain_map`].
+    #[serde(skip_serializing_if = "HdrMode::is_default")]
+    pub hdr_mode: HdrMode,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
     /// JPEG XL: mathematically lossless instead of lossy (`quality` is then unused).
@@ -851,6 +886,7 @@ impl Default for ExportOptions {
             color_space: OutputSpace::Srgb,
             bit_depth: None,
             hdr: false,
+            hdr_mode: HdrMode::SingleLayer,
             hdr_transfer: HdrCurve::Pq,
             jxl_lossless: false,
             jxl_effort: JxlEffort::Normal,
@@ -900,6 +936,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "colorSpace",
     "bitDepth",
     "hdr",
+    "hdrMode",
     "hdrTransfer",
     "jxlLossless",
     "jxlEffort",
@@ -1153,6 +1190,7 @@ impl ExportOptions {
                 }
                 "sharpen" => parses(k, v, |s| SharpenFor::parse(s).is_some(), &["none", "screen", "matte", "glossy"])?,
                 "sharpenAmount" => parses(k, v, |s| SharpenAmount::parse(s).is_some(), &["low", "standard", "high"])?,
+                "hdrMode" => one_of(k, v, &["hdr", "gainMap"])?,
                 "hdrTransfer" => one_of(k, v, &["pq", "hlg"])?,
                 "conflict" => parses(k, v, |s| Conflict::parse(s).is_some(), &["unique", "overwrite", "skip"])?,
                 "destinationMode" => one_of(k, v, &["specificFolder", "sameAsOriginal", "chooseLater"])?,
@@ -1192,6 +1230,23 @@ impl ExportOptions {
                     }
                 }
                 _ => return Err(bad(unknown_key("parameter", k, &known))),
+            }
+        }
+        // a gain map needs a format that can carry one, and an SDR base image to carry it in
+        if obj.get("hdr").and_then(Value::as_bool) == Some(true)
+            && obj.get("hdrMode").and_then(Value::as_str).and_then(HdrMode::parse) == Some(HdrMode::GainMap)
+            && let Some(format) = format
+        {
+            let name = serde_json::to_value(format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+            let why = match format {
+                ExportFormat::Jpeg => None,
+                ExportFormat::Avif | ExportFormat::Jxl => {
+                    obj.get("bitDepth").and_then(whole).filter(|d| *d != 8).map(|_| "the base image of a gain map is 8-bit: drop `bitDepth`")
+                }
+                _ => Some("only JPEG, AVIF and JPEG XL can carry a gain map (`hdrMode: \"gainMap\"`)"),
+            };
+            if let Some(why) = why {
+                return Err(bad(format!("`hdrMode`: {why} for {name}")));
             }
         }
         // issue #1952: a depth the format doesn't have would be written at the format's own depth
@@ -1324,6 +1379,7 @@ impl ExportOptions {
             color_space: s("colorSpace").and_then(OutputSpace::parse).unwrap_or(d.color_space),
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
             hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
+            hdr_mode: s("hdrMode").and_then(HdrMode::parse).unwrap_or(d.hdr_mode),
             hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
             jxl_lossless: p.get("jxlLossless").and_then(Value::as_bool).unwrap_or(d.jxl_lossless),
             jxl_effort: s("jxlEffort").and_then(JxlEffort::parse).unwrap_or(d.jxl_effort),
@@ -1415,9 +1471,11 @@ impl ExportOptions {
             (ExportFormat::RenderedDng, _) => OutputDepth::F32Linear,
             (ExportFormat::Psd, Some(8)) => OutputDepth::U8,
             (ExportFormat::Psd, _) => OutputDepth::U16,
+            (ExportFormat::Avif, _) if self.gain_map() => OutputDepth::U8,
             (ExportFormat::Avif, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Avif, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Avif, _) => OutputDepth::U8,
+            (ExportFormat::Jxl, _) if self.gain_map() => OutputDepth::U8,
             (ExportFormat::Jxl, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Jxl, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Jxl, _) => OutputDepth::U8,
@@ -1447,12 +1505,25 @@ impl ExportOptions {
             )
     }
 
+    /// Whether these options write an SDR base image with an ISO 21496-1 gain map: JPEG with
+    /// [`ExportOptions::hdr`], AVIF and JPEG XL with [`HdrMode::GainMap`] (which needs
+    /// [`ExportOptions::hdr`], as every HDR output does).
+    pub fn gain_map(&self) -> bool {
+        self.hdr
+            && match self.format {
+                ExportFormat::Jpeg => true,
+                ExportFormat::Avif | ExportFormat::Jxl => self.hdr_mode == HdrMode::GainMap,
+                _ => false,
+            }
+    }
+
     /// The colour space the file is actually written in (AVIF: sRGB; AVIF, PNG and JPEG XL HDR:
     /// Rec. 2020; lossy JPEG XL: Adobe RGB and ProPhoto as Rec. 2020, the widest space its encoder
-    /// can declare without a profile).
+    /// can declare without a profile). A gain map file's base image is an SDR image in the
+    /// format's ordinary space.
     pub fn effective_space(&self) -> OutputSpace {
         match self.format {
-            ExportFormat::Avif | ExportFormat::Png | ExportFormat::Jxl if self.hdr => OutputSpace::Rec2020,
+            ExportFormat::Avif | ExportFormat::Png | ExportFormat::Jxl if self.hdr && !self.gain_map() => OutputSpace::Rec2020,
             ExportFormat::Avif => OutputSpace::Srgb,
             ExportFormat::Jxl if !self.jxl_lossless && matches!(self.color_space, OutputSpace::AdobeRgb | OutputSpace::ProPhoto) => {
                 OutputSpace::Rec2020
@@ -1840,6 +1911,53 @@ fn finish_deep_over<'a>(img: &'a DeepImage, alpha: Option<&mut Plane>, o: &Expor
         draw_watermark_deep_over(&mut img, alpha, &wm);
     }
     std::borrow::Cow::Owned(img)
+}
+
+/// Encode a gain map file of `o.format` (JPEG, AVIF or JPEG XL; see [`ExportOptions::gain_map`])
+/// from an SDR and an HDR rendition: the JPEG path with its file-size limit, or the single encode
+/// of AVIF and JPEG XL (their gain map is written once, with the base).
+fn encode_gain_map_file(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<(Vec<u8>, Option<u8>), String> {
+    match o.format {
+        ExportFormat::Jpeg => encode_gain_map_with_quality(sdr, hdr, o, meta),
+        ExportFormat::Avif | ExportFormat::Jxl => {
+            note_encode();
+            use lcc_codecs::gainmap;
+            let mut t = lap_clock();
+            let base = finish_8bit(sdr, o);
+            let hdr = finish_deep(hdr, o);
+            lap("gain map: output sharpening and watermark", &mut t);
+            let DeepSamples::F32(hv) = &hdr.samples else {
+                return Err("HDR export needs a float HDR render".into());
+            };
+            let (w, h) = (base.width, base.height);
+            if (hdr.width, hdr.height) != (w, h) || hv.len() < w * h * 3 {
+                return Err("HDR and SDR renders differ in size".into());
+            }
+            let space = o.effective_space();
+            let sdr_lin = linear_of_8bit(&base, space.trc());
+            let hdr_lin: &[[f32; 3]] = hv.as_chunks::<3>().0;
+            lap("gain map: SDR to linear", &mut t);
+            // the map is measured against the base as written (decoded from its 8-bit codes)
+            let (map, gm) =
+                gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gainmap::GainMapOptions::default()).map_err(|e| e.to_string())?;
+            drop(sdr_lin);
+            lap("gain map: compute", &mut t);
+            let profile = icc::write_named(named_space(space));
+            let exif = meta.map(lcc_meta::write_exif);
+            let xmp = meta.map(|m| lcc_meta::write_xmp(m, None));
+            let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+            let e = EncodeImage::rgba8(&base);
+            // AVIF is always sRGB (`effective_space`), so the map measured in the output space fits
+            let bytes = match o.format {
+                ExportFormat::Avif => lcc_codecs::encode_avif_gain_map(&e, &map, &gm, o.quality, 8, &em),
+                _ => lcc_codecs::encode_jxl_gain_map(&e, &map, &gm, &o.jxl(space, false), &em),
+            };
+            let bytes = bytes.map_err(|e| e.to_string())?;
+            lap("gain map: encode", &mut t);
+            Ok((bytes, None))
+        }
+        f => Err(format!("{f:?} cannot carry a gain map")),
+    }
 }
 
 /// Encode an ISO 21496-1 gain map JPEG from the SDR rendition `sdr` (8-bit, in the output space)
@@ -2329,7 +2447,7 @@ pub(crate) fn prepare_guarded(
         let native_px = (nw.round().max(1.0) * nh.round().max(1.0)) as usize;
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
-        let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
+        let gain_map = o.gain_map();
         // (HDR files are written without alpha: their transparent areas stay on white)
         let alpha = o.format.keeps_alpha() && !o.hdr_output();
         let mut job = session.export_job_with_alpha(id, w, h, o.effective_space(), o.effective_depth(), alpha)?;
@@ -2564,7 +2682,7 @@ impl PreparedExport {
                 // 3. The encode, on this lane's thread after its turn (the next photo renders meanwhile)
                 check()?;
                 let (bytes, limit_quality) = match &hdr {
-                    Some(hdr) => encode_gain_map_with_quality(&r.image, hdr, &opts, meta.as_ref())?,
+                    Some(hdr) => encode_gain_map_file(&r.image, hdr, &opts, meta.as_ref())?,
                     None => encode_rendered_with_quality(&r, &opts, meta.as_ref())?,
                 };
                 lap("encode", &mut t);
@@ -3799,6 +3917,120 @@ mod tests {
         assert!(decoded.meta.alternate_headroom > 1.0, "the gain map must survive size limiting");
         let impossible = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(1), ..opts }, None);
         assert!(impossible.is_err_and(|e| e.contains("cannot fit within 1 KB")));
+    }
+
+    fn gain_map_pair(w: usize, h: usize) -> (Rgba8, DeepImage) {
+        // a grey ramp with a bright patch that is 4 × as bright in HDR
+        let img = Rgba8::from_fn(w, h, |x, _| {
+            let v = if x > w * 3 / 4 { 230 } else { (x * 200 / w) as u8 };
+            [v, v, v, 255]
+        });
+        let hdr = DeepImage {
+            width: img.width,
+            height: img.height,
+            space: OutputSpace::Srgb,
+            samples: DeepSamples::F32(
+                img.data
+                    .iter()
+                    .flat_map(|p| {
+                        let g = if p[0] > 200 { 4.0 } else { 1.0 };
+                        [0; 3].map(|i| lcc_color::transfer::decode_srgb8(p[i]) * g)
+                    })
+                    .collect(),
+            ),
+        };
+        (img, hdr)
+    }
+
+    /// `hdrMode: gainMap` writes an SDR base with an ISO 21496-1 gain map for AVIF and JPEG XL;
+    /// the gain map rebuilds the HDR rendition from the base as written.
+    #[test]
+    fn gain_map_avif_and_jxl_carry_the_hdr_rendition() {
+        use lcc_codecs::gainmap::{self, FileGainMap};
+        let (img, hdr) = gain_map_pair(96, 64);
+        let readers: [(ExportFormat, fn(&[u8]) -> Option<FileGainMap>); 2] =
+            [(ExportFormat::Avif, gainmap::read_avif), (ExportFormat::Jxl, gainmap::read_jxl)];
+        for (format, read) in readers {
+            let o = ExportOptions { format, hdr: true, hdr_mode: HdrMode::GainMap, quality: 95, ..Default::default() };
+            assert!(o.gain_map() && o.hdr_output(), "{format:?}");
+            assert_eq!((o.effective_depth(), o.effective_space()), (OutputDepth::U8, OutputSpace::Srgb));
+            let (bytes, limit_quality) = encode_gain_map_file(&img, &hdr, &o, None).unwrap();
+            assert!(limit_quality.is_none(), "no file size limit for {format:?}");
+            // an ordinary SDR image of the format to every reader
+            let d = lcc_codecs::decode(&bytes, lcc_codecs::DecodeOptions::default()).unwrap();
+            let want = if format == ExportFormat::Avif { lcc_codecs::Format::Avif } else { lcc_codecs::Format::Jxl };
+            assert_eq!(d.format, want);
+            let shown: Vec<u8> = d.to_srgb8().data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+            let diff: f64 =
+                shown.iter().zip(img.data.iter().flat_map(|p| p[..3].iter())).map(|(&a, &b)| (f64::from(a) - f64::from(b)).abs()).sum::<f64>()
+                    / shown.len() as f64;
+            assert!(diff < 4.0, "{format:?}: base mean difference {diff}");
+            // applied to the decoded base, the map brings the highlight back to 4 × white
+            let gm = read(&bytes).unwrap_or_else(|| panic!("{format:?}: the gain map is found"));
+            assert!(gm.meta.alternate_headroom > 1.9, "{format:?}: {}", gm.meta.alternate_headroom);
+            let mut lin: Vec<[f32; 3]> = d.image.data.iter().map(|p| [p[0], p[1], p[2]]).collect();
+            gainmap::apply(&mut lin, img.width, img.height, &gm.gain, &gm.meta, 1.0).unwrap();
+            let at = |x: usize| lin[x][1];
+            assert!(
+                (at(img.width * 7 / 8) / lcc_color::transfer::decode_srgb8(230) / 4.0 - 1.0).abs() < 0.12,
+                "{format:?}: highlight {}",
+                at(img.width * 7 / 8)
+            );
+            let mid = (img.width / 4 * 200 / img.width) as u8;
+            assert!((at(img.width / 4) / lcc_color::transfer::decode_srgb8(mid) - 1.0).abs() < 0.08, "{format:?}: midtone {}", at(img.width / 4));
+            // the default stays one HDR image
+            let single = ExportOptions { format, hdr: true, ..Default::default() };
+            assert!(!single.gain_map() && single.hdr_output());
+            assert_eq!((single.effective_depth(), single.effective_space()), (OutputDepth::F32Hdr, OutputSpace::Rec2020));
+        }
+    }
+
+    /// `hdrMode` is validated per format, round-trips through params, and older params (without
+    /// it) and the default serialisation keep their meaning.
+    #[test]
+    fn hdr_mode_params() {
+        let o = |v: serde_json::Value| ExportOptions::from_params(&v);
+        let avif = |extra: serde_json::Value| {
+            let mut v = serde_json::json!({ "format": "avif", "hdr": true, "hdrMode": "gainMap" });
+            v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            v
+        };
+        let g = o(avif(serde_json::json!({}))).unwrap();
+        assert_eq!((g.hdr_mode, g.gain_map()), (HdrMode::GainMap, true));
+        assert_eq!(
+            o(serde_json::json!({ "format": "jxl", "hdrMode": "gainmap" })).unwrap().hdr_mode,
+            HdrMode::GainMap,
+            "case-insensitive, and without `hdr`"
+        );
+        // no gain map in these formats
+        for format in ["png", "tif", "psd", "original", "dng", "webp"] {
+            let e = o(serde_json::json!({ "format": format, "hdr": true, "hdrMode": "gainMap" })).unwrap_err();
+            assert!(e.to_string().contains("`hdrMode`") && e.to_string().contains("gain map"), "{format}: {e}");
+        }
+        // JPEG has no other HDR form
+        assert!(o(serde_json::json!({ "format": "jpeg", "hdr": true, "hdrMode": "gainMap" })).is_ok());
+        // the base of a gain map is 8-bit
+        for (format, depth) in [("avif", 10), ("jxl", 16)] {
+            let e = o(avif(serde_json::json!({ "format": format, "bitDepth": depth }))).unwrap_err();
+            assert!(e.to_string().contains("8-bit"), "{format}: {e}");
+            // 8-bit (said or not) is the base of a gain map
+            o(avif(serde_json::json!({ "format": format, "bitDepth": 8 }))).unwrap();
+        }
+        // unknown values
+        assert!(o(serde_json::json!({ "hdrMode": "hdr10" })).is_err());
+        assert!(o(serde_json::json!({ "hdrMode": true })).is_err());
+        // without `hdr`, a gain map for a format that has one is accepted (it applies once HDR is asked for)
+        assert!(o(serde_json::json!({ "format": "avif", "hdrMode": "gainMap" })).is_ok());
+        // round trip: the default is not written (older params and stored presets read the same)
+        let d = ExportOptions::default();
+        assert!(d.to_json().get("hdrMode").is_none());
+        assert_eq!(ExportOptions::from_json(&serde_json::json!({ "format": "avif" })).hdr_mode, HdrMode::SingleLayer);
+        let on = ExportOptions { hdr: true, hdr_mode: HdrMode::GainMap, format: ExportFormat::Avif, ..Default::default() };
+        assert_eq!(on.to_json().get("hdrMode"), Some(&serde_json::json!("gainMap")));
+        assert_eq!(ExportOptions::from_json(&on.to_json()), on);
+        assert_eq!(serde_json::to_value(HdrMode::SingleLayer).unwrap(), serde_json::json!("hdr"));
+        ExportOptions::validate("app.export", &on.to_json()).unwrap();
+        ExportOptions::validate("app.export", &serde_json::json!({ "hdrMode": "gainMap" })).unwrap();
     }
 
     #[test]

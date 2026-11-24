@@ -3627,8 +3627,13 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         }
         let rendered = opts.format.is_rendered();
         let depths = lcc_engine::export::ExportOptions::bit_depths(opts.format);
+        // HDR AVIF and JPEG XL fix their own depth (10- or 16-bit PQ/HLG, or an 8-bit base with a gain map)
+        if opts.hdr && matches!(opts.format, F::Avif | F::Jxl) {
+            opts.bit_depth = None;
+        }
         if rendered
             && depths.len() > 1
+            && !(opts.hdr && matches!(opts.format, F::Avif | F::Jxl))
             && let Some(first) = depths.first()
         {
             let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(first.0);
@@ -3672,12 +3677,22 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
             if opts.hdr && !opts.hdr_output() {
                 crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
             }
-            if opts.hdr && opts.format == F::Avif {
+            // AVIF and JPEG XL can store one HDR image, or an SDR image with a gain map
+            if opts.hdr && opts.hdr_output() && matches!(opts.format, F::Avif | F::Jxl) {
+                use lcc_engine::export::HdrMode as M;
+                choices(ui, "HDR mode", "exportHdrMode", &[(M::GainMap, "Gain map"), (M::SingleLayer, "HDR image")], &mut opts.hdr_mode);
+            }
+            if opts.hdr && opts.format == F::Avif && !opts.gain_map() {
                 use lcc_engine::export::HdrCurve as H;
                 choices(ui, "HDR curve", "exportHdrCurve", &[(H::Pq, "PQ"), (H::Hlg, "HLG")], &mut opts.hdr_transfer);
             }
         }
         if !rendered {
+        } else if opts.hdr && opts.gain_map() && opts.format == F::Avif {
+            crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: sRGB with an HDR gain map (AVIF)")).color(t.text_dim))
+                .on_hover_text(crate::i18n::tr(
+                    "Gain map: looks right everywhere, and shows HDR on viewers that read gain maps. Other viewers show the SDR image.",
+                ));
         } else if opts.format == F::Avif && opts.hdr {
             let label = if opts.hdr_transfer == lcc_engine::export::HdrCurve::Hlg {
                 crate::i18n::tr("Color space: Rec. 2020 HLG (HDR AVIF)")
@@ -3688,7 +3703,7 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         } else if opts.format == F::Png && opts.hdr {
             crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: Rec. 2020 PQ, 16-bit (HDR PNG)")).color(t.text_dim))
                 .on_hover_text(crate::i18n::tr("Viewers that don't read the PNG cICP chunk show PQ values as sRGB: flat and washed out. For a picture that looks right everywhere, use JPEG (gain map)."));
-        } else if opts.format == F::Jxl && opts.hdr {
+        } else if opts.format == F::Jxl && opts.hdr && !opts.gain_map() {
             crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: Rec. 2020 PQ (HDR JPEG XL)")).color(t.text_dim));
         } else if opts.format == F::Avif {
             crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
@@ -3704,6 +3719,15 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
             if opts.effective_space() != opts.color_space {
                 let note = "Lossy JPEG XL writes Adobe RGB and ProPhoto as Rec. 2020; choose Lossless to keep them.";
                 crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+            }
+            if opts.hdr && opts.gain_map() {
+                crate::dialog_frame::note(
+                    ui,
+                    egui::RichText::new(crate::i18n::tr(
+                        "HDR gain map: looks right everywhere; few viewers read JPEG XL gain maps yet, so most show the SDR image.",
+                    ))
+                    .color(t.text_dim),
+                );
             }
         }
         if opts.format == F::Jxl {

@@ -77,7 +77,7 @@ impl<'a> Rd<'a> {
 }
 
 /// The child boxes of `b`: (type, payload).
-fn boxes(b: &[u8]) -> Result<Vec<([u8; 4], &[u8])>> {
+pub(crate) fn boxes(b: &[u8]) -> Result<Vec<([u8; 4], &[u8])>> {
     let mut out = Vec::new();
     let mut p = 0usize;
     while p < b.len() {
@@ -406,6 +406,32 @@ fn primary_size(c: &Container) -> Result<(u32, u32)> {
         return Err(bad("zero dimension"));
     }
     Ok((w, h))
+}
+
+/// Largest gain map we read (far above any real one; bounds hostile files).
+const MAX_GAIN_MAP_PIXELS: u64 = 1 << 27;
+
+/// The gain map of a gain-map AVIF (see `avif_gainmap`): the `tmap` item's payload and the gain
+/// map item's 8-bit codes with its size. `None` when the primary item is not the first input of a
+/// `tmap` item whose second input is an `av01` item, or when that item does not decode.
+pub(crate) fn gain_map(bytes: &[u8]) -> Option<(Vec<u8>, usize, usize, Vec<u8>)> {
+    let c = parse(bytes).ok()?;
+    // as libavif reads it: the first `dimg` input of the `tmap` item is the base, the second the gain map
+    let (tmap, gain_id) = c.types.iter().filter(|(_, ty, _)| ty == b"tmap").find_map(|(id, _, _)| {
+        let inputs = c.refs_from(b"dimg", *id);
+        let [base, gain] = inputs.as_slice() else { return None };
+        (*base == c.primary && c.item_type(*gain) == Some(*b"av01")).then_some((*id, *gain))
+    })?;
+    let p = decode_av1(&c, gain_id).ok()?;
+    let (w, h) = (p.w, p.h);
+    let luma = p.planes.first()?;
+    if w == 0 || h == 0 || w as u64 * h as u64 > MAX_GAIN_MAP_PIXELS || luma.len() < w * h {
+        return None;
+    }
+    // the luma plane's code, full range, brought to 8 bits
+    let max = ((1u32 << p.bits.min(16)) - 1) as f32;
+    let codes = luma[..w * h].iter().map(|&v| (f32::from(v) / max * 255.0).round().clamp(0.0, 255.0) as u8).collect();
+    Some((c.data(tmap).ok()?, w, h, codes))
 }
 
 /// The displayed size (container transforms applied, so orientation 1), from the boxes alone.

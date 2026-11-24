@@ -182,6 +182,89 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     Ok(d)
 }
 
+/// Largest gain map we read (far above any real one; bounds hostile files).
+const MAX_GAIN_MAP_PIXELS: u64 = 1 << 27;
+
+/// The top-level boxes of a JPEG XL container: (type, payload). A bare codestream has none.
+fn container_boxes(bytes: &[u8]) -> Vec<([u8; 4], &[u8])> {
+    const SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \x0d\x0a\x87\x0a";
+    let mut out = Vec::new();
+    if !bytes.starts_with(SIGNATURE) {
+        return out;
+    }
+    let mut rest = bytes.get(SIGNATURE.len()..).unwrap_or(&[]);
+    while rest.len() >= 8 {
+        let size = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]);
+        let ty = [rest[4], rest[5], rest[6], rest[7]];
+        let (hdr, size) = match size {
+            0 => (8usize, rest.len() as u64),
+            1 if rest.len() >= 16 => (
+                16usize,
+                u64::from(u32::from_be_bytes([rest[8], rest[9], rest[10], rest[11]])) << 32
+                    | u64::from(u32::from_be_bytes([rest[12], rest[13], rest[14], rest[15]])),
+            ),
+            1 => break,
+            s => (8usize, u64::from(s)),
+        };
+        let Some(len) = usize::try_from(size).ok().and_then(|n| n.checked_sub(hdr)) else { break };
+        let Some((payload, tail)) = rest.get(hdr..).and_then(|r| r.split_at_checked(len)) else { break };
+        out.push((ty, payload));
+        rest = tail;
+        if out.len() > 64 {
+            break;
+        }
+    }
+    out
+}
+
+/// The gain map bundle of a JPEG XL file: the payload of its first `jhgm` box (as libjxl defines
+/// it: `jhgm_version` (u8), `gain_map_metadata_size` (u16), the metadata, a colour encoding size
+/// (u8) and bytes, `alt_icc_size` (u32) and bytes, then the codestream to the end of the box).
+pub(crate) fn gain_map_bundle(bytes: &[u8]) -> Option<&[u8]> {
+    container_boxes(bytes).into_iter().find(|(ty, _)| ty == b"jhgm").map(|(_, p)| p)
+}
+
+/// The ISO 21496-1 metadata inside the gain map bundle.
+pub(crate) fn gain_map_metadata(bundle: &[u8]) -> Option<&[u8]> {
+    if bundle.first() != Some(&0) {
+        return None; // an unknown bundle version
+    }
+    let n = usize::from(u16::from_be_bytes(bundle.get(1..3)?.try_into().ok()?));
+    bundle.get(3..3 + n)
+}
+
+/// The gain map codestream inside the bundle.
+pub(crate) fn gain_map_codestream(p: &[u8]) -> Option<&[u8]> {
+    // unsigned big-endian integer of `n` bytes at `at`
+    let num =
+        |at: usize, n: usize| -> Option<usize> { p.get(at..at.checked_add(n)?).map(|b| b.iter().fold(0usize, |a, &x| a << 8 | usize::from(x))) };
+    let meta = num(1, 2)?;
+    let colour = usize::from(*p.get(3 + meta)?);
+    let icc = num(4 + meta + colour, 4)?;
+    let start = 4 + meta + colour + 4 + icc;
+    p.get(start..).filter(|c| !c.is_empty())
+}
+
+/// The gain map codestream's samples (`None` when it does not decode or is too large): width, height, channels, linear 0..1 floats.
+pub(crate) fn gain_map_samples(codestream: &[u8]) -> Option<(usize, usize, usize, Vec<f32>)> {
+    let opts = DecodeOptions { max_pixels: MAX_GAIN_MAP_PIXELS, ..DecodeOptions::default() };
+    let img = open(codestream, &opts).ok()?;
+    if img.num_loaded_keyframes() == 0 {
+        return None;
+    }
+    let gray = img.image_header().metadata.grayscale();
+    if img.pixel_format().has_black() {
+        return None;
+    }
+    // rendered in the codestream's own colour encoding: the codes it was written with
+    let fb = img.render_frame(0).ok()?.image_all_channels();
+    let (w, h, ch) = (fb.width(), fb.height(), fb.channels());
+    let keep = if gray { 1 } else { 3 };
+    let n = w.checked_mul(h)?;
+    let data: Vec<f32> = fb.buf().chunks_exact(ch).filter(|px| px.len() >= keep).flat_map(|px| px[..keep].iter().copied()).collect();
+    (data.len() == n * keep).then_some((w, h, keep, data))
+}
+
 /// The space of an enum colour encoding whose curve this crate models (not PQ, HLG or unknown), with
 /// its primaries and white point; `None` otherwise.
 fn enum_space(e: &EnumColourEncoding) -> Option<SourceSpace> {

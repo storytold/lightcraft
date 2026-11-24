@@ -67,6 +67,27 @@
   ]
  },
  {
+  "name": "export-hdr-gain-map",
+  "layouts": [
+   "classic",
+   "compact"
+  ],
+  "steps": [
+   {
+    "method": "ui.clickWidget",
+    "params": {
+     "id": "button:exportFormat-5"
+    }
+   },
+   {
+    "method": "ui.clickWidget",
+    "params": {
+     "id": "button:exportHdrMode-0"
+    }
+   }
+  ]
+ },
+{
   "name": "export-watermark",
   "layouts": [
    "classic",
