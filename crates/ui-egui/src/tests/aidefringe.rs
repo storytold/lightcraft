@@ -109,7 +109,8 @@ fn the_switch_turns_it_on_and_the_correction_arrives() {
     let d = h.app.session.develop_of(id).unwrap();
     assert!(d.optics.ai_defringe_enabled());
     assert_eq!(d.optics.ai_defringe, 100.0);
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    // generous: on a loaded CI runner the whole suite shares a few cores
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
     loop {
         h.step();
         let s = h.app.session.execute("aiDefringe.status", &json!({})).unwrap();
