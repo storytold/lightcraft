@@ -3589,7 +3589,7 @@ pub struct Caches {
     /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
     pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
     /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
-    pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
+    pub unnamed: Option<(u64, u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The library filter (any person filter aside) the two above were asked for with: when the sidebar picks another
     /// year, folder or album, they are asked for again.
     pub faces_filter: Option<lcc_catalog::Filter>,
