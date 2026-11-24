@@ -312,7 +312,7 @@ def monotone(xs, ys):
 
 def base(render_dir, out_rs):
     """Fit the default base curve's knots to the neutral render's grey steps (chart value in, linear ProPhoto out) and
-    write them to `out_rs`: 12 knots evenly spaced in stops from the darkest step to white, ending at 1."""
+    write them to `out_rs`: 12 knots evenly spaced in stops from the darkest step (0) to white (1)."""
     from scipy.optimize import least_squares
     patches = json.load(open(os.path.join(render_dir, "manifest.json")))["patches"]
     steps = np.array([q["v"] for q in patches if q["kind"] == "grey" and q["ok"]])
@@ -323,12 +323,12 @@ def base(render_dir, out_rs):
     kx = np.linspace(stops.min(), 0.0, BASE_KNOTS)
 
     def knots(p):
-        w = np.exp(p[1:])
-        y0 = 0.01 / (1 + np.exp(-p[0]))
-        return np.concatenate([[y0], y0 + (1 - y0) * np.cumsum(w) / w.sum()])
+        """Increasing knots from 0 at the darkest step to exactly 1 at white."""
+        w = np.exp(p)
+        return np.concatenate([[0.0], np.cumsum(w) / w.sum()])
 
     err = lambda p: (srgb_encode(monotone(kx, knots(p))(stops)) - srgb_encode(lin)) * 255
-    p0 = np.concatenate([[0.0], np.log(np.maximum(np.diff(np.interp(kx, stops, lin)), 1e-5))])
+    p0 = np.log(np.maximum(np.diff(np.interp(kx, stops, lin)), 1e-5))
     ky = knots(least_squares(err, p0, max_nfev=20000).x)
     e = (srgb_encode(monotone(kx, ky)(stops)) - srgb_encode(lin)) * 255
     print(f"base curve: rms {np.sqrt((e ** 2).mean()):.2f}  max {np.abs(e).max():.2f} (8-bit levels)")

@@ -36,7 +36,7 @@ pub mod curve_stage;
 mod curve_stage_model;
 pub mod default_tone;
 #[rustfmt::skip]
-mod default_tone_table;
+mod default_tone_model;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
@@ -116,8 +116,8 @@ pub struct SourceInfo {
     pub camera_color: Option<Arc<CameraColor>>,
     pub camera_tone: Option<tone::CameraTone>,
     /// The raw is rendered through a camera profile without a tone curve of its own (a DCP without
-    /// `ProfileToneCurve`, such as Adobe Standard): from process V9 its base tone is Lightroom's default curve,
-    /// measured, with the scene shifted by this many stops, the camera's measured exposure offset
+    /// `ProfileToneCurve`, such as Adobe Standard): from process V9 its base tone is the fitted default curve,
+    /// with the scene shifted by this many stops, the camera's measured exposure offset
     /// ([`default_tone`]; 0 for a camera not measured). `None`: the profile has its own curve, or no profile.
     pub default_tone: Option<f32>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.

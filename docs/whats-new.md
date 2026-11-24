@@ -2,14 +2,12 @@
 
 ## Unreleased
 
-### Adobe Standard profiles look as in Lightroom (process V9)
+### A default base curve for camera profiles without one (process 9)
 - A raw developed with an imported camera profile that has no tone curve of its own, such as Adobe Standard, now gets
-  Lightroom's base tone curve, applied the way Lightroom applies it, instead of the tone of the camera's JPEG. An
-  unedited photo then matches Lightroom's in brightness, contrast and colour far more closely. Panasonic Lumix S9,
-  S5, S5 II and S5 IIX raws (RW2) are measured and match closely; other cameras get the same curve without a per-camera exposure offset,
-  so they can come out a little lighter or darker than in Lightroom. This is part of rendering process 9: photos you
-  already edited keep their look until you choose Photo ▸ Update to Current Process. See
-  [Lightroom's default base curve](default-tone.md).
+  a default base tone curve, applied hue preserving, instead of the tone of the camera's JPEG. Panasonic Lumix S9,
+  S5, S5 II and S5 IIX raws (RW2) have a measured exposure offset; other cameras get the same curve without one, so
+  they can come out a little lighter or darker. This is part of rendering process 9: photos you already edited keep
+  their look until you choose Photo ▸ Update to Current Process. See [The default base curve](default-tone.md).
 
 ### Colour Grading wheels reach different tones and spare colours already leaning their way (process 9)
 - The colour grading wheels now tint with a strength and direction that depend on the wheel's hue, reach different

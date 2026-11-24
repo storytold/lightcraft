@@ -1,24 +1,23 @@
-//! Lightroom's default base curve, measured (process V9, `docs/default-tone.md`).
+//! The default base curve for a profile without a tone curve of its own (process V9). `docs/default-tone.md`
+//! records how it was measured and fitted.
 //!
-//! A camera profile without a tone curve of its own (a DCP without `ProfileToneCurve`, such as the Adobe Standard
-//! profiles) leaves the base tone to the raw converter. Lightroom then applies its default curve, hue preserving on
-//! linear ProPhoto channels. Up to V8 LightCraft keeps the photo's own tone instead (the curve fitted to its camera
-//! JPEG, `lightcraft_engine::files`), so the same profile renders brighter and flatter than in Lightroom.
-//!
-//! From V9 such a raw ([`SourceInfo::default_tone`]) gets the curve measured on Camera Raw's render of a synthetic
-//! chart of grey steps (`tools/lr_tone_charts.py base`, [`crate::default_tone_table`]), applied the way Lightroom
-//! applies it ([`rgb_tone`]). The chart is a DNG without a baseline exposure. Camera Raw gives a raw of another format
-//! its own exposure offset per camera, which LightCraft does not know: [`camera_ev`] holds the offsets measured on
-//! photos, and other cameras get none.
+//! A camera profile without a tone curve of its own (a DCP without `ProfileToneCurve`) leaves the base tone to the
+//! raw converter. Up to V8 LightCraft keeps the photo's own tone (the curve fitted to its camera JPEG,
+//! `lightcraft_engine::files`). From V9 such a raw ([`SourceInfo::default_tone`]) gets a fitted default curve
+//! (`tools/lr_tone_charts.py base`, [`crate::default_tone_model`]): a monotone curve through 12 knots evenly spaced
+//! in stops, applied hue preserving on linear ProPhoto channels ([`rgb_tone`]). The curve is fitted to a chart
+//! without a baseline exposure, and raws of other formats need an exposure offset per camera: [`camera_ev`] holds
+//! the offsets measured on photos, and other cameras get none.
 
 use crate::SourceInfo;
-use crate::default_tone_table::GREY;
+use crate::default_tone_model as m;
 use crate::tone::CameraTone;
+use lightcraft_color::spline::MonotoneCurve;
 use lightcraft_develop::{DevelopSettings, Process};
 
 /// Exposure offsets per camera (make, model, stops) for a raw rendered through its Adobe Standard profile: the shift
-/// of the chart's curve that leaves Lightroom's unedited renders of the camera's photos no brighter or darker on
-/// average, measured per camera (`docs/default-tone.md`).
+/// of the curve that leaves the camera's unedited photos no brighter or darker on average than the reference renders
+/// they were measured against (`docs/default-tone.md`).
 const CAMERA_EV: [(&str, &str, f32); 4] =
     [("Panasonic", "DC-S9", -0.10), ("Panasonic", "DC-S5", -0.04), ("Panasonic", "DC-S5M2", -0.03), ("Panasonic", "DC-S5M2X", -0.05)];
 
@@ -36,15 +35,16 @@ pub fn for_source(s: &DevelopSettings, info: &SourceInfo) -> Option<CameraTone> 
     curve(info.default_tone.filter(|_| v9 && info.raw)?)
 }
 
-/// The measured curve with the scene shifted by `ev` stops: 32 knots, evenly spaced in stops over the chart's grey
-/// steps. Below the first knot the curve runs straight to black; past the last it rolls off into white
+/// The fitted curve with the scene shifted by `ev` stops: 32 knots, evenly spaced in stops over the fitted range.
+/// Below the first knot the curve runs straight to black; past the last it rolls off into white
 /// ([`CameraTone::apply_rolloff`]).
 pub fn curve(ev: f32) -> Option<CameraTone> {
     if !ev.is_finite() {
         return None;
     }
     let gain = 2f32.powf(ev);
-    let (x0, x1) = (GREY[0][0].ln(), GREY[GREY.len() - 1][0].ln());
+    let ln2 = std::f32::consts::LN_2;
+    let (x0, x1) = (m::STOPS.0 as f32 * ln2, m::STOPS.1 as f32 * ln2);
     let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
         let x = (x0 + (x1 - x0) * i as f32 / 31.0).exp();
         [x / gain, grey(x).min(0.9995)]
@@ -52,16 +52,21 @@ pub fn curve(ev: f32) -> Option<CameraTone> {
     CameraTone::new(knots)
 }
 
-/// The chart's output at chart value `x` (linear in log `x` between the grey steps).
+/// The fitted curve's output at chart value `x`: a monotone curve through [`m::KNOTS`], evenly spaced in stops from
+/// [`m::STOPS`]`.0` to [`m::STOPS`]`.1`, held at the first knot's value below it.
 fn grey(x: f32) -> f32 {
-    let l = x.max(GREY[0][0]).ln();
-    let i = GREY.partition_point(|g| g[0].ln() <= l).clamp(1, GREY.len() - 1);
-    let (a, b) = (GREY[i - 1], GREY[i]);
-    let t = ((l - a[0].ln()) / (b[0].ln() - a[0].ln())).clamp(0.0, 1.0);
-    a[1] + (b[1] - a[1]) * t
+    static CURVE: std::sync::OnceLock<MonotoneCurve> = std::sync::OnceLock::new();
+    let curve = CURVE.get_or_init(|| {
+        let n = m::KNOTS.len().max(2) - 1;
+        let pts: Vec<(f64, f64)> =
+            m::KNOTS.iter().enumerate().map(|(i, y)| (m::STOPS.0 + (m::STOPS.1 - m::STOPS.0) * i as f64 / n as f64, *y)).collect();
+        MonotoneCurve::new(&pts)
+    });
+    let stops = f64::from(x).max(2f64.powf(m::STOPS.0)).log2();
+    curve.eval(stops) as f32
 }
 
-/// The base tone as Lightroom applies it: `tone` on the largest and smallest channel in linear ProPhoto, the middle
+/// The base tone, hue preserving: `tone` on the largest and smallest channel in linear ProPhoto, the middle
 /// channel keeping its place between them (linear Rec.2020 in and out).
 pub fn rgb_tone(c: [f32; 3], tone: impl Fn(f32) -> f32) -> [f32; 3] {
     let (to, from) = matrices();
@@ -117,11 +122,14 @@ mod tests {
     }
 
     #[test]
-    fn the_curve_follows_the_chart_and_the_offset_shifts_it() {
+    fn the_curve_rises_with_contrast_and_the_offset_shifts_it() {
         let c = curve(0.0).unwrap();
-        for g in GREY.iter().filter(|g| g[0] > 0.01 && g[0] < 0.9) {
-            assert!((c.apply(g[0]) - g[1]).abs() < 0.01, "{g:?} -> {}", c.apply(g[0]));
-        }
+        // tone order never reverses, and the curve runs from near black to near white over the chart's range
+        let xs: Vec<f32> = (0..=60).map(|i| 2f32.powf(-9.0 + 9.0 * i as f32 / 60.0)).collect();
+        assert!(xs.windows(2).all(|w| c.apply(w[0]) <= c.apply(w[1])));
+        assert!(c.apply(0.002) < 0.002 && c.apply(1.0) > 0.99, "{} {}", c.apply(0.002), c.apply(1.0));
+        // a toe: deep shadows are darker than the scene, the midtones brighter
+        assert!(c.apply(0.004) < 0.004 && c.apply(0.05) > 0.05);
         // the chart's mid grey (scene 0.18) lands well above display 0.18: a base curve with contrast and lift
         let mid = c.apply(0.18);
         assert!(mid > 0.35 && mid < 0.45, "{mid}");

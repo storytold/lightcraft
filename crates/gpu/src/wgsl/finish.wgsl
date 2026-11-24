@@ -94,7 +94,7 @@ fn light_channel(k: u32, x: f32) -> f32 {
 }
 
 // `default_tone::rgb_tone`: the base tone on the largest and smallest linear ProPhoto channel, the middle
-// channel keeping its place between them (process V9 with Lightroom's default curve).
+// channel keeping its place between them (process V9 with the fitted default curve).
 fn rgb_tone(c: vec3<f32>) -> vec3<f32> {
     let p = max(mul3(PRO_FROM_2020, c), vec3<f32>(0.0));
     let a = max(p.x, max(p.y, p.z));

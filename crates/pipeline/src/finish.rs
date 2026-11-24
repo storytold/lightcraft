@@ -239,7 +239,7 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
-    /// Process V9 with Lightroom's default curve ([`crate::default_tone`]): the tone map applies hue preserving
+    /// Process V9 with the fitted default curve ([`crate::default_tone`]): the tone map applies hue preserving
     /// on linear ProPhoto channels ([`crate::default_tone::rgb_tone`]) instead of scaling by luminance.
     pub rgb_tone: bool,
     /// Process V4's calibrated Contrast and Blacks on the camera-look path, applied after
@@ -433,7 +433,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
 }
 
 /// The base tone map applied to colour `c` (linear Rec.2020, luminance `yl`, tone-mapped luminance `o`): scaled by
-/// the luminance change, or from process V9 on Lightroom's default curve hue preserving on linear ProPhoto channels
+/// the luminance change, or from process V9 on the fitted default curve hue preserving on linear ProPhoto channels
 /// ([`FinishParams::rgb_tone`]).
 fn tone_mapped(fp: &FinishParams, c: [f32; 3], yl: f32, o: f32) -> [f32; 3] {
     if fp.rgb_tone {
