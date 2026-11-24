@@ -1097,6 +1097,14 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
 fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     use lightcraft_pipeline::spots;
     let (w, h) = (plan.w, plan.h);
+    let method = spots::HealMethod::of(&plan.settings);
+    if method == spots::HealMethod::Pinned && !plan.settings.spots.is_empty() {
+        // process V14's heal (a membrane solve per spot) has no kernel yet: the spots run on the CPU
+        // between the device stages, the rest of the render stays on the device
+        let mut host = cx.read_rgb(&img, w, h);
+        spots::apply(&mut host, &plan.settings.spots, &plan.frame, plan.px_per_long, method);
+        return cx.gpu.upload(rgb_words(&host));
+    }
     for spot in &plan.settings.spots {
         let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { continue };
         let Some(&first) = l.pts.first() else { continue };
@@ -1487,7 +1495,7 @@ const MAX_DABS: usize = 4096;
 
 /// The `shape` kernel's brush data for `dabs`: stroke records (12 words: dab offset, dab count,
 /// r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto) then each dab's centre and the flow it
-/// adds (3 words; the stroke's flow before process V12, [`lightcraft_pipeline::masks::BrushDabs::dab`]).
+/// adds (3 words; the stroke's flow before process V15, [`lightcraft_pipeline::masks::BrushDabs::dab`]).
 fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Vec<f32> {
     let mut aux = Vec::new();
     let mut off = 12 * dabs.len();

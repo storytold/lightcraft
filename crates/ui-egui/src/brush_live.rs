@@ -28,7 +28,7 @@ pub struct LiveParams {
     /// Flow and density, 0..1.
     pub flow: f32,
     pub density: f32,
-    /// Flow is coverage per brush radius travelled (process V12, `masks::flow_per_radius`), as the
+    /// Flow is coverage per brush radius travelled (process V15, `masks::flow_per_radius`), as the
     /// committed stroke paints it.
     pub per_radius: bool,
     /// Overlay colour and its opacity (0..1) at full coverage.
@@ -248,9 +248,9 @@ mod tests {
     }
 
     /// Issue #517: two samples far apart (a fast stroke) paint a continuous band between them,
-    /// Process V12: the live stroke adds Flow per brush radius travelled, as the committed one does,
+    /// Process V15: the live stroke adds Flow per brush radius travelled, as the committed one does,
     /// so a slow drag (a sample every point) and a fast one cover a point the same; a stroke's centre
-    /// at Flow 25 is covered by 1 − 0.75² (Feather 0 here). Before V12 the slow drag built up more.
+    /// at Flow 25 is covered by 1 − 0.75² (Feather 0 here). Before V15 the slow drag built up more.
     #[test]
     fn flow_per_radius_does_not_depend_on_the_drag_speed() {
         let p = LiveParams { flow: 0.25, hard: 10.0, ..params() };
@@ -265,7 +265,7 @@ mod tests {
         let (fast, slow) = (paint(true, 360), paint(true, 1));
         assert!((fast - 0.4375).abs() < 0.03, "{fast}");
         assert!((fast - slow).abs() < 0.02, "fast {fast} vs slow {slow}");
-        assert!(paint(false, 1) > paint(false, 360), "before V12 a slow drag builds up more");
+        assert!(paint(false, 1) > paint(false, 360), "before V15 a slow drag builds up more");
     }
 
     /// not two separate dabs.

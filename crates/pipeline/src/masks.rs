@@ -517,20 +517,20 @@ pub struct BrushDabs {
     pub auto: bool,
     /// Pen pressure (0..1) of each dab, parallel to `dabs`; empty when the stroke has no pressure data (full pressure).
     pub pressure: Vec<f32>,
-    /// What each dab adds under process V12 ([`travel_flow`], pressure applied), parallel to `dabs`;
-    /// empty before V12, where every dab adds the stroke's flow.
+    /// What each dab adds under process V15 ([`travel_flow`], pressure applied), parallel to `dabs`;
+    /// empty before V15, where every dab adds the stroke's flow.
     pub flows: Vec<f32>,
 }
 
 impl BrushDabs {
     /// Radius, hard core and flow of dab `i`, pen pressure applied ([`pressure_radius`], [`pressure_flow`]);
-    /// under process V12 the flow is what the dab adds for the distance it travelled ([`travel_flow`]).
+    /// under process V15 the flow is what the dab adds for the distance it travelled ([`travel_flow`]).
     pub fn dab(&self, i: usize) -> (f64, f64, f32) {
         let (r, hard, flow) = self.pressed(i);
         (r, hard, self.flows.get(i).copied().unwrap_or(flow))
     }
 
-    /// [`Self::dab`] with the stroke's flow for every dab, as before process V12.
+    /// [`Self::dab`] with the stroke's flow for every dab, as before process V15.
     fn pressed(&self, i: usize) -> (f64, f64, f32) {
         match self.pressure.get(i) {
             Some(&p) => {
@@ -541,7 +541,7 @@ impl BrushDabs {
         }
     }
 
-    /// Give every dab what it adds for the distance it travelled ([`travel_flow`], process V12).
+    /// Give every dab what it adds for the distance it travelled ([`travel_flow`], process V15).
     fn flow_by_travel(mut self) -> BrushDabs {
         let flows = (0..self.dabs.len())
             .map(|i| {
@@ -559,14 +559,14 @@ impl BrushDabs {
     }
 }
 
-/// Whether brush Flow is the coverage a stroke adds per brush radius it travels (process V12 on), as
+/// Whether brush Flow is the coverage a stroke adds per brush radius it travels (process V15 on), as
 /// in Lightroom, rather than what every dab adds whatever the spacing of the dabs.
 pub fn flow_per_radius(s: &lightcraft_develop::DevelopSettings) -> bool {
-    s.process.process() >= lightcraft_develop::Process::V12
+    s.process.process() >= lightcraft_develop::Process::V15
 }
 
 /// What one dab adds to a stroke's coverage when Flow is coverage per brush radius travelled
-/// (process V12): `1 − (1 − flow)^(dist / r)` for a dab `dist` past the previous one, brush radius
+/// (process V15): `1 − (1 − flow)^(dist / r)` for a dab `dist` past the previous one, brush radius
 /// `r`. A stroke then covers a point it passes over for a length `L` by `1 − (1 − flow)^(L / r)`
 /// however densely its dabs lie: a straight stroke's centre (`L` = 2 r) by 44 % at Flow 25, 75 % at
 /// Flow 50 and fully at 100, as Lightroom Classic's strokes measure on a grey card (#4045).
