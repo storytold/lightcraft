@@ -493,16 +493,41 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
     if let Some(face) = mask_local_track::face(spec.track) {
         control = control.track_face(face);
     }
-    let out = with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui));
-    // PaintUi::{child,labelled} document parent.with(key). Read the actual rendered responses:
-    // aliases never stand in for a synthetic hit, layout guess, or the composite's non-slider group.
-    for (prefix, child) in [("slider", "slider"), ("sliderValue", "field"), ("sliderField", "field")] {
-        if let Some(response) = ui.ctx().read_response(id.with(child)) {
-            if prefix == "slider" {
-                note_focused_slider(ui.ctx(), response.id);
+    let (out, record) = craft::ui::runtime::inspect::record(ui, id.with("record"), |ui| {
+        with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui))
+    });
+    // Name the row's real parts from what the framework recorded: the owners of the track, the value and the caption,
+    // also for an arena child with no egui response of its own and for a row scrolled out of the panel (which then
+    // keeps its place, with the response of the whole row as its hit).
+    if let Some(record) = record {
+        let focused = craft::ui::runtime::focus::focused_rec(ui.ctx());
+        for (index, element) in record.elements.iter().enumerate() {
+            let Some(facts) = &element.facts else { continue };
+            if element.component == "MenuItem" {
+                continue;
             }
-            crate::widgets::register_response(format!("{prefix}:{}", spec.id), response.rect, &response);
-            crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), response.rect, &response);
+            let prefixes: &[&str] = match facts.role.as_str() {
+                "Slider" => &["slider"],
+                "SpinButton" => &["sliderValue", "sliderField"],
+                _ => continue,
+            };
+            let rect = record.stop_rect(index).unwrap_or(element.rect);
+            let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
+                let mut response = out.response.clone();
+                response.id = element.id;
+                response.rect = rect;
+                response.interact_rect = rect.intersect(ui.clip_rect());
+                response
+            });
+            if prefixes[0] == "slider"
+                && let Some(focus) = focused.as_ref().filter(|focus| focus.stop.id == element.id && !focus.stop.text)
+            {
+                crate::widgets::note_slider_focus(ui.ctx(), focus.stop.root);
+            }
+            for prefix in prefixes {
+                crate::widgets::register_response(format!("{prefix}:{}", spec.id), rect, &response);
+                crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), rect, &response);
+            }
         }
     }
     crate::widgets::register_geometry(ui.ctx(), format!("sliderRow:maskLocal:{}", spec.id), out.response.rect);
@@ -1292,16 +1317,6 @@ fn component_row_popup(
     if row.secondary_clicked() && crate::widgets::carrying(ui.ctx()) {
         return;
     }
-    // A row slot that was not drawn on the frame before (another photo or mask was shown, the panel was
-    // closed) starts with a closed menu of its own: the framework keeps a menu's open state under its id, so
-    // a menu left open when its row went away would otherwise open again, unasked, when the row returns.
-    let frame = ui.ctx().cumulative_frame_nr();
-    let visit_key = ui.scope_id().with(("mask-component-menu-visit", row.id, more.id));
-    let (mut epoch, last) = ui.data(|d| d.get_temp::<(u64, u64)>(visit_key)).unwrap_or((0, frame));
-    if last != frame && last.saturating_add(1) != frame {
-        epoch += 1;
-    }
-    ui.data_mut(|d| d.insert_temp(visit_key, (epoch, frame)));
     let owner_key = ui.scope_id().with(("mask-component-captured-owner", row.id, more.id));
     let mut captured = ui.data(|d| d.get_temp::<ComponentMenuTarget>(owner_key)).unwrap_or(target);
     let interactive = captured == target && captured.live(app);
@@ -1312,7 +1327,7 @@ fn component_row_popup(
     // This id belongs to the opener slot, not the target currently occupying that row.
     let shown = craft::ui::menu::Menu::context(crate::i18n::tr("Component options"), row)
         .opened_by(more, Trigger::Click)
-        .id_salt(("mask-component-menu", row.id, more.id, epoch))
+        .id_salt(("mask-component-menu", row.id, more.id))
         .show(ui, |ui, menu| {
             if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                 body_layer = Some(ui.layer_id());
