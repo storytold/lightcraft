@@ -30,6 +30,8 @@ mod alloc_release;
 mod appearance;
 mod catalog_hooks;
 mod control_server;
+#[cfg(target_os = "linux")]
+mod desktop_entry;
 mod dialog_filter;
 mod editors;
 mod hdr_display;
@@ -1396,6 +1398,8 @@ fn run() -> eframe::Result {
         logging::record_panics(logger);
     }
     alloc_release::install();
+    // from an AppImage: a launcher entry and icon for the taskbar, on a thread of its own (`desktop_entry`)
+    desktop_entry::install_from_env();
     // the shared worker pool leaves cores free and renders run below normal priority
     threads::install();
     let mut control_port = control_port_from(&lcc_brand::env_var("CONTROL_PORT"), lcc_brand::env("CONTROL_PORT").filter(|v| !v.is_empty()));
