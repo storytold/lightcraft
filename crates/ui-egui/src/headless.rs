@@ -3242,6 +3242,10 @@ mod tests {
     /// worker thread, whose language is always English.
     #[test]
     fn the_photos_progress_line_is_in_the_users_language() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         let out = lcc_testkit::TempDir::new("lc-photos-language");
         if !cfg!(target_os = "macos") {
             return;
@@ -4368,6 +4372,10 @@ mod tests {
     /// File → Import from Folder… opens the import review for a folder (searched recursively).
     #[test]
     fn add_folder_opens_the_import_review() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         let dir = lcc_testkit::TempDir::new("lc-addfolder");
         let mut h = demo([1200.0, 900.0]);
         let t = Duration::from_secs(10);
@@ -6260,6 +6268,10 @@ mod tests {
     /// #911 (toast labels only): cycling the overlay announces each mode in the UI language.
     #[test]
     fn info_overlay_toasts_are_painted_in_the_users_language() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         use crate::i18n::Locale;
 
         struct RestoreLanguage(Locale);

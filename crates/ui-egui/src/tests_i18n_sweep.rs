@@ -170,7 +170,13 @@ fn untranslated(h: &mut Headless, language: Locale) -> BTreeMap<String, Vec<Stri
 fn every_screen_paints_its_built_in_text_translated() {
     let mut lines = Vec::new();
     let mut h = demo();
-    for language in [Locale::De, Locale::Ja] {
+    // a single-language build offers only its own language and English (the others would fall back)
+    let checked: Vec<Locale> = [Locale::De, Locale::Ja].into_iter().filter(|language| language.in_build()).collect();
+    if checked.is_empty() {
+        lcc_testkit::skip!(Fonts, "this single-language build offers neither German nor Japanese to check");
+        return;
+    }
+    for language in checked {
         for (text, screens) in untranslated(&mut h, language) {
             lines.push(format!("{}: {text:?} on {}", language.code(), screens.join(", ")));
         }

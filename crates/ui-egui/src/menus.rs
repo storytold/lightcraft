@@ -860,7 +860,8 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         return Some(crate::panels::surface_osd::command(app, id, p));
     }
     if let Some(language) = language_from_command(id) {
-        app.ui.language = language;
+        // a language this build left out is English, as `set_language` shows it
+        app.ui.language = language.or_english();
         // Immediately, not on the next frame: the reply and anything else run this frame
         // (menus rebuilt from it, toasts) are already in the new language.
         crate::i18n::set_language(app.ui.language);
@@ -3816,10 +3817,15 @@ pub struct MenuEntry {
     pub enabled: bool,
 }
 
+/// Whether a single-language build (`CRAFT_FONTS_LANGUAGE`) leaves out the language this command picks.
+pub(crate) fn language_left_out(id: &str) -> bool {
+    language_from_command(id).is_some_and(|language| !language.in_build())
+}
+
 /// The flattened menu model (UI commands + engine commands with menu paths).
 pub fn menu_entries(app: &LccApp) -> Vec<MenuEntry> {
     let mut v: Vec<MenuEntry> = ui_commands()
-        .filter(|c| !c.3.is_empty())
+        .filter(|c| !c.3.is_empty() && !language_left_out(c.0))
         .map(|(id, label, _, m)| MenuEntry {
             id: id.to_string(),
             label: label.to_string(),
