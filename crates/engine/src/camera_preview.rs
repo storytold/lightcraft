@@ -44,7 +44,7 @@ use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophot
 #[cfg(test)]
 use pairs::{
     Attempt, Pairs, TONE_FITS, collect_pairs, colour_pair, displayed, fit_attempt, fit_pairs, fit_pairs_ordered, fit_pairs_with, fit_partial,
-    fit_tone_with_shadows, luma, rank_correlation_ties, search_ordered,
+    fit_partial_on, fit_tone_with_shadows, jpeg_clipped, luma, rank_correlation_ties, search_ordered,
 };
 #[cfg(test)]
 pub(crate) use proxy::LensGeometry;
@@ -86,7 +86,9 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
 /// so previews made without the profile are rebuilt.
-pub const LOOK_VERSION: u32 = 14;
+/// 24: retry the partial look with unclipped bright pairs (#631). Check clipping in the decoded JPEG's colour space
+/// and keep the retry's holdouts out of chroma training.
+pub const LOOK_VERSION: u32 = 24;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
