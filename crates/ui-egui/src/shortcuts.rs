@@ -370,12 +370,58 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
+/// The digits an Alt chord of the app's can use (the keyword set keys ⌥0–⌥9, and what the keymap binds there).
+const ALT_DIGITS: [(Key, &str); 10] = [
+    (Key::Num0, "Alt+0"),
+    (Key::Num1, "Alt+1"),
+    (Key::Num2, "Alt+2"),
+    (Key::Num3, "Alt+3"),
+    (Key::Num4, "Alt+4"),
+    (Key::Num5, "Alt+5"),
+    (Key::Num6, "Alt+6"),
+    (Key::Num7, "Alt+7"),
+    (Key::Num8, "Alt+8"),
+    (Key::Num9, "Alt+9"),
+];
+
+fn alt_digit_owner() -> egui::Id {
+    egui::Id::unique("lc-alt-digit-shortcuts")
+}
+
+/// Holds the Alt+digit chords for the app, every pass the app's shortcuts are live. The runtime turns a digit typed with
+/// Alt alone into Alt-code entry (⌥0 then types nothing, and the shortcut never sees the key) unless a component claims
+/// the chord; a held chord reaches the app instead, and `handle` reads it back. A text field, dialog or shortcut
+/// recording keeps its own digits, so nothing is held while they own the keyboard.
+pub(crate) fn hold_alt_digits(app: &LightcraftApp, ctx: &egui::Context) {
+    let owned = app.ui.dialog.is_some()
+        || crate::panels::notices::blocks_input(app)
+        || crate::panels::library_problem::blocks_dialog_input(app)
+        || app.recording_shortcut.is_some()
+        || app.ui.name_edit.is_some()
+        || keyboard_owned(app, ctx);
+    if owned {
+        return;
+    }
+    for (_, text) in ALT_DIGITS {
+        if let Ok(chord) = craft::keymap::Chord::parse(text) {
+            craft::ui::runtime::keys::capture(ctx, alt_digit_owner(), chord);
+        }
+    }
+}
+
 /// Dispatch the global shortcut pass. It yields while a dialog, prompt, blocking library window,
 /// text field, name edit or shortcut recording owns input, then fires saved command bindings,
 /// aliases and fixed photo keys, respecting native menu ownership and open popups.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Num0, pressed: true, .. }))) {
-        eprintln!("DBG handle num0: events={:?} dialog={} blocks={} text_focus={}", ctx.input(|i| i.events.clone()), app.ui.dialog.is_some(), crate::panels::notices::blocks_input(app), app.text_focus);
+    // Alt+digit presses the runtime held back for the app (see `hold_alt_digits`) come back as ordinary key events,
+    // so the bindings below read them like any other key.
+    for (key, text) in ALT_DIGITS {
+        if let Ok(chord) = craft::keymap::Chord::parse(text)
+            && craft::ui::runtime::keys::take_claimed(ctx, alt_digit_owner(), chord)
+        {
+            let modifiers = Modifiers { alt: true, ..Modifiers::NONE };
+            ctx.input_mut(|i| i.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }));
+        }
     }
     // Space held over a tool ends when the key is up, whoever has the keyboard by then
     crate::space_hand::tick(app, ctx);
@@ -395,16 +441,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     // don't steal keys from text fields or from the keymap editor recording a shortcut
-    if ctx.input(|i| i.modifiers.alt && i.key_pressed(Key::Num0)) {
-        eprintln!("DBG alt0 owned={} rec={} name_edit={} focused_rec={:?} egui_wants={}", keyboard_owned(app, ctx), app.recording_shortcut.is_some(), app.ui.name_edit.is_some(), craft::ui::runtime::focus::focused_rec(ctx).map(|r| r.stop.id), ctx.egui_wants_keyboard_input());
-    }
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
     let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
-    if ctx.input(|i| i.modifiers.alt && i.key_pressed(Key::Num0)) {
-        eprintln!("DBG alt0 fire={fire:?} aliased={}", aliased.len());
-    }
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
     }

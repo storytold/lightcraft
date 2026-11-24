@@ -254,9 +254,6 @@ impl LightcraftApp {
         if ctx.current_pass_index() != 0 {
             return;
         }
-        if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Num0, pressed: true, .. }))) {
-            eprintln!("DBG ui_pass sees num0 events={:?}", ctx.input(|i| i.events.clone()));
-        }
         // A prompt owns the keyboard and focus. A notice may have been added by this frame's logic
         // after `raw_input_hook`; capture its Tab/Enter/Space/Escape and drop everything else
         // before any panel, focused control or shortcut reads the input. A new prompt gets a
