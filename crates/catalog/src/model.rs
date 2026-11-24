@@ -256,10 +256,12 @@ impl Meta {
         let model: Vec<&str> = if after_make.is_some() {
             // drop the end of the make said again, with or without its company words ("NIKON", "ACME CAMERA SYSTEMS",
             // or "KODAK" after "EASTMAN KODAK COMPANY"), then the make's own company words ("NIKON CORPORATION"); any
-            // other word, a company word included, is the model's
+            // other word, a company word included, is the model's; an end of company words alone is not the make
+            // ("ACME COMPUTER Computer 1000")
             let model: Vec<&str> = model.split_whitespace().collect();
             let keys: Vec<String> = model.iter().map(|w| word_key(w)).collect();
-            let longest = |of: &[String]| (0..of.len()).filter_map(|i| of.get(i..)).find(|end| keys.starts_with(end)).map_or(0, <[String]>::len);
+            let named = |end: &&[String]| keys.starts_with(end) && end.iter().any(|w| !company_word(w));
+            let longest = |of: &[String]| (0..of.len()).filter_map(|i| of.get(i..)).find(named).map_or(0, <[String]>::len);
             let full: Vec<String> = make.split_whitespace().map(word_key).collect();
             let run = longest(&full).max(longest(&said));
             let own: Vec<String> = make.split_whitespace().filter(|w| company_word(w)).map(word_key).collect();
@@ -918,6 +920,7 @@ mod camera_name_tests {
         let om = "OM Digital Solutions Digital 1000";
         assert_eq!(name("OM Digital Solutions", om).as_deref(), Some("OM Digital Solutions Digital 1000"));
         assert_eq!(name("ACME", "ACME ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("ACME COMPUTER", "ACME COMPUTER Computer 1000").as_deref(), Some("Acme Computer 1000"));
         // the end of the maker said again is dropped ("EASTMAN KODAK" then "KODAK")
         let kodak = "EASTMAN KODAK COMPANY KODAK EASYSHARE C875 ZOOM DIGITAL CAMERA";
         let shown = name("EASTMAN KODAK COMPANY", kodak);
