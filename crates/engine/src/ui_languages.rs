@@ -9,7 +9,8 @@
 pub const UI_LANGUAGE_FONTS: &[(&str, &[&str])] = &[
     ("en", &[]),
     ("zh-hans", &["Hans"]),
-    ("zh-hant", &["Hant"]),
+    // craft-fonts has no Traditional face yet: the Simplified one stands in (`CraftFont::serves`)
+    ("zh-hant", &["Hant", "Hans"]),
     ("ja", &["Jpan"]),
     ("pt-br", &[]),
     ("es", &[]),
@@ -71,6 +72,8 @@ mod tests {
         assert!(!face_needed(needed, &["Thai", "Latn"]));
         assert!(face_needed(scripts_for("ja").unwrap(), &["Jpan", "Latn"]));
         assert!(!face_needed(scripts_for("ja").unwrap(), &["Hans", "Latn"]));
+        // zh-hant draws Traditional text with the Simplified face until craft-fonts has a Traditional one
+        assert!(face_needed(scripts_for("zh-hant").unwrap(), &["Hans", "Latn"]));
         assert!(scripts_for("xx").is_none());
         assert!(valid_codes().contains("zh-hant"));
     }

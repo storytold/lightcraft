@@ -16,6 +16,7 @@ import { Aside } from '@astrojs/starlight/components';
 - **DNG**: raw photos only, a lossless re-encode with the edits in the embedded XMP. Compression: lossless JPEG (default), ZIP, none or lossy.
 - **DNG of: Rendered photo**: the finished image as a linear DNG other raw converters open as rendered. Also **Photo ▸ File ▸ Render to DNG** (writes `<name>-Rendered.dng` beside the original and stacks it).
 - **Original files**: copies the file byte for byte, with an XMP sidecar.
+- HDR files (gain-map JPEG, PQ / HLG or gain-map AVIF, PQ or gain-map JPEG XL, PQ PNG, float TIFF): [HDR output](../export-size-sharpen/#hdr-output).
 - A non-raw photo cannot be exported as DNG.
 - Transparent sources keep alpha in PNG, WebP and TIFF.
 
