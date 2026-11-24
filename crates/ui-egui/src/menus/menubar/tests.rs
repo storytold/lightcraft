@@ -420,6 +420,25 @@ fn open_log_folder_reveals_the_hosts_log_file() {
     assert_eq!(run_item(&mut app, "app.openLogFolder", Value::Null).unwrap_err(), "no file manager");
 }
 
+/// A search's plan is for the library it was made in: another library opened while it searched gets nothing relinked.
+#[test]
+fn a_search_finishing_after_another_library_opened_relinks_nothing() {
+    let root = std::env::temp_dir().join(format!("lc-ui-drives-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Other")).unwrap();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(root.join("First"), true).unwrap();
+    let mut app = LightcraftApp::new(session, Default::default());
+    assert_eq!(run_item(&mut app, "file.findMissingOnOtherDrives", json!({"hash": false})).unwrap(), json!({"background": true}));
+    app.session.open_library(root.join("Other"), false).unwrap();
+    let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+    let t = std::time::Duration::from_secs(20);
+    assert!(h.step_until(t, |h| h.app.ui.last_find_missing_result.is_some()), "the search never ended");
+    let r = h.app.ui.last_find_missing_result.clone();
+    assert!(matches!(&r, Some(Err(e)) if e.contains("Another library")), "{r:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The search after a Lightroom import waits while another search for missing photos runs (that one took its photos
 /// before the import), and starts when it ends.
 #[test]

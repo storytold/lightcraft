@@ -1755,7 +1755,15 @@ fn find_missing_timeout(p: &Value) -> Result<std::time::Duration, String> {
 }
 
 /// The toast for a finished search, and the result it leaves for a caller that waits.
-fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>) {
+fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>, generation: u64) {
+    // a plan is for the library it was made in: another one opened meanwhile has other photos under the same ids
+    let plan = plan.and_then(|plan| {
+        if app.session.library_generation() == generation {
+            Ok(plan)
+        } else {
+            Err(crate::i18n::tr("Another library was opened while Find Missing Photos searched: nothing was relinked").to_string())
+        }
+    });
     // relinked under the session as it is now: photos relinked meanwhile and files
     // now in use are skipped
     let r = plan.and_then(|plan| app.run("library.findMissing", plan.to_json()));
@@ -1845,7 +1853,8 @@ fn file_find_missing_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Re
     };
     app.ui.last_find_missing = None;
     app.ui.last_find_missing_result = None;
-    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, find_missing_done)?;
+    let generation = app.session.library_generation();
+    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, move |app, ctx, plan| find_missing_done(app, ctx, plan, generation))?;
     if !wait {
         return Ok(json!({"background": true}));
     }
@@ -1875,7 +1884,8 @@ pub(crate) fn file_find_missing_on_other_drives_command(app: &mut LightcraftApp,
     };
     app.ui.last_find_missing = None;
     app.ui.last_find_missing_result = None;
-    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, find_missing_done)?;
+    let generation = app.session.library_generation();
+    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, move |app, ctx, plan| find_missing_done(app, ctx, plan, generation))?;
     if !wait {
         return Ok(json!({"background": true}));
     }
