@@ -276,6 +276,8 @@ mod tests_grid_style;
 #[cfg(test)]
 mod tests_guided_guides;
 #[cfg(test)]
+mod tests_upright_panel;
+#[cfg(test)]
 mod tests_hdr_zoom_cache;
 #[cfg(test)]
 mod tests_help_links;

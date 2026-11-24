@@ -173,6 +173,9 @@ icons! {
     Reset,
     /// The straighten tool: a ruler laid across (Lucide `ruler`).
     Straighten,
+    /// Guided Upright's tool (#1274, original): a photo frame with two guides drawn along its
+    /// converging verticals, each ending in a handle.
+    GuidedUpright,
     /// Automatic: a wand with sparkles (Lucide `wand-sparkles`).
     Auto,
     /// Mask component: add (two squares united; Lucide `squares-unite`).
@@ -954,6 +957,14 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
         Reset => {
             // Lucide `undo-2`
             lucide!(pen, ["M9 14 4 9l5-5", "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"]);
+        }
+        GuidedUpright => {
+            pen.rect(2.5, 3.0, 17.5, 17.0, 1.5);
+            pen.line(&[(6.0, 15.0), (7.5, 5.0)]);
+            pen.line(&[(14.0, 15.0), (12.5, 5.0)]);
+            for (x, y) in [(6.0, 15.0), (7.5, 5.0), (14.0, 15.0), (12.5, 5.0)] {
+                pen.dot(x, y, 1.4);
+            }
         }
         Straighten => {
             // Lucide `ruler`
