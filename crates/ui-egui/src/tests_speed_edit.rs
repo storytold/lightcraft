@@ -21,7 +21,8 @@ fn develop_loupe() -> Headless {
     let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    h.step();
+    // an edit before the test's own, so the photo's history already has its Import step
+    ask(&mut h, "engine.execute", json!({"command": "develop.set", "params": {"control": "color.vibrance", "value": 5.0}}));
     h
 }
 
@@ -134,9 +135,11 @@ fn outside_develop_the_keys_are_plain_shortcuts() {
     let mut app = LccApp::new(lcc_engine::Session::with_demo(), services);
     app.ui.settings.gpu = false;
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    ask(&mut h, "engine.execute", json!({"command": "module.library", "params": {}}));
+    h.app.run("module.library", json!({})).expect("Library");
+    h.step();
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Library, "{:?}", h.app.ui.view);
     ask(&mut h, "ui.key", json!({"key": "E", "action": "down"}));
-    assert!(h.app.speed_edit.is_none(), "Library's E is its own key");
+    assert!(h.app.speed_edit.is_none(), "Library's E is its own key: {:?} {:?}", h.app.ui.module, h.app.ui.view);
     ask(&mut h, "ui.key", json!({"key": "E", "action": "up"}));
 }
 
@@ -144,7 +147,7 @@ fn outside_develop_the_keys_are_plain_shortcuts() {
 fn the_reference_lists_the_speed_keys() {
     let mut h = develop_loupe();
     let (own, _) = crate::help_overlay::rows(&h.app, crate::module::ModuleId::Develop, false);
-    assert!(own.iter().any(|(_, what)| what == crate::i18n::tr("Exposure").as_ref()), "{own:?}");
+    assert!(own.iter().any(|(_, what)| *what == crate::i18n::tr("Exposure").to_string()), "{own:?}");
     ask(&mut h, "engine.execute", json!({"command": "app.shortcuts", "params": {}}));
     let r = h.request("ui.widgets", json!({}), T);
     assert!(r.to_string().contains("speedKey:light.exposure"), "the Keyboard Shortcuts dialog lists the speed keys");

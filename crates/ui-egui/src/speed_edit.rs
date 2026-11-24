@@ -74,6 +74,32 @@ fn available(app: &LccApp) -> bool {
 /// tap's press through to the shortcuts on release.
 pub(crate) fn intercept(app: &mut LccApp, ctx: &egui::Context) {
     let on = available(app);
+    // keys already down while speed edit wasn't available (the E that brought Develop up) are
+    // their shortcuts' presses, not holds, until they are let go
+    let stale_id = egui::Id::new("speed-edit-stale-keys");
+    let down: Vec<Key> = ctx.input(|i| i.keys_down.iter().copied().collect());
+    let mut stale: Vec<Key> = ctx.data(|d| d.get_temp::<Vec<Key>>(stale_id)).unwrap_or_default();
+    // the frame before had no speed edit (a key handled earlier in this frame may have opened
+    // Develop): this frame's keys belong to what was up before
+    let prev_id = egui::Id::new("speed-edit-was-on");
+    let was_on = ctx.data(|d| d.get_temp::<bool>(prev_id)).unwrap_or(false);
+    ctx.data_mut(|d| d.insert_temp(prev_id, on));
+    if on && was_on {
+        stale.retain(|k| down.contains(k));
+    } else {
+        stale = down.clone();
+        // a press arriving this frame is down too
+        ctx.input(|i| {
+            for e in &i.events {
+                if let egui::Event::Key { key, pressed: true, .. } = e
+                    && !stale.contains(key)
+                {
+                    stale.push(*key);
+                }
+            }
+        });
+    }
+    ctx.data_mut(|d| d.insert_temp(stale_id, stale.clone()));
     if !on {
         finish(app, ctx, false);
         return;
@@ -85,7 +111,7 @@ pub(crate) fn intercept(app: &mut LccApp, ctx: &egui::Context) {
     ctx.input_mut(|i| {
         i.events.retain(|e| match e {
             egui::Event::Key { key, pressed: true, modifiers, repeat, .. } if *modifiers == Modifiers::NONE && control_for(&map, *key).is_some() => {
-                if !repeat && held.is_none() && start.is_none() {
+                if !repeat && held.is_none() && start.is_none() && !stale.contains(key) {
                     start = Some(*key);
                 }
                 false
@@ -222,17 +248,17 @@ pub fn set_speed_key(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     let name = p.get("key").and_then(Value::as_str).ok_or("missing key")?;
     let key = key_of(name).ok_or_else(|| format!("{name:?} is not a single key without modifiers"))?;
     let canonical = crate::shortcuts::format(Modifiers::NONE, key).ok_or_else(|| format!("{name:?} can't be a speed-edit key"))?;
+    let control = match p.get("control") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(c)) if c.is_empty() => None,
+        Some(Value::String(c)) => Some(controls::find(c).ok_or_else(|| format!("unknown develop control: {c}"))?.id),
+        Some(_) => return Err("control must be a string or null".into()),
+    };
     let map = &mut app.ui.settings.speed_keys;
     // one entry per key, however it was spelled
     map.retain(|k, _| key_of(k) != Some(key));
-    match p.get("control") {
-        None | Some(Value::Null) => {}
-        Some(Value::String(c)) if c.is_empty() => {}
-        Some(Value::String(c)) => {
-            let spec = controls::find(c).ok_or_else(|| format!("unknown develop control: {c}"))?;
-            map.insert(canonical, spec.id.to_string());
-        }
-        Some(_) => return Err("control must be a string or null".into()),
+    if let Some(id) = control {
+        map.insert(canonical, id.to_string());
     }
     Ok(list(app))
 }
