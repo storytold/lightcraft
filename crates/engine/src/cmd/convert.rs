@@ -672,7 +672,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
                 "Update DNG Preview & Metadata",
                 ["Metadata"],
                 None,
-                "{ids?, longEdge?: 256..4096 (1024), quality?: 1..100 (85)}: for each selected DNG (or `ids`, at most 500) rewrite the file atomically with a JPEG preview of the current edit (an sRGB preview IFD in SubIFDs; a preview of this app's from before is replaced) and the photo's current XMP embedded (merged into the packet already there); the raw data stays byte for byte. Refused with the reason, file untouched: DNGs written by Adobe software, BigTIFF, unreadable or unfamiliar structures, an embedded XMP that cannot be read; non-DNG photos are skipped. Shows in the activity stack (cancel between photos) → {updated: [{id, path, bytes, preview: [w, h], replacedPreviews}], skipped: [{id, name, reason}], failed: [{id, name, error}], cancelled}",
+                "{ids?, longEdge?: 256..4096 (1024), quality?: 1..100 (85)}: for each selected DNG (or `ids`, at most 500) rewrite the file atomically with a JPEG preview of the current edit (an sRGB preview IFD in SubIFDs; a preview of this app's from before is replaced) and the photo's current XMP embedded (merged into the packet already there); the raw data stays byte for byte. Refused with the reason, file untouched: DNGs written by Adobe software, unreadable or unfamiliar structures, an embedded XMP that cannot be read; non-DNG photos are skipped. Shows in the activity stack (cancel between photos) → {updated: [{id, path, bytes, preview: [w, h], replacedPreviews}], skipped: [{id, name, reason}], failed: [{id, name, error}], cancelled}",
                 has_dng_selection,
                 update_dng_preview
             )
