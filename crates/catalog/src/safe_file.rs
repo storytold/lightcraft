@@ -100,11 +100,64 @@ fn parent_of(path: &Path) -> &Path {
     path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
-/// Make a rename or a new name in `dir` durable (POSIX). Opening a directory fails on Windows,
-/// where NTFS journals the rename itself, so errors are ignored.
+/// The result of asking the file system to flush a directory's entries.
+#[derive(Debug)]
+pub enum FolderSync {
+    /// The directory sync completed; this is separate from syncing each file's contents.
+    Durable,
+    /// The platform or file system does not support this directory-sync operation.
+    NoFolderSync(io::Error),
+}
+
+/// Best-effort directory sync, preserving the existing writers' error policy. Destructive callers
+/// that must distinguish unsupported syncing from an I/O failure use [`sync_dir_checked`].
 pub fn sync_dir(dir: &Path) {
-    if let Ok(d) = File::open(dir) {
-        let _ = sync_file(&d);
+    let _ = sync_dir_checked(dir);
+}
+
+/// Flush `dir`'s entries before a destructive operation such as removing a Move's source.
+/// Opening the directory must succeed: permission and path errors are failures, not evidence that
+/// the file system cannot sync directories. Only an unsupported sync on an open directory is a
+/// refusal; genuine I/O errors propagate so the caller can keep the original.
+///
+/// On non-Unix targets this std-only implementation reports `NoFolderSync`: it does not attempt a
+/// native directory flush. In particular, neither NTFS's lazily flushed log nor exFAT/FAT provides
+/// a substitute durability guarantee. Callers may retain their pre-existing behavior on those
+/// volumes, but must not describe the result as a successful directory flush.
+pub fn sync_dir_checked(dir: &Path) -> io::Result<FolderSync> {
+    #[cfg(unix)]
+    {
+        let directory = File::open(dir)?;
+        folder_sync_outcome(sync_file(&directory), std::env::consts::OS)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(FolderSync::NoFolderSync(io::Error::new(io::ErrorKind::Unsupported, "directory flushing is not implemented on this platform")))
+    }
+}
+
+/// Directory fsync refusals are target-specific. BSD/macOS ENOTSUP is 45; macOS also has
+/// EOPNOTSUPP=102 (which is ENETRESET on Linux, and must remain a real error there). Rust does not
+/// map every one to ErrorKind::Unsupported. EBADF/EINVAL are also returned for directory syncs on
+/// some file systems; this classification is used only after opening the directory succeeded.
+#[cfg(any(unix, test))]
+fn folder_sync_outcome(result: io::Result<()>, target_os: &str) -> io::Result<FolderSync> {
+    match result {
+        Ok(()) => Ok(FolderSync::Durable),
+        Err(e) => {
+            let refused = match e.raw_os_error() {
+                Some(9 | 22) => true,
+                Some(code) => match target_os {
+                    "linux" | "android" => code == 95,
+                    "macos" | "ios" => matches!(code, 45 | 102),
+                    "freebsd" | "openbsd" | "netbsd" | "dragonfly" => code == 45,
+                    _ => matches!(e.kind(), io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput),
+                },
+                None => matches!(e.kind(), io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput),
+            };
+            if refused { Ok(FolderSync::NoFolderSync(e)) } else { Err(e) }
+        }
     }
 }
 
@@ -496,6 +549,45 @@ mod tests {
         assert!(!same_file(unreadable, &p), "the lenient comparison still answers false");
         assert!(!same_file_strict(&d.join("missing.jpg"), &p).unwrap(), "a missing original is another file");
         assert!(!same_file_strict(&p.join("under-a-file.jpg"), &p).unwrap());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn directory_sync_refusals_use_the_target_platform_and_keep_real_errors() {
+        for (target, errno) in [("linux", 95), ("linux", 9), ("linux", 22), ("macos", 45), ("macos", 102), ("freebsd", 45)] {
+            assert!(
+                matches!(folder_sync_outcome(Err(io::Error::from_raw_os_error(errno)), target), Ok(FolderSync::NoFolderSync(_))),
+                "{target}: {errno}"
+            );
+        }
+        for (target, errno) in [("linux", 5), ("linux", 13), ("linux", 1), ("linux", 28), ("linux", 102), ("macos", 5)] {
+            assert!(folder_sync_outcome(Err(io::Error::from_raw_os_error(errno)), target).is_err(), "{target}: {errno} must keep the original");
+        }
+        assert!(matches!(folder_sync_outcome(Ok(()), "linux"), Ok(FolderSync::Durable)));
+    }
+
+    /// The checked sync says whether the folder's entries are on disk, and counts the flush it made;
+    /// a folder that is not there is a failure, not a refusal.
+    #[cfg(unix)]
+    #[test]
+    fn the_checked_folder_sync_reports_what_it_did() {
+        let d = temp("dirsync");
+        let before = syncs_on_this_thread();
+        assert!(matches!(sync_dir_checked(&d), Ok(FolderSync::Durable)), "a folder this process can open is flushed");
+        assert_eq!(syncs_on_this_thread(), before + 1, "one flush");
+        let gone = d.join("gone");
+        assert!(sync_dir_checked(&gone).is_err(), "a folder that is not there cannot be flushed");
+        sync_dir(&gone); // and the best-effort version simply does nothing
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// The std-only non-Unix implementation reports its missing directory-flush capability.
+    #[cfg(not(unix))]
+    #[test]
+    fn a_platform_without_a_folder_flush_says_so() {
+        let d = temp("nodirsync");
+        assert!(matches!(sync_dir_checked(&d), Ok(FolderSync::NoFolderSync(_))), "this implementation does not perform a directory flush");
+        sync_dir(&d);
         let _ = fs::remove_dir_all(&d);
     }
 

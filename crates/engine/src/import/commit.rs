@@ -352,8 +352,22 @@ fn finish_moves(s: &mut Session, placed: Vec<crate::import_move::Placed>, log0: 
         }
         return;
     }
+    // Issue #1501: the copies' bytes are on disk (each was synced when written), but not the folder
+    // entries that name them, and those must be there before the originals go — otherwise a crash in
+    // between keeps the deletion and loses the photo. Once per folder for the whole batch, not once
+    // per photo: each committed batch flushes a destination folder once. A folder that cannot be
+    // flushed due to an error keeps its photos' originals; unsupported flushing follows the
+    // compatibility policy in import_move::sync_dir and is not claimed as durability.
+    let unsynced = crate::import_move::sync_folders(&placed);
     for p in placed {
         let from = p.src.to_string_lossy().to_string();
+        if let Some(why) = unsynced.get(crate::import_move::folder_of(&p.dst)) {
+            let folder = crate::import_move::folder_of(&p.dst).display().to_string();
+            let reason = format!("could not make {folder} durable ({why}): the original stays; the photo uses the copy at {}", p.dst.display());
+            log::warn!("import: move {from}: {reason}");
+            report.kept.push(Kept { path: from, reason });
+            continue;
+        }
         match crate::import_move::finish(&p) {
             Ok(kept) => {
                 let sidecars = p.sidecars.iter().map(|sc| sc.dst.to_string_lossy().to_string()).collect();
