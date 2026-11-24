@@ -217,6 +217,13 @@ shared with every drag. Original analysis: **CPU fallback misses the slider budg
 6–7 ms (met; 34–47 ms under load), but an NR drag takes 22.8 ms (297 ms under load). Proposal: a smaller draft size during drags on the CPU path (e.g. 768 px), and skipping NR in
 draft renders while a slider moves.
 
+**Draft NR drag, task 4.5 (2026-11-24):** a draft with luminance NR now runs the colour NR first and keeps that image
+(`Plan::draft_col_key`, `local::denoise_lum_draft`); a Luminance / Detail drag reruns only the luminance NR on it (it
+only scales each pixel's rgb, so the swapped order is a close stand-in). Full-quality renders and exports keep the
+original order and are bit-identical (`tests_draft_nr.rs`). Windows, loaded machine, paired alternating runs, median of
+4: 63.8 → **33.4 ms** wall (single thread 280 → 200 ms). `cargo xtask bench` now carries wall budgets (`BUDGETS`,
+incl. this row at 16 ms) that `--strict` fails on, and compares wall time where there is no process CPU time.
+
 **U4 — export 24 MP JPEG at 1.25 s** (under load; idle: 0.43 s GPU / 0.55 s CPU, budget met — keep as a nice-to-have) (GPU render 865 ms of which most is the full-size source develop, plus 386 ms
 encode). Overlapping the JPEG encode of strip *n* with the render of strip *n+1*, or a faster demosaic for export
 previews, would get under 1 s.
