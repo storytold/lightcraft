@@ -1,6 +1,6 @@
 # Status
 
-> **Last updated:** 2026-11-23 · **Change:** major (created: tracked replacement for the gitignored `plan/STATUS.md`)
+> **Last updated:** 2026-11-24 · **Change:** patch (Metrics: 100k-grid wheel-scroll frame, plan 4.8); major (created: tracked replacement for the gitignored `plan/STATUS.md`)
 
 The one tracked place for where Chromaforge stands right now. Agents read it first (see `AGENTS.md`, *Session start*)
 and update it in the commit that changes what it says. The detailed phased plan lives in the gitignored
@@ -50,5 +50,6 @@ Same-machine before/after pairs only (`AGENTS.md`, *Testing & performance*). Bud
 
 | Date | What | Machine | Before | After |
 |---|---|---|---|---|
+| 2026-11-24 | Grid wheel-scroll frame, 100k photos, 1600×1000 (`wheel_scroll_100k_frame`, release, median / p95 of 120 frames, 3 runs) | Windows 11 x64 desktop, shared with other builds | 3.3–5.3 / 5.1–7.5 ms (grid panel 0.8–1.4 ms) | unchanged: a prefetch-row shortcut measured 3.7–5.3 / 6.4–21 ms and was dropped |
 
-No rows yet: earlier numbers lived in the untracked `plan/STATUS.md` (scale figures are in [gaps.md](gaps.md), gap 26). Add a row per measurement; keep the method (command, build profile) in the commit message.
+Earlier numbers lived in the untracked `plan/STATUS.md` (scale figures are in [gaps.md](gaps.md), gap 26). Add a row per measurement; keep the method (command, build profile) in the commit message.
