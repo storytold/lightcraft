@@ -50,6 +50,14 @@ fn scrolled_actual_keyword_hit_map_excludes_hidden_rows_and_controls() {
     }
     assert!(stable >= 3, "bounded scroll geometry did not settle");
     let tick = "keywordCheck:Seam clip 25";
+    eprintln!(
+        "DBGCLIP row={:?} tick={:?} hit={:?} top={:?} box={:?}",
+        rect(&h, "keywordRow:Seam clip 25"),
+        h.app.widgets.iter().find(|(n, _)| n == tick).map(|(_, r)| *r),
+        h.app.widget_hits.iter().find(|(n, _)| n == tick).map(|(_, hit)| (hit.id, hit.interact_rect, hit.layer_id)),
+        h.app.widgets.iter().find(|(n, _)| n == "keywordList:topLevel").map(|(_, r)| *r),
+        h.app.widgets.iter().find(|(n, _)| n == "field:keyword").map(|(_, r)| *r),
+    );
     let tick_hit = h.app.widget_hits.iter().find(|(name, _)| name == tick).expect("tick hit").1;
     let actual_tick = h
         .view

@@ -479,7 +479,7 @@ fn rect(h: &Headless, id: &str) -> egui::Rect {
 /// the top bar, a keyword released over the top bar stays where it is.
 #[test]
 fn drops_land_only_on_what_is_shown() {
-    let (mut h, ids) = keywords_panel_at([1400.0, 760.0]);
+    let (mut h, ids) = keywords_panel_at([1400.0, 700.0]);
     run(&mut h, "photo.setMeta", json!({"ids": [ids[0]], "keywords": ["aaa|zz"]}));
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordRowToggle:aaa"}));
     let title = rect(&h, "keywordList:topLevel");
@@ -646,6 +646,7 @@ fn ticking_a_keyword_keeps_the_list_in_place() {
     for (n, k) in picked.iter().chain(picked.iter().rev()).enumerate() {
         let (before, box_top) = (rect(&h, &format!("keywordRow:{k}")), rect(&h, "field:keyword").top());
         ask(&mut h, "ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}));
+        eprintln!("DBGTICK {k} before={before:?} after={:?} box_top {box_top} -> {}", rect(&h, &format!("keywordRow:{k}")), rect(&h, "field:keyword").top());
         assert_eq!(rect(&h, &format!("keywordRow:{k}")), before, "{k} stayed under the pointer");
         // (the click found the row where it is drawn, not where a discarded pass had it)
         assert_eq!(keywords_of(&h, ids[0]).contains(k), n < picked.len(), "{k} was the one ticked: {:?}", keywords_of(&h, ids[0]));

@@ -49,13 +49,27 @@ pub(crate) fn select<T: craft::behavior::Value>(
 /// A framework dropdown whose list is a menu of rows the caller fills (choices with automation names of their own,
 /// actions after a divider): a field showing `face`, named `label`, registered as `name` with its real response;
 /// `rows` runs while the menu is open. `width` fixes the field's width.
-pub(crate) fn dropdown_menu(ui: &mut Ui, name: &str, label: &str, face: &str, width: Option<f32>, mut rows: impl FnMut(&mut Ui)) -> Response {
+pub(crate) fn dropdown_menu(ui: &mut Ui, name: &str, label: &str, face: &str, width: Option<f32>, rows: impl FnMut(&mut Ui)) -> Response {
+    dropdown_menu_sized(ui, name, label, face, width, craft::theme::ControlSize::Md, rows)
+}
+
+/// [`dropdown_menu`] at a control size: the small one for a dropdown that shares a line with its caption.
+pub(crate) fn dropdown_menu_sized(
+    ui: &mut Ui,
+    name: &str,
+    label: &str,
+    face: &str,
+    width: Option<f32>,
+    size: craft::theme::ControlSize,
+    mut rows: impl FnMut(&mut Ui),
+) -> Response {
     use craft::ui::buttons::Button;
     use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
     use craft::ui::menu::Menu;
     let button = Button::new(label.to_owned())
         .painted(face.to_owned())
         .trailing_icon(craft::ui::controls::disclosure::DisclosureGlyph::dropdown())
+        .size(size)
         .id_salt(("lc-dropdown", name));
     let shown = match width {
         Some(width) => {

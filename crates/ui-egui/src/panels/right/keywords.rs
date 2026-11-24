@@ -362,7 +362,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let face = crate::i18n::builtin_label(&current, current == recent).to_owned();
         // (the dropdown takes the rest of the line, so a long set name is not cut and the chevron stays)
         let room = ui.available_width();
-        crate::widgets::dropdown_menu(ui, "keywordSetCombo", crate::i18n::tr("Keyword Set"), &face, Some(room), |ui| {
+        crate::widgets::dropdown_menu_sized(ui, "keywordSetCombo", crate::i18n::tr("Keyword Set"), &face, Some(room), craft::theme::ControlSize::Sm, |ui| {
             for set in sets["sets"].as_array().into_iter().flatten() {
                 let name = set["name"].as_str().unwrap_or_default();
                 if crate::widgets::menu_row(ui, ("keywordSet", name), None, crate::i18n::builtin_label(name, name == recent), None, name == current, true) {
