@@ -324,3 +324,28 @@ fn source_info_origin_and_bit_depth_propagate_to_filters_including_native() {
     assert!(r.warnings.is_empty());
     assert!(is_red(r.image.get(0, 0)));
 }
+
+#[test]
+fn draft_and_full_renders_give_matching_point_filter_results() {
+    // 800 × 800 > DRAFT_SOURCE_PIXELS: the draft runs the Source filter on a downsampled copy and
+    // scales it back up. A point filter (overlap 0) must come out the same as on the full run,
+    // up to the draft's own resampling, which the unfiltered pair measures.
+    let (w, h) = (800, 800);
+    let src = Rgb32f::from_fn(w, h, |x, y| [0.05 + 0.6 * x as f32 / w as f32, 0.2 + 0.3 * y as f32 / h as f32, 0.3]);
+    let info = info();
+    let full = RenderRequest::fit(w, h);
+    let draft = RenderRequest { quality: Quality::Draft, ..full };
+    let s = with(&[FilterStage::Source], "t.invert");
+    let mean_diff = |a: &lcc_raster::Rgba8, b: &lcc_raster::Rgba8| {
+        let n = a.data.len().min(b.data.len()).max(1) as f64;
+        a.data.iter().zip(&b.data).map(|(p, q)| (0..3).map(|k| (p[k] as f64 - q[k] as f64).abs()).sum::<f64>() / 3.0).sum::<f64>() / n
+    };
+    let plain =
+        mean_diff(&render(&src, &info, &DevelopSettings::default(), &draft).image, &render(&src, &info, &DevelopSettings::default(), &full).image);
+    let fd = render(&src, &info, &s, &draft);
+    let ff = render(&src, &info, &s, &full);
+    assert!(fd.warnings.is_empty() && ff.warnings.is_empty(), "{:?} {:?}", fd.warnings, ff.warnings);
+    assert_eq!((fd.image.width, fd.image.height), (ff.image.width, ff.image.height));
+    let filtered = mean_diff(&fd.image, &ff.image);
+    assert!(filtered <= plain + 1.5, "draft vs full with the filter differ by {filtered:.2} (unfiltered {plain:.2})");
+}

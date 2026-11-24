@@ -132,7 +132,7 @@ fn photo_status(s: &mut Session, p: &Value) -> Result<Value> {
 /// Pick the lens whose database profile corrects the active raw (`lens: {maker?, model, focal?}`), or go back to the
 /// automatic choice (`lens: null`): the file's own correction, else the match by the metadata's lens name. A picked
 /// lens wins over the file's own correction; `focal` stands in for a photo that records none (a manual lens). One
-/// undo step; kept in the catalog, not written to XMP. → what applies now, as `lens.db.photo` reports it.
+/// undo step; written to XMP with the settings (`optics.lens`). → what applies now, as `lens.db.photo` reports it.
 fn choose(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "lens.choose";
     if p.get("lens").is_none() {
@@ -218,7 +218,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Choose Lens Profile",
             [],
             None,
-            "{lens: {maker?, model, focal?} | model | null}: the lens whose database profile corrects the active raw (over the file's own correction; `focal` for a photo without one), or null for the automatic choice; one undo step, not written to XMP → as lens.db.photo",
+            "{lens: {maker?, model, focal?} | model | null}: the lens whose database profile corrects the active raw (over the file's own correction; `focal` for a photo without one), or null for the automatic choice; one undo step, written to XMP as optics.lens → as lens.db.photo",
             has_active,
             choose
         ),
