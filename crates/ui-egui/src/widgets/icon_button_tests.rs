@@ -330,11 +330,12 @@ fn real_presets_menu_opens_on_long_release_and_keyboard_then_escape_dismisses() 
             frames.frame(vec![pointer(at, PointerButton::Primary, false)], &mut draw);
         }
         frames.frame(vec![], &mut draw);
-        assert!(egui::Popup::is_any_open(&frames.ctx), "{activation:?}");
+        // The options menu is a framework menu layer, not an egui popup.
+        assert!(craft::ui::runtime::overlay::any_open(&frames.ctx, craft::ui::runtime::overlay::OpenFilter::Any), "{activation:?}");
         assert!(frames.rects.iter().any(|(id, _)| id == "presetMenu:thumbnails"));
         frames.frame(key(Key::Escape, false), &mut draw);
         frames.frame(vec![], &mut draw);
-        assert!(!egui::Popup::is_any_open(&frames.ctx));
+        assert!(!craft::ui::runtime::overlay::any_open(&frames.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     }
 }
 

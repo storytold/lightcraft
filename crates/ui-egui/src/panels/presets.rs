@@ -652,7 +652,8 @@ mod tests {
         let hit = h.state().widget_hits.iter().find(|(id, _)| id == &row).unwrap().1;
         let preset = h.state().session.presets.iter().find(|p| row == format!("preset:{}", p.id)).unwrap();
         let name = crate::i18n::builtin_label(&preset.name, preset.builtin).to_string();
-        assert!(h.query_by_role_and_label(egui::accesskit::Role::ListItem, &name).is_some());
+        // Preset rows sit under their group's row, so they are tree items.
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::TreeItem, &name).is_some());
         for _ in 0..100 {
             if h.ctx.memory(|memory| memory.focused()) == Some(hit.id) {
                 break;
