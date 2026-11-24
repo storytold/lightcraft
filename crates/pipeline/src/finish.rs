@@ -14,44 +14,15 @@ use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc}
 use crate::tone::ToneMap;
 use crate::{Prepared, SourceInfo, for_rows};
 
+pub use craft_develop::finish::{
+    GAMUT_WARN, GRAIN_HASH, SHARPEN_GAIN, ValueGrain, gamut_map, gamut_map_to, grain_noise, pixel_sharpen_mask_weight, refine_saturation,
+    sharpen_limit, sharpen_mask_weight, sharpen_term,
+};
+
 #[inline]
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-/// How much of the sharpening a pixel gets (0..1) under Masking `masking` (0..1), from its fine
-/// detail `det` (log luminance minus its texture blur): 1 everywhere at 0, only stronger edges
-/// as it rises. The GPU kernel (`finish.wgsl`) computes the same; Alt-drag on Masking shows it
-/// ([`crate::Overlay::SharpenMask`]).
-#[inline]
-pub fn sharpen_mask_weight(masking: f32, det: f32) -> f32 {
-    if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, det.abs()) } else { 1.0 }
-}
-
-/// Masking weight for the V3 pixel-scale sharpening band, also used by its Alt-drag preview.
-#[inline]
-pub fn pixel_sharpen_mask_weight(masking: f32, det: f32) -> f32 {
-    if masking > 0.0 { smooth(masking * 0.1, masking * 0.1 + 0.06, det.abs()) } else { 1.0 }
-}
-
-/// Gain of the sharpening detail term (per unit of `Amount / 150`), in stops of luminance per stop of detail.
-pub const SHARPEN_GAIN: f32 = 7.0;
-
-/// Soft-clip limit (stops) of the sharpening detail term for Detail `0..=100`: 0.03 stops (large
-/// edge detail is flattened so halos stay small) up to 1.5 stops (practically linear).
-pub fn sharpen_limit(detail: f64) -> f32 {
-    let d = (detail / 100.0).clamp(0.0, 1.0) as f32;
-    0.03 * 50f32.powf(d)
-}
-
-/// The sharpening boost (stops) for pixel-scale detail `det` (log luminance minus its blur at the
-/// sharpen radius): linear for small detail, soft-clipped at `limit`, and gated by the Masking edge
-/// mask (`mask` = Masking / 100) so flat areas and noise can be left alone.
-#[inline]
-pub fn sharpen_term(det: f32, limit: f32, mask: f32) -> f32 {
-    let m = pixel_sharpen_mask_weight(mask, det);
-    SHARPEN_GAIN * m * det / (1.0 + det.abs() / limit)
 }
 
 /// Parametric region curve (encoded domain) composed with the master point curve.
@@ -66,13 +37,13 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let mut base = crate::curve::ParametricCurve::new(c).to_lut();
     let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
-        base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
+        base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose_len(&base, N);
     }
     let per = [&c.red, &c.green, &c.blue];
     Some(std::array::from_fn(|i| {
         if chans.get(i).copied().unwrap_or(false) {
             let pts = per.get(i).map(|&p| to_pts(p)).unwrap_or_default();
-            MonotoneCurve::new(&pts).to_lut(N).compose(&base)
+            MonotoneCurve::new(&pts).to_lut(N).compose_len(&base, N)
         } else {
             base.clone()
         }
@@ -107,22 +78,6 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
     })
 }
 
-/// Hash constants of [`grain_noise`] (shared with the GPU kernel).
-pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
-
-/// The grain of processes V1 to V3: two octaves of value noise. Frozen: photos on those
-/// processes keep rendering with it (`docs/process-versions.md`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ValueGrain {
-    /// Amplitude (display-encoded).
-    pub amt: f32,
-    /// Noise cell size (output pixels).
-    pub cell: f32,
-    /// Roughness 0..1: weight of the finer octave.
-    pub rough: f32,
-    pub seed: u32,
-}
-
 /// A render's film grain. The model follows the photo's process: changing it would change how
 /// existing photos look, so the crystal grain came with process V4.
 #[derive(Clone, Debug)]
@@ -148,32 +103,12 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
-            Process::V7 | Process::V8 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 if draft => {
+                crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal)
+            }
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }
-}
-
-#[inline]
-fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
-    // A degenerate frame (zero-width crop) maps pixels to NaN/inf coordinates: no grain there.
-    if !x.is_finite() || !y.is_finite() {
-        return 0.0;
-    }
-    let (x0, y0) = (x.floor(), y.floor());
-    let (fx, fy) = (x - x0, y - y0);
-    let h = |i: i32, j: i32| {
-        let mut v = (i as u32).wrapping_mul(GRAIN_HASH[0]) ^ (j as u32).wrapping_mul(GRAIN_HASH[1]) ^ seed.wrapping_mul(GRAIN_HASH[2]);
-        v ^= v >> 13;
-        v = v.wrapping_mul(GRAIN_HASH[3]);
-        v ^= v >> 15;
-        (v & 0xffff) as f32 / 32768.0 - 1.0
-    };
-    let (i, j) = (x0 as i32, y0 as i32);
-    let (u, v) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
-    let a = h(i, j) + (h(i + 1, j) - h(i, j)) * u;
-    let b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
-    a + (b - a) * v
 }
 
 /// The crystal grain of output row `y` (`w` pixels) when its pixels are axis-aligned; empty
@@ -310,7 +245,7 @@ impl FinishParams {
         let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space, draft } = input;
         let effects = s.section_enabled("effects");
         let (clar, tex, dehaze) = if effects {
-            ((s.effects.clarity / 100.0) as f32, (s.effects.texture / 100.0) as f32, (s.effects.dehaze / 100.0) as f32)
+            ((s.effects.clarity / 100.0) as f32, texture_slider(s.effects.texture, s.process.process()), (s.effects.dehaze / 100.0) as f32)
         } else {
             (0.0, 0.0, 0.0)
         };
@@ -343,7 +278,7 @@ impl FinishParams {
             out_trc: space.trc(),
             proof: None,
             hl: (s.light.highlights / 100.0) as f32,
-            sh: (s.light.shadows / 100.0) as f32,
+            sh: tone_slider(s.light.shadows, SHADOWS_EASE, s.process.process()),
             clar,
             tex,
             dehaze,
@@ -381,6 +316,45 @@ impl FinishParams {
     }
 }
 
+/// How much a full global Shadows (−100 or +100) eases off from V6's strength under V13: it acts at
+/// `1 / (1 + SHADOWS_EASE)` of it.
+pub const SHADOWS_EASE: f64 = 1.33;
+
+/// A global Shadows slider (−100..100) as the strength the local tone operator takes (−1..1), with `ease` =
+/// [`SHADOWS_EASE`].
+///
+/// Up to V10 the strength is the slider's, linearly. From V13 it eases off as the amount grows, `a / (1 + ease·|a|)`
+/// for `a` = slider / 100: slope 1 at 0, so small amounts change least (Shadows +10 acts at 0.88 of V6's), and
+/// `1 / (1 + ease)` of V6's at ±100.
+/// Fitted to 56 Lightroom exports of real portrait edits (Canon raws, Shadows +40 to +100): V6 left their darkest
+/// tones about 6 L* above the exports; the amounts that cancel that are about 0.6 of V6's at +52 and 0.43 at +100.
+/// Global Highlights stays linear in every process: on the same edits V6 renders their brightest tones about 5 L*
+/// too dark, but Lightroom's response to Highlights alone is close to linear and depends on the frame's content
+/// (single-slider exports, #3923), which a fixed easing would not follow. Masks keep their linear amounts.
+pub fn tone_slider(value: f64, ease: f64, process: lightcraft_develop::Process) -> f32 {
+    if process < lightcraft_develop::Process::V13 {
+        return (value / 100.0) as f32;
+    }
+    let a = (value / 100.0).clamp(-1.0, 1.0);
+    if !a.is_finite() {
+        return 0.0;
+    }
+    (a / (1.0 + ease * a.abs())) as f32
+}
+
+/// How much of V6's strength a global negative Texture keeps under V13.
+pub const NEGATIVE_TEXTURE_V13: f64 = 0.67;
+
+/// The global Texture slider (−100..100) as the strength of the texture band (−1..1).
+///
+/// From V13 a negative amount smooths at [`NEGATIVE_TEXTURE_V13`] of V6's strength: at Texture −27, V6 left the
+/// 1–8 px detail of four full-size Lightroom exports of real Canon EOS R6 edits at 0.87–0.94 of the exports' and
+/// 0.67 of the amount brings it to 0.94–1.02. Positive amounts, masks and V1 to V10 are unchanged.
+pub fn texture_slider(value: f64, process: lightcraft_develop::Process) -> f32 {
+    let t = value / 100.0;
+    if process >= lightcraft_develop::Process::V13 && t < 0.0 { (t * NEGATIVE_TEXTURE_V13) as f32 } else { t as f32 }
+}
+
 /// The base tone map (scene → display luminance, with Contrast, Whites and Blacks) of `s`'s
 /// rendering process. This is where a new tone model branches: a retuned default tone curve (issue
 /// #146) is a new [`Process`] with its own arm here, and V1's arm stays as it is, so photos edited
@@ -407,7 +381,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 | Process::V8 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V13 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -850,10 +824,6 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     delta
 }
 
-/// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for
-/// the gamut warnings (tolerates rounding at the gamut boundary).
-pub const GAMUT_WARN: f32 = 0.995;
-
 /// For the gamut warnings: `r` needed desaturating by `t` to fit, and isn't simply a neutral
 /// beyond white or below black (that's clipping, which the clipping warnings show).
 #[inline]
@@ -871,28 +841,6 @@ fn mul3(m: &[[f32; 3]; 3], d: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Desaturate linear `r` towards its luminance (weights `luma`) until every channel is in 0..1;
-/// returns the mapped colour and the chroma scale used (1 = already in gamut).
-#[inline]
-pub fn gamut_map(r: [f32; 3], luma: [f32; 3]) -> ([f32; 3], f32) {
-    gamut_map_to(r, luma, 1.0)
-}
-
-/// [`gamut_map`] into `0..peak` (an HDR render's range; `peak` = 1 is [`gamut_map`]).
-#[inline]
-pub fn gamut_map_to(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32) {
-    let yy = (luma[0] * r[0] + luma[1] * r[1] + luma[2] * r[2]).clamp(0.0, peak);
-    let mut t = 1.0f32;
-    for c in r {
-        if c < 0.0 {
-            t = t.min(yy / (yy - c).max(1e-9));
-        } else if c > peak {
-            t = t.min((peak - yy) / (c - yy).max(1e-9));
-        }
-    }
-    if t < 1.0 { (r.map(|c| yy + (c - yy) * t), t) } else { (r, 1.0) }
-}
-
 /// Local Defringe weight of a scene-linear colour `c` whose log luminance differs by `det` from
 /// its fine blur: high on strong edges with a purple or green cast.
 #[inline]
@@ -901,23 +849,6 @@ pub fn defringe_weight(c: [f32; 3], det: f32) -> f32 {
     let purple = (c[0].min(c[2]) - c[1]) / y;
     let green = (c[1] - c[0].max(c[2])) / y;
     smooth(0.04, 0.3, det.abs()) * smooth(0.02, 0.2, purple).max(smooth(0.02, 0.2, green))
-}
-
-/// Refine Saturation: scale the curved colour's chroma (around its luma, encoded values) so its
-/// saturation (chroma / luma) moves from the curve's towards the pre-curve one: the ratio is
-/// `(s_curve / s_before)^refine`, so 1 keeps the curve, 0 restores the original saturation.
-#[inline]
-pub fn refine_saturation(before: [f32; 3], after: [f32; 3], refine: f32) -> [f32; 3] {
-    let luma = |e: [f32; 3]| 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-    let chroma = |e: [f32; 3]| e[0].max(e[1]).max(e[2]) - e[0].min(e[1]).min(e[2]);
-    let (y0, y1) = (luma(before), luma(after));
-    let s0 = chroma(before) / y0.max(1e-4);
-    let s1 = chroma(after) / y1.max(1e-4);
-    if s1 <= 1e-6 || s0 <= 1e-6 {
-        return after;
-    }
-    let k = (s0 / s1).powf(1.0 - refine).clamp(0.0, 4.0);
-    after.map(|v| y1 + (v - y1) * k)
 }
 
 pub const SRGB_LUT_N: usize = 4096;
@@ -978,6 +909,165 @@ fn enc(v: f32, dither: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_develop::Process;
+
+    /// Every process before V13, which renders global Shadows, negative Texture and the Global wheel as before.
+    fn before_v13() -> impl Iterator<Item = Process> {
+        Process::ALL.into_iter().filter(|p| *p < Process::V13)
+    }
+
+    #[test]
+    fn tone_sliders_ease_off_from_v13_only() {
+        for v in [-100.0, -52.0, 0.0, 13.0, 100.0, 250.0] {
+            for p in before_v13() {
+                assert_eq!(tone_slider(v, SHADOWS_EASE, p), (v / 100.0) as f32, "{p:?} keeps the linear amount");
+            }
+        }
+        let v13 = |v: f64| tone_slider(v, SHADOWS_EASE, Process::V13);
+        assert_eq!(v13(0.0), 0.0);
+        assert!((v13(1.0) - 0.01).abs() < 2e-4, "slope 1 at 0");
+        // eases off more as the amount grows: a small amount keeps most of the linear strength, a full one less
+        let share = |v: f64| v13(v) / (v / 100.0) as f32;
+        assert!(share(10.0) < 1.0 && share(10.0) > share(52.0) && share(52.0) > share(100.0) && share(100.0) > 0.0);
+        assert_eq!(v13(-100.0), -v13(100.0), "symmetric");
+        assert_eq!(v13(250.0), v13(100.0), "clamped to the slider's range");
+        assert_eq!(v13(f64::NAN), 0.0);
+        let mut last = -1.0;
+        for i in -100..=100 {
+            let y = v13(i as f64);
+            assert!(y > last, "monotonic at {i}");
+            last = y;
+        }
+    }
+
+    #[test]
+    fn v13_eases_negative_texture_only() {
+        for v in [-100.0, -27.0, 0.0, 35.0] {
+            for p in before_v13() {
+                assert_eq!(texture_slider(v, p), (v / 100.0) as f32, "{p:?} keeps the linear amount");
+            }
+        }
+        let (eased, linear) = (texture_slider(-27.0, Process::V13), -0.27f32);
+        assert!(eased < 0.0 && eased > linear, "a negative Texture still smooths, less: {eased}");
+        assert_eq!(texture_slider(35.0, Process::V13), 0.35, "positive amounts unchanged");
+        assert_eq!(texture_slider(0.0, Process::V13), 0.0);
+    }
+
+    #[test]
+    fn v13_shadows_lift_less_than_v10() {
+        let src = lightcraft_raster::Rgb32f::from_fn(64, 8, |x, _| [0.002 * 1.12f32.powi(x as i32); 3]);
+        let mean = |p: Process, shadows: f64| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            s.light.shadows = shadows;
+            let r = crate::render(&src, &SourceInfo::default(), &s, &crate::RenderRequest::fit(64, 8));
+            r.image.data.iter().take(24).map(|px| px[1] as f32).sum::<f32>() / 24.0
+        };
+        let (base, v10, v13) = (mean(Process::V13, 0.0), mean(Process::V10, 80.0), mean(Process::V13, 80.0));
+        assert!(v13 > base && v13 < v10, "Shadows still lifts the darks, less than V10: none {base}, V10 {v10}, V13 {v13}");
+        assert_eq!(mean(Process::V10, 0.0), base, "without Shadows V13 renders as V10");
+    }
+
+    #[test]
+    fn a_render_takes_the_eased_shadows_and_linear_highlights() {
+        let params = |p: Process, highlights: f64, shadows: f64| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            (s.light.highlights, s.light.shadows) = (highlights, shadows);
+            let frame = crate::geometry::Frame::new(64, 8, &s, false);
+            let info = SourceInfo::default();
+            let fp = FinishParams::new(FinishParamsInput {
+                settings: &s,
+                frame: &frame,
+                info: &info,
+                image_size: (64, 8),
+                px_per_long: 64.0,
+                air_pre: 0.0,
+                space: OutputSpace::Srgb,
+                draft: false,
+            });
+            (fp.hl, fp.sh)
+        };
+        for (highlights, shadows) in [(0.0, 52.0), (-100.0, 100.0), (-48.0, 0.0)] {
+            let linear = ((highlights / 100.0) as f32, (shadows / 100.0) as f32);
+            assert_eq!(params(Process::V13, highlights, shadows), (linear.0, tone_slider(shadows, SHADOWS_EASE, Process::V13)));
+            for p in before_v13() {
+                assert_eq!(params(p, highlights, shadows), linear, "{p:?} {highlights}/{shadows}");
+            }
+        }
+    }
+
+    #[test]
+    fn curve_luts_keep_1024_entries_when_composing_master_and_channel_curves() {
+        let c = ToneCurve {
+            highlights: -25.0,
+            shadows: 20.0,
+            master: vec![Point::new(0.0, 0.04), Point::new(0.5, 0.56), Point::new(1.0, 0.96)],
+            red: vec![Point::new(0.0, 0.0), Point::new(0.4, 0.46), Point::new(1.0, 1.0)],
+            blue: vec![Point::new(0.0, 0.0), Point::new(0.6, 0.54), Point::new(1.0, 1.0)],
+            ..ToneCurve::default()
+        };
+        let luts = curve_luts(&c).expect("active curves");
+        for lut in &luts {
+            assert_eq!(lut.v.len(), 1024);
+        }
+        let param = crate::curve::ParametricCurve::new(&c).to_lut();
+        let master = MonotoneCurve::new(&[(0.0, 0.04), (0.5, 0.56), (1.0, 0.96)]).to_lut(1024);
+        let red = MonotoneCurve::new(&[(0.0, 0.0), (0.4, 0.46), (1.0, 1.0)]).to_lut(1024);
+        let blue = MonotoneCurve::new(&[(0.0, 0.0), (0.6, 0.54), (1.0, 1.0)]).to_lut(1024);
+        let x = 512.0 / 1023.0;
+        let base_mid = master.eval(param.eval(x));
+        assert!((luts[1].v[512] - base_mid).abs() < 1e-4, "green/master-only mismatch");
+        assert!((luts[0].v[512] - red.eval(base_mid)).abs() < 1e-3, "red composition mismatch");
+        assert!((luts[2].v[512] - blue.eval(base_mid)).abs() < 1e-3, "blue composition mismatch");
+        assert!((luts[0].v[512] - luts[1].v[512]).abs() > 0.01, "red must differ from master");
+        assert!((luts[2].v[512] - luts[1].v[512]).abs() > 0.01, "blue must differ from master");
+    }
+
+    #[test]
+    fn shared_tone_and_finish_match_pinned_legacy_values_at_neutral_highlights_and_channel_edges() {
+        let disp = ToneMap::display(0.0, 0.0, 0.0);
+        assert_eq!(disp.apply(0.0), 0.0);
+        assert!((disp.apply(0.18) - 0.18).abs() < 2e-3);
+        assert!((disp.apply(1.0) - 1.0).abs() < 2e-3);
+
+        let roll = ToneMap::rolloff_hdr(20.0, 30.0, -10.0, 1.0);
+        let (y_neutral, y_hi1, y_hi4) = (roll.apply(0.18), roll.apply(1.0), roll.apply(4.0));
+        assert!(y_neutral.is_finite() && y_hi1 > y_neutral && y_hi4 > y_hi1 && y_hi4 <= 1.0);
+
+        let lim = sharpen_limit(50.0);
+        assert!((lim - 0.03 * 50f32.sqrt()).abs() < 1e-6);
+        let st = sharpen_term(0.1, lim, 0.5);
+        assert!(st.is_finite() && st > 0.0);
+
+        let (mapped, t) = gamut_map_to([1.6, 0.05, 0.02], [0.2627, 0.6780, 0.0593], 1.0);
+        assert!(t < GAMUT_WARN && mapped.iter().all(|&c| (0.0..=1.0).contains(&c)));
+        assert!(mapped[0] > mapped[1] && mapped[1] >= mapped[2]);
+
+        // Pinned real render covering neutral (0.18), highlights (4.0), and channel edges.
+        let mut src = lightcraft_raster::Rgb32f::filled(8, 8, [0.18, 0.18, 0.18]);
+        for x in 0..8 {
+            src.data[x] = [4.0, 4.0, 4.0]; // row 0: highlight
+            src.data[8 + x] = [1.6, 0.05, 0.02]; // row 1: red edge
+            src.data[16 + x] = [0.01, 1.5, 0.02]; // row 2: green edge
+            src.data[24 + x] = [0.02, 0.05, 1.8]; // row 3: blue edge
+        }
+        let mut s = DevelopSettings::default();
+        s.light.highlights = -30.0;
+        s.light.shadows = 20.0;
+        s.curve.master = vec![Point::new(0.0, 0.04), Point::new(0.5, 0.56), Point::new(1.0, 0.96)];
+        s.curve.red = vec![Point::new(0.0, 0.0), Point::new(0.4, 0.46), Point::new(1.0, 1.0)];
+        s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.6, 0.54), Point::new(1.0, 1.0)];
+        s.curve.refine_saturation = 25.0;
+        s.detail.sharpen_amount = 40.0;
+        s.vignette.amount = -20.0;
+        s.grain.amount = 15.0;
+        let out = crate::render(&std::sync::Arc::new(src), &SourceInfo::default(), &s, &crate::RenderRequest::fit(8, 8)).image;
+        let px = |row: usize, col: usize| out.data[row * 8 + col];
+        let (hi, r_edge, g_edge, b_edge, neutral) = (px(0, 4), px(1, 4), px(2, 4), px(3, 4), px(5, 4));
+        assert!(hi[0] > neutral[0] && hi[1] > neutral[1] && hi[2] > neutral[2]);
+        assert!(r_edge[0] > r_edge[1] && r_edge[0] > r_edge[2]);
+        assert!(g_edge[1] > g_edge[0] && g_edge[1] > g_edge[2]);
+        assert!(b_edge[2] > b_edge[0] && b_edge[2] > b_edge[1]);
+    }
 
     #[test]
     fn grain_noise_is_finite_for_degenerate_coordinates() {
