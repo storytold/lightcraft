@@ -18,9 +18,11 @@ OUTPUT="$DIST/lightcraft-$VERSION-linux-x86_64-nightly.tar.gz"
 nightly_build_gui
 STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
-cp "$NIGHTLY_GUI" "$STAGE/lightcraft"
-chmod 755 "$STAGE/lightcraft"
-cp "$ROOT/assets/app-icon/lightcraft-1024.png" "$STAGE/lightcraft-nightly.png"
+# The GUI is `lightcraft-bin`; `lightcraft` is the launcher, so an unpacked tar starts in the
+# Nightly profile instead of the stable settings folder.
+install -m755 "$NIGHTLY_GUI" "$STAGE/lightcraft-bin"
+install -m755 "$HERE/nightly-tar-launch.sh" "$STAGE/lightcraft"
+install -m644 "$ROOT/assets/app-icon/lightcraft-nightly.png" "$STAGE/lightcraft-nightly.png"
 nightly_copy_notices "$STAGE"
 # The private mktemp cwd is the helper authority root, not a CLI path parent.
 (cd "$NIGHTLY_WORK" && python3 "$ROOT/packaging/nightly-archive.py" linux stage archive.tar.gz)

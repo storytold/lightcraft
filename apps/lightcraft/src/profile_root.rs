@@ -5,6 +5,11 @@ use std::ffi::OsString;
 use lightcraft_engine::config::{PORTABLE_DATA_DIR, PORTABLE_MARKERS};
 use std::path::{Component, Path, PathBuf};
 
+/// The Nightly Flatpak's application id (packaging/linux/flatpak-bundle.sh). It is its own sandbox,
+/// so the nightly GUI inside it may select a profile; any other Flatpak instance is a native package
+/// inheriting a foreign runtime, which is refused.
+const NIGHTLY_FLATPAK_ID: &str = "ai.storyteller.lightcraft.nightly";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Platform {
     Windows,
@@ -211,9 +216,13 @@ fn validate_for(
         // An inherited library variable could point Nightly's catalog at Stable's library.
         return Err("nightly-v1 cannot inherit LIGHTCRAFT_LIBRARY; open a library with File ▸ Open Library".into());
     }
-    if platform != Platform::Windows && env("FLATPAK_ID").is_some_and(|v| !v.is_empty()) {
-        // These rows are native tar/app-bundle launches, not a Flatpak package. Inheriting its
-        // runtime socket namespace could point another profile at the stable app's socket.
+    if platform != Platform::Windows
+        && let Some(id) = env("FLATPAK_ID").filter(|v| !v.is_empty())
+        && id != OsString::from(NIGHTLY_FLATPAK_ID)
+    {
+        // A native tar/app-bundle launch must not inherit a Flatpak runtime (its socket namespace
+        // and its data folder could point another profile at the stable app's state). The Nightly
+        // Flatpak itself is its own sandbox and profiles inside it; it is the only id allowed here.
         return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
     }
     let chosen = canonical_future(root)?;
@@ -582,6 +591,9 @@ mod tests {
         fixture.env.remove("LIGHTCRAFT_LIBRARY");
         fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.lightcraft".into());
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("Flatpak"));
+        // The Nightly Flatpak is its own sandbox: its id may select a profile inside it.
+        fixture.env.insert("FLATPAK_ID".into(), NIGHTLY_FLATPAK_ID.into());
+        assert!(fixture.check(Platform::Linux, &fixture.home().join("nightly-flatpak/profile")).is_ok());
         fixture.env.remove("FLATPAK_ID");
         fixture.env.remove("HOME");
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("HOME"));

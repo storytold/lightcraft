@@ -63,14 +63,13 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
   cat >"$WORK/stage/bin/lightcraft" <<'WRAPPER'
 #!/bin/sh
 set -eu
+# Inside the sandbox the Nightly Flatpak ID already isolates the data, and the profile keeps it
+# explicit: one folder for settings, models, logs and the default library.
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exec /app/libexec/lightcraft "$@"
 fi
-if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then
-  profile_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.var/app/ai.storyteller.lightcraft.nightly/data}"
-  export LIGHTCRAFT_CONFIG_DIR="$profile_base/profile"
-fi
-exec /app/libexec/lightcraft "$@"
+profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.var/app/ai.storyteller.lightcraft.nightly/data}/lightcraft-nightly"
+exec /app/libexec/lightcraft --launch-profile nightly-v1 --profile-root "$profile" -- "$@"
 WRAPPER
   chmod 755 "$WORK/stage/bin/lightcraft"
   mv "$WORK/stage/bin/lightcraft-cli" "$WORK/stage/bin/lightcraft-cli-bin"
@@ -80,10 +79,9 @@ set -eu
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exec /app/libexec/lightcraft-cli "$@"
 fi
-if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then
-  profile_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.var/app/ai.storyteller.lightcraft.nightly/data}"
-  export LIGHTCRAFT_CONFIG_DIR="$profile_base/profile"
-fi
+profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.var/app/ai.storyteller.lightcraft.nightly/data}/lightcraft-nightly"
+if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then export LIGHTCRAFT_CONFIG_DIR="$profile/Settings"; fi
+if [ -z "${LIGHTCRAFT_LIBRARY+x}" ]; then export LIGHTCRAFT_LIBRARY="$profile/Library"; fi
 exec /app/libexec/lightcraft-cli "$@"
 WRAPPER
   chmod 755 "$WORK/stage/bin/lightcraft-cli"

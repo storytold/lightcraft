@@ -42,9 +42,15 @@ nightly_compile_gui() {
 
 nightly_build_gui() {
   nightly_compile_gui
-  local actual
+  local actual launcher
+  # What the binary really prints: the prepared feed identity plus the channel, as build_flavor's
+  # version string makes it (apps/lightcraft/src/build_flavor.rs). Both query forms are answered by
+  # prepare_launch before any profile or window work, so neither may need a profile on disk.
   actual="$("$NIGHTLY_GUI" --version)" || nightly_die 'side-effect-free nightly version verification failed'
   [[ "$actual" == "LightCraft $VERSION (nightly-v1)" ]] || nightly_die 'the built version/flavor is not the prepared identity'
+  launcher="$("$NIGHTLY_GUI" --launch-profile nightly-v1 --profile-root "$NIGHTLY_WORK/profile-query" --version)" \
+    || nightly_die 'the Launcher profile version query failed'
+  [[ "$launcher" == "$actual" ]] || nightly_die 'the Launcher profile query differs from the plain version query'
   [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$LIGHTCRAFT_BUILD_SHA" && -z "$(git -C "$ROOT" status --porcelain)" ]] || nightly_die 'source changed during the version query'
 }
 

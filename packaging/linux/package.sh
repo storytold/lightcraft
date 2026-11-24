@@ -108,16 +108,85 @@ has() {
   case " $FORMATS " in *" $format "*) return 0 ;; *) return 1 ;; esac
 }
 
+# ---- the Nightly FHS layout (the plain tar and the deb/rpm share it) -----------------------------
+# The real binaries move to usr/lib/lightcraft-nightly and usr/bin holds launchers: the GUI starts
+# through its launch profile, the headless CLI takes the same profile through its two host
+# variables. One layout, so an unpacked tar, a .deb and a .rpm all behave the same.
+stage_nightly() {
+  local stage="$WORK/nightly-root" icon
+  export NFPM_NAME="lightcraft-nightly"
+  export NFPM_BIN="lightcraft-nightly"
+  export NFPM_CLI="lightcraft-nightly-cli"
+  NIGHTLY_DESK_ID="$APP_ID.nightly-v1"
+  rm -rf "$stage"
+  cp -R "$STAGE" "$stage"
+  install -Dm755 "$stage/usr/bin/lightcraft" "$stage/usr/lib/lightcraft-nightly/lightcraft"
+  install -Dm755 "$stage/usr/bin/lightcraft-cli" "$stage/usr/lib/lightcraft-nightly/lightcraft-cli"
+  cat >"$stage/usr/bin/$NFPM_BIN" <<'WRAPPER'
+#!/bin/sh
+set -eu
+# The Nightly GUI owns its profile: the Launcher protocol selects it, so settings, models, logs,
+# the library lock and the default library all sit under $profile. The nightly build refuses
+# LIGHTCRAFT_CONFIG_DIR, so an inherited stable variable fails closed instead of silently
+# pointing this window at the stable app's folder.
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  exec /usr/lib/lightcraft-nightly/lightcraft "$@"
+fi
+profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/lightcraft-nightly"
+exec /usr/lib/lightcraft-nightly/lightcraft --launch-profile nightly-v1 --profile-root "$profile" -- "$@"
+WRAPPER
+  cat >"$stage/usr/bin/$NFPM_CLI" <<'WRAPPER'
+#!/bin/sh
+set -eu
+# The headless CLI is not the GUI's Launcher protocol: the same profile reaches it through its two
+# documented host variables, and an explicit value still wins.
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
+fi
+profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/lightcraft-nightly"
+if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then export LIGHTCRAFT_CONFIG_DIR="$profile/Settings"; fi
+if [ -z "${LIGHTCRAFT_LIBRARY+x}" ]; then export LIGHTCRAFT_LIBRARY="$profile/Library"; fi
+exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
+WRAPPER
+  chmod 755 "$stage/usr/bin/$NFPM_BIN" "$stage/usr/bin/$NFPM_CLI"
+  rm -f "$stage/usr/bin/lightcraft" "$stage/usr/bin/lightcraft-cli"
+  mv "$stage/usr/share/doc/lightcraft" "$stage/usr/share/doc/$NFPM_NAME"
+  sed -e "s#^Exec=lightcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
+      -e "s|^TryExec=lightcraft$|TryExec=$NFPM_BIN|" \
+      -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
+      -e "s|^StartupWMClass=.*|StartupWMClass=$NIGHTLY_DESK_ID|" \
+      -e "s|^Name=LightCraft$|Name=LightCraft Nightly|" \
+      -e '/^MimeType=/d' \
+      "$stage/usr/share/applications/$APP_ID.desktop" >"$stage/usr/share/applications/$NIGHTLY_DESK_ID.desktop"
+  rm -f "$stage/usr/share/applications/$APP_ID.desktop"
+  sed -e "s|<id>$APP_ID</id>|<id>$NIGHTLY_DESK_ID</id>|g" \
+      -e "s|<name>LightCraft</name>|<name>LightCraft Nightly</name>|g" \
+      -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
+      -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
+      -e "s|<binary>lightcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
+      "$stage/usr/share/metainfo/$APP_ID.metainfo.xml" >"$stage/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
+  rm -f "$stage/usr/share/metainfo/$APP_ID.metainfo.xml"
+  rm -rf "$stage/usr/share/mime" "$stage/usr/share/icons/hicolor"
+  icon="$ROOT/assets/app-icon/lightcraft-nightly.png"
+  [[ -f "$icon" ]] || icon="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+  install -Dm644 "$icon" "$stage/usr/share/icons/hicolor/256x256/apps/$NIGHTLY_DESK_ID.png"
+  NIGHTLY_STAGE="$stage"
+}
+NIGHTLY_STAGE=""
+[[ "$IS_NIGHTLY" = 1 ]] && stage_nightly
+
 # ---- .tar.gz ------------------------------------------------------------------------------------
 if has tar; then
+  TAR_SRC="${NIGHTLY_STAGE:-$STAGE}"
   mkdir -p "$WORK/tar"
-  cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
+  cp -R "$TAR_SRC/usr" "$WORK/tar/$BASENAME"
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
 
-# The Arch handoff keeps the same basename as the plain tarball in a separate directory.
-# Flatpak, OCI and direct tar consumers still get the original binary, not this launcher.
+# The Arch handoff keeps the same basename as the plain tarball in a separate directory. It builds
+# its own launchers from the real binaries, so it takes the stable-layout tree, not the Nightly
+# usr/bin wrappers; the Nightly desktop, metainfo and icon are added beside them.
 if [[ -n "$ARCH_TAR_DIR" ]]; then
   mkdir -p "$ARCH_TAR_DIR"
   if [[ "$(cd "$ARCH_TAR_DIR" && pwd -P)" == "$(cd "$DIST" && pwd -P)" ]]; then
@@ -132,70 +201,11 @@ if has deb || has rpm; then
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
   export VERSION
   export NFPM_ARCH="$DEB_ARCH"
-  NFPM_STAGE="$STAGE"
   export NFPM_NAME="lightcraft"
   export NFPM_BIN="lightcraft"
   export NFPM_CLI="lightcraft-cli"
-  if [[ "$IS_NIGHTLY" = 1 ]]; then
-    NIGHTLY_DESK_ID="$APP_ID.nightly-v1"
-    export NFPM_NAME="lightcraft-nightly"
-    export NFPM_BIN="lightcraft-nightly"
-    export NFPM_CLI="lightcraft-nightly-cli"
-    NFPM_STAGE="$WORK/nfpm-root"
-    rm -rf "$NFPM_STAGE"
-    cp -R "$STAGE" "$NFPM_STAGE"
-    install -Dm755 "$NFPM_STAGE/usr/bin/lightcraft" "$NFPM_STAGE/usr/lib/lightcraft-nightly/lightcraft"
-    cat >"$NFPM_STAGE/usr/bin/$NFPM_BIN" <<'WRAPPER'
-#!/bin/sh
-set -eu
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  exec /usr/lib/lightcraft-nightly/lightcraft "$@"
-fi
-if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then
-  profile_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
-  export LIGHTCRAFT_CONFIG_DIR="$profile_base/lightcraft-nightly"
-fi
-exec /usr/lib/lightcraft-nightly/lightcraft "$@"
-WRAPPER
-    chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
-    rm -f "$NFPM_STAGE/usr/bin/lightcraft"
-    install -Dm755 "$NFPM_STAGE/usr/bin/lightcraft-cli" "$NFPM_STAGE/usr/lib/lightcraft-nightly/lightcraft-cli"
-    cat >"$NFPM_STAGE/usr/bin/$NFPM_CLI" <<'WRAPPER'
-#!/bin/sh
-set -eu
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
-fi
-if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then
-  profile_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
-  export LIGHTCRAFT_CONFIG_DIR="$profile_base/lightcraft-nightly"
-fi
-exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
-WRAPPER
-    chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_CLI"
-    rm -f "$NFPM_STAGE/usr/bin/lightcraft-cli"
-    mv "$NFPM_STAGE/usr/share/doc/lightcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
-    sed -e "s#^Exec=lightcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
-        -e "s|^TryExec=lightcraft$|TryExec=$NFPM_BIN|" \
-        -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
-        -e "s|^Name=LightCraft$|Name=LightCraft Nightly|" \
-        -e '/^MimeType=/d' \
-        "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop" >"$NFPM_STAGE/usr/share/applications/$NIGHTLY_DESK_ID.desktop"
-    rm -f "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop"
-    sed -e "s|<id>$APP_ID</id>|<id>$NIGHTLY_DESK_ID</id>|g" \
-        -e "s|<name>LightCraft</name>|<name>LightCraft Nightly</name>|g" \
-        -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
-        -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
-        -e "s|<binary>lightcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
-        "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml" >"$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
-    rm -f "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
-    rm -rf "$NFPM_STAGE/usr/share/mime"
-    rm -rf "$NFPM_STAGE/usr/share/icons/hicolor"
-    NIGHTLY_ICON="$ROOT/assets/app-icon/lightcraft-nightly.png"
-    [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
-    install -Dm644 "$NIGHTLY_ICON" \
-      "$NFPM_STAGE/usr/share/icons/hicolor/256x256/apps/$NIGHTLY_DESK_ID.png"
-  fi
+  NFPM_STAGE="$STAGE"
+  [[ -n "$NIGHTLY_STAGE" ]] && NFPM_STAGE="$NIGHTLY_STAGE"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
   DROP_LIB_TREE=
   # shellcheck disable=SC2016
@@ -231,14 +241,13 @@ if has appimage; then
 #!/bin/sh
 set -eu
 HERE="$(dirname "$(readlink -f "$0")")"
+# A real script (not the stable symlink), so an AppImage launch selects the Nightly profile even
+# when the desktop entry's Exec is bypassed; APPIMAGE/APPDIR stay untouched for the app.
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exec "$HERE/usr/bin/lightcraft" "$@"
 fi
-if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then
-  profile_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
-  export LIGHTCRAFT_CONFIG_DIR="$profile_base/lightcraft-nightly"
-fi
-exec "$HERE/usr/bin/lightcraft" "$@"
+profile="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/lightcraft-nightly"
+exec "$HERE/usr/bin/lightcraft" --launch-profile nightly-v1 --profile-root "$profile" -- "$@"
 APPRUN
     chmod 755 "$APPDIR/AppRun"
     sed -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \
