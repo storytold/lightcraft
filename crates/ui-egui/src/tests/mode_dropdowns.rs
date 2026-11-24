@@ -76,23 +76,24 @@ fn crop_overlay_and_upright_are_dropdowns() {
     assert!(h.app.ui.tool.is_empty());
 }
 
-/// The overlay names are translated in the open menu and in the closed dropdown.
+/// The overlay names are translated in the open menu and in the closed dropdown. Thirds is checked
+/// because every shipped catalog already has it; a name with no translation yet shows in English.
 #[test]
 fn crop_overlay_dropdown_is_translated() {
     let mut h = detail("panel.crop");
     let r = h.request("ui.set", json!({"language": Locale::De.code()}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    let golden = Locale::De.tr("Golden Ratio");
-    assert_ne!(golden, "Golden Ratio", "German has its own name for the overlay");
+    choose(&mut h, "cropOverlay", "grid");
+    let thirds = Locale::De.tr("Thirds");
+    assert_ne!(thirds, "Thirds", "German has its own name for the overlay");
     click(&mut h, "dropdown:cropOverlay");
     h.step();
-    assert!(shows(&h, "cropOverlay:golden", golden), "menu item {golden}");
-    click(&mut h, "cropOverlay:golden");
+    assert!(shows(&h, "cropOverlay:thirds", thirds), "menu item {thirds}");
+    click(&mut h, "cropOverlay:thirds");
     h.step();
-    assert_eq!(h.app.ui.crop_overlay, CropOverlay::Golden);
-    assert!(!has_widget(&h, "cropOverlay:golden"), "the menu closed");
-    assert!(shows(&h, "dropdown:cropOverlay", golden), "closed dropdown says {golden}");
+    assert_eq!(h.app.ui.crop_overlay, CropOverlay::Thirds);
+    assert!(!has_widget(&h, "cropOverlay:thirds"), "the menu closed");
+    assert!(shows(&h, "dropdown:cropOverlay", thirds), "closed dropdown says {thirds}");
     crate::i18n::set_language(Locale::En);
 }
 
