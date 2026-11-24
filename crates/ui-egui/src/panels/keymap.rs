@@ -343,9 +343,11 @@ fn speed_keys(app: &LccApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &s
     ui.add_space(8.0);
     ui.label(RichText::new(crate::i18n::tr("Speed-Edit Keys")).font(t.semibold(12.5)).color(t.text));
     ui.label(
-        RichText::new(crate::i18n::tr("In Develop, hold a key and drag sideways or scroll on the photo to move its slider; a tap still runs its shortcut."))
-            .size(11.0)
-            .color(t.text_dim),
+        RichText::new(crate::i18n::tr(
+            "In Develop, hold a key and drag sideways or scroll on the photo to move its slider; a tap still runs its shortcut.",
+        ))
+        .size(11.0)
+        .color(t.text_dim),
     );
     egui::Grid::new("shortcuts-speed").striped(true).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
         for (key, id, label) in rows {

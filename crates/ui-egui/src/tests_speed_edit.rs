@@ -147,7 +147,7 @@ fn outside_develop_the_keys_are_plain_shortcuts() {
 fn the_reference_lists_the_speed_keys() {
     let mut h = develop_loupe();
     let (own, _) = crate::help_overlay::rows(&h.app, crate::module::ModuleId::Develop, false);
-    assert!(own.iter().any(|(_, what)| *what == crate::i18n::tr("Exposure").to_string()), "{own:?}");
+    assert!(own.iter().any(|(_, what)| what == crate::i18n::tr("Exposure")), "{own:?}");
     ask(&mut h, "engine.execute", json!({"command": "app.shortcuts", "params": {}}));
     let r = h.request("ui.widgets", json!({}), T);
     assert!(r.to_string().contains("speedKey:light.exposure"), "the Keyboard Shortcuts dialog lists the speed keys");

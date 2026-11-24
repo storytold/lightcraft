@@ -471,9 +471,9 @@ mod tests_solo_sections;
 #[cfg(test)]
 mod tests_space_hand;
 #[cfg(test)]
-mod tests_speed_edit;
-#[cfg(test)]
 mod tests_space_hold;
+#[cfg(test)]
+mod tests_speed_edit;
 #[cfg(test)]
 mod tests_stand_in_crop;
 #[cfg(test)]

@@ -270,10 +270,7 @@ pub fn list(app: &LccApp) -> Value {
 
 /// The usable entries of `map`: (key, control id, the control's label untranslated).
 pub(crate) fn rows(map: &SpeedKeys) -> Vec<(String, &'static str, &'static str)> {
-    map.iter()
-        .filter(|(k, _)| key_of(k).is_some())
-        .filter_map(|(k, c)| controls::find(c).map(|s| (k.clone(), s.id, s.label)))
-        .collect()
+    map.iter().filter(|(k, _)| key_of(k).is_some()).filter_map(|(k, c)| controls::find(c).map(|s| (k.clone(), s.id, s.label))).collect()
 }
 
 #[cfg(test)]
