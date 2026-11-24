@@ -1824,7 +1824,8 @@ fn conditional_median_refuses_a_curve_pooled_over_a_wide_scene_range() {
 }
 
 /// The pooling limit is half a stop between a block's first and last knot: the same five pooled bins are kept when
-/// their knots span just under it and refused just over it, so a `>=`, a knot off by one or another limit fails here.
+/// their knots span just under it and refused just over it, so a knot off by one or another limit fails here. It
+/// can't tell `>` from `>=`, which only differ at exactly half a stop.
 #[test]
 fn conditional_median_pooling_limit_is_half_a_stop() {
     let curve = |x: f64| 1.0 - (-2.5 * x).exp();
