@@ -79,10 +79,7 @@ fn strip_prerelease(part: &str) -> Option<&str> {
 /// renamed download must get one, or it would never be checked).
 pub fn judge(size: u64, budget: Option<u64>) -> Result<String, String> {
     let Some(budget) = budget else {
-        return Err(format!(
-            "{}: no budget entry; add one with `cargo xtask package-size --update FILE` (and remove the old name's)",
-            mb(size)
-        ));
+        return Err(format!("{}: no budget entry; add one with `cargo xtask package-size --update FILE` (and remove the old name's)", mb(size)));
     };
     let limit = budget.saturating_add(budget / 100 * GROWTH_LIMIT_PERCENT + budget % 100 * GROWTH_LIMIT_PERCENT / 100);
     let change = if budget == 0 { 0.0 } else { (size as f64 / budget as f64 - 1.0) * 100.0 };
