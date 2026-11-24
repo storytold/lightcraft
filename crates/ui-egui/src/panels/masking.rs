@@ -488,7 +488,7 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
         .fill(false)
         .enabled(enabled)
         .number_codec(
-            NumberCodec::new(Reader::new(), usize::from(spec.decimals)).fixed().parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
+            NumberCodec::new(Reader::new(), usize::from(spec.decimals)).parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
         );
     if let Some(face) = mask_local_track::face(spec.track) {
         control = control.track_face(face);
