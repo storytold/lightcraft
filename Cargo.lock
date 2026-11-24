@@ -3944,8 +3944,10 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "serde_json",
+ "thiserror",
  "winit",
  "winresource",
+ "winsafe",
  "zbus",
 ]
 
