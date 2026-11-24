@@ -61,7 +61,9 @@ Library → Validate DNG Files checks the selected DNGs' raw data against their 
 ## Updating the app
 
 Help → Check for Updates… reads the project's release feed and, when something newer exists, offers to
-download it for this system and install it; the app restarts afterwards. Things that can go wrong:
+download it for this system and install it; the app restarts afterwards. The dialog says how long ago it last
+checked ("Last checked 5 minutes ago"). When the download is ready, "Install and Relaunch" is highlighted and has
+the keyboard focus, so Return presses it. Things that can go wrong:
 
 - "Could not reach the release server" or "the release server answered 403": no internet, a proxy, or GitHub's
   rate limit. The check uses the release's `latest.json` first, which usually still works; try again later.
