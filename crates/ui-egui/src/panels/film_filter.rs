@@ -56,7 +56,7 @@ pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, head: Rect, t: &Tokens) -> f
     let y = head.center().y;
     let left = head.right() - 10.0 - width;
     let p = ui.painter().clone();
-    p.text(pos2(left, y), Align2::LEFT_CENTER, &caption, font.clone(), t.text_dim);
+    p.text(pos2(left, y), Align2::LEFT_CENTER, caption, font.clone(), t.text_dim);
     let mut x = left + caption_w + 8.0;
     let mut patch: Option<Value> = None;
     let cell = |x: f32, id: &str, tip: &str, on: bool| -> (Rect, egui::Response) {
