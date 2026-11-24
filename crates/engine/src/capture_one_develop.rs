@@ -356,7 +356,7 @@ fn curve_of(v: &Value) -> Option<Vec<[f64; 2]>> {
     } else {
         return None;
     };
-    let mut points: Vec<[f64; 2]> = n.chunks_exact(2).map(|c| [c[0] / scale, c[1] / scale]).collect();
+    let mut points: Vec<[f64; 2]> = n.as_chunks::<2>().0.iter().map(|[x, y]| [x / scale, y / scale]).collect();
     if points.iter().flatten().any(|x| !(0.0..=1.0).contains(x)) {
         return None;
     }
