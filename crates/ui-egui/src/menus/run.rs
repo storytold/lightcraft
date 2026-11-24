@@ -1368,7 +1368,8 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                         crate::i18n::tr("Lightroom Classic Catalog"),
                         &["lrcat", "zip"],
                     );
-                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+                    // (the dialog's answer comes back under `paths`: a list)
+                    match crate::pick::ask(app, id, p, "paths", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
                         Picked::Now(v) => v,
                         Picked::Later | Picked::Unavailable => Vec::new(),
                     }
@@ -1376,8 +1377,13 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             };
             match paths.split_first() {
                 Some((first, rest)) => {
-                    app.lightroom_queue = rest.to_vec();
-                    crate::lightroom_destination::import(app, first, &req)
+                    // the rest wait only behind a batch that started (or whose destination window is up): a refused
+                    // request leaves a running batch's queue alone
+                    let r = crate::lightroom_destination::import(app, first, &req);
+                    if r.is_ok() {
+                        app.lightroom_queue = rest.to_vec();
+                    }
+                    r
                 }
                 None => Ok(Value::Null),
             }

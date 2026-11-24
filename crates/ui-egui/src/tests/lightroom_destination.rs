@@ -441,3 +441,75 @@ fn several_catalogs_import_one_after_another_and_a_failure_stops_the_rest() {
     assert!(h.app.lightroom_queue.is_empty(), "the failed import stopped the batch");
     assert!(h.app.lightroom.is_none(), "the second catalog was not started");
 }
+
+/// A second fake catalog next to the fixture's, as text.
+fn second_catalog(f: &Fixture, name: &str) -> String {
+    let path = f.root.join("Lightroom").join(name);
+    std::fs::write(&path, b"not really SQLite").unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// The desktop's file dialog answers in the background with several catalogs: the command takes them all, without
+/// asking again.
+#[test]
+fn several_catalogs_chosen_in_the_background_dialog_are_imported_without_asking_again() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let f = Fixture::new("picked");
+    let second = second_catalog(&f, "Second.lrcat");
+    let mut h = f.app(false);
+    let asked = Arc::new(AtomicUsize::new(0));
+    let (a, answer) = (asked.clone(), vec![f.lrcat(), second]);
+    h.app.services.picker = Some(Box::new(move |_| {
+        a.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(answer.clone());
+        Ok(rx)
+    }));
+    assert_eq!(h.app.run("file.importLightroom", json!({"into": "open"})).unwrap(), Value::Null, "the dialog is up");
+    assert!(h.step_until(T, |h| h.app.lightroom.is_some() || h.app.lightroom_last.is_some()), "the answer started no import");
+    let last = import_ends(&mut h, &f.lrcat);
+    assert_eq!(asked.load(Ordering::Relaxed), 1, "the dialog was not opened again");
+    assert!(last.get("error").is_some(), "the first fake catalog fails to read: {last}");
+    assert!(h.app.lightroom_queue.is_empty() && h.app.lightroom.is_none(), "and that stopped the batch");
+}
+
+/// A batch asked for while another one imports is refused, and the running batch keeps the catalogs it queued.
+#[test]
+fn a_refused_batch_leaves_the_running_batchs_queue_alone() {
+    let f = Fixture::new("refused");
+    let (second, third) = (second_catalog(&f, "Second.lrcat"), second_catalog(&f, "Third.lrcat"));
+    let mut h = f.app(false);
+    h.app.run("file.importLightroom", json!({"paths": [f.lrcat(), second.clone()], "into": "open"})).unwrap();
+    assert!(h.app.lightroom.is_some(), "the first catalog is importing");
+    assert!(h.app.run("file.importLightroom", json!({"paths": [third, f.lrcat()], "into": "open"})).is_err(), "busy");
+    assert_eq!(h.app.lightroom_queue, vec![second], "the running batch's queue is unchanged");
+    import_ends(&mut h, &f.lrcat);
+}
+
+/// The destination window: confirmed, the other catalogs follow the first; closed without importing, they are
+/// dropped and nothing imports them later.
+#[test]
+fn the_destination_window_keeps_the_other_catalogs_only_when_it_starts_an_import() {
+    let f = Fixture::new("window-batch");
+    let second = second_catalog(&f, "Second.lrcat");
+    let mut h = f.app(false);
+    let batch = json!({"paths": [f.lrcat(), second.clone()]});
+    assert_eq!(h.app.run("file.importLightroom", batch.clone()).unwrap()["asking"], true);
+    h.step();
+    assert_eq!(h.app.lightroom_queue, vec![second.clone()], "the rest waits behind the window");
+    click(&mut h, "button:dialogCancel");
+    assert!(destination(&h).is_none() && h.app.lightroom.is_none());
+    assert!(h.app.lightroom_queue.is_empty(), "closing the window dropped the batch");
+
+    h.app.run("file.importLightroom", batch).unwrap();
+    h.step();
+    let Some(Dialog::LightroomDestination { catalog, library, photos, name, location, generation, .. }) = h.app.ui.dialog.clone() else {
+        panic!("no destination window")
+    };
+    let merge = Dialog::LightroomDestination { catalog, library, photos, new_library: false, name, location, dont_ask: false, generation };
+    crate::lightroom_destination::confirm(&mut h.app, &merge).unwrap();
+    assert!(h.app.lightroom.is_some(), "the first catalog is importing");
+    assert_eq!(h.app.lightroom_queue, vec![second], "the second still follows it");
+    import_ends(&mut h, &f.lrcat);
+}

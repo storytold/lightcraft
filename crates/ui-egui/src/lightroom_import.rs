@@ -459,6 +459,11 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value, ctx: &egui::Context
 
 /// Poll owner-thread work, commit a prepared import, and finish its archive index.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // a batch's other catalogs wait only while one of it imports or its destination window is up: a window closed
+    // without importing drops them
+    if app.lightroom.is_none() && !matches!(app.ui.dialog, Some(crate::state::Dialog::LightroomDestination { .. })) {
+        app.lightroom_queue.clear();
+    }
     show_result(app);
     let Some(mut task) = app.lightroom.take() else { return };
     let message = match task.rx.try_recv() {

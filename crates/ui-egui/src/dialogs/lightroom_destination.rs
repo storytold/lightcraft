@@ -197,7 +197,12 @@ pub fn confirm(app: &mut LightcraftApp, dialog: &Dialog) -> Result<Value, String
     if *generation != app.session.library_generation() {
         return Err(crate::i18n::tr("Another library was opened since this window appeared: nothing was imported").to_string());
     }
-    let r = app.run("file.importLightroom", params(catalog, *new_library, name, location))?;
+    let mut p = params(catalog, *new_library, name, location);
+    // several catalogs chosen: the others still follow this one
+    if !app.lightroom_queue.is_empty() {
+        p["paths"] = json!(std::iter::once(catalog.clone()).chain(app.lightroom_queue.iter().cloned()).collect::<Vec<_>>());
+    }
+    let r = app.run("file.importLightroom", p)?;
     if !*new_library && *dont_ask {
         app.ui.settings.lightroom_import = LightroomImport::AlwaysMerge;
     }
