@@ -278,7 +278,7 @@ fn docking_survives_native_settings_file_reload() {
     restored_app.ui = restored.unwrap();
     restored_app.run("ui.dock", serde_json::json!({"operation":"open", "panel":"tools"})).unwrap();
     assert_eq!(
-        restored_app.ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect,
+        restored_app.ui.docking.as_ref().unwrap().layout().floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect,
         [70.0, 80.0, 310.0, 500.0]
     );
     std::fs::remove_dir_all(d).unwrap();
