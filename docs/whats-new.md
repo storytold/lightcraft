@@ -11,6 +11,23 @@
   pixels. Very large spots keep the previous heal. This is rendering process 14: new photos (and Reset) get it, photos
   you already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [process versions](process-versions.md).
+
+### Cleaner edges in raw exports
+- Exports of raw photos and the 1:1 view no longer draw thin yellow, green or cyan outlines along sharp white edges
+  (a white boat against the sky, window frames), green and cyan rims around small bright reflections such as
+  sunlit wet rock or water, or magenta and green rims around blown-out lights and sky (issue #1328). The colours
+  were made while the sensor's red, green and blue samples were filled in to full pixels: that happened before
+  white balance, and the pixels next to blown-out samples were not recognised as blown out. Both are fixed.
+- Dark twigs, wires and leaf edges against a blown-out sky keep their brightness.
+- Bright coloured highlights (a setting sun, neon tubes) keep their brightness right up to their blown-out centre.
+- Previews of most cameras never showed it and don't change. Previews of cameras with smaller sensors (Bayer sensors
+  under about 4600 pixels on the long side; Fujifilm X-Trans under about 5760 pixels,
+  such as the 16 megapixel X-E1) were filled in the same way and are fixed too. Smart previews of raws that are out of
+  date are rebuilt from their originals once, in the background, when the library is next opened; ones whose original
+  is offline keep theirs until Build Smart Previews runs with it online. Exports and 1:1 views of photos you have already
+  edited change along such edges and in fine detail. Even areas change by about 0.5 ΔE on average (their noise grain is
+  rendered slightly differently), with no shift in colour.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
