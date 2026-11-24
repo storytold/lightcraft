@@ -109,8 +109,8 @@
 - Moving photos to a folder on another disk or a network share (dropping them on a folder in Folders, Move to
   Folder…) and importing with Copy or Move to another disk now write each file in 1 MiB pieces instead of 8 KiB ones.
   On a network share every write waits for the server: a 24 MB raw took about 13 s to copy over gigabit Ethernet to an
-  SMB share, and now takes about 1.4 s (issue #3561). Each copy is still synced to disk and compared with the original
-  before the original is removed.
+  SMB share, and now takes about 1.4 s (issue #3561). Each copy is still synced to disk and compared with the original,
+  and a move removes the original only after that.
 
 ### Korean and Vietnamese text in exports draws whole
 - macOS often stores Korean file names decomposed (NFD), each syllable as its jamo. Contact-sheet captions, export

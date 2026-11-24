@@ -341,16 +341,17 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
     r
 }
 
-/// Bytes per write of [`copy_in_chunks`]. `io::copy` from one `File` to another writes 8 KiB at a
-/// time on Windows, and on a network share every write waits for the server: 1.9 MB/s on gigabit
-/// SMB, against 17 MB/s in 1 MiB writes (issue #3561).
+/// Largest write of [`copy_in_chunks`] (a file's last write is what is left). `io::copy` from one
+/// `File` to another writes 8 KiB at a time on Windows, and on a network share every write waits
+/// for the server: 1.9 MB/s on gigabit SMB, against 17 MB/s in 1 MiB writes (issue #3561).
 pub(crate) const COPY_CHUNK: usize = 1 << 20;
 
 /// Copy `from` into `to` in writes of about [`COPY_CHUNK`], however little each read returns.
 /// Returns the number of bytes copied. Still `io::copy`, through a [`io::BufWriter`] of that
 /// capacity: on Linux std sees through the `BufWriter` to the files and copies in the kernel
-/// (`copy_file_range`, `sendfile`), and where the kernel declines, the copy std falls back to
-/// fills the buffer, so the writes stay large.
+/// (`copy_file_range`, `sendfile`), and where the kernel declines, std's fallback loop fills the
+/// buffer, so the writes stay large. Flushes `to` before returning but doesn't sync it: a caller
+/// that needs the copy on disk calls `sync_all` itself.
 pub(crate) fn copy_in_chunks<W: Write>(from: &mut impl Read, to: &mut W) -> io::Result<u64> {
     #[cfg(test)]
     CHUNKED_COPIES.with(|c| c.set(c.get() + 1));
