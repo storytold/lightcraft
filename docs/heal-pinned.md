@@ -85,8 +85,11 @@ Adobe's later patent turns it into a ratio-domain heal that "matches texture con
 I_1 = f / g, \qquad \Delta I_2 = 0 \ (\text{or } \nabla^4 I_2 = 0) \ \text{in } \Omega, \quad I_2 = I_1 \ \text{on } \partial\Omega, \qquad h = I_2 \, g
 ```
 
-The patent gives an equivalent log form: solve on log f − log g and exponentiate. Photoshop's original healing works
-on gamma-encoded pixel values. That sits between the two: it scales detail partly with brightness.
+The patent also gives a log form: solve on log f − log g and exponentiate. That is a different formulation, not an
+equivalent one: the exponential of a harmonic function is not harmonic, so the ratio-domain and log-domain solves agree
+on the edge but can give different values inside (between edge ratios of 1 and 4, the ratio solve's midpoint is 2.5,
+the log solve's 2). Photoshop's original healing works on gamma-encoded pixel values. That sits between the two: it
+scales detail partly with brightness.
 
 ### 2.4 Evidence in Lightroom's own files
 
