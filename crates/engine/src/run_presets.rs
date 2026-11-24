@@ -252,7 +252,8 @@ mod tests {
         let mut s = Session::with_demo();
         for (name, edge) in [("Small", 64), ("Smaller", 48)] {
             let d = dir.join(name);
-            s.execute("export.savePreset", &json!({"name": name, "params": {"format": "jpeg", "longEdge": edge, "dir": d.to_string_lossy()}})).unwrap();
+            s.execute("export.savePreset", &json!({"name": name, "params": {"format": "jpeg", "longEdge": edge, "dir": d.to_string_lossy()}}))
+                .unwrap();
         }
         s
     }

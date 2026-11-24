@@ -110,7 +110,9 @@ mod tests {
         assert!(crate::menus::menu_entries(&app).iter().any(|e| e.id == "dialog.runPresets" && e.menu == ["File", "More Exports"]));
         for (name, edge) in [("A", 40), ("B", 56)] {
             let d = dir.join(name);
-            app.session.execute("export.savePreset", &json!({"name": name, "params": {"format": "jpeg", "longEdge": edge, "dir": d.to_string_lossy()}})).unwrap();
+            app.session
+                .execute("export.savePreset", &json!({"name": name, "params": {"format": "jpeg", "longEdge": edge, "dir": d.to_string_lossy()}}))
+                .unwrap();
         }
         let ids: Vec<u64> = app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
         app.session.execute("library.select", &json!({"ids": ids})).unwrap();

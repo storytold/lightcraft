@@ -1,6 +1,6 @@
 # Roadmap
 
-*Last updated 2026-11-24 (version 0.8.2). Revision history: [Log](#log).*
+*Last updated 2026-11-25 (version 0.8.2). Revision history: [Log](#log).*
 
 Milestones toward full Adobe Lightroom Classic parity, with the Classic shell and output modules (Map, Book, Slideshow,
 Print, Web, publish) and Immich integration as Chromaforge's own focus on top of the upstream engine. Estimates are for
@@ -13,7 +13,7 @@ continuous agent-driven development with 4–6 parallel agents and are revised a
 **switch** from Lightroom. Update it when a gap below closes. The full measured assessment is
 [`docs/target-app-parity.md`](docs/target-app-parity.md); the ranked work list is [`docs/gaps.md`](docs/gaps.md).*
 
-**In one line:** the checklist says **90.3%** of 630 rows (P0 98.0%, P1 94.8%, P2 80.3%; Classic extras 91% of P1,
+**In one line:** the checklist says **90.3%** of 631 rows (P0 98.0%, P1 94.8%, P2 80.4%; Classic extras 91% of P1,
 Immich 11/11), but measured by whether a working photographer could replace Lightroom without noticing, we are at
 roughly **60–65%** and at **alpha**. Every Classic module now exists; the remaining gap is mostly **quality of
 results and camera coverage** (colour calibration, CR3 variants, render fidelity, lens profiles, AI masks), not
@@ -132,8 +132,8 @@ parity` prints this line on every run, so it stays current):
 |---|---:|---:|---:|---:|
 | P0 (core) | **98.0%** | 203 | 98.0% | 98.2% |
 | P1 (important parity) | **94.8%** | 191 | 95.1% | 95.6% |
-| P2 (later / AI / niche, incl. Classic modules) | **80.2%** | 230 | 69.4% | 41.6% |
-| **All in-scope rows** | **90.3%** | 630 | 87.9% | 79.7% |
+| P2 (later / AI / niche, incl. Classic modules) | **80.4%** | 232 | 69.4% | 41.6% |
+| **All in-scope rows** | **90.3%** | 631 | 87.9% | 79.7% |
 
 Rows grew from 509 to 570 with the Lightroom Classic extras and Immich sections; P1 dipped slightly because new
 Classic rows entered 🟡.
@@ -331,6 +331,7 @@ database is read-only; the app owns subsequent edits. See `docs/lightroom-catalo
 - 2026-10-11 (upstream): Canon EOS R5 Mark II C-RAW decodes from sensor data (CRX QP map first-symbol literal and limited-length escape; four CC0 files pinned, docs/cr3.md); CR3 on four verified bodies.
 - 2026-10-12: roadmap refreshed for the fork at 0.6.1: 87.3% of 570 rows, Classic modules ~30% → ~65%, Classic power user ~45% → ~60%, Classic completion and platform CI added to the priorities.
 - 2026-11-23: Getting Started guide row (Help ▸ Getting Started…): 630 rows, P2 80.3%.
+- 2026-11-25: process recipes row (CF-PROCESS-RECIPES, `export.runPresets`, plan 7.4): 631 rows, P2 80.4%.
 - 2026-11-23: checklist numbers refreshed (90.3% of 629 rows, matching docs/target-app-parity.md); decoder-source policy brought in line with the 2026-11-10 licence policy; status moved to the tracked docs/status.md.
 - 2026-10-12: 0.6.3 numbers: 87.9% of 581 rows after the upstream merge (381 commits) and the fork gap batches.
 - 2026-10-20: M5 Performance ✅: colour NR blurs at half resolution (already landed: 24 MP 670 → 336 ms) and GPU renders bin the histogram, vectorscope and waveform grids on the GPU (CPU oracle, exact agreement test).

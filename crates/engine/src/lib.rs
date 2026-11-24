@@ -138,6 +138,7 @@ pub mod quality_scan;
 pub mod remote;
 pub mod rename;
 pub mod render_dng;
+pub mod run_presets;
 pub mod scene_disk;
 pub mod segment;
 pub mod sensor_maps;
@@ -157,7 +158,6 @@ pub mod sync;
 mod sync_same;
 pub mod template_folders;
 pub mod text;
-pub mod run_presets;
 pub mod timelapse;
 pub mod ui_languages;
 #[cfg(not(target_arch = "wasm32"))]
