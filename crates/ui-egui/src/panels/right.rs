@@ -598,7 +598,7 @@ fn crop(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let video = crate::video_ui::photo_is_video(app, id);
     crate::video_ui::video_gate(ui, video, |ui| {
         padded(ui, |ui| {
-            crate::panels::classic_crop::upright_controls(app, ui, &d);
+            classic_crop::upright_controls(app, ui, &d);
             ui.add_space(6.0);
             let mut c = d.geometry.constrain_crop;
             if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
