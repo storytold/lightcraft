@@ -51,7 +51,7 @@ File → Export… opens the export dialog; File → Export with Previous (`Cmd+
 - Save the settings as an export preset (`export.savePreset`); plug-ins can post-process exported files.
 - File → Contact Sheet PDF… writes a quick contact sheet; the Print module does full layouts.
 
-Export never overwrites an original or its sidecar (`export.checkTarget`). A subfolder or destination that escapes with `..`, or uses a Windows-reserved name, is refused. The Export preview of one photo shows the loupe's own render, and entering Export or Print from Develop selects the photo on screen. Print takes the single selected photo; only an empty selection prints the whole filmstrip.
+Export never overwrites an original or its sidecar (`export.checkTarget`). A subfolder or destination that escapes with `..`, or uses a Windows-reserved name, is refused. The Export screen previews the first photo as its file will be (SDR, or in HDR on an HDR display with its SDR | HDR choice); entering Export or Print from Develop selects the photo on screen. Print takes the single selected photo; only an empty selection prints the whole filmstrip.
 
 ## From the command line
 

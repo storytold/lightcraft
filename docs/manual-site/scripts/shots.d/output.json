@@ -45,23 +45,9 @@
     }
    },
    {
-    "only": [
-     "classic"
-    ],
-    "method": "ui.click",
+    "method": "ui.clickWidget",
     "params": {
-     "x": 714,
-     "y": 423
-    }
-   },
-   {
-    "only": [
-     "compact"
-    ],
-    "method": "ui.click",
-    "params": {
-     "x": 712,
-     "y": 362
+     "id": "check:exportHdr"
     }
    }
   ]
@@ -95,43 +81,15 @@
   ],
   "steps": [
    {
-    "only": [
-     "classic"
-    ],
-    "method": "ui.click",
+    "method": "ui.clickWidget",
     "params": {
-     "x": 714,
-     "y": 423
+     "id": "check:exportHdr"
     }
    },
    {
-    "only": [
-     "compact"
-    ],
-    "method": "ui.click",
+    "method": "ui.clickWidget",
     "params": {
-     "x": 712,
-     "y": 362
-    }
-   },
-   {
-    "only": [
-     "classic"
-    ],
-    "method": "ui.click",
-    "params": {
-     "x": 714,
-     "y": 899
-    }
-   },
-   {
-    "only": [
-     "compact"
-    ],
-    "method": "ui.click",
-    "params": {
-     "x": 712,
-     "y": 763
+     "id": "check:exportWatermark"
     }
    },
    {

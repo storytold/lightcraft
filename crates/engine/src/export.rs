@@ -2342,12 +2342,16 @@ pub struct PreparedExport {
     mix: bool,
     /// Its renders may use the GPU ([`export_gpu`] when it was prepared).
     gpu: bool,
+    /// [`Self::preview_until`] also renders an HDR file's HDR rendition ([`Self::keep_hdr`]).
+    want_hdr: bool,
 }
 
 struct RenderWork {
     job: crate::media::RenderJob,
     /// The HDR rendition of a gain map JPEG (`job` renders its SDR base).
     hdr_job: Option<crate::media::RenderJob>,
+    /// An HDR file's SDR rendition for a preview ([`prepare_preview`]); `None` for an export.
+    sdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
     /// Source pixels the render reads (its GPU memory, for a gain map's turn at the device).
@@ -2430,6 +2434,7 @@ pub(crate) fn prepare_guarded(
             weight,
             mix: false,
             gpu: export_gpu(),
+            want_hdr: true,
         });
     }
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
@@ -2469,7 +2474,7 @@ pub(crate) fn prepare_guarded(
         // stages the two renders share
         let weight = if gain_map { weight.saturating_add(w.saturating_mul(h).saturating_mul(GAIN_MAP_BYTES_PER_PX)) } else { weight };
         let src_px = source_px(full_px, long, job.level);
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), src_px })), weight)
+        (Work::Render(Box::new(RenderWork { job, hdr_job, sdr_job: None, meta, opts: o.clone(), src_px })), weight)
     } else {
         let lcc_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -2494,7 +2499,7 @@ pub(crate) fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight, mix: export_mix(), gpu: export_gpu() })
+    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight, mix: export_mix(), gpu: export_gpu(), want_hdr: true })
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo
@@ -2542,6 +2547,213 @@ fn source_px(full_px: usize, long: usize, level: crate::media::SourceLevel) -> u
     let edge = level.max_edge().min(long.max(1));
     let scale = edge as f64 / long.max(1) as f64;
     (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize
+}
+
+/// Steps 1 and 2 of a rendered export ([`PreparedExport::run_until`]): decode the original, then the
+/// SDR rendition, and a gain map JPEG's HDR one (`hdr_job`); on the GPU behind a turn of its own.
+/// `t` times the steps for `<PREFIX>_PROFILE`.
+#[allow(clippy::too_many_arguments)]
+fn render_pair(
+    job: crate::media::RenderJob,
+    hdr_job: Option<crate::media::RenderJob>,
+    src_px: usize,
+    mix: bool,
+    gpu: bool,
+    check: &dyn Fn() -> Result<(), String>,
+    t: &mut Option<std::time::Instant>,
+) -> Result<(lcc_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
+    let mut job = job;
+    let mut hdr_job = hdr_job;
+    let out_px = job.request.max_w.saturating_mul(job.request.max_h);
+    // 1. The original is decoded before the photo's turn at the GPU, on this lane's
+    // thread: other photos render on the GPU meanwhile (the turn used to cover
+    // the decode and the encode too, so photos side by side took turns at an idle card).
+    if needs_source(&job) {
+        let src = job.source.load_source()?;
+        if let Some(hj) = &mut hdr_job {
+            hj.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
+        }
+        job.source = crate::media::SourceRef::Loaded(Box::new(src));
+        lap("decode", t);
+    }
+    // 2. The renders (the GPU's part): the SDR rendition, and a gain map's HDR one. A
+    // gain map's HDR rendition starts from the SDR render's decoded original and its
+    // stages instead of redoing them; the two take one turn at the GPU (the memory the
+    // SDR render leaves for the HDR one is never another export's to take meanwhile).
+    let one_turn = hdr_job.is_some();
+    let renders = || -> Result<(lcc_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
+        lap("waiting for the GPU", t);
+        // (cancelled while it waited for its turn: give the turn back at once)
+        check()?;
+        let _mark = TurnMark::enter();
+        let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lcc_pipeline::StageCache::default()));
+        if let Some(st) = &stages {
+            job.stages = Some(st.clone());
+        }
+        let mut result = job.run();
+        lap("render", t);
+        let loaded = result.loaded.take();
+        let r = result.rendered?;
+        let gpu_fallback = result.gpu_fallback;
+        let hdr = match hdr_job {
+            Some(mut hj) => {
+                check()?;
+                if let Some(src) = loaded {
+                    hj.source = crate::media::SourceRef::Loaded(Box::new(src));
+                }
+                if let Some(st) = stages {
+                    hj.stages = Some(st);
+                }
+                let hr = hj.run().rendered?;
+                lap("HDR render", t);
+                Some(hr.deep.ok_or("the HDR render has no float samples")?)
+            }
+            None => None,
+        };
+        Ok((r, hdr, gpu_fallback))
+    };
+    if mix {
+        // the GPU and the processor at once: this photo takes the GPU when it is free,
+        // else it renders on the processor rather than wait
+        match card_turn_now(src_px, out_px) {
+            Some(_turn) => renders(),
+            None => {
+                if lcc_pipeline::profiling() {
+                    eprintln!("  export: the GPU is busy: rendering on the processor");
+                }
+                lcc_gpu::on_cpu(renders)
+            }
+        }
+    } else if gpu && two_cards() {
+        // two cards: the photo waits for whichever has room and would finish it
+        // soonest, holding that card's turn for both its renditions (one card: as
+        // before, each render queues at the card after its plan)
+        match card_turn_waiting(src_px, out_px, &|| check().is_err() || lcc_gpu::shutting_down()) {
+            Some(_turn) => renders(),
+            // no GPU to wait for (the renders go to the processor by themselves), or cancelled
+            None => {
+                check()?;
+                renders()
+            }
+        }
+    } else if one_turn {
+        lcc_gpu::in_one_turn(src_px, out_px, renders)
+    } else {
+        renders()
+    }
+}
+
+/// What an export writes, before it is encoded ([`PreparedExport::preview_until`]): what a preview
+/// of the export shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportPreview {
+    /// The SDR rendition, 8-bit in the options' output space ([`ExportOptions::effective_space`]),
+    /// with the output sharpening and the watermark as the file has them. For an HDR file it is
+    /// what SDR viewers show (a gain map JPEG's base image; the tone-mapped rendition otherwise).
+    pub sdr: Rgba8,
+    /// The HDR rendition of an HDR file ([`ExportOptions::hdr_output`]): linear float in the output
+    /// space, SDR white = 1, highlights above it, sharpened and watermarked like the file.
+    pub hdr: Option<DeepImage>,
+    /// The output space of `sdr` ([`ExportOptions::effective_space`]).
+    pub space: OutputSpace,
+    /// What went wrong without failing the render (skipped plug-in filters and the like).
+    pub warnings: Vec<String>,
+}
+
+impl ExportPreview {
+    /// The preview for a screen: the SDR rendition as sRGB, and the HDR one as linear-light sRGB
+    /// (SDR white = 1, highlights above it: what an HDR output takes). With an output space other
+    /// than sRGB both are converted with the same matrix the pipeline uses.
+    pub fn to_display(&self) -> (Rgba8, Option<(usize, usize, Vec<[f32; 3]>)>) {
+        let to_srgb = |space: OutputSpace| lcc_color::RgbSpace::to_space(&space.rgb_space(), &lcc_color::SRGB).to_f32();
+        let trc = self.space.trc();
+        let m = to_srgb(self.space);
+        let mut sdr = self.sdr.clone();
+        for p in sdr.data.iter_mut() {
+            let lin = [0, 1, 2].map(|c| trc.decode(f32::from(p[c]) / 255.0));
+            let out = [0, 1, 2].map(|i| {
+                let v = (0..3).map(|k| m[i][k] * lin[k]).sum::<f32>();
+                lcc_color::transfer::linear_to_srgb(if v.is_finite() { v.max(0.0) } else { 0.0 })
+            });
+            let v: [u8; 3] = out.map(|v| (v * 255.0 + 0.5) as u8);
+            *p = [v[0], v[1], v[2], p[3]];
+        }
+        let hdr = self.hdr.as_ref().map(|h| {
+            let m = to_srgb(h.space);
+            let v = match &h.samples {
+                DeepSamples::F32(v) => v.clone(),
+                // (a 16-bit rendition has no highlights above white: linear light, SDR white = 1)
+                DeepSamples::U16(v) => v.iter().map(|&x| h.space.trc().decode(f32::from(x) / 65535.0)).collect::<Vec<f32>>(),
+            };
+            let v: Vec<[f32; 3]> = v
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|c| {
+                    [0, 1, 2].map(|i| {
+                        let x = (0..3).map(|k| m[i][k] * c[k]).sum::<f32>();
+                        if x.is_finite() { x.max(0.0) } else { 0.0 }
+                    })
+                })
+                .collect();
+            (h.width, h.height, v)
+        });
+        (sdr, hdr)
+    }
+}
+
+/// The long edge of the largest render a preview makes ([`prepare_preview`]).
+pub const PREVIEW_LONG_EDGE: u32 = 4096;
+
+/// The export of photo `id` for a preview of what it writes ([`PreparedExport::preview_until`]),
+/// through the export's own rendering: where the format has no render of its own ([`ExportFormat::Original`],
+/// [`ExportFormat::Dng`], a video clip), the photo as developed, as a JPEG would be.
+pub fn prepare_preview(session: &mut crate::Session, id: lcc_catalog::PhotoId, o: &ExportOptions) -> Result<PreparedExport, String> {
+    let developed;
+    let capped;
+    let o = if !o.format.is_rendered() {
+        developed = ExportOptions { format: ExportFormat::Jpeg, hdr: false, ..o.clone() };
+        &developed
+    } else if session.catalog.photo(id).is_some_and(|p| {
+        let (w, h) = output_size(p, o);
+        w.max(h) > usize::try_from(PREVIEW_LONG_EDGE).unwrap_or(usize::MAX)
+    }) {
+        // a full-size export of a large photo is previewed at a smaller size (a preview needn't
+        // hold a 50 MP float image): with the export's own resize, so its resampling is the same
+        capped = ExportOptions { resize: Some(Resize::long_edge(PREVIEW_LONG_EDGE)), ..o.clone() };
+        &capped
+    } else {
+        o
+    };
+    let mut prepared = prepare_export(session, id, o, 1)?;
+    // a PQ or float HDR file renders in HDR only: its SDR rendition is a render of its own
+    if let Work::Render(w) = &mut prepared.work
+        && w.opts.hdr_output()
+        && w.hdr_job.is_none()
+    {
+        let (w_, h_) = (w.job.request.max_w, w.job.request.max_h);
+        let mut job = session.export_job(id, w_, h_, w.opts.effective_space(), OutputDepth::U8)?;
+        job.request.exact_size = true;
+        w.sdr_job = Some(job);
+    }
+    Ok(prepared)
+}
+
+/// `img` with its straight alpha `a` (its size) flattened on white.
+fn over_white(img: &Rgba8, a: &lcc_raster::Plane) -> Result<Vec<[u8; 4]>, String> {
+    if (a.width, a.height) != (img.width, img.height) || a.data.len() != img.data.len() {
+        return Err("export: the transparency does not match the rendered image".into());
+    }
+    Ok(img
+        .data
+        .iter()
+        .zip(&a.data)
+        .map(|(p, &av)| {
+            let k = if av.is_finite() { av.clamp(0.0, 1.0) } else { 1.0 };
+            let v = [0, 1, 2].map(|c| (f32::from(p[c]) * k + 255.0 * (1.0 - k) + 0.5) as u8);
+            [v[0], v[1], v[2], 255]
+        })
+        .collect())
 }
 
 /// Give the clips among `items` the batch's cancel flag and progress callback.
@@ -2599,86 +2811,10 @@ impl PreparedExport {
                 })
             }
             Work::Render(w) => {
-                let RenderWork { mut job, mut hdr_job, meta, opts, src_px } = *w;
-                let out_px = job.request.max_w.saturating_mul(job.request.max_h);
+                let RenderWork { job, hdr_job, meta, opts, src_px, sdr_job: _ } = *w;
                 let mut t = lap_clock();
                 check()?;
-                // 1. The original is decoded before the photo's turn at the GPU, on this lane's
-                // thread: other photos render on the GPU meanwhile (the turn used to cover the
-                // decode and the encode too, so photos side by side took turns at an idle card).
-                if needs_source(&job) {
-                    let src = job.source.load_source()?;
-                    if let Some(hj) = &mut hdr_job {
-                        hj.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
-                    }
-                    job.source = crate::media::SourceRef::Loaded(Box::new(src));
-                    lap("decode", &mut t);
-                }
-                // 2. The renders (the GPU's part): the SDR rendition, and a gain map's HDR one. A
-                // gain map's HDR rendition starts from the SDR render's decoded original and its
-                // stages instead of redoing them; the two take one turn at the GPU (the memory the
-                // SDR render leaves for the HDR one is never another export's to take meanwhile).
-                let one_turn = hdr_job.is_some();
-                let renders = || -> Result<(lcc_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
-                    lap("waiting for the GPU", &mut t);
-                    // (cancelled while it waited for its turn: give the turn back at once)
-                    check()?;
-                    let _mark = TurnMark::enter();
-                    let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lcc_pipeline::StageCache::default()));
-                    if let Some(st) = &stages {
-                        job.stages = Some(st.clone());
-                    }
-                    let mut result = job.run();
-                    lap("render", &mut t);
-                    let loaded = result.loaded.take();
-                    let r = result.rendered?;
-                    let gpu_fallback = result.gpu_fallback;
-                    let hdr = match hdr_job {
-                        Some(mut hj) => {
-                            check()?;
-                            if let Some(src) = loaded {
-                                hj.source = crate::media::SourceRef::Loaded(Box::new(src));
-                            }
-                            if let Some(st) = stages {
-                                hj.stages = Some(st);
-                            }
-                            let hr = hj.run().rendered?;
-                            lap("HDR render", &mut t);
-                            Some(hr.deep.ok_or("the HDR render has no float samples")?)
-                        }
-                        None => None,
-                    };
-                    Ok((r, hdr, gpu_fallback))
-                };
-                let (r, hdr, gpu_fallback) = if mix {
-                    // the GPU and the processor at once: this photo takes the GPU when it is free,
-                    // else it renders on the processor rather than wait
-                    match card_turn_now(src_px, out_px) {
-                        Some(_turn) => renders(),
-                        None => {
-                            if lcc_pipeline::profiling() {
-                                eprintln!("  export: the GPU is busy: rendering on the processor");
-                            }
-                            lcc_gpu::on_cpu(renders)
-                        }
-                    }
-                } else if gpu && two_cards() {
-                    // two cards: the photo waits for whichever has room and would finish it
-                    // soonest, holding that card's turn for both its renditions (one card: as
-                    // before, each render queues at the card after its plan)
-                    match card_turn_waiting(src_px, out_px, &|| stop() || lcc_gpu::shutting_down()) {
-                        Some(_turn) => renders(),
-                        // no GPU to wait for (the renders go to the processor by themselves), or cancelled
-                        None => {
-                            check()?;
-                            renders()
-                        }
-                    }
-                } else if one_turn {
-                    lcc_gpu::in_one_turn(src_px, out_px, renders)
-                } else {
-                    renders()
-                }?;
+                let (r, hdr, gpu_fallback) = render_pair(job, hdr_job, src_px, mix, gpu, &check, &mut t)?;
                 // 3. The encode, on this lane's thread after its turn (the next photo renders meanwhile)
                 check()?;
                 let (bytes, limit_quality) = match &hdr {
@@ -2764,6 +2900,47 @@ impl PreparedExport {
                 })
             }
         }
+    }
+
+    /// [`Self::preview_until`] without an HDR file's HDR rendition (a preview that shows its SDR
+    /// rendition alone: half the rendering).
+    pub fn keep_hdr(mut self, want: bool) -> Self {
+        self.want_hdr = want;
+        self
+    }
+
+    /// The export's picture without encoding it ([`ExportPreview`]), giving up once `stop()` says
+    /// so. An export that copies a file or writes a movie has none: an error saying so.
+    pub fn preview_until(self, stop: &dyn Fn() -> bool) -> Result<ExportPreview, String> {
+        let check = || if stop() { Err(CANCELLED.to_string()) } else { Ok(()) };
+        let RenderWork { job, hdr_job, sdr_job, opts, src_px, .. } = match self.work {
+            Work::Render(w) => *w,
+            _ => return Err("this export copies its file unchanged or writes a movie: there is no picture to preview".into()),
+        };
+        let mut t = lap_clock();
+        let hdr_job = hdr_job.filter(|_| self.want_hdr);
+        let (r, hdr, _) = render_pair(job, hdr_job, src_px, self.mix, self.gpu, &check, &mut t)?;
+        // a PQ or float file's render is its HDR one: its SDR rendition is a render of its own
+        let sdr = match sdr_job {
+            Some(sj) => {
+                check()?;
+                sj.run().rendered?.image
+            }
+            None => r.image,
+        };
+        // (transparent areas are shown on white, as the file has them when it is HDR)
+        let sdr = match r.alpha {
+            Some(ref a) => lcc_raster::Rgba8 { width: sdr.width, height: sdr.height, data: over_white(&sdr, a)? },
+            None => sdr,
+        };
+        let sdr = finish_8bit(&sdr, &opts).into_owned();
+        let hdr = match hdr.filter(|_| opts.hdr_output()) {
+            Some(h) => Some(h),
+            None if opts.hdr_output() && opts.effective_depth() == OutputDepth::F32Hdr => r.deep,
+            None => None,
+        };
+        let hdr = hdr.map(|h| finish_deep_over(&h, None, &opts).into_owned());
+        Ok(ExportPreview { space: opts.effective_space(), sdr, hdr, warnings: r.warnings })
     }
 }
 

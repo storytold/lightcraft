@@ -2672,7 +2672,7 @@ fn hdr_button_tip(sdr_window: bool) -> String {
     if sdr_window { format!("{tip}\n\n{}", crate::i18n::tr(HDR_SDR_WINDOW_NOTE)) } else { tip.to_string() }
 }
 
-const HDR_SDR_WINDOW_NOTE: &str = "This display isn't showing HDR (it is SDR, or HDR is off in the system settings), so the window shows the SDR rendition. HDR exports keep the full range.";
+pub(crate) const HDR_SDR_WINDOW_NOTE: &str = "This display isn't showing HDR (it is SDR, or HDR is off in the system settings), so the window shows the SDR rendition. HDR exports keep the full range.";
 
 const SDR_SLIDERS_NOTE: &str = "These set how the photo looks on SDR displays and in SDR exports. Turn on Preview for SDR Display to see them.";
 

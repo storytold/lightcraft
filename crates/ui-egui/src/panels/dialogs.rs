@@ -3171,7 +3171,8 @@ const EXPORT_TOPS: &str = "export-screen-tops";
 const EXPORT_JUMP: &str = "export-screen-jump";
 
 /// The Export screen's rail: its groups (name, the section keys it covers).
-const EXPORT_GROUPS: [(&str, &[&str]); 7] = [
+const EXPORT_GROUPS: [(&str, &[&str]); 8] = [
+    ("Preview", &["Preview"]),
     ("Where", &["Location", "Naming"]),
     ("Video", &["Video"]),
     ("File", &["FileSettings"]),
@@ -3312,12 +3313,20 @@ pub(crate) fn export_screen(app: &mut LccApp, ctx: &egui::Context) {
             let h = r.available_height();
             export_presets(app, &mut r, f, h);
         }
-        // every setting, one scrolling page
-        let w = content.width().min(860.0);
-        let column = egui::Rect::from_min_size(
-            egui::pos2(content.left() + ((content.width() - w) / 2.0).max(0.0), content.top()),
-            egui::vec2(w, content.height()),
-        );
+        // every setting, one scrolling page; with room to spare, the preview of the first photo
+        // sits beside it (a card of its own); in a narrow window it is the page's last section
+        const MIN_SETTINGS: f32 = 640.0;
+        let gap = crate::export_preview::WIDTH + 24.0;
+        let beside = content.width() >= MIN_SETTINGS + gap;
+        let w = if beside { content.width() - gap } else { content.width().min(860.0) };
+        let column = if beside {
+            egui::Rect::from_min_size(content.min, egui::vec2(w, content.height()))
+        } else {
+            egui::Rect::from_min_size(
+                egui::pos2(content.left() + ((content.width() - w) / 2.0).max(0.0), content.top()),
+                egui::vec2(w, content.height()),
+            )
+        };
         let mut page = ui.new_child(egui::UiBuilder::new().max_rect(column.shrink2(egui::vec2(16.0, 0.0))));
         page.ctx().data_mut(|d| d.insert_temp(egui::Id::new(EXPORT_SCREEN), true));
         egui::ScrollArea::vertical().id_salt("export-page").auto_shrink([false, false]).show(&mut page, |ui| {
@@ -3338,9 +3347,47 @@ pub(crate) fn export_screen(app: &mut LccApp, ctx: &egui::Context) {
             } else {
                 crate::dialog_frame::form(ui, EXPORT_LABEL_W, body);
             }
+            // (a narrow window: the preview closes the page)
+            if !beside && export_section(app, ui, "Preview", "Preview", "") {
+                let cap = (column.height() * 0.45).clamp(160.0, 460.0);
+                crate::export_preview::draw(
+                    app,
+                    ui,
+                    ExportForm {
+                        opts: &mut opts,
+                        full_size: &mut full_size,
+                        resize: &mut resize,
+                        preset_name: &mut preset_name,
+                        limit_kb: &mut limit_kb,
+                        dir: &mut dir,
+                    },
+                    false,
+                    Some(cap - 44.0),
+                );
+            }
             ui.add_space(40.0);
         });
         page.ctx().data_mut(|d| d.remove::<bool>(egui::Id::new(EXPORT_SCREEN)));
+        if beside {
+            let pane = egui::Rect::from_min_max(egui::pos2(column.right() + 16.0, content.top() + 12.0), content.max);
+            let mut card = ui.new_child(egui::UiBuilder::new().max_rect(pane));
+            crate::dialog_frame::card_frame(ctx).show(&mut card, |ui| {
+                crate::export_preview::draw(
+                    app,
+                    ui,
+                    ExportForm {
+                        opts: &mut opts,
+                        full_size: &mut full_size,
+                        resize: &mut resize,
+                        preset_name: &mut preset_name,
+                        limit_kb: &mut limit_kb,
+                        dir: &mut dir,
+                    },
+                    true,
+                    None,
+                );
+            });
+        }
     });
     ctx.memory_mut(|m| m.set_modal_layer(shown.response.layer_id));
     // the rows may have closed Export or opened another dialog (a folder picker, Watermark…)
@@ -3673,7 +3720,8 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
             let tip = crate::i18n::tr(
                 "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float",
             );
-            crate::dialog_frame::checkbox(ui, &mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
+            let hdr_box = crate::dialog_frame::checkbox(ui, &mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
+            crate::widgets::register(ui.ctx(), "check:exportHdr", hdr_box.rect);
             if opts.hdr && !opts.hdr_output() {
                 crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
             }
@@ -3844,7 +3892,9 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         };
         if export_section(app, ui, "Watermark", "Watermarking", &summary) {
             let mut wm_on = opts.watermark.is_some();
-            if crate::dialog_frame::checkbox(ui, &mut wm_on, crate::i18n::tr("Watermark")).changed() {
+            let wm_box = crate::dialog_frame::checkbox(ui, &mut wm_on, crate::i18n::tr("Watermark"));
+            crate::widgets::register(ui.ctx(), "check:exportWatermark", wm_box.rect);
+            if wm_box.changed() {
                 opts.watermark = wm_on.then(|| lcc_engine::export::Watermark { text: "© ".into(), ..Default::default() });
             }
             let wm_shown = opts.watermark.clone();

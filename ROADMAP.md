@@ -253,6 +253,9 @@ database is read-only; the app owns subsequent edits. See `docs/lightroom-catalo
 - 2026-10-25: upstream: no more merges after PR #486 (281 commits, 88 conflicted files, mostly UI the fork replaced);
   upstream commits are reviewed weekly and the useful ones cherry-picked (`cargo xtask upstream-review`,
   `docs/upstream-merge.md`); `crates/ui-egui/` joins the fork-owned paths.
+- 2026-11-24: M10: the Export screen previews the first photo to be exported as its file will be (the export's own rendering),
+  with an SDR / HDR choice: the HDR rendition on an HDR display, else the SDR rendition and the reason
+  (`export.previewMode`, LR-EXP-HDR).
 - 2026-10-25: M11.4: `<cli> calibrate-lightroom` (preset, fit, add, list): camera calibrations matched to Lightroom
   by black-box fits to its exports of contributors' own photos; data rules amended (gaps 1 and 3; 0 cameras so far).
 - 2026-10-22 (upstream): Print page setup and PDF output gain the Japanese photo and postcard papers (L判, 2L判,
