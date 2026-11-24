@@ -216,7 +216,10 @@ fn click_at(h: &mut Headless, at: egui::Pos2) {
 /// second click used to undo the first, and the stack stayed as it was. A single click still toggles it.
 #[test]
 fn double_clicking_a_stack_badge_toggles_the_stack_once() {
-    let mut h = grid(ViewMode::PhotoGrid);
+    // The Square Grid: a stack's top photo keeps its cell when the stack opens, so the second click of the double
+    // click still lands on its badge. In Photo Grid the justified row re-flows around the two photos that join it,
+    // and the badge moves out from under the pointer with the width of the window (which is not what this checks).
+    let mut h = grid(ViewMode::SquareGrid);
     let top = PhotoId(2001);
     let sid = StackId(21);
     let collapsed = |h: &Headless| h.app.session.catalog.stack(sid).unwrap().collapsed;
@@ -235,7 +238,7 @@ fn double_clicking_a_stack_badge_toggles_the_stack_once() {
         click_at(&mut h, badge);
         h.settle(SETTLE);
         assert_eq!(collapsed(&h), want, "a double-click toggles the stack once");
-        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "a double-click on the badge doesn't open the photo");
+        assert_eq!(h.app.ui.view, ViewMode::SquareGrid, "a double-click on the badge doesn't open the photo");
         // the next double-click is apart from this one
         for _ in 0..60 {
             h.step();
