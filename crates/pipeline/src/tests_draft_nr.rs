@@ -32,8 +32,7 @@ fn mean_diff(a: &Rgba8, b: &Rgba8) -> f64 {
 }
 
 fn edits(process: Process) -> DevelopSettings {
-    let mut s = DevelopSettings::default();
-    s.process = process.version();
+    let mut s = DevelopSettings { process: process.version(), ..Default::default() };
     s.detail.nr_color = 40.0;
     s.detail.nr_luminance = 20.0;
     s
