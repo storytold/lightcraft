@@ -246,10 +246,10 @@ impl Meta {
     /// the maker's; for a photo added before it was kept, the first word is.
     pub fn camera_name(&self) -> Option<String> {
         let (camera, make) = (self.camera.trim(), self.make.trim());
-        let after_make = camera.strip_prefix(make).filter(|rest| !make.is_empty() && (rest.is_empty() || rest.starts_with(' ')));
+        let after_make = camera.strip_prefix(make).filter(|rest| !make.is_empty() && (rest.is_empty() || rest.starts_with(char::is_whitespace)));
         let (maker, model) = match after_make {
             Some(model) => (make, model),
-            None => camera.split_once(' ').unwrap_or((camera, "")),
+            None => camera.split_once(char::is_whitespace).unwrap_or((camera, "")),
         };
         let maker: Vec<&str> = maker.split_whitespace().filter(|w| !company_word(w)).collect();
         let said: Vec<String> = maker.iter().map(|w| word_key(w)).collect();
@@ -268,9 +268,13 @@ impl Meta {
             let rest = model.get(run..).unwrap_or_default();
             rest.iter().skip_while(|w| run > 0 && own.contains(&word_key(w))).copied().collect()
         } else {
-            // the maker taken from the first word: drop it said again and the company words it left behind
-            // ("CASIO COMPUTER CO.,LTD.")
-            model.split_whitespace().skip_while(|w| said.contains(&word_key(w)) || company_word(w)).collect()
+            // the maker taken from the first word: drop the company words it left behind when they hold a legal form
+            // ("CASIO COMPUTER CO.,LTD.", with the maker said again among them), otherwise only the maker said again
+            // ("ACME Computer 1000" keeps Computer)
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let run: Vec<&str> = model.iter().copied().take_while(|w| said.contains(&word_key(w)) || company_word(w)).collect();
+            let drop = if run.iter().any(|w| legal_form(w)) { run.len() } else { run.iter().take_while(|w| said.contains(&word_key(w))).count() };
+            model.get(drop..).unwrap_or_default().to_vec()
         };
         let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.into_iter().map(str::to_string)).collect();
         (!words.is_empty()).then(|| words.join(" "))
@@ -285,9 +289,17 @@ fn word_key(w: &str) -> String {
 
 /// Is `w` a word of a maker's company name ("IMAGING CORP.", "COMPANY, LTD.", "CAMERA AG"), or punctuation alone?
 fn company_word(w: &str) -> bool {
-    const WORDS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag imaging camera computer optical electronics";
+    const DESCRIPTIVE: &str = "imaging camera computer optical electronics";
     let key = word_key(w);
-    key.is_empty() || WORDS.split(' ').any(|c| c == key)
+    key.is_empty() || legal_form(w) || DESCRIPTIVE.split(' ').any(|c| c == key)
+}
+
+/// Is `w` the legal form of a company ("CORP.", "CO.,LTD.", "AG")? Unlike "CAMERA" or "COMPUTER", no model starts
+/// with one.
+fn legal_form(w: &str) -> bool {
+    const FORMS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag";
+    let key = word_key(w);
+    FORMS.split(' ').any(|c| c == key)
 }
 
 /// A word of a maker's name as a name: one in capitals of more than three letters ("OLYMPUS") or in lower case
@@ -921,6 +933,10 @@ mod camera_name_tests {
         assert_eq!(name("OM Digital Solutions", om).as_deref(), Some("OM Digital Solutions Digital 1000"));
         assert_eq!(name("ACME", "ACME ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
         assert_eq!(name("ACME COMPUTER", "ACME COMPUTER Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // with the maker taken from the first word, a company word with no legal form after it is the model's, and
+        // the first word ends at any space
+        assert_eq!(name("", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("", "CANON\tALPHA R5").as_deref(), Some("Canon ALPHA R5"));
         // the end of the maker said again is dropped ("EASTMAN KODAK" then "KODAK")
         let kodak = "EASTMAN KODAK COMPANY KODAK EASYSHARE C875 ZOOM DIGITAL CAMERA";
         let shown = name("EASTMAN KODAK COMPANY", kodak);
