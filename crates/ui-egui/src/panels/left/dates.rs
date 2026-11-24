@@ -136,6 +136,10 @@ fn sdk_date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let item = &source.shown[source.index[key]];
             let mut row =
                 ListRow::new(item.label.clone()).depth(item.depth).cells(icx.cells()).icon(IconSpec::svg(craft::behavior::IconId::new("clock")));
+            if item.depth == 1 {
+                // the same month of two years is told apart: its triangle reads "Expand March 2025"
+                row = row.accessible_name(format!("{} {}", item.label, &item.key[..4]));
+            }
             if item.group {
                 row = row.group(item.open);
                 // Public ItemCx/CollectionResponse opener API returns the real

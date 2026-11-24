@@ -1689,6 +1689,44 @@ fn removing_a_folder_from_the_library_asks_first() {
     assert_eq!(h.app.ui.dialog, None);
 }
 
+/// Every egui "Double use of widget ID" warning painted this frame, with where it sits.
+fn id_clash_warnings(h: &Headless) -> Vec<(String, egui::Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Text(t) => {
+                let text = t.galley.text();
+                if text.contains("use of widget ID") {
+                    out.push((text.to_string(), t.pos));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.view.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The masking panel, with a mask selected and its Effect section open, paints no egui warning
+/// about two widgets sharing an id (the warnings paint over the panel).
+#[test]
+fn the_masking_panel_has_no_widget_id_clashes() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "masking"}));
+    let r = h.request("engine.execute", json!({"command": "mask.add", "params": {"kind": "linear"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    h.step();
+    let clashes = id_clash_warnings(&h);
+    let near = |p: egui::Pos2| {
+        h.app.widgets.iter().filter(|(_, r)| r.expand(6.0).contains(p)).map(|(w, _)| w.clone()).collect::<Vec<_>>()
+    };
+    let said: Vec<_> = clashes.iter().map(|(t, p)| format!("{t} at {p:?} near {:?}", near(*p))).collect();
+    assert!(clashes.is_empty(), "{said:#?}");
+}
+
 fn popup_open(h: &Headless) -> bool {
     egui::Popup::is_any_open(&h.view.ctx) || craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any)
 }
@@ -2073,7 +2111,8 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     let step = xs[1] - xs[0];
     assert!(xs.len() == 26 && step > 0.0 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
     let panel = widget(&h, "panel:left_panel");
-    assert!(widget(&h, "source:all").width() > panel.width(), "the rows are as wide as the widest one, so there is something to scroll to");
+    // (the rows are as wide as the widest one, so there is something to scroll to: a row's count, at its end, lies past the panel)
+    assert!(widget(&h, "count:all").left() >= panel.right(), "the rows reach past the panel: the count of All Photos is {:?}", widget(&h, "count:all"));
     // what a row needs is known before it is drawn off screen, so the plus stays reachable
     assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
     // a click in the middle of a deep row chooses it; only the little chevron folds it

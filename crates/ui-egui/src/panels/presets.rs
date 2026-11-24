@@ -300,7 +300,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if !measuring && craft::ui::contract::clicked(&resp) && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
+                    if !measuring && !crate::widgets::carrying(ui.ctx()) && app.ui.dragging_photos.is_none() && craft::ui::contract::clicked(&resp) && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
@@ -652,7 +652,8 @@ mod tests {
         let hit = h.state().widget_hits.iter().find(|(id, _)| id == &row).unwrap().1;
         let preset = h.state().session.presets.iter().find(|p| row == format!("preset:{}", p.id)).unwrap();
         let name = crate::i18n::builtin_label(&preset.name, preset.builtin).to_string();
-        assert!(h.query_by_role_and_label(egui::accesskit::Role::ListItem, &name).is_some());
+        // Preset rows sit under their group's row, so they are tree items.
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::TreeItem, &name).is_some());
         for _ in 0..100 {
             if h.ctx.memory(|memory| memory.focused()) == Some(hit.id) {
                 break;

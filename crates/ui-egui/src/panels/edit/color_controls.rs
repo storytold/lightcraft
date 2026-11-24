@@ -568,6 +568,16 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             });
             h.step();
+            // the key comes up again, as a hand's does: a key the framework still holds down from the first round
+            // would make the next round's press a repeat
+            h.events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
             press(&mut h, to, false);
             settle(&mut h);
             assert_eq!(*h.app.session.develop_of(active(&h)).unwrap(), *before);

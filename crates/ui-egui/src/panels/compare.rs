@@ -245,13 +245,14 @@ fn photo_tile(
 ) -> (Rect, Rect, super::detail::host::HostOutput) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
-    // The pane is a pointer handle over a painted photo: it clicks (select, double-click zoom), drags (pan) and takes
-    // the menu, and leaves the keyboard focus alone.
+    // The pane is a control over a painted photo: it clicks (select, double-click zoom), drags (pan) and takes the
+    // menu. It is a Tab stop, as it was: a context menu opened from a target the keyboard cannot reach would not hand
+    // its Escape back to the menu.
     let resp = super::detail::host::target(
         ui,
         ("cull-tile", slot_index(slot), id.0),
         area,
-        super::detail::host::Target::new(app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default()).handle(),
+        super::detail::host::Target::new(app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default()).drag(),
     );
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, area, resp) };
     let caption_h = 26.0;

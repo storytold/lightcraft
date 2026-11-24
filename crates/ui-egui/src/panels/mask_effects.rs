@@ -216,7 +216,7 @@ pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Effect")).font(t.font(12.0)).color(t.text_label));
+            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Effect")).font(t.font(12.0)).color(t.text_label)).selectable(false));
             let current = fx::matching_effect(&app.session, &mask.adjust);
             let label = current.as_deref().map(display_name).unwrap_or_else(|| crate::i18n::tr("Custom").to_string());
             let r = crate::widgets::dropdown(ui, "maskEffect", &label, t.font(12.0), t.text);
@@ -491,6 +491,9 @@ fn save_naming_field(ui: &mut egui::Ui, widget: &str, value: &mut String, hint: 
     eligible && shown.submitted
 }
 
+/// How wide the button that picks an existing group is.
+const PICKER_WIDTH: f32 = 28.0;
+
 /// The New Effect Preset dialog's body.
 pub fn save_body(
     app: &LightcraftApp,
@@ -521,8 +524,8 @@ pub fn save_body(
     let mut popup_probe_buttons: Vec<(String, egui::Response)> = Vec::new();
     ui.horizontal(|ui| {
         // Group Return ends its field but must never use Name's Save path.
-        save_naming_field(ui, "field:effectGroup", group, "Group (optional)", ui.available_width() - 30.0, false);
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), ui.spacing().interact_size.y.max(24.0)), Sense::hover());
+        save_naming_field(ui, "field:effectGroup", group, "Group (optional)", ui.available_width() - PICKER_WIDTH - ui.spacing().item_spacing.x, false);
+        let (rect, _) = ui.allocate_exact_size(vec2(PICKER_WIDTH, ui.spacing().interact_size.y.max(24.0)), Sense::hover());
         let picker = Button::new("…").id_salt("button:effectGroupPick").tooltip(crate::i18n::tr("Choose a group").to_owned()).show_at(ui, rect);
         if real {
             register_response("button:effectGroupPick", picker.rect, &picker);
@@ -625,7 +628,7 @@ pub fn save_body(
                     egui::FontFamily::Monospace => FontRef::monospace(),
                     egui::FontFamily::Name(name) => FontRef::named(name),
                 };
-                let run = DocRun::new(words.clone(), face, font.size, DataColor::new(if changed_here { t.text } else { t.text_dim }));
+                let run = DocRun::new(words.clone(), face, font.size, DataColor::new(if changed_here { t.text } else { t.text_label }));
                 let run = if changed_here { run.bold() } else { run };
                 let shown = cx.labelled_with(
                     &mut cols[i % 2],

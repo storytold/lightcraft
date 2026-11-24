@@ -7,7 +7,7 @@
 //! ([`super::typed_value`]), the Kelvin temperature track, the coloured tracks and the automation names
 //! (`slider:`, `sliderValue:`, `sliderField:`, `sliderLabel:`, `sliderThumb:`).
 
-use craft::behavior::{EditEvent, EditEvents, Mixed, NumberCodec, Reader};
+use craft::behavior::{EditEvent, EditEvents, Mixed, NumberCodec, Proposal, Reader};
 use craft::ui::contract::{Bind, Props as _, Show as _, Sizing};
 use craft::ui::form::{SliderField, SliderFieldOutput};
 use craft::ui::runtime::env::{WheelScope, with_env};
@@ -165,7 +165,15 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
                         if let Some(face) = face {
                             field = field.track_face(face);
                         }
-                        field.show(ui)
+                        // The row takes the room it measures at the panel's width and is shown there. Shown in the
+                        // flow instead, a framework body that measures the app's window first (the shell's) finds the
+                        // row missing from what it kept and asks for another pass every frame. Measured as a measuring
+                        // run: a measure in a real run is checked against what that body kept, which holds no row.
+                        let width = ui.available_width().max(1.0);
+                        let ctx = ui.ctx().clone();
+                        let size = craft::ui::runtime::measure::run(&ctx, || field.measure_in(ui, Proposal::Width(width)));
+                        let (_, room) = ui.allocate_space(egui::vec2(width, size.y));
+                        field.show_at(ui, room)
                     })
                     .inner
             },
@@ -232,9 +240,7 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
                     target = rect.shrink2(egui::vec2((thumb.bounds.width() * 0.5).min(rect.width() * 0.5), 0.0));
                     ctx.data_mut(|data| data.insert_temp(id.with("span"), target.width()));
                     super::register_geometry(ctx, format!("sliderThumb:{}", spec.id), thumb.bounds);
-                    if row.enabled {
-                        hint(ctx, &response, thumb.bounds, &reset_hint);
-                    }
+                    hint(ui, element.id, thumb.bounds, row.enabled.then_some(reset_hint.as_str()));
                 }
                 if let Some(focus) = focus
                     && !focus.stop.text
@@ -255,9 +261,7 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
                 });
             }
             _ => {
-                if row.enabled {
-                    hint(ctx, &response, rect, &reset_hint);
-                }
+                hint(ui, element.id, rect, row.enabled.then_some(reset_hint.as_str()));
             }
         }
         super::register_response(format!("{prefix}:{}", spec.id), target, &response);
@@ -271,7 +275,8 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
     let ended = out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }));
     // Escape gives the readout back too, as LightCraft's did: the field has already put its text back. Not on the
     // pass of the release that opens the edit, whose keys the field has not had yet.
-    let escaped = escape_pressed(ctx, spec.id, row.salt) && !ui.input(|input| input.pointer.any_released());
+    let escaped = escape_went_down(ctx, egui::Id::unique(("lc-slider-escape-down", spec.id)).with(row.salt))
+        && !ui.input(|input| input.pointer.any_released());
     if let Some(root) = number_focus
         && (ended || escaped)
     {
@@ -280,11 +285,10 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
     track
 }
 
-/// Whether Escape went down in this pass (the framework's key stage takes the key from egui's events; it still says
-/// which keys are down).
-fn escape_pressed(ctx: &egui::Context, control: &str, salt: egui::Id) -> bool {
+/// Whether Escape went down in this pass for the reader `key` (the framework's key stage takes the key from egui's
+/// events; it still says which keys are down). Each reader keeps its own memory of the key being held.
+fn escape_went_down(ctx: &egui::Context, key: egui::Id) -> bool {
     let down = craft::ui::runtime::keys::held(ctx).iter().any(|key| key.code_name() == "Escape");
-    let key = egui::Id::unique(("lc-slider-escape-down", control)).with(salt);
     let was = ctx.data_mut(|data| {
         let was = data.get_temp::<bool>(key).unwrap_or(false);
         data.insert_temp(key, down);
@@ -293,12 +297,21 @@ fn escape_pressed(ctx: &egui::Context, control: &str, salt: egui::Id) -> bool {
     down && !was
 }
 
-/// Says how to reset the row while the pointer rests on `area` of the row's real part `response` (the caption, the
-/// thumb): the framework's tooltip on that owner, with no probe or second widget over it.
-fn hint(ctx: &egui::Context, response: &egui::Response, area: Rect, text: &str) {
-    if area.is_finite() && ctx.pointer_hover_pos().is_some_and(|at| area.contains(at)) {
-        craft::ui::contract::tooltip::attach(response, &text.to_owned().into());
+/// Says how to reset the row while the pointer rests on `area` (the caption, the thumb) of the row's part `owner`: the
+/// framework's tooltip at the pointer, kept by that part's memory. No probe or second widget goes over the row, and
+/// the part's own tooltip stays its own.
+fn hint(ui: &Ui, owner: egui::Id, area: Rect, text: Option<&str>) {
+    // once a pass per owner: a row drawn twice in one pass (a replay, a second run of its panel) shows one tip
+    let pass = ui.ctx().cumulative_pass_nr();
+    let shown = owner.with("lc-reset-hint-pass");
+    if ui.ctx().data(|data| data.get_temp::<u64>(shown)) == Some(pass) {
+        return;
     }
+    ui.ctx().data_mut(|data| data.insert_temp(shown, pass));
+    let at = ui.ctx().pointer_hover_pos().filter(|at| area.is_finite() && area.contains(*at));
+    let pressed = ui.input(|input| input.pointer.any_down());
+    let tip = text.map(|text| craft::ui::contract::Tooltip::from(text.to_owned()));
+    craft::ui::contract::tooltip::at_pointer(ui, owner, tip.as_ref(), at, pressed);
 }
 
 /// Lightroom's Kelvin track: 2000–7000 K over the left half, logarithmic up to 50000 K ([`ControlSpec::position`]).

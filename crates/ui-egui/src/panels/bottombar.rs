@@ -141,7 +141,8 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
         let shown = craft::ui::buttons::IconButton::new(craft::ui::primitives::IconSpec::glyph(&glyph))
             .id(owner)
             .label(label)
-            .selected(flag == f)
+            // (the unflag circle never lights: it stands for no flag, not a flag the photo carries)
+            .selected(on)
             .enabled(real && enabled)
             .show_at(&mut pill_ui, rect);
         if real {
