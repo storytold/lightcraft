@@ -66,11 +66,16 @@ fn dec(v: f32) -> f32 {
 /// of an allocation that could fail.
 pub(super) const MAX_PIXELS: usize = super::MAX_SPOT_SPAN * super::MAX_SPOT_SPAN / 2;
 
+/// Whether a `w × h` box fits the pinned heal's working memory ([`MAX_PIXELS`]).
+pub(super) fn fits(w: usize, h: usize) -> bool {
+    w.checked_mul(h).is_some_and(|n| n <= MAX_PIXELS)
+}
+
 /// The healed box: inside the spot (distance below `r`) the source with its detail matched, pinned to
 /// the photo at the spot's edge; outside it the photo. Inputs of mismatched sizes give the photo back;
 /// `None` when the box holds more than [`MAX_PIXELS`] pixels (nothing is allocated then).
 pub(super) fn heal(p: &Patch<'_>) -> Option<Vec<[f32; 3]>> {
-    let n = p.w.checked_mul(p.h).filter(|n| *n <= MAX_PIXELS)?;
+    let n = p.w.checked_mul(p.h).filter(|_| fits(p.w, p.h))?;
     if p.src.len() != n || p.tgt.len() != n || p.dist.len() != n {
         return Some(p.tgt.to_vec());
     }

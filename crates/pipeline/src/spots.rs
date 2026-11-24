@@ -411,34 +411,54 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
     }
 }
 
+/// The distance from the pixel centre (`px`, `py`) to the nearest of the stroke's points.
+fn distance(pts: &[(f32, f32)], px: f32, py: f32) -> f32 {
+    pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min)
+}
+
+/// Each pixel's distance to the stroke over `l`'s box, which only the pinned heal reads; empty (nothing
+/// allocated) unless `l` is a Heal or Remove spot under [`HealMethod::Pinned`] whose box fits the
+/// pinned heal's working memory ([`pinned::fits`]).
+fn pinned_distances(l: &SpotLayout, method: HealMethod) -> Vec<f32> {
+    if !l.heal || method != HealMethod::Pinned || !pinned::fits(l.bw, l.bh) {
+        return Vec::new();
+    }
+    let mut d = Vec::with_capacity(l.bw * l.bh);
+    for y in 0..l.bh {
+        for x in 0..l.bw {
+            d.push(distance(&l.pts, (l.bx + x) as f32 + 0.5, (l.by + y) as f32 + 0.5));
+        }
+    }
+    d
+}
+
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit; `method`
 /// is [`HealMethod::of`] the photo's settings.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: HealMethod) {
     let (w, h) = (img.width, img.height);
     let pinned = method == HealMethod::Pinned;
     for spot in spots {
-        let Some(SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill }) = layout(spot, frame, w, h, ppl) else {
+        let Some(l) = layout(spot, frame, w, h, ppl) else {
             continue;
         };
+        // (empty unless the pinned heal will use it: a box too big for its working memory gets the
+        // averaged heal without the plane being built)
+        let dist = pinned_distances(&l, method);
+        let pinned_heal = !dist.is_empty();
+        let SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill } = l;
         let Some(&first) = pts.first() else { continue };
         let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
         // (V14 reads whole pixels: between them, bilinear sampling averages the source's grain away)
         let offset = if pinned { (offset.0.round(), offset.1.round()) } else { offset };
-        // alpha of the stroke, its distance and the source patch in the box
+        // alpha of the stroke and the source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
-        // (only the pinned heal reads the distance)
-        let pinned_heal = heal && pinned;
-        let mut dist = if pinned_heal { vec![0.0f32; bw * bh] } else { Vec::new() };
         let mut src = vec![[0.0f32; 3]; bw * bh];
         let mut tgt = vec![[0.0f32; 3]; bw * bh];
         for y in 0..bh {
             for x in 0..bw {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
-                let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+                let d = dist.get(y * bw + x).copied().unwrap_or_else(|| distance(&pts, px, py));
                 alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
-                if pinned_heal {
-                    dist[y * bw + x] = d;
-                }
                 src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
             }
@@ -446,7 +466,6 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
         if fill {
             fill_box(&mut src, &tgt, &alpha, bw, bh);
         }
-        // (a box too big for the pinned heal's working memory gets the averaged one)
         let healed = if pinned_heal { pinned::heal(&pinned::Patch { w: bw, h: bh, src: &src, tgt: &tgt, dist: &dist, r }) } else { None };
         let pinned_here = healed.is_some();
         if let Some(healed) = healed {
@@ -787,6 +806,32 @@ mod tests {
                 assert_eq!((g.x, g.y, g.x + g.w, g.y + g.h), want, "{process:?}, step {i}: reads x {x0}..={x1}, y {y0}..={y1}");
             }
         }
+    }
+
+    // Given a Heal box too big for the pinned heal's working memory, `apply` builds no distance plane
+    // for it (the averaged heal, which it falls back to, doesn't read one)
+    #[test]
+    fn an_oversized_heal_box_builds_no_distance_plane() {
+        let l = |bw, bh, heal| SpotLayout {
+            r: 4.0,
+            pts: vec![(2.0, 2.0)],
+            offset: Some((8.0, 0.0)),
+            bx: 0,
+            by: 0,
+            bw,
+            bh,
+            inner: 2.0,
+            opacity: 1.0,
+            heal,
+            fill: false,
+        };
+        for (bw, bh) in [(MAX_SPOT_SPAN, MAX_SPOT_SPAN), (usize::MAX, 2)] {
+            assert_eq!(pinned_distances(&l(bw, bh, true), HealMethod::Pinned).capacity(), 0, "{bw} × {bh}");
+        }
+        // a box that fits gets one, for the pinned heal only
+        assert_eq!(pinned_distances(&l(16, 8, true), HealMethod::Pinned).len(), 16 * 8);
+        assert_eq!(pinned_distances(&l(16, 8, true), HealMethod::Averaged).capacity(), 0);
+        assert_eq!(pinned_distances(&l(16, 8, false), HealMethod::Pinned).capacity(), 0);
     }
 
     // Given a window that would have to grow past the cap, there is no answer (never a wrong one)
