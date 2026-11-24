@@ -49,12 +49,26 @@ pub use source::{
 };
 
 /// Cache version for the decoder of one source format: the pipeline version plus a
-/// per-format decoder version, so a decoder change only invalidates the renders of
+/// per-format decoder revision, so a decoder change only invalidates the renders of
 /// photos in that format. Unknown formats get the pipeline version alone. Every render key
 /// also carries [`format_identity`], so two formats whose versions happen to line up stay
 /// apart: a one-step bump of one format's version is not another format's key.
+#[cfg(test)]
 pub(crate) fn decoder_cache_version(format: &str) -> u64 {
-    let decoder: u64 = match format.to_ascii_uppercase().as_str() {
+    cache_version(decoder_revision(format))
+}
+
+/// [`decoder_cache_version`] of a decoder at `revision`: the render keys take the revision as a
+/// parameter, so a test can bump one format by a step.
+pub(crate) fn cache_version(revision: u64) -> u64 {
+    RENDER_CACHE_VERSION.wrapping_add(revision)
+}
+
+/// The decoder revision of one source format, which [`decoder_cache_version`] adds to
+/// [`RENDER_CACHE_VERSION`]. A revision is not an identity: ARW's 1000 and CR2's 1001 are one step
+/// apart, and [`format_identity`] is what keeps a bump of either off the other format's key.
+pub(crate) fn decoder_revision(format: &str) -> u64 {
+    match format.to_ascii_uppercase().as_str() {
         "ARW" => 1000,
         "CR2" => 1001,
         "CR3" => 1002,
@@ -79,8 +93,7 @@ pub(crate) fn decoder_cache_version(format: &str) -> u64 {
         "AVIF" => 2006,
         "JPEG" | "JPG" => 0,
         _ => 0,
-    };
-    RENDER_CACHE_VERSION.wrapping_add(decoder)
+    }
 }
 
 /// Stable identity of one source format, part of every render key next to the decoder revision
