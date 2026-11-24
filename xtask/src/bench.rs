@@ -8,7 +8,8 @@
 //! Comparisons use **process CPU time** where a probe reports it (it reflects the work done even on a busy
 //! shared machine), wall-clock otherwise. Budgets are wall-clock: what a user waits for. `--strict` exits
 //! non-zero when a metric regressed by more than the threshold (default 20 %) or an enforced budget is
-//! breached. A baseline from another host is never compared against.
+//! breached. A baseline from another host is never compared against. Where the platform reports no
+//! process CPU time (Windows: the `cpu` column is 0), wall time is compared instead.
 //!
 //! Adding a probe or a budget is one line in [`PROBES`] / [`BUDGETS`]. A probe prints lines of the form
 //! `label: N ms wall[, N ms cpu]` (or render_bench's `label: cpu: … | gpu: …`) on stdout or stderr.
@@ -60,7 +61,10 @@ pub fn regressions(prev: &BTreeMap<String, f64>, now: &BTreeMap<String, f64>, th
 /// The metrics compared between runs: CPU time where a row has it, wall-clock otherwise.
 pub fn compared(m: &BTreeMap<String, f64>) -> BTreeMap<String, f64> {
     m.iter()
-        .filter(|(k, _)| k.ends_with("/cpu") || k.strip_suffix("/wall").is_some_and(|base| !m.contains_key(&format!("{base}/cpu"))))
+        .filter(|(k, &v)| {
+            (k.ends_with("/cpu") && v > 0.0)
+                || k.strip_suffix("/wall").is_some_and(|base| !m.get(&format!("{base}/cpu")).is_some_and(|&c| c > 0.0))
+        })
         .map(|(k, v)| (k.clone(), *v))
         .collect()
 }
@@ -111,7 +115,7 @@ pub const BUDGETS: &[Budget] = &[
     budget("render:loupe draft clarity drag (warm)/cpu/wall", 16.0, "slider, draft preview"),
     budget("render:loupe draft clarity drag (warm)/gpu/wall", 16.0, "slider, draft preview"),
     budget("render:loupe draft NR drag (warm)/gpu/wall", 16.0, "slider, draft preview"),
-    advisory("render:loupe draft NR drag (warm)/cpu/wall", 16.0, "slider, draft preview: CPU NR drag (plan 4.5)"),
+    budget("render:loupe draft NR drag (warm)/cpu/wall", 16.0, "slider, draft preview: CPU NR drag (4.5)"),
     budget("render:loupe 1920×1280 exposure drag (warm)/cpu/wall", 60.0, "loupe @ 2.5 MP"),
     budget("render:loupe 1920×1280 exposure drag (warm)/gpu/wall", 60.0, "loupe @ 2.5 MP"),
     budget("render:loupe 1920×1280 NR drag (warm)/gpu/wall", 60.0, "loupe @ 2.5 MP"),
@@ -311,6 +315,17 @@ window pan (new window, warm src):     cpu: 912.0 ms wall, 2210.5 ms cpu  |  gpu
         let r = regressions(&compared(&prev), &compared(&now), 0.2);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, "export JPEG encode/cpu/cpu");
+    }
+
+    #[test]
+    fn without_cpu_time_wall_time_is_compared() {
+        let prev = parse("loupe draft NR drag (warm):  cpu: 30.0 ms wall, 0.0 ms cpu
+");
+        let now = parse("loupe draft NR drag (warm):  cpu: 40.0 ms wall, 0.0 ms cpu
+");
+        let r = regressions(&compared(&prev), &compared(&now), 0.2);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].0, "loupe draft NR drag (warm)/cpu/wall");
     }
 
     #[test]

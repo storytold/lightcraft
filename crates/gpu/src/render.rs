@@ -1487,20 +1487,37 @@ fn auto_source(cx: &mut Cx<'_>, img: &Buf, w: usize, h: usize, target: (f32, f32
 }
 
 /// Noise reduction (`local::denoise`). `colour_noise`: the whole frame's noise model for the joint
-/// colour NR of process V8 (`lcc_pipeline::colour_noise`); `None`: measured on `img`.
+/// colour NR of process V8 (`lcc_pipeline::colour_noise`); `None`: measured on `img`. A draft with
+/// luminance NR (`Plan::draft_col_key`) runs colour NR first, as the CPU's draft does
+/// (`local::denoise_lum_draft`), so both backends show the same drag.
 fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&JointNoise>) -> Buf {
+    if plan.draft_col_key.is_some() {
+        let img = denoise_colour(cx, img, plan, colour_noise);
+        return denoise_lum(cx, img, plan);
+    }
+    let img = denoise_lum(cx, img, plan);
+    denoise_colour(cx, img, plan, colour_noise)
+}
+
+/// The luminance half of [`denoise`].
+fn denoise_lum(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
+    let Some(nr) = local::nr_params(&plan.settings, plan.detail_scale).0 else { return img };
+    let l = cx.gpu.buffer(n);
+    map(cx, "log_lum_k", n, &[], [Some(&img), None, None], &l);
+    let f = guided(cx, &l, w, h, nr.sigma, nr.eps);
+    let out = cx.gpu.buffer(n * 3);
+    map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);
+    out
+}
+
+/// The colour half of [`denoise`].
+fn denoise_colour(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&JointNoise>) -> Buf {
+    let (w, h) = (plan.w, plan.h);
+    let n = w * h;
+    let (_, col) = local::nr_params(&plan.settings, plan.detail_scale);
     let mut img = img;
-    if let Some(nr) = lum {
-        let l = cx.gpu.buffer(n);
-        map(cx, "log_lum_k", n, &[], [Some(&img), None, None], &l);
-        let f = guided(cx, &l, w, h, nr.sigma, nr.eps);
-        let out = cx.gpu.buffer(n * 3);
-        map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);
-        img = out;
-    }
     if col.is_some() && local::joint_colour_nr(&plan.settings) {
         let Some(p) = local::nrc_params(&plan.settings, plan.detail_scale) else { return img };
         let (detail, amount) = local::nrc_sliders(&plan.settings);

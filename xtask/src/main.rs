@@ -19,6 +19,7 @@ mod ico;
 mod immich;
 mod layers;
 mod notes;
+mod package_size;
 mod parity;
 mod quarantine;
 mod rename;
@@ -88,6 +89,8 @@ commands:
   package [--skip-build] [--render-only]
                   release build + rendered packaging/**/*.in templates, branded binaries, man page and
                   completions into target/package/ (installers: packaging/<os>/package.*)
+  package-size [--update] [--budget FILE] FILE…
+                  compare release downloads with packaging/size-budget.toml; fails on > 10 % growth
   rename-crates <prefix> [--from OLD] | --upstream [--since REV]
                   change the internal crate prefix (lcc-*) everywhere; --upstream rewrites incoming
                   upstream crate paths (UPSTREAM_PREFIX-*) in files changed since REV (fork-base)
@@ -175,6 +178,7 @@ fn main() -> ExitCode {
         Some("run") => dist::cmd_run(&root(), &rest),
         Some("install") => dist::cmd_install(&root(), &rest),
         Some("package") => dist::cmd_package(&root(), &rest),
+        Some("package-size") => package_size::run(&root(), &rest),
         Some("rename-crates") => rename::run(&root(), &rest),
         Some("immich") => immich::run(&root(), &rest),
         Some("ico") => ico::run(&rest),

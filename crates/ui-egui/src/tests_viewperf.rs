@@ -170,3 +170,46 @@ fn an_optics_drag_never_shows_a_black_loupe() {
         h.settle(SETTLE);
     }
 }
+
+/// Gap 26 / plan 4.8 (opt-in, run with
+/// `<PREFIX>_PROBES=1 cargo test --release -p lcc-ui-egui wheel_scroll_100k -- --nocapture`): one frame of wheel
+/// scrolling on a 100k-photo grid, timed frame by frame (a wheel notch delivered as input, then the frame drawn),
+/// against the 16 ms budget. Prints the median, 95th percentile and the grid panel's own share; the ceiling it
+/// asserts is loose (shared, loaded machines), so only a real regression fails.
+#[test]
+fn wheel_scroll_100k_frame() {
+    if !lcc_testkit::probe("wheel_scroll_100k_frame") {
+        return;
+    }
+    use std::time::Instant;
+    let app = LccApp::new(crate::tests_grid::library_of(100_000), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+    h.app.ui.thumb_size = 160.0;
+    h.settle(SETTLE);
+    let canvas = h.app.canvas_rect.expect("grid drawn");
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    let mut frames = Vec::new();
+    let mut panel = Vec::new();
+    let top0 = h.app.grid_scroll.unwrap_or(0.0);
+    for _ in 0..120 {
+        h.app.synthetic.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -120.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Default::default(),
+        });
+        let t = Instant::now();
+        h.step();
+        frames.push(t.elapsed().as_secs_f64() * 1e3);
+        panel.push(h.app.caches.grid_stats.last_show.as_secs_f64() * 1e3);
+    }
+    assert!(h.app.grid_scroll.unwrap_or(0.0) > top0 + 1000.0, "the wheel scrolled the grid: {:?} from {top0}", h.app.grid_scroll);
+    let pick = |v: &mut Vec<f64>, q: f64| {
+        v.sort_by(f64::total_cmp);
+        v.get(((v.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(0.0)
+    };
+    let (median, p95, in_grid) = (pick(&mut frames, 0.5), pick(&mut frames, 0.95), pick(&mut panel, 0.5));
+    eprintln!("wheel scroll 100k | frame median {median:.1} ms, p95 {p95:.1} ms, grid panel median {in_grid:.2} ms (budget 16 ms)");
+    assert!(median < 160.0, "wheel-scroll frame median {median:.0} ms, ten times the 16 ms budget");
+}
