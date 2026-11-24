@@ -698,7 +698,9 @@ fn pick_actual_frozen_native_focus_order_with_only_pick_insertion() {
         } else {
             vec!["slider:thumbSize", "icon:photoGrid", "icon:squareGrid", "icon:detail", "icon:compare", "icon:survey", "icon:people", "icon:sort"]
         };
+        // The rating pill's stars are one framework stop (the focused star) between Sort and the flags.
         let mut expected = native.clone();
+        expected.push("star:bottom:1");
         expected.extend(["flag:unflag", PICK, "flag:reject"]);
         expected.extend(["button:copySettings", "icon:copyGear"]);
         r.ready();
@@ -711,7 +713,7 @@ fn pick_actual_frozen_native_focus_order_with_only_pick_insertion() {
         assert_eq!(forward, expected.iter().cycle().take(expected.len() * 2).map(|s| s.to_string()).collect::<Vec<_>>());
         // Complete forward cycles end at gear. Reverse starts at Copy, then the flags,
         // every native stop in reverse order, and finally gear.
-        let mut expected_reverse = vec!["button:copySettings", "flag:reject", PICK, "flag:unflag"];
+        let mut expected_reverse = vec!["button:copySettings", "flag:reject", PICK, "flag:unflag", "star:bottom:1"];
         expected_reverse.extend(native.iter().rev().copied());
         expected_reverse.push("icon:copyGear");
         let mut reverse = Vec::new();

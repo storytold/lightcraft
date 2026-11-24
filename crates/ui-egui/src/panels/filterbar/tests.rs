@@ -175,6 +175,10 @@ fn filter_kind_tab_enter_navigation_preserves_opener_focus() {
     assert!(h.app.widgets.iter().any(|(id, _)| id == "filter:kind-image"), "Space opens the real SDK rows");
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
     assert_eq!(h.app.session.filter, filter, "keyboard cancellation applies nothing");
+    // (the closing menu holds the focus on its row for the few frames it fades out; then it goes back to the opener)
+    for _ in 0..20 {
+        h.step();
+    }
     assert_eq!(h.view.ctx.memory(|memory| memory.focused()), Some(focused), "Escape returns focus to the opener");
     assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
     // (a closed framework menu fades out for a few frames and holds Tab until it is gone)
