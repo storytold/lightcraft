@@ -843,6 +843,7 @@ fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback
 
         // New V10 edit at the same warm-green WB uses the shared checked Mat3::IDENTITY fallback.
         let mut v10 = DevelopSettings { process: Process::V10.version(), ..Default::default() };
+        assert_eq!(v10.process.process(), Process::V10);
         (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
         let v10_reopened = DevelopSettings::from_json(&v10.to_json()).unwrap();
         assert_eq!(v10_reopened.process, ProcessVersion(10));

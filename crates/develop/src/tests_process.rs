@@ -103,10 +103,10 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     assert_eq!(max.process(), Process::LATEST);
     // a whole number written as a float is that number
     assert_eq!(DevelopSettings::from_json(&json!({"process": 2.0})).unwrap().process, ProcessVersion(2));
-    // reserved V9 falls back to V8 without upgrading to V10
+    // 9 names no process: it renders as V8 and Update to Current Process applies
     let reserved_v9 = DevelopSettings::from_json(&json!({"process": 9})).unwrap().process;
     assert_eq!((reserved_v9.process(), reserved_v9.is_known(), reserved_v9.is_outdated()), (Process::V8, false, true));
-    // 11 and 12 (claimed by open pull requests) fall back to V10 without upgrading to V13
+    // 11 and 12 name no process (12 is claimed by an open pull request): they fall back to V10, and Update applies
     for claimed in [11, 12] {
         let v = DevelopSettings::from_json(&json!({"process": claimed})).unwrap().process;
         assert_eq!((v.process(), v.is_known(), v.is_outdated()), (Process::V10, false, true), "{claimed}");
