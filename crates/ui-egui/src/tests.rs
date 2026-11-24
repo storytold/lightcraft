@@ -79,6 +79,7 @@ mod lightroom_destination;
 mod lights_out;
 mod mask_effects;
 mod masking;
+mod port_screenshots;
 mod masking_layout;
 mod menubar;
 mod merge_preview;
