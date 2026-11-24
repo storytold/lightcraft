@@ -1,8 +1,8 @@
 //! Highlights relative to the photo's own tonal range (process V9, `docs/hs-range.md`).
 //!
-//! Up to V8 Highlights moves the base layer's log luminance by a fixed weight of its absolute level. Lightroom's acts
-//! relative to the frame: on a photo with a wide tonal range it reaches further down and works harder. From V9
-//! Highlights takes the frame's range from the base layer's percentiles ([`FrameRange`]). Shadows keeps V8's rule.
+//! Up to V8 Highlights moves the base layer's log luminance by a fixed weight of its absolute level. From V9 it acts
+//! relative to the frame: on a photo with a wide tonal range it reaches further down and works harder. It takes the
+//! frame's range from the base layer's percentiles ([`FrameRange`]). Shadows keeps V8's rule (`docs/hs-range.md`).
 
 use lightcraft_develop::Process;
 
