@@ -244,6 +244,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("section.retouch", "Retouch", None, "Window>Edit Sections"),
     // {on?}; no params toggles. Opening one Edit section closes the others.
     ("view.soloSections", "Solo Mode", None, "Window>Edit Sections"),
+    // {on?} (no params toggles) or {section}: Light, Color, Color Grading, Effects, Detail in the
+    // Masking panel; opening one folds the others (issue #1305)
+    ("mask.solo", "Solo Mode in Masks", None, "Window>Edit Sections"),
     ("tool.brush", "Brush", Some("B"), "Window>Tools"),
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
@@ -334,6 +337,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.appearance", "Next Appearance Mode", None, ""),
     // {theme: charcoal | midnight | silver | paper}: pick a theme and fix the mode to its family.
     ("view.theme", "Theme", None, ""),
+    // {shade?: theme | black | darkGray | mediumGray | lightGray | white}: the shade behind the photo
+    // in the loupe (cycles when omitted). Window ▸ Appearance ▸ Loupe Background, the loupe's right-click.
+    ("view.loupeBackground", "Next Loupe Background", None, ""),
+    // {shade?}: the same for the filmstrip. Window ▸ Appearance ▸ Filmstrip Background.
+    ("view.filmstripBackground", "Next Filmstrip Background", None, ""),
     ("dialog.allMetadata", "All Metadata…", None, "Metadata"),
     ("dialog.faceModel", "Add Face Model…", None, ""),
     ("dialog.newSmartAlbum", "New Smart Collection from Filter…", Some("Cmd+Alt+N"), "Library"),
@@ -699,6 +707,27 @@ fn appearance_command(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     Ok(appearance_json(app))
 }
 
+/// `view.loupeBackground {shade?}` / `view.filmstripBackground {shade?}`: the shade behind the
+/// loupe's photo or the filmstrip; omitted, the next one. Saved with the settings.
+fn background_command(app: &mut LccApp, p: &Value, filmstrip: bool) -> Result<Value, String> {
+    use crate::theme::CanvasShade;
+    let command = if filmstrip { "view.filmstripBackground" } else { "view.loupeBackground" };
+    let s = &mut app.ui.settings;
+    let slot = if filmstrip { &mut s.filmstrip_background } else { &mut s.loupe_background };
+    let shade = match p.get("shade") {
+        None | Some(Value::Null) => slot.next(),
+        Some(v) => match v.as_str().and_then(CanvasShade::from_id) {
+            Some(shade) => shade,
+            None => {
+                let ids = CanvasShade::ALL.map(|s| s.id()).join("|");
+                return Err(format!("{command}: unknown shade {v} ({ids})"));
+            }
+        },
+    };
+    *slot = shade;
+    Ok(json!({"loupe": s.loupe_background.id(), "filmstrip": s.filmstrip_background.id()}))
+}
+
 /// `view.theme {theme}`: pick a theme; the mode becomes its family's (Dark or Light).
 fn theme_command(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     let ids = crate::theme::ThemeKind::ALL.map(|k| k.id()).join("|");
@@ -944,6 +973,8 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             Ok(json!({"sidebar": app.ui.sidebar}))
         }
         "view.appearance" => appearance_command(app, p),
+        "view.loupeBackground" => background_command(app, p, false),
+        "view.filmstripBackground" => background_command(app, p, true),
         "view.theme" => theme_command(app, p),
         "library.selectOnlyActive" => {
             let Some(active) = app.session.active() else { return Some(Err("no active photo".into())) };
@@ -1932,6 +1963,17 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             }
             Ok(json!({"hidden": app.ui.hidden_locations}))
         }
+        "mask.solo" => match p.get("section") {
+            None | Some(Value::Null) => bool_param(id, p, "on").map(|on| {
+                app.ui.set_mask_solo(on.unwrap_or(!app.ui.mask_solo));
+                json!({"maskSolo": app.ui.mask_solo})
+            }),
+            Some(Value::String(k)) if crate::state::MASK_SECTIONS.contains(&k.as_str()) => {
+                app.ui.solo_mask_section(k);
+                Ok(json!({"maskSolo": app.ui.mask_solo, "section": k}))
+            }
+            Some(other) => Err(format!("mask.solo: unknown section {other} (one of {})", crate::state::MASK_SECTIONS.join(", "))),
+        },
         "view.soloSections" => bool_param(id, p, "on").map(|on| {
             app.ui.set_single_panel(on.unwrap_or(!app.ui.single_panel));
             json!({"soloSections": app.ui.single_panel})

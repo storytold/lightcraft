@@ -108,8 +108,10 @@ fn group_changed(a: &LocalAdjustments, ids: &[&str]) -> bool {
 /// A mask slider section's title row: click folds it shut and open again (`section:mask:<key>`, kept
 /// in [`crate::state::UiState::folded_sections`], so open unless folded). A dot after the title
 /// marks a section whose sliders are not all at 0, so a folded one still shows it does something.
-/// Says whether the section is open.
-fn section_header(app: &mut LccApp, ui: &mut egui::Ui, key: &str, title: &str, changed: bool) -> bool {
+/// An icon before the title sets the colour tools apart (issue #1305). In Solo Mode
+/// (`mask.solo`), or on an Alt-click, opening one section folds the others; the header's context
+/// menu turns Solo Mode on and off. Says whether the section is open.
+fn section_header(app: &mut LccApp, ui: &mut egui::Ui, key: &str, title: &str, icon: Option<Icon>, changed: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let id = format!("mask:{key}");
     let open = !app.ui.section_folded(&id);
@@ -135,6 +137,14 @@ fn section_header(app: &mut LccApp, ui: &mut egui::Ui, key: &str, title: &str, c
     };
     let chevron = Rect::from_center_size(pos2(chev_x, r.center().y), vec2(12.0, 12.0));
     paint(p, chevron, if open { Icon::ChevronDown } else { Icon::ChevronRight }, if dense { t.text } else { t.icon });
+    let title_x = match icon {
+        Some(icon) => {
+            let at = Rect::from_center_size(pos2(title_x + 7.0, r.center().y), vec2(14.0, 14.0));
+            paint(p, at, icon, if dense { t.text } else { t.icon });
+            title_x + 20.0
+        }
+        None => title_x,
+    };
     let g = p.layout_no_wrap(title.to_string(), t.semibold(13.0), colour);
     let at = pos2(title_x, r.center().y - g.size().y / 2.0);
     let end = at.x + g.size().x;
@@ -143,8 +153,24 @@ fn section_header(app: &mut LccApp, ui: &mut egui::Ui, key: &str, title: &str, c
         p.circle_filled(pos2(end + 8.0, r.center().y), 2.5, t.accent);
     }
     if resp.clicked() {
-        app.ui.toggle_folded(&id);
+        let solo = !open && (app.ui.mask_solo || ui.input(|i| i.modifiers.alt));
+        if !solo {
+            app.ui.toggle_folded(&id);
+        } else if let Err(e) = app.run("mask.solo", json!({"section": key})) {
+            app.toast(ui.ctx(), e);
+        }
     }
+    resp.context_menu(|ui| {
+        let mut solo = app.ui.mask_solo;
+        let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
+        register(ui.ctx(), "maskSectionMenu:solo", item.rect);
+        if item.changed() {
+            if let Err(e) = app.run("mask.solo", json!({"on": solo})) {
+                app.toast(ui.ctx(), e);
+            }
+            ui.close();
+        }
+    });
     open
 }
 
@@ -152,7 +178,7 @@ fn section_header(app: &mut LccApp, ui: &mut egui::Ui, key: &str, title: &str, c
 /// Highlights, Global, picked by the buttons), its Hue, Saturation and Luminance.
 fn grading_section(app: &mut LccApp, ui: &mut egui::Ui, a: &LocalAdjustments) {
     let ids: Vec<&str> = GRADE_ZONES.iter().flat_map(|(z, _)| grade_specs(z).map(|s| s.id)).collect();
-    if !section_header(app, ui, "grading", "Color Grading", group_changed(a, &ids)) {
+    if !section_header(app, ui, "grading", "Color Grading", Some(Icon::GradeAll), group_changed(a, &ids)) {
         return;
     }
     let zone_id = egui::Id::new("maskGradeZone");
@@ -894,7 +920,11 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     super::mask_effects::effect_row(app, ui, &m, true);
     for (key, title, ids) in GROUPS {
-        if !section_header(app, ui, key, title, group_changed(&m.adjust, ids)) {
+        if *key == "effects" {
+            // Color Grading is a section of its own, right under Color (as Camera Raw lays it out)
+            grading_section(app, ui, &m.adjust);
+        }
+        if !section_header(app, ui, key, title, None, group_changed(&m.adjust, ids)) {
             continue;
         }
         for s in LOCAL.iter().filter(|s| ids.contains(&s.id)).map(|s| local_spec(s, app.ui.settings.expanded_sliders)).collect::<Vec<_>>() {
@@ -918,7 +948,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         if *key == "color" {
             // the tint swatch under Saturation; its row opens the hue and strength sliders
             let open = app.ui.flyout_open("maskTint");
-            let row = flyout_row(ui, "maskTint", "Color", Icon::Target, open);
+            let row = flyout_row(ui, "maskTint", "Color", Icon::Bucket, open);
             let sw = Rect::from_center_size(pos2(row.rect.right() - 36.0, row.rect.center().y), vec2(16.0, 16.0));
             register(ui.ctx(), "maskTint:swatch", sw);
             let t = Tokens::get(ui.ctx());
@@ -944,12 +974,10 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                     }
                 });
             }
-            divider(ui);
-            grading_section(app, ui, &m.adjust);
             // the mask's own Color Mixer and Point Color (a colour photo's tools, as globally)
             if !crate::is_bw(&d) {
                 let open = app.ui.flyout_open("maskMixer");
-                if flyout_row(ui, "maskMixer", "Color Mixer", Icon::Target, open).clicked() {
+                if flyout_row(ui, "maskMixer", "Color Mixer", Icon::Palette, open).clicked() {
                     app.ui.toggle_flyout("maskMixer");
                 }
                 if open {
@@ -996,7 +1024,7 @@ fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui, enabled: bool) {
     let shown = lcc_develop::Mask { id: 0, adjust: app.session.mask_next, ..Default::default() };
     super::mask_effects::effect_row(app, ui, &shown, enabled);
     for (key, title, ids) in GROUPS {
-        if !section_header(app, ui, key, title, group_changed(&shown.adjust, ids)) {
+        if !section_header(app, ui, key, title, None, group_changed(&shown.adjust, ids)) {
             continue;
         }
         for s in LOCAL.iter().filter(|s| ids.contains(&s.id)).map(|s| local_spec(s, app.ui.settings.expanded_sliders)).collect::<Vec<_>>() {

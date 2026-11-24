@@ -43,5 +43,34 @@
         }
       }
     ]
+  },
+  {
+    "name": "settings-sync",
+    "steps": [
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "module.library"
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "sync.rename",
+          "params": {
+            "name": "Studio PC"
+          }
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "app.settings",
+          "params": {
+            "tab": "sync"
+          }
+        }
+      }
+    ]
   }
 ]

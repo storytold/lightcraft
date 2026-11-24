@@ -104,3 +104,70 @@ fn resizing_the_filmstrip_keeps_the_active_photo_in_place() {
     assert_eq!(film_rescroll(f32::NAN, 100.0, 50.0, None), 0.0);
     assert_eq!(film_rescroll(10.0, 0.0, 50.0, None), 0.0);
 }
+
+/// The filmstrip's header filters, as in Lightroom Classic (#1296): flags, then the rating, then the colour
+/// labels, left to right; a click narrows the strip to the matching photos and never flags or rates one.
+#[test]
+fn the_filmstrip_header_filters_by_flag_rating_and_label_in_lightroom_order() {
+    let mut session = lcc_engine::Session::with_demo();
+    let ids = session.visible_cloned();
+    let app = LccApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1600.0, 900.0], 1.0);
+    let (picked, other) = (ids[0], ids[1]);
+    for (cmd, params) in [
+        ("library.select", json!({"ids": [picked.0]})),
+        ("photo.flag", json!({"flag": "pick"})),
+        ("photo.rate", json!({"rating": 3})),
+        ("library.select", json!({"ids": [other.0]})),
+    ] {
+        let r = h.request("engine.execute", json!({"command": cmd, "params": params}), T);
+        assert_eq!(r["ok"], true, "{cmd}: {r}");
+    }
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let at = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.center().x);
+    let order = [
+        "filmfilter:pick",
+        "filmfilter:none",
+        "filmfilter:reject",
+        "filmfilter:ratingOp",
+        "filmfilter:star1",
+        "filmfilter:star5",
+        "filmfilter:label-red",
+    ];
+    let xs: Vec<f32> = order.iter().map(|id| at(&h, id).unwrap_or_else(|| panic!("{id} drawn"))).collect();
+    assert!(xs.windows(2).all(|w| w[0] < w[1]), "flags, then rating, then labels: {xs:?}");
+    let ratings_before: Vec<u8> = ids.iter().map(|id| h.app.session.catalog.photo(*id).unwrap().rating).collect();
+
+    // the pick flag filter: only picks stay in the strip
+    let r = h.request("ui.clickWidget", json!({"id": "filmfilter:pick"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.flag, Some(lcc_catalog::Flag::Pick));
+    let vis = h.app.session.visible_cloned();
+    assert!(vis.contains(&picked) && !vis.contains(&other), "{vis:?}");
+    assert!(vis.iter().all(|id| h.app.session.catalog.photo(*id).unwrap().flag == lcc_catalog::Flag::Pick), "only picks: {vis:?}");
+    assert_eq!(h.app.session.catalog.photo(other).unwrap().flag, lcc_catalog::Flag::None, "a filter click flags nothing");
+    // a second click lifts it
+    let r = h.request("ui.clickWidget", json!({"id": "filmfilter:pick"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.flag, None);
+
+    // three stars or more
+    let r = h.request("ui.clickWidget", json!({"id": "filmfilter:star3"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.rating, 3);
+    let vis = h.app.session.visible_cloned();
+    assert!(vis.contains(&picked) && vis.iter().all(|id| h.app.session.catalog.photo(*id).unwrap().rating >= 3), "{vis:?}");
+    let ratings_after: Vec<u8> = ids.iter().map(|id| h.app.session.catalog.photo(*id).unwrap().rating).collect();
+    assert_eq!(ratings_before, ratings_after, "a star click rates nothing");
+
+    // a colour label
+    let r = h.request("ui.clickWidget", json!({"id": "filmfilter:label-red"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.labels_shown().unwrap_or_default(), vec![lcc_catalog::ColorLabel::Red]);
+}
