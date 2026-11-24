@@ -1505,6 +1505,8 @@ fn an_exact_box_past_the_pixel_ceiling_is_shrunk() {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_cpu_only_cost;
+#[cfg(test)]
 mod tests_curve_space;
 #[cfg(test)]
 mod tests_dehaze;

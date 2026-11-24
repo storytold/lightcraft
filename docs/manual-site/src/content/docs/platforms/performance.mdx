@@ -11,7 +11,7 @@ import Shot from '../../../components/Shot.astro';
 <Shot name="settings-performance" alt="Settings, Performance tab: GPU, HDR, preview size, memory, export and thumbnail cache" />
 
 ## Rendering
-- Develop renders on the GPU (Metal, Vulkan, DirectX 12) with a CPU fallback that gives the same result.
+- Develop renders on the GPU (Metal, Vulkan, DirectX 12) with a CPU fallback that gives the same result. Windows on ARM (Snapdragon) uses DirectX 12 first, with Vulkan as the fallback.
 - **Settings ▸ Performance**: *Use the GPU for rendering*, preview size, *High quality adjustment previews*, memory for caches (Automatic uses a quarter of RAM, up to 16 GB).
 - **Exports**: photos at once, *Use the GPU for exports*, and **Test my machine**, which tries several settings and keeps the fastest.
 - **Thumbnail cache**: size limit and **Clear Cache**.

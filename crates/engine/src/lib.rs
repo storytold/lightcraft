@@ -152,6 +152,7 @@ mod sync_same;
 pub mod template_folders;
 pub mod text;
 pub mod timelapse;
+pub mod ui_languages;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
 pub mod upright_jobs;
