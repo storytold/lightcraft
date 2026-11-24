@@ -225,7 +225,7 @@ fn validate_for(
     }
     if platform != Platform::Windows
         && let Some(id) = env("FLATPAK_ID").filter(|v| !v.is_empty())
-        && id != OsString::from(NIGHTLY_FLATPAK_ID)
+        && id != NIGHTLY_FLATPAK_ID
     {
         // A native tar/app-bundle launch must not inherit a Flatpak runtime (its socket namespace
         // and its data folder could point another profile at the stable app's state). The Nightly
