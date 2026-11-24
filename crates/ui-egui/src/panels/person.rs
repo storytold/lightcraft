@@ -548,7 +548,8 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: 
         p.line_segment([pos2(ac.x, ac.y - 5.0), pos2(ac.x + 4.0, ac.y - 1.0)], arrow);
     }
     if more {
-        let tip = format!("Looks like {name} (similarity {:.2}). Click to confirm.", f.score);
+        let percent = if f.score.is_finite() { f.score.clamp(0.0, 1.0) * 100.0 } else { 0.0 };
+        let tip = format!("Looks like {name} (similarity {percent:.0}%). Click to confirm.");
         super::face_preview::on_hover(app, &resp, f.photo, f.rect, Some(tip));
         if let Some(above) = above_resp.as_ref() {
             let _ = above.clone().on_hover_text(format!(
