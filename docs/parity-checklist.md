@@ -32,7 +32,7 @@ cited here still exists. Formerly docs/parity.md.
 | D. Search & filter (FILT) | 13 | 1 | 0 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 44 | 6 | 1 | 0 | 28/28 (100%) | 13/15 (87%) |
-| G. Profiles (PROF) | 8 | 5 | 3 | 0 | 3/4 (75%) | 3/4 (75%) |
+| G. Profiles (PROF) | 8 | 7 | 1 | 0 | 3/4 (75%) | 3/4 (75%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 10 | 2 | 2 | 1 | 4/4 (100%) | 2/3 (67%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
@@ -55,9 +55,9 @@ cited here still exists. Formerly docs/parity.md.
 | Lightroom Classic extras | 106 | 22 | 0 | 0 | — | 36/40 (90%) |
 | BEYOND. Beyond the reference app | 7 | 0 | 0 | 0 | — | — |
 | IMM. Immich integration | 11 | 0 | 0 | 0 | — | 7/7 (100%) |
-| **Total** | 528 | 82 | 20 | 25 | 195/203 (96%) | 172/191 (90%) |
+| **Total** | 528 | 84 | 18 | 25 | 195/203 (96%) | 172/191 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.3%** of 630 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 80.3% of 231.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.5%** of 630 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 80.7% of 231.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
