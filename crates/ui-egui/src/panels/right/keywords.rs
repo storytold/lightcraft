@@ -356,7 +356,8 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let sets = lightcraft_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).size(12.5).color(t.text_dim));
         let recent = lightcraft_engine::cmd::keywords::RECENT;
         let face = crate::i18n::builtin_label(&current, current == recent).to_owned();
         // (the dropdown takes the rest of the line, so a long set name is not cut and the chevron stays)

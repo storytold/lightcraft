@@ -40,7 +40,11 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let shown = Button::new(crate::i18n::tr(label).to_owned())
                 .id_salt(&key)
                 .size(craft::theme::ControlSize::Sm)
-                .variant(craft::theme::Variant::GHOST)
+                .variant(if app.ui.keywording_view == view {
+                    craft::theme::Variant::look(craft::theme::Emphasis::Soft, craft::theme::variant::Tone::Accent)
+                } else {
+                    craft::theme::Variant::GHOST
+                })
                 .selected(app.ui.keywording_view == view)
                 .show(ui);
             if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { continue; }
