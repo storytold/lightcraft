@@ -52,7 +52,11 @@ if [[ "${LIGHTCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* 
   IS_NIGHTLY=1
   export LIGHTCRAFT_BUILD_CHANNEL=nightly-v1
 fi
-BASENAME="lightcraft-$VERSION-linux-$ARCH"
+ARTIFACT_VERSION="$VERSION"
+if [[ "$IS_NIGHTLY" = 1 && "$VERSION" != *-nightly* ]]; then
+  ARTIFACT_VERSION="${VERSION}-nightly"
+fi
+BASENAME="lightcraft-$ARTIFACT_VERSION-linux-$ARCH"
 
 if [[ -n "$ARCH_TAR_DIR" && "$IS_NIGHTLY" != 1 ]]; then
   echo "error: --arch-tar-dir is only for Nightly builds" >&2
@@ -155,7 +159,21 @@ exec /usr/lib/lightcraft-nightly/lightcraft "$@"
 WRAPPER
     chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     rm -f "$NFPM_STAGE/usr/bin/lightcraft"
-    mv "$NFPM_STAGE/usr/bin/lightcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
+    install -Dm755 "$NFPM_STAGE/usr/bin/lightcraft-cli" "$NFPM_STAGE/usr/lib/lightcraft-nightly/lightcraft-cli"
+    cat >"$NFPM_STAGE/usr/bin/$NFPM_CLI" <<'WRAPPER'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
+fi
+if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then
+  profile_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
+  export LIGHTCRAFT_CONFIG_DIR="$profile_base/lightcraft-nightly"
+fi
+exec /usr/lib/lightcraft-nightly/lightcraft-cli "$@"
+WRAPPER
+    chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_CLI"
+    rm -f "$NFPM_STAGE/usr/bin/lightcraft-cli"
     mv "$NFPM_STAGE/usr/share/doc/lightcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
     sed -e "s|^Exec=lightcraft\([[:space:]]\|$\)|Exec=$NFPM_BIN\1|" \
         -e "s|^TryExec=lightcraft$|TryExec=$NFPM_BIN|" \

@@ -33,7 +33,7 @@ mv "$bin/lightcraft-cli" "$bin/lightcraft-nightly-cli"
 
 test ! -e "$stage/bin/.lightcraft-nightly"
 cmp "$stage/bin/lightcraft" "$bin/.lightcraft-nightly/lightcraft"
-cmp "$stage/bin/lightcraft-cli" "$bin/lightcraft-nightly-cli"
+cmp "$stage/bin/lightcraft-cli" "$bin/.lightcraft-nightly/lightcraft-cli"
 export HOME="$work/home with space"
 unset XDG_DATA_HOME LIGHTCRAFT_CONFIG_DIR
 expect() {
@@ -53,5 +53,11 @@ expect "$(printf 'CONFIG=<<unset>>\n<--version>\n')" --version
 expect "$(printf 'CONFIG=<<unset>>\n<-V>\n')" -V
 LIGHTCRAFT_CONFIG_DIR="$work/explicit with space" expect "$(printf 'CONFIG=<%s>\n<%s>\n' "$work/explicit with space" sample.dng)" \
   sample.dng
+cli_actual=$(PATH="$bin:$PATH" lightcraft-nightly-cli calibrate)
+cli_expected=$(printf 'CONFIG=<%s>\n<calibrate>\n' "$XDG_DATA_HOME/lightcraft-nightly")
+if [[ "$cli_actual" != "$cli_expected" ]]; then
+  printf 'expected:\n%s\nactual:\n%s\n' "$cli_expected" "$cli_actual" >&2
+  exit 1
+fi
 
 echo "PASS: Arch Nightly handoff isolates the profile and preserves launch arguments"

@@ -73,6 +73,20 @@ fi
 exec /app/libexec/lightcraft "$@"
 WRAPPER
   chmod 755 "$WORK/stage/bin/lightcraft"
+  mv "$WORK/stage/bin/lightcraft-cli" "$WORK/stage/bin/lightcraft-cli-bin"
+  cat >"$WORK/stage/bin/lightcraft-cli" <<'WRAPPER'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  exec /app/libexec/lightcraft-cli "$@"
+fi
+if [ -z "${LIGHTCRAFT_CONFIG_DIR+x}" ]; then
+  profile_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.var/app/ai.storyteller.lightcraft.nightly/data}"
+  export LIGHTCRAFT_CONFIG_DIR="$profile_base/profile"
+fi
+exec /app/libexec/lightcraft-cli "$@"
+WRAPPER
+  chmod 755 "$WORK/stage/bin/lightcraft-cli"
   sed -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
       -e "s|^Name=LightCraft$|Name=LightCraft Nightly|" \
       -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.lightcraft.nightly-v1|' \
@@ -93,6 +107,7 @@ WRAPPER
     "$WORK/stage/share/icons/hicolor/256x256/apps/$FLATPAK_ID.png"
   sed -e "s|ai\.storyteller\.lightcraft|$FLATPAK_ID|g" \
       -e 's|- install -Dm755 bin/lightcraft /app/bin/lightcraft|- install -Dm755 bin/lightcraft-bin /app/libexec/lightcraft\n      - install -Dm755 bin/lightcraft /app/bin/lightcraft|' \
+      -e 's|- install -Dm755 bin/lightcraft-cli /app/bin/lightcraft-cli|- install -Dm755 bin/lightcraft-cli-bin /app/libexec/lightcraft-cli\n      - install -Dm755 bin/lightcraft-cli /app/bin/lightcraft-cli|' \
       "$HERE/flatpak/$APP_ID.bundle.yml" >"$WORK/$FLATPAK_ID.yml"
 else
   cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$FLATPAK_ID.yml"

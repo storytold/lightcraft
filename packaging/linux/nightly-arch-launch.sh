@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 
-real_bin="$(dirname "$0")/.lightcraft-nightly/lightcraft"
+case "$(basename "$0")" in
+  *-cli) real_bin="$(dirname "$0")/.lightcraft-nightly/lightcraft-cli" ;;
+  *) real_bin="$(dirname "$0")/.lightcraft-nightly/lightcraft" ;;
+esac
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exec "$real_bin" "$@"
 fi
