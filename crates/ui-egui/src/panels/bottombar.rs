@@ -364,11 +364,15 @@ fn measuring(ui: &egui::Ui) -> bool {
 /// A dropdown face: the framework push button showing `text` and the menu chevron, published as
 /// `dropdown:<id>`. The caller hangs a framework menu from the returned response.
 fn dropdown_face(ui: &mut egui::Ui, id: &str, text: &str) -> egui::Response {
-    let shown = Button::new(text.to_owned())
+    let mut button = Button::new(text.to_owned())
         .id_salt(("bottom-dropdown", id))
         .variant(craft::theme::Variant::GHOST)
-        .trailing_icon(DisclosureGlyph::dropdown())
-        .show(ui);
+        .trailing_icon(DisclosureGlyph::dropdown());
+    // The face takes the room it measures and is shown there. Shown in the flow, a framework body that measures the
+    // shell's window first does not find it in what it kept, and asks for another pass every frame.
+    let size = button.measure_in(ui, craft::behavior::Proposal::Ideal);
+    let (_, room) = ui.allocate_space(size);
+    let shown = button.show_at(ui, room);
     if !measuring(ui) {
         crate::widgets::register_response(format!("dropdown:{id}"), shown.response.rect, &shown.response);
     }
