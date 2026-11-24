@@ -65,7 +65,6 @@ rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-deno
 
 [dev-dependencies]
 # Construct RAW errors using the same TIFF package as craft-raw.
-craft-raw-tiff = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
