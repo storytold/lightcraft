@@ -93,6 +93,18 @@ fn a_header_eye_hides_the_selection_overlay() {
     assert!(h.app.ui.mask_overlay, "a new mask shows its overlay");
     click_eye(&mut h, "tone");
     assert!(!h.app.ui.mask_overlay, "the eye hides the overlay, as a slider does");
+    // with every mask's overlay on (Ctrl+Shift+O), which paints the selected mask too, the eye and a slider hide it
+    let d = |h: &Headless| (*h.app.session.develop_of(h.app.session.active().unwrap()).unwrap()).clone();
+    for (command, params) in
+        [("mask.sectionEnabled", json!({"section": "tone", "enabled": true})), ("mask.adjust", json!({"values": {"exposure": 0.5}}))]
+    {
+        exec(&mut h, "view.maskOverlayAll", json!({}));
+        assert!(h.app.ui.mask_overlay_all);
+        assert!(matches!(crate::panels::detail::view_overlay(&h.app, &d(&h)), lightcraft_pipeline::Overlay::AllMasks { .. }), "{command}");
+        exec(&mut h, command, params);
+        assert!(!h.app.ui.mask_overlay_all, "{command} hides every mask's overlay");
+        assert!(matches!(crate::panels::detail::view_overlay(&h.app, &d(&h)), lightcraft_pipeline::Overlay::None), "{command}: the photo alone");
+    }
 }
 
 #[test]

@@ -253,9 +253,11 @@ impl LightcraftApp {
                     | "mask.pointColor.clear"
             )
         {
-            // Judge local adjustments on the photo (a section eye included), without the selection overlay obscuring them.
-            // Keep it hidden after release; O / the overlay eye can show it again.
+            // Judge local adjustments on the photo (a section eye included), without the selection overlay obscuring them,
+            // nor the all-masks one (Ctrl+Shift+O), which paints the selected mask too. Keep them hidden after release;
+            // O / the overlay eye / Ctrl+Shift+O show them again.
             self.ui.mask_overlay = false;
+            self.ui.mask_overlay_all = false;
         }
         if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate" | "mask.select") {
             // A new or newly picked mask shows its overlay again, as in Lightroom: hidden by a slider
