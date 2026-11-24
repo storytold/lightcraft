@@ -350,9 +350,17 @@ fn a_picked_lens_corrects_a_manual_lens() {
     assert!(p.embedded_lens.is_some(), "the picked profile corrects the photo");
     assert!(p.develop.optics.lens_profile, "picking a lens turns lens corrections on");
     assert_eq!(s.undo.len(), undo + 1, "one undo step");
-    // kept in the catalog, not written to the XMP sidecar
+    // written to the XMP sidecar as `optics.lens`, and read back from it
     let xmp = crate::sidecar::sidecar_packet(p, &s.catalog);
-    assert!(!xmp.contains("Testcam 18-55mm"), "the picked lens is not written to XMP");
+    assert!(xmp.contains("Testcam 18-55mm"), "the picked lens is written to XMP");
+    let back = crate::sidecar::parse_sidecar(&xmp, crate::crs::Target::RawRelative).unwrap();
+    match back.develop {
+        Some(crate::sidecar::DevelopPatch::Full(d)) => {
+            let l = d.optics.lens.expect("the picked lens comes back");
+            assert_eq!((l.make.as_deref(), l.model.as_str(), l.focal), (Some("Testcam"), "Testcam 18-55mm f/3.5-5.6", Some(18.0)));
+        }
+        other => panic!("{other:?}"),
+    }
 
     // back to the automatic choice
     let st = s.execute("lens.choose", &json!({"lens": null})).unwrap();
@@ -390,4 +398,76 @@ fn lens_choose_refuses_hostile_params() {
         assert!(s.execute("lens.choose", &bad).is_err(), "{bad} was accepted");
     }
     assert!(s.catalog.photo(id).unwrap().develop.optics.lens.is_none(), "nothing was stored");
+}
+
+/// A hostile `optics.lens` in a sidecar (huge, empty or wrongly typed names, absurd focal lengths) reads without a
+/// panic, and a name no lens may have corrects nothing.
+#[test]
+fn hostile_sidecar_lens_is_harmless() {
+    let huge = "x".repeat(100_000);
+    for lens in [
+        json!({"model": huge}),
+        json!({"model": ""}),
+        json!({"model": 5, "make": []}),
+        json!({"model": "Testcam 18-55mm f/3.5-5.6", "focal": -1e308}),
+        json!("a string"),
+        json!(null),
+    ] {
+        let settings = json!({"optics": {"lens": lens}}).to_string();
+        let xmp = lcc_meta::write_xmp_filters(&lcc_meta::Metadata::default(), &[("settings", settings.as_str())], &[], &[], &[]);
+        let _ = crate::sidecar::parse_sidecar(&xmp, crate::crs::Target::RawRelative);
+        if let Ok(v) = serde_json::from_value::<lcc_develop::ChosenLens>(lens.clone()) {
+            let given = crate::lens_profiles::GivenLens::from(&v);
+            let db = lcc_lensdb::LensDb::parse(DB).unwrap();
+            let found = crate::lens_profiles::find_given(&db, &given);
+            if given.validate().is_err() {
+                assert!(found.is_none(), "{lens}");
+            }
+        }
+    }
+}
+
+/// The first run fetches the database once, on the activity stack; later starts don't, whatever the outcome.
+#[test]
+fn first_run_fetches_once() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    if skip_for_env() {
+        return;
+    }
+    let before = crate::lens_profiles::configured_dir();
+    crate::lens_profiles::set_dir(None);
+    let settings = scratch("first-run");
+    let mut s = session(&settings, &serve("200 OK", archive()));
+    assert!(!s.lens_db.first_run_tried());
+    assert!(s.lens_db.fetch_on_first_run(&s.activity), "a first run with no database fetches it");
+    assert!(s.activity.list().iter().any(|r| r.kind == "download"), "the download holds an activity row");
+    assert_eq!(s.lens_db.wait(), Some(crate::lens_download::State::Done { lenses: 1 }));
+    assert!(s.lens_db.first_run_tried());
+    assert_eq!(s.lens_db.status()["lenses"], 1);
+    // a later start: never again, even after the database is removed
+    s.execute("lens.db.remove", &json!({})).unwrap();
+    let mut s = session(&settings, &serve("200 OK", archive()));
+    assert!(!s.lens_db.fetch_on_first_run(&s.activity));
+    assert!(s.lens_db.download_state().is_none());
+    // a failed first run is not retried either
+    let other = scratch("first-run-fail");
+    let mut s = session(&other, &serve("404 Not Found", b"x".to_vec()));
+    assert!(s.lens_db.fetch_on_first_run(&s.activity));
+    assert!(matches!(s.lens_db.wait(), Some(crate::lens_download::State::Failed(_))));
+    let mut s = session(&other, "");
+    assert!(!s.lens_db.fetch_on_first_run(&s.activity));
+    // a database already set up: nothing fetched
+    let third = scratch("first-run-set-up");
+    let mut s = session(&third, "");
+    crate::lens_profiles::set_dir(Some(third.to_path_buf()));
+    assert!(!s.lens_db.fetch_on_first_run(&s.activity));
+    // a database removed before first-run fetching existed (`dir: null`, no first-run key) stays removed
+    let fourth = scratch("first-run-removed-before");
+    std::fs::write(fourth.join("lens-profiles.json"), r#"{"dir":null}"#).unwrap();
+    let mut s = session(&fourth, "");
+    assert!(!s.lens_db.fetch_on_first_run(&s.activity));
+    // no settings folder: nothing
+    let mut s = Session::new();
+    assert!(!s.lens_db.fetch_on_first_run(&s.activity));
+    crate::lens_profiles::set_dir(before);
 }

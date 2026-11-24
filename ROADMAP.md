@@ -234,6 +234,8 @@ history/snapshots remain source data, and smart collections import current membe
 database is read-only; the app owns subsequent edits. See `docs/lightroom-catalog-import.md`.
 
 ## Log
+- 2026-11-24: process-retune gate in CI (LR-BEHAV-RENDER-FIDELITY, gap 3): every frozen process must match a
+  committed per-process, per-tool aggregate baseline (`cargo xtask fidelity --baseline`).
 - 2026-11-24: plan 3.8 per-model verification drive (gap 10): Sony SRF and the upright FinePix S200 EXR RAF decode;
   47 more Olympus / OM bodies verified by a bulk check: 645 of 1,446 models verified (45%), 89% of photographers on a
   verified body; `docs/raw/coverage.py` prints the phase-3 target (60% / 95%), not met.

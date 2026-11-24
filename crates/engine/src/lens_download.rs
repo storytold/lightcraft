@@ -7,6 +7,10 @@
 //! tarball, of which only `data/db/*.xml` is kept) is unpacked into `<settings>/lensfun/db`, with bounded sizes and
 //! file names checked so nothing is written outside that folder; the old database stays in place until the new one
 //! has been read and holds lenses. Failure is a message, never a panic.
+//!
+//! First run: the desktop app fetches the database once by itself ([`LensSettings::fetch_on_first_run`]) when no
+//! database is set up (no folder in Settings, none in the environment). The attempt is recorded in the settings file
+//! before it starts, so it happens once whatever its outcome; Settings ▸ Lens profiles can remove it or fetch again.
 
 // the web build downloads nothing: the download half is unused there
 #![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
@@ -25,6 +29,8 @@ pub const URL: &str = "https://github.com/lensfun/lensfun/archive/master.tar.gz"
 pub const ATTRIBUTION: &str = "Lens profiles from the lensfun project (lensfun.github.io), CC-BY-SA 3.0";
 /// Settings file name (in the settings folder).
 const SETTINGS_FILE: &str = "lens-profiles.json";
+/// Settings-file key recording that the first-run fetch was tried.
+const FIRST_RUN_KEY: &str = "firstRunFetch";
 /// Folder (in the settings folder) the database is downloaded into.
 pub const DOWNLOAD_DIR: &str = "lensfun";
 
@@ -102,15 +108,42 @@ impl LensSettings {
 
     /// The folder saved in the settings file.
     pub fn saved_dir(&self) -> Option<PathBuf> {
-        let file = self.settings_dir.as_ref()?.join(SETTINGS_FILE);
-        let text = std::fs::read_to_string(file).ok().filter(|t| t.len() < 64 << 10)?;
-        let v: Value = serde_json::from_str(&text).ok()?;
-        v.get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()).map(PathBuf::from)
+        read_settings(self.settings_dir.as_deref()).get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()).map(PathBuf::from)
     }
 
     /// Where Download puts the database.
     pub fn download_target(&self) -> Option<PathBuf> {
         self.settings_dir.as_ref().map(|d| d.join(DOWNLOAD_DIR).join("db"))
+    }
+
+    /// Whether the first-run fetch was already tried (recorded in the settings file).
+    /// A settings file that already holds a folder choice (even none, after Remove) counts as tried: the user
+    /// decided before first-run fetching existed, and a removed database stays removed.
+    pub fn first_run_tried(&self) -> bool {
+        let v = read_settings(self.settings_dir.as_deref());
+        v.contains_key("dir") || v.get(FIRST_RUN_KEY).and_then(Value::as_bool).unwrap_or(false)
+    }
+
+    /// The desktop app's first run: start downloading lensfun's database once, holding a row on the activity stack,
+    /// when no database is set up (none in Settings or the environment) and it was never tried before. The attempt
+    /// is recorded first, so a failure (offline, say) is not retried at every start. → whether a download started.
+    pub fn fetch_on_first_run(&mut self, activity: &Activity) -> bool {
+        if self.settings_dir.is_none() || cfg!(target_arch = "wasm32") || crate::lens_profiles::source().is_some() || self.first_run_tried() {
+            return false;
+        }
+        if let Err(e) = write_settings(self.settings_dir.as_deref(), |v| {
+            v.insert(FIRST_RUN_KEY.into(), Value::Bool(true));
+        }) {
+            log::warn!("lens database first run: {e}");
+            return false;
+        }
+        match self.start_download(activity) {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("lens database first run: {e}");
+                false
+            }
+        }
     }
 
     /// Save `dir` (or none) as the folder and use it now.
@@ -235,13 +268,35 @@ impl LensSettings {
     }
 }
 
-/// Write the settings file (no settings folder: nothing to save).
-fn save(settings_dir: Option<&Path>, dir: Option<&Path>) -> Result<(), String> {
+/// The settings file's object (empty when missing, oversized or not a JSON object).
+fn read_settings(settings_dir: Option<&Path>) -> serde_json::Map<String, Value> {
+    let Some(s) = settings_dir else { return Default::default() };
+    std::fs::read_to_string(s.join(SETTINGS_FILE))
+        .ok()
+        .filter(|t| t.len() < 64 << 10)
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| match v {
+            Value::Object(m) => Some(m),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Change the settings file, keeping its other keys (no settings folder: nothing to save).
+fn write_settings(settings_dir: Option<&Path>, change: impl FnOnce(&mut serde_json::Map<String, Value>)) -> Result<(), String> {
     let Some(s) = settings_dir else { return Ok(()) };
+    let mut v = read_settings(Some(s));
+    change(&mut v);
     std::fs::create_dir_all(s).map_err(|e| format!("could not create {}: {e}", s.display()))?;
-    let text = json!({"dir": dir.map(|d| d.display().to_string())}).to_string();
     let file = s.join(SETTINGS_FILE);
-    std::fs::write(&file, text).map_err(|e| format!("could not save {}: {e}", file.display()))
+    std::fs::write(&file, Value::Object(v).to_string()).map_err(|e| format!("could not save {}: {e}", file.display()))
+}
+
+/// Save the folder setting.
+fn save(settings_dir: Option<&Path>, dir: Option<&Path>) -> Result<(), String> {
+    write_settings(settings_dir, |v| {
+        v.insert("dir".into(), dir.map_or(Value::Null, |d| Value::String(d.display().to_string())));
+    })
 }
 
 /// Newest modification time (Unix seconds) of the database's XML files.

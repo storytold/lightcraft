@@ -967,3 +967,84 @@ fn sil_vignetting_calibration() {
     s.check(after["map"]["withdrawn"] == true, "the withdrawn state didn't survive a reopen", &after.to_string());
     s.finish();
 }
+
+/// Mean CIEDE2000 over the ColorChecker 24 (2014 edition, D50 references) of a chart lit by D65 that a camera with
+/// colour data `truth` records, rendered through colour data `render`'s input transform (white = D65).
+fn chart_mean_de(truth: &lcc_raw::ColorData, render: &lcc_raw::ColorData) -> f64 {
+    use lcc_colourfit::chart::Edition;
+    use lcc_colourfit::deltae::{de2000, lab};
+    let to_d65 = lcc_color::bradford(lcc_color::D50, lcc_color::D65);
+    let cam = lcc_raw::color::xyz_to_camera(truth, lcc_color::D65);
+    let input = lcc_raw::color::camera_to_xyz_d50(render, lcc_color::D65);
+    let refs = Edition::After2014.reference_xyz();
+    let total: f64 = refs.iter().map(|r| de2000(lab(*r), lab(input.apply(cam.apply(to_d65.apply(*r)))))).sum();
+    total / refs.len() as f64
+}
+
+/// Camera colour (completion plan 3.1, gap 1): the top bodies render ColorChecker colours through their own input
+/// transform consistently, and the dcraw / LibRaw table matrices of bodies that also have measured spectral
+/// sensitivities agree with what the measured camera records: median mean ΔE2000 at most 5, no body above 10 (a
+/// guard against a wrong or misassigned row; on 2026-11-24 the bodies ranged 2.4–9.2, median about 4). This is not
+/// the plan's ΔE ≤ 3 chart criterion: real chart shots of the top bodies (`docs/chart-calibration.md`) are needed for
+/// that. No file or app process is needed.
+#[test]
+fn sil_camera_colour() {
+    const TOP: &[(&str, &str)] = &[
+        ("SONY", "ILCE-7M3"),
+        ("SONY", "ILCE-7M4"),
+        ("SONY", "ILCE-7RM4"),
+        ("SONY", "ILCE-1"),
+        ("SONY", "ILCE-6400"),
+        ("SONY", "ILCE-7RM5"),
+        ("Canon", "Canon EOS R5"),
+        ("Canon", "Canon EOS R6"),
+        ("Canon", "Canon EOS 5D Mark IV"),
+        ("Canon", "Canon EOS R"),
+        ("Canon", "Canon EOS 90D"),
+        ("NIKON CORPORATION", "NIKON Z 6_2"),
+        ("NIKON CORPORATION", "NIKON Z 8"),
+        ("NIKON CORPORATION", "NIKON D850"),
+        ("NIKON CORPORATION", "NIKON D750"),
+        ("NIKON CORPORATION", "NIKON Z 6"),
+        ("FUJIFILM", "X-T4"),
+        ("FUJIFILM", "X-T5"),
+        ("OLYMPUS CORPORATION", "E-M1MarkII"),
+        ("Panasonic", "DC-G9"),
+    ];
+    let mut failures = Vec::new();
+    for (make, model) in TOP {
+        let Some(entry) = lcc_camdb::find(Some(make), model) else {
+            failures.push(format!("{make} {model}: no camera entry"));
+            continue;
+        };
+        let cd = entry.color_data();
+        let de = chart_mean_de(&cd, &cd);
+        println!("sil camera colour: {make} {model} ({:?}) self ΔE2000 {de:.3}", entry.provenance.source);
+        if !lcc_raw::color::has_matrix(&cd) || !de.is_finite() || de > 0.5 {
+            failures.push(format!("{make} {model}: input transform mean ΔE2000 {de:.3}"));
+        }
+    }
+    // dcraw / LibRaw rows against the measured spectral matrices of the same body
+    let mut compared = Vec::new();
+    for e in lcc_camdb::entries().iter().filter(|e| e.provenance.source == lcc_camdb::Source::Dcraw) {
+        let Some(spectral) = lcc_raw::spectral::find(Some(&e.make), &e.model) else { continue };
+        let mut truth = lcc_raw::ColorData::default();
+        if !spectral.fill(&mut truth) {
+            continue;
+        }
+        let de = chart_mean_de(&truth, &e.color_data());
+        println!("sil camera colour: {} {} dcraw-table vs spectral mean ΔE2000 {de:.2}", e.make, e.model);
+        compared.push((format!("{} {}", e.make, e.model), de));
+    }
+    let worst = compared.iter().filter(|(_, de)| !de.is_finite() || *de > 10.0).map(|(n, de)| format!("{n}: {de:.2}"));
+    failures.extend(worst);
+    let mut des: Vec<f64> = compared.iter().map(|(_, de)| *de).collect();
+    des.sort_by(f64::total_cmp);
+    let median = des.get(des.len() / 2).copied().unwrap_or(f64::NAN);
+    println!("sil camera colour: {} table matrices against spectral data, median mean ΔE2000 {median:.2}", des.len());
+    if median.is_nan() || median > 5.0 {
+        failures.push(format!("median table-vs-spectral mean ΔE2000 {median:.2} above 5"));
+    }
+    assert!(compared.len() >= 10, "only {} bodies have both a table and a spectral matrix", compared.len());
+    assert!(failures.is_empty(), "camera colour: {failures:#?}");
+}
