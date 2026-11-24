@@ -1121,61 +1121,88 @@ mod tests {
     /// Review of #236: shutdown while an export is still writing the files it reserved the import
     /// for. The deadline follows the job: the write allowance while the export writes, then the
     /// import's own time limit from when Photos was asked, not one deadline fixed at the start
-    /// (which gave up with the import still inside its limit). Scaled down: 150 ms of writing,
-    /// imports limited to 0.75 s (+ 0.05 s).
+    /// (which gave up with the import still inside its limit). Scaled down: 1 s of writing,
+    /// imports limited to 1 s, a 30 s cap. Photos is a gated runner the test releases, so no
+    /// step depends on how fast a busy machine schedules a thread: lower bounds are the
+    /// deadlines themselves, upper bounds only separate a deadline from a much later one.
     #[test]
     fn shutdown_follows_an_export_into_its_import() {
         let (dir, paths) = files("shutdown", 2);
-        let limits = WaitLimits {
-            writing: Duration::from_millis(150),
-            import: |_| Duration::from_millis(750),
-            margin: Duration::from_millis(50),
-            cap: Duration::from_secs(20),
-        };
-        let taking = |ms: u64| -> Runner {
-            Arc::new(move |args: &[String], _| {
-                std::thread::sleep(Duration::from_millis(ms));
-                let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
-                Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
+        let writing = Duration::from_secs(1);
+        let limits = WaitLimits { writing, import: |_| Duration::from_secs(1), margin: Duration::ZERO, cap: Duration::from_secs(30) };
+        let imports = Arc::new(Imports::default());
+        let waiter = |imports: &Arc<Imports>, limits: WaitLimits| {
+            let imports = imports.clone();
+            std::thread::spawn(move || {
+                let t0 = std::time::Instant::now();
+                (imports.wait_idle_within(limits), t0.elapsed())
             })
         };
-        let imports = Imports::default();
-        // the export is still writing when the wait begins; Photos then takes 0.5 s, past the write
-        // allowance but inside the import's own limit
-        let reserved = imports.reserve(taking(500), "").unwrap();
+        // the export is still writing when the wait begins and hands its files over at once;
+        // Photos then runs past the write allowance (released only after it) but inside the
+        // import's own limit, so the wait follows it to the end
+        let unlimited = WaitLimits { import: |_| Duration::from_secs(25), ..limits };
+        let (photos, go) = delayed();
+        let reserved = imports.reserve(photos, "").unwrap();
         let written: Vec<Value> = paths.iter().map(|p| json!({"path": p})).collect();
-        let exporter = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(75));
-            reserved.run(&written, false)
-        });
+        let (began, wait) = {
+            let imports = imports.clone();
+            let (tx, began) = std::sync::mpsc::channel();
+            let wait = std::thread::spawn(move || {
+                let t0 = std::time::Instant::now();
+                let _ = tx.send(t0);
+                (imports.wait_idle_within(unlimited), t0.elapsed())
+            });
+            (began.recv_timeout(Duration::from_secs(20)).unwrap(), wait)
+        };
+        let exporter = std::thread::spawn(move || reserved.run(&written, false));
         let t0 = std::time::Instant::now();
-        assert!(imports.wait_idle_within(limits), "waited for the import, not just the write allowance");
-        assert!(t0.elapsed() >= Duration::from_millis(500), "{:?}", t0.elapsed());
+        while imports.running().is_some_and(|j| j.started().is_none()) {
+            assert!(t0.elapsed() < Duration::from_secs(20), "the export hands its files over");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Photos answers only once the wait has run past the write allowance
+        let release = began + writing + Duration::from_millis(300);
+        std::thread::sleep(release.saturating_duration_since(std::time::Instant::now()));
+        go.send(()).unwrap();
+        let (idle, waited) = wait.join().unwrap();
+        assert!(idle, "waited for the import, not just the write allowance");
+        assert!(waited > writing, "{waited:?}");
         assert_eq!(exporter.join().unwrap()["imported"], 2);
         // an import past its own limit is given up on at its deadline (not the cap)
-        let job = import_job(&taking(1500), &imports, paths.clone(), "", true, None).unwrap();
+        let (photos, go) = delayed();
+        let job = import_job(&photos, &imports, paths.clone(), "", true, None).unwrap();
+        let (idle, waited) = waiter(&imports, limits).join().unwrap();
+        assert!(!idle);
+        assert!(waited < Duration::from_secs(20), "{waited:?}");
+        let started = job.started().unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(1), "gave up only at the import's deadline");
+        go.send(()).unwrap();
         let t0 = std::time::Instant::now();
-        assert!(!imports.wait_idle_within(limits));
-        let waited = t0.elapsed();
-        assert!(waited >= Duration::from_millis(750) && waited < Duration::from_millis(1450), "{waited:?}");
         while !job.finished() {
-            std::thread::sleep(Duration::from_millis(20));
+            assert!(t0.elapsed() < Duration::from_secs(20));
+            std::thread::sleep(Duration::from_millis(5));
         }
         // an export that never hands its files over: the write allowance, then it's left
-        let held = imports.reserve(taking(0), "").unwrap();
-        let t0 = std::time::Instant::now();
-        assert!(!imports.wait_idle_within(limits));
-        let waited = t0.elapsed();
-        assert!(waited >= Duration::from_millis(150) && waited < Duration::from_millis(750), "{waited:?}");
+        let held = imports.reserve(delayed().0, "").unwrap();
+        let (idle, waited) = waiter(&imports, limits).join().unwrap();
+        assert!(!idle);
+        assert!(waited >= writing && waited < Duration::from_secs(20), "{waited:?}");
         drop(held);
         assert!(imports.wait_idle_within(limits));
         // and the cap holds over everything
-        let job = import_job(&taking(500), &imports, paths, "", true, None).unwrap();
+        let (photos, go) = delayed();
+        let job = import_job(&photos, &imports, paths, "", true, None).unwrap();
+        let capped = WaitLimits { cap: Duration::from_millis(100), import: |_| Duration::from_secs(25), ..limits };
+        let (idle, waited) = waiter(&imports, capped).join().unwrap();
+        assert!(!idle);
+        assert!(waited >= Duration::from_millis(100) && waited < Duration::from_secs(20), "{waited:?}");
+        assert!(!job.finished(), "left at the cap, the import still inside its limit");
+        go.send(()).unwrap();
         let t0 = std::time::Instant::now();
-        assert!(!imports.wait_idle_within(WaitLimits { cap: Duration::from_millis(100), ..limits }));
-        assert!(t0.elapsed() < Duration::from_millis(450));
         while !job.finished() {
-            std::thread::sleep(Duration::from_millis(20));
+            assert!(t0.elapsed() < Duration::from_secs(20));
+            std::thread::sleep(Duration::from_millis(5));
         }
         let _ = std::fs::remove_dir_all(dir);
     }
