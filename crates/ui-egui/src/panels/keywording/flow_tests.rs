@@ -291,6 +291,11 @@ fn tab_between_add_and_painter_preserves_distinct_drafts_and_native_caret_edits(
             // (the keyword chips are real stops too, between the last view choice and the painter's field)
             for _ in 0..8 {
                 ask(h, "ui.key", json!({"key": "Tab", "shift": reverse}));
+                {
+                    let sid = craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id);
+                    let name = h.app.widget_hits.iter().find(|(_, hit)| Some(hit.id) == sid).map(|(n, _)| n.clone());
+                    eprintln!("DBGTAB want {key} expected={expected:?} stop={sid:?} name={name:?}");
+                }
                 if craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id) == Some(expected) {
                     break;
                 }
