@@ -649,6 +649,10 @@ fn run(
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill) {
             return Err(Fallback::NotTried);
         }
+        // measured looks, and sources decoded for one, have no GPU stage (`lightcraft_pipeline::looks`)
+        if lightcraft_pipeline::looks::needs_cpu(s, info) {
+            return Err(Fallback::NotTried);
+        }
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;

@@ -19,8 +19,12 @@ impl crate::Session {
         }
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
-        // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
-        if let SourceRef::File { reduced, .. } = &mut job.source {
+        // (a thumbnail may develop a smaller copy of the raw image that the file keeps, unless its look needs the
+        // look's decode: such copies are in DNGs only, and looks are not)
+        let for_look = self.catalog.photo(id).is_some_and(|p| self.media.for_look(p));
+        if let SourceRef::File { reduced, .. } = &mut job.source
+            && !for_look
+        {
             reduced.clone_from(&self.media.reduced_loader);
         }
         Some(job)
@@ -120,7 +124,10 @@ impl crate::Session {
     }
 
     /// A render of `id` with `settings` in place of its own, fitting `max_w × max_h` (the loupe's
-    /// temporary preview while hovering a preset or profile; nothing is committed or cached).
+    /// temporary preview while hovering a preset or profile; nothing is committed or cached). The
+    /// source is decoded for the photo's own profile, so a measured look previewed on a photo without
+    /// one undoes the profile's table approximately (`MediaCache::for_look`) rather than replacing
+    /// the photo's decode in memory.
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         // the source as these settings develop it: another camera profile (or none) decodes anew
@@ -177,7 +184,8 @@ impl crate::Session {
     /// browsers): from the thumbnail-level source, long edge `edge` (≤ 512), cropped. The result
     /// is cached (memory + the library's disk cache) under the photo's content and the settings
     /// hash, so a variant renders once; `key` is derived from the same hash, so a frontend can
-    /// keep one texture per variant.
+    /// keep one texture per variant. Its source is decoded for the photo's own profile, as in
+    /// [`Self::preview_job`].
     pub fn variant_job(&mut self, id: PhotoId, settings: &DevelopSettings, edge: usize) -> Option<RenderJob> {
         let mut p = (**self.catalog.photo(id)?).clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());

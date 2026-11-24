@@ -9,6 +9,7 @@
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
 //! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, PSD/PSB, Canon CR3,
 //!   HEIF/HEIC/AVIF).
+//! - [`fujifilm_dynamic_range`] — the dynamic range a Fujifilm raw was developed at, from its maker note.
 //! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
 //! - [`heif`] — the HEIF/HEIC/AVIF container's Exif and XMP items (no HEVC decoder needed).
 #![forbid(unsafe_code)]
@@ -17,6 +18,7 @@
 mod convert;
 mod exif;
 pub mod focus;
+mod fujifilm;
 pub mod heif;
 mod iptc;
 pub mod mrw;
@@ -52,6 +54,7 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
 }
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
+pub use fujifilm::fujifilm_dynamic_range;
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
