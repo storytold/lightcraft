@@ -515,33 +515,26 @@ fn parse_wal(wal: &[u8], page_size: usize) -> Result<WalOverlay, String> {
 }
 
 fn decode_record(payload: &[u8], ncols: usize, encoding: TextEncoding) -> Result<Vec<Value>, String> {
-    let mut at = 0;
-    let header_len = usize_from_u64(read_varint(payload, &mut at)?, "record header length")?;
-    if header_len < at || header_len > payload.len() {
-        return Err("invalid SQLite record header length".into());
-    }
+    let (header, data) = craft_sqlite::split_record(payload).map_err(|err| match err {
+        craft_sqlite::Error::InvalidRecordHeaderLength(_) => "invalid SQLite record header length".into(),
+        other => other.to_string(),
+    })?;
     let mut serials = Vec::new();
-    while at < header_len {
+    let mut at = 0;
+    while at < header.len() {
         if serials.len() >= ncols {
             return Err("SQLite record has more columns than table schema".into());
         }
-        serials.push(read_varint(payload, &mut at)?);
+        serials.push(read_varint(header, &mut at).map_err(|_| "SQLite record header is malformed")?);
     }
-    if at != header_len {
-        return Err("SQLite record header is malformed".into());
-    }
-    let mut body = header_len;
+    let mut body = 0;
     let mut values = Vec::with_capacity(ncols);
     for serial in serials {
-        let (value, size) = serial_value(payload, &mut body, serial, encoding)?;
+        let (value, _) = serial_value(data, &mut body, serial, encoding)?;
         values.push(value);
         if values.len() > MAX_COLUMNS {
             return Err("SQLite record has too many columns".into());
         }
-        let _ = size;
-    }
-    if body > payload.len() {
-        return Err("SQLite record body is truncated".into());
     }
     values.resize(ncols, Value::Null);
     Ok(values)
