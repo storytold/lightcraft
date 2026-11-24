@@ -127,7 +127,15 @@ fn the_filmstrip_header_filters_by_flag_rating_and_label_in_lightroom_order() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     let at = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.center().x);
-    let order = ["filmfilter:pick", "filmfilter:none", "filmfilter:reject", "filmfilter:ratingOp", "filmfilter:star1", "filmfilter:star5", "filmfilter:label-red"];
+    let order = [
+        "filmfilter:pick",
+        "filmfilter:none",
+        "filmfilter:reject",
+        "filmfilter:ratingOp",
+        "filmfilter:star1",
+        "filmfilter:star5",
+        "filmfilter:label-red",
+    ];
     let xs: Vec<f32> = order.iter().map(|id| at(&h, id).unwrap_or_else(|| panic!("{id} drawn"))).collect();
     assert!(xs.windows(2).all(|w| w[0] < w[1]), "flags, then rating, then labels: {xs:?}");
     let ratings_before: Vec<u8> = ids.iter().map(|id| h.app.session.catalog.photo(*id).unwrap().rating).collect();

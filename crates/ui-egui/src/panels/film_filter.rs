@@ -111,7 +111,18 @@ pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, head: Rect, t: &Tokens) -> f
         let (r, resp) = cell(x, &format!("star{n}"), "Rating", false);
         let lit = n <= f.rating;
         let icon = if lit { Icon::StarFilled } else { Icon::Star };
-        paint(&p, r.shrink(1.5), icon, if lit { t.text } else if resp.hovered() { t.text_label } else { t.icon });
+        paint(
+            &p,
+            r.shrink(1.5),
+            icon,
+            if lit {
+                t.text
+            } else if resp.hovered() {
+                t.text_label
+            } else {
+                t.icon
+            },
+        );
         if resp.clicked() {
             patch = Some(json!({"rating": star_click(f.rating, n)}));
         }
