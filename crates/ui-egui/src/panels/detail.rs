@@ -6482,7 +6482,10 @@ fn filmstrip_strip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
     let active = app.session.selection.active;
     // Lightroom Classic's source line above the strip: source, count, selection, active file name
     let head = Rect::from_min_max(pos2(r.left(), r.top() + 4.0), pos2(r.right(), (r.top() + 4.0 + FILM_HEAD_H).min(r.bottom())));
-    film_source_line(app, ui, head, ids.len(), map_filter.is_some(), &t);
+    // Lightroom Classic's filmstrip filter at its right (#1296): flags, rating, colour labels
+    let filter_left = super::film_filter::show(app, ui, head, &t);
+    let source_head = Rect::from_min_max(head.min, pos2(filter_left.max(head.left()), head.bottom()));
+    film_source_line(app, ui, source_head, ids.len(), map_filter.is_some(), &t);
     let r = Rect::from_min_max(pos2(r.left(), head.bottom()), r.max);
     let ppp = ui.ctx().pixels_per_point();
     let thumb_px = film_thumb_px(cell_w, ppp);
