@@ -1094,7 +1094,24 @@ fn blocking_window(
                 // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
                 ui.set_width(width);
                 ui.spacing_mut().item_spacing.y = 8.0;
+                // The framework sizes the window from a measuring run of the body, where the list's scroll area and
+                // its rows (host targets only in a real pass) come out shorter: reserve the height the real body
+                // took, so the footer's buttons sit below the last row instead of over it.
+                let height_id = window_id(id).with("body-height");
+                let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                let top = ui.cursor().top();
+                if let Some(height) = ui.ctx().data(|d| d.get_temp::<f32>(height_id)) {
+                    ui.set_min_height(height);
+                }
                 body(ui);
+                if real {
+                    // where the content ends (the cursor, which the reserved height does not move), so it can shrink
+                    let height = (ui.cursor().top() - ui.spacing().item_spacing.y - top).max(0.0);
+                    if ui.ctx().data(|d| d.get_temp::<f32>(height_id)).is_none_or(|kept| (kept - height).abs() > 0.5) {
+                        ui.ctx().data_mut(|d| d.insert_temp(height_id, height));
+                        ui.ctx().request_repaint();
+                    }
+                }
             })
             .output;
         if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
@@ -1305,7 +1322,8 @@ fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, 
     let name = crate::panels::settings::library_name(dir);
     let parent = dir.parent().map(|p| p.display().to_string()).unwrap_or_default();
     let ok = library.unavailable.is_none();
-    let (main, dim) = if ok { (t.text, t.text_dim) } else { (t.text_disabled, t.text_disabled) };
+    // a library that can't be opened reads muted, not disabled-faint: its name and folder stay legible beside why
+    let (main, dim) = if ok { (t.text, t.text_dim) } else { (t.text_dim, t.text_dim) };
     let background = ui.painter().add(egui::Shape::Noop);
     let inner = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
         ui.set_width(ui.available_width());

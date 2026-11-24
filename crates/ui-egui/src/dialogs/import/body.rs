@@ -60,6 +60,18 @@ pub(crate) fn grid_height(available: f32, below: f32, row: f32) -> f32 {
     if h.is_finite() { h.max(row) } else { (DIALOG_SIZE[1] - DEFAULT_BELOW_GRID).max(row) }
 }
 
+/// Where the review dialog's body starts and the height it has to show, for the photo grid this frame.
+const BODY_ROOM: &str = "lc-import-body-room";
+
+/// Note the room the review dialog's body has (`room` points from where `ui` starts), for [`grid_height`].
+pub(crate) fn note_body_room(ui: &egui::Ui, room: f32) {
+    if controls::measuring(ui) {
+        return;
+    }
+    let top = ui.cursor().top();
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(BODY_ROOM), (top, room)));
+}
+
 /// Remember where the review dialog's content ends this frame (after its buttons), for
 /// [`grid_height`] on the next.
 pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
@@ -196,7 +208,10 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
         let y = |key: &str| m.get_temp::<f32>(egui::Id::unique(key));
         y(CONTENT_BOTTOM).zip(y(GRID_BOTTOM)).map(|(content, grid)| content - grid)
     });
-    let grid_h = grid_height(ui.available_height(), below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
+    // the room left in the dialog's body below this point ([`note_body_room`]), else what the ui has
+    let room = ui.ctx().data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique(BODY_ROOM))).map(|(top, room)| top + room - ui.cursor().top());
+    let available = room.map_or(ui.available_height(), |room| room.min(ui.available_height()));
+    let grid_h = grid_height(available, below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
     let mut visible = std::collections::HashSet::new();
     let grid =
         egui::ScrollArea::vertical().id_salt("import-grid").max_height(grid_h).auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {

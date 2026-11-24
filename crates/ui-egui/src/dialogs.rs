@@ -549,7 +549,11 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.width().max(1.0)).clamp(0.5, 1.0),
         (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.height().max(1.0)).clamp(0.5, 1.0),
     );
-    dialog = dialog.overlay(|overlay| overlay.fit(craft::ui::contract::overlay::OverlayFit::ContentCapped(share)));
+    // The app dims the window under the dialog itself ("dialog-dim" above), leaving the integrated title bar lit like a
+    // macOS sheet: the framework's own scrim would dim the bar too.
+    dialog = dialog
+        .backdrop(craft::ui::runtime::overlay::Backdrop::None)
+        .overlay(|overlay| overlay.fit(craft::ui::contract::overlay::OverlayFit::ContentCapped(share)));
     // Return presses OK in a dialog without a text field of its own (Lightroom's default button); a dialog with a
     // field confirms from the field.
     dialog = dialog.close_on_enter(return_confirms(&dlg));
@@ -580,9 +584,10 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
             ui.set_min_width(width);
             ui.set_max_width(max_width);
             if import {
-                // The review sizes its photo grid to the height it is given: give it the dialog's, not the endless
-                // height of a scrolling body.
-                ui.set_max_height((crate::import::DIALOG_SIZE[1] - DIALOG_CHROME_GUESS).min(body_max).max(DIALOG_MIN_BODY));
+                // The review sizes its photo grid to the room the dialog's body has, not to the endless height of a
+                // scrolling body; the body itself still scrolls what goes on below (an opened recipe).
+                let room = (crate::import::DIALOG_SIZE[1] - DIALOG_CHROME_GUESS).min(body_max).max(DIALOG_MIN_BODY);
+                crate::import::note_body_room(ui, room);
             }
             ui.spacing_mut().item_spacing.y = 8.0;
             // (the import review and Print size their own lists to the dialog)
@@ -1631,13 +1636,18 @@ fn new_album_name_field(ui: &mut egui::Ui, value: &mut String) -> bool {
 fn paste_settings_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::PasteSettings { groups } = dlg else { return };
     let n = app.session.selected().len();
-    ui.label(
-        egui::RichText::new(crate::i18n::tr_format!(
-            "Paste into {n} photo{} — only settings that were copied are pasted",
-            if n == 1 { "" } else { "s" },
-            n = n
-        ))
-        .color(t.text_dim),
+    // (not selectable: a selectable label senses clicks, and the framework's measuring run lays it out once more at
+    // another place in the same pass, which egui reports as the same widget id used twice)
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "Paste into {n} photo{} — only settings that were copied are pasted",
+                if n == 1 { "" } else { "s" },
+                n = n
+            ))
+            .color(t.text_dim),
+        )
+        .selectable(false),
     );
     group_checklist(ui, "pasteGroup", groups);
 }

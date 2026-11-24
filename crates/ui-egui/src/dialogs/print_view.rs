@@ -129,7 +129,14 @@ fn number(
     if measuring(ui) {
         return None;
     }
-    crate::widgets::register_response(format!("drag:{id}"), shown.response.rect, &shown.response);
+    // Return applies the value and gives up the keyboard, as the app's fields do: a focused number field keeps
+    // taking the wheel, so the settings column would not scroll.
+    let returned = ui.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. })));
+    if returned && crate::text_field::has_focus_id(ui.ctx(), shown.response.id) {
+        crate::text_field::blur_id(ui.ctx(), shown.response.id);
+    }
+    // (the rect it was laid out at: below the column's visible part too)
+    crate::widgets::register_response(format!("drag:{id}"), rect, &shown.response);
     typed.filter(|v| ui.is_enabled() && v.is_finite() && *v != value)
 }
 

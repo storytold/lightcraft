@@ -748,6 +748,23 @@ pub fn name_editor(
             ui.label(RichText::new(crate::i18n::tr("Enter to confirm, Esc to cancel")).font(t.font(11.0)).color(t.text_dim));
         });
     });
+    // Esc closes the box wherever the keyboard is, as the native box did: also once a Return has ended the field's edit
+    // (the field then reports no ending of its own) and before the field has the keyboard.
+    // A frame's later passes (the framework reruns a pass it discards) see no events: the Esc holds for its frame.
+    let escaped_in = egui::Id::unique("face-name-editor-escaped");
+    let frame = ctx.cumulative_frame_nr();
+    // (the framework's key stage turns an Escape into a Cancel and takes the key event: `escape_mods` names that one)
+    if craft::ui::runtime::keys::escape_mods(ctx).is_some()
+        || ctx.input(|i| {
+            i.key_pressed(egui::Key::Escape)
+                || i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, repeat: false, .. }))
+        })
+    {
+        ctx.data_mut(|d| d.insert_temp(escaped_in, frame));
+    }
+    if matches!(outcome, Editor::Open) && ctx.data(|d| d.get_temp::<u64>(escaped_in)) == Some(frame) {
+        outcome = Editor::Cancel;
+    }
     // a click anywhere else closes it (not on the frame it opened, which is the click that opened it)
     if !opening && ctx.input(|i| i.pointer.any_pressed()) && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !shown.response.rect.contains(p))
     {
