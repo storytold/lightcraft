@@ -27,6 +27,28 @@
     "name": "develop",
     "steps": [
       {
+        "method": "ui.dialog.cancel",
+        "params": {}
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.manager",
+          "params": {
+            "open": false
+          }
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.marketplace",
+          "params": {
+            "open": false
+          }
+        }
+      },
+      {
         "method": "engine.execute",
         "params": {
           "command": "library.select",
@@ -42,6 +64,27 @@
         "params": {
           "command": "module.develop"
         }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "tool.done"
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "tool.none"
+        }
+      },
+      {
+        "method": "ui.clickWidget",
+        "params": {
+          "id": "modern:group:light"
+        },
+        "only": [
+          "modern"
+        ]
       },
       {
         "method": "engine.execute",
