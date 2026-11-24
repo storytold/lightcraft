@@ -213,18 +213,16 @@ fn today() -> String {
 fn confirm_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.confirmSuggestions";
     let chosen = unnamed_faces_param(s, C, p)?;
-    // what the named faces suggest for these faces now (never a stale name from the list the user looked at)
-    let mut current: Vec<(u64, usize, lcc_geom::Rect)> = chosen.iter().map(|(photo, index, rect)| (*photo, *index, *rect)).collect();
-    // the length is taken first: `&mut current` and `current.len()` in one call would borrow it both ways
-    let n = current.len();
-    let arranged = imp::arrange_unnamed(s, &mut current, n);
+    // what the named faces suggest for these faces now (never a stale name from the list the user looked at, nor one
+    // the library-wide scan has not judged again since)
+    let suggestions = imp::suggest_for(s, &chosen);
     let mut by_photo: std::collections::BTreeMap<u64, Vec<(usize, String)>> = std::collections::BTreeMap::new();
     let mut decisions: Vec<(u64, usize, lcc_geom::Rect, String)> = Vec::new();
     {
         // a face the user rejected as this person is not suggested as them, so it is not confirmed as them either
         let store = s.people_store();
         for (photo, index, rect) in &chosen {
-            let Some((name, _)) = arranged.suggestions.get(&(*photo, *index)) else { continue };
+            let Some((name, _)) = suggestions.get(&(*photo, *index)) else { continue };
             let name = name.trim();
             if name.is_empty() || store.rejected_as(*photo, *index, *rect, name) {
                 continue;
@@ -276,11 +274,8 @@ fn confirm_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
 fn reject_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.rejectSuggestions";
     let chosen = unnamed_faces_param(s, C, p)?;
-    // a rejected face is not suggested again, so the groups are worked out here exactly as the Suggested category does
-    let mut current: Vec<(u64, usize, lcc_geom::Rect)> = chosen.iter().map(|(photo, index, rect)| (*photo, *index, *rect)).collect();
-    // the length is taken first: `&mut current` and `current.len()` in one call would borrow it both ways
-    let n = current.len();
-    let arranged = imp::arrange_unnamed(s, &mut current, n);
+    // a rejected face is not suggested again, so what is suggested for these faces now is worked out here
+    let suggestions = imp::suggest_for(s, &chosen);
     let day = today();
     // a face already rejected as the person it is suggested as is not suggested as them: there is nothing to reject
     let decisions: Vec<(u64, usize, lcc_geom::Rect, String)> = {
@@ -288,7 +283,7 @@ fn reject_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
         chosen
             .iter()
             .filter_map(|(photo, index, rect)| {
-                let name = arranged.suggestions.get(&(*photo, *index))?.0.clone();
+                let name = suggestions.get(&(*photo, *index))?.0.clone();
                 (!store.rejected_as(*photo, *index, *rect, &name)).then_some((*photo, *index, *rect, name))
             })
             .collect()
@@ -490,6 +485,24 @@ fn in_scope(scope: &Scope, photo: u64) -> bool {
 /// Most faces `faces.unnamed` lists.
 const MAX_UNNAMED: usize = 3000;
 
+/// How the library-wide look for suggestions is going ([`imp::scan_suggestions`]): a suggestion is the library's whole
+/// answer only once `complete`, and the Suggested category says so while it is not (issue #1365).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Progress {
+    /// Unnamed faces with an embedding in the library.
+    total: usize,
+    /// How many of them have been judged against the named faces.
+    judged: usize,
+    /// Every one of them was judged, so nothing is left to find.
+    complete: bool,
+}
+
+impl Progress {
+    fn json(&self) -> Value {
+        json!({"total": self.total, "judged": self.judged, "complete": self.complete})
+    }
+}
+
 /// How the unnamed faces were laid out.
 struct Arranged {
     /// Faces that look alike are next to each other (only the ones already embedded can be).
@@ -498,44 +511,80 @@ struct Arranged {
     ready: bool,
     /// A name for some faces, when the faces already named say so with confidence: `(photo, index)` to `(name, score)`.
     suggestions: std::collections::HashMap<(u64, usize), (String, f32)>,
+    /// Best similarity to any named person for each embedded, listed face, including faces below the suggestion bars.
+    similarities: std::collections::HashMap<(u64, usize), (String, f32)>,
     /// Look-alike groups (#259): faces next to each other in the order that are as alike as a match needs share a
     /// group number, so a frontend can select (and name or ignore) a group at once. `(photo, index)` to the group.
     groups: std::collections::HashMap<(u64, usize), usize>,
 }
 
-/// The unnamed faces `shown` that the named ones recognise, grouped by the name they suggest (issue #1050): one entry
-/// per person suggested, the people with the most suggested faces first (then by name), and within a group the faces
-/// that look most like them first (then in photo order). Each face is in one group, the best name it was given.
+/// The unnamed faces the named ones recognise, grouped by the name they suggest (issue #1050): one entry per person
+/// suggested, the people with the most suggested faces first (then by name), and within a group the faces that look
+/// most like them first (then in photo order). Each face is in one group, the best name it was given.
 ///
-/// Only the faces listed are in a group, so a group says how many of the listed faces it holds; `total` of
-/// `faces.unnamed` says how many unnamed faces the library has.
+/// Every suggested face the scope holds is in a group, not only those of the page `faces.unnamed` lists (issue
+/// #1365): which page a face falls on is no reason to hide the person it looks like, and a group says how many faces
+/// the library has for that person rather than how many happened to be listed. A face whose suggestion the user
+/// rejected as that person is left out, and so is a key that is no longer an unnamed face (named, ignored or removed
+/// since the scan judged it).
+#[cfg(not(target_arch = "wasm32"))]
 fn suggestion_groups(
-    s: &Session,
-    shown: &[(u64, usize, lcc_geom::Rect)],
+    s: &mut Session,
     suggestions: &std::collections::HashMap<(u64, usize), (String, f32)>,
+    scope: &Scope,
+    people: &std::collections::HashSet<String>,
 ) -> Value {
+    /// One suggested face that is still unnamed.
+    struct Suggested {
+        key: (u64, usize),
+        name: String,
+        score: f32,
+        rect: lcc_geom::Rect,
+        view: lcc_geom::Rect,
+    }
+    let mut found: Vec<Suggested> = Vec::new();
+    for ((photo, index), (name, score)) in suggestions {
+        if !in_scope(scope, *photo) || !people.contains(&name.trim().to_lowercase()) {
+            continue;
+        }
+        let id = lcc_catalog::PhotoId(*photo);
+        let Some(ph) = s.catalog.photo(id).filter(|ph| ph.in_library()) else { continue };
+        let Some(region) = ph.meta.regions.get(*index) else { continue };
+        if region.kind != lcc_meta::RegionKind::Face || region.name.is_some() {
+            continue;
+        }
+        found.push(Suggested { key: (*photo, *index), name: name.clone(), score: *score, rect: region.rect, view: s.face_view(id, region.rect) });
+    }
+    // what the user rejected as the person suggested is not put under them again (issue #1050)
+    let rejected: std::collections::HashSet<(u64, usize)> = {
+        let store = s.people_store();
+        found.iter().filter(|f| store.rejected_as(f.key.0, f.key.1, f.rect, &f.name)).map(|f| f.key).collect()
+    };
     // the name each suggested person was first shown as, by lower-cased name (`Ann` and `ann` are one person)
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut groups: std::collections::HashMap<String, Vec<(u64, usize, lcc_geom::Rect, f32)>> = std::collections::HashMap::new();
-    for (photo, index, rect) in shown {
-        let Some((name, score)) = suggestions.get(&(*photo, *index)) else { continue };
-        let key = name.trim().to_lowercase();
+    let mut groups: std::collections::HashMap<String, Vec<Suggested>> = std::collections::HashMap::new();
+    for face in found {
+        if rejected.contains(&face.key) {
+            continue;
+        }
+        let key = face.name.trim().to_lowercase();
         if key.is_empty() {
             continue;
         }
-        names.entry(key.clone()).or_insert_with(|| name.trim().to_string());
-        groups.entry(key).or_default().push((*photo, *index, *rect, *score));
+        names.entry(key.clone()).or_insert_with(|| face.name.trim().to_string());
+        groups.entry(key).or_default().push(face);
     }
     let mut out: Vec<Value> = groups
         .into_iter()
         .filter_map(|(key, mut faces)| {
             let name = names.get(&key)?.clone();
-            faces.sort_by(|a, b| b.3.total_cmp(&a.3).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+            faces.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.key.0.cmp(&b.key.0)).then(a.key.1.cmp(&b.key.1)));
             let list: Vec<Value> = faces
                 .iter()
-                .map(|(photo, index, rect, score)| {
-                    let view = s.face_view(lcc_catalog::PhotoId(*photo), *rect);
-                    json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "score": score})
+                .map(|f| {
+                    json!({
+                        "photo": f.key.0, "index": f.key.1, "rect": rect_json(&f.rect), "view": rect_json(&f.view), "score": f.score
+                    })
                 })
                 .collect();
             Some(json!({"name": name, "total": faces.len(), "faces": list}))
@@ -550,10 +599,14 @@ fn suggestion_groups(
     Value::Array(out)
 }
 
-/// `faces.unnamed {limit?: 600, bySuggestion?: false}`: the faces nobody has named, to be named a group at a time. With
-/// a recognition model chosen, faces that look alike are next to each other, and a face the named faces recognise
-/// carries the name they suggest. With `bySuggestion: true`, `groups` holds those suggested faces under the person
-/// suggested (issue #1050), so one person's suggestions are reviewed together.
+/// `faces.unnamed {limit?: 600, bySuggestion?: false, budgetMs?: 15}`: the faces nobody has named, to be named a
+/// group at a time. With a recognition model chosen, faces that look alike are next to each other, and a face the
+/// named faces recognise carries the name they suggest. With `bySuggestion: true`, `groups` holds those suggested
+/// faces under the person suggested (issue #1050), so one person's suggestions are reviewed together.
+///
+/// The page is not where suggestions are found: every unnamed face with an embedding is judged against the named ones,
+/// a slice of the work per call (`budgetMs`, so a big library does not stall a frame), and `scan` says how far that is
+/// (issue #1365). `groups` therefore holds the library's suggestions within the scope, not only the page's.
 fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.unnamed";
     let limit = p.get("limit").and_then(Value::as_u64).map_or(600, |n| usize::try_from(n).unwrap_or(600)).clamp(1, MAX_UNNAMED);
@@ -561,6 +614,8 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
         None => false,
         Some(v) => v.as_bool().ok_or_else(|| bad(C, "`bySuggestion` must be true or false"))?,
     };
+    // how long this call may spend judging faces; zero only asks how far the judging is
+    let budget = std::time::Duration::from_millis(p.get("budgetMs").and_then(Value::as_u64).unwrap_or(15).min(250));
     let scope = scope_of(s, C, p)?;
     let mut all: Vec<(u64, usize, lcc_geom::Rect)> = Vec::new();
     for ph in s.catalog.photos().filter(|ph| ph.in_library() && in_scope(&scope, ph.id.0)) {
@@ -572,15 +627,20 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
     }
     all.sort_by_key(|(photo, index, _)| (*photo, *index));
     let total = all.len();
-    let arranged = imp::arrange_unnamed(s, &mut all, limit);
+    // the library is judged a slice at a time, this page's faces first, so that a suggestion never depends on which
+    // page a face falls on (issue #1365)
+    let people = current_people(s);
+    let progress = imp::scan_suggestions(s, budget, &all);
+    let arranged = imp::arrange_unnamed(s, &mut all, limit, &people);
     all.truncate(limit);
     let faces: Vec<Value> = all
         .iter()
         .map(|(photo, index, rect)| {
             let view = s.face_view(lcc_catalog::PhotoId(*photo), *rect);
             let suggestion = arranged.suggestions.get(&(*photo, *index)).map(|(name, score)| json!({"name": name, "score": score}));
+            let similarity = arranged.similarities.get(&(*photo, *index)).map(|(name, score)| json!({"name": name, "score": score}));
             let alike = arranged.groups.get(&(*photo, *index));
-            json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion, "group": alike})
+            json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion, "similarity": similarity, "group": alike})
         })
         .collect();
     // what the user said about a face's suggestion holds: a face rejected as the person it was suggested as is not put
@@ -604,11 +664,27 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
             map.insert("suggestion".into(), Value::Null);
         }
     }
-    let mut out = json!({"total": total, "faces": faces, "ordered": arranged.ordered, "ready": arranged.ready, "rejected": rejected});
+    let mut out =
+        json!({"total": total, "faces": faces, "ordered": arranged.ordered, "ready": arranged.ready, "rejected": rejected, "scan": progress.json()});
     if by_suggestion && let Value::Object(map) = &mut out {
-        map.insert("groups".into(), suggestion_groups(s, &all, &suggestions));
+        // every suggestion the library holds within the scope, not only those of the faces this page lists (#1365)
+        map.insert("groups".into(), imp::suggestion_groups(s, &scope, &people));
     }
     Ok(out)
+}
+
+/// The people the library knows: the lower-cased names of its named faces. A suggestion naming anyone else was made
+/// before that person was renamed or removed, and is not shown (the judging has still to reach that face again).
+fn current_people(s: &Session) -> std::collections::HashSet<String> {
+    s.catalog
+        .photos()
+        .filter(|ph| ph.in_library())
+        .flat_map(|ph| ph.meta.regions.iter())
+        .filter(|r| r.kind == lcc_meta::RegionKind::Face)
+        .filter_map(|r| r.name.as_deref())
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 /// What looking for faces that resemble a person found.
@@ -1387,10 +1463,197 @@ mod imp {
         order
     }
 
+    /// How many faces one chunk of the judging covers: they are scored in parallel, and the clock is looked at between
+    /// chunks, so a call overshoots its budget by about one chunk rather than by the library.
+    const JUDGE_CHUNK: usize = 16;
+    /// The most faces one call judges, whatever the clock says (a coarse timer must not let a call run away).
+    const JUDGE_PER_CALL: usize = 200_000;
+
+    /// What the model and the bars of a suggestion are, as one number: the model's tag (which carries its identity,
+    /// version and mirror setting), which library it is, the threshold and how many of a person's faces a score
+    /// averages. A different one makes every judged face wrong, so the scan starts over.
+    fn model_stamp(tag: &str, epoch: u64, threshold: f32, top: usize) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        tag.hash(&mut h);
+        epoch.hash(&mut h);
+        threshold.to_bits().hash(&mut h);
+        top.hash(&mut h);
+        h.finish()
+    }
+
+    /// The named faces the suggestions are made from, as one number: each one's name, photo and region. A different one
+    /// has every face judged again, over the answer the last one gave (a view that emptied on every name would be no
+    /// use on a large library).
+    fn gallery_stamp(gallery: &[(String, u64, usize, Arc<[f32]>)]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        gallery.len().hash(&mut h);
+        for (name, photo, index, _) in gallery {
+            name.trim().to_lowercase().hash(&mut h);
+            photo.hash(&mut h);
+            index.hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// The unnamed faces a suggestion is made from, and the named ones it is compared with: the named faces of the
+    /// library with an embedding, each with the photo and region it is (so one gallery is told from another).
+    fn suggestion_gallery(s: &Session) -> Vec<(String, u64, usize, Arc<[f32]>)> {
+        s.catalog
+            .photos()
+            .filter(|ph| ph.in_library())
+            .flat_map(|ph| {
+                ph.meta
+                    .regions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.kind == RegionKind::Face)
+                    .filter_map(|(index, r)| Some((r.name.clone()?, ph.id.0, index, s.faces.index.get(ph.id.0, &r.rect)?.clone())))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The name the named faces suggest for each of `faces`, as `faces.suggest` would, worked out here and now: a
+    /// decision acts on this, never on what a page (or an older scan) showed.
+    pub fn suggest_for(s: &mut Session, faces: &[(u64, usize, Rect)]) -> std::collections::HashMap<(u64, usize), (String, f32)> {
+        let mut out = std::collections::HashMap::new();
+        let Some(_) = s.face_models_dir.clone() else { return out };
+        let Ok(manifest) = current_manifest(s, "faces.unnamed", false) else { return out };
+        let gallery = suggestion_gallery(s);
+        if gallery.is_empty() {
+            return out;
+        }
+        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|(name, _, _, e)| (name.as_str(), &e[..])).collect();
+        let threshold = manifest.thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD);
+        let top = top_faces(s);
+        for (photo, index, rect) in faces {
+            let Some(e) = s.faces.index.get(*photo, rect) else { continue };
+            if let Some(x) = matching::suggest(&matching::rank_top(e, &refs, top), threshold, DEFAULT_MARGIN) {
+                out.insert((*photo, *index), (x.name, x.score));
+            }
+        }
+        out
+    }
+
+    /// Judge every unnamed face with an embedding against the named ones, a slice per call, so a suggestion is the
+    /// library's answer and not a page's (issue #1365): `faces.unnamed` lists a page, and which page a face falls on
+    /// must not decide whether the person it looks like is offered. The work is kept in [`crate::face_suggestions`],
+    /// so it resumes where the last call stopped; it starts over only when what a suggestion depends on changed (the
+    /// model, the named faces, the bars). The faces of `first` (the page about to be listed) are judged first, so a
+    /// page keeps its names and hover scores while the rest of the library is looked at again.
+    ///
+    /// With `budget` zero nothing is judged: the caller only asks how far the judging is.
+    pub fn scan_suggestions(s: &mut Session, budget: Duration, first: &[(u64, usize, Rect)]) -> super::Progress {
+        let done = super::Progress { total: 0, judged: 0, complete: true };
+        let Some(_) = s.face_models_dir.clone() else { return done };
+        let Ok(manifest) = current_manifest(s, "faces.unnamed", false) else { return done };
+        let threshold = manifest.thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD);
+        let top = top_faces(s);
+        let gallery = suggestion_gallery(s);
+        let (model, named) = (model_stamp(&s.faces.index.tag, s.faces.epoch, threshold, top), gallery_stamp(&gallery));
+        {
+            let scan = &mut s.faces.suggestions;
+            if scan.model != model {
+                scan.reset(model, named);
+            } else if scan.gallery != named {
+                scan.named_again(named);
+            }
+        }
+        // nothing is named (or nothing named is embedded): no face has a person to be suggested as
+        if gallery.is_empty() {
+            let scan = &mut s.faces.suggestions;
+            scan.complete = true;
+            scan.indexed = s.faces.index.len();
+            return done;
+        }
+        // nothing was embedded since every face was judged: the walk over the library can be skipped
+        let judged_scan = &s.faces.suggestions;
+        if judged_scan.complete && judged_scan.indexed == s.faces.index.len() {
+            return super::Progress { total: judged_scan.judged.len(), judged: judged_scan.judged.len(), complete: true };
+        }
+        // the faces still to judge, and how many of the library's are judged under this stamp already
+        let (mut todo, mut judged) = {
+            let mut todo: Vec<(u64, usize, Arc<[f32]>)> = Vec::new();
+            let mut judged = 0usize;
+            for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
+                for (index, r) in ph.meta.regions.iter().enumerate() {
+                    if r.kind != RegionKind::Face || r.name.is_some() {
+                        continue;
+                    }
+                    let Some(e) = s.faces.index.get(ph.id.0, &r.rect) else { continue };
+                    if judged_scan.judged.contains(&(ph.id.0, index)) {
+                        judged += 1;
+                    } else {
+                        todo.push((ph.id.0, index, e.clone()));
+                    }
+                }
+            }
+            (todo, judged)
+        };
+        let total = judged + todo.len();
+        if !budget.is_zero() && !todo.is_empty() {
+            // the page's faces first: they are what the caller is about to list
+            let page: std::collections::HashSet<(u64, usize)> = first.iter().map(|(photo, index, _)| (*photo, *index)).collect();
+            todo.sort_by_key(|(photo, index, _)| !page.contains(&(*photo, *index)));
+            let refs: Vec<(&str, &[f32])> = gallery.iter().map(|(name, _, _, e)| (name.as_str(), &e[..])).collect();
+            let started = Instant::now();
+            let mut looked = 0usize;
+            for chunk in todo.chunks(JUDGE_CHUNK) {
+                let found: Vec<((u64, usize), Option<(String, f32)>, Option<(String, f32)>)> = chunk
+                    .par_iter()
+                    .map(|(photo, index, e)| {
+                        let ranked = matching::rank_top(e, &refs, top);
+                        let similarity = ranked.first().map(|b| (b.name.clone(), b.score));
+                        let suggestion = matching::suggest(&ranked, threshold, DEFAULT_MARGIN).map(|x| (x.name, x.score));
+                        ((*photo, *index), similarity, suggestion)
+                    })
+                    .collect();
+                let scan = &mut s.faces.suggestions;
+                for (key, similarity, suggestion) in found {
+                    scan.judge(key, similarity, suggestion);
+                }
+                judged += chunk.len();
+                looked += chunk.len();
+                if started.elapsed() >= budget || looked >= JUDGE_PER_CALL {
+                    break;
+                }
+            }
+        }
+        let complete = judged == total;
+        let scan = &mut s.faces.suggestions;
+        scan.complete = complete;
+        if complete {
+            scan.indexed = s.faces.index.len();
+        }
+        super::Progress { total, judged, complete }
+    }
+
+    /// The grouped suggestions the scope holds ([`super::suggestion_groups`]), from what the scan has judged so far.
+    pub fn suggestion_groups(s: &mut Session, scope: &super::Scope, people: &std::collections::HashSet<String>) -> Value {
+        let found = s.faces.suggestions.suggestions.clone();
+        super::suggestion_groups(s, &found, scope, people)
+    }
+
     /// Put the unnamed faces `all` in order of likeness (the ones already embedded; the rest follow in photo order) and
-    /// find a name for those the named faces recognise, for the first `limit` of them.
-    pub fn arrange_unnamed(s: &mut Session, all: &mut Vec<(u64, usize, Rect)>, limit: usize) -> super::Arranged {
-        let none = super::Arranged { ordered: false, ready: false, suggestions: Default::default(), groups: Default::default() };
+    /// give the page's faces what the named faces recognise them as, as the library-wide scan found it.
+    ///
+    /// The scan ([`scan_suggestions`]) has already judged the library, so which faces carry a suggestion no longer
+    /// depends on their place in this order or on `limit` (issue #1365): that is only how many are listed.
+    pub fn arrange_unnamed(
+        s: &mut Session,
+        all: &mut Vec<(u64, usize, Rect)>,
+        limit: usize,
+        people: &std::collections::HashSet<String>,
+    ) -> super::Arranged {
+        let none = super::Arranged {
+            ordered: false,
+            ready: false,
+            suggestions: Default::default(),
+            similarities: Default::default(),
+            groups: Default::default(),
+        };
         let Some(_) = s.face_models_dir.clone() else { return none };
         let Ok(manifest) = current_manifest(s, "faces.unnamed", false) else { return none };
         let (mut embedded, mut plain) = (Vec::new(), Vec::new());
@@ -1403,37 +1666,24 @@ mod imp {
         let beyond = embedded.split_off(embedded.len().min(MAX_ARRANGED));
         let order = nearest_chain(&embedded.iter().map(|(_, e)| &e[..]).collect::<Vec<_>>());
         let ordered: Vec<((u64, usize, Rect), Arc<[f32]>)> = order.into_iter().filter_map(|i| embedded.get(i).cloned()).collect();
-        // names the faces already named suggest, as `faces.suggest` would
-        let gallery: Vec<(String, Arc<[f32]>)> = s
-            .catalog
-            .photos()
-            .filter(|ph| ph.in_library())
-            .flat_map(|ph| {
-                ph.meta
-                    .regions
-                    .iter()
-                    .filter(|r| r.kind == RegionKind::Face)
-                    .filter_map(|r| Some((r.name.clone()?, s.faces.index.get(ph.id.0, &r.rect)?.clone())))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|(n, e)| (n.as_str(), &e[..])).collect();
         let threshold = manifest.thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD);
-        let top = top_faces(s);
-        let mut suggestions = std::collections::HashMap::new();
-        if !refs.is_empty() {
-            for ((photo, index, _), e) in ordered.iter().take(limit) {
-                if let Some(x) = matching::suggest(&matching::rank_top(e, &refs, top), threshold, DEFAULT_MARGIN) {
-                    suggestions.insert((*photo, *index), (x.name, x.score));
-                }
-            }
-        }
         let groups = look_alike_groups(ordered.iter().map(|((photo, index, _), e)| ((*photo, *index), &e[..])), threshold);
         let grouped = !ordered.is_empty();
         all.extend(ordered.into_iter().map(|(f, _)| f));
         all.extend(beyond.into_iter().map(|(f, _)| f));
         all.extend(plain);
-        super::Arranged { ordered: grouped, ready: true, suggestions, groups }
+        // a suggestion naming someone since renamed or removed is not shown: the judging has still to reach this face
+        let known = |v: &(String, f32)| people.contains(&v.0.trim().to_lowercase());
+        let (mut suggestions, mut similarities) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        for (photo, index, _) in all.iter().take(limit) {
+            if let Some(v) = s.faces.suggestions.similarities.get(&(*photo, *index)).filter(|v| known(v)) {
+                similarities.insert((*photo, *index), v.clone());
+            }
+            if let Some(v) = s.faces.suggestions.suggestions.get(&(*photo, *index)).filter(|v| known(v)) {
+                suggestions.insert((*photo, *index), v.clone());
+            }
+        }
+        super::Arranged { ordered: grouped, ready: true, suggestions, similarities, groups }
     }
 
     /// Number the runs of `chain` (faces in order of likeness) whose neighbours are at least `threshold` alike: each
@@ -1794,8 +2044,31 @@ mod imp {
         super::Similar { items: Vec::new(), ready: false, pending: 0 }
     }
 
-    pub fn arrange_unnamed(_: &mut Session, _: &mut Vec<(u64, usize, lcc_geom::Rect)>, _: usize) -> super::Arranged {
-        super::Arranged { ordered: false, ready: false, suggestions: Default::default(), groups: Default::default() }
+    pub fn suggest_for(_: &mut Session, _: &[(u64, usize, lcc_geom::Rect)]) -> std::collections::HashMap<(u64, usize), (String, f32)> {
+        std::collections::HashMap::new()
+    }
+
+    pub fn scan_suggestions(_: &mut Session, _: std::time::Duration, _: &[(u64, usize, lcc_geom::Rect)]) -> super::Progress {
+        super::Progress { total: 0, judged: 0, complete: true }
+    }
+
+    pub fn suggestion_groups(_: &mut Session, _: &super::Scope, _: &std::collections::HashSet<String>) -> Value {
+        Value::Array(Vec::new())
+    }
+
+    pub fn arrange_unnamed(
+        _: &mut Session,
+        _: &mut Vec<(u64, usize, lcc_geom::Rect)>,
+        _: usize,
+        _: &std::collections::HashSet<String>,
+    ) -> super::Arranged {
+        super::Arranged {
+            ordered: false,
+            ready: false,
+            suggestions: Default::default(),
+            similarities: Default::default(),
+            groups: Default::default(),
+        }
     }
 }
 
@@ -1898,7 +2171,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Unnamed Faces",
             [],
             None,
-            "{limit?: 600, scope?: \"filter\", bySuggestion?: false} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready, groups?}: the faces nobody has named (with `scope: \"filter\"`, only in the photos the library filter shows, any person filter aside); with a recognition model chosen, look-alikes are next to each other and a face the named ones recognise carries the name they suggest, and with `bySuggestion: true` `groups` lists those faces under the person suggested ([{name, total, faces: [{photo, index, rect, view, score}]}], the most faces first). `view` is the box to show the face by. Name them with `faces.nameFaces`, ignore them with `faces.ignore`",
+            "{limit?: 600, scope?: \"filter\", bySuggestion?: false, budgetMs?: 15} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null, similarity: {name, score} | null}], ordered, ready, rejected, scan: {total, judged, complete}, groups?}: the faces nobody has named (with `scope: \"filter\"`, only in the photos the library filter shows, any person filter aside); with a recognition model chosen, look-alikes are next to each other and a face the named ones recognise carries the name they suggest. `similarity` is the best confirmed-person match, including below-threshold matches. Every unnamed face with an embedding is judged against the named ones, `budgetMs` of that per call at most, so a suggestion does not depend on the page a face falls on: `scan` says how many of the library's faces were judged, and whether all of them were (`budgetMs: 0` only reports). With `bySuggestion: true`, `groups` lists every suggested face in the scope under the person suggested ([{name, total, faces: [{photo, index, rect, view, score}]}], the most faces first), not only the listed page's. `view` is the box to show the face by. Name them with `faces.nameFaces`, ignore them with `faces.ignore`",
             super::always,
             unnamed
         ),

@@ -12,6 +12,11 @@ import { Aside } from '@astrojs/starlight/components';
 <Shot name="detail-section" alt="The Detail section with sharpening and noise reduction sliders" />
 
 - **Sharpening**: **Amount**, **Radius**, **Detail**, **Masking**. Radius and Detail need process V4 or later: [Process versions](../process-versions/).
+- **Sharpening views**: hold `Alt` (`Option` on macOS) while dragging a Sharpening slider and the photo turns black and white to show what that slider does. Release `Alt` to see the photo again.
+  - **Amount**: the sharpening being applied about mid-grey; more Amount clips more of it to black and white.
+  - **Radius**: the photo blurred at the Radius, in grey.
+  - **Detail**: the fine edges sharpening works on, as grey.
+  - **Masking**: the mask, white where the photo is sharpened and black where it is left alone. At Masking 0 it is all white.
 - **Noise Reduction**: **Luminance**, **Detail**, **Contrast**; **Color**, **Detail**, **Smoothness**. Same look in grid, loupe, 1:1 and export.
 - **Hot pixel removal**: a box under Noise Reduction (outliers); raw hot, dead and stuck pixels are also fixed on decode. See [Sensor and plug-ins](../sensor-and-plugins/).
 - **AI Denoise** and **Super Resolution**, **Raw Details**: [Denoise](../../ai/denoise/), [Super resolution](../../ai/super-resolution/).

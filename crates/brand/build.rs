@@ -40,6 +40,12 @@ fn main() {
             panic!("{}: missing required key `{required}`", path.display());
         }
     }
+    // the repository's issues page, where feedback and bug reports go: built from `product.repository`
+    // (required, so present) so that no URL is typed in code
+    if let Some((_, _, Value::Str(repository))) = entries.iter().find(|(s, k, _)| s == "product" && k == "repository") {
+        let issues = format!("{}/issues", repository.trim_end_matches('/'));
+        writeln!(out, "pub const REPOSITORY_ISSUES: &str = {issues:?};").unwrap();
+    }
     for (required, name, default) in OPTIONAL {
         let (section, key) = required.split_once('.').unwrap();
         if !entries.iter().any(|(s, k, _)| s == section && k == key) {
