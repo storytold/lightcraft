@@ -124,6 +124,10 @@ sidebar:
 - **Loupe background** and **Filmstrip background**: Theme Default, Black, Dark Gray, Medium Gray (50 %), Light Gray
   or White behind the photo and behind the filmstrip, whatever the theme (also **Window ▸ Appearance**).
 - **Expanded sliders** (off by default) let sliders that support it go past Lightroom's range; not XMP compliant.
+- **Click through** (macOS only): a click in a background window brings it to the front and, by default, also acts
+  on the window's contents (**Bring to front and click**). **Only bring to front** makes that first click just bring
+  the window to the front, as Lightroom Classic does on the Mac. Applies at once; agents use
+  `app.backgroundClicks`. Windows and Linux always pass the click on, so the setting isn't shown there.
 
 ### Filmstrip, grid, keywords and presets
 - Filmstrip file names and badges; when the grid shows ratings and flags; **Double-click opens the photo in Develop**;

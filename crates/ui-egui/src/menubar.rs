@@ -2123,6 +2123,24 @@ mod tests {
         assert!(run_item(&mut app, "merge.hdrLast", Value::Null).is_err());
     }
 
+    /// Help ▸ Send Feedback… opens the repository's issues page: the link the command and the menu
+    /// item both read (`links::FEEDBACK`), and the item keeps that label in every build.
+    #[test]
+    fn send_feedback_opens_the_issues_page() {
+        let mut app = app();
+        let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let o = opened.clone();
+        app.services.open_url = Some(Box::new(move |u: &str| {
+            o.lock().unwrap().push(u.to_string());
+            Ok(())
+        }));
+        let help = menu_bar(&app).into_iter().find(|(t, _)| t == "Help").map(|(_, items)| items).unwrap_or_default();
+        assert!(matches!(find(&help, "app.feedback"), Some(MenuNode::Item { label, .. }) if label == "Send Feedback…"), "Help lists Send Feedback…");
+        run_item(&mut app, "app.feedback", Value::Null).unwrap();
+        assert_eq!(opened.lock().unwrap().as_slice(), [crate::links::FEEDBACK]);
+        assert_eq!(crate::links::FEEDBACK, format!("{}/issues", lcc_brand::REPOSITORY.trim_end_matches('/')));
+    }
+
     /// #260: Help ▸ Open Log Folder reveals the log file the host names. Without one (the web,
     /// `--memory`) or without a file manager to show it, the item is off and the command says why.
     #[test]
