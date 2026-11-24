@@ -338,12 +338,12 @@ fn compact_rows_stay_in_the_value_column_whatever_is_open() {
         let exposure = rect(&h, "sliderValue:light.exposure").expect("Exposure's value");
         assert!(hdr.right() <= exposure.right() + 0.5, "HDR {hdr:?} ends on the value column {exposure:?}");
     }
-    // compact upright caption is no larger than the slider names
-    // The Transform section's Upright caption reads as a caption: no larger than the slider names, in Compact.
+    // compact upright mode name is no larger than a slider name row
+    // The Transform section names its Upright mode on a row no taller than the sliders, in Compact.
     {
         h.app.ui.open_sections = vec!["geometry".to_string()];
         redraw(&mut h);
-        let caption = rect(&h, "label:upright").expect("the Upright caption");
+        let caption = rect(&h, "label:uprightMode").expect("the Upright mode name");
         let name = h.app.widgets.iter().find(|(w, _)| w.starts_with("sliderLabel:geometry.")).map(|(_, r)| *r).expect("a transform slider's name");
         assert!(caption.height() <= name.height() + 0.5, "Upright {caption:?} vs a slider name {name:?}");
     }

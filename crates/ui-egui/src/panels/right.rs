@@ -598,58 +598,8 @@ fn crop(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let video = crate::video_ui::photo_is_video(app, id);
     crate::video_ui::video_gate(ui, video, |ui| {
         padded(ui, |ui| {
-            crate::widgets::row_caption(ui, "upright", "Upright");
-            {
-                use lcc_develop::Upright;
-                let modes = [
-                    ("Off", Upright::Off, "off"),
-                    ("Auto", Upright::Auto, "auto"),
-                    ("Guided", Upright::Guided, "guided"),
-                    ("Level", Upright::Level, "level"),
-                    ("Vertical", Upright::Vertical, "vertical"),
-                    ("Full", Upright::Full, "full"),
-                ];
-                let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
-                let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-                if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3)
-                    && let Some(&(_, mode, key)) = modes.get(i)
-                {
-                    let r = app.run("geometry.upright", json!({"mode": key, "again": Some(i) == active}));
-                    upright_note(app, ui.ctx(), r.as_ref().ok());
-                    app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
-                }
-            }
-            let guided = d.geometry.upright == lcc_develop::Upright::Guided;
-            ui.horizontal_wrapped(|ui| {
-                if !guided
-                    && d.geometry.upright != lcc_develop::Upright::Off
-                    && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
-                {
-                    let mode = serde_json::to_value(d.geometry.upright).unwrap_or_default();
-                    let r = app.run("geometry.upright", json!({"mode": mode}));
-                    upright_note(app, ui.ctx(), r.as_ref().ok());
-                }
-                if guided {
-                    let drawing = app.ui.tool == "guidedUpright";
-                    if text_button(ui, "uprightDraw", crate::i18n::tr("Draw Guides"), drawing).clicked() {
-                        app.ui.tool = if drawing { String::new() } else { "guidedUpright".into() };
-                    }
-                    if !d.geometry.guides.is_empty() && text_button(ui, "uprightClear", crate::i18n::tr("Clear Guides"), false).clicked() {
-                        let _ = app.run("geometry.guides", json!({"guides": []}));
-                    }
-                }
-            });
-            if guided {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr_format!(
-                        "{} of 4 guides. Drag along lines that should be vertical or horizontal.",
-                        d.geometry.guides.len()
-                    ))
-                    .size(11.0)
-                    .color(Tokens::get(ui.ctx()).text_dim),
-                );
-            }
-            ui.add_space(4.0);
+            classic_crop::upright_controls(app, ui, &d);
+            ui.add_space(6.0);
             let mut c = d.geometry.constrain_crop;
             if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
@@ -1677,7 +1627,7 @@ enum HistoryRow {
 }
 
 /// Upright that found nothing to correct says why, as a note over the photo.
-fn upright_note(app: &mut LccApp, ctx: &egui::Context, result: Option<&serde_json::Value>) {
+pub(crate) fn upright_note(app: &mut LccApp, ctx: &egui::Context, result: Option<&serde_json::Value>) {
     if let Some(note) = result.and_then(|r| r.get("note")).and_then(serde_json::Value::as_str) {
         app.toast_for(ctx, note.to_string(), 8.0);
     }
@@ -1824,7 +1774,7 @@ fn step_menu(app: &mut LccApp, resp: &egui::Response, label: &str, i: usize) {
 /// A panel icon button for `label` (translated: the accessible name), its hover text the label plus
 /// `command`'s current shortcut. Addressable as `button:{id}` (as the text button it replaced was)
 /// and `icon:{id}`.
-fn cmd_icon(app: &LccApp, ui: &mut egui::Ui, id: &str, icon: Icon, label: &str, command: Option<&str>, active: bool) -> egui::Response {
+pub(crate) fn cmd_icon(app: &LccApp, ui: &mut egui::Ui, id: &str, icon: Icon, label: &str, command: Option<&str>, active: bool) -> egui::Response {
     let sc = command.and_then(|c| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, c));
     let tip = crate::widgets::command_tooltip(ui, label, sc);
     let r = crate::widgets::icon_button_named(ui, id, icon, vec2(28.0, 24.0), active, true, crate::i18n::tr(label), &tip);
