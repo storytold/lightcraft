@@ -290,6 +290,12 @@ pub struct PrepState {
     /// for them yet, and when the last such change was seen.
     changed: std::collections::BTreeSet<PhotoId>,
     changed_at: u64,
+    /// A walk over every photo's settings in progress, [`SCAN_CHUNK`] photos a tick: the photo it goes
+    /// on from, and whether it is the first look (what it finds is the starting point, not a change).
+    /// Needed when what changed is not known photo by photo ([`lcc_catalog::Catalog::touched_since`]):
+    /// a library just opened, an op over more than its own photos. One walk over a 329 000-photo
+    /// library in one tick stalled the interface for seconds (#979).
+    scan: Option<(PhotoId, bool)>,
     /// The running build is the one for [`Self::changed`] photos.
     resync: bool,
     /// The running build was stopped to make way for the changed photos (not by the user).
@@ -318,6 +324,16 @@ impl PrepState {
         self.steps_in = None;
         self.last_at = None;
         self.steps = 0;
+    }
+
+    /// Photo `id`'s settings are at `ptr` now: noted, and `true` when they changed since the last look
+    /// (not counting the photo on screen, `at`, nor the first look at a photo).
+    fn note(&mut self, id: PhotoId, ptr: usize, at: Option<PhotoId>) -> bool {
+        let changed = self.seen.insert(id, ptr).is_some_and(|old| old != ptr) && Some(id) != at;
+        if changed {
+            self.changed.insert(id);
+        }
+        changed
     }
 
     /// The wait after a view change ([`SETTLE_AFTER`]; this crate's tests: none unless they set one).
@@ -540,10 +556,14 @@ pub fn on_background_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
     f()
 }
 
-/// A cheap identity of the photos in view: a build is started once per view.
-fn signature(ids: &[PhotoId], s: &Session) -> u64 {
+/// How many photos' settings a tick looks at, at most, while it walks the library ([`PrepState`]'s scan).
+pub const SCAN_CHUNK: usize = 16_384;
+
+/// A cheap identity of the photos in view: a build is started once per view. `photos`: how many the
+/// catalog holds.
+fn signature(ids: &[PhotoId], photos: usize) -> u64 {
     let mut h = lcc_preview::Hasher128::new();
-    h.u64(ids.len() as u64).u64(s.catalog.len() as u64);
+    h.u64(ids.len() as u64).u64(photos as u64);
     for id in ids.iter().take(64).chain(ids.iter().rev().take(64)) {
         h.u64(id.0);
     }
@@ -611,8 +631,7 @@ impl Session {
         if at.is_none() && !owed {
             return;
         }
-        let view = self.visible_cloned();
-        let view_sig = signature(&view, self);
+        let view_sig = self.view_signature();
         let now = web_time::Instant::now();
         if self.prep.view_seen != Some(view_sig) {
             // another view than the one last seen: an owed build waits until it has been still
@@ -624,7 +643,7 @@ impl Session {
         }
         // the photo the build goes from: the one in the loupe; in the grid the active photo, else
         // the view's first
-        let Some(anchor) = at.or_else(|| self.active()).or_else(|| view.first().copied()) else { return };
+        let Some(anchor) = at.or_else(|| self.active()).or_else(|| self.visible().first().copied()) else { return };
         let (sig, ids) = self.prep_view(mode, anchor);
         // a folder browsed to be culled is prepared as soon as a photo of it is looked at (the
         // user waited on photo 1 for minutes and nothing was prepared); a library after a few steps
@@ -713,7 +732,7 @@ impl Session {
                 && !self.prep.resync
                 && !b.cancel.load(Ordering::Relaxed)
                 && self.prep.started_for.is_some()
-                && self.prep.build_view != signature(&self.visible_cloned(), self)
+                && self.prep.build_view != self.view_signature()
             {
                 b.cancel.store(true, Ordering::Relaxed);
                 self.prep.superseded = true;
@@ -793,49 +812,92 @@ impl Session {
     /// What the background build prepares with the user on photo `at` in `mode`, and its identity:
     /// a folder being culled whole; a library the stretch around `at` ([`AROUND`]), a build per
     /// stretch.
+    ///
+    /// Only the stretch is copied out of the view: a library's whole view is hundreds of thousands of
+    /// ids, and copying it every tick, then building previews for all of it when the photo was not in
+    /// it, is what made each tick take seconds in a 329 000-photo library (#979). A photo not in the
+    /// view (the active one, filtered out) prepares the view's first stretch.
     fn prep_view(&mut self, mode: Mode, at: PhotoId) -> (u64, Vec<PhotoId>) {
-        let ids = self.visible_cloned();
-        let sig = signature(&ids, self);
-        match (mode, ids.iter().position(|id| *id == at)) {
-            (Mode::Culling, _) | (_, None) => (sig, ids),
-            (_, Some(i)) => {
-                let stretch = i / AROUND;
-                let sig = sig ^ (stretch as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-                let from = (stretch * AROUND).saturating_sub(AROUND);
-                (sig, ids.into_iter().skip(from).take(AROUND * 3).collect())
-            }
+        let photos = self.catalog.len();
+        let ids = self.visible();
+        let sig = signature(ids, photos);
+        if mode == Mode::Culling {
+            return (sig, ids.to_vec());
         }
+        let i = ids.iter().position(|id| *id == at).unwrap_or(0);
+        let stretch = i / AROUND;
+        let sig = sig ^ (stretch as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let from = (stretch * AROUND).saturating_sub(AROUND);
+        (sig, ids.iter().skip(from).take(AROUND * 3).copied().collect())
     }
 
-    /// Note which photos' settings changed since the last look (cheap: only when the catalog
-    /// changed, one pointer compare a photo). The photo on screen renders itself.
+    /// The signature of the view shown, without copying it.
+    fn view_signature(&mut self) -> u64 {
+        let photos = self.catalog.len();
+        signature(self.visible(), photos)
+    }
+
+    /// Note which photos' settings changed since the last look (one pointer compare a photo). Cheap
+    /// every tick: when the catalog knows which photos its ops touched, only those are looked at; when
+    /// it doesn't (a library just opened, an op over more than its own photos) the library is walked
+    /// [`SCAN_CHUNK`] photos a tick. The photo on screen renders itself.
     fn note_changes(&mut self, at: Option<PhotoId>) {
         let rev = self.catalog.revision;
         let lib = self.library.as_ref().map(|l| l.dir.as_path());
-        match &self.prep.seen_rev {
-            Some((r, l)) if *r == rev && l.as_deref() == lib => return,
-            Some((_, l)) if l.as_deref() == lib => {}
+        let since = match &self.prep.seen_rev {
+            Some((r, l)) if l.as_deref() == lib => Some(*r),
             // another library (photo ids mean other photos): start over
             _ => {
                 self.prep.seen.clear();
                 self.prep.changed.clear();
+                self.prep.scan = None;
+                None
+            }
+        };
+        if since != Some(rev) {
+            self.prep.seen_rev = Some((rev, lib.map(std::path::Path::to_path_buf)));
+            match since.and_then(|r| self.catalog.touched_since(r)) {
+                Some(ids) => {
+                    // (a photo the walk has not reached yet gets its starting point here)
+                    let mut any = false;
+                    for id in ids {
+                        match self.catalog.photo(id) {
+                            Some(p) => any |= self.prep.note(id, Arc::as_ptr(&p.develop) as usize, at),
+                            None => {
+                                self.prep.seen.remove(&id);
+                            }
+                        }
+                    }
+                    if any {
+                        self.prep.changed_at = clock_ms();
+                    }
+                }
+                // not known photo by photo: the library is walked again from its start (a first
+                // look, still under way, stays one)
+                None => {
+                    let first = self.prep.seen.is_empty() || self.prep.scan.is_some_and(|(_, first)| first);
+                    self.prep.scan = Some((PhotoId(0), first));
+                }
             }
         }
-        self.prep.seen_rev = Some((rev, lib.map(std::path::Path::to_path_buf)));
-        let first = self.prep.seen.is_empty();
+        let Some((from, first)) = self.prep.scan else { return };
         let mut any = false;
-        for p in self.catalog.photos() {
+        let mut next = None;
+        for (n, p) in self.catalog.photos_from(from).enumerate() {
+            if n >= SCAN_CHUNK {
+                next = Some(p.id);
+                break;
+            }
             let ptr = Arc::as_ptr(&p.develop) as usize;
-            if let Some(old) = self.prep.seen.insert(p.id, ptr)
-                && old != ptr
-                && !first
-                && Some(p.id) != at
-            {
-                self.prep.changed.insert(p.id);
-                any = true;
+            if first {
+                self.prep.seen.insert(p.id, ptr);
+            } else {
+                any |= self.prep.note(p.id, ptr, at);
             }
         }
-        if self.prep.seen.len() > self.catalog.len() {
+        self.prep.scan = next.map(|id| (id, first));
+        if next.is_none() && self.prep.seen.len() > self.catalog.len() {
+            // the walk is over: photos removed since are forgotten
             let catalog = &self.catalog;
             self.prep.seen.retain(|id, _| catalog.photo(*id).is_some());
         }
@@ -853,10 +915,12 @@ impl Session {
     /// Render the previews of the photos changed off screen again, nearest the photo on screen
     /// first (in the direction of travel), the ones out of view last.
     fn start_resync(&mut self, at: Option<PhotoId>, backward: bool) {
-        let view = self.visible_cloned();
-        let here = at.and_then(|a| view.iter().position(|id| *id == a)).unwrap_or(0);
-        let pos: std::collections::HashMap<PhotoId, usize> = view.iter().enumerate().map(|(i, id)| (*id, i)).collect();
         let changed = std::mem::take(&mut self.prep.changed);
+        // (one pass over the view, borrowed: only the changed photos' places are kept)
+        let view = self.visible();
+        let here = at.and_then(|a| view.iter().position(|id| *id == a)).unwrap_or(0);
+        let pos: std::collections::HashMap<PhotoId, usize> =
+            view.iter().enumerate().filter(|(_, id)| changed.contains(id)).map(|(i, id)| (*id, i)).collect();
         let mut ids: Vec<PhotoId> = changed.into_iter().filter(|id| self.catalog.photo(*id).is_some()).collect();
         let distance = |id: &PhotoId| match pos.get(id) {
             // ahead in the direction of travel first, then the one as far behind
@@ -913,6 +977,59 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A session (no library) holding `n` photos.
+    fn photos(n: usize) -> Session {
+        let mut s = Session::new();
+        for i in 0..n {
+            let id = s.catalog.alloc_photo_id();
+            let p = lcc_catalog::Photo::new(
+                id,
+                lcc_catalog::Source::File { path: format!("/p/{i}.jpg") },
+                &format!("{i}.jpg"),
+                "JPG",
+                600,
+                400,
+                "2026-01-01T00:00:00",
+            );
+            s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        s
+    }
+
+    /// A large library is looked at a stretch a tick, not all of it in one (a 329 000-photo library
+    /// took seconds a tick, #979), and an edit afterwards is still seen, by looking at its photo only.
+    #[test]
+    fn a_large_library_is_looked_at_a_stretch_a_tick_and_edits_are_still_seen() {
+        let n = SCAN_CHUNK * 2 + 5;
+        let mut s = photos(n);
+        s.prep_tick(Mode::Library, None, false);
+        assert!(s.prep.seen.len() <= SCAN_CHUNK, "one tick looked at {} photos", s.prep.seen.len());
+        assert!(s.prep.scan.is_some(), "the walk goes on next tick");
+        for _ in 0..3 {
+            s.prep_tick(Mode::Library, None, false);
+        }
+        assert!(s.prep.scan.is_none(), "the walk is over");
+        assert_eq!(s.prep.seen.len(), n);
+        assert!(s.prep.changed.is_empty(), "a first look finds nothing changed");
+
+        let id = s.catalog.photos().nth(SCAN_CHUNK + 3).map(|p| p.id).unwrap();
+        let mut d = (*s.catalog.photo(id).unwrap().develop).clone();
+        d.light.exposure = 0.7;
+        s.catalog.apply(lcc_catalog::Op::SetDevelop { id, settings: Arc::new(d), label: "x".into(), edited: None }).unwrap();
+        s.prep_tick(Mode::Library, None, false);
+        assert!(s.prep.scan.is_none(), "a known edit needs no walk");
+        assert_eq!(s.prep.changed.iter().copied().collect::<Vec<_>>(), vec![id]);
+    }
+
+    /// The build started from a photo that isn't in the view prepares a stretch of the view, not all
+    /// of it (#979: a build of every one of 329 000 photos).
+    #[test]
+    fn a_photo_out_of_view_prepares_a_stretch_not_the_whole_view() {
+        let mut s = photos(AROUND * 10);
+        let (_, ids) = s.prep_view(Mode::Library, PhotoId(u64::MAX));
+        assert!(!ids.is_empty() && ids.len() <= AROUND * 3, "{} photos", ids.len());
+    }
 
     #[test]
     fn a_patch_changes_only_what_it_names_and_is_kept_in_range() {

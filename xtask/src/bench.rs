@@ -1,5 +1,5 @@
 //! `cargo xtask bench [FILE] [--only P,P…] [--strict] [--threshold PCT] [--save-baseline]`: run the
-//! performance probes in [`PROBES`] (render, Library grid at 100k, TIFF ZIP export, keyword tree), record
+//! performance probes in [`PROBES`] (render, Library grid at 100k, TIFF ZIP export, keyword tree, start-up at 100k), record
 //! the results in `target/bench/history.jsonl` (one JSON object per run, with git revision, host and load
 //! average), check them against the budgets in [`BUDGETS`] and compare with this machine's stored baseline
 //! (`target/bench/baseline.json`, written by `--save-baseline`; the previous run on this host when there is
@@ -83,6 +83,7 @@ pub const PROBES: &[Probe] = &[
     probe("grid", &["test", "--release", "-q", "-p", "lcc-ui-egui", "--lib", "tests_grid::scale_", "--", "--nocapture", "--test-threads=1"]),
     probe("tiff", &["test", "--release", "-q", "-p", "lcc-codecs", "--test", "it", "tiff_zip::bench", "--", "--nocapture"]),
     probe("keywords", &["test", "--release", "-q", "-p", "lcc-catalog", "--lib", "probe_keyword_tree_cost", "--", "--nocapture"]),
+    probe("startup", &["run", "--release", "-q", "-p", "lcc-ui-egui", "--example", "startup_bench"]), // 100k-photo library (4.1)
 ];
 
 /// A wall-clock ceiling on one metric. `enforce: false` is reported but never fails `--strict`: a known miss
@@ -124,6 +125,7 @@ pub const BUDGETS: &[Budget] = &[
     budget("grid:grid 100k | filter rating >= 4 (command + next frame)/cpu/wall", 1000.0, "grid filter change, 100k (232)"),
     budget("tiff:tiff 24 MP 16-bit noise 1300 Deflate/cpu/wall", 3000.0, "TIFF ZIP export, 24 MP 16-bit (960)"),
     budget("keywords:keyword tree 58k (kept)/cpu/wall", 16.0, "Keyword List, kept tree (0.6)"),
+    advisory("startup:startup library ready/cpu/wall", 3000.0, "start-up to a usable library, 100k photos (4.1; 1.0-8.2 s loaded)"),
     budget("keywords:keyword tree 58k (built with its index)/cpu/wall", 400.0, "Keyword List after an edit (198)"),
 ];
 

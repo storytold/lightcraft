@@ -146,6 +146,25 @@ load_bytes(2560):          93.0 ms wall,  1855.4 ms cpu
 load_bytes(full):         425.3 ms wall, 10448.3 ms cpu
 ```
 
+<<<<<<< HEAD
+## Start-up (`cargo xtask bench`, `startup_bench`; plan item 4.1, #979)
+
+`cargo run --release -p lcc-ui-egui --example startup_bench -- [DIR] [PHOTOS]` makes a synthetic library (default
+100 000 raws, a third edited) and starts the app on it headless: `startup first frame`, `startup library ready`
+(budget ≤ 3 s, an advisory row in `BUDGETS` in `xtask/src/bench.rs` until a quiet machine shows it met), `startup slowest frame`, and `startup prep tick` (the
+slowest of the background preparation's first 30 ticks after the library opened). `cargo xtask bench` runs it as the `startup`
+probe (`--only startup` alone; other sizes by running the example directly).
+
+2026-11-24, Windows 11, machine shared with other builds (wall times vary ±100 % between runs of one binary), three
+interleaved before/after runs at 100 000 photos: preparation tick 12–19 ms → **4 ms**. Before, each catalog change
+compared every photo's settings in one tick and copied the whole view (twice) to sign it, and a build started from a
+photo not in the view asked for previews of every photo in it — about 4 s a tick at 329 000 photos in the report on
+#979. Now the catalog's change log names the photos to compare, a full walk (library opened, an op over more than its
+own photos) goes 16 384 photos a tick, the view is signed in place and a build covers only the stretch around the
+photo. The lens database is read on a worker after a library opens (an activity-stack row) instead of by the first
+photo that needs it. Library ready 1.0–3.9 s before, 1.0–8.2 s after, same noise: the remaining long frame is the
+session open on the interface thread, not measured apart here.
+=======
 ## CPU-only stages against the loupe budget (plan 4.6, 2026-11-24)
 
 Two stages have no WGSL kernel: soft proofs against an output-device profile (a 3D table; the GPU renderer declines
@@ -170,6 +189,7 @@ small spot fits; large or many Even Out spots miss it (the three box blurs per s
 radius), and Fill pays its PatchMatch solve once per stroke. A port of Even Out's blurs to the GPU blur kernels is the
 next step if the idle re-measure confirms the miss. Tried and dropped: taller `box_v` bands for wide radii (fewer
 primes, less parallelism): no difference distinguishable from the load noise.
+>>>>>>> origin/main
 
 ## Catalog (`cargo xtask bench-catalog`)
 
