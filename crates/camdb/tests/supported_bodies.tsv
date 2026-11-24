@@ -1,0 +1,305 @@
+# Bodies with a pinned CC0 raw sample (xtask RAW_SAMPLES, raw.pixls.us names = Exif make and model). DNG and GoPro GPR (own
+# matrices) and Hasselblad 3FR/FFF (opened from the embedded JPEG only) are left out.
+# maker	model	extension
+Nikon	D6	nef
+Nikon	Z 6	nef
+Nikon	Z 7	nef
+Nikon	Z 8	nef
+Sony	ILCE-7RM4A	arw
+Sony	ILCE-9M2	arw
+Sony	ILCE-7M3	arw
+Sony	ILCE-7M4	arw
+Sony	ILCE-7RM4	arw
+Canon	EOS 5D Mark III	cr2
+Canon	EOS 80D	cr2
+Canon	EOS M50	cr3
+Canon	EOS R100	cr3
+Canon	EOS R8	cr3
+Canon	EOS RP	cr3
+Canon	EOS R5 Mark II	cr3
+Canon	EOS M200	cr3
+Canon	EOS R10	cr3
+Canon	EOS R50 V	cr3
+Canon	EOS R6 Mark III	cr3
+Canon	PowerShot V1	cr3
+Canon	EOS-1D X Mark III	cr3
+Canon	EOS 250D	cr3
+Canon	EOS 850D	cr3
+Canon	EOS 90D	cr3
+Canon	EOS M50 Mark II	cr3
+Canon	EOS M6 Mark II	cr3
+Canon	EOS R3	cr3
+Canon	EOS R50	cr3
+Canon	EOS R5	cr3
+Canon	EOS R6	cr3
+Canon	EOS R6 Mark II	cr3
+Canon	EOS R7	cr3
+Canon	EOS R	cr3
+Canon	PowerShot G5 X Mark II	cr3
+Canon	PowerShot G7 X Mark III	cr3
+Canon	PowerShot SX70 HS	cr3
+Nikon	D5100	nef
+Nikon	D7000	nef
+Nikon	D7500	nef
+Nikon	COOLPIX B700	nrw
+Olympus	E-1	orf
+Olympus	E-400	orf
+Olympus	E-M1	orf
+Olympus	E-M10 Mark III	orf
+Olympus	XZ-2	orf
+Pentax	K10D	pef
+Pentax	K-3	pef
+Pentax	K-5 II s	pef
+Samsung	NX10	srw
+Samsung	NX20	srw
+Samsung	EX1	srw
+Fujifilm	X-A2	raf
+Fujifilm	X-A5	raf
+Fujifilm	X-E1	raf
+Fujifilm	X-T20	raf
+Panasonic	DMC-FZ50	raw
+Panasonic	DMC-FZ8	raw
+Panasonic	DC-FZ10002	rw2
+Fujifilm	GFX 100	raf
+Fujifilm	GFX100RF	raf
+Fujifilm	GFX100S	raf
+Fujifilm	GFX 50S	raf
+Fujifilm	X-E5	raf
+Fujifilm	X-H2	raf
+Fujifilm	X-M5	raf
+Fujifilm	X-T2	raf
+Fujifilm	X-T4	raf
+Fujifilm	X-T5	raf
+Fujifilm	X-T50	raf
+Panasonic	DC-G9	rw2
+Panasonic	DMC-GH1	rw2
+Panasonic	DC-GH5	rw2
+Panasonic	DC-GH5M2	rw2
+Panasonic	DC-GH5S	rw2
+Panasonic	DC-GH6	rw2
+Panasonic	DMC-GX80	rw2
+Panasonic	DC-S1	rw2
+Panasonic	DC-S5	rw2
+Panasonic	DC-S5M2	rw2
+Panasonic	DC-S9	rw2
+Leica	D-Lux 7	rwl
+Nikon	Z 6_2	nef
+Nikon	D700	nef
+Fujifilm	XF10	raf
+Fujifilm	X-A10	raf
+Nikon	D5300	nef
+Fujifilm	X-T100	raf
+Fujifilm	X-Pro1	raf
+Nikon	1 V1	nef
+Nikon	1 J4	nef
+Fujifilm	GFX100S II	raf
+Nikon	D610	nef
+Nikon	D5	nef
+Nikon	D2H	nef
+Nikon	COOLPIX P1000	nrw
+Fujifilm	FinePix X100	raf
+Fujifilm	X30	raf
+Fujifilm	FinePix X10	raf
+Nikon	D2Xs	nef
+Nikon	D4	nef
+Nikon	D800	nef
+Fujifilm	X-E2S	raf
+Nikon	D500	nef
+Fujifilm	GFX 50R	raf
+Nikon	Df	nef
+Fujifilm	X-S10	raf
+Nikon	1 V2	nef
+Nikon	1 V3	nef
+Nikon	D3S	nef
+Nikon	Z fc	nef
+Nikon	D810	nef
+Fujifilm	X-A3	raf
+Nikon	D40	nef
+Nikon	D800E	nef
+Nikon	D3X	nef
+Nikon	D4S	nef
+Fujifilm	X-T30 III	raf
+Fujifilm	XQ2	raf
+Fujifilm	X-T10	raf
+Nikon	D2X	nef
+Fujifilm	X70	raf
+Nikon	1 AW1	nef
+Fujifilm	X-H1	raf
+Nikon	1 J5	nef
+Nikon	1 J1	nef
+Nikon	D7200	nef
+Fujifilm	X-T30 II	raf
+Nikon	Z 50	nef
+Nikon	D5000	nef
+Fujifilm	XQ1	raf
+Fujifilm	FinePix HS30EXR	raf
+Nikon	D70s	nef
+Nikon	D5200	nef
+Nikon	Coolpix P1100	nrw
+Fujifilm	X-S20	raf
+Nikon	Z 30	nef
+Fujifilm	X-E2	raf
+Nikon	D60	nef
+Nikon	1 J2	nef
+Nikon	D5600	nef
+Nikon	D3	nef
+Nikon	D300	nef
+Fujifilm	FinePix SL1000	raf
+Fujifilm	X-Pro3	raf
+Fujifilm	X-Pro2	raf
+Nikon	1 S1	nef
+Fujifilm	X-T200	raf
+Nikon	D3200	nef
+Fujifilm	X-T3	raf
+Fujifilm	FinePix F550EXR	raf
+Nikon	D5500	nef
+Fujifilm	X-A7	raf
+Nikon	D3300	nef
+Nikon	Z 5	nef
+Nikon	1 J3	nef
+Nikon	Z 9	nef
+Nikon	Coolpix A1000	nrw
+Fujifilm	X100S	raf
+Nikon	D2Hs	nef
+Nikon	D90	nef
+Nikon	D50	nef
+Nikon	D3000	nef
+Fujifilm	X100T	raf
+Nikon	Z50_2	nef
+Nikon	D600	nef
+Fujifilm	XF1	raf
+Nikon	D7100	nef
+Fujifilm	X-E3	raf
+Fujifilm	X-A1	raf
+Nikon	D3500	nef
+Fujifilm	FinePix HS50EXR	raf
+Fujifilm	GFX100 II	raf
+Fujifilm	X100F	raf
+Nikon	D40X	nef
+Nikon	Coolpix A	nef
+Fujifilm	X20	raf
+Fujifilm	X-E4	raf
+Fujifilm	GFX50S II	raf
+Nikon	D1H	nef
+Nikon	D200	nef
+Fujifilm	FinePix HS33EXR	raf
+Fujifilm	FinePix S1	raf
+Nikon	Z 7_2	nef
+Nikon	D70	nef
+Nikon	D300S	nef
+Fujifilm	X-S1	raf
+Nikon	D3100	nef
+Fujifilm	X-T1	raf
+Nikon	D3400	nef
+Fujifilm	X-M1	raf
+Fujifilm	X-T30	raf
+Nikon	COOLPIX P950	nrw
+Fujifilm	FinePix F770EXR	raf
+Leica	C-Lux	rwl
+Sony	ZV-1M2	arw
+Sony	ZV-E10M2	arw
+Sony	DSC-RX1RM3	arw
+Sony	ILCE-1M2	arw
+Sony	DSC-RX100M7A	arw
+Sony	ILCE-7M5	arw
+Sony	ILME-FX2	arw
+Sony	ILCE-6400A	arw
+Samsung	NX200	srw
+Olympus	SP550UZ	orf
+Olympus	E-10	orf
+Olympus	C5060WZ	orf
+Olympus	SP565UZ	orf
+Olympus	E-M5 Mark II	orf
+Olympus	E-300	orf
+Olympus	SH-2	orf
+Samsung	NX5	srw
+Olympus	C7070WZ	orf
+Olympus	XZ-10	orf
+Samsung	WB2000	srw
+Olympus	E-330	orf
+Olympus	SP570UZ	orf
+Samsung	NX11	srw
+Samsung	NX1000	srw
+Samsung	NX1100	srw
+Samsung	NX210	srw
+Olympus	SP510UZ	orf
+Olympus	PEN-F	orf
+Olympus	E-500	orf
+Canon	EOS 70D	cr2
+Canon	EOS Rebel T7i	cr2
+Canon	PowerShot G9 X	cr2
+Pentax	K-1	pef
+Canon	EOS 4000D	cr2
+Canon	EOS 1000D	cr2
+Canon	PowerShot G1 X Mark II	cr2
+Canon	EOS 500D	cr2
+Pentax	*ist DL	pef
+Canon	EOS 400D	cr2
+Canon	PowerShot S110	cr2
+Canon	EOS Kiss X80	cr2
+Canon	EOS 600D	cr2
+Pentax	K-70	pef
+Canon	PowerShot G1 X	cr2
+Canon	PowerShot G16	cr2
+Canon	PowerShot G3 X	cr2
+Pentax	*ist DS	pef
+Canon	EOS M	cr2
+Canon	EOS-1D X Mark II	cr2
+Pentax	K-3 Mark III	pef
+Canon	EOS 750D	cr2
+Canon	EOS 5DS	cr2
+Canon	PowerShot S100V	cr2
+Canon	EOS Kiss Digital N	cr2
+Canon	EOS Rebel T5	cr2
+Pentax	K110D	pef
+Canon	PowerShot G11	cr2
+Canon	EOS Rebel SL1	cr2
+Canon	PowerShot G15	cr2
+Canon	EOS-1D Mark IV	cr2
+Canon	EOS M5	cr2
+Canon	PowerShot S100	cr2
+Pentax	*ist D	pef
+Canon	EOS Rebel T4i	cr2
+Canon	PowerShot SX50 HS	cr2
+Canon	EOS M2	cr2
+Canon	EOS M3	cr2
+Canon	PowerShot G12	cr2
+Canon	EOS 6D Mark II	cr2
+Canon	EOS M10	cr2
+Canon	EOS Rebel T5i	cr2
+Canon	EOS Rebel T3	cr2
+Canon	EOS 77D	cr2
+Canon	EOS 2000D	cr2
+Canon	EOS 5D Mark IV	cr2
+Canon	EOS-1D Mark III	cr2
+Canon	EOS 60D	cr2
+Pentax	K100D	pef
+Canon	EOS-1D Mark II N	cr2
+Canon	EOS M100	cr2
+Pentax	K2000	pef
+Canon	PowerShot G5 X	cr2
+Canon	PowerShot G9	cr2
+Canon	EOS 5D	cr2
+Pentax	K100D Super	pef
+Canon	EOS M6	cr2
+Canon	PowerShot G7 X Mark II	cr2
+Canon	EOS 7D Mark II	cr2
+Canon	PowerShot S120	cr2
+Canon	PowerShot S95	cr2
+Canon	PowerShot G1 X Mark III	cr2
+Canon	EOS 50D	cr2
+Canon	EOS 20D	cr2
+Pentax	K-r	pef
+Canon	PowerShot G7 X	cr2
+Canon	EOS 450D	cr2
+Canon	PowerShot SX60 HS	cr2
+Canon	EOS Kiss X9	cr2
+Canon	PowerShot G9 X Mark II	cr2
+Canon	EOS 760D	cr2
+Canon	EOS 30D	cr2
+Sony	ILCE-1	arw
+Sony	ILCE-6400	arw
+Sony	ILCE-7RM5	arw
+Nikon	D850	nef
+Nikon	D750	nef
+Olympus	E-M1MarkII	orf
