@@ -25,8 +25,8 @@ pub const MAX_BLOB: u64 = 64 << 30;
 #[serde(rename_all = "camelCase")]
 pub struct Hello {
     pub proto: u32,
-    /// The app's version: records only merge between the same version (a different one could
-    /// drop settings it doesn't know).
+    /// The app's version: records only merge within the same release line, `year.week` (a
+    /// different one could drop settings it doesn't know; patch releases don't change records).
     pub app: String,
     /// This device's name.
     pub name: String,
@@ -162,7 +162,7 @@ pub fn check(mine: &Hello, theirs: &Hello) -> Result<(), Refusal> {
     if theirs.proto != mine.proto {
         return Err(Refusal::Protocol);
     }
-    if theirs.app != mine.app {
+    if release_line(&theirs.app) != release_line(&mine.app) {
         return Err(Refusal::Version(theirs.app.chars().take(32).collect()));
     }
     let skew = mine.now_ms.abs_diff(theirs.now_ms);
@@ -170,6 +170,18 @@ pub fn check(mine: &Hello, theirs: &Hello) -> Result<(), Refusal> {
         return Err(Refusal::Clock(skew / 60_000));
     }
     Ok(())
+}
+
+/// The release line of an app version: its first two numbers (`26.47.2` → `26.47`). Patch
+/// releases of one line sync with each other (#1294: a phone a patch behind the desktop was
+/// refused); anything that isn't `a.b[.c…]` is its own line.
+pub fn release_line(app: &str) -> &str {
+    let mut dots = app.match_indices('.').map(|(i, _)| i);
+    let _first = dots.next();
+    match dots.next() {
+        Some(second) => app.get(..second).unwrap_or(app),
+        None => app,
+    }
 }
 
 #[cfg(test)]
@@ -185,6 +197,13 @@ mod tests {
         let me = hello("26.47.0", 1_000_000_000);
         assert_eq!(check(&me, &hello("26.47.0", 1_000_060_000)), Ok(()));
         assert_eq!(check(&me, &hello("26.46.2", 1_000_000_000)), Err(Refusal::Version("26.46.2".into())));
+        // patch releases of one line sync (#1294)
+        assert_eq!(check(&me, &hello("26.47.3", 1_000_000_000)), Ok(()));
+        assert_eq!(check(&me, &hello("26.470.0", 1_000_000_000)), Err(Refusal::Version("26.470.0".into())));
+        for odd in ["", ".", "..", "26", "26.", "é.é.é", "26.47"] {
+            let _ = check(&me, &hello(odd, 1_000_000_000));
+            assert!(odd.starts_with(release_line(odd)));
+        }
         assert_eq!(check(&me, &hello("26.47.0", 1_000_000_000 + 3_600_000)), Err(Refusal::Clock(60)));
         assert_eq!(check(&me, &Hello { proto: 1, ..hello("26.47.0", 1_000_000_000) }), Err(Refusal::Protocol));
     }
