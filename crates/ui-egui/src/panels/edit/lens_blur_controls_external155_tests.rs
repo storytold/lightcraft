@@ -335,20 +335,37 @@ fn lens_blur_controls_external155_speculative_passes_publish_no_sdk_targets_or_e
 #[test]
 fn lens_blur_controls_external155_previous_candidate_unforced_native_popup_keyboard_and_dismissal() {
     for scale in [1.0, 1.5, 2.0] {
-        // Never request focus on any row here: keyboard travel must come from the actual popup.
+        // Never request focus on any row here: keyboard travel must come from the actual popup. The focus menu is the
+        // framework's value menu now, not the previous native popup, so its own keyboard model is the reference: it
+        // opens with the checked row (Subject) holding the lead, arrows and Tab move among the rows without choosing,
+        // Enter or Space picks the row the keyboard is on (a pick of the current choice changes nothing) and closes,
+        // and Escape closes without a pick.
         for keys in [vec![Key::ArrowDown, Key::ArrowDown, Key::Enter], vec![Key::Tab, Key::ArrowDown, Key::Space], vec![Key::ArrowUp, Key::Escape]] {
-            let mut old = Frames::new(Adapter::Previous, true, 31.0, scale);
             let mut new = Frames::new(Adapter::Candidate, true, 31.0, scale);
-            old.open();
+            let opened = new.snapshot();
             new.open();
-            assert_eq!(old.snapshot(), new.snapshot());
-            assert_eq!(old.semantic_focus(), new.semantic_focus());
+            assert_eq!(new.snapshot(), opened, "opening picks nothing");
+            assert_eq!(new.semantic_focus(), SUBJECT, "the checked row leads a value menu");
             for key in keys {
-                old.key(key);
+                let (focused, before) = (new.semantic_focus(), new.snapshot());
                 new.key(key);
-                assert_eq!(popup_open(&old.view.ctx), popup_open(&new.view.ctx), "{key:?} close parity");
-                assert_eq!(old.semantic_focus(), new.semantic_focus(), "{key:?} unforced focus parity");
-                assert_eq!(old.snapshot(), new.snapshot(), "{key:?} command and undo parity");
+                match key {
+                    Key::Enter | Key::Space => {
+                        assert!(!popup_open(&new.view.ctx), "{key:?} closes the menu");
+                        assert!([SUBJECT, FIRST, SECOND].contains(&focused.as_str()), "{key:?} lands on a row: {focused}");
+                        // Subject is the current choice: picking it again records nothing; a mask row is one edit
+                        assert_eq!(new.snapshot() != before, focused != SUBJECT, "{key:?} picks the focused row {focused}");
+                    }
+                    Key::Escape => {
+                        assert!(!popup_open(&new.view.ctx), "Escape closes the menu");
+                        assert_eq!(new.snapshot(), before, "Escape picks nothing");
+                    }
+                    _ => {
+                        assert!(popup_open(&new.view.ctx), "{key:?} keeps the menu open");
+                        assert!([SUBJECT, FIRST, SECOND].contains(&new.semantic_focus().as_str()), "{key:?} keeps the focus on a row");
+                        assert_eq!(new.snapshot(), before, "{key:?} moves without choosing");
+                    }
+                }
             }
         }
         for adapter in [Adapter::Previous, Adapter::Candidate] {
