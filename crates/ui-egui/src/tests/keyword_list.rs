@@ -99,6 +99,22 @@ fn the_filter_box_narrows_the_list() {
 #[test]
 fn the_arrow_shows_the_photos_with_the_keyword() {
     let (mut h, _) = keywords_panel();
+    {
+        let hit = h.app.widget_hits.iter().find(|(n, _)| n == "keywordRow:mountains").map(|(_, hit)| (hit.interact_rect, hit.layer_id));
+        let w = |n: &str| h.app.widgets.iter().find(|(x, _)| x == n).map(|(_, r)| *r);
+        eprintln!(
+            "DBGROW size={:?} row={:?} hit={hit:?} title={:?} box={:?} sect={:?} create={:?} kwset={:?} chips={:?} painter={:?}",
+            h.size,
+            w("keywordRow:mountains"),
+            w("keywordList:topLevel"),
+            w("field:keyword"),
+            w("section:keywording"),
+            w("keywordList:create"),
+            w("kwSet:1"),
+            h.app.widgets.iter().filter(|(x, _)| x.starts_with("keywordChip:")).map(|(_, r)| *r).collect::<Vec<_>>(),
+            w("field:keywordPainter"),
+        );
+    }
     ask(&mut h, "ui.hoverWidget", json!({"id": "keywordRow:mountains"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordShow:mountains"}));
     assert_eq!(h.app.session.filter.keyword.as_deref(), Some("mountains"));

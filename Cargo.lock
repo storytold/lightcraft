@@ -1414,6 +1414,7 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-imaging",
+ "craft-keymap",
  "craft-layers",
  "craft-menu",
  "craft-pages",
