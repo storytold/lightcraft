@@ -554,11 +554,11 @@ fn favourites_are_imported_in_runs_of_their_own() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Photos imported the files but refused to mark them: the user is told the files are there and
-/// what to do, not that adding them failed.
+/// Photos imported the favourites but refused to mark them, so the run stopped before the other
+/// files: the user is told what is in Photos, that the rest may be missing, and what to do.
 #[test]
 fn a_refused_favourite_is_explained() {
     assert!(SCRIPT.contains(&format!("number {FAVORITE_FAILED}")));
     let m = explain(&failed(&format!("execution error: LightCraft: added, but not marked as favourites: x ({FAVORITE_FAILED})")), "");
-    assert!(m.contains("added the files") && m.contains("favourites"), "{m}");
+    assert!(m.contains("added the favourites") && m.contains("may not have been added") && m.contains("Check Photos"), "{m}");
 }

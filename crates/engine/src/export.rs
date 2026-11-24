@@ -40,6 +40,7 @@ pub use params::{
 #[cfg(test)]
 use place::Placer;
 pub use place::{write_file, write_file_durable, write_file_new};
+pub use prepare::photos_favorite;
 pub use prepare::{
     AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };

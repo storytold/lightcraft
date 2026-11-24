@@ -199,9 +199,9 @@ pub fn explain(out: &Output, album: &str) -> String {
         Some(-128) => "The import was cancelled in Photos.".into(),
         Some(-1712) => "Photos didn't answer in time; it may still be importing. Check Photos before trying again.".into(),
         Some(-43) => "Photos couldn't find a file to add (it was moved or deleted after the export).".into(),
-        Some(FAVORITE_FAILED) => {
-            "Photos added the files but didn't mark them as favourites. Mark them in Photos, or export again without the favourite options.".into()
-        }
+        Some(FAVORITE_FAILED) => "Photos added the favourites but didn't mark them, and stopped there: the other files may not have been added. \
+             Check Photos before exporting again, and mark the favourites there."
+            .into(),
         Some(AMBIGUOUS_ALBUM) => format!(
             "More than one album at the top level of Photos is named “{album}”, so nothing was added. Rename one of them in Photos, or use another album name."
         ),

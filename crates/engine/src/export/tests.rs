@@ -1621,3 +1621,25 @@ fn photos_favourite_options_are_checked_and_kept() {
         ExportOptions::from_params(&json!({"addToPhotos": true, "photosFavoriteRating": 0, "metadata": "none"})).unwrap();
     }
 }
+
+/// With `conflict` overwrite, a later photo that replaces an earlier one's file takes the favourite
+/// decision with it: the earlier entry no longer marks that path (PR #4719 review).
+#[test]
+fn a_replaced_file_keeps_only_the_replacing_photos_favourite() {
+    use lightcraft_catalog::PhotoId;
+    let o = ExportOptions::from_params(&json!({"conflict": "overwrite"})).unwrap();
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut write = |_: &str, _: &[u8]| Ok(());
+    let guard = crate::originals::OriginalGuard::new(&lightcraft_catalog::Catalog::default());
+    let mut placer = Placer::new(&o, &to, &mut write, &|_| false, true);
+    let exported = || -> Result<Exported, String> {
+        Ok(Exported { file_name: "same.jpg".into(), bytes: vec![1], width: 1, height: 1, sidecars: vec![], gpu_fallback: None })
+    };
+    let favourites = |out: &[serde_json::Value]| out.iter().filter(|f| f["photosFavorite"] == json!(true)).count();
+    placer.place(PhotoId(1), "same.jpg".into(), None, &guard, true, exported()).unwrap();
+    assert_eq!(favourites(&placer.out), 1);
+    placer.place(PhotoId(2), "same.jpg".into(), None, &guard, false, exported()).unwrap();
+    assert_eq!(favourites(&placer.out), 0, "photo 2 replaced photo 1's file: {:?}", placer.out);
+    placer.place(PhotoId(3), "same.jpg".into(), None, &guard, true, exported()).unwrap();
+    assert_eq!(favourites(&placer.out), 1, "the replacing photo's own decision stands");
+}

@@ -819,7 +819,11 @@ fn render(args: &[String]) -> Result<(), String> {
         eprintln!("lightcraft-cli: wrote {sc}");
     }
     eprintln!("lightcraft-cli: wrote {output} ({}×{})", e.width, e.height);
-    if let Some(photos) = after.run(&[json!({"path": output})], false) {
+    let mut entry = json!({"path": output});
+    if s.catalog.photo(lightcraft_engine::catalog::PhotoId(id)).is_some_and(|p| lightcraft_engine::export::photos_favorite(p, &o)) {
+        entry["photosFavorite"] = json!(true);
+    }
+    if let Some(photos) = after.run(&[entry], false) {
         if let Some(err) = photos.get("error").and_then(Value::as_str) {
             return Err(format!("render: {output} was written, but {err}"));
         }

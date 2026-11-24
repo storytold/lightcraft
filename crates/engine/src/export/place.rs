@@ -171,6 +171,13 @@ impl<'a> Placer<'a> {
         });
         match written {
             Ok((path, files, sidecars)) => {
+                // `conflict` overwrite: an earlier entry whose file this one just replaced no longer
+                // holds that photo, so it can't make the path a favourite; only this photo's decision counts
+                for earlier in self.out.iter_mut().filter(|x| x.get("path").and_then(serde_json::Value::as_str) == Some(path.as_str())) {
+                    if let Some(m) = earlier.as_object_mut() {
+                        m.remove("photosFavorite");
+                    }
+                }
                 self.taken.extend(files);
                 let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars});
                 if let Some(why) = &e.gpu_fallback {
