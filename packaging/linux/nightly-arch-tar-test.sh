@@ -61,7 +61,11 @@ test -f "$share/applications/$nightly_id.desktop"
 test ! -e "$share/applications/ai.storyteller.lightcraft.desktop"
 grep -qx "StartupWMClass=$nightly_id" "$share/applications/$nightly_id.desktop"
 grep -qx "Icon=$nightly_id" "$share/applications/$nightly_id.desktop"
-! grep -q '^MimeType=' "$share/applications/$nightly_id.desktop"
+# `! grep` is not a condition: errexit skips it, so a match would pass. Fail the assertion explicitly.
+if grep -q '^MimeType=' "$share/applications/$nightly_id.desktop"; then
+  echo 'FAIL: the Nightly desktop file still declares MimeType' >&2
+  exit 1
+fi
 test -f "$share/metainfo/$nightly_id.metainfo.xml"
 grep -q "<id>$nightly_id</id>" "$share/metainfo/$nightly_id.metainfo.xml"
 grep -q "<binary>lightcraft</binary>" "$share/metainfo/$nightly_id.metainfo.xml"
