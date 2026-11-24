@@ -1016,6 +1016,25 @@ mod tests {
                 }
             }
         }
+        // the in-place path: a file an earlier update wrote, damaged in IFD0 and in our preview directory
+        let once = update(&good, &preview, XMP).expect("first").bytes;
+        let raw_pixels = pixels(&once);
+        let tiff = Tiff::parse(&once).expect("parses");
+        let mut spots: Vec<usize> = (0..16).collect();
+        for offset in [tiff.ifds[0].offset, tiff.ifds[0].sub_ifds[0].offset] {
+            let at = offset as usize;
+            spots.extend(at..(at + 2 + 12 * 40).min(once.len()));
+        }
+        for at in spots {
+            for flip in [0x01u8, 0x80, 0xFF] {
+                let mut bad = once.clone();
+                bad[at] ^= flip;
+                if let Ok(done) = update(&bad, &preview, XMP) {
+                    assert!(Tiff::parse(&done.bytes).is_ok(), "updated file byte {at} ^ {flip:#x}");
+                }
+            }
+        }
+        assert_eq!(pixels(&update(&once, &jpeg(16, 12), XMP).expect("again").bytes), raw_pixels);
         // a SubIFDs loop and an offset list pointing outside
         let mut looped = good.clone();
         looped[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
