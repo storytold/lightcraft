@@ -135,8 +135,9 @@ travel (`↑` this device is ahead, `↓` another is, none in step). The arrow p
 Tracked in [gaps.md](gaps.md) (gaps 31–33).
 
 - Virtual copies, versions and history, and keywords as a tree don't travel.
-- Both devices need the same app version (the protocol is checked in the hello; a found device of another
-  version can't be paired).
+- Both devices need the same release line, the version's first two numbers (`lcc_sync::proto::release_line`:
+  patch releases of one line sync, #1294); the pairing handshake (`lcc-peer-v2` since 26.47.0) refuses a device
+  on 26.46 or older, which shows only "connection closed" on the older side.
 - Clocks must be within 5 minutes of each other, or the exchange is refused with a message.
 - LAN only; mDNS is IPv4, on one interface, with no RFC 6762 probing; not tested against Apple Bonjour or
   Android NSD.
