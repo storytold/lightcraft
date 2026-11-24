@@ -4,8 +4,21 @@ use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect,
 
 // ------------------------------------------------------------------------ remove
 
+/// The `spot.add` mode the Remove panel's Mode paints with, or `None` while no brush is chosen
+/// (Mode ▸ None, or another tool): then the photo takes no new spots, by pointer or by keyboard.
+pub(crate) fn spot_brush(tool: &str) -> Option<&'static str> {
+    match tool {
+        "remove" => Some("remove"),
+        "fill" => Some("fill"),
+        "heal" => Some("heal"),
+        "clone" => Some("clone"),
+        _ => None,
+    }
+}
+
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
-/// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
+/// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one
+/// (only while a brush is chosen: with Mode ▸ None nothing is painted and no brush circle shows).
 /// The Tool Overlay mode (Shift+H) says which spots show; a hidden spot can't be grabbed, so a
 /// click there adds a new one.
 pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
@@ -63,10 +76,11 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             .copied()
     };
     let hover = resp.hover_pos().and_then(hit);
+    let brush = spot_brush(&app.ui.tool);
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        } else {
+        } else if brush.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
             p.circle_stroke(h, r * (1.0 - app.ui.remove_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(110)));
@@ -104,7 +118,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let _ = app.run("spot.select", json!({"index": spot}));
         return;
     }
-    if let Some(q) = resp.interact_pointer_pos()
+    if brush.is_some()
+        && let Some(q) = resp.interact_pointer_pos()
         && (resp.drag_started() || resp.dragged() || resp.clicked())
     {
         let n = map.norm(q);
@@ -120,13 +135,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
+        && let Some(mode) = brush
     {
-        let mode = match app.ui.tool.as_str() {
-            "heal" => "heal",
-            "clone" => "clone",
-            "fill" => "fill",
-            _ => "remove",
-        };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         let _ = app.run(
             "spot.add",
@@ -137,7 +147,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
 
 /// Keyboard stand-ins for the Remove tool: each spot's target and source (an arrow press moves
 /// it a step, one undo step; Return selects the spot), and a placement point that the arrows move
-/// and Return turns into a new spot of the brush's size there. True when a spot was added.
+/// and Return turns into a new spot of the brush's size there (only while a brush is chosen, as
+/// with the pointer: with none the placement point is not offered). True when a spot was added.
 fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings, grips: &[(usize, bool, Pos2, f32)]) -> bool {
     for &(spot, source, q, _) in grips {
         let at = map.norm(q);
@@ -155,6 +166,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             let _ = app.run("develop.endInteraction", json!({}));
         }
     }
+    let Some(mode) = spot_brush(&app.ui.tool) else { return false };
     // where a new spot goes: the photo's centre at first, then wherever the arrows took it
     let key = egui::Id::unique("lc-spot-placement");
     let place: (f64, f64) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5));
@@ -175,12 +187,6 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         ui.painter().circle_stroke(q, r, Stroke::new(1.0, Color32::WHITE));
     }
     if keys.activated {
-        let mode = match app.ui.tool.as_str() {
-            "heal" => "heal",
-            "clone" => "clone",
-            "fill" => "fill",
-            _ => "remove",
-        };
         let _ = app.run(
             "spot.add",
             json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
