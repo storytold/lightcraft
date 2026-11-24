@@ -13,7 +13,7 @@ sidebar:
 - **Some raws are preview-only**: unusual CR3 variants, Nikon High Efficiency on several bodies, NEF lossy-after-split, IIQ, X3F, ARQ pixel shift, old FinePix.
 - **Per-model verification** is partial (about 41% of listed models).
 - **Render fidelity** against Lightroom is tuned by eye, not measured.
-- **Lens profiles**: no bundled database; in-file corrections and your own lensfun-format database only.
+- **Lens profiles**: no profiles of our own; in-file corrections and lensfun's database (downloaded on first run).
 - **Per-monitor display profiles** on Windows and Wayland.
 
 ## AI

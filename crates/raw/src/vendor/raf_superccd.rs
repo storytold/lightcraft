@@ -23,6 +23,10 @@
 //!   image of `fw·√2 × (grid − fw)·√2` pixels.
 //! - S3Pro / S5Pro (SR Pro) store the low-sensitivity "R" photosites as a second frame after the first; the first
 //!   (the "S" photosites) is the image. SR bodies that interleave S and R rows in one frame (F700, S20Pro) are refused.
+//! - SuperCCD EXR bodies without a raw IFD (S200EXR, S205EXR) set `FujiLayout` byte 1 bit 3: their strip is an
+//!   ordinary upright mosaic. RGGB at (0, 0) and the centred `RawImageSize` window were read from dcraw 9.28's Fujifilm
+//!   branch (`identify()`: default filters, `left_margin = (raw_width - width) >> 2 << 1`) as a reference and
+//!   checked on the CC0 S200EXR sample (per-phase means, neighbour differences, camera-JPEG correlation).
 
 use super::raf::Header;
 use super::white_from_data;
@@ -111,7 +115,7 @@ pub(crate) fn decode(h: &Header, raw: &[u8], camera: &str, mode: Mode) -> Result
     let layout = h.records.iter().find(|r| r.0 == LAYOUT).map(|r| r.1).unwrap_or_default();
     let (b0, b1) = (layout.first().copied().unwrap_or(0), layout.get(1).copied().unwrap_or(0));
     if b1 & 8 != 0 {
-        return Err(RawError::Unsupported("Fujifilm RAF: upright pre-X layout without a raw IFD".into()));
+        return decode_upright(h, raw, full, mode);
     }
     let s2pro = camera.replace(' ', "").eq_ignore_ascii_case("FinePixS2Pro");
     // the S2Pro's RawImageSize describes the output, not the stored area
@@ -161,11 +165,7 @@ pub(crate) fn decode(h: &Header, raw: &[u8], camera: &str, mode: Mode) -> Result
         data = rotate(&rgb, g.fw as f64, ow, oh);
     }
 
-    let wb = pair(h, WB_GRGB).and_then(|(gl, r)| {
-        let d = h.records.iter().find(|x| x.0 == WB_GRGB).map(|x| x.1)?;
-        let b = u16::from_be_bytes([*d.get(6)?, *d.get(7)?]);
-        (gl > 0 && r > 0 && b > 0).then(|| [r as f32 / gl as f32, 1.0, f32::from(b) / gl as f32])
-    });
+    let wb = wb_grgb(h);
     let mut metadata = h.jpeg.map(lcc_meta::extract).unwrap_or_default();
     // keep the full output as the image; trim the resampled edge where the diamond's corners blur
     let active = Rect::new(2, 2, ow - 4, oh - 4);
@@ -195,6 +195,67 @@ pub(crate) fn decode(h: &Header, raw: &[u8], camera: &str, mode: Mode) -> Result
     };
     img.validate_for(mode)?;
     Ok(img)
+}
+
+/// The SuperCCD EXR bodies without a raw IFD (S200EXR / S205EXR): `FujiLayout` byte 1 bit 3 set, the strip a plain
+/// upright RGGB mosaic of `RawImageFullSize` little-endian 14-bit words, the image `RawImageSize` wide and centred
+/// (left offset rounded down to even), black 512.
+fn decode_upright(h: &Header, raw: &[u8], full: (usize, usize), mode: Mode) -> Result<RawImage> {
+    let (fh, fw) = full;
+    let n = fh.checked_mul(fw).filter(|n| *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
+    if fw < 8 || fh < 8 {
+        return Err(RawError::Corrupt("upright RAF: empty image".into()));
+    }
+    let src = raw
+        .get(..n.checked_mul(2).ok_or(RawError::Limit("image too large"))?)
+        .ok_or_else(|| RawError::Unsupported(format!("Fujifilm RAF: strip of {} bytes for {fw}x{fh}", raw.len())))?;
+    let (ih, iw) = pair(h, IMAGE_SIZE).filter(|(ih, iw)| *ih <= fh && *iw <= fw && *ih >= 8 && *iw >= 8).unwrap_or((fh, fw));
+    let active = Rect::new(((fw - iw) / 2) & !1, ((fh - ih) / 2) & !1, iw, ih);
+    let data = match mode {
+        Mode::Full => samples(src),
+        Mode::Header => Vec::new(),
+    };
+    let white = match mode {
+        Mode::Full => white_from_data(&data, 14).max(UPRIGHT_BLACK + 1.0),
+        Mode::Header => 16383.0,
+    };
+    let mut metadata = h.jpeg.map(lcc_meta::extract).unwrap_or_default();
+    metadata.width = Some(active.width as u32);
+    metadata.height = Some(active.height as u32);
+    let orientation = metadata.orientation.unwrap_or(Orientation::Normal);
+    let img = RawImage {
+        format: RawFormat::Raf,
+        width: fw,
+        height: fh,
+        cpp: 1,
+        data: RawData::U16(data),
+        cfa: Some(Cfa::bayer_static("RGGB")),
+        bits: 14,
+        black: BlackLevel::uniform(UPRIGHT_BLACK),
+        white: vec![white],
+        active_area: active,
+        crop: Rect::new(0, 0, active.width, active.height),
+        orientation,
+        color: ColorData::default(),
+        wb_multipliers: wb_grgb(h),
+        linearized: false,
+        opcodes: OpcodeLists::default(),
+        metadata,
+        lens_metadata: Default::default(),
+        pixel_aspect: 1.0,
+    };
+    img.validate_for(mode)?;
+    Ok(img)
+}
+
+/// Black level of the upright EXR strip: the dark floor of the S200EXR sample centres there in every CFA channel.
+const UPRIGHT_BLACK: f32 = 512.0;
+
+fn wb_grgb(h: &Header) -> Option<[f32; 3]> {
+    let (gl, r) = pair(h, WB_GRGB)?;
+    let d = h.records.iter().find(|x| x.0 == WB_GRGB).map(|x| x.1)?;
+    let b = u16::from_be_bytes([*d.get(6)?, *d.get(7)?]);
+    (gl > 0 && r > 0 && b > 0).then(|| [r as f32 / gl as f32, 1.0, f32::from(b) / gl as f32])
 }
 
 /// SR bodies interleave sensitive (S) and small (R) photosites by stored row, the R rows several stops lower: the

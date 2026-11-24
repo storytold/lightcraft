@@ -1634,6 +1634,11 @@ fn run() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 let display = hdr_display::report(cc.wgpu_render_state.as_ref());
                 let mut app = LccApp::new(session, services(cc, app_log_file.as_deref()));
+                // first run: fetch lensfun's lens database once (CC BY-SA), on the activity stack
+                if keeps_settings {
+                    let activity = app.session.activity.clone();
+                    app.session.lens_db.fetch_on_first_run(&activity);
+                }
                 // the window and the app are up: a zip update that put this version here worked
                 lcc_engine::update::confirm_update();
                 app.hdr_display_sdr = !display.is_hdr();
