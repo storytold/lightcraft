@@ -5731,7 +5731,8 @@ mod tests {
         use lcc_raw::profile::HsvTable;
         let own = Mat3([[0.6, -0.1, -0.05], [-0.4, 1.3, 0.1], [-0.1, 0.2, 0.7]]);
         let baseline = 0.3;
-        let mut looked = lcc_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(own), None], baseline_exposure: baseline, ..Default::default() };
+        let mut looked =
+            lcc_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(own), None], baseline_exposure: baseline, ..Default::default() };
         looked.profile.look_table = HsvTable::from_tags(&[1, 2, 1], &[0.0, 1.0, 1.0, 0.0, 1.0, 1.0], 0);
         let mut raw = raw_of(RawFormat::Dng, "Canon", "Canon EOS 6D", looked);
         let mut trace = StartTrace::default();

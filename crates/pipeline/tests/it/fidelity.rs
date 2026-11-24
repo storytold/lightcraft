@@ -264,8 +264,7 @@ fn frozen_processes_keep_their_committed_baseline() {
         let plains: Vec<Rgba8> =
             if p == Process::LATEST { Vec::new() } else { scenes.iter().map(|src| rendered(src, &settings(|_| {}, p))).collect() };
         for (tool, apply) in TOOLS {
-            let Some(want) = doc.get("processes").and_then(|ps| ps.get(&key)).and_then(|t| t.get(*tool)).and_then(serde_json::Value::as_array)
-            else {
+            let Some(want) = doc.get("processes").and_then(|ps| ps.get(&key)).and_then(|t| t.get(*tool)).and_then(serde_json::Value::as_array) else {
                 failures.push(format!("{key} {tool}: no baseline (cargo xtask fidelity --baseline)"));
                 continue;
             };
