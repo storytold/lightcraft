@@ -8,6 +8,8 @@
 #   BUILD_SHA               git commit of the build
 #   BUILD_DATE              UTC build date, YYYY-MM-DD
 #   CARGO_TARGET_DIR        cargo's target dir (default: $ROOT/target)
+#   PACKAGE_PROFILE         cargo profile the desktop packages build with (default: dist, the release
+#                           profile with thin LTO and one codegen unit; `release` for a quicker local build)
 #   BRAND_<KEY>             every string in brand.toml's [product], [identity] and [stable], upper-cased:
 #                           BRAND_DISPLAY_NAME, BRAND_BINARY, BRAND_CLI_BINARY, BRAND_APP_ID, BRAND_ENV_PREFIX, …
 #                           ($BRAND_FILE, relative to ROOT, picks another brand file)
@@ -45,6 +47,7 @@ fi
 export BUILD_SHA
 export BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%d)}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+export PACKAGE_PROFILE="${PACKAGE_PROFILE:-dist}"
 
 # ---- brand.toml ---------------------------------------------------------------------------------
 # The product name lives only in brand.toml (see crates/brand). This reads the same subset of TOML:

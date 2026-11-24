@@ -71,7 +71,7 @@ if [[ "$SKIP_BUILD" = 0 ]]; then
   export CRAFT_FONTS_EMBED=0
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p lcc-app --features lcc-app/heif "${args[@]}")
+  (cd "$ROOT" && cargo build --profile "$PACKAGE_PROFILE" --locked -p lcc-app --features lcc-app/heif "${args[@]}")
 fi
 
 rm -rf "$WORK"
@@ -79,7 +79,7 @@ mkdir -p "$WORK/bin"
 # neutral cargo name (app) -> brand name
 bin=app out=$BRAND_BINARY
 inputs=()
-for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
+for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/$PACKAGE_PROFILE/$bin"); done
 lipo -create -output "$WORK/bin/$out" "${inputs[@]}"
 lipo -info "$WORK/bin/$out"
 archs="$(lipo -archs "$WORK/bin/$out" | tr ' ' '\n' | sort | xargs)"
