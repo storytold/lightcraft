@@ -90,7 +90,7 @@ fn bench_24mp_16_bit_zip() {
         for c in [TiffCompression::None, TiffCompression::Deflate, TiffCompression::Lzw] {
             let t = std::time::Instant::now();
             let n = encode_tiff(&img, c, &EncodeMeta::default()).unwrap().len();
-            println!("noise {noise:>6} {c:?}: {:>7.1} MB in {:>6.0} ms", n as f64 / 1e6, t.elapsed().as_secs_f64() * 1e3);
+            println!("tiff 24 MP 16-bit noise {noise} {c:?}: {:.0} ms wall, {:.1} MB", t.elapsed().as_secs_f64() * 1e3, n as f64 / 1e6);
         }
     }
 }
