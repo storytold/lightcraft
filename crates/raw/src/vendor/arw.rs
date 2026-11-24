@@ -230,6 +230,17 @@ const MN_SONY_MODEL_ID: u16 = 0xb001;
 /// SonyModelID 289 (issue #1275).
 const SONY_MODEL_IDS: &[(u64, &str)] = &[(289, "NEX-7"), (294, "SLT-A99"), (297, "DSC-RX100"), (308, "DSC-RX100M2")];
 
+/// Extra factor on an ARW6 file's black and white tags beyond the 2 x 14-bit output unit. The decoder's output scale
+/// does not depend on BitsPerSample; a 12-bit file whose WhiteLevel fits in 12 bits states its levels on the 12-bit
+/// scale, so they are multiplied by 4 to reach 14-bit units. A 14-bit-sized WhiteLevel, or none, keeps 14-bit units.
+/// Unverified on a real 12-bit file (none is public); see docs/arw6-compression.md.
+fn arw6_level_scale(bits: u32, white_tag: Option<f64>) -> f32 {
+    match white_tag {
+        Some(v) if bits == 12 && v.is_finite() && v > 0.0 && v <= 4095.0 => 4.0,
+        _ => 1.0,
+    }
+}
+
 /// The Sony body for the model-keyed tables: the Exif `model` of a Sony-branded file, else the one the maker note's
 /// `SonyModelID` names (a Lunar says "Lunar"), else `model` as it is.
 fn sony_body<'a>(make: &str, model: &'a str, mn: Option<&makernote::MakerNote>) -> &'a str {
@@ -733,6 +744,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         if ifd0.string(t::MODEL).as_deref().map(str::trim) == Some("DSLR-A100") {
             return decode_a100(bytes, &tiff, mode);
         }
+        if super::srf::applies(&ifd0.string(t::MODEL).unwrap_or_default()) {
+            return super::srf::decode(bytes, &tiff, mode);
+        }
         return Err(RawError::Unsupported("ARW without a CFA image IFD (old ARW or SR2)".into()));
     };
     let info = raw.image()?;
@@ -804,8 +818,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             }
         },
         32766 if chunks.len() == 1 => {
-            if bits != 14 {
-                return Err(RawError::Unsupported("ARW6 12-bit mode (no sample to verify)".into()));
+            // The 12-bit mode (electronic shutter, continuous drive) carries the same LLVC tile streams: each tile's
+            // picture header states its own decoded depth (BBD 16), which `arw6` checks; any other header variant is
+            // refused there as unsupported. LibRaw's decoder likewise ignores BitsPerSample (read as a reference).
+            if bits != 14 && bits != 12 {
+                return Err(RawError::Unsupported(format!("ARW6 with BitsPerSample {bits}")));
             }
             let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
             (RawData::U16(arw6::decode(src, w, h, mode)?), 16)
@@ -859,7 +876,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
     // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double; without the tag the white is the
     // 14-bit white in those units, 2 x 16383
-    let unit = if info.compression == 32766 { 2.0 } else { 1.0 };
+    let unit = if info.compression == 32766 { 2.0 * arw6_level_scale(bits, raw.f64(t::WHITE_LEVEL)) } else { 1.0 };
     let white = if linear_rgb {
         YCBCR_WHITE + YCBCR_OFFSET
     } else {
@@ -966,6 +983,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn arw6_level_scale_reads_twelve_bit_levels_only_when_they_fit() {
+        assert_eq!(super::arw6_level_scale(12, Some(4095.0)), 4.0);
+        assert_eq!(super::arw6_level_scale(12, Some(15360.0)), 1.0);
+        assert_eq!(super::arw6_level_scale(14, Some(4095.0)), 1.0);
+        for hostile in [None, Some(0.0), Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {
+            assert_eq!(super::arw6_level_scale(12, hostile), 1.0);
+        }
+    }
+
     use super::*;
 
     #[test]

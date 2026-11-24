@@ -50,9 +50,11 @@ commands:
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
-  fidelity [--regen] [--refs DIR]
+  fidelity [--regen] [--baseline] [--refs DIR]
                   render-fidelity suite: tools × processes × scenes/corpus against local references
-                  (default fidelity-refs/); --regen writes them from the current renderer (docs/testing-sil.md)
+                  (default fidelity-refs/); --regen writes them from the current renderer; --baseline
+                  rewrites the committed process-retune gate (tests/fidelity/process-baseline.json)
+                  (docs/testing-sil.md)
   fuzz [TARGET…|all] [--secs N] [--rng N] [--parallel] [--list]
                   time-boxed pure-Rust fuzzing (default 60 s per target, all targets): raw, tiff, codecs,
                   meta, develop, lightroom, peer; --parallel builds all, then runs them at once;
@@ -2145,6 +2147,11 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "2d4549067f92b33a222d7ded9460adb5ff6ce739ed92af9890c168e37170d4ff",
     ),
     (
+        "srf-sony-dsc-f828.srf",
+        "https://raw.pixls.us/data/Sony/DSC-F828/DSC06227.SRF",
+        "07739f94bcab0c7e198d418ac65172d0dce04bb84a7683ecffd0bfe4b32f6d79",
+    ),
+    (
         "raf-fuji-finepix-s2pro.raf",
         "https://raw.pixls.us/data/Fujifilm/FinePix%20S2Pro/DSCF0002.RAF",
         "9fe1bf1361f015d9db862228e4a26b23d69e81015ed4a032eaefb8242ae9ad42",
@@ -3903,6 +3910,9 @@ fn cmd_fidelity(args: &[&str]) -> Result<(), String> {
         match args[i] {
             "--regen" => {
                 c.env(env_name("FIDELITY_REGEN"), "1");
+            }
+            "--baseline" => {
+                c.env(env_name("FIDELITY_BASELINE"), "1");
             }
             "--refs" => {
                 let v = args.get(i + 1).ok_or("--refs needs a folder")?;

@@ -4847,6 +4847,7 @@ dependencies = [
  "lcc-develop",
  "lcc-faces",
  "lcc-fetch",
+ "lcc-fidelity",
  "lcc-filters",
  "lcc-fuzzkit",
  "lcc-genfill",

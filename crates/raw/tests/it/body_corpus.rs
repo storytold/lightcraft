@@ -1,4 +1,4 @@
-//! One CC0 file per Nikon and Fujifilm body from raw.pixls.us (URLs and SHA-256 in `RAW_SAMPLES`,
+//! One CC0 file per Nikon and Fujifilm body (and the Sony DSC-F828's SRF) from raw.pixls.us (URLs and SHA-256 in `RAW_SAMPLES`,
 //! xtask/src/main.rs; downloaded into the gitignored corpus/raw by `cargo xtask corpus --download`).
 //!
 //! No external decoder was run on these: the check against the camera is
@@ -44,6 +44,45 @@ fn green_vs_camera_jpeg(raw: &lcc_raw::RawImage, jpeg: &[u8], gw: usize, gh: usi
         }
     }
     let (r, j) = (mean(rs, rn), mean(js, jn));
+    let n = r.len() as f64;
+    let (mr, mj) = (r.iter().sum::<f64>() / n, j.iter().sum::<f64>() / n);
+    let cov: f64 = r.iter().zip(&j).map(|(x, y)| (x - mr) * (y - mj)).sum();
+    let vr: f64 = r.iter().map(|x| (x - mr).powi(2)).sum();
+    let vj: f64 = j.iter().map(|y| (y - mj).powi(2)).sum();
+    cov / (vr * vj).sqrt()
+}
+
+/// log(red / blue) of the mosaic against the camera JPEG's on a `gw × gh` grid of the crop (Pearson r).
+fn red_blue_vs_camera_jpeg(raw: &lcc_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
+    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
+    let px = d.decode().unwrap();
+    let info = d.info().unwrap();
+    let (jw, jh) = (info.width as usize, info.height as usize);
+    let mut j = vec![[0f64; 2]; gw * gh];
+    for y in 0..jh {
+        for x in 0..jw {
+            let c = &mut j[(y * gh / jh) * gw + x * gw / jw];
+            c[0] += f64::from(px[(y * jw + x) * 3]);
+            c[1] += f64::from(px[(y * jw + x) * 3 + 2]);
+        }
+    }
+    let RawData::U16(samples) = &raw.data else { panic!("integer sensor data expected") };
+    let cfa = raw.cfa.clone().expect("colour-filter layout");
+    let (a, black) = (raw.crop, f64::from(raw.black.mean()));
+    let mut r = vec![[0f64; 2]; gw * gh];
+    for y in a.y..a.y + a.height {
+        for x in a.x..a.x + a.width {
+            let c = cfa.color_at(x, y);
+            if c != 1 {
+                let cell = &mut r[((y - a.y) * gh / a.height) * gw + (x - a.x) * gw / a.width];
+                cell[usize::from(c / 2)] += (f64::from(samples[y * raw.width + x]) - black).max(0.0);
+            }
+        }
+    }
+    let ratio = |v: &[[f64; 2]]| v.iter().map(|c| ((c[0] + 1.0) / (c[1] + 1.0)).ln()).collect::<Vec<f64>>();
+    let (r, j) = (ratio(&r), ratio(&j));
     let n = r.len() as f64;
     let (mr, mj) = (r.iter().sum::<f64>() / n, j.iter().sum::<f64>() / n);
     let cov: f64 = r.iter().zip(&j).map(|(x, y)| (x - mr) * (y - mj)).sum();
@@ -174,7 +213,12 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         ("raf-fujifilm-x-t30-ii.raf", (6384, 4182)),
         ("raf-fujifilm-x-t30.raf", (6384, 4182)),
         ("raf-fujifilm-x-t3.raf", (6384, 4182)),
+        ("raf-fuji-finepix-s200exr.raf", (2880, 2128)),
+        ("srf-sony-dsc-f828.srf", (3360, 2460)),
     ];
+    // bodies whose red / blue phase was set from a decoder reference, not a CFA tag: the red-to-blue balance of
+    // the mosaic must follow the camera JPEG's too (a swapped phase gives a negative r)
+    let chroma_checked = ["raf-fuji-finepix-s200exr.raf", "srf-sony-dsc-f828.srf"];
     let mut seen = 0;
     for &(name, sensor) in cases {
         let path = corpus().join("raw").join(name);
@@ -192,7 +236,51 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);
         eprintln!("{name:40} {}x{}: green follows the camera JPEG, r = {r:.3}", raw.width, raw.height);
         assert!(r > 0.6, "{name}: decoded mosaic does not follow the camera JPEG (r = {r:.3})");
+        if chroma_checked.contains(&name) {
+            let rb = red_blue_vs_camera_jpeg(&raw, &jpeg, 16, 12);
+            eprintln!("{name:40} red / blue follows the camera JPEG, r = {rb:.3}");
+            assert!(rb > 0.5, "{name}: red and blue look swapped against the camera JPEG (r = {rb:.3})");
+        }
         seen += 1;
     }
     eprintln!("Nikon / Fujifilm bodies checked on {seen} files");
+}
+
+/// A recorded bulk check, run by hand: every file in `<PREFIX>_BULK_DIR` (one raw per body, e.g. fetched from
+/// raw.pixls.us) must decode from sensor data and its green sites must follow the camera's embedded JPEG. Prints one
+/// line per file (`ok` / `FAIL`) for the evidence table in docs/raw/evidence.tsv.
+#[test]
+#[ignore = "needs a directory of raw files in <PREFIX>_BULK_DIR"]
+fn bulk_dir_decodes_like_the_camera_jpeg() {
+    let Some(dir) = lcc_brand::env_os("BULK_DIR").map(PathBuf::from) else {
+        lcc_testkit::skip!(Corpus, "BULK_DIR not set");
+        return;
+    };
+    let mut names: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().filter_map(|e| Some(e.ok()?.path())).collect();
+    names.sort();
+    let (mut ok, mut failed) = (0, 0);
+    for path in names {
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let verdict = match (decode(&bytes), embedded_preview(&bytes)) {
+            (Ok(raw), Some(jpeg)) if raw.cfa.is_some() && matches!(raw.data, RawData::U16(_)) => {
+                let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);
+                if r > 0.6 { Ok(format!("{}x{} r = {r:.3}", raw.width, raw.height)) } else { Err(format!("r = {r:.3}")) }
+            }
+            (Ok(_), Some(_)) => Err("not a colour-filter mosaic".to_string()),
+            (Ok(_), None) => Err("no camera JPEG".to_string()),
+            (Err(e), _) => Err(e.to_string()),
+        };
+        match verdict {
+            Ok(m) => {
+                ok += 1;
+                eprintln!("ok   {name:50} {m}");
+            }
+            Err(m) => {
+                failed += 1;
+                eprintln!("FAIL {name:50} {m}");
+            }
+        }
+    }
+    eprintln!("bulk check: {ok} ok, {failed} failed");
 }

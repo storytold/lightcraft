@@ -21,7 +21,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 - **In the file**: DNG warp and vignette opcodes (including Pixel phones' two-stage warp).
 - **Camera corrections** read from the raw: Sony ARW, Nikon NEF, Fujifilm RAF, Panasonic and Leica RW2.
-- **Lens database** you supply, in lensfun format: **Edit ▸ Settings ▸ Import ▸ Lens profiles** (choose a folder, or Download). Not bundled.
+- **Lens database** in lensfun format (the lensfun project's, CC BY-SA 3.0). On its first run the desktop app downloads it once by itself, shown in the activity list; if that fails (offline), or you remove it, use **Edit ▸ Settings ▸ Import ▸ Lens profiles** to choose a folder or Download again. It is not built into the app.
+- **A lens you pick** for a photo (an adapted or manual lens) is saved in its XMP sidecar with the other settings, so it comes back when the sidecar is read into another library.
 - **Compact cameras** whose raws name no lens (a Canon PowerShot G7 X, a Sony RX100 II) get their built-in lens's profile from the database, found by the camera. A camera body with an unnamed lens gets none, since any lens could have been on it.
 - Adobe lens profiles are never used.
 - **Sensor window**: crop modes are handled so profiles line up.

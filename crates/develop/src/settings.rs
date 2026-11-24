@@ -1462,8 +1462,8 @@ pub struct Optics {
     pub ca_red: f64,
     pub ca_blue: f64,
     /// A lens profile the user picked from the lens database for this photo (an adapted or manual lens, one its
-    /// metadata misnames); `None`: the file's own correction, else the database's match by the lens name. Not
-    /// written to XMP.
+    /// metadata misnames); `None`: the file's own correction, else the database's match by the lens name.
+    /// Written to XMP with the rest of the settings (`lc:settings`), so another catalog reading the sidecar keeps it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lens: Option<ChosenLens>,
     /// The flat-field map (Capture One's LCC "Uniform Light", [`crate::vignetting_calibration`]) that evens out the lens's

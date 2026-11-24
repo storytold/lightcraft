@@ -17,11 +17,10 @@ fn corpus_root() -> PathBuf {
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "cr3-",            // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
-    "-he.nef",         // Unverified Nikon HE profiles (issue #193); verified cases live in nikon_he_corpus.rs
-    "sraw",            // Canon sRAW / mRAW
-    "crw-canon-g1",    // CMYG colour filter
-    "finepix-s200exr", // SuperCCD EXR stored upright without a raw IFD: no Bayer phase matches the camera JPEG
+    "cr3-",         // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
+    "-he.nef",      // Unverified Nikon HE profiles (issue #193); verified cases live in nikon_he_corpus.rs
+    "sraw",         // Canon sRAW / mRAW
+    "crw-canon-g1", // CMYG colour filter
 ];
 
 #[test]
