@@ -3637,6 +3637,10 @@ pub fn ui_enabled(app: &LccApp, id: &str) -> bool {
     if let Some(e) = fork::enabled(app, id) {
         return e;
     }
+    // a single-language build (`CRAFT_FONTS_LANGUAGE`) offers only its language and English
+    if let Some(language) = language_from_command(id) {
+        return language.in_build();
+    }
     match id {
         "merge.deleteSourcesNow" => {
             app.session.active().and_then(|id| app.session.merge_sources_to_delete(id)).is_some_and(|(present, _)| !present.is_empty())

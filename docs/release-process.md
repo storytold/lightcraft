@@ -21,6 +21,9 @@ Written after 26.46.2; keep it current. CI mechanics: [`ci.md`](ci.md). Changelo
 6. **Draft notes:** the workflow seeds the draft with generated notes. While the build runs, once the draft
    exists: `gh release edit v<ver> --notes-file docs/changelog/<ver>.md`. The final job reads the draft body for
    `latest.json` (the updater's notes), so do it before that job.
+   Each packaging job runs `cargo xtask package-size dist/release/*`, which fails when a download grew more than
+   10 % over its entry in `packaging/size-budget.toml`. A deliberate growth raises the entry with
+   `cargo xtask package-size --update <files>` (or by hand from the draft's asset sizes) in a commit that says why.
 7. **Publish** when the Release workflow succeeded and the draft has all assets (19 in 26.46.2; compare with the
    previous release): `gh release edit v<ver> --draft=false --latest`.
 8. **Clean up** local prep branches, finished agents' worktrees and scratch/target dirs.

@@ -1,0 +1,20 @@
+# Release download sizes in bytes (`cargo xtask package-size`, docs/release-process.md).
+# The release check fails when a download grows more than 10 % over its entry.
+# Raise an entry with `cargo xtask package-size --update FILE…` and say why in the commit.
+# Seeded from the v26.48.0 release assets.
+"android-arm64-v8a-x86_64.aab" = 177116702
+"android-arm64-v8a.apk" = 197223112
+"android-x86_64.apk" = 216113861
+"linux-x86_64.AppImage" = 91179512
+"linux-x86_64.deb" = 99580990
+"linux-x86_64.flatpak" = 68682160
+"linux-x86_64.rpm" = 99115468
+"linux-x86_64.tar.gz" = 98859932
+"macos-arm64.dmg" = 91832039
+"macos-universal.dmg" = 156863578
+"macos-x64.dmg" = 97719205
+"web.zip" = 112072220
+"windows-arm64-portable.zip" = 95060800
+"windows-arm64.msi" = 74727424
+"windows-x64-portable.zip" = 99688669
+"windows-x64.msi" = 78614528
