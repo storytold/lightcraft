@@ -100,6 +100,10 @@ mod tests {
     /// alike, so a catalog can translate them without naming it.
     #[test]
     fn the_upstream_name_is_filled_in_every_language() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         use crate::i18n::{Locale, set_language, tr};
         let name = lcc_brand::UPSTREAM_NAME;
         for language in [Locale::En, Locale::De, Locale::Ja] {

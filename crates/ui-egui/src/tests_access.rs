@@ -157,6 +157,10 @@ fn every_module_names_its_interactive_widgets_and_tab_walks_the_web_settings() {
 /// message the German catalog translates differently (that text skipped `tr`).
 #[test]
 fn module_text_is_routed_through_tr() {
+    if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+        lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+        return;
+    }
     let mut h = demo();
     h.app.ui.language = crate::i18n::Locale::De;
     crate::i18n::set_language(crate::i18n::Locale::De);

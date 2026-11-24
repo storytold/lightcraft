@@ -326,6 +326,10 @@ pub(crate) fn selection_deleted(app: &LccApp) -> bool {
 /// Items only some hosts have are left out of the others' menus (the web build's library backup);
 /// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LccApp, id: &str) -> bool {
+    // a single-language build (`CRAFT_FONTS_LANGUAGE`) has no menu item for the languages it left out
+    if crate::menus::language_left_out(id) {
+        return false;
+    }
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         // the desktop's backup into the library's backup folder; a host with a backup of its own

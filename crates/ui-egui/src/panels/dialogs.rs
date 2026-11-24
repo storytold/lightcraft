@@ -4750,6 +4750,10 @@ mod gap_tests {
 
     #[test]
     fn gap_text_reads_back_what_it_shows() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         for v in [0.0, 1.0, 12.0, 59.0, 60.0, 90.0, 600.0, 3599.0, 3600.0, 3601.0, 3661.0, 3900.0, 7325.0, 86340.0, 86399.0] {
             assert_eq!(parse_gap(&fmt_gap(v)), Some(v), "{}", fmt_gap(v));
         }
