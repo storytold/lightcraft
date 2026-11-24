@@ -1171,5 +1171,8 @@
   "Opacity": "אטימות",
   "Size": "גודל",
   "Heal the small, soft dark spots sensor dust leaves on smooth areas": "תיקון כתמים כהים קטנים ומטושטשים שאבק על החיישן מותיר באזורים חלקים",
-  "Drag along the horizon; double-click for Auto": "יש לגרור לאורך קו האופק; לחיצה כפולה ליישור אוטומטי"
+  "Drag along the horizon; double-click for Auto": "יש לגרור לאורך קו האופק; לחיצה כפולה ליישור אוטומטי",
+  "Enter Keywords": "הזנת מילות מפתח",
+  "Keywords, separated by commas": "מילות מפתח, מופרדות בפסיקים",
+  "Return applies the edit to the selected photos; Esc gives it up. An asterisk marks a keyword only some of them have.": "הקשה על Enter מחילה את השינוי על התמונות שנבחרו; Esc מבטלת אותו. כוכבית מציינת מילת מפתח שקיימת רק בחלק מהן."
 }
