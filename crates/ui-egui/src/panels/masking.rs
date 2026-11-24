@@ -431,11 +431,7 @@ fn note_focused_slider(ctx: &egui::Context, slider: egui::Id) {
 /// Only the selected mask's seventeen local adjustments, Amount and Refine use this binding.
 /// Scalar keys belong to the SDK's real composite row; no app key handler or hover proxy routes them.
 fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoId, u32), spec: &ControlSpec, current: f64) {
-    use craft::behavior::{EditEvent, NumberCodec, Reader};
-    use craft::ui::contract::{Bind, Props as _, Show as _};
-    use craft::ui::form::SliderField;
-    use craft::ui::runtime::env::{WheelScope, with_env};
-    use craft::ui::runtime::keys::{ScalarKeyPolicy, ScalarKeyTrigger};
+    use craft::behavior::EditEvent;
 
     #[derive(Clone, Copy)]
     struct Visit {
@@ -475,38 +471,28 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
         visit = Visit { owner, revision: app.session.catalog.revision, epoch: visit.epoch.wrapping_add(1), pass, enabled, editing: false };
     }
     let id = ui.scope_id().with(("mask-local", owner, spec.id, visit.epoch));
-    let number_spec = *spec;
-    let nudge = crate::widgets::nudge_unit(spec);
-    let policy = ScalarKeyPolicy::new(nudge).model_step(spec.step).shift_factor(5.0).trigger(ScalarKeyTrigger::HoveredOrFocused);
-    let mut control = SliderField::new(crate::i18n::tr(spec.label).to_owned(), Bind::given(current).reset(spec.default), spec.min..=spec.max)
-        .id(id)
-        .step(spec.step)
-        .wheel_step(nudge)
-        .key_policy(policy)
-        .pointer_model_step(spec.step)
-        .pointer_modifiers(craft::ui::value_drag::DragModifiers::new(Some(craft::ui::value_drag::DragModifier::Shift), None))
-        .fill(false)
-        .enabled(enabled)
-        .number_codec(
-            NumberCodec::new(Reader::new(), usize::from(spec.decimals)).fixed().parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
-        );
-    if let Some(face) = mask_local_track::face(spec.track) {
-        control = control.track_face(face);
-    }
-    // (inset like the other rows of the panel, so the label and the value box lie inside it)
-    let out = egui::Frame::NONE
-        .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
-        .show(ui, |ui| with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui)))
-        .inner;
-    // PaintUi::{child,labelled} document parent.with(key). Read the actual rendered responses:
-    // aliases never stand in for a synthetic hit, layout guess, or the composite's non-slider group.
-    for (prefix, child) in [("slider", "slider"), ("sliderValue", "field"), ("sliderField", "field")] {
-        if let Some(response) = ui.ctx().read_response(id.with(child)) {
-            if prefix == "slider" {
-                note_focused_slider(ui.ctx(), response.id);
+    // The framework row of the develop sliders, inset like the other rows of the panel; its parts are named
+    // `slider:{id}` and the like, and again `…:maskLocal:{id}` for the mask's own callers.
+    let record = egui::Id::unique(("mask-local-record", spec.id, target.1));
+    let shown = crate::widgets::slider_field(
+        ui,
+        &crate::widgets::SliderRow { spec, value: current, enabled, label: None, salt: id, record: Some(record) },
+    );
+    let out = shown.out;
+    if let Some(recorded) = craft::ui::runtime::inspect::recorded(ui.ctx(), record) {
+        for (index, element) in recorded.elements.iter().enumerate() {
+            let Some(facts) = &element.facts else { continue };
+            let prefix = match facts.role.as_str() {
+                "Slider" => "slider",
+                "SpinButton" => "sliderValue",
+                _ => continue,
+            };
+            let rect = recorded.stop_rect(index).unwrap_or(element.rect);
+            let Some(response) = ui.ctx().read_response(element.id) else { continue };
+            crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), rect, &response);
+            if prefix == "sliderValue" {
+                crate::widgets::register_response(format!("sliderField:maskLocal:{}", spec.id), rect, &response);
             }
-            crate::widgets::register_response(format!("{prefix}:{}", spec.id), response.rect, &response);
-            crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), response.rect, &response);
         }
     }
     crate::widgets::register_geometry(ui.ctx(), format!("sliderRow:maskLocal:{}", spec.id), out.response.rect);
@@ -569,89 +555,6 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
     visit.revision = app.session.catalog.revision;
     visit.pass = pass;
     ui.data_mut(|data| data.insert_temp(key, visit));
-}
-
-/// A display-only SDK track face, using the app's existing WB/gradient palette and SDK contrast cues.
-mod mask_local_track {
-    use craft::behavior::{Input, Metrics, Sense};
-    use craft::theme::Contrast;
-    use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role, Styled as _};
-    use craft::ui::primitives::PaintShape;
-    use craft::ui::style::{ComponentStyle, DataColor, StyleCx, TrackLook};
-    use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
-    use lightcraft_develop::Track;
-    pub(super) fn face(track: Track) -> Option<craft::ui::value_drag::TrackFace<'static>> {
-        let stops = match track {
-            Track::Temp => vec!["#193961", "#47566a", "#60666d", "#70705b", "#737339", "#75742a"],
-            Track::Tint => vec!["#246123", "#2c552c", "#394739", "#4a3d4c", "#6b336b", "#872c87"],
-            Track::Rainbow => vec!["#aa0000", "#aaaa00", "#009900", "#00aaaa", "#0044cc", "#aa0077", "#aa0000"],
-            Track::Gradient { from, to } => vec![from, to],
-            _ => return None,
-        };
-        Some(craft::ui::value_drag::TrackFace::new(Face { common: Common::new(), stops: stops.into_iter().map(crate::widgets::hex).collect() }))
-    }
-    #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-    pub(super) struct FaceStyle {
-        #[style(metrics)]
-        metrics: Metrics,
-        track: TrackLook,
-        high_contrast: bool,
-    }
-    #[derive(Clone, Component)]
-    #[component(unregistered)]
-    struct Face {
-        #[common]
-        common: Common,
-        stops: Vec<Color32>,
-    }
-    impl Component for Face {
-        const ROLE: Role = Role::None;
-        const INPUT: Input = Input::Display;
-        const PARTS: bool = false;
-        const STOPS: bool = false;
-        const OVERLAYS: bool = false;
-        const SHOWS_LABEL: bool = false;
-        type Style = FaceStyle;
-        type Output = Response;
-        fn style(cx: &StyleCx<'_>, _: FaceStyleKey) -> FaceStyle {
-            FaceStyle { metrics: Metrics::new(), track: cx.track(), high_contrast: cx.contrast() == Contrast::High }
-        }
-        fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-            Vec2::splat(cx.style.track.thickness)
-        }
-        fn sense(&self) -> Sense {
-            Sense::empty()
-        }
-        fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-            let track = &cx.style.track;
-            let rect = track.groove(cx.rect);
-            let draw = ui.draw();
-            if cx.style.high_contrast || cx.state().is_disabled() {
-                draw.fill(&PaintShape::Rect(rect, CornerRadius::same((track.thickness / 2.0).round() as u8)), cx.resolve(&track.unfilled));
-                return;
-            }
-            let segments = self.stops.len().saturating_sub(1);
-            if segments == 0 {
-                return;
-            }
-            for i in 0..48 {
-                let a = i as f32 / 48.0;
-                let b = (i + 1) as f32 / 48.0;
-                let position = if cx.flow.is_rtl() { 1.0 - a } else { a };
-                let along = position * segments as f32;
-                let index = (along.floor() as usize).min(segments.saturating_sub(1));
-                if let (Some(from), Some(to)) = (self.stops.get(index), self.stops.get(index + 1)) {
-                    let color = crate::widgets::lerp(*from, *to, along - index as f32);
-                    let strip =
-                        Rect::from_min_max(pos2(rect.left() + rect.width() * a, rect.top()), pos2(rect.left() + rect.width() * b, rect.bottom()));
-                    draw.data_fill(&PaintShape::Rect(strip, CornerRadius::ZERO), DataColor::new(color));
-                }
-            }
-        }
-        fn finish(self, cx: Cx<'_, Self>) -> Response {
-            cx.response.clone()
-        }
-    }
 }
 
 /// The mask's Lens Blur block (`section:maskLensBlur`): a header that folds it and whose eye
