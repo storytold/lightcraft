@@ -830,6 +830,54 @@ fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_r
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Production highlight protection writes a uniform RGB cell (the same value at every photosite of
+/// a clipped Bayer cell). The ordinary demosaic's directional mask must not reach that twin: it
+/// would preserve different channels at different sensor positions and put a Bayer pattern into
+/// the uniform cell. Value-based reconstruction leaves the below-threshold cell unchanged.
+#[test]
+fn unbinned_denoised_twin_keeps_a_cell_protected_highlight() {
+    use lightcraft_denoise::product;
+    use lightcraft_raw::{Method, decode};
+    let (w, h) = (16usize, 16usize);
+    // Mid tones, plus one RGGB cell whose blue photosite is at the white level (clipped).
+    let mut data: Vec<u16> = vec![2000; w * h];
+    let (cx, cy) = (4usize, 4usize); // R at (4,4), G (5,4), G (4,5), B (5,5)
+    data[(cy + 1) * w + (cx + 1)] = 16000;
+    let bytes = crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, None, Default::default());
+    let mut raw = decode(&bytes).unwrap();
+    let (_, tr, _) = crate::camera_preview::starting_colour(&mut raw, &bytes, None, None);
+    let (mut camera_rgb, mask) = raw.take_develop_balanced_masked(Method::Ahd, tr.wb, super::HIGHLIGHT_CLIP).unwrap();
+    assert!(mask.is_some(), "the clipped photosite must produce a sensor mask");
+    // Production cell protection: the same RGB at all four positions of the cell.
+    let protected = [0.20, 0.60, 0.20];
+    for dy in 0..2 {
+        for dx in 0..2 {
+            camera_rgb.data[(cy + dy) * w + (cx + dx)] = protected;
+        }
+    }
+    let dir = crate::tests_xmp::temp_dir("denoise-twin-mask");
+    let key = "cell-protected";
+    let path = dir.join("twin.lcdn");
+    product::write(&path, &camera_rgb, key).unwrap();
+    let spec = DenoiseSpec { product: path, key: key.into(), make: None };
+    let (_, twin, _) = load_vec_pair(bytes, 2048, &spec, Default::default()).unwrap();
+    let twin = twin.expect("denoised twin");
+    let mut cell = Vec::new();
+    for dy in 0..2 {
+        for dx in 0..2 {
+            cell.push(twin.data[(cy + dy) * w + (cx + dx)]);
+        }
+    }
+    let spread = (0..3)
+        .map(|c| {
+            let vs: Vec<f32> = cell.iter().map(|p| p[c]).collect();
+            vs.iter().cloned().fold(f32::NEG_INFINITY, f32::max) - vs.iter().cloned().fold(f32::INFINITY, f32::min)
+        })
+        .fold(0.0f32, f32::max);
+    assert!(spread < 0.02, "Bayer pattern in a uniform protected cell: {cell:?} spread {spread}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Luminance (from linear RGB) minus its 9 × 9 local mean: tone differences between a render and a camera JPEG
 /// mostly cancel, edges remain.
 fn detail(w: usize, h: usize, lum: impl Fn(usize, usize) -> f32) -> Vec<f32> {

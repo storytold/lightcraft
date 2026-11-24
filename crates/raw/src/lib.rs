@@ -7,8 +7,9 @@
 //! - [`RawImage::normalized`] subtracts black, scales white to 1.0 and crops to the active area (applying DNG
 //!   `OpcodeList1`/`OpcodeList2`); [`demosaic`] turns CFA data into camera-RGB [`Rgb32f`];
 //!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_balanced`]
-//!   and [`RawImage::develop_balanced_masked`] do the same after white-balancing the mosaic (full-size exports and
-//!   the 1:1 view); [`RawImage::develop_binned`] produces the development at 1/k of the size straight from the mosaic
+//!   and [`RawImage::develop_balanced_masked`] do the same after white-balancing the mosaic (the 1:1 view and unbinned
+//!   engine loads, including ordinary exports; lossy DNG export and Photo Merge frames still use [`RawImage::develop`]);
+//!   [`RawImage::develop_binned`] produces the development at 1/k of the size straight from the mosaic
 //!   (previews, thumbnails; [`RawImage::develop_binned_masked`] with the mask of blocks holding clipped samples, for [`highlight`]).
 //! - [`color`] implements the DNG colour model (dual-illuminant interpolation, forward matrices, white balance)
 //!   and produces camera → linear Rec.2020 D65 matrices; [`profile`] reads and applies a DNG's own profile

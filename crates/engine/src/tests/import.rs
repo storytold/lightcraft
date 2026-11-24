@@ -2824,6 +2824,98 @@ fn smart_previews_of_raws_from_an_older_decode_are_refreshed() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// Opening refresh used `origin_ref`, which hard-codes `outliers: false`. A raw with Remove Hot
+/// Pixels on would then get a proxy without the correction, stamped current. The refresh now
+/// carries the photo's setting.
+#[test]
+fn refresh_of_a_raw_with_remove_hot_pixels_on_keeps_the_correction() {
+    use std::sync::{Arc, Mutex};
+    let src = temp_dir("smarthot-src");
+    let lib = temp_dir("smarthot-lib");
+    write_png(&src.join("a.png"), 3);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+    raw.format = "ARW".into();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    let mut develop = (*raw.develop).clone();
+    develop.detail.nr_outliers = true;
+    raw.develop = std::sync::Arc::new(develop);
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    assert!(s.catalog.photo(id).unwrap().develop.removes_hot_pixels());
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let dir = s.media.smart_dir.clone().unwrap();
+    let file = crate::smart::sharded_file_path(&dir, s.catalog.photo(id).unwrap());
+    let log = Arc::new(Mutex::new(Vec::<bool>::new()));
+    let inner = s.media.file_loader.clone().unwrap();
+    let recorded = log.clone();
+    s.media.file_loader = Some(Arc::new(move |path, max_edge, with| {
+        recorded.lock().unwrap().push(with.outliers);
+        inner(path, max_edge, with)
+    }));
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!(r["built"], 1, "{r}");
+    edit_smart_header(&file, |h| h["source_version"] = json!(0));
+    crate::smart::mark_look_checked(&dir).unwrap();
+    std::fs::write(dir.join("source-version"), b"0\n").unwrap();
+    log.lock().unwrap().clear();
+    crate::cmd::previews::refresh_stale_smart_previews(&mut s).unwrap().join().unwrap();
+    let seen = log.lock().unwrap().clone();
+    assert!(!seen.is_empty(), "the original was read");
+    assert!(seen.iter().all(|&o| o), "refresh decoded with Remove Hot Pixels on: {seen:?}");
+    assert!(!crate::smart::source_stale(&file));
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// Build Smart Previews used to take a cached proxy source (no camera profile) as a profile match
+/// even after the original's drive came back, then drop it in `original_only` and keep the stale
+/// proxy. The cached proxy only stands in while the original is offline.
+#[test]
+fn build_smart_previews_refreshes_a_stale_proxy_once_the_original_is_back() {
+    let src = temp_dir("smartdrive-src");
+    let lib = temp_dir("smartdrive-lib");
+    write_png(&src.join("a.png"), 3);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
+    let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
+    let (p, i) = (pixels.clone(), info.clone());
+    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _| Ok((p.clone(), i.clone()))));
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+    raw.format = "ARW".into();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let dir = s.media.smart_dir.clone().unwrap();
+    let file = crate::smart::sharded_file_path(&dir, s.catalog.photo(id).unwrap());
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!(r["built"], 1, "{r}");
+    edit_smart_header(&file, |h| h["look_version"] = json!(0));
+    let stale_bytes = std::fs::read(&file).unwrap();
+    assert!(crate::smart::is_stale(&file));
+
+    // view while the original is offline, so the proxy is decoded into the source cache
+    std::fs::rename(&src, src.with_extension("offline")).unwrap();
+    s.media.forget(id);
+    let _ = s.render_now(id, 600, 600).expect("renders from the smart preview");
+
+    // the drive comes back in the same session; do not forget the cached proxy source
+    std::fs::rename(src.with_extension("offline"), &src).unwrap();
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["refreshed"].as_u64(), r["staleKept"].as_u64()), (Some(1), Some(0)), "{r}");
+    assert_ne!(std::fs::read(&file).unwrap(), stale_bytes, "the proxy was rebuilt from the original");
+    assert!(!crate::smart::is_stale(&file));
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// A library with an ARW (fitted look), a DNG (none) and a PNG (the test loader decodes PNG pixels for the raws),
 /// all three with current smart previews; the loader counts the originals it reads.
 struct SmartFixture {
