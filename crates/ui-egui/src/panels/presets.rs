@@ -300,7 +300,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if !measuring && craft::ui::contract::clicked(&resp) && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
+                    if !measuring && !crate::widgets::carrying(ui.ctx()) && app.ui.dragging_photos.is_none() && craft::ui::contract::clicked(&resp) && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
