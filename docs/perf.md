@@ -146,7 +146,6 @@ load_bytes(2560):          93.0 ms wall,  1855.4 ms cpu
 load_bytes(full):         425.3 ms wall, 10448.3 ms cpu
 ```
 
-<<<<<<< HEAD
 ## Start-up (`cargo xtask bench`, `startup_bench`; plan item 4.1, #979)
 
 `cargo run --release -p lcc-ui-egui --example startup_bench -- [DIR] [PHOTOS]` makes a synthetic library (default
@@ -164,7 +163,7 @@ own photos) goes 16 384 photos a tick, the view is signed in place and a build c
 photo. The lens database is read on a worker after a library opens (an activity-stack row) instead of by the first
 photo that needs it. Library ready 1.0–3.9 s before, 1.0–8.2 s after, same noise: the remaining long frame is the
 session open on the interface thread, not measured apart here.
-=======
+
 ## CPU-only stages against the loupe budget (plan 4.6, 2026-11-24)
 
 Two stages have no WGSL kernel: soft proofs against an output-device profile (a 3D table; the GPU renderer declines
@@ -189,7 +188,26 @@ small spot fits; large or many Even Out spots miss it (the three box blurs per s
 radius), and Fill pays its PatchMatch solve once per stroke. A port of Even Out's blurs to the GPU blur kernels is the
 next step if the idle re-measure confirms the miss. Tried and dropped: taller `box_v` bands for wide radii (fewer
 primes, less parallelism): no difference distinguishable from the load noise.
->>>>>>> origin/main
+
+**Even Out on the GPU (2026-11-24).** Even Out spots now run on the device: `spot_prep` writes the target and the
+masked surroundings, the three blurs go through the GPU box-blur `gaussian` (the CPU's three-box blur, pass for
+pass), and `spot_apply` computes `flat_gain`'s clamped gain. `lin_needs_cpu` no longer sends such a photo's
+scene-linear stage to the CPU (Fill / Generate / sourceless Remove still do). GPU vs CPU: `spots_match` (four Even
+Out cases: small, large, brushed and cut by the edge, over a heal) within 1 LSB, mean 0.0001. Probe:
+`cargo test -p lcc-gpu --release --test it even_out_render_time -- --ignored --nocapture` (whole GPU render,
+1920×1280, 7 runs). Same binary-pair before/after on the same machine, but it was saturated by ten other build
+lanes (the plain render ranged 1.9–5.6 s, against tens of ms idle), so only the fastest run is meaningful:
+
+| Case (1920×1280, GPU render) | Before (fastest) | After (fastest) |
+|---|---|---|
+| no spots | 1947 ms | 4017 ms (load) |
+| 1 Even Out spot, size 0.05 | 2361 ms | 937 ms |
+| 1 Even Out spot, size 0.20 | 2963 ms | 1507 ms |
+| 10 Even Out spots, size 0.05 | 3757 ms | 1982 ms |
+
+Before, every Even Out case paid a read-back, the CPU stage and an upload on top of the plain render (+0.4–1.8 s
+here); after, no case is slower than the plain render's noise. An idle re-measure should confirm the absolute spot
+cost against the 60 ms loupe budget.
 
 ## Catalog (`cargo xtask bench-catalog`)
 
