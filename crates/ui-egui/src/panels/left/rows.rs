@@ -4,7 +4,7 @@ use std::hash::{Hash as _, Hasher as _};
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, PartKey, Selection, SizeHint};
 use craft::ui::contract::overlay::Anchor;
 use craft::ui::contract::{
-    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger,
+    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::display::Divider;
 use craft::ui::list::{List, ListRow, TreeLeaves};
@@ -686,12 +686,12 @@ pub(super) fn host_menu(
         MenuAt::Rect(rect) => Anchor::Rect(rect),
     };
     let mut open = true;
-    let shown = Menu::new(name.to_owned())
+    let shown = Menu::context(name.to_owned(), response)
         .id_salt(("left-menu", slot))
-        .opened_by(response, Trigger::Manual)
         .anchor(anchor)
         .open(Bind::bound(&mut open))
         .show(ui, |ui, _| body(ui, &key));
+    eprintln!("DBGMENU slot={slot} closed={:?} open={open} overlay_open={}", shown.output.closed, craft::ui::runtime::overlay::any_open(ui.ctx(), craft::ui::runtime::overlay::OpenFilter::Any));
     if shown.output.closed.is_some() || !open {
         ui.data_mut(|d| d.remove::<(String, MenuAt)>(stored));
     }

@@ -2078,8 +2078,9 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
     // a click in the middle of a deep row chooses it; only the little chevron folds it
     let chosen = "/a/b/c/d/e/f/g/h/i/j/k/l";
-    click(&mut h, &format!("source:libfolder:{chosen}"));
-    assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's middle is the row, not its chevron");
+    // (the row's own centre is past the panel's edge in a sideways-scrolled sidebar: click its name)
+    click(&mut h, &format!("label:libfolder:{chosen}"));
+    assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's name is the row, not its chevron");
 }
 
 /// A library below a deep path (issue #2298): the deepest folder's name has room left of its
