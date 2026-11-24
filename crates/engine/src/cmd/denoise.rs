@@ -239,7 +239,13 @@ fn activate_install(s: &mut Session, result: &Value, model: Arc<dyn crate::denoi
         write_settings(&dir, &st).map_err(EngineError::Other)?;
     }
     s.denoise.touch();
+    // The install worker has already loaded and self-tested the model: hand that instance to the refresh instead of
+    // letting it load one of its own, so finishing an installation on the frame pump neither reads the model again
+    // nor leaves the instance the worker tested unused.
+    let tested = model.clone();
+    let loader = std::mem::replace(&mut s.denoise.loader, Arc::new(move |_, _| Ok(tested.clone())));
     s.denoise_refresh_active(true);
+    s.denoise.loader = loader;
     if let Some(a) = &s.denoise.active
         && a.id == id
     {

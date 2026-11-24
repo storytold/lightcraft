@@ -128,6 +128,64 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     let _ = std::fs::remove_dir_all(x.dir);
 }
 
+/// Finishing a background model installation on the frame pump keeps the model the install worker already loaded and
+/// self-tested: the pump loads nothing itself, and the photo's next denoise job runs on that same instance.
+#[test]
+fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_model_review_regression_1() {
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+    let mut x = setup("install-reuse", false);
+    let path = model_files(&x.dir, "stand-in");
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let runs = x.runs.clone();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let worker_loads = loads.clone();
+    x.s.denoise.loader = Arc::new(move |_, _| {
+        // the install worker's load waits here until the test lets it go; a later load answers at once, so one made on
+        // the frame pump is counted instead of holding the run up
+        let first = worker_loads.fetch_add(1, Ordering::Relaxed) == 0;
+        if first {
+            entered_tx.send(()).map_err(|e| e.to_string())?;
+            release_rx.lock().unwrap().recv_timeout(Duration::from_secs(3)).map_err(|e| e.to_string())?;
+        }
+        Ok(Arc::new(Dim { runs: runs.clone() }) as Arc<dyn Model>)
+    });
+    let r = x.s.execute("denoise.models.install", &json!({"path": path, "acknowledged": true, "background": true})).unwrap();
+    assert_eq!(r["started"], "local-install");
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // the worker is still in the loader: the frame pump returns, with the installation in progress
+    x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    assert_eq!(x.s.execute("denoise.models.downloads", &json!({})).unwrap()["downloads"][0]["state"], "installing");
+    // a second install while this one runs is refused, not queued behind the blocked loader
+    assert!(x.s.execute("denoise.models.install", &json!({"path": path, "acknowledged": true, "background": true})).is_err());
+    assert_eq!(loads.load(Ordering::Relaxed), 1, "only the install worker loads the model");
+    let status = x.s.execute("denoise.status", &json!({})).unwrap();
+    assert_eq!(status["model"]["id"], "builtin", "the built-in denoiser is in use meanwhile");
+    release_tx.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        if x.s.execute("denoise.models.downloads", &json!({})).unwrap()["downloads"][0]["state"] == "installed" {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the background installation never finished");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(loads.load(Ordering::Relaxed), 1, "finishing the installation must not load the model again");
+    assert_eq!(x.s.denoise.active.as_ref().map(|a| a.id.as_str()), Some("stand-in"));
+    assert!(x.s.denoise.active.as_ref().unwrap().model.lock().unwrap().is_some(), "the worker's tested model is in use");
+    // …and the photo's next denoise job runs on it, without loading anything
+    set_amount(&mut x.s, 100.0);
+    let r = pump_until_ready(&mut x.s, 1);
+    assert_eq!(r["queued"], 0, "{r}");
+    assert_eq!(loads.load(Ordering::Relaxed), 1, "the job reuses the loaded model");
+    assert!(x.runs.load(Ordering::Relaxed) >= 4, "the stand-in ran the photo's tiles: {}", x.runs.load(Ordering::Relaxed));
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
 #[test]
 fn failed_model_replacement_preserves_the_installed_model() {
     let mut x = setup("replacement", true);
