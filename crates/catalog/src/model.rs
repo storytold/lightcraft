@@ -253,7 +253,14 @@ impl Meta {
         };
         let maker: Vec<&str> = maker.split_whitespace().filter(|w| !company_word(w)).collect();
         let said: Vec<String> = maker.iter().map(|w| word_key(w)).collect();
-        let model = model.split_whitespace().skip_while(|w| company_word(w) || said.contains(&word_key(w)));
+        // drop the maker said again, with the company words that follow it ("NIKON CORPORATION"); a company word that
+        // starts the model is the model's ("ACME Computer 1000"), unless the maker was taken from the first word and
+        // left its company words behind ("CASIO COMPUTER CO.,LTD.")
+        let mut skipping = after_make.is_none();
+        let model = model.split_whitespace().skip_while(|w| {
+            skipping = said.contains(&word_key(w)) || (skipping && company_word(w));
+            skipping
+        });
         let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.map(str::to_string)).collect();
         (!words.is_empty()).then(|| words.join(" "))
     }
@@ -893,5 +900,10 @@ mod camera_name_tests {
         for make in ["CASIO COMPUTER CO.,LTD.", ""] {
             assert_eq!(name(make, "CASIO COMPUTER CO.,LTD. EX-Z1050").as_deref(), Some("Casio EX-Z1050"), "make {make:?}");
         }
+        // with the maker known, a company word that starts the model is the model's
+        assert_eq!(name("ACME", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // but the maker said again in full, company words and all, is dropped
+        let repeated = "NIKON CORPORATION NIKON CORPORATION Z 8";
+        assert_eq!(name("NIKON CORPORATION", repeated).as_deref(), Some("Nikon Z 8"));
     }
 }
