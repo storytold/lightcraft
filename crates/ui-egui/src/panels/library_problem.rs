@@ -873,7 +873,8 @@ pub fn start_upgrade(app: &mut LccApp, dir: std::path::PathBuf, files: Vec<Strin
 /// it in the session on the interface's thread: the open used to run before the first frame,
 /// where a store left in an older format by an update (its byte-verified backup copy), or simply
 /// a large one being read, kept the window silent. The worker does only what must not happen
-/// there — [`lcc_engine::library::prepare_library`] — so the window shows the opening meanwhile,
+/// there — [`lcc_engine::library::prepare_library`], then reading the catalog
+/// ([`lcc_engine::library::load_catalog`], staged for the open) — so the window shows the opening meanwhile,
 /// with the phase and progress of an upgrade on the way
 /// ([`lcc_engine::library::migration_progress`]). `files` are imported once it is open; `demo`
 /// seeds a library the open creates with the procedural demo photos; `by_argument`: the library
@@ -888,9 +889,15 @@ pub fn start_open(app: &mut LccApp, dir: std::path::PathBuf, files: Vec<String>,
     let started = crate::tasks::spawn(
         app,
         OPEN_LABEL,
-        None,
-        move || lcc_engine::library::prepare_library(&dir).map_err(|e| e.to_string()),
-        move |app, _ctx, res: Result<bool, String>| {
+        // an activity row (TaskGuard) for the open's work off the interface's thread
+        Some("library"),
+        // the catalog is read here too, off the interface's thread: on a large library that read
+        // was a frame of seconds once the worker was done (#979)
+        move || {
+            lcc_engine::library::prepare_library(&dir).map_err(|e| e.to_string())?;
+            lcc_engine::library::load_catalog(&dir).map_err(|e| e.to_string())
+        },
+        move |app, _ctx, res: Result<lcc_engine::library::LoadedCatalog, String>| {
             if let Some(p) = app.library_problem.as_mut() {
                 p.opening = false;
             }
@@ -902,7 +909,8 @@ pub fn start_open(app: &mut LccApp, dir: std::path::PathBuf, files: Vec<String>,
                 crate::panels::settings::remember_library(&mut app.ui.settings.recent_libraries, &previous);
             }
             match res {
-                Ok(_) => {
+                Ok(loaded) => {
+                    app.session.stage_catalog(loaded);
                     open(app, Some(path), demo);
                     opened_start_view(app, empty_start);
                 }
