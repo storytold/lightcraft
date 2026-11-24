@@ -31,6 +31,9 @@ fn scrolled_actual_keyword_hit_map_excludes_hidden_rows_and_controls() {
     }
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 760.0], 1.0);
+    // (a photo is selected: the framework's tick takes no pointer or keys while there is nothing to tick for)
+    let first: Vec<u64> = h.app.session.visible_cloned().iter().take(1).map(|p| p.0).collect();
+    h.app.run("library.select", json!({"ids": first})).expect("select a photo");
     ask(&mut h, "ui.set", json!({"view": "photoGrid", "right": "keywords"}));
     let target = rect(&h, "keywordRow:Seam clip 25");
     ask(&mut h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
@@ -50,14 +53,6 @@ fn scrolled_actual_keyword_hit_map_excludes_hidden_rows_and_controls() {
     }
     assert!(stable >= 3, "bounded scroll geometry did not settle");
     let tick = "keywordCheck:Seam clip 25";
-    eprintln!(
-        "DBGCLIP row={:?} tick={:?} hit={:?} top={:?} box={:?}",
-        rect(&h, "keywordRow:Seam clip 25"),
-        h.app.widgets.iter().find(|(n, _)| n == tick).map(|(_, r)| *r),
-        h.app.widget_hits.iter().find(|(n, _)| n == tick).map(|(_, hit)| (hit.id, hit.interact_rect, hit.layer_id)),
-        h.app.widgets.iter().find(|(n, _)| n == "keywordList:topLevel").map(|(_, r)| *r),
-        h.app.widgets.iter().find(|(n, _)| n == "field:keyword").map(|(_, r)| *r),
-    );
     let tick_hit = h.app.widget_hits.iter().find(|(name, _)| name == tick).expect("tick hit").1;
     let actual_tick = h
         .view
