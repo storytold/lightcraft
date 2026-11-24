@@ -493,16 +493,41 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
     if let Some(face) = mask_local_track::face(spec.track) {
         control = control.track_face(face);
     }
-    let out = with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui));
-    // PaintUi::{child,labelled} document parent.with(key). Read the actual rendered responses:
-    // aliases never stand in for a synthetic hit, layout guess, or the composite's non-slider group.
-    for (prefix, child) in [("slider", "slider"), ("sliderValue", "field"), ("sliderField", "field")] {
-        if let Some(response) = ui.ctx().read_response(id.with(child)) {
-            if prefix == "slider" {
-                note_focused_slider(ui.ctx(), response.id);
+    let (out, record) = craft::ui::runtime::inspect::record(ui, id.with("record"), |ui| {
+        with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui))
+    });
+    // Name the row's real parts from what the framework recorded: the owners of the track, the value and the caption,
+    // also for an arena child with no egui response of its own and for a row scrolled out of the panel (which then
+    // keeps its place, with the response of the whole row as its hit).
+    if let Some(record) = record {
+        let focused = craft::ui::runtime::focus::focused_rec(ui.ctx());
+        for (index, element) in record.elements.iter().enumerate() {
+            let Some(facts) = &element.facts else { continue };
+            if element.component == "MenuItem" {
+                continue;
             }
-            crate::widgets::register_response(format!("{prefix}:{}", spec.id), response.rect, &response);
-            crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), response.rect, &response);
+            let prefixes: &[&str] = match facts.role.as_str() {
+                "Slider" => &["slider"],
+                "SpinButton" => &["sliderValue", "sliderField"],
+                _ => continue,
+            };
+            let rect = record.stop_rect(index).unwrap_or(element.rect);
+            let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
+                let mut response = out.response.clone();
+                response.id = element.id;
+                response.rect = rect;
+                response.interact_rect = rect.intersect(ui.clip_rect());
+                response
+            });
+            if prefixes[0] == "slider"
+                && let Some(focus) = focused.as_ref().filter(|focus| focus.stop.id == element.id && !focus.stop.text)
+            {
+                crate::widgets::note_slider_focus(ui.ctx(), focus.stop.root);
+            }
+            for prefix in prefixes {
+                crate::widgets::register_response(format!("{prefix}:{}", spec.id), rect, &response);
+                crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), rect, &response);
+            }
         }
     }
     crate::widgets::register_geometry(ui.ctx(), format!("sliderRow:maskLocal:{}", spec.id), out.response.rect);
@@ -1301,9 +1326,17 @@ fn component_row_popup(
     if last != frame && last.saturating_add(1) != frame {
         epoch += 1;
     }
-    ui.data_mut(|d| d.insert_temp(visit_key, (epoch, frame)));
     let owner_key = ui.scope_id().with(("mask-component-captured-owner", row.id, more.id));
     let mut captured = ui.data(|d| d.get_temp::<ComponentMenuTarget>(owner_key)).unwrap_or(target);
+    if captured != target {
+        // What the menu was opened for is gone (another photo, mask, component or revision holds this slot now):
+        // the slot starts again with a closed menu of its own, so the old one cannot come back by itself when
+        // the old target does, and a press held on its rows has nothing left to act on.
+        epoch += 1;
+        captured = target;
+        ui.data_mut(|d| d.insert_temp(owner_key, captured));
+    }
+    ui.data_mut(|d| d.insert_temp(visit_key, (epoch, frame)));
     let interactive = captured == target && captured.live(app);
     let mut pending = None;
     let mut targets = Vec::new();
