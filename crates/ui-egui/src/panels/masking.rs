@@ -198,7 +198,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // mask list
     egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
+            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label)).selectable(false));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let on = app.ui.mask_overlay;
                 if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
@@ -488,12 +488,16 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
         .fill(false)
         .enabled(enabled)
         .number_codec(
-            NumberCodec::new(Reader::new(), usize::from(spec.decimals)).parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
+            NumberCodec::new(Reader::new(), usize::from(spec.decimals)).fixed().parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
         );
     if let Some(face) = mask_local_track::face(spec.track) {
         control = control.track_face(face);
     }
-    let out = with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui));
+    // (inset like the other rows of the panel, so the label and the value box lie inside it)
+    let out = egui::Frame::NONE
+        .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
+        .show(ui, |ui| with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui)))
+        .inner;
     // PaintUi::{child,labelled} document parent.with(key). Read the actual rendered responses:
     // aliases never stand in for a synthetic hit, layout guess, or the composite's non-slider group.
     for (prefix, child) in [("slider", "slider"), ("sliderValue", "field"), ("sliderField", "field")] {
@@ -760,11 +764,11 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let parent_enabled = ui.is_enabled();
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim)).selectable(false));
         // Reserve the original dropdown's size and automatic response ID. The SDK owns
         // its list, real focus, proposals and cancellation; only a pick runs the command.
         let g = one_line(ui.painter(), menu_label(view.label()), t.font(12.5), t.text_label, f32::INFINITY);
-        let (id, rect) = ui.allocate_space(vec2(g.size().x + 20.0, g.size().y.max(20.0)));
+        let (id, rect) = ui.allocate_space(vec2(g.size().x + 44.0, g.size().y.max(20.0)));
         let entries: Vec<_> = MaskView::ALL.into_iter().map(|v| Entry::new(v.name().to_owned(), menu_label(v.label()))).collect();
         let out = Select::new(crate::i18n::tr("Overlay"), Bind::given(view.name().to_owned()), &entries).id(id).enabled(real).show_at(ui, rect);
         if real {
