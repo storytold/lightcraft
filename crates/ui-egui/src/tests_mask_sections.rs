@@ -124,7 +124,10 @@ fn mask_solo_keeps_one_section_open_and_grading_sits_under_color() {
     }
     let (color, grading, effects) = (rect_of(&h, "section:mask:color"), rect_of(&h, "section:mask:grading"), rect_of(&h, "section:mask:effects"));
     let point = rect_of(&h, "flyout:maskPointColor");
-    assert!(color.top() < point.top() && point.top() < grading.top() && grading.top() < effects.top(), "Color, its tools, then Color Grading, then Effects");
+    assert!(
+        color.top() < point.top() && point.top() < grading.top() && grading.top() < effects.top(),
+        "Color, its tools, then Color Grading, then Effects"
+    );
 
     // Color Grading folds on its own, Color's tools stay
     req(&mut h, "ui.clickWidget", json!({"id": "section:mask:grading"}));
