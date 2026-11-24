@@ -2,12 +2,12 @@
 
 ## Unreleased
 
-### Colour Grading behaves as in Lightroom (process V9)
-- The colour grading wheels now tint as strongly and in the same direction as Lightroom's, reach the same tones (the
-  shadows wheel spares the deepest blacks and reaches into the midtones, the global wheel acts most on the
+### Colour Grading wheels reach different tones and spare colours already leaning their way (process 9)
+- The colour grading wheels now tint with a strength and direction that depend on the wheel's hue, reach different
+  tones (the shadows wheel spares the deepest blacks and reaches into the midtones, the global wheel acts most on the
   midtones), and give less tint to colours that already lean its way, so a warm grade no longer oversaturates warm
-  colours. Blending, Balance and Luminance follow Lightroom's measured response too. This is part of rendering
-  process 9: photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  colours. Blending, Balance and Luminance change with them. This is part of rendering process 9: photos you
+  already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [Colour Grading](grading-stage.md).
 
 ### Colour mixer bands in new places, stronger at large amounts (process 9)

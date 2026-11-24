@@ -39,7 +39,7 @@ pub mod finish;
 pub mod geometry;
 pub mod grading_stage;
 #[rustfmt::skip]
-mod grading_stage_tables;
+mod grading_stage_model;
 pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout

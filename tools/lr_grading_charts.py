@@ -7,11 +7,12 @@
         saturations, at Luminance -100/-50/50/100, at Blending 0/25/75/100 and (not global) at Balance
         -100/-50/50/100; and two combinations used only as checks.
     (render every DNG through Camera Raw to a 16-bit Adobe RGB (1998) TIFF with the same file name)
-    python3 tools/lr_grading_charts.py tables RENDER_DIR OUT_RS
-        Reads the renders and writes the Rust tables of `lightcraft_pipeline::grading_stage`.
+    python3 tools/lr_grading_charts.py fit RENDER_DIR OUT_RS
+        Reads the renders, fits LightCraft's model of Colour Grading to them and writes the model's constants
+        (`lightcraft_pipeline::grading_stage_model`). The measurements themselves are not written out.
 
 The charts are original test data generated here; nothing in them comes from Adobe. Only Camera Raw's output is
-measured. Requires numpy and tifffile (tools/requirements-lr-tone-charts.txt).
+measured. Requires numpy, scipy and tifffile (tools/requirements-lr-tone-charts.txt).
 
 The model, per wheel: an OkLab tint (a, b) by wheel hue and saturation; a lightness profile (how much of the tint
 each lightness gets) by Blending and Balance; a damping of the tint for colours that already lean its way, by their
@@ -94,8 +95,9 @@ def oklab_patches(path, patches):
     return np.array(out)
 
 
-def tables(render_dir, out_rs):
-    """Measure the Camera Raw renders in `render_dir` and write the Rust tables to `out_rs`."""
+def measure(render_dir):
+    """Measure the Camera Raw renders in `render_dir`: tints, profiles by Blending and by Balance, Luminance curves and
+    damping per wheel, as dictionaries (kept in memory, never written out)."""
     patches = json.load(open(os.path.join(render_dir, "manifest.json")))["patches"]
     ok = np.array([p["ok"] for p in patches])
     grey = ok & np.array([p["kind"] == "grey" for p in patches])
@@ -163,56 +165,185 @@ def tables(render_dir, out_rs):
                         cnt[i, j] += 1
         att[w] = np.where(cnt > 0, acc / np.maximum(cnt, 1), 1.0)
 
-    f = lambda v, p=6: f"{v:.{p}f}"
-    row = lambda vs, p=6: "[" + ", ".join(f(v, p) for v in vs) + "]"
+    return tint, pblend, pbal, lum, att
+
+
+# ---- fit ----------------------------------------------------------------------------------------------------
+#
+# LightCraft's own model of Colour Grading, fitted to the measurements above. Nothing measured is written out: only
+# the model's constants (docs/grading-stage.md has the formulas).
+#
+# - Tint: the same shape around the hue circle for every wheel, a Fourier series of the wheel hue for the tint's
+#   direction (offset from the wheel hue) and for its log size, times a size per wheel and a saturation curve per
+#   wheel: size(s) = s (1 + g1 (s - 1) + g2 (s - 1)^2), s = saturation / 100.
+# - Share by lightness: two bumps (as the tone curve stage's), whose gain and exponents are quadratic in Blending and
+#   in Balance.
+# - Luminance: two bumps per direction, gain and exponents changing with the amount.
+# - Damping: 1 + (C / 0.12)^e (d0 + d1 cos a + d2 cos 2a), a the angle between the colour's hue and the tint's.
+
+HARMONICS = 4
+FIT_SEED = 3
+FIT_STARTS = 24
+
+
+def fourier(c, h):
+    """c0 + sum of c[2k-1] cos(k h) + c[2k] sin(k h)."""
+    return c[0] + sum(c[2 * k - 1] * np.cos(k * h) + c[2 * k] * np.sin(k * h) for k in range(1, (len(c) - 1) // 2 + 1))
+
+
+def bump(x, p, q):
+    """A bump of peak 1 at p / (p + q), 0 at black and white."""
+    m = p / (p + q)
+    return np.exp(p * np.log(np.clip(x, 1e-12, 1) / m) + q * np.log(np.clip(1 - x, 1e-12, 1) / (1 - m)))
+
+
+def tint_model(params, hue, sat):
+    """Tints (wheel, hue, saturation, a/b) for hues in radians and saturations 0..1."""
+    n = 2 * HARMONICS + 1
+    angle = hue + fourier(params[:n], hue)
+    size = np.exp(fourier(params[n:2 * n], hue))
+    out = np.zeros((4, len(hue), len(sat), 2))
+    for w in range(4):
+        scale, g1, g2 = np.exp(params[2 * n + w]), params[2 * n + 4 + 2 * w], params[2 * n + 5 + 2 * w]
+        for i, s in enumerate(sat):
+            m = scale * size * s * (1 + g1 * (s - 1) + g2 * (s - 1) ** 2)
+            out[w, :, i] = np.stack([m * np.cos(angle), m * np.sin(angle)], 1)
+    return out
+
+
+def share_model(params, blend, balance, light):
+    """Share of the tint at lightness `light` for Blending and Balance as fractions (Blending 0.5 and Balance 0 at the default)."""
+    b, c = blend - 0.5, balance
+    out = 0.0
+    for k in range(2):
+        q = params[15 * k:15 * k + 15]
+        f = lambda i: q[i] + q[i + 1] * b + q[i + 2] * b * b + q[i + 3] * c + q[i + 4] * c * c
+        out = out + f(0) * bump(light, np.exp(f(5)), np.exp(f(10)))
+    return out
+
+
+def lum_model(params, amount, light):
+    """Lightness change at `light` for Luminance `amount` (-1..1)."""
+    a, side = abs(amount), 0 if amount < 0 else 1
+    out = 0.0
+    for k in range(2):
+        q = params[12 * side + 6 * k:12 * side + 6 * k + 6]
+        out = out + (q[0] * a + q[1] * a * a) * bump(light, np.exp(q[2] + q[3] * a), np.exp(q[4] + q[5] * a))
+    return np.sign(amount) * out
+
+
+def damping_model(params, chroma, angle):
+    """Share of the tint a colour of `chroma` gets at `angle` (radians) from the tint's direction."""
+    d0, d1, d2, e = params
+    return 1 + (chroma / 0.12) ** np.exp(e) * (d0 + d1 * np.cos(angle) + d2 * np.cos(2 * angle))
+
+
+def multistart(residual, starts):
+    """The best least-squares solution over `starts`."""
+    from scipy.optimize import least_squares
+    return min((least_squares(residual, s, max_nfev=4000) for s in starts), key=lambda r: r.cost).x
+
+
+def fit_share(job):
+    """One wheel's share profiles (by Blending, by Balance) on the lightness grid."""
+    blends, balances, light = job
+    def residual(p):
+        return np.concatenate([share_model(p, b, 0.0, light) - v for b, v in blends] +
+                              [share_model(p, 0.5, a, light) - v for a, v in balances]) * 100
+    rng = np.random.default_rng(FIT_SEED)
+    starts = []
+    for _ in range(FIT_STARTS):
+        s = np.zeros(30)
+        for k in range(2):
+            s[15 * k], s[15 * k + 5], s[15 * k + 10] = rng.uniform(0.2, 1), rng.uniform(-1, 2.5), rng.uniform(-1, 2.5)
+        starts.append(s)
+    return multistart(residual, starts)
+
+
+def fit_lum(job):
+    """One wheel's Luminance responses on the lightness grid."""
+    lums, light = job
+    residual = lambda p: np.concatenate([lum_model(p, a, light) - v for a, v in lums]) * 100
+    rng = np.random.default_rng(FIT_SEED)
+    starts = []
+    for _ in range(FIT_STARTS):
+        s = np.zeros(24)
+        for side in range(2):
+            for k in range(2):
+                o = 12 * side + 6 * k
+                s[o], s[o + 2], s[o + 4] = rng.uniform(0, 0.1), rng.uniform(-1, 2.5), rng.uniform(-1, 2.5)
+        starts.append(s)
+    return multistart(residual, starts)
+
+
+def fit_damping(table):
+    """One wheel's damping (chroma level x 6 angle bins) as 4 constants."""
+    angle = np.radians(np.arange(15, 180, 30))
+    c = np.array(CHROMA)[:, None]
+    return multistart(lambda p: (damping_model(p, c, angle[None, :]) - table).ravel() * 100, [np.zeros(4)])
+
+
+def fit(render_dir, out_rs):
+    """Fit the model to the Camera Raw renders in `render_dir` and write its constants to `out_rs`."""
+    from concurrent.futures import ProcessPoolExecutor
+    tint, pblend, pbal, lum, att = measure(render_dir)
     names = list(WHEELS)
-    s = ["// @generated by tools/lr_grading_charts.py from Camera Raw renders of its synthetic charts (docs/grading-stage.md).",
-         "// OkLab. Wheels: shadows, midtones, highlights, global. Lightness grids: 65 steps from 0 to 1.",
-         "// Measured values, which can come close to a mathematical constant by chance.",
-         "#![allow(clippy::approx_constant)]",
+    light = np.linspace(0, 1, GRID)
+    hue, sat = np.radians(np.array(HUES, float)), np.array(SATS) / 100
+    measured = np.array([[[tint[(w, h, s)] for s in SATS] for h in HUES] for w in names])
+    n = 2 * HARMONICS + 1
+    start = np.zeros(2 * n + 12)
+    start[n] = np.log(np.hypot(*measured.reshape(-1, 2).T).mean())
+    tp = multistart(lambda p: ((tint_model(p, hue, sat) - measured) * 100).ravel(), [start])
+    e = np.linalg.norm(tint_model(tp, hue, sat) - measured, axis=-1) * 100
+    print(f"tint: rms {np.sqrt((e ** 2).mean()):.3f} of {np.linalg.norm(measured, axis=-1).mean() * 100:.3f} (OkLab x 100)")
+    share_jobs = [([(b / 100, pblend[(w, b)]) for b in BLENDS], [] if w == "global" else [(a / 100, pbal[(w, a)]) for a in BALANCES], light)
+                  for w in names]
+    lum_jobs = [([(v / 100, lum[(w, v)]) for v in LUMS], light) for w in names]
+    with ProcessPoolExecutor() as pool:
+        shares = list(pool.map(fit_share, share_jobs))
+        lums = list(pool.map(fit_lum, lum_jobs))
+    damps = [fit_damping(att[w]) for w in names]
+    for i, w in enumerate(names):
+        blends, balances, _ = share_jobs[i]
+        es = np.concatenate([share_model(shares[i], b, 0.0, light) - v for b, v in blends] +
+                            [share_model(shares[i], 0.5, a, light) - v for a, v in balances]) * 100
+        el = np.concatenate([lum_model(lums[i], a, light) - v for a, v in lum_jobs[i][0]]) * 100
+        ed = (damping_model(damps[i], np.array(CHROMA)[:, None], np.radians(np.arange(15, 180, 30))[None, :]) - att[w]) * 100
+        print(f"{w:10s} share rms {np.sqrt((es ** 2).mean()):.2f} (x 100), Luminance rms {np.sqrt((el ** 2).mean()):.3f} (OkLab L x 100), "
+              f"damping rms {np.sqrt((ed ** 2).mean()):.2f} (x 100)")
+    num = lambda v: f"{v:.6e}"
+    row = lambda vs: "[" + ", ".join(num(v) for v in vs) + "]"
+    s = ["// Written by `tools/lr_grading_charts.py fit`: LightCraft's model of Colour Grading, fitted to the tool's charts",
+         "// (provenance in docs/grading-stage.md). Constants of the model only. Wheels: shadows, midtones, highlights, global.",
          "",
-         f"pub const HUES: [f32; {len(HUES)}] = [{', '.join(f'{h}.0' for h in HUES)}];",
-         f"pub const SATS: [f32; {len(SATS)}] = [{', '.join(f'{x}.0' for x in SATS)}];",
-         f"pub const BLENDS: [f32; {len(BLENDS)}] = [{', '.join(f'{x}.0' for x in BLENDS)}];",
-         f"pub const BALANCES: [f32; {len(BALANCES)}] = [{', '.join(f'{x}.0' for x in BALANCES)}];",
-         f"pub const LUMS: [f32; {len(LUMS)}] = [{', '.join(f'{x}.0' for x in LUMS)}];",
-         f"/// Nominal chroma of the damping's levels.",
-         f"pub const CHROMA: [f32; 3] = [{', '.join(str(c) for c in CHROMA)}];",
-         "",
-         "/// Tint (a, b) per wheel, hue and saturation.",
-         f"pub static TINT: [[[[f32; 2]; {len(SATS)}]; {len(HUES)}]; 4] = ["]
-    for w in names:
-        s.append("    [")
-        for h in HUES:
-            s.append("        [" + ", ".join(row(tint[(w, h, x)]) for x in SATS) + "],")
-        s.append("    ],")
-    s += ["];", "",
-          "/// Share of the tint by lightness, per wheel and Blending (at Balance 0).",
-          f"pub static PROFILE_BLEND: [[[f32; {GRID}]; {len(BLENDS)}]; 4] = ["]
-    for w in names:
-        s += ["    ["] + [f"        {row(pblend[(w, b)], 5)}," for b in BLENDS] + ["    ],"]
-    s += ["];", "",
-          "/// Share of the tint by lightness, per wheel and Balance (at Blending 50; the global wheel ignores Balance).",
-          f"pub static PROFILE_BALANCE: [[[f32; {GRID}]; {len(BALANCES)}]; 4] = ["]
-    for w in names:
-        s += ["    ["] + [f"        {row(pbal[(w, a)], 5)}," for a in BALANCES] + ["    ],"]
-    s += ["];", "",
-          "/// Lightness change by lightness, per wheel and Luminance.",
-          f"pub static LUM: [[[f32; {GRID}]; {len(LUMS)}]; 4] = ["]
-    for w in names:
-        s += ["    ["] + [f"        {row(lum[(w, v)])}," for v in LUMS] + ["    ],"]
-    s += ["];", "",
-          "/// Share of the tint a colour gets, per wheel, chroma level and angle between its hue and the tint's (30 degree bins).",
-          "pub static DAMPING: [[[f32; 6]; 3]; 4] = ["]
-    for w in names:
-        s += ["    ["] + [f"        {row(att[w][i], 4)}," for i in range(3)] + ["    ],"]
-    s += ["];", ""]
-    with open(out_rs, "w") as fh:
-        fh.write("\n".join(s))
+         "/// The tint's direction around the hue circle, as an offset from the wheel hue (radians): a Fourier series of the",
+         "/// wheel hue, `c0 + c1 cos h + c2 sin h + c3 cos 2h + ...`.",
+         f"pub const TINT_ANGLE: [f64; {n}] = {row(tp[:n])};",
+         "/// The tint's log size around the hue circle, the same kind of series.",
+         f"pub const TINT_SIZE: [f64; {n}] = {row(tp[n:2 * n])};",
+         "/// Each wheel's log size, added to [`TINT_SIZE`].",
+         f"pub const WHEEL_SIZE: [f64; 4] = {row(tp[2 * n:2 * n + 4])};",
+         "/// Each wheel's saturation curve `[g1, g2]`: size `s (1 + g1 (s - 1) + g2 (s - 1)²)` at saturation `s` (0 to 1).",
+         "pub const WHEEL_SAT: [[f64; 2]; 4] = [" + ", ".join(row(tp[2 * n + 4 + 2 * w:2 * n + 6 + 2 * w]) for w in range(4)) + "];",
+         "/// Each wheel's share of the tint by lightness: two bumps of 15 constants, `[g, gb, gb2, gc, gc2, p, pb, ..., q, ...]`,",
+         "/// each value quadratic in Blending (`b` = Blending / 100 - 0.5) and Balance (`c` = Balance / 100).",
+         "pub const SHARE: [[f64; 30]; 4] = [",
+         *[f"    {row(p)}," for p in shares],
+         "];",
+         "/// Each wheel's Luminance, negative then positive: two bumps of `[g1, g2, p0, p1, q0, q1]` each.",
+         "pub const LUM: [[f64; 24]; 4] = [",
+         *[f"    {row(p)}," for p in lums],
+         "];",
+         "/// Each wheel's damping `[d0, d1, d2, e]`: `1 + (C / 0.12)^(e^e) (d0 + d1 cos a + d2 cos 2a)`.",
+         "pub const DAMPING: [[f64; 4]; 4] = [" + ", ".join(row(p) for p in damps) + "];",
+         ""]
+    with open(out_rs, "w") as f:
+        f.write("\n".join(s))
 
 
 def main():
-    """Command line: `charts OUT_DIR` or `tables RENDER_DIR OUT_RS`."""
+    """Command line: `charts OUT_DIR` or `fit RENDER_DIR OUT_RS`."""
     if len(sys.argv) == 3 and sys.argv[1] == "charts":
         out = sys.argv[2]
         os.makedirs(out, exist_ok=True)
@@ -220,8 +351,8 @@ def main():
         json.dump(dict(patches=patches), open(os.path.join(out, "manifest.json"), "w"))
         for name, settings in variants().items():
             write_dng(os.path.join(out, f"grade__{name}.dng"), img, xmp(**settings))
-    elif len(sys.argv) == 4 and sys.argv[1] == "tables":
-        tables(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == "fit":
+        fit(sys.argv[2], sys.argv[3])
     else:
         sys.exit(__doc__)
 

@@ -409,7 +409,7 @@ fn measured_grade(lab: vec3<f32>) -> vec3<f32> {
         let d0 = aux[w + 2u + j] * (1.0 - fa) + aux[w + 3u + j] * fa;
         let d1 = aux[w + 8u + j] * (1.0 - fa) + aux[w + 9u + j] * fa;
         let d2 = aux[w + 14u + j] * (1.0 - fa) + aux[w + 15u + j] * fa;
-        // the damping's chroma levels (`grading_stage_tables::CHROMA`)
+        // the damping's chroma levels (`grading_stage::CHROMA`)
         var damp = 1.0;
         if (c <= 0.04) {
             damp = 1.0 + (d0 - 1.0) * c / 0.04;
