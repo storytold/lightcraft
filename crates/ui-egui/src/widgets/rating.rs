@@ -102,11 +102,16 @@ impl Rating {
     pub fn show(self, ui: &mut Ui) -> Option<u8> {
         use craft::ui::choice::Rating as Stars;
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        let shown = Stars::new(Bind::given(self.rating), STARS)
+        let mut stars = Stars::new(Bind::given(self.rating), STARS)
             .id_salt(("lc-rating", self.id.as_str()))
             .label(crate::i18n::tr("Rating").to_owned())
-            .size(craft::theme::ControlSize::Sm)
-            .show(ui);
+            .size(craft::theme::ControlSize::Sm);
+        // The row takes the room it measures and is shown there. Shown in the flow instead, a framework body that
+        // measures the app's window first (the shell's) finds this row missing from what it kept, and asks for
+        // another pass every frame.
+        let size = stars.measure_in(ui, craft::behavior::Proposal::Ideal);
+        let (_, room) = ui.allocate_space(size);
+        let shown = stars.show_at(ui, room);
         // a measuring run draws nothing the user can reach: no automation names, no change
         if !real {
             return None;
