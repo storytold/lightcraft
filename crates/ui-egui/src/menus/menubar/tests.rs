@@ -453,7 +453,9 @@ fn the_search_after_an_import_waits_for_a_running_search() {
     app.session.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
     std::fs::remove_file(dir.join("gone.png")).unwrap();
     let gone = dir.join("gone.png").to_string_lossy().into_owned();
-    assert_eq!(run_item(&mut app, "file.findMissingOnOtherDrives", json!({"hash": false})).unwrap(), json!({"background": true}));
+    // the running search looks for nothing (an empty scope), so a result that counts the photo is the waiting one's
+    let running = json!({"hash": false, "paths": []});
+    assert_eq!(run_item(&mut app, "file.findMissingOnOtherDrives", running).unwrap(), json!({"background": true}));
     crate::lightroom_import::search_other_drives(&mut app, vec![json!(gone)]);
     assert_eq!(app.other_drives_waiting, vec![json!(gone)], "waits behind the running search");
     let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
@@ -461,6 +463,14 @@ fn the_search_after_an_import_waits_for_a_running_search() {
     assert!(h.step_until(t, |h| h.app.other_drives_waiting.is_empty()), "the waiting search never started");
     assert!(h.step_until(t, |h| !h.app.tasks.is_running("Find Missing Photos on Other Drives")), "it never ended");
     assert_eq!(h.app.ui.last_find_missing_result.as_ref().and_then(|r| r.as_ref().ok()).map(|r| r["missing"].clone()), Some(json!(1)));
+
+    // waiting paths of a library that was closed meanwhile are dropped, not searched in the next one
+    let r = run_item(&mut h.app, "file.findMissingOnOtherDrives", json!({"hash": false, "paths": []})).unwrap();
+    assert_eq!(r, json!({"background": true}));
+    crate::lightroom_import::search_other_drives(&mut h.app, vec![json!(gone)]);
+    h.app.session.open_library(dir.join("Other library"), false).unwrap();
+    crate::lightroom_import::search_other_drives(&mut h.app, Vec::new());
+    assert!(h.app.other_drives_waiting.is_empty(), "the other library's paths were dropped");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

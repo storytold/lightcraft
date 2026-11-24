@@ -121,6 +121,7 @@ impl LightcraftApp {
             lightroom: None,
             lightroom_last: None,
             other_drives_waiting: Vec::new(),
+            other_drives_waiting_in: 0,
             lightroom_result: None,
             review_pending: None,
             shown_library: None,

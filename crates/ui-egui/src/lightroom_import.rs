@@ -323,8 +323,13 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
 
 /// Settings ▸ Missing photos: look for `paths` (originals an import couldn't find) on the other drives, now or, while
 /// a search for missing photos is running (it took its photos before this import), as soon as it ends. Each frame
-/// calls it with none to start what waits.
+/// calls it with none to start what waits. Paths of a library that is no longer open are dropped.
 pub(crate) fn search_other_drives(app: &mut LightcraftApp, paths: Vec<Value>) {
+    let library = app.session.library_generation();
+    if app.other_drives_waiting_in != library {
+        app.other_drives_waiting.clear();
+        app.other_drives_waiting_in = library;
+    }
     app.other_drives_waiting.extend(paths);
     if app.other_drives_waiting.is_empty()
         || app.tasks.is_running("Find Missing Photos on Other Drives")
