@@ -2309,3 +2309,98 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(!h.app.ui.section_folded("maskLensBlur"));
     h.settle(SETTLE);
 }
+
+/// One notch of a real mouse wheel (up) over image point (`x`, `y`), then a few frames for egui's
+/// smoothed wheel delta to play out.
+fn wheel_notch_at(h: &mut Headless, x: f64, y: f64) {
+    pointer(h, json!([{"kind": "move", "x": x, "y": y}]));
+    let r = h.request("ui.scroll", json!({"source": "wheel", "unit": "line", "dy": 1.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..10 {
+        h.step();
+    }
+}
+
+#[test]
+fn the_wheel_resizes_the_masking_brush_instead_of_zooming() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let size = h.app.ui.brush_size;
+    wheel_notch_at(&mut h, 0.5, 0.5);
+    assert!((h.app.ui.brush_size - size * 1.1).abs() < 1e-6, "{} → {}", size, h.app.ui.brush_size);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit, "the photo doesn't zoom as well");
+}
+
+#[test]
+fn the_wheel_over_the_selected_radial_resizes_it_and_elsewhere_zooms() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1, "angle": 30}));
+    let before = develop(&h);
+    wheel_notch_at(&mut h, 0.52, 0.5);
+    let MaskShape::Radial { center, rx, ry, angle, .. } = develop(&h).masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((rx - 0.198).abs() < 1e-9 && (ry - 0.11).abs() < 1e-9, "both radii grow: {rx} {ry}");
+    assert_eq!((center, angle), (lightcraft_geom::Point::new(0.5, 0.5), 30.0), "only the size changes");
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit, "the photo doesn't zoom as well");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).masks, before.masks, "one undo step a notch");
+    // off the gradient the wheel zooms as before
+    wheel_notch_at(&mut h, 0.1, 0.1);
+    assert_eq!(develop(&h).masks, before.masks);
+    assert_ne!(h.app.ui.zoom, crate::state::Zoom::Fit, "off the mask the wheel zooms");
+}
+
+#[test]
+fn two_wheel_notches_in_one_frame_are_two_undo_steps() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1}));
+    pointer(&mut h, json!([{"kind": "move", "x": 0.52, "y": 0.5}]));
+    let r = h.request("ui.scroll", json!({"source": "wheel", "unit": "line", "dy": 2.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..10 {
+        h.step();
+    }
+    let rx = |h: &Headless| match develop(h).masks[0].components[0].shape {
+        MaskShape::Radial { rx, .. } => rx,
+        _ => panic!("radial"),
+    };
+    assert!((rx(&h) - 0.18 * 1.21).abs() < 1e-9, "{}", rx(&h));
+    exec(&mut h, "edit.undo", json!({}));
+    assert!((rx(&h) - 0.18 * 1.1).abs() < 1e-9, "one notch undone: {}", rx(&h));
+}
+
+#[test]
+fn a_wheel_notch_during_a_mask_drag_changes_nothing_and_keeps_one_undo_step() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1}));
+    let before = develop(&h);
+    pointer(&mut h, json!([{"kind": "down", "x": 0.52, "y": 0.5}, {"kind": "drag", "x": 0.55, "y": 0.52}]));
+    wheel_notch_at(&mut h, 0.55, 0.52);
+    pointer(&mut h, json!([{"kind": "drag", "x": 0.57, "y": 0.53}, {"kind": "up", "x": 0.57, "y": 0.53}]));
+    let MaskShape::Radial { center, rx, ry, .. } = develop(&h).masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((center.x - 0.55).abs() < 0.005 && (center.y - 0.53).abs() < 0.005, "the drag moved it: {center:?}");
+    assert_eq!((rx, ry), (0.18, 0.1), "the notch didn't resize it");
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit, "nor zoom");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).masks, before.masks, "the drag is still one undo step");
+}
+
+#[test]
+fn a_taken_wheel_notch_doesnt_pan_a_zoomed_in_photo_afterwards() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.4, "ry": 0.4}));
+    exec(&mut h, "view.navigate", json!({"zoom": {"percent": 200.0}, "pan": [0.5, 0.5]}));
+    for _ in 0..4 {
+        h.step();
+    }
+    let (zoom, pan) = (h.app.ui.zoom, h.app.ui.pan);
+    assert_ne!(zoom, crate::state::Zoom::Fit);
+    let image = h.app.image_rect.unwrap();
+    let canvas = h.app.canvas_rect.unwrap();
+    // the canvas centre, as a fraction of the (larger) image: on the gradient
+    let (x, y) = (f64::from((canvas.center().x - image.left()) / image.width()), f64::from((canvas.center().y - image.top()) / image.height()));
+    wheel_notch_at(&mut h, x, y);
+    for _ in 0..20 {
+        h.step();
+    }
+    assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "neither zoomed nor panned by the notch's smoothed tail");
+}
