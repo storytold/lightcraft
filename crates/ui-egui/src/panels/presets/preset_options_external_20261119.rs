@@ -145,9 +145,20 @@ impl Frames {
     }
 
     fn focus(&mut self, id: &str) {
-        let hit = self.hit(id);
-        self.ctx.memory_mut(|m| m.request_focus(hit.id));
-        self.frame(vec![], Pass::Real);
+        // Natural keyboard travel into the real menu group: Tab enters it and the arrows move between its rows.
+        // No focus request: the SDK's own focus record must name the row, or its key activation is not the row's.
+        let wanted = self.hit(id).id;
+        let mut path = Vec::new();
+        for _ in 0..16 {
+            let focused = craft::ui::runtime::focus::focused_rec(&self.ctx).map(|rec| rec.stop.id);
+            if focused == Some(wanted) {
+                return;
+            }
+            path.push(focused);
+            let in_menu = self.hits.iter().any(|(name, hit)| name.starts_with("presetMenu:") && Some(hit.id) == focused);
+            self.key(if in_menu { Key::ArrowDown } else { Key::Tab });
+        }
+        panic!("natural Tab/arrow travel never reached {id}: {path:?}");
     }
 
     fn snapshot(&self) -> serde_json::Value {
