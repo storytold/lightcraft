@@ -49,15 +49,15 @@ only come from the gate named here.
 | Variant | Status | Gate | Exact rejection |
 |---|---|---|---|
 | Version `0x100`, four Bayer planes, encoding 0, wavelet levels 0 (lossless) or 3 (C-RAW, horizontal tiles) | Supported | `supports()` in `vendor/crx.rs` | none |
-| Version `0x200`: single-tile 14-bit three-level C-RAW with adaptive quantization, QP map of any height (an odd height leaves the last QP row without a partner and it is used on its own), QP values 131–175 (169–175: EOS R6 Mark II) | Supported | `supports()`, `qp_map()` | none |
+| Version `0x100` C-RAW partial subbands (a quantization delta before every row; LibRaw `crxUpdateQparam`) and empty subbands (all zero) | Supported, synthetic tests only (no public file) | `RowQuant` | none (a row value outside 4–44 is `Canon CRX quantization value {value}`) |
+| Version `0x200`: 14-bit three-level C-RAW with adaptive quantization, QP map of any height (an odd height leaves the last QP row without a partner and it is used on its own), QP values 131–175 (169–175: EOS R6 Mark II) | Supported (single tile on real files) | `supports()`, `qp_map()` | none |
+| Version `0x200` with several tiles, and adaptive gains on the low-frequency bands (LL and bands 1–3 average four QP rows; LibRaw `crxMakeQStep`, `crxProcessSubbands`) | Supported, synthetic tests only (no public file) | `qp_cell()`, `adaptive_step()` | none |
 | Version other than `0x100`/`0x200`, or wavelet levels other than 0 and 3 | Rejected | `supports()` | `Canon CRX version {version:#x}, encoding {encoding}, {planes} planes, {levels} wavelet levels` |
 | Bit depth outside 8–16 (the `CMP1` parser only accepts 1–16, so 1–7 is what can arrive) | Rejected | `supports()` | `Canon CRX {bits}-bit samples` |
-| C-RAW with vertical tiles (tile height below the image height, three levels) | Rejected | `supports()` | `Canon CRX C-RAW with vertical tiles` |
-| Version `0x200` that is not a single-tile 14-bit C-RAW | Rejected | `supports()` | `Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image` |
+| Version `0x200` that is not a 14-bit C-RAW | Rejected | `supports()` | `Canon CRX version 0x200 requires a 14-bit Bayer C-RAW image` |
 | Extended `CMP1` header with a median bit depth (used by type-3 burst coding) | Rejected | `supports()` | `Canon CRX extended median-bit-depth header` |
 | Rounded-plane coding or unexpected plane flags | Rejected | `validate_planes()` | `Canon CRX plane coding flags` |
-| Partial-subband coding | Rejected | `validate_planes()` | `Canon CRX partial subband coding` |
-| Adaptive quantization gain on a low-frequency band (bands 0–3) | Rejected | `validate_planes()` | `Canon CRX adaptive quantization subband parameters` |
+| Partial flag on a version `0x200` subband | Rejected | `validate_planes()` | `Canon CRX partial subband with adaptive quantization` |
 | Uniform quantization value outside 4–44 | Rejected | `quant_step()`, called from `validate_planes()` | `Canon CRX quantization value {value}` |
 | Adaptive QP value outside 131–175 | Rejected | `qp_map()` | `Canon CRX adaptive QP value {value}` |
 | `ff11`/`ff12`/`ff13` markers in a `0x100` stream | Rejected | `layout()` | `Canon CRX ff11/ff12/ff13 marker family` |
@@ -71,9 +71,10 @@ through a CR3 container the adapter rejects the first two before the CRX layer i
 parser rejects the third for four-plane tracks. A descriptor the parser cannot accept at all (a zero
 dimension, a tile larger than the image, a bit depth outside 1–16, a plane count outside 1–4 or a zero
 header size) is reported as `Corrupt` (`CR3 raw track has an invalid CMP1 descriptor`), not as unsupported.
-A gain on a low-frequency band cannot reach `adaptive_step()`, which has its own rejection
-(`Canon CRX adaptive low-frequency quantization`): `validate_planes()` refuses it first. That gate is defence
-in depth and is not tested separately.
+The partial flag on a lossless plane's subband is ignored, as LibRaw ignores it. LibRaw's row lookup for
+vertically tiled version `0x200` data (`getSubbandRow`) subtracts the bottom add-on count where its column
+lookup subtracts the left one, which would read before the table; `qp_cell()` uses the column rule for rows.
+No public file has vertical `0x200` tiles to settle it.
 
 ## Verified sensor decoding
 
