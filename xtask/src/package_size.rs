@@ -14,8 +14,12 @@ pub const GROWTH_LIMIT_PERCENT: u64 = 10;
 const DEFAULT_BUDGET: &str = "packaging/size-budget.toml";
 
 /// `<binary>-<version>-<rest>` → `<rest>`; `<binary>-web-<version>.zip` → `web.zip`. None for a
-/// name with no `N.N.N` version in it.
+/// name with no `N.N.N` version in it, and for a side file published next to a download (the
+/// AppImage's `.zsync` delta-update index), which is not a download of its own.
 pub fn budget_key(file_name: &str) -> Option<String> {
+    if file_name.ends_with(".zsync") {
+        return None;
+    }
     let parts: Vec<&str> = file_name.split('-').collect();
     let at = parts.iter().position(|part| strip_version(part).is_some())?;
     // the version may carry the extension (`26.48.0.zip`): keep what follows its three numbers
@@ -132,7 +136,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     for file in &files {
         let name = file.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: no file name", file.display()))?;
         let Some(key) = budget_key(name) else {
-            println!("{name}: skipped (no version in the name)");
+            println!("{name}: skipped (not a versioned download)");
             continue;
         };
         let size = std::fs::metadata(file).map_err(|e| format!("{}: {e}", file.display()))?.len();
@@ -177,6 +181,7 @@ mod tests {
         assert_eq!(budget_key("app-26.48.0-beta-macos-arm64.dmg").as_deref(), Some("macos-arm64.dmg"));
         assert_eq!(budget_key("app-web-26.48.0-rc.2.zip").as_deref(), Some("web.zip"));
         assert_eq!(budget_key("app-26.48.0-linux-x86_64.rpm").as_deref(), Some("linux-x86_64.rpm"));
+        assert_eq!(budget_key("app-26.48.0-linux-x86_64.AppImage.zsync"), None, "the Linux job's side file is skipped, not failed");
         assert_eq!(budget_key("SHA256SUMS.txt"), None);
         assert_eq!(budget_key("latest.json"), None);
         // hostile names never panic

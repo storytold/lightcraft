@@ -102,7 +102,7 @@ if (-not $SkipBuild) {
   Invoke-Native "cargo build ($Target, $CargoProfile)" { cargo build --profile $CargoProfile --locked -p lcc-app -p lcc-cli-launcher --features lcc-app/heif --target $Target }
 }
 
-$Bin = Join-Path $TargetDir "$Target\release"
+$Bin = Join-Path $TargetDir "$Target\$CargoProfile"
 
 # Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
 # x64 build can never ship labelled arm64. Subsystem (optional header): 2 = Windows GUI, 3 = console.
