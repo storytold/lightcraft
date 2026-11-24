@@ -1785,6 +1785,49 @@ fn hdr_render_time() {
     eprintln!("HDR render {w}x{h}: CPU {cpu:.0} ms, GPU {gpu:.0} ms");
 }
 
+/// GPU render time with Even Out spots, against the same render without them (plan 4.6, `docs/perf.md`):
+/// `cargo test -p lcc-gpu --test it even_out_render_time -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing, run by hand"]
+fn even_out_render_time() {
+    use lcc_develop::SpotMode;
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 1920, 1280);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(1920, 1920);
+    let spot = |at: (f64, f64), size| Spot {
+        mode: SpotMode::Flat,
+        points: vec![Point::new(at.0, at.1)],
+        size,
+        feather: 50.0,
+        opacity: 100.0,
+        ..Default::default()
+    };
+    let cases: Vec<(&str, Vec<Spot>)> = vec![
+        ("no spots", vec![]),
+        ("1 Even Out spot, size 0.05", vec![spot((0.5, 0.5), 0.05)]),
+        ("1 Even Out spot, size 0.20", vec![spot((0.5, 0.5), 0.20)]),
+        ("10 Even Out spots, size 0.05", (0..10).map(|i| spot((0.08 + 0.09 * f64::from(i), 0.5), 0.05)).collect()),
+    ];
+    for (name, spots) in cases {
+        let mut s = DevelopSettings::default();
+        typical(&mut s);
+        s.spots = spots;
+        let mut t: Vec<f64> = (0..8)
+            .map(|_| {
+                let t0 = std::time::Instant::now();
+                drop(lcc_gpu::try_render(&src, &info, &s, &req, None).expect("gpu"));
+                t0.elapsed().as_secs_f64() * 1e3
+            })
+            .skip(1)
+            .collect();
+        t.sort_by(f64::total_cmp);
+        eprintln!("{name:<30} GPU render median {:.0} ms (min {:.0})", t[3], t[0]);
+    }
+}
+
 /// Raw decoding keeps negative channels (near-black sensor noise through a saturating camera matrix, a NIKON D780
 /// profile's): pushed and edited, the GPU renders them as the CPU does.
 #[test]
@@ -2064,7 +2107,7 @@ fn refine_edges_and_feather_match() {
     }
 }
 
-/// Spot removal on the device: Clone, Heal and Remove (automatic source, scored on the device),
+/// Spot removal on the device: Clone, Heal, Remove (automatic source, scored on the device) and Even Out,
 /// brushed strokes, overlapping spots (each reads what the earlier ones left), feather 0 and
 /// spots cut by the image edge.
 #[test]
@@ -2093,6 +2136,13 @@ fn spots_match() {
         ("brushed heal stroke", vec![spot(SpotMode::Heal, &[(0.2, 0.7), (0.3, 0.72), (0.4, 0.69)], 0.02, 30.0, Some((0.0, -0.15)))]),
         ("feather 0, half opacity", vec![Spot { opacity: 50.0, ..spot(SpotMode::Clone, &[(0.7, 0.3)], 0.04, 0.0, Some((-0.2, 0.0))) }]),
         ("cut by the edge", vec![spot(SpotMode::Heal, &[(0.99, 0.02)], 0.05, 50.0, Some((-0.2, 0.2)))]),
+        ("even out", vec![spot(SpotMode::Flat, &[(0.4, 0.4)], 0.05, 50.0, None)]),
+        ("even out, large", vec![spot(SpotMode::Flat, &[(0.5, 0.5)], 0.20, 30.0, None)]),
+        ("even out, brushed, cut by the edge", vec![spot(SpotMode::Flat, &[(0.9, 0.1), (0.98, 0.05)], 0.04, 60.0, None)]),
+        (
+            "even out over a heal",
+            vec![spot(SpotMode::Heal, &[(0.3, 0.6)], 0.04, 50.0, Some((0.1, 0.0))), spot(SpotMode::Flat, &[(0.32, 0.6)], 0.06, 50.0, None)],
+        ),
         (
             "overlapping, auto after manual",
             vec![

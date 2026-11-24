@@ -1493,7 +1493,7 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     out
 }
 
-/// Spot removal (`spots::apply`; Clone, Heal, Remove), spot by spot on `img` in place: each spot
+/// Spot removal (`spots::apply`; Clone, Heal, Remove, Even Out), spot by spot on `img` in place: each spot
 /// reads the image as the earlier ones left it.
 fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     use lcc_pipeline::spots;
@@ -1510,7 +1510,7 @@ fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
         let (al, sp, df, wt) = (cx.gpu.buffer(nb), cx.gpu.buffer(3 * nb), cx.gpu.buffer(3 * nb), cx.gpu.buffer(nb));
         let mut p = vec![w as u32, h as u32, l.bx as u32, l.by as u32, l.bw as u32, l.bh as u32, l.pts.len() as u32];
         p.extend([l.r, l.inner, l.opacity, offset.0, offset.1].map(f32::to_bits));
-        p.push(l.heal as u32);
+        p.extend([l.heal as u32, l.flat as u32]);
         let groups = groups2(l.bw, l.bh, [16, 16]);
         cx.run("spot_prep", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(&df), Some(&wt)], groups);
         // Heal: the tone correction is the masked difference's normalized blur
@@ -1518,8 +1518,18 @@ fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
             let sigma = (l.r * 0.6).max(1.0);
             (gaussian(cx, &df, l.bw, l.bh, 3, sigma), gaussian(cx, &wt, l.bw, l.bh, 1, sigma))
         });
-        let (bd, bm) = blurred.as_ref().map_or((&df, &wt), |(d, m)| (d, m));
-        cx.run("spot_apply", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(bd), Some(bm)], groups);
+        // Even Out: the surroundings' and weights' blur, and the target's own finer one in place of the patch
+        let flat = l.flat.then(|| {
+            let sigma = (l.r * 0.6).max(1.0);
+            let own = gaussian(cx, &sp, l.bw, l.bh, 3, (l.r * 0.15).max(1.0));
+            (gaussian(cx, &df, l.bw, l.bh, 3, sigma), gaussian(cx, &wt, l.bw, l.bh, 1, sigma), own)
+        });
+        let (bd, bm, sp) = match (&blurred, &flat) {
+            (_, Some((d, m, o))) => (d, m, o),
+            (Some((d, m)), None) => (d, m, &sp),
+            (None, None) => (&df, &wt, &sp),
+        };
+        cx.run("spot_apply", &p, &[Some(&img), Some(&pts), Some(&al), Some(sp), Some(bd), Some(bm)], groups);
     }
     img
 }

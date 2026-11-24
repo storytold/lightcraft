@@ -3,7 +3,7 @@
 // over the spot's box: alpha, source patch, masked difference, weights).
 //
 // Parameters of spot_prep / spot_apply: W, H, BX, BY, BW, BH, NPTS, R, INNER, OPACITY, OFFX, OFFY,
-// HEAL. `pts`: the stroke's points (x, y; output pixels).
+// HEAL, FLAT (Even Out: `spots::flat_gain`). `pts`: the stroke's points (x, y; output pixels).
 
 // `f32::MAX` exactly ("doesn't fit", as the CPU's score; a decimal literal may round below it,
 // and naga can't evaluate bitcast in a const).
@@ -75,7 +75,14 @@ fn spot_prep(@builtin(global_invocation_id) gid: vec3<u32>) {
     let gi = gy * pu(0u) + gx;
     let t = vec3<f32>(img[3u * gi], img[3u * gi + 1u], img[3u * gi + 2u]);
     let outside = select(0.0, 1.0, alpha < 0.02);
-    let m = (t - s) * outside;
+    var m = (t - s) * outside;
+    if (pu(13u) != 0u) {
+        // Even Out: the target itself (its own smooth tone, once blurred) and the target outside the stroke
+        sp[3u * i] = t.x;
+        sp[3u * i + 1u] = t.y;
+        sp[3u * i + 2u] = t.z;
+        m = t * outside;
+    }
     df[3u * i] = m.x;
     df[3u * i + 1u] = m.y;
     df[3u * i + 2u] = m.z;
@@ -102,6 +109,21 @@ fn spot_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let gi = (pu(3u) + gid.y) * pu(0u) + pu(2u) + gid.x;
     let t = vec3<f32>(img[3u * gi], img[3u * gi + 1u], img[3u * gi + 2u]);
+    if (pu(13u) != 0u) {
+        // Even Out (`spots::flat_gain`): sp is the target's own smooth tone, df / wt the blurred
+        // surroundings and their weight; the gain lifts the one to the other
+        let m = max(wt[i], 1e-4);
+        var g = vec3<f32>(1.0);
+        for (var c = 0u; c < 3u; c++) {
+            let want = df[3u * i + c] / m;
+            let has = sp[3u * i + c];
+            // (`is_finite`: want is NaN or inf only when the image held one)
+            if (has > 1e-5 && abs(want) <= f32_max()) {
+                g[c] = clamp(want / has, 0.5, 3.0);
+            }
+        }
+        v = t * g;
+    }
     let o = max(t + (v - t) * a, vec3<f32>(0.0));
     img[3u * gi] = o.x;
     img[3u * gi + 1u] = o.y;
