@@ -26,7 +26,7 @@ JSON line for each command says why it failed. If the app does crash, please rep
   `<PREFIX>_GPU_BACKEND=vulkan|metal|dx12|gl` (`off` also disables the GPU). Settings has a GPU rendering switch too.
 - The window stopped drawing and the app ended with "its window stopped drawing: the graphics driver lost the …
   renderer's GPU device": the library and settings were saved first. From the next start the window uses the next
-  renderer (Windows: Vulkan → DX12 → GL → OpenGL) and keeps trying the lost one last; `<PREFIX>_GPU_BACKEND=dx12`
+  renderer (Windows: Vulkan → DX12 → GL → OpenGL; Windows on ARM: DX12 → Vulkan → GL → OpenGL) and keeps trying the lost one last; `<PREFIX>_GPU_BACKEND=dx12`
   (or `vulkan`, `gl`, `glow`) still forces one. Deleting `window-lost` in the settings folder forgets the loss.
 - `<PREFIX>_PROFILE=1` prints per-stage pipeline timings to standard error.
 - A spinning cursor when the window comes back to the front: start with `<PREFIX>_PROFILE=1` from a terminal; each

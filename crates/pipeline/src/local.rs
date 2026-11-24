@@ -512,8 +512,10 @@ fn nr_radius(sigma: f32) -> (f32, f32) {
 /// multiplies by `scale²`. A radius below [`NR_MIN_SIGMA`] fades instead ([`nr_radius`]): previews look like
 /// the full-size render scaled down (issue #960). At `scale` 1 these are the full-size parameters.
 pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrColor>) {
-    let lum = (s.detail.nr_luminance / 100.0) as f32;
-    let col = (s.detail.nr_color / 100.0) as f32;
+    // a slider that is not a number, or overflows, is off (hostile settings never reach the filters)
+    let unit = |v: f64| Some((v / 100.0) as f32).filter(|v| v.is_finite()).unwrap_or(0.0);
+    let lum = unit(s.detail.nr_luminance);
+    let col = unit(s.detail.nr_color);
     let scale = if scale.is_finite() { scale.clamp(0.0, 1.0) } else { 1.0 };
     let l = (lum > 0.0).then(|| nr_radius((1.0 + 2.5 * lum) * scale)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
         let detail = (s.detail.nr_detail / 100.0) as f32;
@@ -545,6 +547,41 @@ pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
 /// joint colour NR ([`crate::colour_noise`]); `None` measures it on `img`.
 pub fn denoise_with(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, draft: bool, colour_noise: Option<&crate::nrc_joint::JointNoise>) {
     let (lum, col) = nr_params(s, scale);
+    denoise_parts(img, s, scale, lum, col, draft, colour_noise);
+}
+
+/// The colour half of [`denoise_with`] alone (a draft's first NR step, [`denoise_lum_draft`]).
+pub fn denoise_colour_only(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, colour_noise: Option<&crate::nrc_joint::JointNoise>) {
+    let (_, col) = nr_params(s, scale);
+    denoise_parts(img, s, scale, None, col, true, colour_noise);
+}
+
+/// Draft noise reduction during a slider drag (task 4.5): colour NR first, once
+/// ([`denoise_colour_only`], cached by the pipeline under `Plan::draft_col_key`), then luminance NR
+/// on top ([`denoise_lum_draft`]).
+/// Luminance NR only scales each pixel's rgb (its chromaticity stays), so the swapped order is a
+/// close stand-in, and a Luminance / Detail drag reruns only the cheap luminance part. A
+/// full-quality render never takes it (its keys are marked): previews == exports.
+///
+/// The luminance step is the full-quality luminance NR itself (at draft sizes its radius is at the
+/// smallest, so a subsampled filter saves nothing and drifts from the release look); the saving is
+/// the colour NR (the joint filter of V8 most of all) not rerunning per tick.
+pub fn denoise_lum_draft(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
+    let (lum, _) = nr_params(s, scale);
+    if let Some(nr) = lum {
+        apply_lum(img, nr, |l| guided(l, nr.sigma, nr.eps));
+    }
+}
+
+fn denoise_parts(
+    img: &mut Rgb32f,
+    s: &DevelopSettings,
+    scale: f32,
+    lum: Option<NrLum>,
+    col: Option<NrColor>,
+    draft: bool,
+    colour_noise: Option<&crate::nrc_joint::JointNoise>,
+) {
     if col.is_some() && joint_colour_nr(s) {
         apply_nr(img, lum, None, draft);
         if let Some(p) = nrc_params(s, scale) {
@@ -655,11 +692,26 @@ pub fn fit_nonneg_line(pts: &[(f64, f64, f64)]) -> (f64, f64) {
 
 /// Noise reduction with explicit parameters (see [`denoise`]; `draft` as there).
 pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>, draft: bool) {
-    let w = img.width;
     if let Some(nr) = lum {
+        apply_lum(img, nr, |l| guided(l, nr.sigma, nr.eps));
+    }
+    if let Some(nr) = col {
+        let _t = crate::profiling().then(std::time::Instant::now);
+        // the half-resolution blur is a (slightly) different look: drafts only, never a final render
+        colour_nr(img, nr, draft && nr.sigma >= HALF_RES_NR_SIGMA);
+        if let Some(t) = _t {
+            eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+    }
+}
+
+/// Luminance NR with the log-luminance filter `filter`, blended by `nr.k`.
+fn apply_lum(img: &mut Rgb32f, nr: NrLum, filter: impl FnOnce(&Plane) -> Plane) {
+    let w = img.width;
+    {
         let _t = crate::profiling().then(std::time::Instant::now);
         let l = img.map(log_lum);
-        let f = guided(&l, nr.sigma, nr.eps);
+        let f = filter(&l);
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
@@ -670,14 +722,6 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>, draf
         });
         if let Some(t) = _t {
             eprintln!("    nr luminance: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
-        }
-    }
-    if let Some(nr) = col {
-        let _t = crate::profiling().then(std::time::Instant::now);
-        // the half-resolution blur is a (slightly) different look: drafts only, never a final render
-        colour_nr(img, nr, draft && nr.sigma >= HALF_RES_NR_SIGMA);
-        if let Some(t) = _t {
-            eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
         }
     }
 }
