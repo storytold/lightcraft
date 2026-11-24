@@ -11,6 +11,7 @@
 "linux-x86_64.rpm" = 99115468
 "linux-x86_64.tar.gz" = 98859932
 "macos-arm64.dmg" = 91832039
+"macos-universal.dmg" = 156863578
 "macos-x64.dmg" = 97719205
 "web.zip" = 112072220
 "windows-arm64-portable.zip" = 95060800

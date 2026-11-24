@@ -229,9 +229,11 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: packaging/macos/import-cert.sh
-      # Two disk images, one per architecture: Apple silicon (arm64) and Intel (x64), each built with
-      # the dist profile, signed, notarized and stapled. No universal image any more (#1269): the
-      # updater since 26.48.0 takes the image for the Mac it runs on.
+      # Three disk images from one dist-profile build of each architecture: Apple silicon (arm64),
+      # Intel (x64), and the universal one. The universal image is kept through 26.48.x only, so
+      # installs of 26.47.x and earlier (whose updater takes only it) can update to 26.48; remove it
+      # (the `--arch universal` line and its size-budget entry) with 26.49.0 (#1269). Each is signed,
+      # notarized and stapled.
       - name: Build, sign, notarize
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -240,8 +242,9 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          packaging/macos/package.sh --arch arm64
-          packaging/macos/package.sh --arch x64
+          packaging/macos/package.sh --arch universal
+          packaging/macos/package.sh --arch arm64 --skip-build
+          packaging/macos/package.sh --arch x64 --skip-build
       # Fails when a download grew more than 10 % over packaging/size-budget.toml (docs/release-process.md).
       - name: Package size
         shell: bash

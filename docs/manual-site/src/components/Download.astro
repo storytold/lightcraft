@@ -19,6 +19,7 @@ const items = [
   { id: 'win-arm64-zip', label: 'Windows on ARM', detail: 'portable zip, nothing to install', re: '-windows-arm64-portable\.zip$' },
   { id: 'mac-arm', label: 'Mac with Apple chip (M1 or newer)', detail: 'disk image', re: '-macos-arm64\\.dmg$' },
   { id: 'mac-intel', label: 'Mac with Intel chip', detail: 'disk image', re: '-macos-x64\\.dmg$' },
+  { id: 'mac-any', label: 'Mac, not sure which chip', detail: 'runs on both, bigger download', re: '-macos-universal\\.dmg$' },
   { id: 'linux-appimage', label: 'Linux', detail: 'AppImage (works on most distros)', re: '-linux-x86_64\\.AppImage$' },
   { id: 'linux-deb', label: 'Linux: Ubuntu, Debian, Mint', detail: '.deb package', re: '-linux-x86_64\\.deb$' },
   { id: 'linux-rpm', label: 'Linux: Fedora, openSUSE', detail: '.rpm package', re: '-linux-x86_64\\.rpm$' },
