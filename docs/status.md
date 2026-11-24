@@ -1,6 +1,6 @@
 # Status
 
-> **Last updated:** 2026-11-24 · **Change:** minor (Metrics: CPU-only stages, plan 4.6)
+> **Last updated:** 2026-11-24 · **Change:** minor (Metrics: draft NR drag, task 4.5); minor (Metrics: CPU-only stages, plan 4.6)
 
 The one tracked place for where Chromaforge stands right now. Agents read it first (see `AGENTS.md`, *Session start*)
 and update it in the commit that changes what it says. The detailed phased plan lives in the gitignored
@@ -50,6 +50,7 @@ Same-machine before/after pairs only (`AGENTS.md`, *Testing & performance*). Bud
 
 | Date | What | Machine | Before | After |
 |---|---|---|---|---|
+| 2026-11-24 | 4.5: draft Luminance NR drag, CPU (`ONLY=drag N=9 render_bench`, release, `<PREFIX>_GPU=0`, a7m3 24 MP, draft 1152×768); paired runs of both binaries alternated, median of 4 | Windows 11, shared with other build agents (loaded; no process CPU time on Windows) | 63.8 ms wall (60.5–66.4); single thread 280 ms (268–506) | **33.4 ms** (31.9–34.6); single thread 200 ms (168–259). Still over the 16 ms budget on this loaded machine |
 | 2026-11-24 | CPU-only stages at 1920×1280 (4.6, `cpu_only_stage_cost`, release): device proof / Even Out | Windows, 16 cores, heavily loaded | plain CPU render 74 ms | device proof +6–12 ms; Even Out spot 34 ms (size 0.05), 223 ms (size 0.20); see perf.md |
 
 Earlier numbers lived in the untracked `plan/STATUS.md` (scale figures are in [gaps.md](gaps.md), gap 26). Add a row per measurement; keep the method (command, build profile) in the commit message.
