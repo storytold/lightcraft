@@ -317,7 +317,24 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
     app.toast_for(ctx, message, 6.0);
     // Settings ▸ Missing photos: the originals the import couldn't find are looked for on the other drives
     if let Some(paths) = missing_after_import.filter(|_| app.ui.settings.missing_other_drives_auto) {
-        let _ = crate::menus::run_ui_command(app, "file.findMissingOnOtherDrives", &json!({"paths": paths}));
+        search_other_drives(app, paths);
+    }
+}
+
+/// Settings ▸ Missing photos: look for `paths` (originals an import couldn't find) on the other drives, now or, while
+/// a search for missing photos is running (it took its photos before this import), as soon as it ends. Each frame
+/// calls it with none to start what waits.
+pub(crate) fn search_other_drives(app: &mut LightcraftApp, paths: Vec<Value>) {
+    app.other_drives_waiting.extend(paths);
+    if app.other_drives_waiting.is_empty()
+        || app.tasks.is_running("Find Missing Photos on Other Drives")
+        || app.tasks.is_running("Find Missing Photos")
+    {
+        return;
+    }
+    let paths = std::mem::take(&mut app.other_drives_waiting);
+    if let Some(Err(e)) = crate::menus::run_ui_command(app, "file.findMissingOnOtherDrives", &json!({"paths": paths})) {
+        log::warn!("the search on other drives after a Lightroom import didn't start: {e}");
     }
 }
 
@@ -453,6 +470,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value, ctx: &egui::Context
 
 /// Poll owner-thread work, commit a prepared import, and finish its archive index.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    search_other_drives(app, Vec::new());
     show_result(app);
     let Some(mut task) = app.lightroom.take() else { return };
     let message = match task.rx.try_recv() {

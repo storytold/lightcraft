@@ -420,6 +420,31 @@ fn open_log_folder_reveals_the_hosts_log_file() {
     assert_eq!(run_item(&mut app, "app.openLogFolder", Value::Null).unwrap_err(), "no file manager");
 }
 
+/// The search after a Lightroom import waits while another search for missing photos runs (that one took its photos
+/// before the import), and starts when it ends.
+#[test]
+fn the_search_after_an_import_waits_for_a_running_search() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-drives-wait-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
+    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    std::fs::write(dir.join("gone.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Default::default());
+    app.session.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    std::fs::remove_file(dir.join("gone.png")).unwrap();
+    let gone = dir.join("gone.png").to_string_lossy().into_owned();
+    assert_eq!(run_item(&mut app, "file.findMissingOnOtherDrives", json!({"hash": false})).unwrap(), json!({"background": true}));
+    crate::lightroom_import::search_other_drives(&mut app, vec![json!(gone)]);
+    assert_eq!(app.other_drives_waiting, vec![json!(gone)], "waits behind the running search");
+    let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+    let t = std::time::Duration::from_secs(20);
+    assert!(h.step_until(t, |h| h.app.other_drives_waiting.is_empty()), "the waiting search never started");
+    assert!(h.step_until(t, |h| !h.app.tasks.is_running("Find Missing Photos on Other Drives")), "it never ended");
+    assert_eq!(h.app.ui.last_find_missing_result.as_ref().and_then(|r| r.as_ref().ok()).map(|r| r["missing"].clone()), Some(json!(1)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// File ▸ Find Missing Photos on Other Drives searches on a worker and answers with the relink report; a photo
 /// whose file is nowhere stays missing.
 #[test]
