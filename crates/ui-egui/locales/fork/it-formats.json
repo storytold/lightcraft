@@ -35,6 +35,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Le modifiche da {device} sono datate {minutes} minuti nel futuro, quindi vengono trattenute fino ad allora. Regola l'orologio di {device}.",
   "Chart · greys about {cct:.0} K": "Target · grigi a circa {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Controllati {checked} di {total} file DNG: {intact} integri, {damaged} danneggiati, {unverifiable} non verificabili",
+  "Closest: {name}, {percent:.0}%": "Più simile: {name}, {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "Raccolta importata: {n} foto trovate, {m} non in questo catalogo",
   "Confirm all {}": "Conferma tutti ({})",
   "Confirm all {} suggestions": "Conferma tutti i {} suggerimenti",
@@ -105,7 +106,6 @@
   "Imported {n} metadata preset{}": "Predefiniti metadati importati: {n}{:.0}",
   "Importing {n} photos…": "Importazione di {n} foto…",
   "Installed {name} {version}": "{name} {version} installato",
-  "Installing it will {action}.": "L'installazione: {action}.",
   "Invite {name}": "Invita {name}",
   "It is {}: name this face": "È {}: dai un nome a questo volto",
   "It isn't available for {platform}.": "Non è disponibile per {platform}.",
@@ -115,7 +115,9 @@
   "JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)": "Qualità JPEG {q} per rientrare nel limite di dimensione (una dimensione minore o un limite maggiore mantiene più qualità)",
   "Key from the environment variable {}": "Chiave dalla variabile d'ambiente {}",
   "Key saved ({})": "Chiave salvata ({})",
-  "Last checked {when}": "Ultimo controllo {when}",
+  "Last checked {n} hours ago": "Ultimo controllo: {n} ore fa",
+  "Last checked {n} minutes ago": "Ultimo controllo: {n} minuti fa",
+  "Last checked {n} seconds ago": "Ultimo controllo: {n} secondi fa",
   "Last synced on {date}": "Ultima sincronizzazione il {date}",
   "Last synced {n} h ago": "Ultima sincronizzazione {n} h fa",
   "Last synced {n} min ago": "Ultima sincronizzazione {n} min fa",
@@ -187,6 +189,7 @@
   "Step {n} of {total}": "Passo {n} di {total}",
   "Stop waiting: {task}?": "Smettere di attendere: {task}?",
   "Style {n}": "Stile {n}",
+  "Suggested as {name}: {percent:.0}%": "Suggerito come {name}: {percent:.0}%",
   "Suggested as {}": "Suggerito come {}",
   "Suggested as {}. Confirm the faces that are them.": "Suggerito come {}. Conferma i volti che sono quella persona.",
   "Sync this catalog with {name}:": "Sincronizza questo catalogo con {name}:",
@@ -317,5 +320,6 @@
   "“{name}” added to Camera Profiles": "«{name}» aggiunto ai profili fotocamera",
   "“{name}” has its old settings again": "«{name}» ha di nuovo le impostazioni precedenti",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}» è nuova. Cosa possono averne gli altri dispositivi che sincronizzano questo catalogo?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» prende le impostazioni della foto attiva. Nome, gruppo, posizione e contrassegni restano."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» prende le impostazioni della foto attiva. Nome, gruppo, posizione e contrassegni restano.",
+  "★{n} at or above": "★{n} e oltre"
 }

@@ -3177,7 +3177,8 @@ pub(crate) fn hdr_window(app: &mut LccApp, c: &WindowCtx, v: &WindowView, full: 
 
 /// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
 /// Visualize Spots, Visualize HDR, and the clipping overlay: J's per-pixel red/blue tint, or the
-/// black/white clipping mask while ⌥/Alt-dragging a global tone slider).
+/// black/white clipping mask while ⌥/Alt-dragging a global tone slider; likewise the black/white
+/// sharpening views while ⌥/Alt-dragging a Sharpening slider).
 /// Whether a mask has settings: an effect on the photo to judge. A mask without any shows its
 /// overlay by itself, so what it selects can be seen (upstream PR 2920's overlay rule).
 pub(crate) fn mask_has_settings(m: &lcc_develop::Mask) -> bool {
@@ -3210,7 +3211,7 @@ fn shapes_graphics(id: &str) -> bool {
 }
 
 pub(crate) fn view_overlay(app: &LccApp, d: &DevelopSettings, alt_held: bool) -> lcc_pipeline::Overlay {
-    use lcc_pipeline::{MaskView, Overlay};
+    use lcc_pipeline::{MaskView, Overlay, SharpenView};
     if app.ui.fullscreen {
         return Overlay::None;
     }
@@ -3291,6 +3292,11 @@ pub(crate) fn view_overlay(app: &LccApp, d: &DevelopSettings, alt_held: bool) ->
             match app.ui.dragging_control.as_deref() {
                 Some("light.exposure" | "light.highlights" | "light.whites") => return Overlay::Clipping(Some(false)),
                 Some("light.shadows" | "light.blacks") => return Overlay::Clipping(Some(true)),
+                // Sharpening's sliders: each its own black-and-white view of the band it sharpens
+                Some("detail.sharpenAmount") => return Overlay::Sharpen(SharpenView::Amount),
+                Some("detail.sharpenRadius") => return Overlay::Sharpen(SharpenView::Radius),
+                Some("detail.sharpenDetail") => return Overlay::Sharpen(SharpenView::Detail),
+                Some("detail.sharpenMasking") => return Overlay::Sharpen(SharpenView::Masking),
                 _ => {}
             }
         }

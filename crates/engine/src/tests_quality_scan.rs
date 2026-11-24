@@ -1,6 +1,7 @@
-//! The Image Quality Scanner (issue #1313): `photo.qualityScan` measures a real decoded source
-//! per photo, stores the score on the photo (catalog format 20) and maps it to a Pick / Reject
-//! flag by two cutoffs; `photo.qualityScanPump` writes a background run's scores as one undo step.
+//! The Image Quality Scanner (issues #1313 and #1362): `photo.qualityScan` measures a real decoded
+//! source per photo, stores the score on the photo (catalog format 21) and maps it to a Pick /
+//! Reject flag by two cutoffs — and to a star rating by configurable breakpoints;
+//! `photo.qualityScanPump` writes a background run's scores as one undo step.
 
 use serde_json::{Value, json};
 
@@ -273,4 +274,118 @@ fn verdicts_read_the_cutoffs_inclusively() {
             assert_eq!(verdict, want, "{row}");
         }
     }
+}
+
+/// Star ratings (issue #1362): with `autoRate` the scan writes the rating its score asks for, only
+/// onto photos the user never rated (or whose rating the scan itself wrote); a re-scan may change
+/// its own, never the user's — unless `overwriteMetadata` says otherwise.
+#[test]
+fn scan_assigns_star_ratings_and_preserves_the_users() {
+    use crate::quality_scan::{DEFAULT_STAR_BREAKS, star_of};
+
+    let mut s = Session::with_demo();
+    let vis = s.visible_cloned();
+    let ids: Vec<u64> = vis.iter().take(4).map(|i| i.0).collect();
+    // start from photos nobody has rated
+    s.execute("photo.rate", &json!({"ids": ids, "rating": 0})).unwrap();
+
+    // 1. autoRate maps the score to stars by the default breakpoints and stores them
+    let r = s.execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "autoRate": true})).unwrap();
+    assert_eq!(r["failed"].as_u64().unwrap_or(1), 0, "{r}");
+    let rows = r["photos"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 4, "{r}");
+    // (a photo whose score asks for no star keeps the 0 it had, so `rated` counts the rows above it:
+    // the demo's scores are what they are, and the count must follow them rather than an assumption)
+    let wanted: u64 = rows.iter().filter(|row| star_of(row["score"].as_f64().unwrap_or(-1.0) as f32, &DEFAULT_STAR_BREAKS) > 0).count() as u64;
+    assert_eq!(r["rated"].as_u64().unwrap_or(u64::MAX), wanted, "{r}");
+    for row in &rows {
+        let score = row["score"].as_f64().unwrap_or(-1.0) as f32;
+        let want = star_of(score, &DEFAULT_STAR_BREAKS) as u64;
+        assert_eq!(row["rating"].as_u64().unwrap_or(9), want, "the answer carries the rating it wrote: {row}");
+        let id = lcc_catalog::PhotoId(row["id"].as_u64().unwrap_or(0));
+        assert_eq!(s.catalog.photo(id).unwrap().rating as u64, want, "the photo carries it: {row}");
+    }
+    // the record the scan left on each photo: its own rating is the scan's to move (a photo the scan
+    // left at 0 stars, from 0, has nothing to claim — `rating_written` is `Some` only for what changed)
+    for id in &ids {
+        let q = s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().analysis.and_then(|a| a.quality).expect("a score is stored");
+        let stored = s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().rating;
+        assert_eq!(q.rating_written, (stored > 0).then_some(stored), "the scan claims the rating it wrote for {id}");
+    }
+
+    // 2. the scan's own ratings may move on a rescan; a rating the user set does not
+    let first = lcc_catalog::PhotoId(ids[0]);
+    s.execute("photo.rate", &json!({"ids": [ids[0]], "rating": 5})).unwrap();
+    let r = s.execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "rescan": true, "autoRate": true})).unwrap();
+    assert_eq!(s.catalog.photo(first).unwrap().rating, 5, "the user's rating survives a rescan: {r}");
+
+    // 3. "Overwrite existing" replaces the user's rating too
+    let r =
+        s.execute("photo.qualityScan", &json!({"ids": [ids[0]], "wait": true, "rescan": true, "autoRate": true, "overwriteMetadata": true})).unwrap();
+    let row = r["photos"].as_array().cloned().unwrap_or_default().pop().expect("one photo was measured");
+    assert_eq!(s.catalog.photo(first).unwrap().rating as u64, row["rating"].as_u64().unwrap_or(9), "overwriteMetadata replaced the rating: {r}");
+
+    // 4. custom breakpoints are read as given
+    s.execute("photo.rate", &json!({"ids": ids, "rating": 0})).unwrap();
+    let r = s
+        .execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "rescan": true, "autoRate": true, "starBreaks": [10, 30, 50, 70, 90]}))
+        .unwrap();
+    for row in r["photos"].as_array().cloned().unwrap_or_default() {
+        let score = row["score"].as_f64().unwrap_or(-1.0) as f32;
+        let want = star_of(score, &[10.0, 30.0, 50.0, 70.0, 90.0]) as u64;
+        let id = lcc_catalog::PhotoId(row["id"].as_u64().unwrap_or(0));
+        assert_eq!(s.catalog.photo(id).unwrap().rating as u64, want, "{row}");
+    }
+
+    // 5. autoRate off: the scan writes no rating at all
+    s.execute("photo.rate", &json!({"ids": ids, "rating": 0})).unwrap();
+    let before: Vec<u8> = ids.iter().map(|id| s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().rating).collect();
+    let r = s.execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "rescan": true})).unwrap();
+    assert_eq!(r["rated"].as_u64().unwrap_or(1), 0, "not asked to rate: {r}");
+    let after: Vec<u8> = ids.iter().map(|id| s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().rating).collect();
+    assert_eq!(before, after, "no rating is written when autoRate is off");
+
+    // 6. one undo step brings the scores and the ratings back together
+    s.execute("photo.rate", &json!({"ids": ids, "rating": 0})).unwrap();
+    let r = s.execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "rescan": true, "autoRate": true})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    for id in &ids {
+        assert_eq!(s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().rating, 0, "undo brings the rating back: {id}");
+    }
+    let changed = r["photos"].as_array().cloned().unwrap_or_default().iter().filter(|row| row["rating"].as_u64().unwrap_or(0) > 0).count() as u64;
+    assert_eq!(r["rated"].as_u64().unwrap_or(u64::MAX), changed, "{r}");
+}
+
+/// The ratings the scan writes go through the same `Op::SetRating` the Library Filter Bar reads:
+/// filtering by a scan-written star shows exactly the photos at that rating, whether the scan wrote
+/// it or the demo library did.
+#[test]
+fn scan_ratings_are_filterable() {
+    let mut s = Session::with_demo();
+    let vis = s.visible_cloned();
+    let ids: Vec<u64> = vis.iter().take(4).map(|i| i.0).collect();
+    s.execute("photo.rate", &json!({"ids": ids, "rating": 0})).unwrap();
+    // the demo library rates photos of its own, so the ratings of the photos this scan is not given
+    // are noted to check it leaves them alone
+    let others: Vec<(u64, u8)> = vis.iter().map(|i| (i.0, s.catalog.photo(*i).unwrap().rating)).filter(|(id, _)| !ids.contains(id)).collect();
+    // (breakpoints low enough that every score earns a star: the filter is what is under test here,
+    // not the demo's scores)
+    let r =
+        s.execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "rescan": true, "autoRate": true, "starBreaks": [0, 1, 2, 3, 4]})).unwrap();
+    assert_eq!(r["failed"].as_u64().unwrap_or(1), 0, "{r}");
+    let ratings: Vec<u8> = ids.iter().map(|id| s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().rating).collect();
+    let top = ratings.iter().copied().max().unwrap_or(0);
+    assert!(top > 0, "the scan rated at least one photo star: {ratings:?}");
+    // the filter bar: at least `top` stars shows exactly the photos at that rating — the demo's own
+    // rated photos answering too, since the op reads the photo and not who wrote its stars
+    for (id, rating) in &others {
+        assert_eq!(s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().rating, *rating, "the scan left {id} alone");
+    }
+    s.execute("library.filter", &json!({"rating": top, "ratingOp": "atLeast"})).unwrap();
+    let mut shown: Vec<u64> = s.visible_cloned().iter().map(|i| i.0).collect();
+    let mut want: Vec<u64> = ids.iter().zip(ratings.iter()).filter(|(_, rating)| **rating >= top).map(|(id, _)| *id).collect();
+    want.extend(others.iter().filter(|(_, rating)| *rating >= top).map(|(id, _)| *id));
+    shown.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(shown, want, "the filter's answer is the scan's rating, through the same op");
 }

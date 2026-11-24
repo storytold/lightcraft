@@ -32,6 +32,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "來自 {device} 的變更日期比現在晚 {minutes} 分鐘，因此會暫緩到那時再合併。請將 {device} 的時鐘設為正確時間。",
   "Chart · greys about {cct:.0} K": "色卡 · 灰色約 {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "已檢查 {total} 個 DNG 檔案中的 {checked} 個：{intact} 個完好，{damaged} 個已損毀，{unverifiable} 個無法驗證",
+  "Closest: {name}, {percent:.0}%": "最相似的人：{name}，{percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "已匯入收藏集：找到 {n} 張相片，{m} 張不在此目錄中",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "色彩空間：Rec. 2020 {curve}（HDR AVIF）",
   "Confirm all {}": "全部確認（{}）",
@@ -100,7 +101,6 @@
   "Importing {n} photos…": "正在匯入 {n} 張照片…",
   "In line for AI Denoise ({ahead} ahead)…": "正在排隊等待 AI 降噪（前面還有 {ahead} 張）…",
   "Installed {name} {version}": "已安裝 {name} {version}",
-  "Installing it will {action}.": "安裝時會{action}。",
   "Invite {name}": "邀請 {name}",
   "It is {}: name this face": "是 {}：命名此人臉",
   "It isn't available for {platform}.": "不適用於 {platform}。",
@@ -108,7 +108,9 @@
   "Its manifest has values this version can't use, which it leaves out: {values}": "其資訊清單包含此版本無法使用並省略的值：{values}",
   "JPEG quality {q} to fit the size limit": "為符合大小限制，JPEG 品質為 {q}",
   "JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)": "為符合大小限制，JPEG 品質為 {q}（縮小尺寸或放寬限制可保留更多品質）",
-  "Last checked {when}": "上次檢查：{when}",
+  "Last checked {n} hours ago": "上次檢查：{n} 小時前",
+  "Last checked {n} minutes ago": "上次檢查：{n} 分鐘前",
+  "Last checked {n} seconds ago": "上次檢查：{n} 秒前",
   "Last synced on {date}": "上次同步於 {date}",
   "Last synced {n} h ago": "上次同步於 {n} 小時前",
   "Last synced {n} min ago": "上次同步於 {n} 分鐘前",
@@ -180,6 +182,7 @@
   "Step {n} of {total}": "第 {n} 步，共 {total} 步",
   "Stop waiting: {task}?": "停止等待：{task}？",
   "Style {n}": "樣式 {n}",
+  "Suggested as {name}: {percent:.0}%": "建議為 {name}：{percent:.0}%",
   "Suggested as {}": "建議為 {}",
   "Suggested as {}. Confirm the faces that are them.": "建議為 {}。請確認屬於此人的面孔。",
   "Sync this catalog with {name}:": "將此目錄與 {name} 同步：",
@@ -306,5 +309,6 @@
   "“{name}” added to Camera Profiles": "已將「{name}」加入相機描述檔",
   "“{name}” has its old settings again": "「{name}」已恢復原來的設定",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "「{name}」是新的。同步此目錄的其他裝置可以取得它的哪些內容？",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」將採用目前相片的設定。名稱、群組、位置與標記保持不變。"
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」將採用目前相片的設定。名稱、群組、位置與標記保持不變。",
+  "★{n} at or above": "★{n} 及以上"
 }

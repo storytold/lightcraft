@@ -32,6 +32,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Изменения с устройства {device} датированы на {minutes} мин вперёд, поэтому они отложены до этого времени. Установите правильное время на {device}.",
   "Chart · greys about {cct:.0} K": "Мишень · серые около {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Проверено файлов DNG: {checked} из {total}. Целых: {intact}, повреждённых: {damaged}, непроверяемых: {unverifiable}",
+  "Closest: {name}, {percent:.0}%": "Ближе всего к {name}: {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "Коллекция импортирована: найдено фото: {n}, нет в каталоге: {m}",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Цветовое пространство: Rec. 2020 {curve} (HDR AVIF)",
   "Confirm all {}": "Подтвердить все ({})",
@@ -100,7 +101,6 @@
   "Importing {n} photos…": "Импорт фото ({n})…",
   "In line for AI Denoise ({ahead} ahead)…": "В очереди на ИИ-шумоподавление (впереди: {ahead})…",
   "Installed {name} {version}": "Установлено: {name} {version}",
-  "Installing it will {action}.": "При установке: {action}.",
   "Invite {name}": "Пригласить {name}",
   "It is {}: name this face": "Это {}: назвать это лицо",
   "It isn't available for {platform}.": "Недоступен для {platform}.",
@@ -108,7 +108,9 @@
   "Its manifest has values this version can't use, which it leaves out: {values}": "В его манифесте есть значения, которые эта версия не может использовать и пропускает: {values}",
   "JPEG quality {q} to fit the size limit": "Качество JPEG {q}, чтобы уложиться в ограничение размера",
   "JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)": "Качество JPEG {q}, чтобы уложиться в ограничение размера (меньший размер или большее ограничение сохраняют больше качества)",
-  "Last checked {when}": "Последняя проверка: {when}",
+  "Last checked {n} hours ago": "Последняя проверка: {n} ч назад",
+  "Last checked {n} minutes ago": "Последняя проверка: {n} мин. назад",
+  "Last checked {n} seconds ago": "Последняя проверка: {n} с назад",
   "Last synced on {date}": "Последняя синхронизация {date}",
   "Last synced {n} h ago": "Последняя синхронизация {n} ч назад",
   "Last synced {n} min ago": "Последняя синхронизация {n} мин назад",
@@ -180,6 +182,7 @@
   "Step {n} of {total}": "Шаг {n} из {total}",
   "Stop waiting: {task}?": "Прекратить ожидание: {task}?",
   "Style {n}": "Стиль {n}",
+  "Suggested as {name}: {percent:.0}%": "Предложено имя {name}: {percent:.0}%",
   "Suggested as {}": "Предложено как {}",
   "Suggested as {}. Confirm the faces that are them.": "Предложено как {}. Подтвердите лица, которые принадлежат этому человеку.",
   "Sync this catalog with {name}:": "Синхронизировать этот каталог с {name}:",
@@ -310,5 +313,6 @@
   "“{name}” added to Camera Profiles": "«{name}» добавлен в профили камеры",
   "“{name}” has its old settings again": "У «{name}» снова прежние настройки",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}»: новая. Что из неё могут получать другие устройства, синхронизирующие этот каталог?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» получает настройки активного фото. Название, группа, место и отметки сохраняются."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» получает настройки активного фото. Название, группа, место и отметки сохраняются.",
+  "★{n} at or above": "★{n} и выше"
 }
