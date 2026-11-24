@@ -283,7 +283,7 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
 /// Whether Escape went down in this pass (the framework's key stage takes the key from egui's events; it still says
 /// which keys are down).
 fn escape_pressed(ctx: &egui::Context, control: &str, salt: egui::Id) -> bool {
-    let down = craft::ui::runtime::keys::down(ctx).iter().any(|key| key.code_name() == "Escape");
+    let down = craft::ui::runtime::keys::held(ctx).iter().any(|key| key.code_name() == "Escape");
     let key = egui::Id::unique(("lc-slider-escape-down", control)).with(salt);
     let was = ctx.data_mut(|data| {
         let was = data.get_temp::<bool>(key).unwrap_or(false);
