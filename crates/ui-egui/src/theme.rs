@@ -288,7 +288,36 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 /// Install the browser's separately downloaded Chinese face alongside the embedded faces.
 pub fn install_fonts_with_chinese(ctx: &egui::Context, chinese: Option<&Arc<FontData>>) {
-    ctx.set_fonts(font_definitions_with_chinese(lightcraft_engine::CRAFT_FONTS, chinese));
+    let definitions = font_definitions_with_chinese(lightcraft_engine::CRAFT_FONTS, chinese);
+    ctx.data_mut(|d| d.insert_temp(installed_fonts_id(), Arc::new(definitions.clone())));
+    ctx.set_fonts(definitions);
+}
+
+fn installed_fonts_id() -> egui::Id {
+    egui::Id::unique("lightcraft-installed-fonts")
+}
+
+/// The framework lays its text out by what it knows of the fonts installed through it: whether a `semibold` family
+/// exists (strong text, titles and section headers draw in it, else in the regular face) and the leading face's
+/// line height (control and row heights). LightCraft installs its own definitions, which the framework never sees,
+/// so its headings drew regular and its rows short. Installing the framework's default stack first records those
+/// facts: its proportional face is the same Inter, and its `semibold` family has the same name as
+/// [`FONT_SEMIBOLD`]. LightCraft's definitions then replace the stack's faces. (A framework gap: an app with its own
+/// font definitions has no call that records them; see the port's framework-gaps.md.)
+///
+/// Once per context, before a pass (`LightcraftApp::try_install_framework`): inside a pass the framework's install asks
+/// for the pass to be run again. LightCraft's own definitions, when they are installed already, go back at once.
+pub fn tell_framework_fonts(ctx: &egui::Context) {
+    use craft::ui::fonts::{I18nScripts, UiFonts};
+    let told = egui::Id::unique("lightcraft-framework-fonts-told");
+    if ctx.data(|d| d.get_temp::<bool>(told)).is_some() {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(told, true));
+    let _ = UiFonts::new(&I18nScripts).install(ctx);
+    if let Some(definitions) = ctx.data(|d| d.get_temp::<Arc<FontDefinitions>>(installed_fonts_id())) {
+        ctx.set_fonts(FontDefinitions::clone(&definitions));
+    }
 }
 
 /// Inter remains the default UI face. Egui's default faces and craft-fonts cover other scripts;
@@ -405,6 +434,63 @@ pub const WHEEL_ZOOM_PER_POINT: f32 = 40.0 / 200.0 / WHEEL_LINE_POINTS;
 
 fn theme_id() -> egui::Id {
     egui::Id::unique("lightcraft-theme")
+}
+
+/// The framework theme for `kind`: the suite default with LightCraft's own colours pinned on the framework's
+/// surfaces, text, lines, states and accent, so framework panels, docks, dialogs and controls sit in the same
+/// colours as LightCraft's own chrome (the suite default's lighter grey panels and dialogs looked like a different
+/// app). One definition per theme for the life of the process, so the framework's token cache keeps its identity.
+pub fn framework_theme(kind: ThemeKind) -> Option<Arc<craft::theme::ThemeDef>> {
+    static THEMES: std::sync::OnceLock<Vec<Option<Arc<craft::theme::ThemeDef>>>> = std::sync::OnceLock::new();
+    let all = THEMES.get_or_init(|| ThemeKind::ALL.iter().map(|&kind| build_framework_theme(kind).map(Arc::new)).collect());
+    ThemeKind::ALL.iter().position(|&k| k == kind).and_then(|at| all.get(at)).cloned().flatten()
+}
+
+/// The dim behind a modal dialog: the window's colours at about 45%, as LightCraft's dialogs always dimmed it.
+pub const SCRIM_ALPHA: u8 = 140;
+
+fn build_framework_theme(kind: ThemeKind) -> Option<craft::theme::ThemeDef> {
+    use craft::theme::{ColorToken as C, ModeSeeds, Rgba, ThemeId, Variants};
+    let base = craft::theme::builtins().iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT)?;
+    let t = Tokens::for_kind(kind);
+    let mut theme = base.clone();
+    theme.id = ThemeId::parse(&format!("lightcraft.{}", kind.id())).ok()?;
+    theme.name = format!("LightCraft {}", kind.label());
+    theme.apps.clear();
+    theme.mode_seeds = ModeSeeds::default();
+    theme.seeds.neutral = Rgba::from(t.chrome);
+    theme.seeds.accent = Rgba::from(t.accent);
+    theme.variants = if kind.is_dark() { Variants::DarkOnly } else { Variants::LightOnly };
+    let pins = if kind.is_dark() { &mut theme.pins.dark } else { &mut theme.pins.light };
+    pins.refs.clear();
+    pins.colors.clear();
+    for (token, color) in [
+        // the dock's tab strip: a shade darker than the panels, so the shown tab reads as part of its panel
+        (C::SurfaceBackground, t.inset),
+        (C::SurfaceChrome, t.chrome),
+        (C::SurfacePanel, t.chrome),
+        (C::SurfaceCanvas, t.canvas),
+        (C::SurfaceSunken, t.field),
+        (C::SurfaceControl, t.button),
+        (C::TextNormal, t.text),
+        (C::TextMuted, t.text_label),
+        (C::TextFaint, t.text_dim),
+        (C::TextDisabled, t.text_disabled),
+        (C::LineDivider, t.divider),
+        (C::LineBorder, t.field_border),
+        (C::LineControlEdge, t.button_border),
+        (C::LineFocus, t.accent),
+        (C::StateHover, t.hover),
+        (C::StatePressed, t.pressed),
+        (C::StateSelected, t.canvas),
+        (C::AccentSolid, t.accent),
+    ] {
+        pins.colors.insert(token, Rgba::from(color));
+    }
+    // a text selection in the accent, as LightCraft's own fields select (egui's selection at 60%)
+    pins.colors.insert(C::StateTextSelection, Rgba::from(t.accent).with_alpha(153));
+    pins.colors.insert(C::SurfaceScrim, Rgba::BLACK.with_alpha(SCRIM_ALPHA));
+    Some(theme)
 }
 
 /// The theme `ctx` is styled with (none before the first [`apply_kind`]).
@@ -576,6 +662,23 @@ mod tests {
             light_theme_commands(&ctx, true, refresh)
         };
         assert_eq!(first_frame(true), first_frame(false) + 1);
+    }
+
+    /// The framework draws its panels, docks and dialogs in LightCraft's own colours in every theme (the suite
+    /// default's lighter grey looked like another app), and one definition per theme keeps the token cache's identity.
+    #[test]
+    fn the_framework_theme_carries_lightcraft_colours_in_every_theme() {
+        use craft::theme::{ColorToken, Rgba};
+        for kind in ThemeKind::ALL {
+            let theme = framework_theme(kind).expect("a framework theme");
+            let t = Tokens::for_kind(kind);
+            let pins = if kind.is_dark() { &theme.pins.dark } else { &theme.pins.light };
+            for (token, color) in [(ColorToken::SurfacePanel, t.chrome), (ColorToken::TextNormal, t.text), (ColorToken::AccentSolid, t.accent)] {
+                assert_eq!(pins.get(token), Some(Rgba::from(color)), "{kind:?}: {}", token.path());
+            }
+            assert_eq!(pins.get(ColorToken::SurfaceScrim).map(Rgba::a), Some(SCRIM_ALPHA), "{kind:?}: one dim behind every dialog");
+            assert!(Arc::ptr_eq(&theme, &framework_theme(kind).expect("a framework theme")), "{kind:?}");
+        }
     }
 
     /// Every theme scrolls 100 points a wheel notch, and a zoom notch stays egui's stock ~1.22x

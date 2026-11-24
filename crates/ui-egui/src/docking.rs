@@ -7,6 +7,7 @@ use craft::behavior::dock::{
     Permissions, SplitSize,
 };
 use craft::behavior::{Axis, CancelReason};
+use craft::host::target::WindowKind;
 use craft::ui::contract::{Bind, BodyCx, PlainData, SizeLimits, Tracked};
 use craft::ui::docking::{DockConfig, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft::ui::patterns::dock::DockArea;
@@ -509,7 +510,10 @@ struct Specs {
 impl PanelSpecs<Panel> for Specs {
     fn spec(&self, panel: &Panel) -> PanelSpec {
         let spec = PanelSpec::new(crate::i18n::tr(panel.label()).to_string()).limits(panel_limits(*panel));
-        if *panel == Panel::Canvas { spec.canvas() } else { spec }
+        // LightCraft's panels frame and pad their own content, as they did before the dock: the dock shows their
+        // bodies edge to edge, without its panel padding (only a document's group does that; LightCraft has no OS
+        // windows for the kind to change). A framework gap: no body-padding option of its own.
+        if *panel == Panel::Canvas { spec.canvas() } else { spec.window_kind(WindowKind::Document) }
     }
 
     fn permissions(&self, panel: &Panel) -> Permissions {

@@ -506,7 +506,7 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     // lit: the window buttons the OS draws over it do not dim. It is an area below the dialog's layer.
     if real {
         egui::Area::new(egui::Id::unique("dialog-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(false).show(&ctx, |ui| {
-            ui.painter().rect_filled(below_title_bar(screen, title_bar), 0.0, egui::Color32::from_black_alpha(140));
+            ui.painter().rect_filled(below_title_bar(screen, title_bar), 0.0, egui::Color32::from_black_alpha(crate::theme::SCRIM_ALPHA));
         });
     }
     // What the body leaves the confirm this pass: the footer's state follows the draft the body just wrote.
@@ -1774,12 +1774,17 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     // Only the actual edit target or creation parent identifies the caller; text, flags and selection are drafts.
     let caller = (editing.as_deref(), parent.as_deref());
 
-    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Name")).color(t.text_dim));
+    // (captions, not selectable text: a selectable label senses the pointer, and the dialog's measuring run of the body
+    // gave each one a second use of its id, which egui's debug build painted over the fields)
+    let caption = |ui: &mut egui::Ui, text: &str| {
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(text)).color(t.text_dim)).selectable(false));
+    };
+    caption(ui, "Keyword Name");
     if field(ui, caller, "field:keywordTagName", "Keyword Name", "Keyword Name", name, true) {
         *confirm = true;
     }
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(crate::i18n::tr("Synonyms")).color(t.text_dim));
+    caption(ui, "Synonyms");
     if field(ui, caller, "field:keywordSynonyms", "Synonyms", "Separated by commas", synonyms, false) {
         *confirm = true;
     }
@@ -1799,7 +1804,7 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
         );
         ui.add_space(4.0);
     }
-    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Tag Options")).color(t.text_dim));
+    caption(ui, "Keyword Tag Options");
     for (on, label, alias) in [
         (include_on_export, "Include on Export", "check:keywordIncludeOnExport"),
         (export_containing, "Export Containing Keywords", "check:keywordExportContaining"),
