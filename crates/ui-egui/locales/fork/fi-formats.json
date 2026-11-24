@@ -94,6 +94,7 @@
   "Goes into the group “{group}” that exists already.": "Menee olemassa olevaan ryhmään ”{group}”.",
   "Healed {n} blemishes": "Korjattu {n} näppylää",
   "Healed {n} mark{} from the infrared pass": "Infrapunakuvasta korjattuja jälkiä: {n}{:.0}",
+  "Hold {} and drag or scroll": "Pidä {} ja vedä tai vieritä",
   "Ignored {} face": "Ohitettu {} kasvo",
   "Ignored {} faces": "Ohitettu {} kasvoa",
   "Image Quality Scan stopped: {n} photos scanned": "Kuvanlaadun skannaus pysäytetty: skannattiin {n} kuvaa",

@@ -596,6 +596,8 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
     }
     // a video in the loupe: Space plays / pauses, ←/→ step frames while paused
     crate::video_ui::handle_keys(app, ctx);
+    // a held speed-edit key (Develop) keeps its press until it's let go without adjusting anything
+    crate::speed_edit::intercept(app, ctx);
     canvas_nudge(app, ctx);
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)

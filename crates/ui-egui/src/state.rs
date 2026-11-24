@@ -669,6 +669,8 @@ pub struct AppSettings {
     pub keymap: crate::shortcuts::Keymap,
     /// The keymap set the user's changes apply over (Classic by default).
     pub keymap_set: crate::shortcuts::KeymapSet,
+    /// Speed-edit keys: hold the key and drag or scroll on the photo to move the slider (`app.setSpeedKey`).
+    pub speed_keys: crate::speed_edit::SpeedKeys,
     /// Auto (follow the system), Dark or Light.
     pub appearance_mode: AppearanceMode,
     /// The theme of the dark appearance.
@@ -872,6 +874,7 @@ impl Default for AppSettings {
             loupe_messages: true,
             keymap: Default::default(),
             keymap_set: Default::default(),
+            speed_keys: crate::speed_edit::default_keys(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
             light_theme: LightTheme::Silver,

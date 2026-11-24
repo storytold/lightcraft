@@ -87,6 +87,7 @@
   "Goes into the group “{group}” that exists already.": "Kommt in die bereits vorhandene Gruppe „{group}“.",
   "Healed {n} blemishes": "{n} Hautunreinheiten behoben",
   "Healed {n} mark{} from the infrared pass": "Reparierte Stellen aus dem Infrarotdurchgang: {n}{:.0}",
+  "Hold {} and drag or scroll": "{} halten und ziehen oder scrollen",
   "Ignored {} face": "{} Gesicht ignoriert",
   "Ignored {} faces": "{} Gesichter ignoriert",
   "Image Quality Scan stopped: {n} photos scanned": "Bildqualitäts-Scan gestoppt: {n} Fotos gescannt",

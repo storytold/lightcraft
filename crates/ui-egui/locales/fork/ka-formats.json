@@ -110,6 +110,7 @@
   "Goes into the group “{group}” that exists already.": "მოხვდება არსებულ ჯგუფში „{group}“.",
   "Healed {n} blemishes": "აღდგენილია ლაქა: {n}",
   "Healed {n} mark{} from the infrared pass": "ინფრაწითელი გავლიდან გასწორებული კვალი: {n}{:.0}",
+  "Hold {} and drag or scroll": "დააჭირეთ {} და გადაათრიეთ ან გადაახვიეთ",
   "Ignored {} face": "იგნორირებულია {} სახე",
   "Ignored {} faces": "იგნორირებულია {} სახე",
   "Image Quality Scan stopped: {n} photos scanned": "გამოსახულების ხარისხის სკანირება შეჩერდა: დასკანირდა {n} ფოტო",

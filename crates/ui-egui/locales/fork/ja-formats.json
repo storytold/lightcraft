@@ -87,6 +87,7 @@
   "Goes into the group “{group}” that exists already.": "既存のグループ「{group}」に入ります。",
   "Healed {n} blemishes": "{n} か所のシミを修復しました",
   "Healed {n} mark{} from the infrared pass": "赤外線パスから修復した跡: {n}{:.0}",
+  "Hold {} and drag or scroll": "{} を押したままドラッグまたはスクロール",
   "Ignored {} face": "{} 件の顔を無視しました",
   "Ignored {} faces": "{} 件の顔を無視しました",
   "Image Quality Scan stopped: {n} photos scanned": "画像品質スキャンを停止しました：{n} 枚をスキャンしました",

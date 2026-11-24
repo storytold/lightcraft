@@ -473,6 +473,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.shortcuts", "Keyboard Shortcuts", Some("Cmd+/"), "Help"),
     ("app.setShortcut", "Set Keyboard Shortcut", None, ""),
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
+    ("app.setSpeedKey", "Set Speed-Edit Key", None, ""),
+    ("app.speedKeys", "Speed-Edit Keys", None, ""),
     ("app.keymapSet", "Keymap Set", None, ""),
     ("app.keymapExport", "Export Keymap…", None, "Edit>Keymap"),
     ("app.keymapImport", "Import Keymap…", None, "Edit>Keymap"),
@@ -2709,6 +2711,8 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "app.setSpeedKey" => crate::speed_edit::set_speed_key(app, p),
+        "app.speedKeys" => Ok(crate::speed_edit::list(app)),
         "app.resetShortcuts" => {
             app.ui.settings.keymap.clear();
             Ok(Value::Null)

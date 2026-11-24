@@ -454,6 +454,14 @@ pub(crate) fn navigate_gesture(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui:
     // While Space is held over a tool, `loupe:hand` sits above `loupe` and takes the hover from it;
     // wheel/scroll gestures over the canvas still belong to the view.
     if !resp.hovered() && !(app.space_hand.is_some() && resp.contains_pointer()) {
+        // a held speed-edit key's own drag surface takes the hover from the loupe
+        if app.speed_edit.is_some() && resp.contains_pointer() {
+            crate::speed_edit::wheel(app, ui);
+        }
+        return false;
+    }
+    // a held speed-edit key: the wheel moves its slider, not the view
+    if crate::speed_edit::wheel(app, ui) {
         return false;
     }
     let (mut factor, mut delta, anchor) =
@@ -1914,6 +1922,8 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     }
     // Space held over a tool: the view's hand takes the pointer from it (#1895)
     crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then_some((before_area, before_img)));
+    // a held speed-edit key: a drag on the photo moves its slider (above the loupe and the tools)
+    crate::speed_edit::interact(app, ui, canvas);
     // Compact (OneSlips 0c58de7ad): the overlay switched on to stay (O) overrides showing it only when useful, so the
     // photo says so; it steps aside while a slider or dial adjusts (the overlay does too)
     if right == RightPanel::Masking && crate::theme::compact(ui.ctx()) && app.ui.mask_overlay && !adjusting(app) && !fullscreen {
