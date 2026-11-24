@@ -419,7 +419,7 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 pub(super) fn sidebar_title(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (_, hr) = ui.allocate_space(vec2(ui.available_width(), TITLE_HEIGHT));
     let library = crate::panels::settings::open_library_name(app);
-    let mut row = SideRow::new("sidebarTitle", "folder", crate::i18n::tr("My Photos")).no_icon().strong().unregistered().detail(library.clone());
+    let mut row = SideRow::new("sidebarTitle", "folder", crate::i18n::tr("My Photos")).no_icon().strong().role(craft::ui::style::TypeRole::Title).unregistered().detail(library.clone());
     if library.is_some()
         && let Some(l) = app.session.library.as_ref()
     {

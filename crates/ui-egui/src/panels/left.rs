@@ -154,6 +154,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             pinned_header(app, ui, &placed, view_top);
             section_drag(app, ui, &placed);
             settle_width(ui.ctx(), viewport.width());
+            // a drag the lists started this frame is adopted at once
+            sections::adopt_drags(app, ui);
         });
     });
 }
