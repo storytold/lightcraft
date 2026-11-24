@@ -109,3 +109,76 @@ fn the_color_swatch_tints_the_mask() {
     assert!(crate::panels::masking::tint_swatch(200.0, 0.0).is_none(), "no strength, no tint");
     assert!(crate::panels::masking::tint_swatch(f64::NAN, 50.0).is_none());
 }
+
+fn rect_of(h: &Headless, id: &str) -> egui::Rect {
+    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("{id} shown"))
+}
+
+/// Issue #1305: Color Grading is its own section right under Color, Color's tools are distinct
+/// rows, and `mask.solo` keeps one mask section open at a time.
+#[test]
+fn mask_solo_keeps_one_section_open_and_grading_sits_under_color() {
+    let mut h = masking();
+    for s in ["flyout:maskTint", "flyout:maskMixer", "flyout:maskPointColor"] {
+        assert!(has(&mut h, s), "{s} under Color");
+    }
+    let (color, grading, effects) = (rect_of(&h, "section:mask:color"), rect_of(&h, "section:mask:grading"), rect_of(&h, "section:mask:effects"));
+    let point = rect_of(&h, "flyout:maskPointColor");
+    assert!(
+        color.top() < point.top() && point.top() < grading.top() && grading.top() < effects.top(),
+        "Color, its tools, then Color Grading, then Effects"
+    );
+
+    // Color Grading folds on its own, Color's tools stay
+    req(&mut h, "ui.clickWidget", json!({"id": "section:mask:grading"}));
+    h.settle(SETTLE);
+    assert!(!has(&mut h, "slider:grade_shadows_sat") && has(&mut h, "flyout:maskMixer"));
+
+    // Solo Mode: turning it on keeps the first open section; opening another folds the rest
+    exec(&mut h, "mask.solo", json!({"on": true}));
+    h.settle(SETTLE);
+    assert!(has(&mut h, "slider:exposure"), "Light (the first open) stays");
+    assert!(!has(&mut h, "slider:clarity") && !has(&mut h, "flyout:maskMixer"), "the others fold");
+    req(&mut h, "ui.clickWidget", json!({"id": "section:mask:effects"}));
+    h.settle(SETTLE);
+    assert!(has(&mut h, "slider:clarity") && !has(&mut h, "slider:exposure"), "Effects open, Light folded");
+    // {section} solos one even with the mode off; the mode toggles with no params
+    exec(&mut h, "mask.solo", json!({}));
+    assert!(!h.app.ui.mask_solo);
+    exec(&mut h, "mask.solo", json!({"section": "grading"}));
+    h.settle(SETTLE);
+    assert!(has(&mut h, "slider:grade_shadows_sat") && !has(&mut h, "slider:clarity"));
+    req(&mut h, "ui.clickWidget", json!({"id": "section:mask:detail"}));
+    h.settle(SETTLE);
+    assert!(has(&mut h, "slider:grade_shadows_sat"), "mode off: opening Detail keeps Grading open");
+
+    // hostile arguments are errors, never a panic or a change
+    for bad in [json!({"section": "nope"}), json!({"section": 3}), json!({"on": "yes"}), json!({"section": ""})] {
+        let r = h.request("engine.execute", json!({"command": "mask.solo", "params": bad}), T);
+        assert_eq!(r["ok"], false, "{bad} refused: {r}");
+    }
+    assert!(!h.app.ui.mask_solo);
+}
+
+/// Issue #1301: the Targeted Adjustment buttons and the mask's colour rows draw distinct icons.
+#[test]
+fn colour_tools_have_distinct_icons() {
+    use crate::icons::Icon;
+    let draw = |icon: Icon| {
+        let mut view = crate::headless::HeadlessView::new();
+        let raw = crate::headless::HeadlessView::raw_input(egui::vec2(24.0, 24.0), 1.0, 0.0, vec![]);
+        view.run(raw, |ui| {
+            ui.painter().rect_filled(ui.max_rect(), 0.0, egui::Color32::BLACK);
+            crate::icons::paint(ui.painter(), egui::Rect::from_min_size(egui::pos2(2.0, 2.0), egui::vec2(20.0, 20.0)), icon, egui::Color32::WHITE);
+        });
+        view.paint(&Default::default()).pixels.iter().map(|p| p.r() > 100).collect::<Vec<_>>()
+    };
+    let set = [Icon::Target, Icon::Bucket, Icon::Palette, Icon::Picker, Icon::GradeAll];
+    for (i, a) in set.iter().enumerate() {
+        for b in &set[i + 1..] {
+            let (pa, pb) = (draw(*a), draw(*b));
+            let differ = pa.iter().zip(&pb).filter(|(x, y)| x != y).count();
+            assert!(differ > 20, "{a:?} and {b:?} look alike ({differ} pixels differ)");
+        }
+    }
+}

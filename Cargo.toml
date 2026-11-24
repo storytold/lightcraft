@@ -113,6 +113,8 @@ redb = "4.3" # catalog storage v4 (crates/catalog/src/db.rs): pure Rust, MIT OR 
 libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lcc-cli --features dhat-heap) and heap tests; never in product builds
 trash = { version = "5.2", default-features = false, features = ["coinit_apartmentthreaded"] } # move files to system Recycle Bin / Trash (Delete from Disk)
+# OS folder change notifications (FSEvents, inotify, ReadDirectoryChangesW; gap 37), CC0-1.0
+notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
 
 # formats
 quick-xml = "0.41"

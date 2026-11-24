@@ -32,6 +32,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Los cambios de {device} tienen fecha {minutes} minutos en el futuro, así que se retienen hasta entonces. Pon en hora el reloj de {device}.",
   "Chart · greys about {cct:.0} K": "Carta · grises a unos {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Se comprobaron {checked} de {total} archivos DNG: {intact} intactos, {damaged} dañados, {unverifiable} no verificables",
+  "Closest: {name}, {percent:.0}%": "Más parecido: {name}, {percent:.0} %",
   "Collection imported: {n} photos found, {m} not in this catalog": "Colección importada: {n} fotos encontradas, {m} no están en este catálogo",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Espacio de color: Rec. 2020 {curve} (AVIF HDR)",
   "Confirm all {}": "Confirmar todas ({})",
@@ -88,6 +89,7 @@
   "Goes into the group “{group}” that exists already.": "Va al grupo «{group}», que ya existe.",
   "Healed {n} blemishes": "{n} imperfecciones corregidas",
   "Healed {n} mark{} from the infrared pass": "Marcas corregidas desde la pasada infrarroja: {n}{:.0}",
+  "Hold {} and drag or scroll": "Mantén {} y arrastra o desplaza",
   "Ignored {} face": "{} cara ignorada",
   "Ignored {} faces": "{} caras ignoradas",
   "Image Quality Scan stopped: {n} photos scanned": "Escaneo de calidad de imagen detenido: {n} fotos escaneadas",
@@ -181,6 +183,7 @@
   "Step {n} of {total}": "Paso {n} de {total}",
   "Stop waiting: {task}?": "¿Dejar de esperar: {task}?",
   "Style {n}": "Estilo {n}",
+  "Suggested as {name}: {percent:.0}%": "Sugerido como {name}: {percent:.0} %",
   "Suggested as {}": "Sugerida como {}",
   "Suggested as {}. Confirm the faces that are them.": "Sugerida como {}. Confirma las caras que son suyas.",
   "Sync this catalog with {name}:": "Sincronizar este catálogo con {name}:",
@@ -310,5 +313,6 @@
   "“{name}” added to Camera Profiles": "«{name}» añadido a Perfiles de cámara",
   "“{name}” has its old settings again": "«{name}» vuelve a tener sus ajustes anteriores",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}» es nueva. ¿Qué pueden tener de ella los demás dispositivos que sincronizan este catálogo?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» toma los ajustes de la foto activa. Su nombre, grupo, posición y marcas se mantienen."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» toma los ajustes de la foto activa. Su nombre, grupo, posición y marcas se mantienen.",
+  "★{n} at or above": "★{n} o más"
 }

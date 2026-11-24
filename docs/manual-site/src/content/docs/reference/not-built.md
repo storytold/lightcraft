@@ -22,6 +22,7 @@ sidebar:
 - **Generative remove** works through cloud providers with your own key; no on-device model. Remove people and reflections are not built.
 
 ## Library and output
+- **The Image Quality Scanner measures on the CPU only**: issue #1362 also asked for the downscale, luminance and sRGB passes on the graphics card, and that path is not built. A scan is scored on the multi-threaded processor, so a very large cull takes as long as the processor needs.
 - **The Image Quality Scanner scores technical quality only**: sharpness, noise, exposure and JPEG artifacts. The learned aesthetic engine (NIMA / MUSIQ, GPU) is not built — there is no ONNX runtime here, and the app's only learned model is CLIP — so a sharp, clean photo of a dull subject still scores high. Aesthetic judgement is Assisted Culling's Aesthetic and Suggested Stars.
 - **Lightroom catalog import** is one-way and approximate; some rules and settings do not carry over.
 - **Tethered capture** over USB is untested on real camera bodies; not on Android.
@@ -31,7 +32,7 @@ sidebar:
 
 ## Platforms and quality
 - **Android and device sync** are tested on an emulator and one machine only.
-- **Accessibility**: screen-reader audit and keyboard-only masking pins are open.
+- **Accessibility**: a screen-reader audit with blind users is open.
 - **Translations**: 17 languages; What's New is mostly English.
 - **HDR** on X11 is a platform limit; video has no sound output yet.
 - **Control surfaces**: Loupedeck Live / CT and Tangent panels are not built; MIDI is Windows and macOS only.

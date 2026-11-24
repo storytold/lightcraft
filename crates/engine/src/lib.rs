@@ -63,6 +63,8 @@ pub mod eye_prep;
 pub mod eye_store;
 pub mod eyes;
 pub mod face_download;
+#[cfg(not(target_arch = "wasm32"))]
+mod face_suggestions;
 pub mod face_tiles;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_index;
@@ -73,6 +75,8 @@ pub mod filter_plugins;
 pub mod finishing;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod folder_notify;
 pub mod folder_watch;
 pub mod fonts;
 pub mod genfill;
@@ -82,6 +86,8 @@ pub mod history_groups;
 pub mod identity;
 pub mod import;
 mod import_move;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod instance;
 pub mod legacy;
 pub mod lens_download;
 pub mod lens_profiles;
@@ -430,6 +436,9 @@ pub struct Session {
     pub(crate) appearance: identity::Appearance,
     /// The folder metadata save or read waiting for `folder.metadataPump` ([`cmd::folder_metadata`]); dropped when another library opens.
     pub(crate) folder_metadata: Option<cmd::folder_metadata::FolderMetadataJob>,
+    /// A catalog read off the interface's thread ([`library::load_catalog`]) waiting for the
+    /// next [`Session::open_library`] of its folder, which takes it instead of reading it again.
+    pub(crate) staged_catalog: Option<library::LoadedCatalog>,
     /// The order of Reload from Disk runs, so an older one finishing late is dropped ([`cmd::reload`]).
     pub(crate) reload_tickets: cmd::reload::Tickets,
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
@@ -894,6 +903,7 @@ impl Session {
             appearance: Default::default(),
             stems: Default::default(),
             folder_metadata: None,
+            staged_catalog: None,
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]

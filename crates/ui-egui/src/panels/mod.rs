@@ -20,6 +20,7 @@ pub mod edit;
 pub mod empty_library;
 pub mod face_preview;
 pub mod faces;
+pub mod film_filter;
 pub mod filterbar;
 pub mod folders;
 pub mod genfill;

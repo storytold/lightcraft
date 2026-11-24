@@ -1,19 +1,21 @@
 ---
 title: Image Quality Scanner
-description: Score photos for sharpness, noise, exposure and JPEG artifacts, and flag them by score.
+description: Score photos for sharpness, noise, exposure and JPEG artifacts, then flag, rate and filter them by score.
 sidebar:
   order: 17
 ---
 
+import Shot from '../../../components/Shot.astro';
 import { Aside } from '@astrojs/starlight/components';
-import NeedsImage from '../../../components/NeedsImage.astro';
 
-<NeedsImage what="The Image Quality Scanner window: the scope buttons (the selected photos, the folder shown, the whole catalog), the Accepted and Rejected cutoffs, the four Basic Factors weights, Write the flags onto photos you have not flagged, Scan, and the same controls with the filter bar's quality picker behind them." />
+<Shot name="quality-scanner" menu="Library ▸ Image Quality Scanner…" alt="The Image Quality Scanner window: what to scan, the Accepted and Rejected cutoffs, writing the flags, the Auto-Assign Metadata choices, the four Basic Factors weights, and Scan" />
 
 - **Library ▸ Image Quality Scanner…** measures photos for four technical factors and combines them into one 0–100 score, kept on the photo.
 - **Sorting, the filter bar, smart collections and rules** read that score without measuring anything again.
 - **Technical, not aesthetic**: a sharp, clean, well-exposed photo of a dull subject scores high. Aesthetic judgement is Assisted Culling's **Aesthetic** and **Suggested Stars**.
-- **One undo step** takes a whole scan back (its scores and the flags it wrote); stopping a running scan keeps what it measured.
+- **Auto-assign metadata**: a scan can also write the **star rating** a score asks for, and Pick / Reject flags, onto the photos — with your own ratings and flags kept unless you say otherwise.
+- **Measured on the CPU**, on several photos at once: a scan is a decode and a few passes over the plane.
+- **One undo step** takes a whole scan back (its scores, and the ratings and flags it wrote); stopping a running scan keeps what it measured.
 - Clips are skipped: a poster frame is not the clip's quality.
 
 ## What it measures
@@ -47,6 +49,30 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 - **Write the flags onto photos you have not flagged** decides whether the verdicts become flags; with it off a scan only scores, and the verdict is there to filter and sort on.
 - **Your flag wins**: a photo you flagged yourself is never re-flagged by a scan. A flag a scan wrote is the scan's own, so rescanning may change it.
 
+## Auto-Assign Metadata
+
+- **Write star ratings onto photos the scan can rate** turns on the star assignment; with it off a scan writes no ratings.
+- **The five thresholds** are the scores at which a star steps up, and each can be dragged (they can't cross: one dragged below the one before it stops at it). The defaults are:
+
+| Score | Stars |
+| --- | --- |
+| below 20 | 0★ |
+| 20 – 39 | 1★ |
+| 40 – 54 | 2★ |
+| 55 – 69 | 3★ |
+| 70 – 84 | 4★ |
+| 85 and above | 5★ |
+
+- **Overwrite existing** (off by default) decides what happens to what you set yourself. Off, a rating or flag you set stays exactly as it is; the scan only writes onto photos you have not rated or flagged — and onto the ratings and flags an earlier scan wrote, which are the scan's own, so rescanning can change them.
+- **On**, the scan replaces both: every photo in scope gets the rating and flag its score asks for, whatever you had set.
+- **Flags and ratings are independent**: *Write the flags…* writes Pick / Reject, *Write star ratings…* writes stars, and either can be on alone.
+- The ratings and flags are written into the catalog the moment the scan finishes — no separate save — and follow **Settings ▸ Metadata**'s XMP sidecar setting, as a rating or flag you set by hand does. They appear in the Library grid straight away, and the filter bar's **Rating** and **Flag** pickers find them.
+
+## Performance
+
+- The pixels are measured on the processor, several photos at once; a scan runs in the background, so you can keep working while it goes.
+- A scan reads each photo's largest preview rather than its full-size render, which is what makes a whole library quick to score.
+
 ## Sorting and filtering
 
 - **Sort**: the bottom bar's and **View ▸ Sort**'s **Quality** orders the grid by score; photos no scan scored come first ascending (last descending).
@@ -57,11 +83,13 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 
 ```sh
 <cli> quality-scan --library ~/Pictures/MyLibrary --accepted 75 --rejected 20 --apply-flags
-<cli> quality-scan --connect --scope selection --rescan
-<cli> run --library ~/Pictures/MyLibrary photo.qualityScan '{"scope": "catalog", "wait": true}'
+<cli> quality-scan --library ~/Pictures/MyLibrary --auto-rate --auto-flag --overwrite-metadata
+<cli> quality-scan --connect --scope selection --rescan --star-breaks 15,35,50,65,80
+<cli> run --library ~/Pictures/MyLibrary photo.qualityScan '{"scope": "catalog", "wait": true, "autoRate": true}'
 ```
 
-- **`photo.qualityScan`** takes `scope` (`selected`, `view`, `folder` with `path`, or `catalog`), `ids`, `accepted`, `rejected`, `applyFlags`, `rescan`, `weights`, `wait`, `cancel` and `status`.
+- **`photo.qualityScan`** takes `scope` (`selected`, `view`, `folder` with `path`, or `catalog`), `ids`, `accepted`, `rejected`, `applyFlags`, `rescan`, `weights`, `autoRate`, `overwriteMetadata`, `starBreaks` (five numbers, 0–100, not decreasing), `wait`, `cancel` and `status`.
+- The summary carries `rated` (photos whose rating the scan changed) beside `flagged`, `accepted`, `pending` and `rejected`, and each photo in `photos` carries the `rating` it has after the scan.
 - **`photo.qualityScanPump`** takes a finished background scan in and writes it; the MCP server reaches the same commands. See [Commands](../../automate/commands/) and [Command line](../../automate/cli/).
 
 <Aside type="note" title="Modern layout">

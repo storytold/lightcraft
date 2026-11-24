@@ -64,7 +64,8 @@ sidebar:
 - **Sidecar names**: how sidecars are named beside the raw.
 
 ### Folder polling and drag and drop
-- **Check folders for new photos** every so often; new photos are offered ("N new") or added at once. New folders
+- **Check folders for new photos** every so often, and as soon as the system reports a change in one of the library's
+  folders (a few seconds later; network shares that send no notices are still checked every few minutes); new photos are offered ("N new") or added at once. New folders
   count too: in a tree of dated folders, a new day or year folder is found, as long as it is inside the folder your
   library's photos branch out of and that folder holds mostly your photo folders (your home folder and a whole disk or share never are).
   Only photos in the new folder count, not new files in the folders beside it; they are counted on the folder that holds it.
@@ -122,6 +123,8 @@ sidebar:
 ### Appearance
 - **Appearance Mode** (Sync with System, Dark, Light), a theme for each, and how sliders are drawn (Classic only; Compact
   always draws one row, Modern always pills). Shift while dragging gives fine control.
+- **Loupe background** and **Filmstrip background**: Theme Default, Black, Dark Gray, Medium Gray (50 %), Light Gray
+  or White behind the photo and behind the filmstrip, whatever the theme (also **Window ▸ Appearance**).
 - **Expanded sliders** (off by default) let sliders that support it go past Lightroom's range; not XMP compliant.
 - **Click through** (macOS only): a click in a background window brings it to the front and, by default, also acts
   on the window's contents (**Bring to front and click**). **Only bring to front** makes that first click just bring

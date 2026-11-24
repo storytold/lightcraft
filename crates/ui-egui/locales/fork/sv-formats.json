@@ -38,6 +38,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Ändringar från {device} är daterade {minutes} minuter fram i tiden och hålls kvar tills dess. Ställ klockan på {device} rätt.",
   "Chart · greys about {cct:.0} K": "Färgkarta · gråtoner kring {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Kontrollerade {checked} av {total} DNG-filer: {intact} hela, {damaged} skadade, {unverifiable} som inte kunde verifieras",
+  "Closest: {name}, {percent:.0}%": "Närmaste person: {name}, {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "Samlingen importerad: {n} foton hittades, {m} finns inte i den här katalogen",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Färgrymd: Rec. 2020 {curve} (HDR AVIF)",
   "Confirm all {}": "Bekräfta alla ({})",
@@ -97,6 +98,7 @@
   "Goes into the group “{group}” that exists already.": "Hamnar i den befintliga gruppen ”{group}”.",
   "Healed {n} blemishes": "Läkte {n} hudfläckar",
   "Healed {n} mark{} from the infrared pass": "Lagade märken från det infraröda passet: {n}{:.0}",
+  "Hold {} and drag or scroll": "Håll {} och dra eller rulla",
   "Ignored {} face": "{} ansikte ignorerat",
   "Ignored {} faces": "{} ansikten ignorerade",
   "Image Quality Scan stopped: {n} photos scanned": "Bildkvalitetsskanning stoppad: {n} foton skannade",
@@ -202,6 +204,7 @@
   "Step {n} of {total}": "Steg {n} av {total}",
   "Stop waiting: {task}?": "Sluta vänta: {task}?",
   "Style {n}": "Stil {n}",
+  "Suggested as {name}: {percent:.0}%": "Föreslagen som {name}: {percent:.0}%",
   "Suggested as {}": "Föreslaget som {}",
   "Suggested as {}. Confirm the faces that are them.": "Föreslaget som {}. Bekräfta de ansikten som är personen.",
   "Sync this catalog with {name}:": "Synka den här katalogen med {name}:",
@@ -345,5 +348,6 @@
   "“{name}” added to Camera Profiles": "”{name}” har lagts till i kameraprofiler",
   "“{name}” has its old settings again": "”{name}” har sina gamla inställningar igen",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "”{name}” är ny. Vad får de andra enheterna som synkar den här katalogen ha av den?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” tar det aktiva fotots inställningar. Namn, grupp, plats och markeringar behålls."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” tar det aktiva fotots inställningar. Namn, grupp, plats och markeringar behålls.",
+  "★{n} at or above": "★{n} eller fler"
 }

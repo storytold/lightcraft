@@ -133,6 +133,7 @@ pub mod slideshow_ui;
 pub mod soft_keyboard;
 pub mod softpaint;
 pub mod space_hand;
+pub mod speed_edit;
 pub mod state;
 pub mod surface;
 pub mod surface_icons;
@@ -173,6 +174,8 @@ mod tests_appearance;
 mod tests_background_clicks;
 #[cfg(test)]
 mod tests_background_prep;
+#[cfg(test)]
+mod tests_backgrounds;
 #[cfg(test)]
 mod tests_bar_buttons;
 #[cfg(test)]
@@ -472,6 +475,8 @@ mod tests_space_hand;
 #[cfg(test)]
 mod tests_space_hold;
 #[cfg(test)]
+mod tests_speed_edit;
+#[cfg(test)]
 mod tests_stand_in_crop;
 #[cfg(test)]
 mod tests_surface;
@@ -501,6 +506,8 @@ mod tests_tool_row;
 mod tests_unsaved;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_update;
+#[cfg(test)]
+mod tests_upright_panel;
 #[cfg(test)]
 mod tests_view_state;
 #[cfg(test)]
@@ -978,6 +985,8 @@ pub struct LccApp {
     pub crop_layout: Option<panels::detail::CropLayout>,
     /// Space is held over a tool on the photo: the view's hand has the pointer ([`space_hand`]).
     pub space_hand: Option<space_hand::SpaceHand>,
+    /// A speed-edit key is held in Develop: a drag or scroll on the photo moves its slider ([`speed_edit`]).
+    pub speed_edit: Option<speed_edit::SpeedEdit>,
     /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).
     pub brush_live: Option<brush_live::LiveStroke>,
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
@@ -1054,6 +1063,10 @@ pub struct LccApp {
     pub folder_poll: folder_poll::FolderPoll,
     /// A link (`<scheme>://sync?path=…`) the app was started with, followed once a frame runs.
     pub pending_link: Option<String>,
+    /// Single-instance hand-off (gap 37): what later launches hand this copy (their links and
+    /// files), followed each frame (`folder_poll::take_handoffs`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub handoff: Option<lcc_engine::instance::Server>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -1366,6 +1379,7 @@ impl LccApp {
             gesture: None,
             crop_layout: None,
             space_hand: None,
+            speed_edit: None,
             brush_live: None,
             loupe_shown: None,
             loupe_timing: Default::default(),
@@ -1401,6 +1415,8 @@ impl LccApp {
             sync_run: None,
             folder_poll: Default::default(),
             pending_link: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            handoff: None,
             lightroom: None,
             lightroom_last: None,
             catalog_ui: Default::default(),
@@ -2304,6 +2320,7 @@ impl LccApp {
         theme::set_compact(ctx, self.compact());
         theme::set_slider_text(ctx, self.ui.settings.slider_text);
         theme::set_slider_control(ctx, self.ui.settings.slider_control);
+        theme::set_canvas_shades(ctx, self.ui.settings.loupe_background, self.ui.settings.filmstrip_background);
         let wanted = self.ui.settings.theme(self.system_theme(ctx));
         if theme::current(ctx) != Some(wanted) {
             theme::apply_kind(ctx, wanted);
@@ -2554,6 +2571,8 @@ impl LccApp {
         if let Some(url) = self.pending_link.take() {
             folder_poll::follow_link(self, ctx, &url);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        folder_poll::take_handoffs(self, ctx);
         self.ui.was_focused = focused;
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
@@ -3263,7 +3282,7 @@ impl LccApp {
         let t = theme::Tokens::get(&ctx);
         let bg = if matches!(self.ui.view, state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference)
         {
-            t.canvas
+            theme::loupe_shade(&ctx).color(t.canvas)
         } else {
             t.grid_bg
         };
@@ -3597,7 +3616,7 @@ pub struct Caches {
     /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
     pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
     /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
-    pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
+    pub unnamed: Option<(u64, u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The library filter (any person filter aside) the two above were asked for with: when the sidebar picks another
     /// year, folder or album, they are asked for again.
     pub faces_filter: Option<lcc_catalog::Filter>,
@@ -4295,6 +4314,8 @@ mod tests_modern_gestures;
 mod tests_modern_library;
 #[cfg(test)]
 mod tests_modern_sheets;
+#[cfg(test)]
+mod tests_phone_menus;
 #[cfg(test)]
 mod tests_pill_slider;
 #[cfg(test)]

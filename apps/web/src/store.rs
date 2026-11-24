@@ -218,6 +218,51 @@ mod tests {
         assert_eq!(&*s.get("web/h1/b.jpg").unwrap(), &[1, 2]);
     }
 
+    /// Table-driven hostile input (5.6): corrupt originals in browser storage (empty, garbage,
+    /// truncated, a header claiming huge dimensions) and hostile synthetic paths never panic;
+    /// importing or rendering them is an error, and the session keeps working.
+    #[test]
+    fn corrupt_originals_never_panic() {
+        let png = png_bytes(16, 12);
+        let mut huge = png[..png.len().min(33)].to_vec();
+        // IHDR width/height (bytes 16..24) set to u32::MAX
+        for b in huge.iter_mut().skip(16).take(8) {
+            *b = 0xff;
+        }
+        let cases: Vec<(&str, &str, Vec<u8>)> = vec![
+            ("empty", "a.png", Vec::new()),
+            ("garbage png", "b.png", vec![0xde, 0xad, 0xbe, 0xef, 1, 2, 3]),
+            ("truncated png", "c.png", png[..png.len() / 2].to_vec()),
+            ("huge dimensions", "d.png", huge),
+            ("garbage jpeg", "e.jpg", vec![0xff, 0xd8, 0xff, 0xe1, 0xff, 0xff, 0, 0]),
+            ("garbage raw", "f.dng", b"II*\0\xff\xff\xff\xff".to_vec()),
+            ("no extension", "noext", png.clone()),
+        ];
+        let store = Originals::default();
+        let mut session = lcc_engine::Session::new();
+        store.install(&mut session);
+        for (what, name, bytes) in cases {
+            let hash = content_hash(&bytes);
+            let path = store.added(name, &hash, bytes.into());
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.execute("library.import", &json!({"paths": [path]}))));
+            let Ok(r) = r else { panic!("{what}: import panicked") };
+            if let Ok(v) = r {
+                for id in v["imported"].as_array().into_iter().flatten().filter_map(|x| x.as_u64()) {
+                    let id = lcc_engine::catalog::PhotoId(id);
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.render_now(id, 20, 20)));
+                    assert!(r.is_ok(), "{what}: render panicked");
+                }
+            }
+        }
+        for path in ["web/", "web//", "web/x", "web/\u{0}/\u{0}", "web/../../etc/passwd", "web/h/ä.png", "mem/1/a.png", ""] {
+            assert!(store.get(path).is_none() || hash_of_path(path).is_some(), "{path:?}");
+            let _ = hash_of_path(path);
+            let _ = download_name(path);
+            let _ = mime_for(path);
+        }
+        session.execute("library.info", &json!({})).unwrap();
+    }
+
     #[test]
     fn import_and_render_from_memory() {
         let store = Originals::default();

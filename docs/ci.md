@@ -18,8 +18,8 @@ Every change goes on a branch, opens a PR and is set to auto-merge
 
 | Trigger | Linux ("Linux (cargo xtask ci)") | macOS / Windows |
 |---|---|---|
-| Pull request to `main` | `cargo xtask ci --fast` + changed-crate tests + SIL suite | clippy |
-| Push to `main` | `cargo xtask ci --fast` + SIL suite | clippy |
+| Pull request to `main` | `cargo xtask ci --fast` + changed-crate tests + SIL suite | clippy of the changed crates and their dependents (`cargo xtask affected-clippy`; none for a docs-only PR) |
+| Push to `main` (newest only: a newer push cancels the run) | `cargo xtask ci --fast` + SIL suite | clippy |
 | Manual dispatch (Actions → CI → Run workflow) | full `cargo xtask ci` + SIL suite | build + clippy + `cargo test --workspace` |
 | Push to `release` | none: the dispatched run tested that commit | none |
 
@@ -35,7 +35,11 @@ associative, idempotent merges and no grant leakage). Clippy also denies `indexi
 reads go through `json_ext::JsonExt::field`). `apps/android` builds only for Android, so the Android check also runs
 `cargo clippy --target <abi> -p lcc-android --all-targets -- -D warnings` (gap 40, closed 2026-11-22). The engine's import → develop → export → re-import scenario
 (`crates/engine/tests/it/roundtrip.rs`) runs with `cargo test -p lcc-engine` (the full run's workspace tests),
-not in the SIL step. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
+not in the SIL step. Locally, `cargo xtask ci` stays the full run. Before pushing, run `cargo xtask ci --quick`: fmt, brand, docs,
+layers and assets, clippy on the changed crates and every crate depending on them, the changed crates' tests (built
+with `-p`), and heif / parity / wasm when the changes touch them. Don't repeat `ci --fast` locally: the PR's CI runs
+it, and the Windows runner is also the maintainers' development machine. Open a PR once the work is ready; every
+push to an open PR starts a run, and a branch push starts none.
 
 The fast gate checks the wasm and Android crates in one `cargo check` per target, so a crate shared by several
 of them is checked once; when that fails it checks each crate on its own to name the broken ones. The full run,
@@ -62,7 +66,9 @@ GitHub's PR run checks out the merge of the PR into `main`. When the PR then mer
 merge commit has exactly that tree, so testing it again finds nothing new. Each green PR run of the Linux job
 uploads a marker artifact `ci-tree-<tree hash>` (kept 14 days); the `tested` job of a push to `main` looks for the
 pushed commit's tree and, when a marker exists, skips the Linux, macOS and Windows jobs. If `main` moved in between,
-the tree is new and everything runs. (GitHub's merge queue, which would test each merge exactly once, is only
+the tree is new and everything runs. Runs on `main` cancel each other (`cancel-in-progress`), so a burst of merges
+tests only the newest commit, which contains the earlier ones; a failure then points at the merges since the last
+green run. (GitHub's merge queue, which would test each merge exactly once, is only
 offered to repositories owned by an organization.)
 
 The other workflows avoid repeats the same way: Brand (the throw-away brand build, `cargo xtask brand test`) runs
@@ -229,6 +235,7 @@ on all three desktop OSes every day.
 | GPU equivalence on lavapipe | gpu0, `rust:1.100.0-bookworm` container (exact tag) | `crates/gpu/tests/it/equivalence.rs` on Mesa's software Vulkan driver (the container has no GPU) |
 | GPU equivalence on WARP | self-hosted Windows | the same tests on DX12's software adapter |
 | Full tests (macOS), Full tests (Windows) | self-hosted mac0, win0 | `cargo build --workspace` and `cargo xtask quarantine test` (nextest with retries and the quarantine), as the manual full CI run |
+| Web smoke (headless Chromium) | gpu0, `rust:1.100.0-bookworm` container | `packaging/web/smoke.sh`: builds the browser version (`cargo xtask web --dev`), serves it, loads `?store=memory` in headless Chromium (no Node, no WebDriver: `--dump-dom` plus the browser's stderr console log) and fails when the app doesn't start, shows a crash overlay or logs a console error. Run it locally with Chromium on PATH (or `CHROME=<path>`) |
 | Report | self-hosted Linux | scheduled runs only: when any job failed or was cancelled, opens the issue "Nightly full run failing" (or comments on the open one) with the run link; on a green run it closes that issue |
 
 **Release gate.** `release.yml`'s version job looks up the completed `nightly.yml` runs and takes the newest whose

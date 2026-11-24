@@ -398,4 +398,63 @@ mod tests {
         assert_eq!(s2.catalog.len(), s.catalog.len(), "not seeded twice");
         assert_eq!(s2.selection.active, s.selection.active);
     }
+
+    /// Table-driven hostile input (5.6): corrupt library files in browser storage (truncated,
+    /// garbage, a wrong or future version, absurd lengths and numbers) never panic. The library
+    /// either opens (damage repaired or set aside, as on desktop) or start-up gets an actionable
+    /// error, and a refused file is left in storage as it was.
+    #[test]
+    fn corrupt_library_files_never_panic() {
+        let v = lcc_engine::catalog::journal::VERSION;
+        let good_snap = format!(r#"{{"format":"lcc-catalog","version":{v},"seq":0,"catalog":{{}}}}"#);
+        let mut huge_len = vec![0xff; 8];
+        huge_len.extend_from_slice(b"{\"op\":");
+        let cases: Vec<(&str, &str, Vec<u8>)> = vec![
+            ("empty snapshot", "catalog.snap", Vec::new()),
+            ("garbage snapshot", "catalog.snap", vec![0xde, 0xad, 0xbe, 0xef, 0, 1, 2, 3]),
+            ("not UTF-8 snapshot", "catalog.snap", vec![0xc3, 0x28, 0xa0, 0xa1]),
+            ("truncated snapshot", "catalog.snap", good_snap.as_bytes()[..good_snap.len() / 2].to_vec()),
+            ("future version", "catalog.snap", br#"{"format":"lcc-catalog","version":4294967295,"seq":0,"catalog":{}}"#.to_vec()),
+            ("negative version", "catalog.snap", br#"{"format":"lcc-catalog","version":-1,"seq":0,"catalog":{}}"#.to_vec()),
+            ("wrong format", "catalog.snap", br#"{"format":"something-else","version":1}"#.to_vec()),
+            (
+                "huge seq",
+                "catalog.snap",
+                format!(r#"{{"format":"lcc-catalog","version":{v},"seq":18446744073709551615,"catalog":{{}}}}"#).into_bytes(),
+            ),
+            ("deep nesting", "catalog.snap", ("[".repeat(100_000) + &"]".repeat(100_000)).into_bytes()),
+            ("garbage log", "catalog.log", vec![0x00, 0xff, 0x13, 0x37, b'\n', b'{', b'\n']),
+            ("truncated log record", "catalog.log", br#"{"seq":1,"op":{"Rate"#.to_vec()),
+            ("huge length prefix in log", "catalog.log", huge_len),
+            ("log of nulls", "catalog.log", vec![0; 4096]),
+            ("garbage presets", "presets.json", vec![0xff; 64]),
+            ("truncated view", "view.json", br#"{"selection":{"active":"#.to_vec()),
+            ("huge numbers in prefs", "prefs.json", br#"{"zoom":1e999999,"cache_mb":18446744073709551616}"#.to_vec()),
+            ("garbage ui", "ui.json", b"\x00\x01not json at all".to_vec()),
+        ];
+        for (what, name, bytes) in cases {
+            for with_good_snapshot in [false, true] {
+                let files = Files::default();
+                if with_good_snapshot && name != "catalog.snap" {
+                    files.preload("catalog.snap", good_snap.clone().into_bytes());
+                }
+                files.preload(name, bytes.clone());
+                let mut s = Session::new();
+                let stores =
+                    LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.open_library_in(stores, true)));
+                let Ok(r) = r else { panic!("{what}: opening the library panicked") };
+                match r {
+                    Ok(_) => {
+                        s.execute("library.info", &json!({})).unwrap_or_else(|e| panic!("{what}: library opened but unusable: {e}"));
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        assert!(msg.len() > 10, "{what}: the error says what is wrong: {msg:?}");
+                        assert_eq!(files.get(name), Some(bytes.clone()), "{what}: refused data is left untouched");
+                    }
+                }
+            }
+        }
+    }
 }

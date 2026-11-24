@@ -43,6 +43,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Các thay đổi từ {device} được ghi ngày {minutes} phút trong tương lai, nên được giữ lại đến lúc đó. Hãy chỉnh đồng hồ của {device} cho đúng.",
   "Chart · greys about {cct:.0} K": "Bảng màu · xám khoảng {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Đã kiểm tra {checked} trong {total} tệp DNG: {intact} nguyên vẹn, {damaged} bị hỏng, {unverifiable} không thể xác minh",
+  "Closest: {name}, {percent:.0}%": "Người giống nhất: {name}, {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "Đã nhập bộ sưu tập: tìm thấy {n} ảnh, {m} ảnh không có trong catalog này",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Không gian màu: Rec. 2020 {curve} (HDR AVIF)",
   "Confirm all {}": "Xác nhận tất cả ({})",
@@ -110,6 +111,7 @@
   "Goes into the group “{group}” that exists already.": "Sẽ vào nhóm “{group}” đã có sẵn.",
   "Healed {n} blemishes": "Đã chữa {n} vết mụn",
   "Healed {n} mark{} from the infrared pass": "Đã sửa {n}{:.0} vết từ lượt quét hồng ngoại",
+  "Hold {} and drag or scroll": "Giữ {} rồi kéo hoặc cuộn",
   "Ignored {} face": "Đã bỏ qua {} khuôn mặt",
   "Ignored {} faces": "Đã bỏ qua {} khuôn mặt",
   "Image Quality Scan stopped: {n} photos scanned": "Đã dừng quét chất lượng ảnh: đã quét {n} ảnh",
@@ -223,6 +225,7 @@
   "Step {n} of {total}": "Bước {n}/{total}",
   "Stop waiting: {task}?": "Dừng chờ: {task}?",
   "Style {n}": "Kiểu {n}",
+  "Suggested as {name}: {percent:.0}%": "Được đề xuất là {name}: {percent:.0}%",
   "Suggested as {}": "Gợi ý là {}",
   "Suggested as {}. Confirm the faces that are them.": "Gợi ý là {}. Xác nhận những khuôn mặt đúng là người đó.",
   "Sync this catalog with {name}:": "Đồng bộ catalog này với {name}:",
@@ -385,5 +388,6 @@
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "“{name}” là mới. Các thiết bị khác đang đồng bộ catalog này được có gì từ nó?",
   "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}” lấy cài đặt của ảnh đang chọn. Tên, nhóm, vị trí và đánh dấu được giữ nguyên.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "«{to}» đã là một người. Gộp lại sẽ thành một người; Hoàn tác sẽ tách chúng ra.",
-  "…and {more} more": "…và {more} mục khác"
+  "…and {more} more": "…và {more} mục khác",
+  "★{n} at or above": "★{n} trở lên"
 }

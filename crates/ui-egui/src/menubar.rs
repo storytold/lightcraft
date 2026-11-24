@@ -414,6 +414,7 @@ pub fn checked(app: &LccApp, id: &str) -> Option<bool> {
         "view.filterBar" => Some(u.filter_bar),
         "library.toggleFilters" => Some(!app.session.filters_off()),
         "view.soloSections" => Some(u.single_panel),
+        "mask.solo" => Some(u.mask_solo),
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
         "library.holdView" => Some(app.session.hold_view),
@@ -664,6 +665,20 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     let on = if k.is_dark() { s.dark_theme.kind() == k } else { s.light_theme.kind() == k };
                     v.push(item("view.theme", json!({"theme": k.id()}), k.label(), None, true, Some(on)));
                 }
+            }
+            // each background as a titled group of shades, not a submenu: Appearance is already
+            // a submenu of Window, and menus stay two levels deep
+            for (label, command, current) in [
+                ("Loupe Background", "view.loupeBackground", s.loupe_background),
+                ("Filmstrip Background", "view.filmstripBackground", s.filmstrip_background),
+            ] {
+                v.push(MenuNode::Separator);
+                v.push(item(command, Value::Null, label, None, false, None));
+                v.extend(
+                    crate::theme::CanvasShade::ALL
+                        .into_iter()
+                        .map(|shade| item(command, json!({"shade": shade.id()}), shade.label(), None, true, Some(current == shade))),
+                );
             }
             v
         }

@@ -2420,6 +2420,15 @@ fn appearance(
         let options = crate::theme::SliderText::ALL.map(|size| (size, size.label()));
         choices(ui, "settingsSliderText", &options, &mut s.slider_text);
     });
+    // issue #1295: a neutral surround for judging colour (also Window ▸ Appearance, the loupe's right-click)
+    row(ui, t, crate::i18n::tr("Loupe background"), |ui| {
+        let options = crate::theme::CanvasShade::ALL.map(|shade| (shade, shade.label()));
+        choices(ui, "settingsLoupeBackground", &options, &mut s.loupe_background);
+    });
+    row(ui, t, crate::i18n::tr("Filmstrip background"), |ui| {
+        let options = crate::theme::CanvasShade::ALL.map(|shade| (shade, shade.label()));
+        choices(ui, "settingsFilmstripBackground", &options, &mut s.filmstrip_background);
+    });
     if rows.control {
         row(ui, t, crate::i18n::tr("Slider control"), |ui| {
             let options = crate::theme::SliderControl::ALL.map(|c| (c, c.label()));

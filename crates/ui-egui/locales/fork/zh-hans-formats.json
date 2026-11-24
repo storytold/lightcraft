@@ -32,6 +32,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "来自 {device} 的更改日期比现在晚 {minutes} 分钟，因此会暂缓到那时再合并。请将 {device} 的时钟设为正确时间。",
   "Chart · greys about {cct:.0} K": "色卡 · 灰色约 {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "已检查 {total} 个 DNG 文件中的 {checked} 个：{intact} 个完好，{damaged} 个已损坏，{unverifiable} 个无法验证",
+  "Closest: {name}, {percent:.0}%": "最相似的人：{name}，{percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "已导入收藏夹：找到 {n} 张照片，{m} 张不在此目录中",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "色彩空间：Rec. 2020 {curve}（HDR AVIF）",
   "Confirm all {}": "全部确认（{}）",
@@ -88,6 +89,7 @@
   "Goes into the group “{group}” that exists already.": "将放入已存在的分组“{group}”。",
   "Healed {n} blemishes": "已修复 {n} 处瑕疵",
   "Healed {n} mark{} from the infrared pass": "已根据红外通道修复痕迹：{n}{:.0}",
+  "Hold {} and drag or scroll": "按住 {} 并拖动或滚动",
   "Ignored {} face": "已忽略 {} 张人脸",
   "Ignored {} faces": "已忽略 {} 张人脸",
   "Image Quality Scan stopped: {n} photos scanned": "图像质量扫描已停止：已扫描 {n} 张照片",
@@ -181,6 +183,7 @@
   "Step {n} of {total}": "第 {n} 步，共 {total} 步",
   "Stop waiting: {task}?": "停止等待：{task}？",
   "Style {n}": "样式 {n}",
+  "Suggested as {name}: {percent:.0}%": "建议为 {name}：{percent:.0}%",
   "Suggested as {}": "建议为 {}",
   "Suggested as {}. Confirm the faces that are them.": "建议为 {}。请确认属于此人的面孔。",
   "Sync this catalog with {name}:": "将此目录与 {name} 同步：",
@@ -310,5 +313,6 @@
   "“{name}” added to Camera Profiles": "已将“{name}”添加到相机配置文件",
   "“{name}” has its old settings again": "“{name}”已恢复原来的设置",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "“{name}”是新的。同步此目录的其他设备可以获得它的哪些内容？",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}”将采用当前照片的设置。名称、分组、位置和标记保持不变。"
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}”将采用当前照片的设置。名称、分组、位置和标记保持不变。",
+  "★{n} at or above": "★{n} 及以上"
 }

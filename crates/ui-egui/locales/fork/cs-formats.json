@@ -35,6 +35,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Změny ze zařízení {device} mají datum {minutes} minut v budoucnosti, proto jsou do té doby odloženy. Nastavte na zařízení {device} správný čas.",
   "Chart · greys about {cct:.0} K": "Terč · šedé kolem {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Zkontrolováno {checked} z {total} souborů DNG: {intact} neporušených, {damaged} poškozených, {unverifiable} neověřitelných",
+  "Closest: {name}, {percent:.0}%": "Nejpodobnější: {name}, {percent:.0} %",
   "Collection imported: {n} photos found, {m} not in this catalog": "Sbírka importována: nalezeno {n} fotek, {m} není v tomto katalogu",
   "Confirm all {}": "Potvrdit všechny ({})",
   "Confirm all {} suggestions": "Potvrdit všechny návrhy ({})",
@@ -93,6 +94,7 @@
   "Goes into the group “{group}” that exists already.": "Půjde do existující skupiny „{group}“.",
   "Healed {n} blemishes": "Vyretušované nedokonalosti: {n}",
   "Healed {n} mark{} from the infrared pass": "Vyretušované stopy z infračerveného průchodu: {n}{:.0}",
+  "Hold {} and drag or scroll": "Podržte {} a táhněte nebo posouvejte",
   "Ignored {} face": "Ignorován {} obličej",
   "Ignored {} faces": "Ignorováno obličejů: {}",
   "Image Quality Scan stopped: {n} photos scanned": "Skenování kvality obrazu zastaveno: naskenováno {n} fotografií",
@@ -186,6 +188,7 @@
   "Step {n} of {total}": "Krok {n} z {total}",
   "Stop waiting: {task}?": "Přestat čekat: {task}?",
   "Style {n}": "Styl {n}",
+  "Suggested as {name}: {percent:.0}%": "Navrženo jako {name}: {percent:.0} %",
   "Suggested as {}": "Navrženo jako {}",
   "Suggested as {}. Confirm the faces that are them.": "Navrženo jako {}. Potvrďte obličeje, které jsou to oni.",
   "Sync this catalog with {name}:": "Synchronizovat tento katalog s {name}:",
@@ -319,5 +322,6 @@
   "“{name}” added to Camera Profiles": "„{name}“ přidán do profilů fotoaparátu",
   "“{name}” has its old settings again": "„{name}“ má opět původní nastavení",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "„{name}“ je nová. Co z ní smějí mít ostatní zařízení synchronizující tento katalog?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}“ přebírá nastavení aktivní fotky. Název, skupina, místo a značky zůstávají."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}“ přebírá nastavení aktivní fotky. Název, skupina, místo a značky zůstávají.",
+  "★{n} at or above": "★{n} a výše"
 }

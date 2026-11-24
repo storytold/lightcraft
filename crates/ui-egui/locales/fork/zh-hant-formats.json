@@ -32,6 +32,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "來自 {device} 的變更日期比現在晚 {minutes} 分鐘，因此會暫緩到那時再合併。請將 {device} 的時鐘設為正確時間。",
   "Chart · greys about {cct:.0} K": "色卡 · 灰色約 {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "已檢查 {total} 個 DNG 檔案中的 {checked} 個：{intact} 個完好，{damaged} 個已損毀，{unverifiable} 個無法驗證",
+  "Closest: {name}, {percent:.0}%": "最相似的人：{name}，{percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "已匯入收藏集：找到 {n} 張相片，{m} 張不在此目錄中",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "色彩空間：Rec. 2020 {curve}（HDR AVIF）",
   "Confirm all {}": "全部確認（{}）",
@@ -88,6 +89,7 @@
   "Goes into the group “{group}” that exists already.": "將放入已存在的群組「{group}」。",
   "Healed {n} blemishes": "已修復 {n} 處瑕疵",
   "Healed {n} mark{} from the infrared pass": "已依紅外線通道修復痕跡：{n}{:.0}",
+  "Hold {} and drag or scroll": "按住 {} 並拖曳或捲動",
   "Ignored {} face": "已忽略 {} 張人臉",
   "Ignored {} faces": "已忽略 {} 張人臉",
   "Image Quality Scan stopped: {n} photos scanned": "影像品質掃描已停止：已掃描 {n} 張照片",
@@ -181,6 +183,7 @@
   "Step {n} of {total}": "第 {n} 步，共 {total} 步",
   "Stop waiting: {task}?": "停止等待：{task}？",
   "Style {n}": "樣式 {n}",
+  "Suggested as {name}: {percent:.0}%": "建議為 {name}：{percent:.0}%",
   "Suggested as {}": "建議為 {}",
   "Suggested as {}. Confirm the faces that are them.": "建議為 {}。請確認屬於此人的面孔。",
   "Sync this catalog with {name}:": "將此目錄與 {name} 同步：",
@@ -310,5 +313,6 @@
   "“{name}” added to Camera Profiles": "已將「{name}」加入相機描述檔",
   "“{name}” has its old settings again": "「{name}」已恢復原來的設定",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "「{name}」是新的。同步此目錄的其他裝置可以取得它的哪些內容？",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」將採用目前相片的設定。名稱、群組、位置與標記保持不變。"
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」將採用目前相片的設定。名稱、群組、位置與標記保持不變。",
+  "★{n} at or above": "★{n} 及以上"
 }

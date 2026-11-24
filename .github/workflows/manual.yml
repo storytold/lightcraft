@@ -8,7 +8,7 @@ on:
     branches: [main]
     paths: ["docs/manual-site/**", ".github/workflows/manual.yml"]
   pull_request:
-    paths: ["docs/manual-site/**", ".github/workflows/manual.yml"]
+    paths: ["docs/manual-site/**", ".github/workflows/manual.yml", "crates/ui-egui/**", "crates/engine/**", "apps/cli/**"]
   workflow_dispatch:
 
 permissions:
@@ -49,6 +49,26 @@ jobs:
         if: github.event_name != 'pull_request'
         with:
           path: docs/manual-site/dist
+
+  # Runs every shot script (docs/manual-site/scripts/shots.d) headless against the demo library and
+  # fails when one breaks: a request answering "ok": false (a renamed widget id or command) or a
+  # missing screenshot. The images it makes are thrown away; the committed ones are not checked.
+  shots:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends imagemagick
+      - name: Build the CLI
+        run: cargo build -p lcc-cli
+      - name: Run every shot script
+        run: node docs/manual-site/scripts/shots.mjs --cli target/debug/app-cli
 
   deploy:
     if: github.event_name != 'pull_request'

@@ -32,6 +32,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "{device} からの変更は {minutes} 分先の日時になっているため、その時刻まで保留されます。{device} の時計を正しく設定してください。",
   "Chart · greys about {cct:.0} K": "チャート · グレーは約 {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "{total} 個の DNG ファイルのうち {checked} 個を確認: 正常 {intact}、破損 {damaged}、検証不可 {unverifiable}",
+  "Closest: {name}, {percent:.0}%": "最も近い人物: {name}、{percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "コレクションを読み込みました: {n} 枚が見つかり、{m} 枚はこのカタログにありません",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "カラースペース：Rec. 2020 {curve}（HDR AVIF）",
   "Confirm all {}": "すべて確定（{}）",
@@ -88,6 +89,7 @@
   "Goes into the group “{group}” that exists already.": "既存のグループ「{group}」に入ります。",
   "Healed {n} blemishes": "{n} か所のシミを修復しました",
   "Healed {n} mark{} from the infrared pass": "赤外線パスから修復した跡: {n}{:.0}",
+  "Hold {} and drag or scroll": "{} を押したままドラッグまたはスクロール",
   "Ignored {} face": "{} 件の顔を無視しました",
   "Ignored {} faces": "{} 件の顔を無視しました",
   "Image Quality Scan stopped: {n} photos scanned": "画像品質スキャンを停止しました：{n} 枚をスキャンしました",
@@ -181,6 +183,7 @@
   "Step {n} of {total}": "ステップ {n} / {total}",
   "Stop waiting: {task}?": "待機を中止しますか: {task}",
   "Style {n}": "スタイル {n}",
+  "Suggested as {name}: {percent:.0}%": "{name} として提案: {percent:.0}%",
   "Suggested as {}": "{} の候補",
   "Suggested as {}. Confirm the faces that are them.": "{} の候補です。本人の顔を確定してください。",
   "Sync this catalog with {name}:": "このカタログを {name} と同期：",
@@ -310,5 +313,6 @@
   "“{name}” added to Camera Profiles": "「{name}」をカメラプロファイルに追加しました",
   "“{name}” has its old settings again": "「{name}」は以前の設定に戻りました",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "「{name}」は新規です。このカタログを同期している他のデバイスに何を許可しますか？",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」はアクティブな写真の設定を取り込みます。名前、グループ、位置、マークはそのままです。"
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」はアクティブな写真の設定を取り込みます。名前、グループ、位置、マークはそのままです。",
+  "★{n} at or above": "★{n} 以上"
 }

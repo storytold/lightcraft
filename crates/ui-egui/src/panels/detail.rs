@@ -454,6 +454,14 @@ pub(crate) fn navigate_gesture(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui:
     // While Space is held over a tool, `loupe:hand` sits above `loupe` and takes the hover from it;
     // wheel/scroll gestures over the canvas still belong to the view.
     if !resp.hovered() && !(app.space_hand.is_some() && resp.contains_pointer()) {
+        // a held speed-edit key's own drag surface takes the hover from the loupe
+        if app.speed_edit.is_some() && resp.contains_pointer() {
+            crate::speed_edit::wheel(app, ui);
+        }
+        return false;
+    }
+    // a held speed-edit key: the wheel moves its slider, not the view
+    if crate::speed_edit::wheel(app, ui) {
         return false;
     }
     let (mut factor, mut delta, anchor) =
@@ -1914,6 +1922,8 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     }
     // Space held over a tool: the view's hand takes the pointer from it (#1895)
     crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then_some((before_area, before_img)));
+    // a held speed-edit key: a drag on the photo moves its slider (above the loupe and the tools)
+    crate::speed_edit::interact(app, ui, canvas);
     // Compact (OneSlips 0c58de7ad): the overlay switched on to stay (O) overrides showing it only when useful, so the
     // photo says so; it steps aside while a slider or dial adjusts (the overlay does too)
     if right == RightPanel::Masking && crate::theme::compact(ui.ctx()) && app.ui.mask_overlay && !adjusting(app) && !fullscreen {
@@ -2004,8 +2014,22 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                 }
             }
         });
+        background_menu(app, ui, "view.loupeBackground", app.ui.settings.loupe_background);
         ui.separator();
         super::grid::context_menu(app, ui, id);
+    });
+}
+
+/// The loupe's right-click Background submenu (as Lightroom's right-click on the area round the
+/// photo): one checkable item per [`crate::theme::CanvasShade`], each running `command`.
+pub(crate) fn background_menu(app: &mut LccApp, ui: &mut egui::Ui, command: &str, current: crate::theme::CanvasShade) {
+    crate::widgets::menu_button(ui, crate::i18n::tr("Background"), |ui| {
+        for shade in crate::theme::CanvasShade::ALL {
+            if ui.radio(current == shade, crate::i18n::tr(shade.label())).clicked() {
+                let _ = app.run(command, json!({"shade": shade.id()}));
+                ui.close();
+            }
+        }
     });
 }
 
@@ -4950,6 +4974,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         } else {
             app.brush_live = None;
         }
+        brush_keys(app, ui, map, d, active, long);
         let _ = finish_brush_gesture(app, resp, map, d);
         return;
     }
@@ -5302,6 +5327,64 @@ fn mask_keys(app: &mut LccApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSe
         let new_shape = moved_shape(&shape, handle, Point::new(dx, dy), to, &map, false);
         let _ = app.run("mask.update", json!({"id": mid, "component": ci, "shape": new_shape}));
         let _ = app.run("develop.endInteraction", json!({}));
+    }
+}
+
+/// The brush by keyboard: a focusable stand-in (`canvasHandle:brush`) at the brush's place, the
+/// photo's centre at first. The arrows move it (Shift: further); Return or Space puts the brush
+/// down, painting a dab there, and lifts it again; while it is down each arrow press paints a
+/// stroke from where it was to where it goes (one undo step a press), with the panel's brush
+/// settings (Erase too).
+fn brush_keys(app: &mut LccApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings, active: Option<u32>, long: f64) {
+    let key = egui::Id::new("lc-brush-placement");
+    let (x, y, down): (f64, f64, bool) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5, false));
+    let mmap = map.for_mask_id(d, active);
+    let q = mmap.screen(Point::new(x, y));
+    // a stroke can redraw the panels (a new mask) and drop the focus for a frame: a brush that is
+    // down keeps it, so the next arrow press still paints
+    if down && ui.memory(|m| m.focused().is_none()) {
+        ui.memory_mut(|m| m.request_focus(crate::canvas_keys::id("brush")));
+    }
+    let state = crate::i18n::tr(if down { "brush down" } else { "brush up" });
+    let keys = crate::canvas_keys::handle(
+        ui,
+        "brush",
+        crate::i18n::tr("Brush (Return puts it down and paints, the arrows paint while it is down)"),
+        format!("{}, {state}", crate::canvas_keys::position_text(x, y)),
+        q,
+    );
+    if ui.memory(|m| m.has_focus(crate::canvas_keys::id("brush"))) {
+        let r = crate::state::brush_core_points(app.ui.brush_set(app.ui.brush_erasing()).size);
+        ui.painter().circle_stroke(q, r, Stroke::new(if down { 2.0 } else { 1.0 }, Color32::WHITE));
+    }
+    let paint = |app: &mut LccApp, points: &[Point]| {
+        let erase = vec![app.ui.brush_erase; points.len()];
+        let params = brush_params(app, d, points, &[], &erase, 0, false, long);
+        let _ = app.run("develop.beginInteraction", json!({"label": "Brush"}));
+        let made = app.run("mask.brushStroke", params);
+        let _ = app.run("develop.endInteraction", json!({}));
+        // the first stroke of a tool armed for a new mask made it: the brush paints on into it
+        if made.is_ok() && app.ui.mask_new.take().is_some() {
+            app.ui.active_mask_component = Some(0);
+        }
+    };
+    let mut next = (x, y, down);
+    if keys.activated {
+        if !down {
+            paint(app, &[Point::new(x, y)]);
+        }
+        next.2 = !down;
+    }
+    if let Some((dx, dy)) = keys.delta {
+        let to = ((x + dx).clamp(0.0, 1.0), (y + dy).clamp(0.0, 1.0));
+        if down && to != (x, y) {
+            paint(app, &[Point::new(x, y), Point::new(to.0, to.1)]);
+        }
+        next = (to.0, to.1, next.2);
+    }
+    if next != (x, y, down) {
+        ui.data_mut(|m| m.insert_temp(key, next));
+        ui.ctx().request_repaint();
     }
 }
 
@@ -6476,7 +6559,9 @@ pub(crate) fn filmstrip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
 
 fn filmstrip_strip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
-    ui.painter().rect_filled(r, 0.0, t.canvas);
+    // Settings ▸ Interface ▸ Filmstrip Background (`view.filmstripBackground`)
+    let strip_bg = crate::theme::filmstrip_shade(ui.ctx()).color(t.canvas);
+    ui.painter().rect_filled(r, 0.0, strip_bg);
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
     film_resize(app, ui, r);
     // the cells keep the shape they had at the strip's original height (120 wide at 142 high)
@@ -6488,7 +6573,10 @@ fn filmstrip_strip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
     let active = app.session.selection.active;
     // Lightroom Classic's source line above the strip: source, count, selection, active file name
     let head = Rect::from_min_max(pos2(r.left(), r.top() + 4.0), pos2(r.right(), (r.top() + 4.0 + FILM_HEAD_H).min(r.bottom())));
-    film_source_line(app, ui, head, ids.len(), map_filter.is_some(), &t);
+    // Lightroom Classic's filmstrip filter at its right (#1296): flags, rating, colour labels
+    let filter_left = super::film_filter::show(app, ui, head, &t);
+    let source_head = Rect::from_min_max(head.min, pos2(filter_left.max(head.left()), head.bottom()));
+    film_source_line(app, ui, source_head, ids.len(), map_filter.is_some(), &t);
     let r = Rect::from_min_max(pos2(r.left(), head.bottom()), r.max);
     let ppp = ui.ctx().pixels_per_point();
     let thumb_px = film_thumb_px(cell_w, ppp);
@@ -6591,13 +6679,13 @@ fn filmstrip_strip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
                 let compact = app.compact();
                 let flag = app.session.catalog.photo(*id).map(|ph| ph.flag).unwrap_or_default();
                 let base = if compact {
-                    super::grid::cell_fill(&t, state, flag, resp.hovered(), t.canvas)
+                    super::grid::cell_fill(&t, state, flag, resp.hovered(), strip_bg)
                 } else if selected {
                     t.cell_selected
                 } else if resp.hovered() {
                     t.cell_selected.gamma_multiply(0.6)
                 } else {
-                    t.canvas
+                    strip_bg
                 };
                 p.rect_filled(cr, 0.0, crate::theme::label_background(base, label, selected));
                 if compact {
