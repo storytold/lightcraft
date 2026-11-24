@@ -67,6 +67,7 @@ pub mod eye_strip;
 pub mod eyedropper;
 pub mod face_menu;
 mod focus_scan;
+pub mod focus_watch;
 pub mod folder_poll;
 mod frame_rate;
 pub mod headless;
@@ -831,6 +832,8 @@ pub struct LccApp {
     pub services: Services,
     pub renderer: render::Renderer,
     pub perf: Perf,
+    /// The window's focus and visibility changes, timed (issue #1188).
+    pub focus_watch: focus_watch::FocusWatch,
     /// What this frame ran (commands, control requests, slow panels), for [`SlowFrame`]: at most
     /// [`FRAME_LOG_LEN`] names.
     frame_log: Vec<String>,
@@ -1287,6 +1290,7 @@ impl LccApp {
             services,
             renderer: render::Renderer::default(),
             perf: Perf::default(),
+            focus_watch: focus_watch::FocusWatch::default(),
             frame_log: Vec::new(),
             slowest_frame: None,
             caches: Caches::default(),
@@ -2377,6 +2381,10 @@ impl LccApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
         self.frame_log.clear();
+        // (a frame that focuses, unfocuses, hides or shows the window says so in its log, and is timed)
+        if let Some(what) = self.focus_watch.observe(focus_watch::WindowState::of(ctx), self.perf.host_frame_ms) {
+            self.note_ran(what);
+        }
         // painting on the loupe (OneSlips, NOTES-1028 note 29): a brush stroke in progress and a moment after it
         let now = ctx.input(|i| i.time);
         let painting = matches!(self.gesture, Some(panels::detail::Gesture::Brush { .. }));
@@ -3002,6 +3010,7 @@ impl LccApp {
         self.perf.frame_ms = now_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+        self.focus_watch.finish(self.perf.logic_ms, self.perf.frame_ms);
         self.note_slow_frame(ctx.cumulative_pass_nr());
     }
 

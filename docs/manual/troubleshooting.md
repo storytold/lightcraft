@@ -29,6 +29,10 @@ JSON line for each command says why it failed. If the app does crash, please rep
   renderer (Windows: Vulkan → DX12 → GL → OpenGL; Windows on ARM: DX12 → Vulkan → GL → OpenGL) and keeps trying the lost one last; `<PREFIX>_GPU_BACKEND=dx12`
   (or `vulkan`, `gl`, `glow`) still forces one. Deleting `window-lost` in the settings folder forgets the loss.
 - `<PREFIX>_PROFILE=1` prints per-stage pipeline timings to standard error.
+- A spinning cursor when the window comes back to the front: start with `<PREFIX>_PROFILE=1` from a terminal; each
+  time the window gains or loses focus, or is hidden or shown, a `[profile] window focus gained: … ms` line says how
+  long that frame held the app, and the next frame adds a `… ms host frame` line with the same change's painting and
+  presenting included. Include those lines when reporting it.
 - Library → Previews → Clear Preview Cache rebuilds thumbnails and previews.
 - A very large library on a network share or hard disk opens much faster since 26.46.2; culling stays responsive while previews are prepared in the background, and a raw's first picture is its camera JPEG.
 

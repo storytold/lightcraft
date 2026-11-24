@@ -1885,7 +1885,8 @@ fn dngs_of_raws_without_colour_matrices_carry_the_colour_they_open_with() {
     let render = |t: &lcc_raw::color::CameraTransform, c: [f64; 3]| {
         t.matrix.apply(std::array::from_fn(|i| c[i] * t.wb[i] as f64)).map(|v| v * t.baseline_exposure.exp2())
     };
-    for (model, measured) in [("NIKON Z f", true), ("NIKON Z 9", false)] {
+    for (model, measured) in [("NIKON Z f", true), ("NIKON Z 99", false)] {
+        assert_eq!(lcc_camdb::has_matrices_camera(&format!("NIKON CORPORATION {model}")), measured, "{model}: pick a body the tables do/don't know");
         let metadata = lcc_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some(model.into()), ..Default::default() };
         let mut raw = lcc_raw::decode(&synthetic_dng_with(None, metadata)).unwrap();
         // a vendor raw's colour: a white balance, no matrices

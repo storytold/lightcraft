@@ -45,9 +45,10 @@ commands:
                   name) in any source file outside the allowlist (xtask/src/brand.rs);
                   test: build the CLI with xtask/test-brand.toml and check help, UI snapshot,
                   MCP serverInfo and config/log paths show only that brand; vars: list template keys
-  bench [FILE] [--strict] [--threshold PCT]
-                  run the render benchmark, append to target/bench/history.jsonl, compare CPU time with
-                  the previous run (default input: corpus/raw/arw-sony-a7m3-compressed.arw)
+  bench [FILE] [--only render,grid,tiff,keywords] [--strict] [--threshold PCT] [--save-baseline]
+                  run the perf probes, check the budgets, append to target/bench/history.jsonl and compare
+                  with this host's baseline (target/bench/baseline.json) or previous run; --strict fails on
+                  a regression over PCT (default 20) or a budget breach (docs/perf.md)
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
@@ -647,7 +648,7 @@ fn cmd_affected_tests(args: &[&str]) -> Result<(), String> {
 
 /// The app's environment variable `<PREFIX>_<suffix>` (`env_prefix` from brand.toml), for the
 /// child processes CI starts; the bare suffix when the brand file can't be read.
-fn env_name(suffix: &str) -> String {
+pub(crate) fn env_name(suffix: &str) -> String {
     brand::Brand::current().ok().and_then(|b| b.get("env_prefix").map(|p| format!("{p}_{suffix}"))).unwrap_or_else(|| suffix.to_string())
 }
 
