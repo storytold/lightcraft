@@ -208,7 +208,8 @@ fn manage_window_renames_groups_stars_duplicates_and_deletes() {
 #[test]
 fn style_brush_menu_starts_a_brush_mask() {
     let mut h = setup();
-    exec(&mut h, "mask.updateEffect", json!({"name": "12 Sky", "brush": {"size": 40, "feather": 70, "flow": 55, "density": 90, "auto_mask": true}}));
+    exec(&mut h, "mask.adjust", json!({"values": {"highlights": -60}}));
+    exec(&mut h, "mask.saveEffect", json!({"name": "12 Sky", "group": "Detail", "brush": {"size": 40, "feather": 70, "flow": 55, "density": 90, "auto_mask": true}}));
     exec(&mut h, "mask.select", json!({"id": null}));
     let before = h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().masks.len();
     h.step();
