@@ -1176,8 +1176,6 @@
   "Keywords, separated by commas": "מילות מפתח, מופרדות בפסיקים",
   "Return applies the edit to the selected photos; Esc gives it up. An asterisk marks a keyword only some of them have.": "הקשה על Enter מחילה את השינוי על התמונות שנבחרו; Esc מבטלת אותו. כוכבית מציינת מילת מפתח שקיימת רק בחלק מהן.",
   "this photo": "התמונה הזו",
-  "these {count} photos": "{count} התמונות האלה",
-  "Move {what} to Recently Deleted?": "להעביר את {what} אל „נמחקו לאחרונה”?",
   "Photos whose capture time can't be read were left as they were": "תמונות שלא ניתן לקרוא את מועד הצילום שלהן נותרו ללא שינוי",
   "The active photo's capture time can't be read": "לא ניתן לקרוא את מועד הצילום של התמונה הפעילה"
 }

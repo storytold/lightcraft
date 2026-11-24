@@ -13,5 +13,7 @@
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} מתוך 4 קווי עזר — יש לגרור לאורך קווים שאמורים להיות אנכיים או אופקיים.",
   "{} spot(s) on this photo": "מספר התיקונים הנקודתיים בתמונה: {}",
   "{mode} spot {} of {}": "{mode} — תיקון נקודתי {} מתוך {}",
-  "A keyword name can't end with an asterisk: “{name}”": "שם מילת מפתח אינו יכול להסתיים בכוכבית: „{name}”"
+  "A keyword name can't end with an asterisk: “{name}”": "שם מילת מפתח אינו יכול להסתיים בכוכבית: „{name}”",
+  "these {count} photos": "{count} התמונות האלה",
+  "Move {what} to Recently Deleted?": "להעביר את {what} אל „נמחקו לאחרונה”?"
 }
