@@ -126,7 +126,8 @@ fn compare_external155_clear_reference_keyboard_activation_keeps_active_selectio
         if focused == Some(target) {
             break;
         }
-        ask(&mut h, "ui.key", json!({"key": if focused.is_some_and(|id| h.app.widget_hits.iter().any(|(name, hit)| name.starts_with("compare:") && hit.id == id)) { "ArrowDown" } else { "Tab" }}));
+        let in_menu = focused.is_some_and(|id| h.app.widget_hits.iter().any(|(name, hit)| name.starts_with("compare:") && hit.id == id));
+        ask(&mut h, "ui.key", json!({"key": if in_menu { "ArrowDown" } else { "Tab" }}));
     }
     assert_eq!(craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|rec| rec.stop.id), Some(target), "the menu row holds the SDK focus");
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
