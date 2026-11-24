@@ -369,6 +369,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
     ("dialog.editInPresets", "Edit In Presets…", None, "Photo>Edit In"),
+    // {preset, mode?, action?}: one item of a saved Edit In preset's menu (Photo ▸ Edit In ▸ the
+    // preset): the selected photos handed to its editor, all with one start
+    ("photo.editInPreset", "Edit In Preset", None, ""),
     ("panel.actions", "Actions", None, ""),
     // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened
     // in the other editor, e.g. a raw developer
@@ -2671,6 +2674,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             edit_in(app, &ctx, p, photocraft)
         }
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
+        "photo.editInPreset" => crate::edit_in::run_preset(app, &ctx, p),
         "dialog.qualityScan" => {
             let s = crate::panels::dialogs::QualityScanSettings::remembered(app);
             app.ui.dialog = Some(Dialog::QualityScanner {
@@ -3722,7 +3726,9 @@ pub fn ui_enabled(app: &LccApp, id: &str) -> bool {
         "app.installUpdate" => false,
         #[cfg(not(target_arch = "wasm32"))]
         "app.installUpdate" => app.session.updater.staged().is_some(),
-        "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
+        "photo.editInPhotoCraft" | "photo.editInExternal" | "photo.editInPreset" => {
+            app.session.active().is_some() && app.services.open_with.is_some()
+        }
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),
         "dialog.updatePreset" => app.session.active().is_some(),
