@@ -401,13 +401,6 @@ fn a_clip_keeps_lens_corrections_upright_and_transform() {
     let d = s.develop_of(PhotoId(900)).unwrap();
     assert_eq!((d.optics.distortion, d.geometry.vertical), (20.0, -15.0), "kept on the clip");
     assert!(lcc_pipeline::grade::video_is_framed(&d));
-    // Upright analyses the clip's poster frame and stores the mode
-    let r = run(&mut s, "geometry.upright", json!({"mode": "auto"}));
-    assert_eq!(r["mode"], "auto");
-    assert_eq!(s.develop_of(PhotoId(900)).unwrap().geometry.upright, lcc_develop::Upright::Auto);
-    // one undo step takes it back
-    run(&mut s, "edit.undo", json!({}));
-    assert_eq!(s.develop_of(PhotoId(900)).unwrap().geometry.upright, lcc_develop::Upright::Off);
     // Capture Frame carries the transform: still decodable and the frame's size
     let r = run(&mut s, "video.captureFrame", json!({"time": 2.0}));
     let img = lcc_codecs::decode(&std::fs::read(r["path"].as_str().unwrap()).unwrap(), Default::default()).unwrap().to_srgb8();

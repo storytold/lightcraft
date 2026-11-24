@@ -140,6 +140,13 @@ fn clip_exports_with_lens_correction_and_transform() {
     make_clip(&src);
     let mut s = Session::new();
     let id = add_clip(&mut s, &src, (0.0, None));
+    // Upright analyses the clip's poster frame and stores the mode; one undo step takes it back
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let r = s.execute("geometry.upright", &json!({"mode": "auto"})).unwrap();
+    assert_eq!(r["mode"], "auto");
+    assert_eq!(s.develop_of(id).unwrap().geometry.upright, lcc_develop::Upright::Auto);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().geometry.upright, lcc_develop::Upright::Off);
     let mut d = (*s.develop_of(id).unwrap()).clone();
     d.optics.vignetting = 100.0;
     d.geometry.rotate = 5.0;
