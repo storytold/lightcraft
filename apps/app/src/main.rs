@@ -1399,6 +1399,7 @@ fn run() -> eframe::Result {
     }
     alloc_release::install();
     // from an AppImage: a launcher entry and icon for the taskbar, on a thread of its own (`desktop_entry`)
+    #[cfg(target_os = "linux")]
     desktop_entry::install_from_env();
     // the shared worker pool leaves cores free and renders run below normal priority
     threads::install();
