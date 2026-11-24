@@ -179,6 +179,20 @@
     ]
   },
   {
+    "name": "mask-colour-solo",
+    "steps": [
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "mask.solo",
+          "params": {
+            "section": "color"
+          }
+        }
+      }
+    ]
+  },
+  {
     "name": "mask-5-result",
     "steps": [
       {

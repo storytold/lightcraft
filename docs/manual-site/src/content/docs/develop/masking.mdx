@@ -6,6 +6,7 @@ description: Local adjustments, step by step.
 ---
 
 import Shot from '../../../components/Shot.astro';
+import NeedsImage from '../../../components/NeedsImage.astro';
 import { Aside, Steps } from '@astrojs/starlight/components';
 
 <Steps>
@@ -18,7 +19,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
    <Shot name="mask-2-linear" alt="A linear mask dragged on the sky" />
 
-3. **Adjust the mask.** Its own Light, Colour, Effects and Detail sliders only touch the masked area. Colour's **Hue** is an angle in degrees: about ±34° (Lightroom's range), or ±180° with **Settings ▸ Interface ▸ Expanded sliders** on.
+3. **Adjust the mask.** Its own Light, Colour, Color Grading, Effects and Detail sliders only touch the masked area. Colour's **Hue** is an angle in degrees: about ±34° (Lightroom's range), or ±180° with **Settings ▸ Interface ▸ Expanded sliders** on.
 
    <Shot name="mask-3-adjust" alt="Exposure, temperature, saturation and dehaze changed for the sky mask" />
 
@@ -39,6 +40,11 @@ import { Aside, Steps } from '@astrojs/starlight/components';
   - Resize the brush with `[` / `]`, the mouse wheel, or two-finger trackpad scrolling (scrolling up enlarges the brush, matching Lightroom Classic). To turn the scroll gesture the other way, enable **Invert brush resize direction** under **Settings ▸ Interface**.
 - **Range**: Luminance, Color, Depth (needs the Depth Anything model; see [AI masks](../../ai/masks-ai/#depth)).
 - **Before any mask exists**: the panel shows the settings the next mask will start from ("Settings for the next mask"), dimmed and inert. Create a mask first; once one exists those sliders work, and with masks present but none selected they again set up the next mask.
+- **Colour tools**: under Colour's sliders are **Color** (paint-bucket icon), **Color Mixer** (palette icon) and **Point Color** (eyedropper icon). **Color Grading** is its own section right under Colour, with the colour-wheels icon. The Targeted Adjustment buttons (Tone Curve, Color Mixer, the mask's Color Mixer) show a reticle.
+- **Solo Mode**: right-click any mask section title and tick **Solo Mode** (or **Window ▸ Edit Sections ▸ Solo Mode in Masks**). Opening one section then folds the others. Alt-click a section title to open just that one with the mode off.
+
+  <NeedsImage what="A mask's sections in Solo Mode: only Colour open, with the Color, Color Mixer and Point Color rows and their icons" />
+
 - **Color** (the swatch under Saturation): tints the masked area. Open it for **Hue** (0–360°, round the colour wheel) and **Saturation** (how strongly); Saturation 0 is no tint.
 - Add, subtract and intersect to refine; **Refine Edges** and **Feather** soften the border.
 - Masks use image-relative coordinates, so previews and exports match at any size.
