@@ -349,7 +349,13 @@ fn curve_of(v: &Value) -> Option<Vec<[f64; 2]>> {
         return None;
     }
     let max = n.iter().fold(0.0_f64, |m, x| m.max(*x));
-    let scale = if max <= 1.0 { 1.0 } else if max <= 255.0 { 255.0 } else { return None };
+    let scale = if max <= 1.0 {
+        1.0
+    } else if max <= 255.0 {
+        255.0
+    } else {
+        return None;
+    };
     let mut points: Vec<[f64; 2]> = n.chunks_exact(2).map(|c| [c[0] / scale, c[1] / scale]).collect();
     if points.iter().flatten().any(|x| !(0.0..=1.0).contains(x)) {
         return None;
@@ -499,13 +505,10 @@ pub fn partial(d: &CaptureOneDevelop, target: crate::crs::Target, as_shot: Optio
     if let Some(ev) = d.exposure {
         out.insert("light".into(), json!({"exposure": ev.clamp(-5.0, 5.0)}));
     }
-    let mut group = |name: &str| -> Option<&mut serde_json::Map<String, Value>> {
-        out.entry(name.to_string()).or_insert_with(|| json!({})).as_object_mut()
-    };
     for (key, v) in &d.sliders {
         let Some((g, name)) = key.split_once('.') else { continue };
         let v = if v.is_finite() { v.clamp(-100.0, 100.0) } else { continue };
-        if let Some(m) = group(g) {
+        if let Some(m) = group(&mut out, g) {
             m.insert(name.to_string(), json!(v));
         }
     }
@@ -514,7 +517,7 @@ pub fn partial(d: &CaptureOneDevelop, target: crate::crs::Target, as_shot: Optio
             continue;
         }
         let points: Vec<Value> = points.iter().map(|[x, y]| json!({"x": x.clamp(0.0, 1.0), "y": y.clamp(0.0, 1.0)})).collect();
-        if let Some(m) = group("curve") {
+        if let Some(m) = group(&mut out, "curve") {
             m.insert(channel.clone(), Value::Array(points));
         }
     }
@@ -522,7 +525,7 @@ pub fn partial(d: &CaptureOneDevelop, target: crate::crs::Target, as_shot: Optio
         if !lcc_develop::Levels::CHANNELS.contains(&channel.as_str()) {
             continue;
         }
-        if let Some(m) = group("levels") {
+        if let Some(m) = group(&mut out, "levels") {
             m.insert(channel.clone(), json!({"black": black, "midtone": midtone, "white": white, "out_black": out_black, "out_white": out_white}));
         }
     }
@@ -556,6 +559,11 @@ pub fn partial(d: &CaptureOneDevelop, target: crate::crs::Target, as_shot: Optio
     skipped.sort();
     skipped.dedup();
     (Value::Object(out), skipped)
+}
+
+/// The settings group `name` in `out`, made when missing.
+fn group<'a>(out: &'a mut serde_json::Map<String, Value>, name: &str) -> Option<&'a mut serde_json::Map<String, Value>> {
+    out.entry(name.to_string()).or_insert_with(|| json!({})).as_object_mut()
 }
 
 /// The aspect `ZCROPASPECTRATIONAME` names (`16x9`, `1x1 (Square)`), turned to the crop's shape; `None` for

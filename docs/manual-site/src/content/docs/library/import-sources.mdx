@@ -10,7 +10,6 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 
 ---
 
-import Shot from '../../../components/Shot.astro';
 
 - **Import from Device** (**File** menu): lists mounted cards and cameras that have a `DCIM` folder; opens the review and copies by default. Copies are verified; a bad copy is removed and reported.
 - **Settings ▸ Import ▸ Cameras and Cards**: open the review when a card is inserted (off by default).
@@ -32,7 +31,7 @@ import Shot from '../../../components/Shot.astro';
 
 <NeedsImage what="The Lightroom catalog import window asking: Merge into the open library, or Create a new library." />
 
-<Shot name="capture-one-import-result" alt="Capture One catalog import result: the settings not imported yet with their photo counts, and the white balance marked approximate" />
+<NeedsImage what="Capture One catalog import result: the settings not imported yet (LCC, local adjustment layers) with their photo counts, and the white balance marked approximate; retake capture-one-import-result now that Brightness, HDR and Levels import" />
 
 <Aside type="note" title="Modern layout">
   **File ▸ Import …** and **File ▸ More Imports** in the ☰ menu.

@@ -21,7 +21,8 @@ fn rect(p: &Value) -> [f64; 4] {
 fn columns_belong_to_the_tool_with_the_longest_prefix() {
     assert_eq!(tool_of("ZLENSLCCLIGHTFALLOFFAMOUNT"), Some("LCC"));
     assert_eq!(tool_of("ZLENSLIGHTFALLOFF"), Some("Lens Correction"));
-    assert_eq!(tool_of("ZGRADATIONCURVEY"), Some("Curve"));
+    assert_eq!(tool_of("ZGRADATIONCURVEY"), Some("Luma curve"));
+    assert_eq!(tool_of("ZGRADATIONCURVERED"), Some("Curve"));
     assert_eq!(tool_of("ZBWLIGHTTONEHUE"), Some("Black & White"));
     assert_eq!(tool_of("ZCLARITYSTRUCTURE"), Some("Clarity"));
     // imported, computed by Capture One, bookkeeping, the ICC profile: never reported
@@ -299,7 +300,7 @@ fn unreadable_tool_values_are_reported() {
         ("ZCLARITY", json!("1e999"), "Clarity"),
     ];
     for (column, value, tool) in cases {
-        let l = layers(json!({ *column: value }), json!({ *column: "0" }));
+        let l = layers(json!({ *column: value }), json!({ *column: "0.25" }));
         let d = develop_of(&l, [6000.0, 4000.0], ("", ""));
         assert!(d.not_imported.iter().any(|t| t == tool), "{column} = {value}: {:?}", d.not_imported);
         assert!(d.curves.is_empty() && d.levels.is_empty() && d.sliders.is_empty(), "{column} = {value}");
