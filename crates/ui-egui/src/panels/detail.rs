@@ -5310,6 +5310,11 @@ fn brush_keys(app: &mut LccApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopS
     let (x, y, down): (f64, f64, bool) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5, false));
     let mmap = map.for_mask_id(d, active);
     let q = mmap.screen(Point::new(x, y));
+    // a stroke can redraw the panels (a new mask) and drop the focus for a frame: a brush that is
+    // down keeps it, so the next arrow press still paints
+    if down && ui.memory(|m| m.focused().is_none()) {
+        ui.memory_mut(|m| m.request_focus(crate::canvas_keys::id("brush")));
+    }
     let state = crate::i18n::tr(if down { "brush down" } else { "brush up" });
     let keys = crate::canvas_keys::handle(
         ui,
@@ -5326,8 +5331,12 @@ fn brush_keys(app: &mut LccApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopS
         let erase = vec![app.ui.brush_erase; points.len()];
         let params = brush_params(app, d, points, &[], &erase, 0, false, long);
         let _ = app.run("develop.beginInteraction", json!({"label": "Brush"}));
-        let _ = app.run("mask.brushStroke", params);
+        let made = app.run("mask.brushStroke", params);
         let _ = app.run("develop.endInteraction", json!({}));
+        // the first stroke of a tool armed for a new mask made it: the brush paints on into it
+        if made.is_ok() && app.ui.mask_new.take().is_some() {
+            app.ui.active_mask_component = Some(0);
+        }
     };
     let mut next = (x, y, down);
     if keys.activated {
