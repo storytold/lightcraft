@@ -405,21 +405,43 @@ fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, ski
         .filter_map(|p| Some((p["manifest_path"].as_str()?.to_owned(), p["name"].as_str()?.to_owned())))
         .filter(|(_, name)| packages.contains(name))
         .collect();
-    let mut sel: Vec<&str> = vec!["test", "--no-run", "--message-format=json-render-diagnostics"];
-    if narrow {
-        sel.extend(packages.iter().flat_map(|p| ["-p", p.as_str()]));
+    // packages without a library (xtask, the apps): `-p` with `--lib` fails on them, so a narrow
+    // run builds them in a second cargo invocation without `--lib`
+    let has_lib: std::collections::BTreeSet<String> = metadata()?["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["targets"].as_array().into_iter().flatten().any(|t| t["kind"].as_array().into_iter().flatten().any(|k| k == "lib")))
+        .filter_map(|p| p["name"].as_str().map(str::to_owned))
+        .collect();
+    let base = ["test", "--no-run", "--message-format=json-render-diagnostics"];
+    let runs: Vec<Vec<&str>> = if narrow {
+        let (libs, bins): (Vec<&String>, Vec<&String>) = packages.iter().partition(|p| has_lib.contains(*p));
+        let mut runs = Vec::new();
+        if !libs.is_empty() {
+            let sel: Vec<&str> = base.into_iter().chain(libs.iter().flat_map(|p| ["-p", p.as_str()])).collect();
+            runs.push(with_test_targets(&sel));
+        }
+        if !bins.is_empty() {
+            runs.push(base.into_iter().chain(bins.iter().flat_map(|p| ["-p", p.as_str()])).chain(["--bins", "--tests"]).collect());
+        }
+        runs
     } else {
-        sel.push("--workspace");
-    }
+        vec![with_test_targets(&[&base[..], &["--workspace"]].concat())]
+    };
     let what = if narrow { "cargo test -p <packages> --no-run --lib --bins --tests" } else { "cargo test --workspace --no-run --lib --bins --tests" };
     eprintln!("$ {what} (then the test binaries of {})", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-    let out =
-        cargo().args(with_test_targets(&sel)).stderr(std::process::Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("{what}: exited with {}", out.status));
+    let mut stdout = String::new();
+    for args in &runs {
+        let out = cargo().args(args).stderr(std::process::Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("{what}: exited with {}", out.status));
+        }
+        stdout.push_str(&String::from_utf8_lossy(&out.stdout));
+        stdout.push('\n');
     }
     let mut binaries = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in stdout.lines() {
         let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else { continue };
         if msg["reason"] != "compiler-artifact" || msg["profile"]["test"] != true {
             continue;

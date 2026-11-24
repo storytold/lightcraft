@@ -50,7 +50,7 @@ try {
     const env = { ...process.env, ...isolatedEnv(work) };
     execFileSync(cli, ['snapshot', '--demo', '--script', script, '--size', cfg.size], { cwd: repo, env, stdio: 'inherit' });
     for (const s of shots.filter((x) => !x.layouts || x.layouts.includes(layout))) {
-      execFileSync('magick', [join(work, `${layout}-${s.name}.png`), '-resize', '1280x>', '-strip', '-sampling-factor', '4:2:0', '-quality', '82', join(out, `${s.name}.jpg`)]);
+      toJpeg(join(work, `${layout}-${s.name}.png`), join(out, `${s.name}.jpg`));
     }
   }
 } finally {
@@ -73,4 +73,17 @@ function isolatedEnv(dir) {
     XDG_CONFIG_HOME: join(home, '.config'),
     APPDATA: join(home, 'AppData'),
   };
+}
+
+// PNG -> 1280 px wide JPEG: ImageMagick when installed, else ffmpeg.
+var converter; // var: toJpeg runs before this line is reached
+function toJpeg(png, jpg) {
+  converter ??= ['magick', 'ffmpeg'].find((c) => { try { execFileSync(c, ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } });
+  if (converter === 'magick') {
+    execFileSync('magick', [png, '-resize', '1280x>', '-strip', '-sampling-factor', '4:2:0', '-quality', '82', jpg]);
+  } else if (converter === 'ffmpeg') {
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', png, '-vf', "scale='min(1280,iw)':-2", '-pix_fmt', 'yuvj420p', '-q:v', '4', '-map_metadata', '-1', jpg]);
+  } else {
+    throw new Error('install ImageMagick (magick) or ffmpeg to convert the screenshots');
+  }
 }

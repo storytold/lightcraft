@@ -1260,3 +1260,95 @@ mod tests {
         assert!((large_scale - UiFontSize::Large.scale()).abs() < 1e-4);
     }
 }
+
+/// The shade behind the photo in the loupe (and Compare/Survey/Reference) or behind the filmstrip
+/// (Settings ▸ Interface, Window ▸ Appearance, the loupe's right-click Background menu,
+/// `view.loupeBackground` / `view.filmstripBackground`). `Theme` keeps the theme's own canvas; the
+/// greys are fixed sRGB levels so a photo can be judged against a neutral surround (issue #1295:
+/// a 50 % grey round the photo in dark mode).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CanvasShade {
+    #[default]
+    Theme,
+    Black,
+    DarkGray,
+    MediumGray,
+    LightGray,
+    White,
+}
+
+impl CanvasShade {
+    pub const ALL: [CanvasShade; 6] =
+        [CanvasShade::Theme, CanvasShade::Black, CanvasShade::DarkGray, CanvasShade::MediumGray, CanvasShade::LightGray, CanvasShade::White];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            CanvasShade::Theme => "theme",
+            CanvasShade::Black => "black",
+            CanvasShade::DarkGray => "darkGray",
+            CanvasShade::MediumGray => "mediumGray",
+            CanvasShade::LightGray => "lightGray",
+            CanvasShade::White => "white",
+        }
+    }
+
+    /// The untranslated menu label (pass through `tr`).
+    pub fn label(self) -> &'static str {
+        match self {
+            CanvasShade::Theme => "Theme Default",
+            CanvasShade::Black => "Black",
+            CanvasShade::DarkGray => "Dark Gray",
+            CanvasShade::MediumGray => "Medium Gray",
+            CanvasShade::LightGray => "Light Gray",
+            CanvasShade::White => "White",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<CanvasShade> {
+        CanvasShade::ALL.into_iter().find(|s| s.id() == id)
+    }
+
+    /// The next shade in [`CanvasShade::ALL`], wrapping.
+    pub fn next(self) -> CanvasShade {
+        let i = CanvasShade::ALL.iter().position(|s| *s == self).unwrap_or(0);
+        CanvasShade::ALL.get(i + 1).copied().unwrap_or(CanvasShade::Theme)
+    }
+
+    /// The fill, `theme` for [`CanvasShade::Theme`]. Medium Gray is sRGB 128 (50 % grey).
+    pub fn color(self, theme: Color32) -> Color32 {
+        match self {
+            CanvasShade::Theme => theme,
+            CanvasShade::Black => Color32::BLACK,
+            CanvasShade::DarkGray => Color32::from_gray(64),
+            CanvasShade::MediumGray => Color32::from_gray(128),
+            CanvasShade::LightGray => Color32::from_gray(192),
+            CanvasShade::White => Color32::WHITE,
+        }
+    }
+}
+
+fn shade_id(filmstrip: bool) -> egui::Id {
+    egui::Id::new(("app-canvas-shade", filmstrip))
+}
+
+/// The loupe's background shade `ctx` paints with.
+pub fn loupe_shade(ctx: &egui::Context) -> CanvasShade {
+    ctx.data(|d| d.get_temp::<CanvasShade>(shade_id(false))).unwrap_or_default()
+}
+
+/// The filmstrip's background shade `ctx` paints with.
+pub fn filmstrip_shade(ctx: &egui::Context) -> CanvasShade {
+    ctx.data(|d| d.get_temp::<CanvasShade>(shade_id(true))).unwrap_or_default()
+}
+
+/// Paint the loupe and the filmstrip with these shades from the next frame on.
+pub fn set_canvas_shades(ctx: &egui::Context, loupe: CanvasShade, filmstrip: CanvasShade) {
+    if loupe_shade(ctx) != loupe || filmstrip_shade(ctx) != filmstrip {
+        ctx.data_mut(|d| {
+            d.insert_temp(shade_id(false), loupe);
+            d.insert_temp(shade_id(true), filmstrip);
+        });
+        ctx.request_repaint();
+    }
+}

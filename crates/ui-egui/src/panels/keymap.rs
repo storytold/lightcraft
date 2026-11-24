@@ -89,6 +89,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         });
         fixed_keys(app, ui, t, mac, &needle);
+        speed_keys(app, ui, t, mac, &needle);
     });
 }
 
@@ -322,6 +323,37 @@ fn fixed_keys(app: &LccApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &s
                 text = text.strikethrough();
             }
             ui.label(text);
+            ui.end_row();
+        }
+    });
+}
+
+/// Develop's speed-edit keys (`app.setSpeedKey`): hold the key and drag or scroll on the photo to
+/// move the slider. Listed here so the reference names every key that does something.
+fn speed_keys(app: &LccApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &str) {
+    let rows: Vec<_> = crate::speed_edit::rows(&app.ui.settings.speed_keys)
+        .into_iter()
+        .filter(|(key, _, label)| {
+            needle.is_empty() || crate::i18n::tr(label).to_lowercase().contains(needle) || menu_text(key, mac).to_lowercase().contains(needle)
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    ui.add_space(8.0);
+    ui.label(RichText::new(crate::i18n::tr("Speed-Edit Keys")).font(t.semibold(12.5)).color(t.text));
+    ui.label(
+        RichText::new(crate::i18n::tr(
+            "In Develop, hold a key and drag sideways or scroll on the photo to move its slider; a tap still runs its shortcut.",
+        ))
+        .size(11.0)
+        .color(t.text_dim),
+    );
+    egui::Grid::new("shortcuts-speed").striped(true).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+        for (key, id, label) in rows {
+            let r = ui.label(RichText::new(crate::i18n::tr(label)).color(t.text_label));
+            register(ui.ctx(), format!("speedKey:{id}"), r.rect);
+            ui.label(RichText::new(crate::i18n::tr_format!("Hold {} and drag or scroll", menu_text(&key, mac))).color(t.text_dim));
             ui.end_row();
         }
     });

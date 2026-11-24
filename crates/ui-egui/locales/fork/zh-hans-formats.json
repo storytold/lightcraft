@@ -88,6 +88,7 @@
   "Goes into the group “{group}” that exists already.": "将放入已存在的分组“{group}”。",
   "Healed {n} blemishes": "已修复 {n} 处瑕疵",
   "Healed {n} mark{} from the infrared pass": "已根据红外通道修复痕迹：{n}{:.0}",
+  "Hold {} and drag or scroll": "按住 {} 并拖动或滚动",
   "Ignored {} face": "已忽略 {} 张人脸",
   "Ignored {} faces": "已忽略 {} 张人脸",
   "Image Quality Scan stopped: {n} photos scanned": "图像质量扫描已停止：已扫描 {n} 张照片",

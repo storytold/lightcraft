@@ -111,7 +111,7 @@ icons! {
     Picker,
     /// A curved line with an arrow at both ends: drag to rotate, either way (the crop tool's pointer).
     RotateDrag,
-    /// Targeted adjustment: a picker with an up/down arrow beside it (pick on the photo, drag vertically).
+    /// Targeted adjustment: a reticle, a ring with four ticks and a centre dot (issue #1301; our own).
     Target,
     /// Community chat : a speech bubble with three dots. Our own
     /// generic drawing, not any service's logo.
@@ -141,6 +141,8 @@ icons! {
     RedEye,
     /// Color Mixer: a painter's palette.
     Palette,
+    /// A mask's Color (tint): a paint bucket tipped to pour, with a drop (issue #1305; our own).
+    Bucket,
     /// Object mask: a pointer clicking into a dashed selection.
     Object,
     /// Describe (text-prompt) mask: a speech bubble with lines of text.
@@ -173,6 +175,9 @@ icons! {
     Reset,
     /// The straighten tool: a ruler laid across (Lucide `ruler`).
     Straighten,
+    /// Guided Upright's tool (#1274, original): a photo frame with two guides drawn along its
+    /// converging verticals, each ending in a handle.
+    GuidedUpright,
     /// Automatic: a wand with sparkles (Lucide `wand-sparkles`).
     Auto,
     /// Mask component: add (two squares united; Lucide `squares-unite`).
@@ -819,12 +824,21 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(19.2, 9.6), (17.0, 11.9), (13.9, 11.0)]);
         }
         Target => {
-            // the picker (pick a colour or tone on the photo) with an up/down arrow beside it (drag up or down there)
-            pen.line(&[(2.5, 15.5), (8.5, 9.5)]);
-            pen.closed(&[(8.0, 6.0), (12.0, 10.0), (14.0, 8.0), (10.0, 4.0)]);
-            pen.line(&[(16.5, 10.5), (16.5, 18.0)]);
-            pen.line(&[(14.8, 12.2), (16.5, 10.5), (18.2, 12.2)]);
-            pen.line(&[(14.8, 16.3), (16.5, 18.0), (18.2, 16.3)]);
+            // a reticle: aim at a colour or tone on the photo, then drag there
+            pen.circle(10.0, 10.0, 6.0);
+            pen.line(&[(10.0, 1.5), (10.0, 6.0)]);
+            pen.line(&[(10.0, 14.0), (10.0, 18.5)]);
+            pen.line(&[(1.5, 10.0), (6.0, 10.0)]);
+            pen.line(&[(14.0, 10.0), (18.5, 10.0)]);
+            pen.dot(10.0, 10.0, 1.3);
+        }
+        Bucket => {
+            // a pail tipped to the right, half full, its handle over the top, a drop falling from its lip
+            pen.closed(&[(2.5, 9.0), (9.0, 2.5), (15.5, 9.0), (9.0, 15.5)]);
+            pen.fill(&[(4.0, 10.5), (14.0, 10.5), (9.0, 15.5)]);
+            pen.arc(9.0, 9.0, 4.0, 200.0, 340.0);
+            pen.line(&[(15.5, 9.0), (17.0, 12.0)]);
+            pen.dot(17.0, 15.0, 1.6);
         }
         Chat => {
             // rounded bubble with a tail at the lower left
@@ -954,6 +968,14 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
         Reset => {
             // Lucide `undo-2`
             lucide!(pen, ["M9 14 4 9l5-5", "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"]);
+        }
+        GuidedUpright => {
+            pen.rect(2.5, 3.0, 17.5, 17.0, 1.5);
+            pen.line(&[(6.0, 15.0), (7.5, 5.0)]);
+            pen.line(&[(14.0, 15.0), (12.5, 5.0)]);
+            for (x, y) in [(6.0, 15.0), (7.5, 5.0), (14.0, 15.0), (12.5, 5.0)] {
+                pen.dot(x, y, 1.4);
+            }
         }
         Straighten => {
             // Lucide `ruler`

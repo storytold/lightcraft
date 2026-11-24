@@ -936,12 +936,12 @@ pub fn retouch_people(img: &mut Rgb32f, s: &DevelopSettings, frame: &geometry::F
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (content-aware Fill, Generate and
-/// sourceless Remove spots, Even Out, the camera's local tone map).
+/// sourceless Remove spots, the camera's local tone map).
 pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
-    // defringe and Clone / Heal / sourced Remove spots have GPU kernels; spots rebuilt from their
-    // surroundings (Fill, Generate, a Remove without a source), Even Out and the camera's local
+    // defringe and Clone / Heal / sourced Remove / Even Out spots have GPU kernels; spots rebuilt
+    // from their surroundings (Fill, Generate, a Remove without a source) and the camera's local
     // tone map don't
-    s.spots.iter().any(|sp| spots::synthesises(sp) || sp.mode == lcc_develop::SpotMode::Flat) || local_tone::enabled(info, s)
+    s.spots.iter().any(spots::synthesises) || local_tone::enabled(info, s)
 }
 
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the

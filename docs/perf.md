@@ -68,7 +68,9 @@ It prints each budget in `BUDGETS` (draft slider ≤ 16 ms, loupe ≤ 60 ms at 2
 kept keyword tree ≤ 16 ms, …) with the measured wall time, then compares with this machine's baseline
 (`target/bench/baseline.json`, or the previous run on this host when there is none) using CPU time where a probe
 reports it and wall time otherwise. `--strict` fails on an enforced budget breach or a regression over 20 %
-(`--threshold PCT`). Budgets marked advisory are known misses and never fail; they become enforced once met. A
+(`--threshold PCT`). The same threshold is the budgets' noise allowance: an enforced budget fails only above
+ceiling × (1 + threshold), so one noisy reading just over a ceiling on a shared machine is reported as "over
+(within noise allowance)" and does not fail. Budgets marked advisory are known misses and never fail; they become enforced once met. A
 baseline from another host is never used: numbers compare only on one machine.
 
 First run (Windows, shared machine under heavy concurrent build load, 2026-11-24, 24 MP ARW; wall ms):
@@ -77,11 +79,12 @@ First run (Windows, shared machine under heavy concurrent build load, 2026-11-24
 |---|---|---|---|
 | draft highlights / clarity drag, GPU | 16 | 3.9 / 4.1 | enforced |
 | draft highlights / clarity drag, CPU | 16 | 78 / 51 | advisory |
-| draft NR drag, GPU / CPU (4.5) | 16 | 30 / 519 | advisory |
+| draft NR drag, GPU / CPU (4.5) | 16 | 11.3 (was 39.9, same-machine A/B, loaded) / 519 | advisory |
 | loupe 1920×1280 exposure drag, GPU / CPU | 60 | 13 / 127 | GPU enforced, CPU advisory |
 | loupe 1920×1280 NR drag, GPU / CPU | 60 | 255 / 573 | advisory |
 | grid 100k unchanged frame | 16 | 13.2 | enforced |
 | grid wheel-scroll frame, filter bar hidden (4.8) | 16 | 17.5 | advisory |
+| grid wheel-scroll frame median, 100k (`wheel` probe, 4.8; 2026-11-24) | 16 | 6.2 | enforced |
 | grid 100k jump to 90k / filter change | 1500 / 1000 | 971 / 232 | enforced (guessed ceilings with headroom) |
 | TIFF ZIP 24 MP 16-bit | 3000 | 960 | enforced (guessed ceiling) |
 | keyword tree kept / rebuilt | 16 / 400 | 0.6 / 198 | enforced (rebuilt: guessed ceiling) |
@@ -146,7 +149,6 @@ load_bytes(2560):          93.0 ms wall,  1855.4 ms cpu
 load_bytes(full):         425.3 ms wall, 10448.3 ms cpu
 ```
 
-<<<<<<< HEAD
 ## Start-up (`cargo xtask bench`, `startup_bench`; plan item 4.1, #979)
 
 `cargo run --release -p lcc-ui-egui --example startup_bench -- [DIR] [PHOTOS]` makes a synthetic library (default
@@ -164,7 +166,7 @@ own photos) goes 16 384 photos a tick, the view is signed in place and a build c
 photo. The lens database is read on a worker after a library opens (an activity-stack row) instead of by the first
 photo that needs it. Library ready 1.0–3.9 s before, 1.0–8.2 s after, same noise: the remaining long frame is the
 session open on the interface thread, not measured apart here.
-=======
+
 ## CPU-only stages against the loupe budget (plan 4.6, 2026-11-24)
 
 Two stages have no WGSL kernel: soft proofs against an output-device profile (a 3D table; the GPU renderer declines
@@ -189,7 +191,26 @@ small spot fits; large or many Even Out spots miss it (the three box blurs per s
 radius), and Fill pays its PatchMatch solve once per stroke. A port of Even Out's blurs to the GPU blur kernels is the
 next step if the idle re-measure confirms the miss. Tried and dropped: taller `box_v` bands for wide radii (fewer
 primes, less parallelism): no difference distinguishable from the load noise.
->>>>>>> origin/main
+
+**Even Out on the GPU (2026-11-24).** Even Out spots now run on the device: `spot_prep` writes the target and the
+masked surroundings, the three blurs go through the GPU box-blur `gaussian` (the CPU's three-box blur, pass for
+pass), and `spot_apply` computes `flat_gain`'s clamped gain. `lin_needs_cpu` no longer sends such a photo's
+scene-linear stage to the CPU (Fill / Generate / sourceless Remove still do). GPU vs CPU: `spots_match` (four Even
+Out cases: small, large, brushed and cut by the edge, over a heal) within 1 LSB, mean 0.0001. Probe:
+`cargo test -p lcc-gpu --release --test it even_out_render_time -- --ignored --nocapture` (whole GPU render,
+1920×1280, 7 runs). Same binary-pair before/after on the same machine, but it was saturated by ten other build
+lanes (the plain render ranged 1.9–5.6 s, against tens of ms idle), so only the fastest run is meaningful:
+
+| Case (1920×1280, GPU render) | Before (fastest) | After (fastest) |
+|---|---|---|
+| no spots | 1947 ms | 4017 ms (load; slower than the spot cases, so absolute numbers here are noise) |
+| 1 Even Out spot, size 0.05 | 2361 ms | 937 ms |
+| 1 Even Out spot, size 0.20 | 2963 ms | 1507 ms |
+| 10 Even Out spots, size 0.05 | 3757 ms | 1982 ms |
+
+Before, every Even Out case paid a read-back, the CPU stage and an upload on top of the plain render (+0.4–1.8 s
+here); after, no case is slower than the plain render's noise. An idle re-measure should confirm the absolute spot
+cost against the 60 ms loupe budget.
 
 ## Catalog (`cargo xtask bench-catalog`)
 

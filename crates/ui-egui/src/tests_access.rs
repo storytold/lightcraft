@@ -179,3 +179,55 @@ fn module_text_is_routed_through_tr() {
     english.dedup();
     assert!(english.is_empty(), "shown in English although translated:\n{}", english.join("\n"));
 }
+
+/// Library and Develop's core widgets, as a screen reader hears them: every grid cell is named by
+/// its file, every Develop slider carries a name and a value (Exposure among them), the panel
+/// headers are named and say whether they are open, and no button in either view is nameless
+/// (the shared filmstrip cells and scroll bars aside).
+#[test]
+fn library_and_develop_core_widgets_are_named() {
+    let mut h = demo();
+    let nodes = |h: &Headless| -> Vec<(NodeId, Node)> { h.view.access.as_ref().map(|u| u.nodes.clone()).unwrap_or_default() };
+    let film: BTreeSet<NodeId> = h.app.session.visible_cloned().iter().map(|p| egui::Id::new(("film", p.0)).accesskit_id()).collect();
+    let nameless_buttons = |all: &[(NodeId, Node)]| -> Vec<String> {
+        all.iter()
+            .filter(|(id, n)| {
+                matches!(n.role(), Role::Button | Role::CheckBox | Role::Slider | Role::ComboBox) && !named(n) && !shared_widget(&film, *id, n)
+            })
+            .map(|(_, n)| format!("{:?} at {:?}", n.role(), n.bounds()))
+            .collect()
+    };
+    // Library: the grid
+    run(&mut h, "module.library", json!({}));
+    let r = h.request("ui.set", json!({"view": "photoGrid"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+    let all = nodes(&h);
+    let cells: Vec<NodeId> = h.app.session.visible_cloned().iter().map(|p| egui::Id::new(("cell", p.0)).accesskit_id()).collect();
+    let seen: Vec<&Node> = all.iter().filter(|(id, _)| cells.contains(id)).map(|(_, n)| n).collect();
+    assert!(!seen.is_empty(), "grid cells are in the tree");
+    for n in &seen {
+        assert!(n.label().is_some_and(|l| l.contains('.')), "a grid cell is named by its file: {n:?}");
+    }
+    let lib = nameless_buttons(&all);
+    // Develop: sliders, panel headers, buttons
+    run(&mut h, "module.switch", json!({"module": "develop"}));
+    let all = nodes(&h);
+    let sliders: Vec<&Node> = all.iter().map(|(_, n)| n).filter(|n| n.role() == Role::Slider).collect();
+    assert!(sliders.len() > 5, "Develop shows its sliders ({})", sliders.len());
+    for s in &sliders {
+        assert!(named(s) && (s.numeric_value().is_some() || s.value().is_some()), "a slider has a name and a value: {s:?}");
+    }
+    assert!(sliders.iter().any(|s| s.label() == Some("Exposure")), "Exposure is announced");
+    let headers = all
+        .iter()
+        .filter(|(_, n)| {
+            (n.is_expanded().is_some() || n.is_selected().is_some() || n.toggled().is_some()) && n.label().is_some_and(|l| !l.trim().is_empty())
+        })
+        .count();
+    assert!(headers >= 3, "panel headers are named and say whether they are open ({headers})");
+    let dev = nameless_buttons(&all);
+    assert!(lib.is_empty() && dev.is_empty(), "nameless controls:\nlibrary: {lib:#?}\ndevelop: {dev:#?}");
+}

@@ -235,6 +235,7 @@ on all three desktop OSes every day.
 | GPU equivalence on lavapipe | gpu0, `rust:1.100.0-bookworm` container (exact tag) | `crates/gpu/tests/it/equivalence.rs` on Mesa's software Vulkan driver (the container has no GPU) |
 | GPU equivalence on WARP | self-hosted Windows | the same tests on DX12's software adapter |
 | Full tests (macOS), Full tests (Windows) | self-hosted mac0, win0 | `cargo build --workspace` and `cargo xtask quarantine test` (nextest with retries and the quarantine), as the manual full CI run |
+| Web smoke (headless Chromium) | gpu0, `rust:1.100.0-bookworm` container | `packaging/web/smoke.sh`: builds the browser version (`cargo xtask web --dev`), serves it, loads `?store=memory` in headless Chromium (no Node, no WebDriver: `--dump-dom` plus the browser's stderr console log) and fails when the app doesn't start, shows a crash overlay or logs a console error. Run it locally with Chromium on PATH (or `CHROME=<path>`) |
 | Report | self-hosted Linux | scheduled runs only: when any job failed or was cancelled, opens the issue "Nightly full run failing" (or comments on the open one) with the run link; on a green run it closes that issue |
 
 **Release gate.** `release.yml`'s version job looks up the completed `nightly.yml` runs and takes the newest whose

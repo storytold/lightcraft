@@ -18,6 +18,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 - **Navigator**: small map at the top of the left panel; click or drag to pan. Fit, Fill, 1:1 and 3:1 buttons.
 - **Zoom**: `⌘0` fit, click to 1:1, **View ▸ Zoom**. Zoom works while cropping. Compare (`⇧C`) and Survey: [Browse](../../library/browse/).
+- **Background** round the photo: right-click the loupe ▸ **Background**, or the **Loupe Background** group of **Window ▸ Appearance**: Theme Default, Black, Dark Gray, Medium Gray (50 % grey, for judging colour), Light Gray or White. The **Filmstrip Background** group in the same menu sets the strip's shade on its own. Both are also in **Settings ▸ Interface** and are kept between sessions. Agents: `view.loupeBackground {"shade": "mediumGray"}`, `view.filmstripBackground` (no shade: the next one). <NeedsImage what="the loupe on a Medium Gray background with a Dark Gray filmstrip, and the right-click Background submenu" />
 - **Camera focus point** overlay: zoom to where the camera focused (beyond Lightroom). Partial.
 - **Info overlay**: **View ▸ Loupe Info**. **Show Clipping** (`J`): blue shadows, red highlights. The histogram's clipping triangles preview the clipped areas once the pointer rests on one for about 0.3 s. A click on a triangle switches Show Clipping on or off, and the preview then stays off until the pointer leaves the triangle.
 
@@ -25,10 +26,12 @@ import { Aside } from '@astrojs/starlight/components';
 
 - **Histogram** modes: RGB, Luminance, Separated, Chroma; scopes **Vectorscope**, **Waveform**, **RGB Parade**; linear or log scale. Colour readout in RGB, HSL or Lab.
 - **Drag on the histogram** to change Blacks, Shadows, Exposure, Highlights, Whites.
-- **Soft Proofing** (`S`): preview the output colour space or a CMYK/ICC profile with intent and paper-and-ink simulation. <NeedsImage what="the loupe with soft proofing on and its destination-gamut warning" />
+- **Soft Proofing** (`S`): preview the output colour space or a CMYK/ICC profile with intent and paper-and-ink simulation.
 - **Second window** (**Window ▸ Second Window**) shows the photo on another display.
 - **High quality adjustment previews**: **Settings ▸ Performance**. Keeps the preview at full quality while a slider is dragged. Off by default.
 - **GPU**: **Settings ▸ Performance** turns the GPU on or off and sets preview size; a crash building the GPU device turns it off.
+
+<Shot name="soft-proof" alt="Soft Proofing on in Develop: Proof Preview · sRGB over the photo, the destination-gamut warning showing out-of-gamut colour in red, and the profile picker" />
 
 <Aside type="note" title="Modern layout">
   Before/After, zoom and scopes: **View** menu. The histogram is the small card at the top right.

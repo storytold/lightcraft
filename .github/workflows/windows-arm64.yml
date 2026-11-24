@@ -124,6 +124,8 @@ jobs:
         shell: pwsh
         env:
           DIST: ${{ github.workspace }}\dist\arm64
+          # a check, not a release: the quicker release profile (releases build with dist)
+          PACKAGE_PROFILE: release
           CRAFT_FONTS_DIR: ${{ github.workspace }}\craft-fonts
         run: |
           ./packaging/windows/package.ps1 -Arch arm64

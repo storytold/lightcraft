@@ -52,10 +52,10 @@ if [[ "$SKIP_BUILD" = 0 ]]; then
   # shellcheck source=../fonts.sh
   . "$ROOT/packaging/fonts.sh"
   prepare_fonts
-  (cd "$ROOT" && cargo build --release --locked -p lcc-app --features lcc-app/heif \
+  (cd "$ROOT" && cargo build --profile "$PACKAGE_PROFILE" --locked -p lcc-app --features lcc-app/heif \
     ${CROSS_TARGET:+--target "$CROSS_TARGET"})
 fi
-BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
+BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}$PACKAGE_PROFILE"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"

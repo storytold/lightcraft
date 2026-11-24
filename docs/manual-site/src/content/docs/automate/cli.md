@@ -9,7 +9,7 @@ sidebar:
 - **`<cli> run`**: run a chain of commands and print one JSON line per command. A word without `=` starts the next command; `key=value` values are JSON when they parse.
 - **`<cli> render`**: develop one file and export it (see [Headless](../headless/)).
 - **`<cli> run-action NAME`**: play a saved [action](../actions/) on the selection or on `ids`.
-- **`<cli> sync-folder FOLDER`** and **`open-url URL`**: synchronise a library folder, or follow a `<app>` link.
+- **`<cli> sync-folder FOLDER`** and **`open-url URL`**: synchronise a library folder, or follow a `<app>` link. Opening the link itself (Windows, Linux) starts the app, or hands it to the copy already running, which opens Synchronize Folder for the folder.
 - **`<cli> mcp`**: the [MCP server](../mcp/).
 - **`<cli> merge hdr|panorama|hdr-panorama|hdr-batch|focus FILES…`**: Photo Merge without a window.
 - **`<cli> quality-scan [FOLDER]`**: the [Image Quality Scanner](../../library/quality-scanner/) without a window: scores the library (or a folder) and prints the summary as JSON. `--accepted`, `--rejected`, `--apply-flags` (`--auto-flag`), `--rescan`, `--weights`, `--auto-rate`, `--overwrite-metadata` and `--star-breaks` (five scores) set what the dialog sets; `--connect` scans in the running app. `run photo.qualityScan …` does the same from a script.

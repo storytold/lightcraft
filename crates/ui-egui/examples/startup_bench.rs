@@ -6,7 +6,8 @@
 //! `target/bench/startup-<PHOTOS>`) when it has none — raws of a few camera bodies, a third of them
 //! edited, keywords and ratings, like a library brought over from another program — then starts the
 //! app on it the way the desktop app does: an unopened session, the window's first frame, the
-//! catalog opened on a worker ([`lcc_ui_egui::panels::library_problem::start_open`]), the session
+//! catalog read and its first view sorted on a worker
+//! ([`lcc_ui_egui::panels::library_problem::start_open`]), the session
 //! opened on the interface's thread, and the first frames of the grid after it. A headless host draws
 //! the frames (no window, no GPU surface: the window's own creation is not counted).
 //!
@@ -63,11 +64,30 @@ fn make_library(dir: &str, n: u32) {
     eprintln!("made a library of {n} photos in {dir} in {:.1} s", t.elapsed().as_secs_f64());
 }
 
+/// With `<PREFIX>_PROFILE=1`, what the app logs at info level (the library open's stages) goes to
+/// stderr, so a slow frame can be traced to its stage.
+struct StderrLog;
+impl log::Log for StderrLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Info
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("[{}] {}", r.target(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+static STDERR_LOG: StderrLog = StderrLog;
+
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1e3
 }
 
 fn main() {
+    if lcc_pipeline::profiling() && log::set_logger(&STDERR_LOG).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let n: u32 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(100_000);
     let dir = args.first().cloned().unwrap_or_else(|| format!("target/bench/startup-{n}"));
@@ -81,10 +101,15 @@ fn main() {
     lcc_ui_egui::panels::library_problem::start_open(&mut app, dir.clone().into(), Vec::new(), false, false);
     let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
     let mut slowest = 0.0f64;
+    let profile = lcc_pipeline::profiling();
     let mut frame = |h: &mut Headless| {
         let t = Instant::now();
         h.step();
-        slowest = slowest.max(ms(t.elapsed()));
+        let took = ms(t.elapsed());
+        if profile && took > 100.0 {
+            eprintln!("startup: a {took:.1} ms frame at {:.1} ms", ms(t0.elapsed()));
+        }
+        slowest = slowest.max(took);
     };
     frame(&mut h);
     let first = t0.elapsed();
@@ -92,6 +117,10 @@ fn main() {
     while !open(&h) && t0.elapsed() < Duration::from_secs(600) {
         std::thread::sleep(Duration::from_millis(2));
         frame(&mut h);
+        if let Some(e) = h.app.library_problem.as_ref().map(|p| p.error.clone()).filter(|e| !e.is_empty()) {
+            eprintln!("the library did not open: {e}");
+            std::process::exit(1);
+        }
     }
     if !open(&h) {
         eprintln!("the library did not open within 10 minutes");
