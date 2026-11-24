@@ -206,7 +206,9 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let (w, h) = (p.width.max(1) as f64, p.height.max(1) as f64);
             if d.orientation.swaps_axes() { h / w } else { w / h }
         });
-        ui.horizontal(|ui| {
+        // wrapped: the label, the ratio and Lock are wider than a narrow panel, and a row wider than the panel would
+        // widen the whole column (the sliders' values and the buttons below ran past its edge)
+        ui.horizontal_wrapped(|ui| {
             ui.label(crate::i18n::tr("Aspect Ratio"));
             aspect_picker(app, ui, id, original);
             let locked = app.crop_tool_aspect().is_some();
@@ -263,6 +265,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     // read as the Straighten value reads a typed one: "-3,25" too
                     .codec(
                         NumberCodec::new(Reader::new(), 2)
+                            .fixed()
                             .parse_with(move |text| crate::widgets::typed_value(&number_spec, text.trim().trim_end_matches('°'))),
                     )
                     .show(ui);
@@ -272,37 +275,42 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if real && ui.is_enabled() {
                     const OWNER: &str = "cropAngleField";
                     let angle = |value: f64| (value.clamp(spec.min, spec.max) * 100.0).round() / 100.0;
+                    // a scrub of the field (the pointer held) is live and one undo step; typing is not: a typed angle
+                    // applies on Return or on leaving the field, no half-typed angles (-3° on the way to -3.25°)
+                    let held = ui.input(|input| input.pointer.primary_down());
                     for event in &shown.events {
+                        let owned = app.ui.dragging_control.as_deref() == Some(OWNER);
                         match event {
-                            // a drag on the field is one undo step, like the slider's
-                            EditEvent::Begin { .. } => {
+                            EditEvent::Begin { .. } if held => {
                                 if app.run("develop.beginInteraction", json!({"label": "Straighten"})).is_ok() {
                                     app.ui.dragging_control = Some(OWNER.into());
                                 }
                             }
-                            EditEvent::Update { value: Some(v), .. } if v.is_finite() && app.ui.dragging_control.as_deref() == Some(OWNER) => {
+                            EditEvent::Update { value: Some(v), .. } if v.is_finite() && owned => {
                                 let _ = app.run("crop.straighten", json!({"angle": angle(*v)}));
                             }
-                            EditEvent::Commit { after: Some(v), .. } => {
-                                if v.is_finite() {
-                                    let _ = app.run("crop.straighten", json!({"angle": angle(*v)}));
+                            EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
+                                if let Some(v) = after.filter(|v| v.is_finite())
+                                    && (owned || angle(v) != d.crop.geometry.angle)
+                                {
+                                    let _ = app.run("crop.straighten", json!({"angle": angle(v)}));
                                 }
-                                if app.ui.dragging_control.as_deref() == Some(OWNER) {
+                                if owned {
                                     let _ = app.run("develop.endInteraction", json!({}));
                                     app.ui.dragging_control = None;
                                 }
                             }
-                            // a typed angle applies on Return (or leaving the field): no half-typed angles, one undo step
-                            EditEvent::Set { after: Some(v), .. } if v.is_finite() && *v != d.crop.geometry.angle => {
-                                let _ = app.run("crop.straighten", json!({"angle": angle(*v)}));
-                            }
-                            // Esc keeps the old angle; it ends the field's edit, not the crop tool
+                            // Esc keeps the old angle and gives the field up, as the old one did, doing nothing else: the
+                            // next Esc is the crop tool's
                             EditEvent::Cancel { .. } => {
-                                if app.ui.dragging_control.as_deref() == Some(OWNER) {
+                                if owned {
                                     let _ = app.run("develop.cancelInteraction", json!({}));
                                     app.ui.dragging_control = None;
                                 }
                                 crate::widgets::take_escape(ui.ctx());
+                                if let Some(rec) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == shown.response.id) {
+                                    ui.ctx().memory_mut(|memory| memory.surrender_focus(rec.stop.root));
+                                }
                             }
                             _ => {}
                         }
@@ -391,7 +399,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 }
 
 /// Crop's composition overlay is a view preference, not a develop edit or a canvas action.
-/// One spatial radio group keeps keyboard ownership across both rows; labels wrap in their cells.
+/// One spatial radio group keeps keyboard ownership across its rows; each row holds as many whole labels as fit.
 fn crop_overlay_choices(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: PhotoId) {
     use crate::state::CropOverlay as O;
     use craft::behavior::{NavShape, Proposal};
@@ -418,13 +426,40 @@ fn crop_overlay_choices(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: Photo
         let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
         let picked = {
             let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0)).max(1.0);
-            let cell_width = ((width - 12.0) / 4.0).max(1.0);
+            // As many columns as fit every choice whole (a radio, its gap and its label; each column as wide as its
+            // widest label): a label never wraps mid-word ("Golde/n"), and a wide panel still takes four a row.
+            let label_widths: Vec<f32> = opts
+                .iter()
+                .map(|(_, label, _)| {
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let text = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_owned(), font, egui::Color32::WHITE).size().x;
+                    // the radio's circle, its gap to the label and a little air
+                    text + 16.0 + 6.0 + 6.0
+                })
+                .collect();
+            let widths_for = |columns: usize| -> Vec<f32> {
+                (0..columns).map(|column| label_widths.iter().skip(column).step_by(columns).copied().fold(0.0_f32, f32::max)).collect()
+            };
+            let fits = |columns: usize| widths_for(columns).iter().sum::<f32>() + 4.0 * (columns as f32 - 1.0) <= width;
+            let columns = (2..=4).rev().find(|&columns| fits(columns)).unwrap_or(2);
+            let room = width - 4.0 * (columns as f32 - 1.0);
+            let column_widths: Vec<f32> = if fits(columns) {
+                // the room left over is shared out, so the columns still span the panel
+                let natural = widths_for(columns);
+                let spare = ((room - natural.iter().sum::<f32>()) / columns as f32).max(0.0);
+                natural.iter().map(|w| w + spare).collect()
+            } else {
+                // a panel too narrow for two whole long labels (a long translation at the narrowest width): two equal
+                // columns inside the panel, their labels wrapping in them
+                vec![(room / columns as f32).max(1.0); columns]
+            };
             let body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
-                for (row_index, row) in opts.chunks(4).enumerate() {
+                for (row_index, row) in opts.chunks(columns).enumerate() {
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         for (column, (_, label, key)) in row.iter().enumerate() {
-                            let index = (row_index * 4 + column) as u8;
+                            let index = (row_index * columns + column) as u8;
+                            let cell_width = column_widths[column];
                             ui.allocate_ui_with_layout(egui::vec2(cell_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                                 ui.set_min_width(cell_width);
                                 ui.set_max_width(cell_width);

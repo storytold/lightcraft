@@ -81,10 +81,15 @@ impl CurveResetFrames {
         self.frame(vec![pointer(at, button, false)]);
     }
 
+    /// The graph's context menu is the framework's: a layer of its that takes keys is open.
+    fn menu_open(&self) -> bool {
+        craft::ui::runtime::overlay::any_open(&self.ctx, craft::ui::runtime::overlay::OpenFilter::Keys)
+    }
+
     fn open(&mut self) {
         self.click(self.rect("curve").center(), PointerButton::Secondary);
         self.settle();
-        assert!(egui::Popup::is_any_open(&self.ctx));
+        assert!(self.menu_open());
         for id in ["curveMenu:resetChannel", "curveMenu:resetAll"] {
             assert_eq!(self.rects.iter().filter(|(name, _)| name == id).count(), 1);
             assert_eq!(self.hits.iter().filter(|(name, _)| name == id).count(), 1);
@@ -108,7 +113,7 @@ impl CurveResetFrames {
         assert_eq!(commands.len(), 1, "one dispatch, including no-op duplicates: {commands:?}");
         assert_eq!(commands[0], ("curve.reset".to_owned(), json!({"channel": channel})));
         assert_eq!(self.app.session.undo.len(), undo + 1);
-        assert!(!egui::Popup::is_any_open(&self.ctx), "native egui menu dismissed");
+        assert!(!self.menu_open(), "the menu is dismissed");
     }
 }
 
@@ -172,7 +177,11 @@ fn sdk_curve_reset_all_pointer_enter_and_space_dispatch_once_and_dismiss_native_
             f.open();
             if let Some(key) = key {
                 let hit = f.hit("curveMenu:resetAll");
-                f.ctx.memory_mut(|m| m.request_focus(hit.id));
+                // The menu is the framework's, and the pointer opened it: the first key there only starts the keyboard
+                // (a row it did not light does not run on it). An arrow starts it, then the row's focus goes through
+                // the framework's focus service.
+                f.key(Key::ArrowDown);
+                craft::ui::runtime::focus::request(&f.ctx, craft::ui::runtime::focus::FocusTarget::Id(hit.id));
                 f.frame(vec![]);
                 f.key(key);
             } else {
@@ -216,7 +225,7 @@ fn sdk_curve_reset_escape_outside_secondary_and_cancelled_press_do_not_dispatch(
         assert_eq!(f.app.session.journal.len(), journal, "{cancel}");
         assert_eq!(f.app.session.undo.len(), undo, "{cancel}");
         if cancel == "escape" || cancel == "outside" {
-            assert!(!egui::Popup::is_any_open(&f.ctx), "{cancel} dismisses");
+            assert!(!f.menu_open(), "{cancel} dismisses");
         }
     }
 }

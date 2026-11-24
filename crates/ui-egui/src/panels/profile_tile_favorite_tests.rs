@@ -62,7 +62,8 @@ impl Frames {
                             let controls = profile_cell_controls(ui, tag, PROFILE, NAME, cell, star, d.profile.id == PROFILE, fav);
                             visible_focus.push((controls.star.id, controls.star_focus_visible));
                             for response in [&controls.tile, &controls.star] {
-                                selections.push((response.id, ui.ctx().accesskit_node_builder(response.id, |n| (n.is_selected(), n.description().map(str::to_owned)))));
+                                // button-role toggles report their state as pressed (toggled), not selected
+                                selections.push((response.id, ui.ctx().accesskit_node_builder(response.id, |n| (n.toggled().and_then(|t| (t == egui::accesskit::Toggled::True).then_some(true)), n.description().map(str::to_owned)))));
                             }
                             if controls.intent != ProfileCellIntent::None { intents.push(controls.intent); }
                             profile_cell_apply(app, ui, PROFILE, controls.intent);
@@ -118,7 +119,7 @@ impl Frames {
     }
     fn assert_state(&self, owner: egui::Id, on: bool) {
         let node = self.selections.iter().find(|(id,_)| *id==owner).expect("current SDK response").1.as_ref().expect("actual AX button node");
-        // For Button the pinned SDK emits SELECTED only when true. The explicit
+        // For Button the SDK reports the state as pressed (toggled); only On counts here. The explicit
         // localized description must remain available in *both* states.
         assert_eq!(node.0,on.then_some(true));
         assert_eq!(node.1.as_deref(),Some(crate::i18n::tr(if on {"On"} else {"Off"})));
