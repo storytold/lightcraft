@@ -79,7 +79,7 @@ First run (Windows, shared machine under heavy concurrent build load, 2026-11-24
 |---|---|---|---|
 | draft highlights / clarity drag, GPU | 16 | 3.9 / 4.1 | enforced |
 | draft highlights / clarity drag, CPU | 16 | 78 / 51 | advisory |
-| draft NR drag, GPU / CPU (4.5) | 16 | 30 / 519 | advisory |
+| draft NR drag, GPU / CPU (4.5) | 16 | 11.3 (was 39.9, same-machine A/B, loaded) / 519 | advisory |
 | loupe 1920×1280 exposure drag, GPU / CPU | 60 | 13 / 127 | GPU enforced, CPU advisory |
 | loupe 1920×1280 NR drag, GPU / CPU | 60 | 255 / 573 | advisory |
 | grid 100k unchanged frame | 16 | 13.2 | enforced |
