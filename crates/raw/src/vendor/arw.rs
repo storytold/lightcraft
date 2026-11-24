@@ -230,8 +230,6 @@ const MN_SONY_MODEL_ID: u16 = 0xb001;
 /// SonyModelID 289 (issue #1275).
 const SONY_MODEL_IDS: &[(u64, &str)] = &[(289, "NEX-7"), (294, "SLT-A99"), (297, "DSC-RX100"), (308, "DSC-RX100M2")];
 
-/// The Sony body for the model-keyed tables: the Exif `model` of a Sony-branded file, else the one the maker note's
-/// `SonyModelID` names (a Lunar says "Lunar"), else `model` as it is.
 /// Extra factor on an ARW6 file's black and white tags beyond the 2 x 14-bit output unit. The decoder's output scale
 /// does not depend on BitsPerSample; a 12-bit file whose WhiteLevel fits in 12 bits states its levels on the 12-bit
 /// scale, so they are multiplied by 4 to reach 14-bit units. A 14-bit-sized WhiteLevel, or none, keeps 14-bit units.
@@ -243,6 +241,8 @@ fn arw6_level_scale(bits: u32, white_tag: Option<f64>) -> f32 {
     }
 }
 
+/// The Sony body for the model-keyed tables: the Exif `model` of a Sony-branded file, else the one the maker note's
+/// `SonyModelID` names (a Lunar says "Lunar"), else `model` as it is.
 fn sony_body<'a>(make: &str, model: &'a str, mn: Option<&makernote::MakerNote>) -> &'a str {
     if make.trim().to_ascii_uppercase().starts_with("SONY") {
         return model;
