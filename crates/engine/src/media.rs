@@ -50,7 +50,9 @@ pub use source::{
 
 /// Cache version for the decoder of one source format: the pipeline version plus a
 /// per-format decoder version, so a decoder change only invalidates the renders of
-/// photos in that format. Unknown formats get the pipeline version alone.
+/// photos in that format. Unknown formats get the pipeline version alone. Every render key
+/// also carries [`format_identity`], so two formats whose versions happen to line up stay
+/// apart: a one-step bump of one format's version is not another format's key.
 pub(crate) fn decoder_cache_version(format: &str) -> u64 {
     let decoder: u64 = match format.to_ascii_uppercase().as_str() {
         "ARW" => 1000,
@@ -79,6 +81,37 @@ pub(crate) fn decoder_cache_version(format: &str) -> u64 {
         _ => 0,
     };
     RENDER_CACHE_VERSION.wrapping_add(decoder)
+}
+
+/// Stable identity of one source format, part of every render key next to the decoder revision
+/// ([`decoder_cache_version`]): the number never changes, so bumping one format's decoder revision
+/// cannot land on another format's key. DNG, JPEG and unknown formats keep identity 0, which leaves
+/// their keys exactly as they were.
+pub(crate) fn format_identity(format: &str) -> u64 {
+    match format.to_ascii_uppercase().as_str() {
+        "ARW" => 1,
+        "CR2" => 2,
+        "CR3" => 3,
+        "NEF" => 4,
+        "NRW" => 5,
+        "RAF" => 6,
+        "ORF" => 7,
+        "RW2" => 8,
+        "PEF" => 9,
+        "IIQ" => 10,
+        "MOS" => 11,
+        "SRW" => 12,
+        "X3F" => 13,
+        "GPR" => 14,
+        "PNG" => 15,
+        "TIFF" | "TIF" => 16,
+        "WEBP" => 17,
+        "HEIC" | "HEIF" => 18,
+        "GIF" => 19,
+        "BMP" => 20,
+        "AVIF" => 21,
+        _ => 0,
+    }
 }
 
 pub struct MediaCache {

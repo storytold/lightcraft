@@ -275,3 +275,33 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
     }
     assert_eq!(jpeg.1[3], arw.1[3], "the original file's identity must not change with the decoder version");
 }
+
+/// Regression check for the `decoder_cache_version` review: a format's identity must be in the
+/// key apart from its decoder revision. ARW (offset 1000) and CR2 (offset 1001) are one step
+/// apart, so a one-step ARW revision bump would land on CR2's number; with every other key
+/// input equal (one photo id, one content hash, one set of settings), the revision number alone
+/// must not be what tells the two formats apart, or the bumped ARW keys would alias CR2's. The
+/// frontend render identities carry no decoder revision at all, so they show whether the format
+/// itself is in the key; the persistent families carry both. The intentional legacy DNG/JPEG
+/// equality stays as it is.
+#[test]
+fn format_identity_survives_decoder_revision_bump() {
+    let arw = decoder_keys(&mut decoder_session("ARW"));
+    let cr2 = decoder_keys(&mut decoder_session("CR2"));
+    // Thumbnail, render, hover and quick-view identities: no decoder revision is one of their
+    // inputs, so two formats one revision step apart must still be told apart by the format.
+    for (i, (a, b)) in arw.0.iter().zip(&cr2.0).enumerate() {
+        assert_ne!(a, b, "render identity {i} must carry the format, not only its decoder revision");
+    }
+    // The thumbnail, view and variant keys: the revision is part of them, and the format must
+    // be too, so a one-step ARW revision bump cannot land on CR2's key.
+    for i in 0..3 {
+        assert_ne!(arw.1[i], cr2.1[i], "persistent key {i} must not alias across a one-step decoder revision bump");
+    }
+    // The same bytes remain the original file's identity, whatever the decoder.
+    assert_eq!(arw.2, cr2.2, "the original file's identity must not change with the decoder");
+    // The legacy DNG/JPEG equality is deliberate and must survive the identity change.
+    let dng = decoder_keys(&mut decoder_session("DNG"));
+    let jpeg = decoder_keys(&mut decoder_session("JPEG"));
+    assert_eq!(dng, jpeg, "DNG and JPEG keep their legacy shared keys");
+}

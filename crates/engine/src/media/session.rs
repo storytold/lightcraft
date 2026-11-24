@@ -67,6 +67,7 @@ impl crate::Session {
         let source_key = super::quick::source_identity(&p);
         let decoder = super::quick::decoder_key(&p);
         let format = source_format(&p);
+        let identity = super::format_identity(&format);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
@@ -83,10 +84,16 @@ impl crate::Session {
             ^ salt
             ^ profile_salt.rotate_left(29)
             ^ lens.rotate_left(37)
-            ^ decoder.rotate_left(43);
+            ^ decoder.rotate_left(43)
+            ^ identity.rotate_left(47);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(super::decoder_cache_version(&format));
+            // (the format's own identity, next to its decoder revision: a one-step bump of one
+            // format's revision must not land on another format's key)
+            if identity != 0 {
+                k.str("format").u64(identity);
+            }
             // (likewise an ORF decode whose sensor pixels were withdrawn: the cached thumb must not stand in)
             if decoder != 0 {
                 k.str("decoder").u64(decoder);
@@ -147,6 +154,7 @@ impl crate::Session {
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
         let decoder = super::quick::decoder_key(&p);
+        let identity = super::format_identity(&source_format(&p));
         job.key = settings.hash64()
             ^ crate::files::hot_pixel_key(settings)
             ^ ((max_w as u64) << 40)
@@ -155,7 +163,8 @@ impl crate::Session {
             ^ (job.level as u64) << 60
             ^ profile_salt.rotate_left(29)
             ^ lens.rotate_left(37)
-            ^ decoder.rotate_left(43);
+            ^ decoder.rotate_left(43)
+            ^ identity.rotate_left(47);
         Some(job)
     }
 
@@ -164,12 +173,18 @@ impl crate::Session {
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
         let format = source_format(p);
         let decoder = super::quick::decoder_key(p);
+        let identity = super::format_identity(&format);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64() ^ crate::files::hot_pixel_key(settings))
             .u64(edge as u64)
             .u64(super::decoder_cache_version(&format));
+        // (the format itself, apart from its decoder revision: a one-step bump of one format's
+        // revision must not land on another format's key)
+        if identity != 0 {
+            k.str("format").u64(identity);
+        }
         // (likewise an ORF decode whose sensor pixels were withdrawn: the cached variant must not stand in)
         if decoder != 0 {
             k.str("decoder").u64(decoder);
@@ -302,12 +317,17 @@ impl crate::Session {
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let format = source_format(p);
         let decoder = super::quick::decoder_key(p);
+        let identity = super::format_identity(&format);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop))
             .u64(apply_crop as u64)
             .u64(super::decoder_cache_version(&format));
+        // (the format itself, apart from its decoder revision, as in the thumbnail key)
+        if identity != 0 {
+            k.str("format").u64(identity);
+        }
         // (likewise an ORF decode whose sensor pixels were withdrawn: the cached view must not stand in)
         if decoder != 0 {
             k.str("decoder").u64(decoder);
@@ -451,7 +471,8 @@ impl crate::Session {
             .u64(id.0)
             .u64(profile_salt)
             .finish();
-        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43);
+        let identity = super::format_identity(&source_format(&p));
+        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43) ^ identity.rotate_left(47);
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
