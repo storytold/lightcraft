@@ -874,6 +874,12 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         }),
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         screen_profile: None,
+        // Settings ▸ Interface ▸ Click through: macOS asks the window's view on
+        // each such click; elsewhere the click is always passed on
+        #[cfg(target_os = "macos")]
+        background_clicks: Some(Box::new(|accept| lcc_firstclick::set_accept_background_clicks(accept).map_err(|e| e.to_string()))),
+        #[cfg(not(target_os = "macos"))]
+        background_clicks: None,
         pick_display_profile: picker!(|| {
             let mut d = file_dialog()
                 .set_title(lcc_ui_egui::i18n::tr("Choose Monitor Profile"))

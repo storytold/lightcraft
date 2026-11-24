@@ -119,6 +119,9 @@ pub struct Available {
     pub action: String,
     /// The install kind.
     pub kind: Kind,
+    /// Whether installing the download starts the install (and the app relaunches), as against
+    /// opening the file's folder so the person installs it by hand.
+    pub offers_install: bool,
     /// Where it downloads from. Not shown in the status: it is long, and the dialog shows the file.
     pub url: String,
     /// The SHA-256 the feed states (shown, never trusted: the download is checked against the
@@ -127,7 +130,10 @@ pub struct Available {
 }
 
 impl Available {
-    fn of(u: &lcc_updater::Update) -> Available {
+    fn of(u: &lcc_updater::Update, copy: &lcc_updater::CopyKind) -> Available {
+        let kind = u.asset.kind;
+        // the plan only reads the file's path for a manual install's steps, which this doesn't show
+        let offers_install = lcc_updater::plan(kind, Path::new(""), &u.version.to_text(), copy).restart != lcc_updater::Restart::Manual;
         Available {
             version: u.version.to_text(),
             current: u.current.to_text(),
@@ -138,7 +144,8 @@ impl Available {
             file: u.asset.name.clone(),
             size: u.asset.size,
             action: u.action.clone(),
-            kind: Kind::of(u.asset.kind),
+            kind: Kind::of(kind),
+            offers_install,
             url: u.asset.url.clone(),
             sha256: u.sha256.clone(),
         }
@@ -258,6 +265,10 @@ pub struct Updater {
     installed: Option<Installed>,
     /// When the last check finished (ISO 8601).
     checked_at: Option<String>,
+    /// When the last check finished, in Unix seconds ([`Updater::clock`]'s), for `lastCheckedAgo`.
+    checked_secs: Option<u64>,
+    /// Unix seconds now; tests replace it ([`Updater::set_test_clock`]).
+    clock: Box<dyn Fn() -> u64 + Send>,
     /// How a running check reports back.
     worker: Option<Receiver<lcc_updater::Checked>>,
     /// Why the last check or download failed, in words.
@@ -294,6 +305,8 @@ impl Updater {
             progress: Progress::Idle,
             installed: None,
             checked_at: None,
+            checked_secs: None,
+            clock: Box::new(unix_now),
             worker: None,
             error: None,
             job: None,
@@ -445,6 +458,8 @@ impl Updater {
             "checkAtStartup": self.prefs.check_at_startup,
             "prerelease": self.prefs.prerelease,
             "lastChecked": self.checked_at,
+            // seconds since the last check finished (negative when the clock went back)
+            "lastCheckedAgo": self.checked_secs.map(|then| i64::try_from((self.clock)()).unwrap_or(i64::MAX).saturating_sub(i64::try_from(then).unwrap_or(i64::MAX))),
             "seenVersion": self.prefs.seen_version.as_ref().map(|s| json!({"version": s.version, "skipped": s.skipped})),
             "repo": lcc_brand::REPOSITORY,
             "page": format!("{}/releases", lcc_brand::REPOSITORY),
@@ -508,6 +523,13 @@ impl Updater {
     #[cfg(test)]
     pub(crate) fn trust_test_origin(&mut self, origin: Option<String>) {
         self.extra_origin = origin.map(|o| o.trim().to_string()).filter(|o| !o.is_empty());
+    }
+
+    /// Tests only: tell the updater what time it is (Unix seconds), so "last checked … ago" can be
+    /// walked forward. Same reach as [`Updater::trust_test_key`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_test_clock(&mut self, clock: Box<dyn Fn() -> u64 + Send>) {
+        self.clock = clock;
     }
 
     /// Tests only: verify releases against `key` (a throwaway test key) instead of the brand's.
@@ -632,10 +654,13 @@ impl Updater {
 
     /// Record what a check found.
     pub fn apply(&mut self, checked: lcc_updater::Checked) {
-        self.checked_at = Some(iso_now());
-        self.cache.put(&self.options(), checked.clone());
+        let now = (self.clock)();
+        self.checked_at = Some(iso_from_unix(now));
+        self.checked_secs = Some(now);
+        let options = self.options();
+        self.cache.put(&options, checked.clone());
         self.check = match checked {
-            lcc_updater::Checked::Found(u) => Check::Found(Box::new(Available::of(&u))),
+            lcc_updater::Checked::Found(u) => Check::Found(Box::new(Available::of(&u, &options.copy))),
             lcc_updater::Checked::Current(_) => Check::Current,
             lcc_updater::Checked::Failed(why) => {
                 log::info!("updates: {why}");
@@ -885,8 +910,11 @@ pub fn platform_supported() -> bool {
 
 /// `YYYY-MM-DDTHH:MM:SSZ` now.
 pub fn iso_now() -> String {
-    let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    iso_from_unix(secs)
+    iso_from_unix(unix_now())
+}
+
+fn unix_now() -> u64 {
+    web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// [`iso_now`] for a Unix timestamp.
@@ -908,6 +936,7 @@ fn available_json(a: &Available, verified: bool) -> Value {
         "size": a.size,
         "action": a.action,
         "verified": verified,
+        "offersInstall": a.offers_install,
         "page": release_page(&a.tag),
         "kind": a.kind.text(),
     })

@@ -163,7 +163,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Update Status",
             [],
             None,
-            "{} → {version, platform, supported, check: never | running | current | found, download: idle | running | ready | failed | cancelled, checkAtStartup, prerelease, lastChecked, seenVersion, repo, page, staging, feed? (a feed other than the release's own), available?: {version, current, title, tag, published, notes, file, size, action, verified (this build can check the release's signature; false: it downloads and installs nothing), kind, page (the release's own page)}, progress?: {bytes, total}, staged?: {version, file, bytes, sha256, path, kind}, installed?: {version, message, exit}, error?}: what the updater knows right now",
+            "{} → {version, platform, supported, check: never | running | current | found, download: idle | running | ready | failed | cancelled, checkAtStartup, prerelease, lastChecked, lastCheckedAgo (seconds since the last check finished, absent before the first; negative if the clock went back), seenVersion, repo, page, staging, feed? (a feed other than the release's own), available?: {version, current, title, tag, published, notes, file, size, action, verified (this build can check the release's signature; false: it downloads and installs nothing), offersInstall (installing the download starts the install and relaunches; false: it opens the file's folder for a manual install), kind, page (the release's own page)}, progress?: {bytes, total}, staged?: {version, file, bytes, sha256, path, kind}, installed?: {version, message, exit}, error?}: what the updater knows right now",
             always,
             status
         ),

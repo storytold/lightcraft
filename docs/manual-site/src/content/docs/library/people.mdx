@@ -19,9 +19,9 @@ import Shot from '../../../components/Shot.astro';
 - Names written to XMP by other apps (Lightroom, digiKam) are read as face regions.
 - **Face boxes** in the loupe (**View ▸ Face Boxes**): resize, rename or remove one (**Remove Face Box**).
 - **Detect Faces** (**Library** menu) finds faces; the model is an opt-in download (**Settings ▸ Faces**), nothing ships bundled.
-- **Name Faces**: unnamed faces are grouped (**Group Unnamed Faces**); type a name once for a group. With an optional recognition model, **Recognize People** suggests names.
-- **Which face a tile is about**: each face close-up outlines its own face, so a tile with two people in it shows which one you are naming. **Hover** a face (unnamed, or on a person's page) to see the whole photo with that face marked.
-- **Right-click an unnamed face** to select its whole look-alike group, then name or ignore the group at once; the menu can also ignore that face alone.
+- **Name Faces**: unnamed faces are grouped (**Group Unnamed Faces**); type a name once for a group. In **Unknown**, look-alike clusters are visually separated, and selecting a cluster selects only its Unknown faces. Hover a tile to see the closest confirmed person's name and similarity. With an optional recognition model, **Recognize People** suggests names; hover a **Suggested** face to see the suggested match and its score.
+- **Which face a tile is about**: each face close-up outlines its own face, so a tile with two people in it shows which one you are naming. **Hover** a face (unnamed, Suggested, or on a person's page) to see the whole photo with that face marked and its similarity percentage when a comparison is available.
+- **Right-click an unnamed face** to select its whole look-alike group, then name or ignore the group at once; the menu can also ignore that face alone. Naming faces immediately lets recognition suggest that person for the remaining Unknown faces.
 - **Ignore** a face; the ignored list can be reviewed.
 - **Unnamed faces**, and on a person's page their faces and the suggested faces, follow the year, folder or album picked in the sidebar.
 - **Suggested faces on a person's page** are only faces that look clearly more like that person than like anyone else already named, so when two people look alike, each page offers that person's own faces. Poor faces (tiny, blurred, from behind) that look a little like everybody are left out too. While the face scan is still running, a face can show up until the faces of the person it looks more like have been scanned.

@@ -44,6 +44,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "{device}-დან ცვლილებები {minutes} წუთით მომავალშია დათარიღებული, ამიტომ მანამდე შეჩერებულია. დააყენეთ სწორი დრო {device}-ზე.",
   "Chart · greys about {cct:.0} K": "სამიზნე · ნაცრისფრები დაახლ. {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "შემოწმებულია {checked} / {total} DNG ფაილი: {intact} მთლიანი, {damaged} დაზიანებული, {unverifiable} გადაუმოწმებელი",
+  "Closest: {name}, {percent:.0}%": "ყველაზე მსგავსი: {name}, {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "კოლექცია იმპორტირებულია: ნაპოვნია {n} ფოტო, {m} ამ კატალოგში არ არის",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "ფერთა სივრცე: Rec. 2020 {curve} (HDR AVIF)",
   "Confirm all {}": "ყველას დადასტურება ({})",
@@ -124,7 +125,6 @@
   "Imported {n} metadata preset{}": "იმპორტირებული მეტამონაცემების პრესეტები: {n}{:.0}",
   "Importing {n} photos…": "მიმდინარეობს {n} ფოტოს იმპორტი…",
   "Installed {name} {version}": "დაინსტალირდა {name} {version}",
-  "Installing it will {action}.": "ინსტალაცია: {action}.",
   "Invite {name}": "{name}-ის მოწვევა",
   "It is {}: name this face": "ეს არის {}: ამ სახისთვის სახელის მიცემა",
   "It isn't available for {platform}.": "მიუწვდომელია სისტემისთვის {platform}.",
@@ -137,7 +137,9 @@
   "Key saved ({})": "გასაღები შენახულია ({})",
   "Keywords of {n} selected photos": "მონიშნული ფოტოების ({n}) საკვანძო სიტყვები",
   "Label: {name}": "იარლიყი: {name}",
-  "Last checked {when}": "ბოლოს შემოწმდა {when}",
+  "Last checked {n} hours ago": "ბოლოს შემოწმდა {n} საათის წინ",
+  "Last checked {n} minutes ago": "ბოლოს შემოწმდა {n} წუთის წინ",
+  "Last checked {n} seconds ago": "ბოლოს შემოწმდა {n} წამის წინ",
   "Last import: {mapped} brought over, {dropped} left out": "ბოლო იმპორტი: გადმოტანილია {mapped}, გამოტოვებულია {dropped}",
   "Last synced on {date}": "ბოლო სინქრონიზაცია: {date}",
   "Last synced {n} h ago": "ბოლო სინქრონიზაცია {n} სთ-ის წინ",
@@ -232,6 +234,7 @@
   "Step {n} of {total}": "ნაბიჯი {n} / {total}",
   "Stop waiting: {task}?": "ლოდინის შეწყვეტა: {task}?",
   "Style {n}": "სტილი {n}",
+  "Suggested as {name}: {percent:.0}%": "შემოთავაზებულია როგორც {name}: {percent:.0}%",
   "Suggested as {}": "შეთავაზებულია როგორც {}",
   "Suggested as {}. Confirm the faces that are them.": "შეთავაზებულია როგორც {}. დაადასტურეთ სახეები, რომლებიც ის არის.",
   "Switch to profile {name}": "პროფილზე გადართვა: {name}",
@@ -391,5 +394,6 @@
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "„{name}“ ახალია. რა შეიძლება ჰქონდეთ მისგან ამ კატალოგის სინქრონიზებულ სხვა მოწყობილობებს?",
   "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}“ იღებს აქტიური ფოტოს პარამეტრებს. სახელი, ჯგუფი, ადგილი და ნიშნები რჩება.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "„{to}“ უკვე ადამიანია. გაერთიანებით ერთი ადამიანი მიიღება; დაბრუნება მათ ისევ გაყოფს.",
-  "…and {more} more": "…და კიდევ {more}"
+  "…and {more} more": "…და კიდევ {more}",
+  "★{n} at or above": "★{n} და ზემოთ"
 }

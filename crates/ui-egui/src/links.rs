@@ -8,8 +8,8 @@ pub const GITHUB: &str = lcc_brand::REPOSITORY;
 pub const HELP: &str = lcc_brand::DOCS;
 /// The community chat (empty when the brand has none: no link is shown).
 pub const DISCORD: &str = lcc_brand::DISCORD;
-/// Where feedback and bug reports go.
-pub const FEEDBACK: &str = lcc_brand::REPOSITORY;
+/// Where feedback and bug reports go: the repository's issues page.
+pub const FEEDBACK: &str = lcc_brand::REPOSITORY_ISSUES;
 
 /// (UI command id, menu label, URL) for each link, in Help-menu order. Labels use the `{app}`
 /// placeholder; `crate::i18n::tr` fills it in.

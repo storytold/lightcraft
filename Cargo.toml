@@ -28,6 +28,7 @@ lcc-gpumem = { path = "crates/gpumem" }
 lcc-winspool = { path = "crates/winspool" }
 lcc-winmsi = { path = "crates/winmsi" }
 lcc-winjob = { path = "crates/winjob" }
+lcc-firstclick = { path = "crates/firstclick" }
 lcc-android-host = { path = "crates/android-host" }
 lcc-peer = { path = "crates/peer" }
 lcc-sync = { path = "crates/sync" }
