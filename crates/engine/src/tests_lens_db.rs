@@ -461,6 +461,11 @@ fn first_run_fetches_once() {
     let mut s = session(&third, "");
     crate::lens_profiles::set_dir(Some(third.to_path_buf()));
     assert!(!s.lens_db.fetch_on_first_run(&s.activity));
+    // a database removed before first-run fetching existed (`dir: null`, no first-run key) stays removed
+    let fourth = scratch("first-run-removed-before");
+    std::fs::write(fourth.join("lens-profiles.json"), r#"{"dir":null}"#).unwrap();
+    let mut s = session(&fourth, "");
+    assert!(!s.lens_db.fetch_on_first_run(&s.activity));
     // no settings folder: nothing
     let mut s = Session::new();
     assert!(!s.lens_db.fetch_on_first_run(&s.activity));

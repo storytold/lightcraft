@@ -117,8 +117,11 @@ impl LensSettings {
     }
 
     /// Whether the first-run fetch was already tried (recorded in the settings file).
+    /// A settings file that already holds a folder choice (even none, after Remove) counts as tried: the user
+    /// decided before first-run fetching existed, and a removed database stays removed.
     pub fn first_run_tried(&self) -> bool {
-        read_settings(self.settings_dir.as_deref()).get(FIRST_RUN_KEY).and_then(Value::as_bool).unwrap_or(false)
+        let v = read_settings(self.settings_dir.as_deref());
+        v.contains_key("dir") || v.get(FIRST_RUN_KEY).and_then(Value::as_bool).unwrap_or(false)
     }
 
     /// The desktop app's first run: start downloading lensfun's database once, holding a row on the activity stack,
