@@ -253,15 +253,24 @@ impl Meta {
         };
         let maker: Vec<&str> = maker.split_whitespace().filter(|w| !company_word(w)).collect();
         let said: Vec<String> = maker.iter().map(|w| word_key(w)).collect();
-        // drop the maker said again, with the company words that follow it ("NIKON CORPORATION"); a company word that
-        // starts the model is the model's ("ACME Computer 1000"), unless the maker was taken from the first word and
-        // left its company words behind ("CASIO COMPUTER CO.,LTD.")
-        let mut skipping = after_make.is_none();
-        let model = model.split_whitespace().skip_while(|w| {
-            skipping = said.contains(&word_key(w)) || (skipping && company_word(w));
-            skipping
-        });
-        let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.map(str::to_string)).collect();
+        let model: Vec<&str> = if after_make.is_some() {
+            // drop the end of the make said again, with or without its company words ("NIKON", "ACME CAMERA SYSTEMS",
+            // or "KODAK" after "EASTMAN KODAK COMPANY"), then the make's own company words ("NIKON CORPORATION"); any
+            // other word, a company word included, is the model's
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let keys: Vec<String> = model.iter().map(|w| word_key(w)).collect();
+            let longest = |of: &[String]| (0..of.len()).filter_map(|i| of.get(i..)).find(|end| keys.starts_with(end)).map_or(0, <[String]>::len);
+            let full: Vec<String> = make.split_whitespace().map(word_key).collect();
+            let run = longest(&full).max(longest(&said));
+            let own: Vec<String> = make.split_whitespace().filter(|w| company_word(w)).map(word_key).collect();
+            let rest = model.get(run..).unwrap_or_default();
+            rest.iter().skip_while(|w| run > 0 && own.contains(&word_key(w))).copied().collect()
+        } else {
+            // the maker taken from the first word: drop it said again and the company words it left behind
+            // ("CASIO COMPUTER CO.,LTD.")
+            model.split_whitespace().skip_while(|w| said.contains(&word_key(w)) || company_word(w)).collect()
+        };
+        let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.into_iter().map(str::to_string)).collect();
         (!words.is_empty()).then(|| words.join(" "))
     }
 }
@@ -905,5 +914,16 @@ mod camera_name_tests {
         // but the maker said again in full, company words and all, is dropped
         let repeated = "NIKON CORPORATION NIKON CORPORATION Z 8";
         assert_eq!(name("NIKON CORPORATION", repeated).as_deref(), Some("Nikon Z 8"));
+        // a model word that is only some word of the maker, or a company word the make never had, is the model's
+        let om = "OM Digital Solutions Digital 1000";
+        assert_eq!(name("OM Digital Solutions", om).as_deref(), Some("OM Digital Solutions Digital 1000"));
+        assert_eq!(name("ACME", "ACME ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // the end of the maker said again is dropped ("EASTMAN KODAK" then "KODAK")
+        let kodak = "EASTMAN KODAK COMPANY KODAK EASYSHARE C875 ZOOM DIGITAL CAMERA";
+        let shown = name("EASTMAN KODAK COMPANY", kodak);
+        assert_eq!(shown.as_deref(), Some("Eastman Kodak EASYSHARE C875 ZOOM DIGITAL CAMERA"));
+        // the make said again with a company word inside it is dropped whole
+        let systems = "ACME CAMERA SYSTEMS ACME CAMERA SYSTEMS 1000";
+        assert_eq!(name("ACME CAMERA SYSTEMS", systems).as_deref(), Some("Acme Systems 1000"));
     }
 }
