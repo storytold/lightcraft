@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
+> **Last reviewed:** 2026-11-15 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -199,6 +199,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Lens Blur with AI subject focus and per-mask bokeh; survey tiles fit the photos' shapes and glide to their new places; direct import of Lightroom backup zips (#2592); legacy shutter repair in virtual copies; the opened-library folder-safety fix; v0.21.0 and v0.21.1 released; craft-libs cutover for TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata and gain maps, plus a security-hardening batch; headline numbers not re-measured |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |
 | 2026-10-22 | minor | Print: Japanese photo and postcard paper sizes (L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺) in the page setup, Print dialog and PDF output; headline numbers unchanged |

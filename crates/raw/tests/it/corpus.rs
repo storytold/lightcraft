@@ -626,10 +626,8 @@ fn corpus_sony_16x9_crops() {
         let c = img.crop;
         assert_eq!((c.x, c.y, c.width, c.height), (x, y, w, h), "{name}: crop");
         let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no preview"));
-        let mut d = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&jpeg));
-        d.decode_headers().unwrap();
-        let info = d.info().unwrap();
-        let (aspect, preview) = (c.width as f64 / c.height as f64, info.width as f64 / info.height as f64);
+        let (jw, jh) = craft_image_codecs::probe_size(&jpeg).unwrap();
+        let (aspect, preview) = (c.width as f64 / c.height as f64, jw as f64 / jh as f64);
         assert!((aspect / preview - 1.0).abs() < 0.02, "{name}: crop aspect {aspect} vs camera JPEG {preview}");
         seen += 1;
     }
@@ -719,12 +717,9 @@ fn corpus_sony_lens_tables_become_opcodes() {
 
 /// The embedded JPEG as linear RGB, reduced to `gw × gh` cells.
 fn jpeg_cells(jpeg: &[u8], gw: usize, gh: usize) -> Vec<[f64; 3]> {
-    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
-    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
-    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
-    let px = d.decode().unwrap();
-    let info = d.info().unwrap();
-    let (w, h) = (info.width as usize, info.height as usize);
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, jpeg, &craft_image_codecs::DecodeOptions::default()).unwrap();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let px = img.as_u8().unwrap();
     let (mut sum, mut n) = (vec![[0f64; 3]; gw * gh], vec![0f64; gw * gh]);
     for y in 0..h {
         for x in 0..w {

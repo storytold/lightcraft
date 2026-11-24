@@ -10,20 +10,19 @@
   process 9: photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [Colour Grading](grading-stage.md).
 
-### The colour mixer behaves as in Lightroom (process V9)
-- Each band of the colour mixer now covers the colours Lightroom's does (a red-orange such as skin answers to
-  Orange, Blue reaches further towards aqua and purple), and Hue, Saturation and Luminance follow Lightroom's
-  measured response, including how strongly they act at large amounts. The mixer works before the tone curves, as in
-  Lightroom. This is part of rendering process 9: photos you already edited keep their look until you choose
-  Photo ▸ Update to Current Process. See [The colour mixer](mixer-stage.md).
+### Colour mixer bands in new places, stronger at large amounts (process 9)
+- Each band of the colour mixer now covers different colours (a red-orange such as skin answers to Orange, Blue
+  reaches further towards aqua and purple), and Hue, Saturation and Luminance act more strongly at large amounts
+  than at small ones. The mixer now works before the tone curves. This is part of rendering process 9: photos you
+  already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [The colour mixer](mixer-stage.md).
 
-### Whites and the tone curves behave as in Lightroom (process V9)
-- Whites now reaches into the upper midtones as Lightroom's does, and the Highlights, Lights, Darks and Shadows
-  regions of the parametric curve are as broad as Lightroom's and add up the same way: both follow Lightroom's
-  measured response. A contrast curve no longer turns orange towards red: the point curve keeps colours' hue, and
-  the red, green and blue curves act on their channel after it. This is rendering process 9: new photos (and Reset)
-  get it, photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
-  [Whites and the tone curves](curve-stage.md).
+### Broader Whites and parametric curve, hue-preserving tone curves (process 9)
+- Whites now reaches into the upper midtones, and the Highlights, Lights, Darks and Shadows regions of the
+  parametric curve are broader, overlap and add up when several are set. A contrast curve no longer turns orange
+  towards red: the point curve keeps colours' hue, and the red, green and blue curves act on their channel after it.
+  This is rendering process 9: new photos (and Reset) get it, photos you already edited keep their look until you
+  choose Photo ▸ Update to Current Process. See [Whites and the tone curves](curve-stage.md).
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
@@ -307,6 +306,9 @@
   so a script or an agent can't do it either.
 
 ## 2026-10-27
+
+### The Edit menu loses its Language submenu
+- Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
