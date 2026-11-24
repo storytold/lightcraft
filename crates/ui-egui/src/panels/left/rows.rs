@@ -695,7 +695,6 @@ pub(super) fn host_menu(
         .anchor(anchor)
         .open(Bind::bound(&mut open))
         .show(ui, |ui, _| body(ui, &key));
-    eprintln!("DBGMENU slot={slot} closed={:?} open={open} overlay_open={}", shown.output.closed, craft::ui::runtime::overlay::any_open(ui.ctx(), craft::ui::runtime::overlay::OpenFilter::Any));
     if shown.output.closed.is_some() || !open {
         ui.data_mut(|d| d.remove::<(String, MenuAt)>(stored));
     }

@@ -129,7 +129,6 @@ pub(crate) fn section_drop_before(placed: &[PlacedSection], y: f32) -> Option<Si
 pub(super) fn adopt_drags(app: &mut LightcraftApp, ui: &egui::Ui) {
     let ctx = ui.ctx();
     let down = ui.input(|i| i.pointer.primary_down());
-    eprintln!("DBGADOPT down={down} session_section={:?} session_album={:?} app_section={:?} app_album={:?} started={}", craft::ui::runtime::drag::active::<SectionDrag>(ctx).map(|p| p.section), craft::ui::runtime::drag::active::<AlbumDrag>(ctx).map(|p| p.0), app.ui.dragging_section, app.ui.dragging_album, craft::ui::runtime::drag::started(ctx));
     let (section, album) = (craft::ui::runtime::drag::active::<SectionDrag>(ctx), craft::ui::runtime::drag::active::<AlbumDrag>(ctx));
     let (section_flag, album_flag) = (egui::Id::unique("left-section-from-session"), egui::Id::unique("left-album-from-session"));
     let adopted = |flag: egui::Id| ui.data(|d| d.get_temp::<bool>(flag)).unwrap_or(false);

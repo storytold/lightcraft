@@ -58,9 +58,6 @@ pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Op
             crate::widgets::register(ui, format!("albumProblem:{}", m.album.id.0), row.rect);
         }
     }
-    if ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released()) {
-        eprintln!("DBGALB photos={:?} shown={} response_enabled={:?} released={}", app.ui.dragging_photos, out.shown.len(), out.response.as_ref().map(|r| r.enabled()), ui.input(|i| i.pointer.primary_released()));
-    }
     for row in &out.shown {
         let Some(m) = meta.get(&row.key) else { continue };
         let mut open = m.open;
@@ -606,7 +603,6 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, a: &Album
     let Some(ids) = app.ui.dragging_photos.clone() else { return };
     // only where the row can be seen: not scrolled out of the sidebar or beneath the pinned header
     let over = pointer_over_row(ui, rect);
-    eprintln!("DBGDROP album={} over={over} rect={rect:?} pos={:?} layer_at={:?} ui_layer={:?} released={}", a.id.0, ui.input(|i| i.pointer.latest_pos()), ui.input(|i| i.pointer.latest_pos()).and_then(|p| ui.ctx().layer_id_at(p)), ui.layer_id(), ui.input(|i| i.pointer.primary_released()));
     if !over {
         return;
     }
