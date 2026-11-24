@@ -103,13 +103,19 @@ pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, area: Rect, left: f32, top: 
     }
     // the open menu's items, under its title
     let under = title_rect.map_or(rect.left_bottom(), |r| pos2(r.left(), rect.bottom() + 6.0));
-    let x = under.x.min(area.right() - 12.0 - 260.0).max(area.left() + 12.0);
+    // on a phone the menu never grows past the screen (#1288): rows wrap within it instead
+    let room = (area.width() - 24.0).max(120.0);
+    let narrow = room < 440.0;
+    let x = under.x.min(area.right() - 12.0 - room.min(260.0)).max(area.left() + 12.0);
     let mut clicked: Option<(String, Value)> = None;
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let drop = egui::Area::new(Id::new("modern-menu-drop")).fixed_pos(pos2(x, rect.bottom() + 6.0)).order(egui::Order::Foreground).show(&ctx, |ui| {
         // as a menu: rows without button frames, on one line each
         ui.style_mut().visuals.button_frame = false;
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.style_mut().wrap_mode = Some(if narrow { egui::TextWrapMode::Wrap } else { egui::TextWrapMode::Extend });
+        if narrow {
+            ui.set_max_width((area.right() - 12.0 - x).max(120.0));
+        }
         // its submenus (popups of their own) take the same glass
         let v = &mut ui.style_mut().visuals;
         v.window_fill = t.chrome.gamma_multiply(0.94);

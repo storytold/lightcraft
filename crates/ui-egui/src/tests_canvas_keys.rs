@@ -1,5 +1,5 @@
 //! The canvas tools by keyboard: crop handles, spot removals, red-eye corrections, gradient handles
-//! and mask pins are reached with Tab or focus, moved with the arrow keys (Shift: further), one undo
+//! mask pins and the brush are reached with Tab or focus, moved with the arrow keys (Shift: further), one undo
 //! step a press.
 
 use std::time::Duration;
@@ -203,4 +203,52 @@ fn red_eye_corrections_are_added_moved_resized_and_removed_by_keyboard() {
     assert!(left.len() == 1 && left[0].pet, "the red eye went, the pet eye stayed: {left:?}");
     assert_eq!(h.app.session.active(), photo);
     assert_eq!(h.app.session.visible_cloned().len(), photos);
+}
+
+/// The brush by keyboard: Return puts it down (a dab), the arrows paint while it is down, Return
+/// lifts it, and arrows then only move it. Each press is one undo step.
+#[test]
+fn the_brush_paints_by_keyboard() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    h.step();
+    let strokes = |h: &Headless| -> Vec<lcc_develop::BrushStroke> {
+        develop(h)
+            .masks
+            .iter()
+            .flat_map(|m| m.components.iter())
+            .filter_map(|c| match &c.shape {
+                MaskShape::Brush { strokes } => Some(strokes.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    assert!(strokes(&h).is_empty());
+    h.view.ctx.enable_accesskit();
+    focus(&mut h, "brush");
+    // announced: a name and its place and state
+    let node =
+        h.view.access.as_ref().and_then(|u| u.nodes.iter().find(|(id, _)| *id == canvas_keys::id("brush").accesskit_id()).map(|(_, n)| n.clone()));
+    let node = node.expect("the brush is in the AccessKit tree");
+    assert!(node.label().is_some_and(|l| !l.is_empty()) && node.value().is_some_and(|v| v.contains('%')), "{node:?}");
+    key(&mut h, "enter", false);
+    let s = strokes(&h);
+    assert_eq!(s.len(), 1, "Return paints a dab");
+    assert!((s[0].points[0].x - 0.5).abs() < 1e-6, "{:?}", s[0].points);
+    key(&mut h, "right", true);
+    let s = strokes(&h);
+    assert_eq!(s.len(), 2, "an arrow paints while the brush is down");
+    let last = s[1].points.last().copied().expect("points");
+    assert!((last.x - 0.5 - canvas_keys::BIG_STEP).abs() < 1e-6, "{last:?}");
+    key(&mut h, "enter", false);
+    key(&mut h, "down", false);
+    assert_eq!(strokes(&h).len(), 2, "a lifted brush only moves");
+    key(&mut h, "enter", false);
+    let s = strokes(&h);
+    assert_eq!(s.len(), 3);
+    assert!((s[2].points[0].y - 0.5 - canvas_keys::STEP).abs() < 1e-6, "it moved: {:?}", s[2].points);
+    // undo takes back one press
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(strokes(&h).len(), 2, "one undo step a press");
 }
