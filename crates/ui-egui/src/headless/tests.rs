@@ -1857,10 +1857,10 @@ fn a_renamed_export_folder_prompts_for_a_replacement() {
     use crate::state::Dialog;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    let base = std::env::temp_dir().join(format!("lc-renamed-export-{}", std::process::id()));
-    let previous = base.join("exports");
-    std::fs::create_dir_all(&previous).unwrap();
-    std::fs::rename(&previous, base.join("renamed")).unwrap();
+    let base = tempfile::tempdir().unwrap();
+    let previous = base.path().join("exports");
+    std::fs::create_dir(&previous).unwrap();
+    std::fs::rename(&previous, base.path().join("renamed")).unwrap();
 
     let wrote = Arc::new(AtomicBool::new(false));
     let writer = wrote.clone();
@@ -1882,8 +1882,6 @@ fn a_renamed_export_folder_prompts_for_a_replacement() {
     app.ui.dialog = None;
     app.run("dialog.export", json!({})).unwrap();
     assert!(matches!(&app.ui.dialog, Some(Dialog::Export { dir, .. }) if dir.is_empty()));
-
-    std::fs::remove_dir_all(&base).unwrap();
 }
 
 /// The Export dialog hands its batch to a worker thread: the UI keeps drawing frames, shows
