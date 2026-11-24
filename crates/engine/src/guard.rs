@@ -27,23 +27,61 @@ pub fn catch<T>(what: &str, f: impl FnOnce() -> T) -> Result<T, String> {
 }
 
 /// Install a panic hook that keeps the default report (stderr) and also appends the panic's
-/// location and message to `log` (best effort), so a panic in a GUI session leaves a trace.
-pub fn install_hook(log: PathBuf) {
+/// location and message to `log` (best effort, its folder made when missing), so a panic in a GUI
+/// session leaves a trace. `log` belongs in a folder of the user's own, never a shared one.
+pub fn install_hook(log: Option<PathBuf>) {
     let default = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         default(info);
         let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+        let Some(log) = &log else { return };
+        if let Ok(mut f) = open_panic_log(log) {
             let _ = writeln!(f, "{secs} [{thread}] panic at {at}: {}", panic_message(info.payload()));
         }
     }));
 }
 
+/// Opens the panic log for appending, making its folder when missing. On Unix a new log is
+/// readable by its owner only (0600): panic messages can name the user's files.
+fn open_panic_log(log: &std::path::Path) -> std::io::Result<std::fs::File> {
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut open = std::fs::OpenOptions::new();
+    open.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    open.open(log)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #2572: the panic log's folder is made when missing, and on Unix a new log is the
+    /// owner's alone; appending keeps what is there.
+    #[test]
+    fn the_panic_log_is_made_for_its_owner_only() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-panic-log-{}", std::process::id()));
+        // A fresh private folder, so nothing left there (or planted by another user) is opened.
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut make = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut make, 0o700);
+        make.create(&dir).unwrap();
+        let log = dir.join("logs").join("lightcraft-panics.log");
+        writeln!(open_panic_log(&log).unwrap(), "one").unwrap();
+        writeln!(open_panic_log(&log).unwrap(), "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "one\ntwo\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&log).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_panic_becomes_an_error() {
