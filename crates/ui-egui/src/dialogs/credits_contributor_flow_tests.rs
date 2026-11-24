@@ -2,7 +2,7 @@
 //! Reuses real baked credits and existing immutable DTOs; no network, app logic or generated data edits.
 use super::*;
 use crate::state::Dialog;
-use crate::{Services, headless::HeadlessView};
+use crate::{LightcraftApp, Services, headless::HeadlessView};
 use craft::ui::runtime::inspect::Element;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use lightcraft_catalog::{HistoryStep, Op, Photo, PhotoId, Source, Version};

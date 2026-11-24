@@ -323,7 +323,7 @@ impl Component for FaceButton {
                 if cx.visible.intersects(rect) {
                     let ctx = &cx.response.ctx;
                     let painter = Painter::new(ctx.clone(), cx.response.layer_id, cx.visible);
-                    crate::progress::paint_spinner(&painter, slot_rect, content, ctx.input(|i| i.time));
+                    crate::progress::paint_spinner(&painter, slot_rect, content.egui(), ctx.input(|i| i.time));
                     ctx.request_repaint_after(std::time::Duration::from_millis(33));
                 }
             } else if let Some(icon) = self.icon {
@@ -333,7 +333,7 @@ impl Component for FaceButton {
         if let Some(g) = &self.galley {
             // A reserved SDK paint slot keeps the exact galley under the pipeline's clip and focus ring.
             let at = pos2(x, rect.center().y - g.size().y / 2.0);
-            let shape = egui::epaint::TextShape::new(at, Arc::clone(g), content).with_opacity_factor(self.opacity);
+            let shape = egui::epaint::TextShape::new(at, Arc::clone(g), content.egui()).with_opacity_factor(self.opacity);
             ui.reserve_slot(cx.visible).extend(&cx.response.ctx, vec![shape.into()]);
         }
     }

@@ -26,6 +26,7 @@ fn rect(h: &Headless, id: &str) -> egui::Rect {
 fn access_rect(h: &Headless, role: egui::accesskit::Role, label: &str) -> egui::Rect {
     let tree = craft::ui::runtime::windows::WindowHost::of(&h.view.ctx).access_tree(egui::ViewportId::ROOT).expect("AccessKit is on");
     let node = tree
+        .update()
         .nodes
         .iter()
         .map(|(_, node)| node)
