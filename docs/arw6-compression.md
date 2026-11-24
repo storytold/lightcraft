@@ -146,7 +146,7 @@ Unconditional synthetic tests (encode -> decode round trips for both geometries,
 
 ## Not covered
 
-- The 12-bit Compressed mode (electronic shutter with continuous drive): no sample exists, so it returns `Unsupported` unless its headers prove identical.
+- The 12-bit Compressed mode (electronic shutter with continuous drive, BitsPerSample 12): decoded since 2026-11-24 when every tile's picture header matches the verified variant (BBD 16, NC 3, NW 3, NP 1000000000b, HS/VS the tile size); any deviation is `Unsupported`. The tile streams state their own decoded depth, so the output scale is the 14-bit mode's. LibRaw's `sony_arw6.cpp` (snapshot 202611, commit `4d9bd21a`, LGPL-2.1/CDDL, read as a reference) does the same: it ignores BitsPerSample and gates only on the stream header's decoded-bits / component / mode fields. A 12-bit file whose WhiteLevel is at most 4095 has its black and white tags read on the 12-bit scale (×4). No public 12-bit sample exists, so this path is verified only on synthetic files; a real one may still need a fix.
 - The ILCE-7M5: same codec, no sample; unverified.
 - Tiles whose plane width is not a multiple of 8.
 - First-half shifts other than 0 and 3 (other crops / bodies): the geometry is generic and round-trip tested, but no real sample exists.

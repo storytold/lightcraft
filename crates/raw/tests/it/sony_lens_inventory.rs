@@ -12,8 +12,8 @@
 //! `_setting_raw` and `_setting` (a label: `Off`, `Auto`, `Auto (ILCE-1)`, `Auto fixed by lens`, `No correction
 //! params available`). A file that doesn't decode must still have a row, and fails the check when it has one.
 //!
-//! Any decode error fails the check except an unsupported variant (`RawError::Unsupported`, e.g. the 12-bit mode of
-//! the ARW6 compression): those are counted, and the count must equal `<PREFIX>_SONY_LENS_UNSUPPORTED` (default 0).
+//! Any decode error fails the check except an unsupported variant (`RawError::Unsupported`, e.g. an ARW6 file with an
+//! unknown BitsPerSample): those are counted, and the count must equal `<PREFIX>_SONY_LENS_UNSUPPORTED` (default 0).
 //!
 //! `<PREFIX>_SONY_LENS_DIR=… <PREFIX>_SONY_LENS_INVENTORY=….csv cargo test -p lcc-raw --release --test
 //! sony_lens_inventory -- --nocapture`
@@ -290,7 +290,7 @@ impl Drop for Scratch {
 }
 
 /// A small Sony CFA file with a distortion setting (a lens record), or, `unsupported`, a variant the decoder refuses
-/// as unsupported: the ARW6 compression (32766) in its 12-bit mode. (The 12-bit ARW version 1 strip this used to be
+/// as unsupported: the ARW6 compression (32766) with a BitsPerSample other than 12 or 14. (The 12-bit ARW version 1 strip this used to be
 /// now decodes, see `vendor/arw1.rs`.)
 fn synthetic_arw(unsupported: bool) -> Vec<u8> {
     use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
@@ -303,7 +303,7 @@ fn synthetic_arw(unsupported: bool) -> Vec<u8> {
     raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
     raw.set(0x7036, Value::Short(vec![0]));
     if unsupported {
-        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![10]));
         raw.set(t::COMPRESSION, Value::Short(vec![32766]));
         raw.set(0x7010, Value::Short(vec![8000, 10400, 12900, 14100]));
         raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![vec![0; 32 * 4 + 8]] });

@@ -29,6 +29,9 @@ crates/camdb/data/cameras/libraw.toml holds colour matrices for about 400 bodies
 tools/libraw_adobe_coeff.py), taken from LibRaw's adobe_coeff table (src/tables/colordata.cpp, commit 2ab6323,
 https://github.com/LibRaw/LibRaw), Copyright 2019-2026 LibRaw LLC, used under the GNU LGPL 2.1
 (crates/camdb/data/cameras/LICENSE-LibRaw-LGPL-2.1.txt; LibRaw also offers CDDL 1.0).
+LibRaw's src/decoders/sony_arw6.cpp (commit 4d9bd21a, Copyright 2026 LibRaw LLC and Jiang Yaogeng,
+LGPL 2.1 or CDDL 1.0) was read as a reference for accepting the ARW6 12-bit mode in
+crates/raw/src/vendor/arw.rs; no code from it is included.
 
 vendor/egui-wgpu is egui-wgpu 0.36.2 (https://github.com/emilk/egui), Copyright (c) 2018-2021
 Emil Ernerfeldt and the egui contributors, licensed under the MIT License or the Apache License,
