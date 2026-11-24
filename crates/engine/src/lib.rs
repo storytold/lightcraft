@@ -75,6 +75,7 @@ pub mod finishing;
 mod focus_scan;
 pub mod folder_watch;
 pub mod fonts;
+pub mod ui_languages;
 pub mod genfill;
 pub mod guard;
 pub mod hdr_texture;
