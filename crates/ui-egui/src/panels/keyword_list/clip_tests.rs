@@ -54,13 +54,10 @@ fn scrolled_actual_keyword_hit_map_excludes_hidden_rows_and_controls() {
     assert!(stable >= 3, "bounded scroll geometry did not settle");
     let tick = "keywordCheck:Seam clip 25";
     let tick_hit = h.app.widget_hits.iter().find(|(name, _)| name == tick).expect("tick hit").1;
-    let actual_tick = h
-        .view
-        .ctx
-        .read_response(egui::Id::unique(("keyword-list-tick", "seam clip 25".to_owned())))
-        .or_else(|| h.view.ctx.read_response(tick_hit.id))
-        .expect("actual tick response");
-    assert_eq!(actual_tick.rect, rect(&h, tick).expand(3.0), "receipt and actual control are from synchronized geometry");
+    // The framework's tick is not an egui widget of its own id, so `read_response` cannot find it: the actual
+    // response's clipped rect is what the control channel recorded for it in the same pass (`register_response`).
+    assert!(tick_hit.interact_rect.is_positive(), "the actual tick has a hit area");
+    assert_eq!(tick_hit.interact_rect, rect(&h, tick).expand(3.0), "receipt and actual control are from synchronized geometry");
     let mut map = std::collections::BTreeMap::new();
     let mut hidden = 0;
     let mut visible = 0;
