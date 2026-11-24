@@ -2004,8 +2004,22 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                 }
             }
         });
+        background_menu(app, ui, "view.loupeBackground", app.ui.settings.loupe_background);
         ui.separator();
         super::grid::context_menu(app, ui, id);
+    });
+}
+
+/// The loupe's right-click Background submenu (as Lightroom's right-click on the area round the
+/// photo): one checkable item per [`crate::theme::CanvasShade`], each running `command`.
+pub(crate) fn background_menu(app: &mut LccApp, ui: &mut egui::Ui, command: &str, current: crate::theme::CanvasShade) {
+    crate::widgets::menu_button(ui, crate::i18n::tr("Background"), |ui| {
+        for shade in crate::theme::CanvasShade::ALL {
+            if ui.radio(current == shade, crate::i18n::tr(shade.label())).clicked() {
+                let _ = app.run(command, json!({"shade": shade.id()}));
+                ui.close();
+            }
+        }
     });
 }
 
@@ -6470,7 +6484,9 @@ pub(crate) fn filmstrip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
 
 fn filmstrip_strip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
-    ui.painter().rect_filled(r, 0.0, t.canvas);
+    // Settings ▸ Interface ▸ Filmstrip Background (`view.filmstripBackground`)
+    let strip_bg = crate::theme::filmstrip_shade(ui.ctx()).color(t.canvas);
+    ui.painter().rect_filled(r, 0.0, strip_bg);
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
     film_resize(app, ui, r);
     // the cells keep the shape they had at the strip's original height (120 wide at 142 high)
@@ -6585,13 +6601,13 @@ fn filmstrip_strip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
                 let compact = app.compact();
                 let flag = app.session.catalog.photo(*id).map(|ph| ph.flag).unwrap_or_default();
                 let base = if compact {
-                    super::grid::cell_fill(&t, state, flag, resp.hovered(), t.canvas)
+                    super::grid::cell_fill(&t, state, flag, resp.hovered(), strip_bg)
                 } else if selected {
                     t.cell_selected
                 } else if resp.hovered() {
                     t.cell_selected.gamma_multiply(0.6)
                 } else {
-                    t.canvas
+                    strip_bg
                 };
                 p.rect_filled(cr, 0.0, crate::theme::label_background(base, label, selected));
                 if compact {
