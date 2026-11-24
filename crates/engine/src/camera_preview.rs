@@ -24,6 +24,8 @@ mod pairs;
 mod proxy;
 mod tone;
 
+pub(crate) use pairs::clip_colour;
+
 #[cfg(test)]
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
@@ -43,8 +45,9 @@ use look_fit::{
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
 #[cfg(test)]
 use pairs::{
-    Attempt, Pairs, TONE_FITS, collect_pairs, colour_pair, displayed, fit_attempt, fit_pairs, fit_pairs_ordered, fit_pairs_with, fit_partial,
-    fit_tone_with_shadows, luma, rank_correlation_ties, search_ordered,
+    Attempt, MATRIX_SPREAD, MATRIX_SPREAD_FROM, Pairs, TONE_FITS, collect_pairs, colour_pair, dark_colour_signal, displayed, fit_attempt, fit_pairs,
+    fit_pairs_ordered, fit_pairs_with, fit_partial, fit_partial_on, fit_tone_with_shadows, jpeg_clipped, luma, matrix_spread, rank_correlation_ties,
+    search_ordered,
 };
 #[cfg(test)]
 pub(crate) use proxy::LensGeometry;
@@ -86,7 +89,11 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
 /// so previews made without the profile are rebuilt.
-pub const LOOK_VERSION: u32 = 14;
+/// 24: retry the partial look with unclipped bright pairs (#631). Check clipping in the decoded JPEG's colour space
+/// and keep the retry's holdouts out of chroma training.
+/// 25: dark-scene colour fits scale the threshold by luminance (#865) and preserve luminance when clipping negative colour noise.
+/// 26: learned colour matrices must beat identity on held-out colours, and chroma shares the matrix holdouts.
+pub const LOOK_VERSION: u32 = 26;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -94,6 +101,8 @@ pub(crate) struct CameraLook {
     pub tone: CameraTone,
     /// Hue/saturation correction after `matrix`, in linear ProPhoto RGB (DNG `ProfileHueSatMap`).
     pub hue_sat: Option<HsvTable>,
+    /// Clipping negative channels keeps luminance for a matrix learnt through the scaled spread.
+    pub preserve_luminance: bool,
 }
 
 #[cfg(test)]

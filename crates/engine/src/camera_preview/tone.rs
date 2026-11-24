@@ -1,5 +1,5 @@
 use super::look_fit::dro_off;
-use super::pairs::{Pairs, displayed, luma};
+use super::pairs::{Pair, Pairs, displayed, luma};
 use super::{CameraTone, Rgb32f, ToneMap, luminance_2020};
 
 /// How the per-photo tone curve is fitted ([`fit_pairs_ordered`] tries them in order).
@@ -38,6 +38,21 @@ pub(super) fn highlights(sensor: &Rgb32f, reference: &Rgb32f) -> Pairs {
         .collect()
 }
 
+/// The [`highlights`] whose sensor pixel is clipped (`clipped`, the proxy's clip mask).
+pub(super) fn clipped_highlights(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool]) -> Pairs {
+    if sensor.data.len() != reference.data.len() || clipped.len() != sensor.data.len() {
+        return Vec::new();
+    }
+    sensor
+        .data
+        .iter()
+        .zip(&reference.data)
+        .zip(clipped)
+        .filter(|((x, y), c)| **c && x.iter().chain(y.iter()).all(|v| v.is_finite() && *v >= 0.0) && luminance_2020(**y) >= 0.85)
+        .map(|((x, y), _)| (x.map(f64::from), y.map(f64::from)))
+        .collect()
+}
+
 /// Smallest ratio between the scene luminance of the brightest and of the darkest 1/32 of the
 /// pairs a tone curve is fitted to (its last and first knot). Below it the training pairs are
 /// nearly uniform (under 0.26 EV from their darker to their brighter parts): the curve would be
@@ -60,8 +75,12 @@ const NARROW_TONE_RANGE: f32 = 1.5;
 
 /// What a narrow tone curve is checked against ([`highlights_hold`]).
 pub(super) struct HighlightCheck {
+    /// Effective decoded JPEG primaries. Unknown or unsupported encodings use a conservative check.
+    pub(super) jpeg_space: Option<lightcraft_codecs::NamedSpace>,
     /// The frame's [`highlights`].
     pub(super) pairs: Pairs,
+    /// The highlights whose sensor pixel is clipped. The bright-pair retry checks them separately.
+    pub(super) clipped: Pairs,
     /// The photo's curve will be lowered to Sony's without DRO ([`with_dro_off_tone`]) after the
     /// fit, so the check looks at it lowered.
     pub(super) dro: bool,
@@ -77,14 +96,23 @@ pub(super) struct HighlightCheck {
 /// [`NARROW_TONE_RANGE`]: true for wider ones, and for frames without such pixels.
 pub(super) fn highlights_hold(tone: &CameraTone, check: &HighlightCheck, colour: impl Fn([f64; 3]) -> [f64; 3]) -> bool {
     let knots = tone.knots();
-    if knots[31][0] >= knots[0][0] * NARROW_TONE_RANGE {
-        return true;
-    }
+    knots[31][0] >= knots[0][0] * NARROW_TONE_RANGE || keeps_highlights(tone, check, colour)
+}
+
+/// The comparison of [`highlights_hold`], whatever the curve's range: [`fit_partial`]'s second
+/// attempt asks it of every curve, as its bright pairs widen the curve while the clipped part of a
+/// sky stays out of them.
+pub(super) fn keeps_highlights(tone: &CameraTone, check: &HighlightCheck, colour: impl Fn([f64; 3]) -> [f64; 3]) -> bool {
+    keeps(tone, check, &check.pairs, colour)
+}
+
+/// [`keeps_highlights`] for one set of bright pairs (the check's, or its clipped ones).
+pub(super) fn keeps(tone: &CameraTone, check: &HighlightCheck, pairs: &[Pair], colour: impl Fn([f64; 3]) -> [f64; 3]) -> bool {
     // the curve as the photo will get it
     let used = if check.dro { dro_off(tone) } else { *tone };
     let (map, neutral) = (ToneMap::camera(&used, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
     let (mut look, mut fallback) = (0.0, 0.0);
-    for (x, target) in &check.pairs {
+    for (x, target) in pairs {
         let (rendered, base) = (displayed(colour(*x), &map), displayed(*x, &neutral));
         if check.grey {
             look += (luma(rendered) - luma(*target)).powi(2);
@@ -98,7 +126,7 @@ pub(super) fn highlights_hold(tone: &CameraTone, check: &HighlightCheck, colour:
     }
     let hold = look.is_finite() && look <= fallback;
     if !hold && lightcraft_pipeline::profiling() {
-        eprintln!("[profile] camera look: narrow tone curve renders the bright areas worse than the fallback ({look:.3} > {fallback:.3})");
+        eprintln!("[profile] camera look: the tone curve renders bright areas worse than the fallback ({look:.3} > {fallback:.3})");
     }
     hold
 }

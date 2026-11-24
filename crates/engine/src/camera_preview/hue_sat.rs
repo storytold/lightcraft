@@ -1,6 +1,6 @@
 use super::mono::to_prophoto;
-use super::pairs::{displayed, luma};
-use super::{CameraLook, CameraTone, HsvTable, Mat3, ToneMap, luminance_2020};
+use super::pairs::{ChromaPairs, displayed, luma};
+use super::{CameraLook, CameraTone, HsvTable, Mat3, ToneMap, clip_colour, luminance_2020};
 use lightcraft_raw::profile::HsvTableApply;
 
 /// [`HueSat::apply`] restores the luminance in full only if the table kept at least this share of it. A colour
@@ -213,14 +213,15 @@ const CHROMA_KERNEL: f64 = 0.08;
 
 const CHROMA_SHRINK: f64 = 2.0;
 
-/// The look's tone curve with a chroma-by-display-luminance curve fitted to `pairs` (two thirds
-/// train, one third held out), when that lowers the held-out error. Colourfulness is compared as
-/// the distance from neutral of luminance-normalised RGB.
-pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<CameraTone> {
+/// Fit a chroma-by-display-luminance curve when it lowers the held-out error.
+/// The split includes the matrix and any bright retry holdouts. Colourfulness is compared
+/// as the distance from neutral of luminance-normalised RGB.
+pub(super) fn fit_chroma_excluding(samples: &ChromaPairs, look: &CameraLook, retry_holdouts: &[bool]) -> Option<CameraTone> {
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let scene = |x: &[f64; 3]| {
         let p = look.matrix.apply(*x);
-        correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
+        let p = correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from));
+        if look.preserve_luminance && p.iter().any(|v| *v < 0.0) { clip_colour(p.map(|v| v as f32), true).map(f64::from) } else { p }
     };
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let predict = |x: &[f64; 3]| displayed(scene(x), &tone);
@@ -228,11 +229,11 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
         let y = luma(p);
         (y > 0.0).then(|| p.iter().map(|v| (v / y - 1.0).powi(2)).sum::<f64>().sqrt())
     };
-    let samples: Vec<(f64, f64, f64)> = pairs
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 3 != 0)
-        .filter_map(|(_, (x, y))| {
+    let split =
+        || samples.pairs.iter().zip(&samples.holdouts).enumerate().map(|(i, (pair, held))| (pair, *held || retry_holdouts.get(i) == Some(&true)));
+    let samples: Vec<(f64, f64, f64)> = split()
+        .filter(|(_, held)| !*held)
+        .filter_map(|((x, y), _)| {
             let p = predict(x);
             let (cp, cy) = (chroma(p)?, chroma(*y)?);
             (cp > 0.05).then(|| (luma(p), cp, (cy.max(1e-3) / cp).ln().clamp(0.05f64.ln(), 2.5f64.ln())))
@@ -255,10 +256,9 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
     let fitted = look.tone.with_chroma(curve)?;
     let with = ToneMap::camera(&fitted, 0.0, 0.0, 0.0);
     let error = |map: &ToneMap| -> f64 {
-        pairs
-            .iter()
-            .step_by(3)
-            .map(|(x, y)| {
+        split()
+            .filter(|(_, held)| *held)
+            .map(|((x, y), _)| {
                 let p = displayed(scene(x), map);
                 (0..3).map(|c| (p[c] - y[c]).powi(2)).sum::<f64>()
             })
