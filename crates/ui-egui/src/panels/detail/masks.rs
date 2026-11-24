@@ -879,7 +879,7 @@ fn current_on_photo(app: &LightcraftApp, mask: u32) -> Option<bool> {
 }
 
 /// Long-edge units → normalized units for x and y.
-fn frame_long_norm(map: &CanvasMap) -> (f64, f64) {
+pub(super) fn frame_long_norm(map: &CanvasMap) -> (f64, f64) {
     // derive from the mapping: 1 normalized unit in x and y in screen points (of the frame's
     // proportions, which a lens or perspective warp doesn't change)
     let map = map.for_mask(false);

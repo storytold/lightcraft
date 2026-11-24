@@ -286,10 +286,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 let mut c = cargo();
                 c.args(["clippy", "-p", "lightcraft-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
                 run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
-                test(
-                    tests(&with_test_targets(&["-p", "lightcraft-codecs", "-p", "lightcraft-heif", "--features", "lightcraft-codecs/heif"])),
-                    "heif",
-                )?;
+                test(tests(&with_test_targets(&["-p", "lightcraft-codecs", "--features", "lightcraft-codecs/heif"])), "heif")?;
                 // the engine's HEIC import test, with the decoder (the workspace run checks the error)
                 test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]), "heif")
             }),

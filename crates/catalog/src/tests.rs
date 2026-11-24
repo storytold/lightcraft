@@ -12,6 +12,26 @@ fn photo(c: &mut Catalog, name: &str, date: &str) -> PhotoId {
     id
 }
 
+/// ORF probes record both supported and preview-only outcomes, without changing other formats.
+#[test]
+fn orf_support_checks_keep_a_stamp_even_when_sensor_data_decodes() {
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "a.orf".into() }, "a.orf", "ORF", 4, 3, "2026-01-01");
+    p.kind = MediaKind::Raw;
+    assert!(p.preview_only_stale(), "legacy supported ORF needs the withdrawal recheck");
+    p.set_preview_only(None);
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(p.develops_raw(), "supported uncompressed ORF remains sensor-decodable");
+    p.set_preview_only(Some("Olympus compressed ORF".into()));
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(!p.develops_raw());
+    p.format = "DNG".into();
+    p.set_preview_only(None);
+    assert!(p.preview_checked.is_empty(), "other supported formats keep their existing semantics");
+    assert!(!p.preview_only_stale());
+}
+
 #[test]
 fn date_token_matches_time_part_case_insensitively() {
     let mut c = Catalog::new();
@@ -1033,6 +1053,12 @@ fn history_handles_loaded_revisions_failed_batches_and_retention() {
     let before = c.revision;
     c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 3 }, Op::RenameAlbum { id: album, name: "Journey".into() }] }).unwrap();
     assert_eq!(c.touched_since(before), None);
+    // the keyword list changes no photo: what was touched stays known, and the list is said to have changed
+    let before = c.revision;
+    c.apply(Op::SetKeyword { path: "travel|Rome".into(), info: Some(Default::default()) }).unwrap();
+    assert_eq!(c.touched_since(before), Some(vec![]));
+    assert_eq!(c.aspects_since(before), Some(Aspects::KEYWORD_LIST));
+    assert_eq!(c.aspects_since(c.revision), Some(Aspects::NONE), "and from after it, not");
     // more ops than are remembered: the oldest are answered with "anything"
     let long_ago = c.revision;
     for i in 0..9000u32 {
@@ -1072,6 +1098,13 @@ fn an_op_that_fails_leaves_no_touched_photos_behind() {
     assert!(c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 5 }, Op::SetRating { id: missing, rating: 1 }] }).is_err());
     assert_eq!(c.revision, start);
     assert_eq!(c.touched_since(start), Some(vec![]));
+    assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
+    // a keyword op that fails, alone or inside a batch that is rolled back, does not say the keyword list changed
+    assert!(c.apply(Op::SetKeyword { path: " | ".into(), info: Some(Default::default()) }).is_err());
+    assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
+    let ok = Op::SetKeyword { path: "travel|Rome".into(), info: Some(Default::default()) };
+    assert!(c.apply(Op::Batch { ops: vec![ok, Op::SetRating { id: missing, rating: 1 }] }).is_err());
+    assert_eq!(c.revision, start);
     assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
     assert_eq!(c.photo(a).map(|p| p.rating), Some(0));
     // a batch that ends in a failed removal of a photo that exists
