@@ -357,7 +357,7 @@ const HELP: &[&str] = &[
     "module.help",
     "app.shortcuts",
     "---",
-    "app.feedback=Provide Feedback…",
+    "app.feedback",
     "app.website",
     "app.github",
     "app.discord",
