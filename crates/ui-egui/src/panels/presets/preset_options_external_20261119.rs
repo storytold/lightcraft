@@ -148,12 +148,15 @@ impl Frames {
         // Natural keyboard travel into the real menu group: Tab enters it and the arrows move between its rows.
         // No focus request: the SDK's own focus record must name the row, or its key activation is not the row's.
         let wanted = self.hit(id).id;
+        // At least one key first: Enter or Space as the first key of a pointer-opened menu is withheld by its row.
         let mut path = Vec::new();
+        let mut pressed = false;
         for _ in 0..16 {
             let focused = craft::ui::runtime::focus::focused_rec(&self.ctx).map(|rec| rec.stop.id);
-            if focused == Some(wanted) {
+            if pressed && focused == Some(wanted) {
                 return;
             }
+            pressed = true;
             path.push(focused);
             let in_menu = self.hits.iter().any(|(name, hit)| name.starts_with("presetMenu:") && Some(hit.id) == focused);
             self.key(if in_menu { Key::ArrowDown } else { Key::Tab });

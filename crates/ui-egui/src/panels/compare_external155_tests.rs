@@ -121,13 +121,16 @@ fn compare_external155_clear_reference_keyboard_activation_keeps_active_selectio
     // Reach the real recorded MenuItem by natural keyboard travel (Tab into the menu, arrows between rows), then
     // deliver a real Enter through the control channel.
     let target = h.app.widget_hits.iter().find(|(id, _)| id == "compare:clearReference").unwrap().1.id;
+    // At least one key first: Enter as the first key of a pointer-opened menu is withheld by its row.
+    let mut pressed = false;
     for _ in 0..16 {
         let focused = craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|rec| rec.stop.id);
-        if focused == Some(target) {
+        if pressed && focused == Some(target) {
             break;
         }
         let in_menu = focused.is_some_and(|id| h.app.widget_hits.iter().any(|(name, hit)| name.starts_with("compare:") && hit.id == id));
         ask(&mut h, "ui.key", json!({"key": if in_menu { "ArrowDown" } else { "Tab" }}));
+        pressed = true;
     }
     assert_eq!(craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|rec| rec.stop.id), Some(target), "the menu row holds the SDK focus");
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
