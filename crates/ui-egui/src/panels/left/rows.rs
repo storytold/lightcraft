@@ -603,9 +603,13 @@ fn list_shown<E>(ui: &mut egui::Ui, out: &CollectionResponse<String, E>, source:
 /// `count:<id>`, and paints its colour label's dot.
 fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count, gap): (Option<Rect>, Option<Rect>, Option<Rect>), chosen: bool) {
     let id = &item.id;
-    register(ui, format!("source:{id}"), rect);
+    // what is visible of the row: a press on the centre of a row that reaches past the panel's edge
+    // (the sidebar scrolls sideways) must land on the panel
+    let visible = rect.intersect(ui.clip_rect());
+    let visible = if visible.is_positive() { visible } else { rect };
+    register(ui, format!("source:{id}"), visible);
     if chosen {
-        register(ui, format!("highlight:{id}"), rect);
+        register(ui, format!("highlight:{id}"), visible);
     }
     if let Some(label) = label {
         // the name as far as it is drawn: its own width, or the whole column when it is cut short

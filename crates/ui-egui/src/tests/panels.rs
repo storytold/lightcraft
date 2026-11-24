@@ -2073,14 +2073,14 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     let step = xs[1] - xs[0];
     assert!(xs.len() == 26 && step > 0.0 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
     let panel = widget(&h, "panel:left_panel");
-    assert!(widget(&h, "source:all").width() > panel.width(), "the rows are as wide as the widest one, so there is something to scroll to");
+    // (the rows are as wide as the widest one, so there is something to scroll to: a row's count, at its end, lies past the panel)
+    assert!(widget(&h, "count:all").left() >= panel.right(), "the rows reach past the panel: the count of All Photos is {:?}", widget(&h, "count:all"));
     // what a row needs is known before it is drawn off screen, so the plus stays reachable
     assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
     // a click in the middle of a deep row chooses it; only the little chevron folds it
     let chosen = "/a/b/c/d/e/f/g/h/i/j/k/l";
-    // (the row's own centre is past the panel's edge in a sideways-scrolled sidebar: click its name)
-    click(&mut h, &format!("label:libfolder:{chosen}"));
-    assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's name is the row, not its chevron");
+    click(&mut h, &format!("source:libfolder:{chosen}"));
+    assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's middle is the row, not its chevron");
 }
 
 /// A library below a deep path (issue #2298): the deepest folder's name has room left of its
