@@ -108,8 +108,7 @@ impl LensSettings {
 
     /// The folder saved in the settings file.
     pub fn saved_dir(&self) -> Option<PathBuf> {
-        read_settings(self.settings_dir.as_deref())
-            .get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()).map(PathBuf::from)
+        read_settings(self.settings_dir.as_deref()).get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()).map(PathBuf::from)
     }
 
     /// Where Download puts the database.
