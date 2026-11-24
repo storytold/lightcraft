@@ -1042,7 +1042,7 @@ fn sil_camera_colour() {
     des.sort_by(f64::total_cmp);
     let median = des.get(des.len() / 2).copied().unwrap_or(f64::NAN);
     println!("sil camera colour: {} table matrices against spectral data, median mean ΔE2000 {median:.2}", des.len());
-    if !(median <= 5.0) {
+    if median.is_nan() || median > 5.0 {
         failures.push(format!("median table-vs-spectral mean ΔE2000 {median:.2} above 5"));
     }
     assert!(compared.len() >= 10, "only {} bodies have both a table and a spectral matrix", compared.len());
