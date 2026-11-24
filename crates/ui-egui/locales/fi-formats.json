@@ -120,6 +120,7 @@
   "Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.": "Lightroomin geometriaa ei säilytetty kohteelle {path}; tallennettua Upright-muunnosta ei tueta.",
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "Lightroomin geometriaa ei säilytetty kohteelle {path}; tallennettu muunnos ohitetaan, koska Upright on pois päältä.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Lightroomin geometriaa ei säilytetty kohteelle {path}; {mode} lasketaan uudelleen.",
+  "Lightroom import cancelled · {imported} photos added": "Lightroom-tuonti peruttu · lisättyjä kuvia: {imported}",
   "Lightroom import complete: {imported} photos added": "Lightroom-tuonti valmis: lisättyjä kuvia {imported}",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom-tuonti valmis: lisättyjä kuvia {imported}, epäonnistuneita {failed}",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom-tuonti valmis: lisättyjä kuvia {imported}; hakemistovaroitus: {warning}",
