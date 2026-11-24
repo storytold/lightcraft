@@ -48,6 +48,42 @@ pub enum Overlay {
     /// channels shown. `Some(false)` (highlights): black background with the clipped highlight
     /// channels shown. `None`: the image with clipped highlights pure red and crushed shadows pure blue.
     Clipping(Option<bool>),
+    /// Sharpening's diagnostic view, shown while ⌥/Alt is held on one of its sliders
+    /// ([`SharpenView`]): the mask and the detail band the render sharpens.
+    Sharpen(SharpenView),
+}
+
+/// What [`Overlay::Sharpen`] shows: a black-and-white view of one Sharpening slider, each drawn from
+/// the pixel-scale band sharpening boosts (log luminance minus its blur at Radius).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SharpenView {
+    /// Amount: the sharpening applied (the band, soft-clipped by Detail, gated by Masking) about
+    /// mid-grey; more Amount clips more of it to black and white.
+    Amount,
+    /// Radius: the photo blurred at the Radius, in grey (what sharpening takes away).
+    Radius,
+    /// Detail: the band before Detail soft-clips it, as grey, so the edges Detail flattens stand out.
+    Detail,
+    /// Masking: the edge mask, white where the photo is sharpened, black where it is left alone.
+    Masking,
+}
+
+impl SharpenView {
+    pub const ALL: [SharpenView; 4] = [SharpenView::Amount, SharpenView::Radius, SharpenView::Detail, SharpenView::Masking];
+
+    /// Stable name (control channel, settings).
+    pub fn name(self) -> &'static str {
+        match self {
+            SharpenView::Amount => "sharpenAmount",
+            SharpenView::Radius => "sharpenRadius",
+            SharpenView::Detail => "sharpenDetail",
+            SharpenView::Masking => "sharpenMasking",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<SharpenView> {
+        SharpenView::ALL.into_iter().find(|v| v.name() == s)
+    }
 }
 
 /// [`Overlay::HdrRange`] colours (sRGB) for 0–1, 1–2, 2–3 and ≥ 3 stops above SDR white.
@@ -144,6 +180,7 @@ impl Overlay {
             Overlay::Clipping(Some(true)) => (6, 1.0),
             Overlay::Clipping(Some(false)) => (6, 2.0),
             Overlay::Clipping(None) => (6, 3.0),
+            Overlay::Sharpen(v) => (9, SharpenView::ALL.iter().position(|s| *s == v).unwrap_or_default() as f64),
         }
     }
 
@@ -169,6 +206,7 @@ impl Overlay {
                 2 => Some(false),
                 _ => None,
             }),
+            9 => SharpenView::ALL.get(v.clamp(0.0, 3.0) as usize).map_or(Overlay::None, |s| Overlay::Sharpen(*s)),
             _ => Overlay::None,
         }
     }
@@ -192,6 +230,7 @@ impl Overlay {
                         None => 3,
                     }
             }
+            Overlay::Sharpen(v) => 0x9000 + SharpenView::ALL.iter().position(|s| *s == v).unwrap_or_default() as u64,
         }
     }
 
@@ -214,6 +253,19 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
         let p = &mut s.to_mut().point_colors[i as usize];
         (p.hue_shift, p.sat_shift, p.lum_shift, p.variance) = (0.0, 0.0, 0.0, 0.0);
     }
+    // a Sharpening view needs the pixel-scale band, which the render only makes for a V4 edit
+    // that sharpens (the photo underneath is replaced by the view, so its settings don't show)
+    if let Overlay::Sharpen(_) = o
+        && (s.process.process() < lcc_develop::Process::V4 || s.detail.sharpen_amount == 0.0)
+    {
+        let s = s.to_mut();
+        if s.process.process() < lcc_develop::Process::V4 {
+            s.process = lcc_develop::Process::V4.version();
+        }
+        if s.detail.sharpen_amount == 0.0 {
+            s.detail.sharpen_amount = 40.0;
+        }
+    }
 }
 
 /// Draw overlay `o` over `img` (rendered with `plan`). `mask` is the evaluated alpha of the mask
@@ -223,6 +275,8 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>,
     match o {
         // drawn by the renderer from the HDR rendition ([`hdr_range`])
         Overlay::None | Overlay::HdrRange => {}
+        // drawn by the renderer, which has the sharpening band ([`sharpen_view`])
+        Overlay::Sharpen(_) => {}
         Overlay::Clipping(mode) => clipping(img, mode),
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
@@ -279,6 +333,45 @@ pub fn mask_view(img: &mut Rgba8, a: &Plane, view: MaskView, color: [u8; 3], opa
             };
             let o = out.map(|v| v.round().clamp(0.0, 255.0) as u8);
             *px = [o[0], o[1], o[2], 255];
+        }
+    });
+}
+
+/// Grey level (0..1) of the sharpening view for one pixel: `det` is log luminance minus its blur
+/// at the Radius (stops) and `luma` the rendered photo's luminance there (0..255; the Radius view).
+#[inline]
+fn sharpen_grey(view: SharpenView, det: f32, luma: f32, mask: f32, limit: f32, amount: f32) -> f32 {
+    match view {
+        SharpenView::Masking => crate::finish::sharpen_gate(det, mask),
+        SharpenView::Detail => 0.5 + det,
+        SharpenView::Amount => 0.5 + 0.6 * amount * crate::finish::sharpen_term(det, limit, mask),
+        // the photo blurred at the Radius: its luminance moved by the band sharpening removes
+        SharpenView::Radius => (luma / 255.0) * (-det).exp2(),
+    }
+    .clamp(0.0, 1.0)
+}
+
+/// Draw the [`Overlay::Sharpen`] view over `img`, an edit `s` was rendered with: `log_l` its log
+/// luminance and `blur` that blurred at the Radius (the plane sharpening boosts), both at the
+/// image's size. A differently sized band leaves the photo as it is.
+pub fn sharpen_view(o: Overlay, img: &mut Rgba8, s: &DevelopSettings, log_l: &Plane, blur: &Plane) {
+    let Overlay::Sharpen(view) = o else { return };
+    if (log_l.width, log_l.height) != (img.width, img.height) || (blur.width, blur.height) != (img.width, img.height) {
+        return;
+    }
+    let mask = (s.detail.sharpen_masking / 100.0) as f32;
+    let limit = crate::finish::sharpen_limit(s.detail.sharpen_detail);
+    let amount = (s.detail.sharpen_amount / 150.0).clamp(0.0, 1.0) as f32;
+    let w = img.width;
+    for_rows(&mut img.data, w, |y, row| {
+        for (x, px) in row.iter_mut().enumerate() {
+            let i = y * w + x;
+            let Some((l, a)) = log_l.data.get(i).zip(blur.data.get(i)) else { continue };
+            let luma = 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
+            let det = l - a;
+            let g = if det.is_finite() { sharpen_grey(view, det, luma, mask, limit, amount) } else { 0.0 };
+            let v = (g * 255.0).round().clamp(0.0, 255.0) as u8;
+            *px = [v, v, v, 255];
         }
     });
 }

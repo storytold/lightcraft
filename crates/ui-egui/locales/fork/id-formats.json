@@ -36,6 +36,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Perubahan dari {device} bertanggal {minutes} menit di masa depan, jadi ditahan sampai saat itu. Setel jam di {device} dengan benar.",
   "Chart · greys about {cct:.0} K": "Bagan · abu-abu sekitar {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "{checked} dari {total} file DNG diperiksa: {intact} utuh, {damaged} rusak, {unverifiable} tidak dapat diverifikasi",
+  "Closest: {name}, {percent:.0}%": "Paling mirip: {name}, {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "Koleksi diimpor: {n} foto ditemukan, {m} tidak ada di katalog ini",
   "Confirm all {}": "Konfirmasi semua ({})",
   "Confirm all {} suggestions": "Konfirmasi semua {} saran",
@@ -104,7 +105,6 @@
   "Imported {n} metadata preset{}": "{n} preset metadata diimpor{:.0}",
   "Importing {n} photos…": "Mengimpor {n} foto…",
   "Installed {name} {version}": "{name} {version} terinstal",
-  "Installing it will {action}.": "Penginstalan akan: {action}.",
   "Invite {name}": "Undang {name}",
   "It is {}: name this face": "Ini {}: beri nama wajah ini",
   "It isn't available for {platform}.": "Tidak tersedia untuk {platform}.",
@@ -115,7 +115,9 @@
   "Key from the environment variable {}": "Kunci dari variabel lingkungan {}",
   "Key saved (ends in {})": "Kunci disimpan (berakhiran {})",
   "Key saved ({})": "Kunci disimpan ({})",
-  "Last checked {when}": "Terakhir diperiksa {when}",
+  "Last checked {n} hours ago": "Terakhir diperiksa {n} jam lalu",
+  "Last checked {n} minutes ago": "Terakhir diperiksa {n} menit lalu",
+  "Last checked {n} seconds ago": "Terakhir diperiksa {n} detik lalu",
   "Last synced on {date}": "Terakhir disinkronkan pada {date}",
   "Last synced {n} h ago": "Terakhir disinkronkan {n} jam lalu",
   "Last synced {n} min ago": "Terakhir disinkronkan {n} menit lalu",
@@ -194,6 +196,7 @@
   "Step {n} of {total}": "Langkah {n} dari {total}",
   "Stop waiting: {task}?": "Berhenti menunggu: {task}?",
   "Style {n}": "Gaya {n}",
+  "Suggested as {name}: {percent:.0}%": "Disarankan sebagai {name}: {percent:.0}%",
   "Suggested as {}": "Disarankan sebagai {}",
   "Suggested as {}. Confirm the faces that are them.": "Disarankan sebagai {}. Konfirmasi wajah yang memang dia.",
   "Sync this catalog with {name}:": "Sinkronkan katalog ini dengan {name}:",
@@ -332,5 +335,6 @@
   "“{name}” added to Camera Profiles": "“{name}” ditambahkan ke Profil Kamera",
   "“{name}” has its old settings again": "“{name}” kembali memiliki pengaturan lamanya",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "“{name}” baru. Apa yang boleh dimiliki perangkat lain yang menyinkronkan katalog ini darinya?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}” mengambil pengaturan foto aktif. Nama, grup, posisi, dan tandanya tetap."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}” mengambil pengaturan foto aktif. Nama, grup, posisi, dan tandanya tetap.",
+  "★{n} at or above": "★{n} ke atas"
 }

@@ -31,6 +31,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Les modifications de {device} sont datées de {minutes} minutes dans le futur : elles sont mises en attente jusque-là. Mettez l'horloge de {device} à l'heure.",
   "Chart · greys about {cct:.0} K": "Mire · gris vers {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "{checked} fichiers DNG sur {total} vérifiés : {intact} intacts, {damaged} endommagés, {unverifiable} non vérifiables",
+  "Closest: {name}, {percent:.0}%": "Personne la plus proche : {name}, {percent:.0} %",
   "Collection imported: {n} photos found, {m} not in this catalog": "Collection importée : {n} photos trouvées, {m} absentes de ce catalogue",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Espace colorimétrique : Rec. 2020 {curve} (AVIF HDR)",
   "Confirm all {}": "Tout confirmer ({})",
@@ -96,7 +97,6 @@
   "Imported {n} metadata preset{}": "Paramètres de métadonnées importés : {n}{:.0}",
   "Importing {n} photos…": "Importation de {n} photos…",
   "Installed {name} {version}": "{name} {version} installé",
-  "Installing it will {action}.": "L’installation va : {action}.",
   "Invite {name}": "Inviter {name}",
   "It is {}: name this face": "C'est {} : nommer ce visage",
   "It isn't available for {platform}.": "Il n’est pas disponible pour {platform}.",
@@ -104,7 +104,9 @@
   "Its manifest has values this version can't use, which it leaves out: {values}": "Son manifeste contient des valeurs que cette version ne peut pas utiliser et qu'elle laisse de côté : {values}",
   "JPEG quality {q} to fit the size limit": "Qualité JPEG {q} pour respecter la limite de taille",
   "JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)": "Qualité JPEG {q} pour respecter la limite de taille (une taille plus petite ou une limite plus grande conserve plus de qualité)",
-  "Last checked {when}": "Dernière vérification : {when}",
+  "Last checked {n} hours ago": "Dernière vérification : il y a {n} heures",
+  "Last checked {n} minutes ago": "Dernière vérification : il y a {n} minutes",
+  "Last checked {n} seconds ago": "Dernière vérification : il y a {n} secondes",
   "Last synced on {date}": "Dernière synchronisation le {date}",
   "Last synced {n} h ago": "Dernière synchronisation il y a {n} h",
   "Last synced {n} min ago": "Dernière synchronisation il y a {n} min",
@@ -172,6 +174,7 @@
   "Step {n} of {total}": "Étape {n} sur {total}",
   "Stop waiting: {task}?": "Arrêter d’attendre : {task} ?",
   "Style {n}": "Style {n}",
+  "Suggested as {name}: {percent:.0}%": "Suggéré comme {name} : {percent:.0} %",
   "Suggested as {}": "Suggéré comme {}",
   "Suggested as {}. Confirm the faces that are them.": "Suggéré comme {}. Confirmez les visages qui sont cette personne.",
   "Sync this catalog with {name}:": "Synchroniser ce catalogue avec {name} :",
@@ -295,5 +298,6 @@
   "“{name}” added to Camera Profiles": "« {name} » ajouté aux profils d’appareil",
   "“{name}” has its old settings again": "« {name} » a retrouvé ses anciens réglages",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "« {name} » est nouveau. Qu’en peuvent avoir les autres appareils qui synchronisent ce catalogue ?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "« {name} » prend les réglages de la photo active. Son nom, son groupe, sa place et ses marques restent."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "« {name} » prend les réglages de la photo active. Son nom, son groupe, sa place et ses marques restent.",
+  "★{n} at or above": "★{n} et plus"
 }

@@ -44,6 +44,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("winspool", Class::Layer(0)),
     ("winmsi", Class::Layer(0)),
     ("winjob", Class::Layer(0)),
+    ("firstclick", Class::Layer(0)),
     ("android-host", Class::Layer(0)),
     ("peer", Class::Layer(0)),
     ("sync", Class::Layer(0)),

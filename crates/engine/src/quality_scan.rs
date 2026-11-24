@@ -1,8 +1,9 @@
 //! `photo.qualityScan`: the Image Quality Scanner (issue #1313). It scores photos for technical
 //! quality — blur, noise, exposure, compression artifacts ([`lcc_pipeline::quality`]) — over a
 //! selection, the photos in view, a folder or the whole library, stores each score on the photo
-//! (catalog format 20, [`lcc_catalog::QualityScan`]) so the Library can filter and sort by it
-//! without scanning again, and maps scores to Pick Flags with two configurable cutoffs.
+//! (catalog format 21, [`lcc_catalog::QualityScan`]) so the Library can filter and sort by it
+//! without scanning again, and maps scores to star ratings (0–5) and Pick Flags with configurable
+//! cutoffs (issue #1362).
 //!
 //! A background scan is a row in the activity stack (cancellable), measures a batch of
 //! thumbnail-level sources at a time on every core and writes the scores as one undo step when it
@@ -13,7 +14,15 @@
 //! **Unscanned only** (the default) leaves photos that already carry a score alone; `rescan: true`
 //! measures every target again and overwrites its score. Unless `applyFlags` is on, the scan only
 //! says what flag a photo's score asks for (`verdict`); with it on, it writes that flag onto
-//! photos the user has not flagged themselves, never touching a flag the user set.
+//! photos the user has not flagged themselves, never touching a flag the user set. Star ratings
+//! behave the same way behind `autoRate`: written onto photos the user never rated (or whose
+//! rating an earlier scan wrote, so a re-scan may change its own), never onto a user-set rating —
+//! unless `overwriteMetadata` is on, which replaces both, as the dialog's "Overwrite existing"
+//! checkbox asks. The XMP sidecar sync (`xmp.auto_write`) applies to both through the same
+//! `Op::SetRating`/`Op::SetFlag` ops a manual edit writes.
+//!
+//! The pixels are measured on the CPU, on several lanes at once: the scan is a decode and a few
+//! passes over the plane, and the decode dominates.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,11 +57,32 @@ pub struct ScanOptions {
     pub rescan: bool,
     /// The factors measured and their weights.
     pub weights: QualityWeights,
+    /// Write the star rating the score asks for (only onto photos the user never rated themselves).
+    pub auto_rate: bool,
+    /// "Overwrite existing": write the rating and the flag even onto photos the user rated/flagged.
+    pub overwrite_metadata: bool,
+    /// The scores at which a star steps up (0★→1★ through 4★→5★): five non-decreasing numbers in
+    /// 0..=100. The default is the issue's own: `<20` 0★, `20–39` 1★, `40–54` 2★, `55–69` 3★,
+    /// `70–84` 4★, `≥85` 5★.
+    pub star_breaks: [f32; 5],
 }
+
+/// The issue's own breakpoints: `<20` 0★, `20–39` 1★, `40–54` 2★, `55–69` 3★, `70–84` 4★,
+/// `≥85` 5★.
+pub const DEFAULT_STAR_BREAKS: [f32; 5] = [20.0, 40.0, 55.0, 70.0, 85.0];
 
 impl Default for ScanOptions {
     fn default() -> Self {
-        ScanOptions { accepted: 70.0, rejected: 25.0, apply_flags: false, rescan: false, weights: QualityWeights::default() }
+        ScanOptions {
+            accepted: 70.0,
+            rejected: 25.0,
+            apply_flags: false,
+            rescan: false,
+            weights: QualityWeights::default(),
+            auto_rate: false,
+            overwrite_metadata: false,
+            star_breaks: DEFAULT_STAR_BREAKS,
+        }
     }
 }
 
@@ -76,12 +106,16 @@ impl ScanOptions {
         if weights.blur == 0.0 && weights.noise == 0.0 && weights.exposure == 0.0 && weights.compression == 0.0 {
             return Err(bad(C, "every factor's weight is 0: there is nothing to score"));
         }
+        let star_breaks = star_breaks(p)?;
         Ok(ScanOptions {
             accepted,
             rejected,
             apply_flags: p.get("applyFlags").and_then(Value::as_bool).unwrap_or(d.apply_flags),
             rescan: p.get("rescan").and_then(Value::as_bool).unwrap_or(d.rescan),
             weights,
+            auto_rate: p.get("autoRate").and_then(Value::as_bool).unwrap_or(d.auto_rate),
+            overwrite_metadata: p.get("overwriteMetadata").and_then(Value::as_bool).unwrap_or(d.overwrite_metadata),
+            star_breaks,
         })
     }
 }
@@ -108,6 +142,32 @@ fn weight(p: &Value, key: &str, default: f32) -> Result<f32> {
     }
 }
 
+/// The five star breakpoints (`starBreaks`), defaulting to [`DEFAULT_STAR_BREAKS`]: five numbers
+/// from 0 to 100, non-decreasing (an equal neighbour leaves its tier empty, the user's choice).
+fn star_breaks(p: &Value) -> Result<[f32; 5]> {
+    let Some(v) = p.get("starBreaks") else { return Ok(DEFAULT_STAR_BREAKS) };
+    if v.is_null() {
+        return Ok(DEFAULT_STAR_BREAKS);
+    }
+    let Some(list) = v.as_array() else { return Err(bad(C, "`starBreaks` must be an array of five numbers from 0 to 100")) };
+    if list.len() != 5 {
+        return Err(bad(C, "`starBreaks` must be an array of five numbers from 0 to 100"));
+    }
+    let mut out = [0.0f32; 5];
+    for (i, item) in list.iter().enumerate() {
+        match item.as_f64() {
+            Some(x) if x.is_finite() && (0.0..=100.0).contains(&x) => out[i] = x as f32,
+            _ => return Err(bad(C, format!("`starBreaks[{i}]` must be a number from 0 to 100"))),
+        }
+    }
+    for (i, pair) in out.windows(2).enumerate() {
+        if pair[1] < pair[0] {
+            return Err(bad(C, format!("`starBreaks` must not decrease: `starBreaks[{}]` is below `starBreaks[{i}]`", i + 1)));
+        }
+    }
+    Ok(out)
+}
+
 /// Whether a photo's source is (or was made from) a JPEG: blockiness is measured on it. A raw's
 /// own data was never JPEG encoded (its embedded preview was, but the raw data is what is
 /// scored); a preview-only raw is scored on the camera's JPEG, so it is.
@@ -121,6 +181,11 @@ pub fn jpeg_encoded(photo: &Photo) -> bool {
 /// read from it.
 pub fn score(img: &lcc_raster::Rgb32f, options: &ScanOptions, jpeg: bool) -> QualityScan {
     let factors: QualityFactors = QualityFactors::measure(img, options.weights, jpeg);
+    score_from_factors(factors, options)
+}
+
+/// The scan `factors` ask for, as [`score`] stores it.
+fn score_from_factors(factors: QualityFactors, options: &ScanOptions) -> QualityScan {
     // (a scan with every factor at weight 0 is refused, so a measured photo has a score)
     let score = factors.score.unwrap_or(0.0);
     QualityScan {
@@ -130,21 +195,43 @@ pub fn score(img: &lcc_raster::Rgb32f, options: &ScanOptions, jpeg: bool) -> Qua
         compression: factors.compression,
         score,
         verdict: QualityVerdict::of(score, options.accepted, options.rejected),
-        // (the flag record is for the run that stores the scan: a measurement writes no flag yet)
+        // (the flag and rating records are for the run that stores the scan: a measurement writes
+        // neither yet)
         flag_written: None,
+        rating_written: None,
     }
+}
+
+/// The star rating a 0..100 `score` asks for with these breakpoints: `0` below the first, `5` at
+/// or above the last; a non-finite score asks for none.
+pub fn star_of(score: f32, breaks: &[f32; 5]) -> u8 {
+    breaks.iter().filter(|b| score >= **b).count() as u8
 }
 
 /// The photo's flag once a scan that writes flags (`apply_flags`) stores `scan`: the verdict's
 /// flag when the photo is unflagged, or when its flag is the one an earlier scan wrote (a rescan
 /// may change its own flag); a flag the user set stays, and a `Pending` verdict changes nothing.
-/// `previous` is the scan the photo carried before this run, if any.
-pub fn flag_after(photo: &Photo, previous: Option<QualityScan>, scan: &QualityScan, apply_flags: bool) -> Flag {
+/// `previous` is the scan the photo carried before this run, if any. With `overwrite_metadata`,
+/// the scan's flag is written even onto a flag the user set ("Overwrite existing").
+pub fn flag_after(photo: &Photo, previous: Option<QualityScan>, scan: &QualityScan, options: &ScanOptions) -> Flag {
     let ours = photo.flag == Flag::None || previous.and_then(|q| q.flag_written) == Some(photo.flag);
     match scan.verdict.flag() {
-        Some(flag) if apply_flags && ours => flag,
+        Some(flag) if options.apply_flags && (options.overwrite_metadata || ours) => flag,
         _ => photo.flag,
     }
+}
+
+/// The photo's star rating once a scan that writes ratings (`auto_rate`) stores `scan`: the stars
+/// the score asks for when the photo was never rated by the user (rating `0`) or its rating is the
+/// one an earlier scan wrote (a rescan may change its own), or — with `overwrite_metadata` —
+/// whatever is there now; a rating the user set stays. Mirrors [`flag_after`].
+pub fn rating_after(photo: &Photo, previous: Option<QualityScan>, scan: &QualityScan, options: &ScanOptions) -> u8 {
+    if !options.auto_rate {
+        return photo.rating;
+    }
+    let star = star_of(scan.score, &options.star_breaks);
+    let ours = photo.rating == 0 || previous.and_then(|q| q.rating_written) == Some(photo.rating);
+    if options.overwrite_metadata || ours { star } else { photo.rating }
 }
 
 /// The photos a scan looks at:
@@ -418,9 +505,10 @@ impl Session {
         let mut pending = 0u64;
         let mut rejected = 0u64;
         let mut flagged = 0u64;
+        let mut rated = 0u64;
         let mut failures: Vec<Value> = Vec::new();
         let mut photos = Vec::with_capacity(run.measured as usize);
-        let mut ops: Vec<Op> = Vec::with_capacity(run.measured as usize * 2);
+        let mut ops: Vec<Op> = Vec::with_capacity(run.measured as usize * 3);
         for (id, flag_before, measured) in results {
             let scan = match measured {
                 Ok(scan) => scan,
@@ -437,13 +525,24 @@ impl Session {
             // the focus the scan measured is the assisted culling's own focus measure: keep the
             // two in one number, and the best-of-burst and other culling marks as they were
             analysis.sharpness = scan.sharpness;
-            let flag = flag_after(photo, previous, &scan, run.options.apply_flags);
+            let rating_before = photo.rating;
+            let flag = flag_after(photo, previous, &scan, &run.options);
             // the flag a scan writes is its own, so a later scan may change it; a flag it leaves
             // alone is the user's. The record says which: the flag just written, the one an earlier
             // scan wrote and this one kept, or none (the photo's flag is not the scan's)
             let flag_written = if flag != flag_before { Some(flag) } else { previous.and_then(|old| old.flag_written).filter(|old| *old == flag) };
-            analysis.quality = Some(lcc_catalog::QualityScan { flag_written, ..scan });
+            // the rating behaves the same way: its record travels with the scan, so a re-scan may
+            // change a rating the scan wrote but never a rating the user set (unless the run says
+            // "Overwrite existing")
+            let rating = rating_after(photo, previous, &scan, &run.options);
+            let rating_written =
+                if rating != rating_before { Some(rating) } else { previous.and_then(|old| old.rating_written).filter(|old| *old == rating) };
+            analysis.quality = Some(lcc_catalog::QualityScan { flag_written, rating_written, ..scan });
             ops.push(Op::SetAnalysis { id, analysis: Some(analysis) });
+            if rating != rating_before {
+                ops.push(Op::SetRating { id, rating });
+                rated += 1;
+            }
             if flag != flag_before {
                 ops.push(Op::SetFlag { id, flag });
                 flagged += 1;
@@ -462,6 +561,7 @@ impl Session {
                 "compression": scan.compression.map(round1),
                 "verdict": scan.verdict.as_str(),
                 "flag": flag,
+                "rating": rating,
             }));
         }
         if !ops.is_empty() {
@@ -479,6 +579,7 @@ impl Session {
             "pending": pending,
             "rejected": rejected,
             "flagged": flagged,
+            "rated": rated,
             "failed": failed,
             "failures": failures,
             "cancelled": run.cancelled,
@@ -533,7 +634,7 @@ fn quality_scan(s: &mut Session, p: &Value) -> Result<Value> {
         // nothing to measure: say so plainly, without an empty activity row
         return Ok(json!({
             "active": false, "done": true, "measured": 0, "skipped": skipped, "clips": clips,
-            "accepted": 0, "pending": 0, "rejected": 0, "flagged": 0,
+            "accepted": 0, "pending": 0, "rejected": 0, "flagged": 0, "rated": 0,
             "failed": 0, "failures": [], "cancelled": false, "photos": [],
         }));
     }
@@ -609,7 +710,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Image Quality Scan",
             ["Library"],
             None,
-            "{scope?: selected|view|folder|catalog (selected with `ids`, else the selection or the photo in view; view: the photos in view; folder: the folder shown (the Folders panel's or Browse's), or `path`; catalog: the whole library), ids?, path?, subfolders?: bool (true), accepted?: 0..100 (70), rejected?: 0..100 (25), applyFlags?: bool (false), rescan?: bool (false), weights?: {blur, noise, exposure, compression: 0..10 (1)}, wait?: bool, cancel?: bool, status?: bool}: score photos for technical quality (sharpness or blur, noise, exposure and JPEG compression artifacts) and store each score on the photo with a verdict from the two cutoffs; `applyFlags` also writes Pick / Reject onto photos the user has not flagged (a flag an earlier scan wrote is the scan's own, so a rescan may change it); `rescan` measures photos that carry a score already; runs in the background (an activity row, cancellable: cancelling keeps what it measured) and `wait` runs it now → the summary {active: false, done: true, measured, skipped, clips, accepted, pending, rejected, flagged, failed, failures, cancelled, photos} or, started in the background, {started: true, done: false, photos, skipped, clips}",
+            "{scope?: selected|view|folder|catalog (selected with `ids`, else the selection or the photo in view; view: the photos in view; folder: the folder shown (the Folders panel's or Browse's), or `path`; catalog: the whole library), ids?, path?, subfolders?: bool (true), accepted?: 0..100 (70), rejected?: 0..100 (25), applyFlags?: bool (false), rescan?: bool (false), weights?: {blur, noise, exposure, compression: 0..10 (1)}, autoRate?: bool (false), overwriteMetadata?: bool (false), starBreaks?: [number, number, number, number, number] ([20, 40, 55, 70, 85]; the scores at which a star steps up), wait?: bool, cancel?: bool, status?: bool}: score photos for technical quality (sharpness or blur, noise, exposure and JPEG compression artifacts) and store each score on the photo with a verdict from the two cutoffs; `applyFlags` also writes Pick / Reject onto photos the user has not flagged (a flag an earlier scan wrote is the scan's own, so a rescan may change it) and `autoRate` writes the star rating the score asks for the same way (a rating the user set always stays; `overwriteMetadata` replaces both, \"Overwrite existing\"); `rescan` measures photos that carry a score already; runs in the background (an activity row, cancellable: cancelling keeps what it measured) and `wait` runs it now → the summary {active: false, done: true, measured, skipped, clips, accepted, pending, rejected, flagged, rated, failed, failures, cancelled, photos} or, started in the background, {started: true, done: false, photos, skipped, clips}",
             always,
             quality_scan
         ),
@@ -618,7 +719,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Image Quality Scan: Take Results",
             [],
             None,
-            "{}: cheap every frame: moves a background scan along and returns its progress {active, done, photos, measured, remaining, cancelled}; the frame it ends, its summary (one undo step) → {active, done, measured, skipped, clips, accepted, pending, rejected, flagged, failed, failures, cancelled, photos}",
+            "{}: cheap every frame: moves a background scan along and returns its progress {active, done, photos, measured, remaining, cancelled}; the frame it ends, its summary (one undo step) → {active, done, measured, skipped, clips, accepted, pending, rejected, flagged, rated, failed, failures, cancelled, photos}",
             always,
             pump
         ),
@@ -676,21 +777,100 @@ mod tests {
         let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "JPEG", 4, 4, "2026-01-01");
         let accepted = QualityScan { score: 90.0, verdict: QualityVerdict::Accepted, ..QualityScan::default() };
         let rejected = QualityScan { score: 10.0, verdict: QualityVerdict::Rejected, ..QualityScan::default() };
-        assert_eq!(flag_after(&p, None, &accepted, false), Flag::None, "not asked to flag");
-        assert_eq!(flag_after(&p, None, &accepted, true), Flag::Pick);
-        assert_eq!(flag_after(&p, None, &rejected, true), Flag::Reject);
+        let flagging = ScanOptions { apply_flags: true, ..ScanOptions::default() };
+        let not_flagging = ScanOptions::default();
+        assert_eq!(flag_after(&p, None, &accepted, &not_flagging), Flag::None, "not asked to flag");
+        assert_eq!(flag_after(&p, None, &accepted, &flagging), Flag::Pick);
+        assert_eq!(flag_after(&p, None, &rejected, &flagging), Flag::Reject);
         // a flag the user set stays
         p.flag = Flag::Pick;
-        assert_eq!(flag_after(&p, None, &rejected, true), Flag::Pick, "the user's flag stays");
+        assert_eq!(flag_after(&p, None, &rejected, &flagging), Flag::Pick, "the user's flag stays");
+        // ... but "Overwrite existing" replaces it
+        let overwriting = ScanOptions { apply_flags: true, overwrite_metadata: true, ..ScanOptions::default() };
+        assert_eq!(flag_after(&p, None, &rejected, &overwriting), Flag::Reject, "overwrite replaces the user's flag");
         // ... unless it is the one a scan wrote: a rescan may change its own
         let ours = QualityScan { flag_written: Some(Flag::Pick), ..accepted };
-        assert_eq!(flag_after(&p, Some(ours), &rejected, true), Flag::Reject, "the scan's own flag may change");
+        assert_eq!(flag_after(&p, Some(ours), &rejected, &flagging), Flag::Reject, "the scan's own flag may change");
         // and the flag of the scan before this one is not the user's either way
         p.flag = Flag::Reject;
-        assert_eq!(flag_after(&p, Some(ours), &accepted, true), Flag::Reject, "the flag is not the scan's record");
+        assert_eq!(flag_after(&p, Some(ours), &accepted, &flagging), Flag::Reject, "the flag is not the scan's record");
         // a verdict between the cutoffs asks for nothing
         p.flag = Flag::None;
         let pending = QualityScan { score: 50.0, verdict: QualityVerdict::Pending, ..QualityScan::default() };
-        assert_eq!(flag_after(&p, None, &pending, true), Flag::None);
+        assert_eq!(flag_after(&p, None, &pending, &flagging), Flag::None);
+    }
+
+    /// Star ratings: the score asks for a star by the breakpoints, the scan writes it only onto a
+    /// photo the user never rated (or whose rating an earlier scan wrote), and "Overwrite
+    /// existing" replaces even a user-set rating. A scan that does not write ratings changes none.
+    #[test]
+    fn ratings_follow_the_score_and_the_users_choice() {
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "JPEG", 4, 4, "2026-01-01");
+        let rating = ScanOptions { auto_rate: true, ..ScanOptions::default() };
+        let low = QualityScan { score: 30.0, ..QualityScan::default() };
+        // the defaults: 0 <20, 20 1★, 40 2★, 55 3★, 70 4★, 85 5★
+        let stars = |score: f32| star_of(score, &DEFAULT_STAR_BREAKS);
+        assert_eq!(stars(0.0), 0);
+        assert_eq!(stars(19.9), 0);
+        assert_eq!(stars(20.0), 1);
+        assert_eq!(stars(39.9), 1);
+        assert_eq!(stars(40.0), 2);
+        assert_eq!(stars(54.9), 2);
+        assert_eq!(stars(55.0), 3);
+        assert_eq!(stars(69.9), 3);
+        assert_eq!(stars(70.0), 4);
+        assert_eq!(stars(84.9), 4);
+        assert_eq!(stars(85.0), 5);
+        assert_eq!(stars(100.0), 5);
+        assert_eq!(stars(f32::NAN), 0);
+        // not asked to rate: nothing changes
+        assert_eq!(rating_after(&p, None, &low, &ScanOptions::default()), 0);
+        // an unrated photo takes the scan's star
+        assert_eq!(rating_after(&p, None, &low, &rating), 1);
+        // a rating the user set stays
+        p.rating = 4;
+        assert_eq!(rating_after(&p, None, &low, &rating), 4, "the user's rating stays");
+        // ... unless "Overwrite existing" is on
+        let overwriting = ScanOptions { auto_rate: true, overwrite_metadata: true, ..ScanOptions::default() };
+        assert_eq!(rating_after(&p, None, &low, &overwriting), 1, "overwrite replaces the user's rating");
+        // ... or unless the rating is the one an earlier scan wrote: a rescan may change its own
+        let ours = QualityScan { rating_written: Some(4), ..low };
+        assert_eq!(rating_after(&p, Some(ours), &low, &rating), 1, "the scan's own rating may change");
+        // and the record stays a record: a user rating in place is not the scan's
+        p.rating = 2;
+        assert_eq!(rating_after(&p, Some(ours), &low, &rating), 2, "a user rating in place is not the scan's");
+        // custom breakpoints are read as given
+        let custom = ScanOptions { auto_rate: true, star_breaks: [10.0, 30.0, 50.0, 70.0, 90.0], ..ScanOptions::default() };
+        p.rating = 0;
+        let scan = QualityScan { score: 50.0, ..QualityScan::default() };
+        assert_eq!(rating_after(&p, None, &scan, &custom), 3, "the third custom breakpoint is reached at 50");
+    }
+
+    /// The breakpoints and the rest of the new options: hostile numbers are refused with an
+    /// actionable message, hostile shapes of the list too.
+    #[test]
+    fn star_breaks_are_checked() {
+        let parse = |v: Value| ScanOptions::parse(&v);
+        assert_eq!(parse(json!({"starBreaks": [20, 40, 55, 70, 85]})).map(|o| o.star_breaks).ok(), Some(DEFAULT_STAR_BREAKS));
+        for bad in [
+            json!({"starBreaks": [20, 40, 55, 70]}),
+            json!({"starBreaks": [20, 40, 55, 70, 85, 95]}),
+            json!({"starBreaks": [20, 40, 55, 70, "85"]}),
+            json!({"starBreaks": [20, 40, 55, 70, 101]}),
+            json!({"starBreaks": [20, 40, 55, 70, -1]}),
+            json!({"starBreaks": [85, 70, 55, 40, 20]}),
+            json!({"starBreaks": "20,40"}),
+        ] {
+            assert!(parse(bad.clone()).is_err(), "{bad}");
+        }
+        // equal neighbours are allowed: that tier is empty
+        assert!(parse(json!({"starBreaks": [20, 20, 55, 70, 85]})).is_ok());
+        // the toggles
+        assert!(parse(json!({})).map(|o| !o.auto_rate && !o.overwrite_metadata).unwrap_or(false));
+        let all = parse(json!({"autoRate": true, "overwriteMetadata": true})).map(|o| (o.auto_rate, o.overwrite_metadata));
+        assert_eq!(all.ok(), Some((true, true)));
+        // names a scan does not take are ignored rather than refused, so a command written by hand
+        // (or with a key this scanner never had) still runs
+        assert!(parse(json!({"gpu": true, "precision": "fp16", "batchSize": 8})).is_ok());
     }
 }
