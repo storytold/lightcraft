@@ -5,8 +5,9 @@
 //! `origin/main` (or `--base REF`), committed or not, and runs:
 //!
 //! - fmt, layers, assets: always (seconds);
-//! - clippy on the whole workspace (check builds only; catches callers broken by an API change);
-//! - the tests of the changed packages only (not their dependents);
+//! - clippy on the changed packages and their dependents (check builds only; catches callers broken by
+//!   an API change), the whole workspace when a workspace-wide file changed;
+//! - the tests of the changed packages only (not their dependents), built with `-p`;
 //! - heif when `lcc-codecs` / `lcc-heif` changed;
 //! - parity when the tracker docs, a command/control crate, or a file's path changed (renames and
 //!   deletions: the tracker cites paths);
@@ -15,7 +16,8 @@
 //! A file outside any package that a crate compiles in (`include_str!` of `docs/whats-new.md`,
 //! fonts and camera profiles under `assets/`, ...) counts as a change to that crate (`EMBEDDED`).
 //! A change to a workspace-wide file (root `Cargo.toml`, `Cargo.lock`, lint or toolchain config)
-//! tests everything. The full `ci` (GitHub's CI on every PR) stays the merge gate.
+//! tests everything. This is the local pre-push check; GitHub's CI on the PR (`ci --fast` plus
+//! `affected-tests`) stays the merge gate.
 
 use std::collections::BTreeSet;
 use std::path::Path;

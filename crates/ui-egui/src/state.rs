@@ -2281,7 +2281,7 @@ pub enum Dialog {
     /// Library ▸ Image Quality Scanner… (issue #1313): score photos for technical
     /// quality (blur, noise, exposure, JPEG blockiness) in the background and flag them Pick /
     /// Reject by two cutoffs; the scores stay on the photos for the Library's quality filter and
-    /// sort.
+    /// sort. Also assigns the star ratings the scores ask for (issue #1362).
     QualityScanner {
         /// The scope: `selection`, `folder` or `catalog` (`photo.qualityScan`'s `scope`).
         scope: String,
@@ -2295,6 +2295,12 @@ pub enum Dialog {
         rescan: bool,
         /// The factors measured, as `photo.qualityScan`'s `weights`: blur, noise, exposure, compression.
         weights: [f32; 4],
+        /// Write the star ratings the scores ask for (photos the user never rated themselves).
+        auto_rate: bool,
+        /// “Overwrite existing”: write the ratings and flags even onto photos the user set.
+        overwrite_metadata: bool,
+        /// The scores at which a star steps up (0★→1★ … 4★→5★), non-decreasing.
+        star_breaks: [f32; 5],
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
