@@ -9,6 +9,7 @@ mod activity;
 pub mod alternatives;
 mod before;
 pub(crate) mod browse;
+pub mod camera_looks;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod catalog;
 pub mod chart_profile;
@@ -50,7 +51,6 @@ pub mod keywords;
 mod lens_db;
 pub mod levels;
 pub mod library;
-pub mod camera_looks;
 pub mod lut_profiles;
 pub mod manage;
 pub mod map;

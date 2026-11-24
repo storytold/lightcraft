@@ -46,11 +46,12 @@ fn auto_pairs(s: &Session, ids: &[PhotoId]) -> Vec<(PhotoId, PhotoId)> {
             jpegs.entry(k).or_insert(id);
         }
     }
-    ids.iter().filter_map(|&id| match key(id) {
-        Some((k, MediaKind::Raw)) => jpegs.get(&k).map(|&j| (id, j)),
-        _ => None,
-    })
-    .collect()
+    ids.iter()
+        .filter_map(|&id| match key(id) {
+            Some((k, MediaKind::Raw)) => jpegs.get(&k).map(|&j| (id, j)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The `pairs` param (`[[raw, jpeg], …]`), else pairs found among the targets.
