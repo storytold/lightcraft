@@ -16,8 +16,9 @@ pub const PARAM_LUT: usize = 1024;
 /// The parametric (region) curve of a [`ToneCurve`]: the four region amounts, each a cosine bump
 /// over its window between two splits, summed and then forced monotone.
 ///
-/// This is the renderer's curve, not an approximation of it — both `curve_luts` in the pipeline
-/// and the curve editor in the UI use this struct so they can never disagree.
+/// This is the renderer's curve, not an approximation of it: processes V1 to V8 render it, and V9
+/// renders it when the splits are moved. The curve editor draws it through
+/// [`crate::curve_stage::ParametricGraph`], which picks the measured regions where V9 renders those.
 #[derive(Clone, Debug)]
 pub struct ParametricCurve {
     /// The curve, sampled and already forced monotone.

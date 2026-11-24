@@ -422,9 +422,8 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
         },
-        // V7, with Whites moved out of the tone map: the curve stage applies Whites as measured against
-        // Lightroom (`crate::curve_stage`). A raw whose profile has no tone curve gets Lightroom's default
-        // curve, measured (`crate::default_tone`), instead of its own.
+        // V7, with Whites moved out of the tone map: the curve stage applies Whites (`crate::curve_stage`). A raw
+        // whose profile has no tone curve gets the fitted default curve (`crate::default_tone`) instead of its own.
         Process::V9 => match crate::default_tone::for_source(s, info).or(info.camera_tone.filter(|_| info.raw)) {
             Some(curve) => ToneMap::camera_rolloff_hdr(&curve, 0.0, 0.0, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, 0.0, l.blacks, peak),
@@ -589,7 +588,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- process V4: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
             d = apply_light(d, light.as_ref(), preview_light.as_ref(), exact, srgb);
 
-            // --- process V9: the colour mixer, then Whites and the tone curves, as Lightroom applies them
+            // --- process V9: the colour mixer, then Whites and the tone curves
             d = fp.mixer_stage.as_ref().map_or(d, |stage| stage.apply(d));
             d = fp.curve_stage.as_ref().map_or(d, |stage| stage.apply(d));
 

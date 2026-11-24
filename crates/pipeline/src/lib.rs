@@ -33,7 +33,7 @@ pub mod cull;
 pub mod curve;
 pub mod curve_stage;
 #[rustfmt::skip]
-mod curve_stage_tables;
+mod curve_stage_model;
 pub mod default_tone;
 #[rustfmt::skip]
 mod default_tone_table;
@@ -42,7 +42,7 @@ pub mod finish;
 pub mod geometry;
 pub mod grading_stage;
 #[rustfmt::skip]
-mod grading_stage_tables;
+mod grading_stage_model;
 pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
@@ -54,6 +54,8 @@ pub mod lut;
 pub mod mask_space;
 pub mod masks;
 pub mod mixer_stage;
+#[rustfmt::skip]
+mod mixer_stage_model;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
@@ -69,6 +71,7 @@ pub mod upright;
 pub mod visualize;
 
 pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
+pub use curve_stage::ParametricGraph;
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 

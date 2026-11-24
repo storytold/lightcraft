@@ -102,9 +102,10 @@ pub enum Process {
     /// V7, with the Highlights/Shadows base taken of log luminance without its fine detail (clamped
     /// between a fine and a 3× wider median), so gaps in dark lettering aren't lifted into bright blocks.
     V8,
-    /// V8, with Whites and the parametric curve measured against Lightroom, and the tone curves applied as
-    /// Lightroom does: Whites, the parametric and point curve hue-preserving in linear ProPhoto RGB, then the
-    /// red, green and blue curves per channel, before the colour stage (`lightcraft_pipeline::curve_stage`).
+    /// V8, with Whites and the parametric curve from a fitted model, and the tone curves applied
+    /// hue-preserving: Whites, the parametric and point curve in linear ProPhoto RGB, then the red, green and
+    /// blue curves per channel, before the colour stage (`lightcraft_pipeline::curve_stage`,
+    /// `docs/curve-stage.md`).
     V9,
 }
 
