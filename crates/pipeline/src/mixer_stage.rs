@@ -1,16 +1,15 @@
-//! Process V9's mixer stage ([`lightcraft_develop::Process::V9`], `docs/mixer-stage.md`): the colour mixer,
-//! applied the way Lightroom applies it.
+//! Process V9's mixer stage ([`lightcraft_develop::Process::V9`]): the colour mixer. `docs/mixer-stage.md` records
+//! how the model was measured and fitted.
 //!
-//! Measured on Camera Raw renders of synthetic OkLCh charts (`tools/lr_mixer_charts.py`):
-//! - Each slider's effect is a table of Camera Raw's measured response (`mixer_stage.bin`): per OkLab hue (72 bins of
-//!   5°), chroma level and lightness level (3 × 3), the hue shift, the relative chroma change and the lightness
-//!   change, at ±25, ±50, ±75 and ±100. Amounts in between are interpolated linearly, towards 0 below 25.
-//! - Lightroom's bands differ from V8's: their centres sit elsewhere on the hue circle (Orange at OkLab hue 50, not
-//!   82), Blue is wider and Red and Magenta narrower, and the response grows faster than linearly with the amount.
+//! - Each slider's effect comes from a fitted model (`mixer_stage_model`, written by `tools/lr_mixer_charts.py fit`):
+//!   each band has a centre and a width on each side, shared by its Hue, Saturation and Luminance sliders; each kind
+//!   of slider has a gain that grows faster than linearly with the amount and a dependence on the colour's chroma and
+//!   lightness; each band scales them per slider and output ([`response`]).
+//! - The bands differ from V8's: their centres sit elsewhere on the hue circle (Orange at OkLab hue 50, not 82), Blue
+//!   is wider and Red and Magenta narrower.
 //! - All 24 sliders act on the same input colour: their hue and lightness changes add and their chroma changes
 //!   multiply.
-//! - Lightroom applies the mixer before the tone curves: predicting charts with a strong curve and the mixer from the
-//!   single-setting renders leaves 1.17 (OkLab × 100) in this order, 1.66 with the mixer after the curves.
+//! - The mixer acts before the tone curves.
 //!
 //! The stage runs after the tone map and Process V4's calibrated Contrast and Blacks, before the curve stage
 //! ([`crate::curve_stage`]). It replaces V8's mixer in [`crate::colorops::ColorOps`].
@@ -18,8 +17,7 @@
 use lightcraft_color::perceptual::{lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
 use lightcraft_develop::{DevelopSettings, Process};
 
-/// The measured table, written by `tools/lr_mixer_charts.py table` (format in its docstring).
-static TABLE: &[u8] = include_bytes!("mixer_stage.bin");
+use crate::mixer_stage_model as m;
 
 /// Hue bins per table row (5° each, from OkLab hue 0).
 pub const HUES: usize = 72;
@@ -29,92 +27,64 @@ pub const ROWS: usize = 9;
 const OUTPUTS: usize = 3;
 /// Values of the combined table: [`ROWS`] × outputs × [`HUES`].
 pub const TABLE_LEN: usize = ROWS * OUTPUTS * HUES;
-/// The measured amounts.
-const AMOUNTS: [f32; 8] = [-100.0, -75.0, -50.0, -25.0, 25.0, 50.0, 75.0, 100.0];
-/// Sliders in the table: mixer bands (red … magenta) × (hue, saturation, luminance).
+/// Sliders in the model: mixer bands (red … magenta) × (hue, saturation, luminance).
 const SLIDERS: usize = 24;
-const HEADER: usize = 4 + 6 * 4 + AMOUNTS.len() * 4 + 12 * 4;
-const ROW_BYTES: usize = 4 + HUES;
+/// Where the combined table samples the model: OkLab lightness levels.
+const LIGHT: [f32; 3] = [0.55, 0.78, 0.92];
+/// The table's chroma levels per lightness level: bright colours reach less chroma, so their levels sit lower.
+const CHROMA: [[f32; 3]; 3] = [[0.07, 0.13, 0.19], [0.045, 0.09, 0.14], [0.025, 0.05, 0.09]];
 
 /// The stage's combined response table: per row (lightness level × 3 + chroma level), output and hue bin, the hue
-/// shift (radians), the chroma factor and the lightness change of every slider together.
+/// shift (radians), the chroma factor and the lightness change of every slider together, sampled from the model.
 #[derive(Clone, Debug)]
 pub struct MixerStage {
-    /// Mean OkLab chroma of the measured chroma levels on Camera Raw's neutral chart, per lightness level (its
-    /// neutral render desaturates bright colours: the patches of one nominal chroma differ by about 3× in chroma).
+    /// OkLab chroma of the table's chroma levels, per lightness level ([`CHROMA`]).
     pub chroma: [[f32; 3]; 3],
-    /// Mean OkLab lightness of the measured lightness levels.
+    /// OkLab lightness of the table's lightness levels ([`LIGHT`]).
     pub light: [f32; 3],
     pub table: Box<[f32; TABLE_LEN]>,
 }
 
-/// The little-endian `f32` at byte `off` of the table, if it is inside.
-fn f32_at(off: usize) -> Option<f32> {
-    TABLE.get(off..off + 4).and_then(|b| b.try_into().ok()).map(f32::from_le_bytes)
-}
-
-/// The little-endian `u32` at byte `off` of the table, if it is inside.
-fn u32_at(off: usize) -> Option<u32> {
-    TABLE.get(off..off + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
-}
-
-/// The table's level keys (chroma per lightness level, lightness), when its header and size match this code.
-fn levels() -> Option<([[f32; 3]; 3], [f32; 3])> {
-    let dims = [1, SLIDERS, AMOUNTS.len(), ROWS, OUTPUTS, HUES];
-    let header_ok = TABLE.get(..4) == Some(b"LCCS")
-        && dims.iter().enumerate().all(|(i, d)| u32_at(4 + 4 * i) == Some(*d as u32))
-        && AMOUNTS.iter().enumerate().all(|(i, a)| f32_at(28 + 4 * i) == Some(*a));
-    if !header_ok || TABLE.len() != HEADER + SLIDERS * AMOUNTS.len() * ROWS * OUTPUTS * ROW_BYTES {
-        return None;
-    }
-    let at = |i: usize| f32_at(28 + 4 * AMOUNTS.len() + 4 * i);
-    let chroma = [[at(0)?, at(1)?, at(2)?], [at(3)?, at(4)?, at(5)?], [at(6)?, at(7)?, at(8)?]];
-    let light = [at(9)?, at(10)?, at(11)?];
-    Some((chroma, light))
-}
-
-/// Measured response of `slider` at measured amount `amount`, row `row`, output `out`, hue bin `bin`.
-fn measured(slider: usize, amount: usize, row: usize, out: usize, bin: usize) -> f32 {
-    let off = HEADER + (((slider * AMOUNTS.len() + amount) * ROWS + row) * OUTPUTS + out) * ROW_BYTES;
-    let scale = f32_at(off).unwrap_or(0.0);
-    TABLE.get(off + 4 + bin).map_or(0.0, |q| scale * f32::from(i8::from_le_bytes([*q])))
-}
-
-/// The two measured amounts around `v` and the weight of the upper: `None` stands for the unedited 0.
-fn bracket(v: f32) -> (Option<usize>, Option<usize>, f32) {
-    let v = v.clamp(AMOUNTS[0], AMOUNTS[AMOUNTS.len() - 1]);
-    let mut keys: Vec<(f32, Option<usize>)> = AMOUNTS.iter().enumerate().map(|(i, a)| (*a, Some(i))).collect();
-    keys.push((0.0, None));
-    keys.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for w in keys.windows(2) {
-        if let [k0, k1] = w
-            && v >= k0.0
-            && v <= k1.0
-        {
-            let f = if k1.0 > k0.0 { (v - k0.0) / (k1.0 - k0.0) } else { 0.0 };
-            return (k0.1, k1.1, f);
-        }
-    }
-    (None, None, 0.0)
+/// The fitted response of slider `slider` (band × 3 + kind) output `out` at amount `t` (−1 to 1) for OkLCh chroma `c`,
+/// lightness `l` and hue `h` (degrees): a hue shift in degrees, a relative chroma change or a lightness change.
+/// `amp · gain(t) · band(h) · level(dc, dl)` with the band's shape shared by its three sliders, and the gain and level
+/// dependence shared by all bands' sliders of one kind (docs/mixer-stage.md).
+fn response(slider: usize, out: usize, t: f64, c: f64, l: f64, h: f64) -> f64 {
+    let (band, kind) = (slider / 3, slider % 3);
+    let (Some([centre, left, right]), Some(k), Some(amp)) =
+        (m::BANDS.get(band), m::KINDS.get(kind).and_then(|k| k.get(out)), m::AMPS.get(band).and_then(|a| a.get(kind)).and_then(|a| a.get(out)))
+    else {
+        return 0.0;
+    };
+    let [g1, g2, g3, g4, g5, g6, ac, al] = *k;
+    let (at, dc, dl) = (t.abs(), (c - m::REF_CHROMA.0) / m::REF_CHROMA.1, (l - m::REF_LIGHT.0) / m::REF_LIGHT.1);
+    let gain = if t < 0.0 { g1 * at + g2 * at * at + g3 * at * at * at } else { g4 * at + g5 * at * at + g6 * at * at * at };
+    let d = (h - centre + 180.0).rem_euclid(360.0) - 180.0;
+    let z = d / (if d < 0.0 { *left } else { *right }).exp();
+    amp * gain * (-0.5 * z * z).exp() * (ac * dc + al * dl).exp()
 }
 
 /// The combined table of `(slider, amount)` pairs: hue and lightness changes add, chroma changes multiply.
 fn combine(sliders: &[(usize, f32)]) -> Option<Box<[f32; TABLE_LEN]>> {
-    // each slider's two measured amounts and weight, found once
-    let active: Vec<(usize, (Option<usize>, Option<usize>, f32))> =
-        sliders.iter().filter(|(_, v)| *v != 0.0 && v.is_finite()).map(|(s, v)| (*s, bracket(*v))).collect();
+    let active: Vec<(usize, f64)> = sliders
+        .iter()
+        .filter(|(i, v)| *v != 0.0 && v.is_finite() && *i < SLIDERS)
+        .map(|(i, v)| (*i, (f64::from(*v) / 100.0).clamp(-1.0, 1.0)))
+        .collect();
     if active.is_empty() {
         return None;
     }
     let mut t = Box::new([0.0f32; TABLE_LEN]);
     for row in 0..ROWS {
+        let (li, ci) = (row / 3, row % 3);
+        let l = f64::from(LIGHT.get(li).copied().unwrap_or(0.0));
+        let c = f64::from(CHROMA.get(li).and_then(|r| r.get(ci)).copied().unwrap_or(0.0));
         for out in 0..OUTPUTS {
             for bin in 0..HUES {
+                let h = bin as f64 * (360.0 / HUES as f64);
                 let mut acc = if out == 1 { 1.0 } else { 0.0 };
-                for (slider, (a0, a1, f)) in &active {
-                    let (a0, a1, f) = (*a0, *a1, *f);
-                    let at = |a: Option<usize>| a.map_or(0.0, |a| measured(*slider, a, row, out, bin));
-                    let r = at(a0) * (1.0 - f) + at(a1) * f;
+                for (slider, t) in &active {
+                    let r = response(*slider, out, *t, c, l, h) as f32;
                     match out {
                         0 => acc += r.to_radians(),
                         1 => acc *= (1.0 + r).max(0.0),
@@ -130,7 +100,7 @@ fn combine(sliders: &[(usize, f32)]) -> Option<Box<[f32; TABLE_LEN]>> {
     Some(t)
 }
 
-/// Position of `x` between the three measured levels `keys`: (lower, upper, weight of the upper), clamped.
+/// Position of `x` between the three levels `keys`: (lower, upper, weight of the upper), clamped.
 fn level(keys: &[f32; 3], x: f32) -> (usize, usize, f32) {
     if x <= keys[0] {
         (0, 0, 0.0)
@@ -149,13 +119,12 @@ impl MixerStage {
         if s.process.process() < Process::V9 {
             return None;
         }
-        let (chroma, light) = levels()?;
         let sliders: Vec<(usize, f32)> = s.mixer.bands().iter().flat_map(|b| [b.hue, b.sat, b.lum]).enumerate().map(|(i, v)| (i, v as f32)).collect();
-        combine(&sliders).map(|table| MixerStage { chroma, light, table })
+        combine(&sliders).map(|table| MixerStage { chroma: CHROMA, light: LIGHT, table })
     }
 
     /// The (hue shift, chroma factor, lightness change) for OkLCh `l`, `c`, `h`: linear in hue, bilinear in the chroma
-    /// and lightness levels, clamped to the measured ones. Below the lowest measured chroma the lightness change fades
+    /// and lightness levels, clamped to the table's. Below the lowest chroma level the lightness change fades
     /// out towards neutral.
     pub fn look(&self, l: f32, c: f32, h: f32) -> [f32; 3] {
         let hd = h.to_degrees().rem_euclid(360.0) / 5.0;
@@ -216,22 +185,36 @@ mod tests {
         (d + 180.0).rem_euclid(360.0) - 180.0
     }
 
+    /// Every slider's fitted response stays finite and within plausible ranges over the colours the table samples,
+    /// and is 0 at amount 0.
     #[test]
-    fn the_table_matches_this_code() {
-        let (chroma, light) = levels().expect("table header");
-        assert!(chroma.iter().all(|c| c.windows(2).all(|w| w[0] < w[1])) && light.windows(2).all(|w| w[0] < w[1]), "{chroma:?} {light:?}");
-        // every scale is finite and the values stay within plausible ranges
+    fn the_fitted_responses_stay_plausible() {
         for slider in 0..SLIDERS {
-            for a in 0..AMOUNTS.len() {
-                for row in 0..ROWS {
-                    for out in 0..OUTPUTS {
-                        let m = (0..HUES).map(|b| measured(slider, a, row, out, b).abs()).fold(0.0, f32::max);
-                        // Blue Luminance −100 darkens pale blues and raises their chroma about sixfold
-                        let limit = [180.0, 8.0, 0.5][out];
-                        assert!(m.is_finite() && m <= limit, "slider {slider} amount {a} row {row} out {out}: {m}");
+            for out in 0..OUTPUTS {
+                // Blue Luminance −100 darkens pale blues and raises their chroma severalfold
+                let limit = [180.0, 8.0, 0.5][out];
+                for t in [-1.0, -0.6, -0.25, 0.3, 0.75, 1.0] {
+                    for (li, row) in CHROMA.iter().enumerate() {
+                        for c in row {
+                            for bin in 0..HUES {
+                                let r = response(slider, out, t, f64::from(*c), f64::from(LIGHT[li]), bin as f64 * 5.0);
+                                assert!(r.is_finite() && r.abs() <= limit, "slider {slider} out {out} at {t}: {r}");
+                            }
+                        }
                     }
                 }
+                assert_eq!(response(slider, out, 0.0, 0.1, 0.7, 50.0), 0.0);
             }
+        }
+    }
+
+    /// Each band acts around its own centre: a slider moves colours at its band's centre more than colours half the
+    /// hue circle away.
+    #[test]
+    fn each_band_acts_around_its_own_centre() {
+        for (band, [centre, ..]) in m::BANDS.iter().enumerate() {
+            let at = |h: f64| response(band * 3 + 1, 1, 1.0, 0.09, 0.75, h).abs();
+            assert!(at(*centre) > 5.0 * at(centre + 180.0), "band {band}: {} vs {}", at(*centre), at(centre + 180.0));
         }
     }
 
@@ -252,7 +235,7 @@ mod tests {
         let mut s = v9();
         s.mixer.orange = Hsl { hue: 0.0, sat: -60.0, lum: 0.0 };
         let st = MixerStage::new(&s).expect("stage");
-        // Lightroom's Orange centre sits near OkLab hue 51
+        // the Orange band's centre sits near OkLab hue 51
         let orange = colour(0.7, 0.1, 55.0);
         let out = st.apply(orange);
         assert!(lch_of(out)[1] < lch_of(orange)[1] * 0.7, "{:?} -> {:?}", lch_of(orange), lch_of(out));
@@ -267,7 +250,7 @@ mod tests {
         s.mixer.blue.hue = -100.0;
         let st = MixerStage::new(&s).expect("stage");
         let blue = colour(0.6, 0.1, 255.0);
-        // Lightroom's Blue Hue −100 turns blue towards aqua (lower OkLab hue)
+        // Blue Hue −100 turns blue towards aqua (lower OkLab hue)
         assert!(hue_shift(blue, st.apply(blue)) < -10.0, "{}", hue_shift(blue, st.apply(blue)));
         let mut s = v9();
         s.mixer.green.lum = -80.0;
@@ -287,7 +270,7 @@ mod tests {
         };
         let (a, b, c, d) = (shift(10.0), shift(25.0), shift(60.0), shift(100.0));
         assert!(a < b && b < c && c < d, "{a} {b} {c} {d}");
-        assert!((a - b * 0.4).abs() < 0.05 * b.max(1.0), "below 25 the effect fades linearly: {a} vs {b}");
+        assert!(a < b * 0.5, "a small amount does little: {a} vs {b}");
     }
 
     #[test]
@@ -303,7 +286,7 @@ mod tests {
             s.mixer.orange.sat = 40.0;
             s.mixer.orange.lum = -30.0;
         });
-        // on a measured node (lightness and chroma level 1, hue bin 11), where no interpolation blurs the rule
+        // on a table node (lightness and chroma level 1, hue bin 11), where no interpolation blurs the rule
         let (l, c, h) = (a.light[1], a.chroma[1][1], 55f32.to_radians());
         let (ra, rb, r) = (a.look(l, c, h), b.look(l, c, h), both.look(l, c, h));
         assert!((r[1] - ra[1] * rb[1]).abs() < 1e-5, "chroma changes multiply: {ra:?} {rb:?} {r:?}");

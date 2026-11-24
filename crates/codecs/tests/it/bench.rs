@@ -45,8 +45,7 @@ fn bench_24mp_jpeg() {
     let mp = (w * h) as f64 / 1e6;
     let px = synthetic(w, h);
     let img = EncodeImage::new(w as u32, h as u32, 3, Samples::U8(&px));
-    let plain =
-        time("encode JPEG q90 4:2:0 (jpeg-encoder)", mp, 1, || encode_jpeg(&img, 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap());
+    let plain = time("encode JPEG q90 4:2:0 (craft-jpeg)", mp, 1, || encode_jpeg(&img, 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap());
     println!("  size {:.1} MB", plain.len() as f64 / 1e6);
 
     time("decode full → linear Rgb32f", mp, 3, || decode(&plain, DecodeOptions::default()).unwrap());

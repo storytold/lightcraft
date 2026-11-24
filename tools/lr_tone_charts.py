@@ -5,14 +5,15 @@
         Writes linear DNG charts (48 grey steps plus colour patches) with the settings embedded as XMP:
         one neutral chart, Whites at +-25/50/100 and each parametric region at +-25/50/75/100 (default splits).
     (render every DNG through Camera Raw to a 16-bit Adobe RGB (1998) TIFF with the same file name)
-    python3 tools/lr_tone_charts.py tables RENDER_DIR OUT_RS
-        Reads the renders and writes the Rust tables of `lightcraft_pipeline::curve_stage`.
+    python3 tools/lr_tone_charts.py fit RENDER_DIR OUT_RS
+        Reads the renders, fits LightCraft's model of each setting to them and writes the model's constants
+        (`lightcraft_pipeline::curve_stage_model`). The measurements themselves are not written out.
     python3 tools/lr_tone_charts.py base RENDER_DIR OUT_RS
-        Reads the neutral render and writes Lightroom's default base curve, the table of
-        `lightcraft_pipeline::default_tone` (docs/default-tone.md).
+        Reads the neutral render, fits the default base curve's knots to its grey steps and writes them
+        (`lightcraft_pipeline::default_tone_model`, docs/default-tone.md). The grey steps are not written out.
 
 The charts are original test data generated here; nothing in them comes from Adobe. Only Camera Raw's output is
-measured. Requires numpy and tifffile (tools/requirements-lr-tone-charts.txt).
+measured. Requires numpy, scipy and tifffile (tools/requirements-lr-tone-charts.txt).
 """
 import json
 import os
@@ -122,7 +123,7 @@ def variants():
     return v
 
 
-# ---- tables -------------------------------------------------------------------------------------------------
+# ---- measuring ----------------------------------------------------------------------------------------------
 
 ADOBE_TO_XYZ = np.array([[0.5767309, 0.1855540, 0.1881852], [0.2973769, 0.6273491, 0.0752741], [0.0270343, 0.0706872, 0.9911085]])
 # XYZ (D65) -> linear ProPhoto RGB (D50, Bradford), as `RgbSpace::to_space`
@@ -141,7 +142,7 @@ ADOBE_RGB_NAME = "Adobe RGB (1998)"
 
 
 def read_render(path):
-    """A Camera Raw render as RGB 0..1, after checking it is the 16-bit Adobe RGB (1998) TIFF the tables assume.
+    """A Camera Raw render as RGB 0..1, after checking it is the 16-bit Adobe RGB (1998) TIFF the fit assumes.
 
     Another export setting would still give plausible numbers, but wrong ones, so it is refused.
     """
@@ -184,51 +185,168 @@ def delta_table(neutral, edited):
     return d
 
 
-def tables(render_dir, out_rs):
-    """Measure the Camera Raw renders in `render_dir` and write the Rust tables to `out_rs`."""
+# ---- fit ----------------------------------------------------------------------------------------------------
+#
+# LightCraft's own model of each setting, fitted to the measured grey steps. Nothing measured is written out: only
+# the model's constants. Per slider direction (negative, positive) the response (output minus input) is the sum of
+# two bumps, each with a gain over the amount and a shape whose position and width change with the amount:
+#
+#     t = |amount| / 100
+#     response(x) = sum over the two bumps of (a1 t + a2 t^2 + a3 t^3) * bump(x, e^(p0 + p1 t), e^(q0 + q1 t))
+#     bump(x, p, q) = (x / m)^p ((1 - x) / (1 - m))^q with m = p / (p + q): 0 at black and white, 1 at its peak m
+#
+# The fit keeps every response growing with the amount at every input, and never acting against the slider.
+
+FIT_SEED = 7
+FIT_STARTS = 16
+FIT_AMOUNTS = np.linspace(0, 1, 21)
+GRID = np.linspace(0, 1, 257)
+
+
+def bump(x, p, q):
+    """A bump of peak 1 at p / (p + q), 0 at black and white."""
+    m = p / (p + q)
+    return np.exp(p * np.log(np.clip(x, 1e-12, 1) / m) + q * np.log(np.clip(1 - x, 1e-12, 1) / (1 - m)))
+
+
+def response(params, t, x=GRID):
+    """The model's response of one slider direction at amount `t` (0..1) for inputs `x`."""
+    out = 0.0
+    for a1, a2, a3, p0, p1, q0, q1 in np.reshape(params, (2, 7)):
+        out = out + (a1 * t + a2 * t * t + a3 * t ** 3) * bump(x, np.exp(p0 + p1 * t), np.exp(q0 + q1 * t))
+    return out
+
+
+def fit_direction(amounts, deltas, sign):
+    """Fit one slider direction to its measured deltas (257 inputs each); returns the constants and the error."""
+    from scipy.optimize import least_squares
+    rows = [(abs(a) / 100, d) for a, d in zip(amounts, deltas) if np.sign(a) == sign]
+
+    def err(params):
+        """Error of the rendered curve in 8-bit levels, both sides clamped to 0..1 as the stage clamps."""
+        return np.concatenate([(np.clip(GRID + response(params, t), 0, 1) - np.clip(GRID + d, 0, 1)) * 255 for t, d in rows])
+
+    def residual(params):
+        grow = np.array([sign * response(params, t) for t in FIT_AMOUNTS])
+        return np.concatenate([err(params), 30 * 255 * np.minimum(np.diff(grow, axis=0), 0).ravel(),
+                               30 * 255 * np.minimum(grow, 0).ravel()])
+
+    rng = np.random.default_rng(FIT_SEED)
+    starts = [np.ravel([[sign * rng.uniform(0, 0.3), 0, 0, rng.uniform(-1.5, 2.5), 0, rng.uniform(-1.5, 2.5), 0]
+                        for _ in range(2)]) for _ in range(FIT_STARTS)]
+    best = min((least_squares(residual, s, max_nfev=3000) for s in starts), key=lambda r: r.cost)
+    e = err(best.x)
+    return best.x, float(np.sqrt((e ** 2).mean())), float(np.abs(e).max())
+
+
+def fit(render_dir, out_rs):
+    """Fit the model to the Camera Raw renders in `render_dir` and write its constants to `out_rs`."""
     patches = json.load(open(os.path.join(render_dir, "manifest.json")))["patches"]
     tif = lambda n: os.path.join(render_dir, f"curve__{n}.tif")
     n0 = grey_levels(tif("neutral"), patches)
     rows = lambda names: [delta_table(n0, grey_levels(tif(n), patches)) for n in names]
-    whites = rows([f"whites{a:+d}" for a in WHITES])
-    regions = [rows([f"par_{r.lower()}{a:+d}" for a in REGION_AMOUNTS]) for r in REGIONS]
-    fmt = lambda t: "[" + ", ".join(f"{v:.6f}" for v in t) + "]"
-    s = ["// @generated by tools/lr_tone_charts.py from Camera Raw renders of its synthetic grey steps (docs/curve-stage.md).",
-         "// Output minus input of each setting on sRGB-encoded linear ProPhoto values, 257 evenly spaced inputs from 0 to 1.",
+    sets = [("Whites", WHITES, rows([f"whites{a:+d}" for a in WHITES]))]
+    sets += [(r, REGION_AMOUNTS, rows([f"par_{r.lower()}{a:+d}" for a in REGION_AMOUNTS])) for r in REGIONS]
+    from concurrent.futures import ProcessPoolExecutor
+    jobs = [(name, sign, amounts, deltas) for name, amounts, deltas in sets for sign in (-1, 1)]
+    with ProcessPoolExecutor() as pool:
+        done = list(pool.map(fit_direction, *zip(*[(a, d, s) for _, s, a, d in jobs])))
+    fitted = {}
+    for (name, sign, _, _), (params, rms, worst) in zip(jobs, done):
+        fitted[name, sign] = params
+        print(f"{name:10s} {'+' if sign > 0 else '-'}  rms {rms:.2f}  max {worst:.2f} (8-bit levels)")
+    num = lambda v: f"{v:.6e}"
+    resp = lambda name, sign: "[" + ", ".join("[" + ", ".join(num(v) for v in b) + "]" for b in np.reshape(fitted[name, sign], (2, 7))) + "]"
+    pair = lambda name: f"[{resp(name, -1)}, {resp(name, 1)}]"
+    s = ["// Written by `tools/lr_tone_charts.py fit`: LightCraft's model of Whites and the parametric regions, fitted to the",
+         "// tool's grey-step charts (provenance in docs/curve-stage.md). Constants of the model only.",
          "",
-         f"pub const WHITES_AMOUNTS: [f32; {len(WHITES)}] = [{', '.join(f'{a}.0' for a in WHITES)}];",
-         f"pub static WHITES: [[f32; 257]; {len(WHITES)}] = [", *[f"    {fmt(t)}," for t in whites], "];",
+         "/// One bump of a response: `[a1, a2, a3, p0, p1, q0, q1]`, gain `a1 t + a2 t² + a3 t³` (t = |amount| / 100), shape",
+         "/// exponents `e^(p0 + p1 t)` and `e^(q0 + q1 t)` ([`crate::curve_stage`]).",
+         "pub type Bump = [f64; 7];",
+         "/// A slider direction's response: two bumps, added.",
+         "pub type Response = [Bump; 2];",
          "",
-         "/// Shadows, Darks, Lights, Highlights at the default splits (25, 50, 75).",
-         f"pub const REGION_AMOUNTS: [f32; {len(REGION_AMOUNTS)}] = [{', '.join(f'{a}.0' for a in REGION_AMOUNTS)}];",
-         f"pub static REGIONS: [[[f32; 257]; {len(REGION_AMOUNTS)}]; 4] = ["]
-    for r in regions:
-        s += ["    ["] + [f"        {fmt(t)}," for t in r] + ["    ],"]
-    s += ["];", ""]
-    with open(out_rs, "w") as f:
-        f.write("\n".join(s))
-
-
-def base(render_dir, out_rs):
-    """Write the neutral render's grey steps (chart value in, linear ProPhoto out) as the default base curve to `out_rs`."""
-    patches = json.load(open(os.path.join(render_dir, "manifest.json")))["patches"]
-    steps = [q["v"] for q in patches if q["kind"] == "grey" and q["ok"]]
-    enc = grey_levels(os.path.join(render_dir, "curve__neutral.tif"), patches)
-    lin = np.where(enc <= 0.04045, enc / 12.92, ((enc + 0.055) / 1.055) ** 2.4)
-    lin = np.maximum.accumulate(np.clip(lin, 0, 1))
-    s = ["// @generated by tools/lr_tone_charts.py from Camera Raw's render of its neutral synthetic chart (docs/default-tone.md).",
-         "// Grey steps: the chart's linear value in, the render's linear ProPhoto value out.",
+         "/// Whites: negative, positive.",
+         f"pub const WHITES: [Response; 2] = {pair('Whites')};",
          "",
-         f"pub const GREY: [[f32; 2]; {len(steps)}] = [",
-         *[f"    [{x:.6f}, {y:.6f}]," for x, y in zip(steps, lin)],
+         "/// Shadows, Darks, Lights, Highlights at the default splits (25, 50, 75): negative, positive.",
+         "pub const REGIONS: [[Response; 2]; 4] = [",
+         *[f"    {pair(r)}," for r in REGIONS],
          "];",
          ""]
     with open(out_rs, "w") as f:
         f.write("\n".join(s))
 
 
+BASE_KNOTS = 12
+
+
+def monotone(xs, ys):
+    """`lightcraft_color::spline::MonotoneCurve`: the same tangents and Fritsch-Carlson limiter, as a function."""
+    n = len(xs)
+    d = np.diff(ys) / np.diff(xs)
+    ms = np.zeros(n)
+    ms[0], ms[-1] = d[0], d[-1]
+    for i in range(1, n - 1):
+        ms[i] = 0 if d[i - 1] * d[i] <= 0 else (d[i - 1] + d[i]) / 2
+    for i in range(n - 1):
+        if d[i] == 0:
+            ms[i] = ms[i + 1] = 0
+            continue
+        a, b = ms[i] / d[i], ms[i + 1] / d[i]
+        if a * a + b * b > 9:
+            t = 3 / np.sqrt(a * a + b * b)
+            ms[i], ms[i + 1] = t * a * d[i], t * b * d[i]
+
+    def at(q):
+        q = np.asarray(q, float)
+        i = np.clip(np.searchsorted(xs, q) - 1, 0, n - 2)
+        h = xs[i + 1] - xs[i]
+        t = (q - xs[i]) / h
+        v = ((2 * t ** 3 - 3 * t ** 2 + 1) * ys[i] + (t ** 3 - 2 * t ** 2 + t) * h * ms[i] + (-2 * t ** 3 + 3 * t ** 2) * ys[i + 1]
+             + (t ** 3 - t ** 2) * h * ms[i + 1])
+        return np.where(q <= xs[0], ys[0], np.where(q >= xs[-1], ys[-1], v))
+    return at
+
+
+def base(render_dir, out_rs):
+    """Fit the default base curve's knots to the neutral render's grey steps (chart value in, linear ProPhoto out) and
+    write them to `out_rs`: 12 knots evenly spaced in stops from the darkest step (0) to white (1)."""
+    from scipy.optimize import least_squares
+    patches = json.load(open(os.path.join(render_dir, "manifest.json")))["patches"]
+    steps = np.array([q["v"] for q in patches if q["kind"] == "grey" and q["ok"]])
+    enc = grey_levels(os.path.join(render_dir, "curve__neutral.tif"), patches)
+    lin = np.where(enc <= 0.04045, enc / 12.92, ((enc + 0.055) / 1.055) ** 2.4)
+    lin = np.maximum.accumulate(np.clip(lin, 0, 1))
+    stops = np.log2(steps)
+    kx = np.linspace(stops.min(), 0.0, BASE_KNOTS)
+
+    def knots(p):
+        """Increasing knots from 0 at the darkest step to exactly 1 at white."""
+        w = np.exp(p)
+        return np.concatenate([[0.0], np.cumsum(w) / w.sum()])
+
+    err = lambda p: (srgb_encode(monotone(kx, knots(p))(stops)) - srgb_encode(lin)) * 255
+    p0 = np.log(np.maximum(np.diff(np.interp(kx, stops, lin)), 1e-5))
+    ky = knots(least_squares(err, p0, max_nfev=20000).x)
+    e = (srgb_encode(monotone(kx, ky)(stops)) - srgb_encode(lin)) * 255
+    print(f"base curve: rms {np.sqrt((e ** 2).mean()):.2f}  max {np.abs(e).max():.2f} (8-bit levels)")
+    row = lambda vs: "[" + ", ".join(f"{v:.6e}" for v in vs) + "]"
+    s = ["// Written by `tools/lr_tone_charts.py base`: LightCraft's default base curve, fitted to the tool's neutral",
+         "// grey-step chart (provenance in docs/default-tone.md). Knots of the curve only.",
+         "",
+         "/// The knots' range in stops of the chart's linear value: from the darkest grey step to white.",
+         f"pub const STOPS: (f64, f64) = ({kx[0]:.6e}, 0.0);",
+         "/// The curve's linear ProPhoto output at the knots, evenly spaced over [`STOPS`].",
+         f"pub const KNOTS: [f64; {BASE_KNOTS}] = {row(ky)};",
+         ""]
+    with open(out_rs, "w") as f:
+        f.write("\n".join(s))
+
+
 def main():
-    """Command line: `charts OUT_DIR`, `tables RENDER_DIR OUT_RS` or `base RENDER_DIR OUT_RS`."""
+    """Command line: `charts OUT_DIR`, `fit RENDER_DIR OUT_RS` or `base RENDER_DIR OUT_RS`."""
     if len(sys.argv) == 3 and sys.argv[1] == "charts":
         out = sys.argv[2]
         os.makedirs(out, exist_ok=True)
@@ -236,8 +354,8 @@ def main():
         json.dump(dict(patches=patches), open(os.path.join(out, "manifest.json"), "w"))
         for name, settings in variants().items():
             write_dng(os.path.join(out, f"curve__{name}.dng"), img, xmp(**settings))
-    elif len(sys.argv) == 4 and sys.argv[1] == "tables":
-        tables(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == "fit":
+        fit(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == "base":
         base(sys.argv[2], sys.argv[3])
     else:

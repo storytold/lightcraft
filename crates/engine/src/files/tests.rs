@@ -1681,7 +1681,7 @@ fn decode_failures_of_recognised_raws_may_fall_back_to_the_preview() {
     assert_eq!(preview_reason(b"x", RawError::Unsupported("x".into())), Ok("x".to_string()));
     assert!(preview_reason(b"x", RawError::Corrupt("bad strip".into())).is_ok_and(|w| w.contains("bad strip")));
     assert!(preview_reason(b"x", RawError::Limit("too big")).is_ok());
-    assert!(preview_reason(b"x", RawError::Tiff(craft_tiff::TiffError::MissingTag(256))).is_ok());
+    assert!(preview_reason(b"x", RawError::Tiff(craft_raw_tiff::TiffError::MissingTag(256))).is_ok());
     assert!(preview_reason(b"x", RawError::NotRaw).is_err());
     assert!(preview_reason(cr3, RawError::Corrupt("bad".into())).is_ok_and(|w| w.starts_with("CR3 ")));
 }
@@ -1849,6 +1849,44 @@ fn existing_photo_settings_are_not_rewritten() {
     assert!(!s.catalog.photo(old).unwrap().is_edited(), "still as imported");
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn imported_shutter_times_survive_catalog_and_export_metadata() {
+    use lightcraft_catalog::{Catalog, Photo, PhotoId};
+    for (t, shown) in [
+        (0.3, "0.3"),
+        (0.4, "0.4"),
+        (0.6, "0.6"),
+        (0.8, "0.8"),
+        (1.3, "1.3"),
+        (1.6, "1.6"),
+        (2.5, "2.5"),
+        (3.2, "3.2"),
+        (30.0, "30"),
+        (0.625, "0.625"),
+        (1.0 / 2.8, "0.3571"),
+        (1.0 / 3.0, "1/3"),
+        (0.003, "0.003"),
+        (1.0 / 250.0, "1/250"),
+        (1.0 / 8000.0, "1/8000"),
+    ] {
+        let original = lightcraft_meta::Metadata { exposure_time: Some(t), ..Default::default() };
+        let (meta, _) = meta_of(&original);
+        // the catalog shows a short shutter speed, never the raw f64 (`0.35714285714285715`)
+        assert_eq!(meta.shutter, shown, "{t}");
+        // Exercise the persisted catalog JSON, not a value kept alongside it in memory.
+        let meta: Meta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        let mut photo = Photo::new(PhotoId(1), lightcraft_catalog::Source::Demo { scene: 0 }, "capture.jpg", "JPEG", 2, 2, "");
+        photo.meta = meta;
+        let exported = crate::export::export_metadata(&photo, &Catalog::new(), &crate::export::ExportOptions::default()).unwrap();
+        assert_eq!(exported.exposure_time, Some(t));
+        let bytes =
+            crate::export::encode_with_metadata(&lightcraft_raster::Rgba8::new(2, 2), &crate::export::ExportOptions::default(), Some(&exported))
+                .unwrap();
+        let back = lightcraft_meta::extract(&bytes);
+        assert!((back.exposure_time.unwrap() - t).abs() < 0.000001, "{t}: {:?}", back.exposure_time);
+    }
 }
 
 /// Issue #1632: a DNG's `ProfileToneCurve` is the finish stage's camera curve, so process V5 extends

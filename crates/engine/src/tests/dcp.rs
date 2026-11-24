@@ -70,11 +70,11 @@ fn a_profile_without_a_tone_curve_keeps_the_photos_contrast() {
     assert!((tone.apply(0.18) - 0.45).abs() < 0.01, "{}", tone.apply(0.18));
 }
 
-/// Process V9 (`lightcraft_pipeline::default_tone`): a profile without a tone curve marks the source for Lightroom's
+/// Process V9 (`lightcraft_pipeline::default_tone`): a profile without a tone curve marks the source for the fitted
 /// default curve (a camera with no measured offset: 0 stops); a profile with a curve, or no profile, does not. Up to
 /// V7 the base tone stays the file's own.
 #[test]
-fn a_profile_without_a_tone_curve_gets_lightrooms_default_curve_from_v9() {
+fn a_profile_without_a_tone_curve_gets_the_default_curve_from_v9() {
     use lightcraft_develop::{DevelopSettings, Process};
     use lightcraft_raw::profile::ToneCurve;
     let dng = crate::tests_xmp::synthetic_dng_with(None, Default::default());
