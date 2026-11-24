@@ -102,10 +102,12 @@ never a panic. Never ship a panic path; fix crashes before building on them. Thi
   shortcut. Removing a feature removes its manual text. Mention "Manual: <pages>" (or "Manual: none, no user-visible
   change") in the commit/PR. A release is not cut with a changelog entry that has no manual page behind it.
 - **Releases:** follow [`docs/release-process.md`](docs/release-process.md) (steps and known problems).
-- **Quality gates (2026-11-10):** *before pushing*, every commit passes `cargo xtask ci --fast` (fmt, clippy
-  -D warnings, build incl. wasm check, brand, layers, assets, parity, deny), targeted `cargo test -p <crate>`, and
-  `cargo xtask sil`. The full suite runs only in cloud CI on the PR; releases get a manual full-CI dispatch.
-  [`docs/ci.md`](docs/ci.md).
+- **Quality gates (2026-11-24):** *before pushing*, run `cargo xtask ci --quick` (fmt, brand, docs, layers, assets;
+  clippy -D warnings on the changed crates and their dependents; the changed crates' tests; parity / wasm / heif when
+  the changes touch them) and `cargo xtask sil` when pipeline/develop changed. Don't also run `ci --fast` or the
+  full `ci` locally: the PR's CI runs the fast gate and the affected tests, and it is the merge gate. Open a PR once,
+  when the work is ready (every push to an open PR starts a CI run on CPU-bound self-hosted runners; branch pushes
+  run nothing). Releases get a manual full-CI dispatch. [`docs/ci.md`](docs/ci.md).
 - **Commits:** one task id per commit (`M2.3: local Laplacian highlights/shadows`); green states only; end messages
   with the environment's attribution line.
 
