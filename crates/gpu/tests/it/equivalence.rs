@@ -1229,6 +1229,40 @@ fn cached_renders_match_uncached() {
     }
 }
 
+/// Task 4.5 follow-up: a draft luminance NR drag keeps the colour-NR'd image on the device and
+/// reruns only luminance NR. Each cached frame equals a fresh GPU draft, matches the CPU draft within
+/// the bounds, and the release (full-quality) render after the drag is unchanged.
+#[test]
+fn draft_luminance_nr_drag_reuses_colour_nr_and_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 900, 600);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    for process in [Process::V8, Process::V5] {
+        let cache = StageCache::default();
+        let draft = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(640, 640) };
+        let full = RenderRequest { quality: Quality::Full, ..draft };
+        let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+        typical(&mut s);
+        s.detail.nr_color = 40.0;
+        for v in [20.0, 35.0, 50.0, 65.0] {
+            s.detail.nr_luminance = v;
+            s.detail.nr_detail = v / 2.0;
+            let warm = lcc_gpu::render(&src, &info, &s, &draft, Some(&cache)).expect("gpu");
+            let fresh = lcc_gpu::render(&src, &info, &s, &draft, None).expect("gpu");
+            assert_eq!(warm.image, fresh.image, "{process:?} nr {v}: cached draft differs from a fresh one");
+            check(&format!("{process:?} draft NR drag {v}"), &src, &info, &s, &draft);
+        }
+        // a colour NR change after the drag invalidates the kept image
+        s.detail.nr_color = 70.0;
+        let warm = lcc_gpu::render(&src, &info, &s, &draft, Some(&cache)).expect("gpu");
+        let fresh = lcc_gpu::render(&src, &info, &s, &draft, None).expect("gpu");
+        assert_eq!(warm.image, fresh.image, "{process:?}: colour NR change kept a stale image");
+        check(&format!("{process:?} release after drag"), &src, &info, &s, &full);
+    }
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
