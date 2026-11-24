@@ -584,9 +584,10 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
             ui.set_min_width(width);
             ui.set_max_width(max_width);
             if import {
-                // The review sizes its photo grid to the height it is given: give it the dialog's, not the endless
-                // height of a scrolling body.
-                ui.set_max_height((crate::import::DIALOG_SIZE[1] - DIALOG_CHROME_GUESS).min(body_max).max(DIALOG_MIN_BODY));
+                // The review sizes its photo grid to the room the dialog's body has, not to the endless height of a
+                // scrolling body; the body itself still scrolls what goes on below (an opened recipe).
+                let room = (crate::import::DIALOG_SIZE[1] - DIALOG_CHROME_GUESS).min(body_max).max(DIALOG_MIN_BODY);
+                crate::import::note_body_room(ui, room);
             }
             ui.spacing_mut().item_spacing.y = 8.0;
             // (the import review and Print size their own lists to the dialog)

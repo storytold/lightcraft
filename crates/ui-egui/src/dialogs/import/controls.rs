@@ -22,6 +22,18 @@ fn response(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
     }
 }
 
+/// Return applies a number field's value and gives up the keyboard, as the app's fields do: a focused framework
+/// number field keeps taking the wheel, so the review's body would not scroll under it.
+pub(crate) fn blur_on_return(ui: &egui::Ui, response: &egui::Response) {
+    if measuring(ui) {
+        return;
+    }
+    let returned = ui.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. })));
+    if returned && crate::text_field::has_focus_id(ui.ctx(), response.id) {
+        crate::text_field::blur_id(ui.ctx(), response.id);
+    }
+}
+
 /// [`response`] for a control shown at `rect`: the rect it was laid out at, also below the body's visible part.
 fn response_at(ui: &egui::Ui, id: impl Into<String>, rect: egui::Rect, response: &egui::Response) {
     if !measuring(ui) {
@@ -124,6 +136,7 @@ pub(super) fn number(ui: &mut egui::Ui, spec: &lightcraft_develop::controls::Con
             .show_at(ui, rect);
         response_at(ui, format!("sliderValue:{}", spec.id), rect, &shown.response);
         response_at(ui, format!("sliderField:{}", spec.id), rect, &shown.response);
+        blur_on_return(ui, &shown.response);
         if let Some(exact) = exact.filter(|v| v.is_finite()) {
             current = spec.clamp(exact);
         }
