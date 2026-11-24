@@ -172,10 +172,7 @@ mod config_path_tests {
     #[test]
     fn config_override_keeps_panic_log_in_isolated_profile() {
         let temp = std::path::PathBuf::from("temp");
-        assert_eq!(
-            panic_log_path_with(|_| Some("isolated".into()), temp.clone(), None),
-            std::path::PathBuf::from("isolated/lightcraft-panics.log")
-        );
+        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone(), None), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
         assert_eq!(panic_log_path_with(|_| None, temp.clone(), None), temp.join("lightcraft-panics.log"));
         assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone(), None), temp.join("lightcraft-panics.log"));
     }
