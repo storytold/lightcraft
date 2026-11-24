@@ -50,5 +50,6 @@ Same-machine before/after pairs only (`AGENTS.md`, *Testing & performance*). Bud
 
 | Date | What | Machine | Before | After |
 |---|---|---|---|---|
+| 2026-11-24 | 4.1 start-up, 100 000-photo synthetic library (`startup_bench`, release, 3 interleaved runs each) | Windows 11 dev box, shared with other builds (wall times ±100 %) | background-preparation tick (slowest of first 30) 12.1 / 17.6 / 18.6 ms; library ready 0.99–3.9 s; slowest frame 0.52–3.3 s | tick 22.9\* / 4.0 / 4.2 ms; library ready 1.0–8.2 s; slowest frame 0.59–4.7 s (\*first pair under the heaviest load). Tick bounded at 16 384 photos looked at; the multi-second frames are the session open, not preparation |
 
 No rows yet: earlier numbers lived in the untracked `plan/STATUS.md` (scale figures are in [gaps.md](gaps.md), gap 26). Add a row per measurement; keep the method (command, build profile) in the commit message.

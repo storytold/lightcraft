@@ -872,6 +872,8 @@ impl Session {
         lcc_raw::dcp::install_user_defaults(self.camera_profile_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
         self.cache_mb = prefs.cache_mb;
         self.prep.opened_library();
+        // the lens database is read off this thread now, not by the first photo that needs it
+        crate::lens_profiles::preload_in_background(&self.activity);
         self.prep.library = prefs.prep.map(crate::prep::PrepSettings::sanitized);
         self.prep.unfinished = prefs.prep_unfinished;
         self.preview_prefs = prefs.previews;

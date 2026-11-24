@@ -153,6 +153,35 @@ pub fn database() -> Option<Arc<LensDb>> {
     db
 }
 
+/// Whether [`database`] would read the folder now: a source is set up and nothing is loaded for it yet.
+fn load_pending() -> bool {
+    let env = env_dir();
+    let c = cache();
+    c.loaded.is_none() && (env.is_some() || c.dir.is_some())
+}
+
+/// Read the database on a worker thread, so the first photo that asks for it doesn't wait for the read
+/// (a full Lensfun folder takes a moment; plan item 4.1). Shows as a row on the activity stack while it
+/// runs. Does nothing when nothing is set up or it is loaded already; on wasm32 the first use reads it.
+pub fn preload_in_background(activity: &crate::activity::Activity) {
+    if !load_pending() {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let task = activity.start("lensDatabase", "Reading the lens database", crate::activity::Cancel::No);
+        let started = std::thread::Builder::new().name("lens-database".into()).spawn(move || {
+            let _task = task;
+            let _ = database();
+        });
+        if let Err(e) = started {
+            log::info!("lens database: not read in the background ({e}); read on first use");
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = activity;
+}
+
 /// What the lens database says about a photo's lens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Match {
