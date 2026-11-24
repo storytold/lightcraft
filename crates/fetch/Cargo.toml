@@ -10,7 +10,7 @@ workspace = true
 
 # downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-http-url = { git = "https://github.com/storytold/craft-libs", rev = "1507e63e6a8d79daacc14c1203992bdb01f95a70" }
+craft-http-url = { git = "https://github.com/storytold/craft-libs", rev = "2be967ec515a687db6b0abe372d54243ccf124bd" }
 log = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 rustls-rustcrypto = "0.0.2-alpha"

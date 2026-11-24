@@ -365,62 +365,12 @@ fn decode_xmp_bytes(bytes: &[u8]) -> Result<String, String> {
     String::from_utf8(decoded).map_err(|e| e.to_string())
 }
 
-fn be_word(bytes: &[u8], at: usize) -> Result<u32, String> {
-    let word = bytes.get(at..at + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).ok_or("truncated WAL")?;
-    Ok(u32::from_be_bytes(word))
-}
-
-fn wal_checksum(bytes: &[u8], big: bool, mut sum: (u32, u32)) -> (u32, u32) {
-    for pair in bytes.as_chunks::<8>().0 {
-        let first = [pair[0], pair[1], pair[2], pair[3]];
-        let second = [pair[4], pair[5], pair[6], pair[7]];
-        let (first, second) =
-            if big { (u32::from_be_bytes(first), u32::from_be_bytes(second)) } else { (u32::from_le_bytes(first), u32::from_le_bytes(second)) };
-        sum.0 = sum.0.wrapping_add(first).wrapping_add(sum.1);
-        sum.1 = sum.1.wrapping_add(second).wrapping_add(sum.0);
-    }
-    sum
-}
-
 // SQLite file format §4: validate the live checksum chain in constant space, then overlay
-// only its last committed prefix. The forensic timeline materializes EVERY historical
-// database snapshot; it must never be used to validate a large, actively used catalog.
+// only its last committed prefix (shared in craft-sqlite). The forensic timeline materializes
+// EVERY historical database snapshot; it must never be used to validate a large, actively used
+// catalog.
 fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
-    if wal.is_empty() {
-        return Ok(0);
-    }
-    let header = wal.get(..32).ok_or("truncated WAL header")?;
-    let magic = be_word(header, 0)?;
-    if !matches!(magic, 0x377f0682 | 0x377f0683) || be_word(header, 4)? != 3_007_000 {
-        return Err("invalid WAL header".into());
-    }
-    let raw_size = main.get(16..18).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes).ok_or("truncated SQLite header")?;
-    let size = craft_sqlite::page_size_from_raw(raw_size).map_err(|_| "WAL page size mismatch")?;
-    if be_word(header, 8)? != size {
-        return Err("WAL page size mismatch".into());
-    }
-    let big = magic == 0x377f0683;
-    let mut sum = wal_checksum(&header[..24], big, (0, 0));
-    if sum != (be_word(header, 24)?, be_word(header, 28)?) {
-        return Err("invalid WAL header checksum".into());
-    }
-    let salt = (be_word(header, 16)?, be_word(header, 20)?);
-    let mut committed = 0;
-    let stride = size as usize + 24;
-    for (i, frame) in wal[32..].chunks_exact(stride).enumerate() {
-        if be_word(frame, 0)? == 0 || salt != (be_word(frame, 8)?, be_word(frame, 12)?) {
-            break;
-        }
-        sum = wal_checksum(&frame[..8], big, sum);
-        sum = wal_checksum(&frame[24..], big, sum);
-        if sum != (be_word(frame, 16)?, be_word(frame, 20)?) {
-            break;
-        }
-        if be_word(frame, 4)? != 0 {
-            committed = 32 + (i + 1) * stride;
-        }
-    }
-    Ok(committed)
+    craft_sqlite::wal::committed_prefix_len(main, wal).map_err(String::from)
 }
 
 /// Where a root folder is when its `absolutePath` isn't a folder here (the catalog came from
