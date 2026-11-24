@@ -56,6 +56,13 @@ Before a retune, regenerate the render-fidelity references on `main` (`cargo xta
 [testing-sil](testing-sil.md#render-fidelity-reference-suite)) and run `cargo xtask fidelity` on the change: the
 existing processes must stay within tolerance.
 
+The process baseline gates this in CI without local references: `frozen_processes_keep_their_committed_baseline`
+(`crates/pipeline/tests/it/fidelity.rs`) renders every tool under every process except `Process::LATEST` on the
+procedural scenes and compares the aggregates (mean L\*a\*b\* and each tool's ΔE2000 from the unedited render) with
+`crates/pipeline/tests/fidelity/process-baseline.json`. A retune of a frozen process fails it; a new process fails
+until it has an entry. Run `cargo xtask fidelity --baseline` after adding a process (or for a deliberate in-place
+bug fix, which then shows in the diff).
+
 
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in
    `Process::version` and make it `Process::LATEST`.

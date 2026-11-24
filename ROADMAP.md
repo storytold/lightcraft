@@ -1,6 +1,6 @@
 # Roadmap
 
-*Last updated 2026-11-23 (version 0.8.2). Revision history: [Log](#log).*
+*Last updated 2026-11-24 (version 0.8.2). Revision history: [Log](#log).*
 
 Milestones toward full Adobe Lightroom Classic parity, with the Classic shell and output modules (Map, Book, Slideshow,
 Print, Web, publish) and Immich integration as Chromaforge's own focus on top of the upstream engine. Estimates are for
@@ -234,6 +234,8 @@ history/snapshots remain source data, and smart collections import current membe
 database is read-only; the app owns subsequent edits. See `docs/lightroom-catalog-import.md`.
 
 ## Log
+- 2026-11-24: process-retune gate in CI (LR-BEHAV-RENDER-FIDELITY, gap 3): every frozen process must match a
+  committed per-process, per-tool aggregate baseline (`cargo xtask fidelity --baseline`).
 - 2026-11-23: render-fidelity reference suite (LR-BEHAV-RENDER-FIDELITY, gap 3): `cargo xtask fidelity`, local
   references, aggregate ΔE2000 / SSIM tolerances, synthetic ColorChecker check; retunes gated on it.
 - 2026-11-23: Raw-format priority and effort row follow the 2026-11-10 licence policy (share-alike decoder ports
