@@ -17,6 +17,19 @@ use crate::{ColorData, Mat3, Mode, Orientation, RawFormat, RawImage, Rect, Resul
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let format = crate::probe(bytes);
+    // compressed Olympus ORF, which craft-raw refuses, is decoded here; asked first, so a damaged compressed stream is
+    // an error rather than craft-raw's reading of it as uncompressed 16-bit words
+    if format == Some(RawFormat::Orf)
+        && let Some(raw) = crate::orf_compressed::decode(bytes, mode)?
+    {
+        let metadata = metadata(bytes, raw.format, &raw.camera, raw.info().developed_size());
+        let mut img = image(raw, metadata);
+        if mode == Mode::Header {
+            img.data = craft_raw::RawData::U16(Vec::new());
+        }
+        finish(&mut img);
+        return Ok(img);
+    }
     // the white balance of these two is measured from the samples, so the probe decodes them too
     let estimate_wb = matches!(format, Some(RawFormat::Erf | RawFormat::Mef));
     let mut img = if mode == Mode::Full || estimate_wb {
