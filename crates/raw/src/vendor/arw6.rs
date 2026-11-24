@@ -3,7 +3,9 @@
 //! Clean-room. The layout comes from SMPTE RDD 34 (Picture_info in word 0) and from Phase 0 black-box
 //! inspection of real ILCE-7RM6 files (tile table, group size words, stream headers and index entries), each rule
 //! checked by re-serialising parsed tiles byte-for-byte. The format is described in `docs/arw6-compression.md`; section
-//! names in italics below refer to it. No other raw decoder's source was consulted.
+//! names in italics below refer to it. The decoder was written without any other raw decoder's source. For the 12-bit
+//! mode only, LibRaw's `src/decoders/sony_arw6.cpp` (snapshot 202611, commit `4d9bd21a`, LGPL-2.1 / CDDL-1.0) was
+//! read as a reference: it decodes ARW6 regardless of BitsPerSample, gated on the stream header alone; no code copied.
 
 use crate::llvc::{Bands3, Plane, band_rows, dequant, reconstruct3, vld_decode_line};
 use crate::vendor::arw6_curve::curve;
@@ -933,12 +935,24 @@ mod tests {
         let (m, c1, c2, res) = planes(w2, h2, 7);
         let tile = encode_tile(&TileSpec { s: 6, qi: Qis::ZERO, m, c1, c2, res });
         assert!(matches!(decode_tile_planes(&tile, 64, 48), Err(RawError::Unsupported(_))));
-        // twelve bit mode is unsupported
-        {
-            let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
-            let file = arw6_file_bits(&[(0, 0, 64, 48, tile)], 64, 48, 12);
-            assert!(matches!(crate::decode(&file), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn twelve_bit_mode_decodes_like_fourteen() {
+        let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
+        let d14 = crate::decode(&arw6_file_bits(&[(0, 0, 64, 48, tile.clone())], 64, 48, 14)).unwrap();
+        let d12 = crate::decode(&arw6_file_bits(&[(0, 0, 64, 48, tile.clone())], 64, 48, 12)).unwrap();
+        assert_eq!(d12.data, d14.data); // the streams describe their own depth
+        assert!(d12.white[0] > d12.black.values[0]);
+        // other depths, and a 12-bit file whose tile header deviates, stay unsupported
+        for bits in [8u16, 10, 16, 0, 65535] {
+            let file = arw6_file_bits(&[(0, 0, 64, 48, tile.clone())], 64, 48, bits);
+            assert!(crate::decode(&file).is_err(), "bits {bits}");
         }
+        let mut bad = tile;
+        bad[13] = 0xff;
+        let file = arw6_file_bits(&[(0, 0, 64, 48, bad)], 64, 48, 12);
+        assert!(matches!(crate::decode(&file), Err(RawError::Unsupported(_))));
     }
 
     #[test]
