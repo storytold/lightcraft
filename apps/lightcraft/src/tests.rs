@@ -659,3 +659,35 @@ fn on_exit_removes_the_lock_owner_note() {
     assert!(lightcraft_engine::Session::new().open_library(&dir, false).is_ok(), "the library is still locked");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn parsed(args: &[&str]) -> CommandLine {
+    match parse_args(args.iter().map(|a| a.to_string()), None) {
+        Parsed::Run(a) => a,
+        other => panic!("expected a launch, got {other:?}"),
+    }
+}
+
+/// `--no-update-check` (throwaway test copies must not call GitHub at start) turns the startup
+/// update check off and nothing else; without it the check stays on.
+#[test]
+fn no_update_check_turns_the_startup_update_check_off() {
+    assert!(parsed(&[]).startup_update_check, "the default is to check");
+    assert!(parsed(&["--memory", "--control", "7981", "Trip"]).startup_update_check, "other options leave it on");
+    let off = parsed(&["--memory", "--no-update-check", "Trip"]);
+    assert!(!off.startup_update_check);
+    // the flag is only that: the other options and the files still read the same
+    assert_eq!(CommandLine { startup_update_check: true, ..off }, parsed(&["--memory", "Trip"]));
+    // a value of --library is that folder, never the flag
+    let lib = parsed(&["--library", "--no-update-check"]);
+    assert!(lib.startup_update_check);
+    assert_eq!(lib.library_dir, Some(std::path::PathBuf::from("--no-update-check")));
+}
+
+/// The flag is a known option that takes no value (an unknown one exits with a usage error) and
+/// `--help` lists it.
+#[test]
+fn no_update_check_is_a_known_option_and_listed_in_the_help() {
+    assert_eq!(parse_args(["--no-update-chek".to_string()], None), Parsed::Unknown("--no-update-chek".into()));
+    assert_eq!(parse_args(["--no-update-check=false".to_string()], None), Parsed::Unknown("--no-update-check=false".into()));
+    assert!(HELP.contains("--no-update-check"));
+}
