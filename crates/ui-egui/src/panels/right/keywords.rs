@@ -71,9 +71,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let generation = app.session.library_generation();
             let active = app.session.active();
             ui.horizontal_wrapped(|ui| {
-                if grouped {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-                }
+                ui.spacing_mut().item_spacing = vec2(if grouped { 6.0 } else { 4.0 }, 4.0);
                 for (i, k) in suggestions.into_iter().enumerate() {
                     let whole = k.replace('|', " › ");
                     let name = names.get(i).unwrap_or(&whole);
@@ -307,7 +305,7 @@ fn suggestion_button(ui: &mut egui::Ui, owner: egui::Id, keyword: &str, name: &s
     // interpret egui's cached click snapshot, including a press from a disabled/measurement pass.
     // Cancel this leaf's press lifecycle during measurement too, not merely its returned
     // action: a measuring press must never arm the same owner for a later real release.
-    let shown = craft::ui::buttons::Button::new(format!("+ {name}")).id(owner).enabled(real && enabled).show(ui);
+    let shown = craft::ui::buttons::Button::new(format!("+ {name}")).id(owner).size(craft::theme::ControlSize::Sm).enabled(real && enabled).show(ui);
     if real {
         crate::widgets::register_response(format!("kwSuggest:{keyword}"), shown.response.rect, &shown.response);
     }
@@ -331,6 +329,7 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     // (the height drawn on the pass before: one from an earlier visit to the panel says nothing)
     let before = ui.data(|d| d.get_temp::<(f32, u64)>(key)).filter(|&(_, drawn)| drawn.checked_add(1) == Some(pass)).map(|(h, _)| h);
     ui.data_mut(|d| d.insert_temp(key, (height, pass)));
+    eprintln!("DBGHOLD pass={pass} height={height} before={before:?} top={top} clip_top={}", ui.clip_rect().top());
     let Some(before) = before else { return };
     let grew = height - before;
     if !grew.is_finite() || grew.abs() < 0.5 || top >= ui.clip_rect().top() - 0.5 {
@@ -358,10 +357,13 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let sets = lightcraft_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).size(12.5).color(t.text_dim));
         let recent = lightcraft_engine::cmd::keywords::RECENT;
         let face = crate::i18n::builtin_label(&current, current == recent).to_owned();
-        crate::widgets::dropdown_menu(ui, "keywordSetCombo", crate::i18n::tr("Keyword Set"), &face, None, |ui| {
+        // (the dropdown takes the rest of the line, so a long set name is not cut and the chevron stays)
+        let room = ui.available_width();
+        crate::widgets::dropdown_menu_sized(ui, "keywordSetCombo", crate::i18n::tr("Keyword Set"), &face, Some(room), craft::theme::ControlSize::Sm, |ui| {
             for set in sets["sets"].as_array().into_iter().flatten() {
                 let name = set["name"].as_str().unwrap_or_default();
                 if crate::widgets::menu_row(ui, ("keywordSet", name), None, crate::i18n::builtin_label(name, name == recent), None, name == current, true) {

@@ -733,6 +733,7 @@ impl LightcraftApp {
             return;
         }
         self.sync_theme(&ctx);
+        crate::shortcuts::hold_alt_digits(self, &ctx);
         self.ui_pass(&ctx);
         self.draw_window(ui);
         self.capture_ui_completion(&ctx);

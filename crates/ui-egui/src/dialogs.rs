@@ -1713,9 +1713,10 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     fn field(ui: &mut egui::Ui, caller: (Option<&str>, Option<&str>), alias: &str, label: &str, hint: &str, value: &mut String, first: bool) -> bool {
         use craft::ui::text::TextField;
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-        let item = || {
+        // (a measuring copy has an id of its own: two live widgets under one id in a pass are an egui id clash)
+        let item = |measuring: bool| {
             let field = TextField::new(crate::i18n::tr(label).to_owned(), Bind::given(value.clone()))
-                .id_salt(("keyword-tag-fields", caller, alias))
+                .id_salt(("keyword-tag-fields", caller, alias, measuring))
                 .placeholder(crate::i18n::tr(hint).to_owned())
                 .limit(None)
                 .submits();
@@ -1723,12 +1724,12 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
         };
         if !real {
             let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
-            let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item().show(ui));
+            let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item(true).show(ui));
             ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), size.y), egui::Sense::hover());
             return false;
         }
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
-        let shown = item().show_at(ui, rect);
+        let shown = item(false).show_at(ui, rect);
         crate::widgets::register_response(alias, shown.response.rect, &shown.response);
         if !ui.is_enabled() {
             return false;
@@ -1746,9 +1747,9 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     fn option(ui: &mut egui::Ui, caller: (Option<&str>, Option<&str>), alias: &str, label: String, value: &mut bool, enabled: bool) {
         let current = *value;
         let enabled = enabled && ui.is_enabled();
-        let item = || {
+        let item = |measuring: bool| {
             Checkbox::new(Bind::given(current))
-                .id_salt(("keyword-tag-options", caller, alias))
+                .id_salt(("keyword-tag-options", caller, alias, measuring))
                 .label(label.clone())
                 .enabled(enabled)
                 .sizing(Sizing::FillWidth)
@@ -1756,11 +1757,11 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
         if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
             // Use the public labelled flow's ideal size without creating a live control or publishing a target.
             let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
-            let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item().show(ui));
+            let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item(true).show(ui));
             ui.allocate_exact_size(size, egui::Sense::hover());
             return;
         }
-        let out = item().show(ui);
+        let out = item(false).show(ui);
         crate::widgets::register_response(alias, out.response.rect, &out.response);
         #[cfg(test)]
         keyword_tag_options_flow_tests::observe(ui, alias, &out.response);

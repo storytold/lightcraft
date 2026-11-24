@@ -98,7 +98,8 @@ fn the_filter_box_narrows_the_list() {
 /// The arrow on a row shows the photos with that keyword.
 #[test]
 fn the_arrow_shows_the_photos_with_the_keyword() {
-    let (mut h, _) = keywords_panel();
+    // (the Keywords box is taller than it was, so the window is too: the list's rows are in sight)
+    let (mut h, _) = keywords_panel_at([1400.0, 1160.0]);
     ask(&mut h, "ui.hoverWidget", json!({"id": "keywordRow:mountains"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordShow:mountains"}));
     assert_eq!(h.app.session.filter.keyword.as_deref(), Some("mountains"));
@@ -478,7 +479,7 @@ fn rect(h: &Headless, id: &str) -> egui::Rect {
 /// the top bar, a keyword released over the top bar stays where it is.
 #[test]
 fn drops_land_only_on_what_is_shown() {
-    let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
+    let (mut h, ids) = keywords_panel_at([1400.0, 700.0]);
     run(&mut h, "photo.setMeta", json!({"ids": [ids[0]], "keywords": ["aaa|zz"]}));
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordRowToggle:aaa"}));
     let title = rect(&h, "keywordList:topLevel");
@@ -631,7 +632,7 @@ fn dropping_photos_counts_those_that_get_the_keyword() {
 /// Keywording box above grows and shrinks out of sight instead of pushing the rows down.
 #[test]
 fn ticking_a_keyword_keeps_the_list_in_place() {
-    let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
+    let (mut h, ids) = keywords_panel_at([1400.0, 760.0]);
     run(&mut h, "photo.setMeta", json!({"ids": ids, "keywords": []}));
     for i in 0..40 {
         run(&mut h, "keyword.create", json!({"name": format!("zz{i:02}")}));
@@ -645,6 +646,7 @@ fn ticking_a_keyword_keeps_the_list_in_place() {
     for (n, k) in picked.iter().chain(picked.iter().rev()).enumerate() {
         let (before, box_top) = (rect(&h, &format!("keywordRow:{k}")), rect(&h, "field:keyword").top());
         ask(&mut h, "ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}));
+        eprintln!("DBGTICK {k} before={before:?} after={:?} box_top {box_top} -> {}", rect(&h, &format!("keywordRow:{k}")), rect(&h, "field:keyword").top());
         assert_eq!(rect(&h, &format!("keywordRow:{k}")), before, "{k} stayed under the pointer");
         // (the click found the row where it is drawn, not where a discarded pass had it)
         assert_eq!(keywords_of(&h, ids[0]).contains(k), n < picked.len(), "{k} was the one ticked: {:?}", keywords_of(&h, ids[0]));
@@ -658,7 +660,7 @@ fn ticking_a_keyword_keeps_the_list_in_place() {
 /// without scrolling the panel. Checkbox interaction is covered separately above.
 #[test]
 fn at_the_top_the_box_grows_in_sight() {
-    let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
+    let (mut h, ids) = keywords_panel_at([1400.0, 760.0]);
     run(&mut h, "photo.setMeta", json!({"ids": ids, "keywords": []}));
     let (title, box_top) = (rect(&h, "keywordList:topLevel"), rect(&h, "field:keyword"));
     for k in ["aaa1", "aaa2", "aaa3", "aaa4", "aaa5", "aaa6"] {
@@ -676,7 +678,7 @@ fn at_the_top_the_box_grows_in_sight() {
 /// it was last drawn, not where a pass drawn again (the list held in place) first had it.
 #[test]
 fn ticks_in_quick_succession_land_on_their_rows() {
-    let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
+    let (mut h, ids) = keywords_panel_at([1400.0, 760.0]);
     run(&mut h, "photo.setMeta", json!({"ids": ids, "keywords": []}));
     for i in 0..40 {
         run(&mut h, "keyword.create", json!({"name": format!("zz{i:02}")}));

@@ -30,7 +30,10 @@ fn scrolled_actual_keyword_hit_map_excludes_hidden_rows_and_controls() {
         session.execute("keyword.create", &json!({"name": format!("Seam clip {n:02}")})).expect("fixture keyword");
     }
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1400.0, 640.0], 1.0);
+    let mut h = Headless::new(app, [1400.0, 760.0], 1.0);
+    // (a photo is selected: the framework's tick takes no pointer or keys while there is nothing to tick for)
+    let first: Vec<u64> = h.app.session.visible_cloned().iter().take(1).map(|p| p.0).collect();
+    h.app.run("library.select", json!({"ids": first})).expect("select a photo");
     ask(&mut h, "ui.set", json!({"view": "photoGrid", "right": "keywords"}));
     let target = rect(&h, "keywordRow:Seam clip 25");
     ask(&mut h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
@@ -51,13 +54,10 @@ fn scrolled_actual_keyword_hit_map_excludes_hidden_rows_and_controls() {
     assert!(stable >= 3, "bounded scroll geometry did not settle");
     let tick = "keywordCheck:Seam clip 25";
     let tick_hit = h.app.widget_hits.iter().find(|(name, _)| name == tick).expect("tick hit").1;
-    let actual_tick = h
-        .view
-        .ctx
-        .read_response(egui::Id::unique(("keyword-list-tick", "seam clip 25".to_owned())))
-        .or_else(|| h.view.ctx.read_response(tick_hit.id))
-        .expect("actual tick response");
-    assert_eq!(actual_tick.rect, rect(&h, tick).expand(3.0), "receipt and actual control are from synchronized geometry");
+    // The framework's tick is not an egui widget of its own id, so `read_response` cannot find it: the actual
+    // response's clipped rect is what the control channel recorded for it in the same pass (`register_response`).
+    assert!(tick_hit.interact_rect.is_positive(), "the actual tick has a hit area");
+    assert_eq!(tick_hit.interact_rect, rect(&h, tick).expand(3.0), "receipt and actual control are from synchronized geometry");
     let mut map = std::collections::BTreeMap::new();
     let mut hidden = 0;
     let mut visible = 0;
@@ -69,7 +69,7 @@ fn scrolled_actual_keyword_hit_map_excludes_hidden_rows_and_controls() {
             let hit = h.app.widget_hits.iter().find(|(name, _)| name == &widget).expect("published real hit").1;
             if hit.interact_rect.is_positive() {
                 assert!(hit.interact_rect.top() >= 44.0, "{widget}: no hit under the top bar: {:?}", hit.interact_rect);
-                assert!(hit.interact_rect.bottom() <= 640.0, "{widget}: no hit outside the viewport");
+                assert!(hit.interact_rect.bottom() <= 760.0, "{widget}: no hit outside the viewport");
                 if prefix == "keywordRow" {
                     visible += 1;
                 }
