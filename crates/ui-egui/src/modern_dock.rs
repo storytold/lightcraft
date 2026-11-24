@@ -103,7 +103,7 @@ impl Group {
         match self {
             Group::Light => &[("light", "Basic"), ("profile", "Profile & Treatment")],
             Group::Colour => &[("mixer", "Color Mixer"), ("grading", "Color Grading"), ("calibration", "Calibration")],
-            Group::Tone => &[("levels", "Levels"), ("curve", "Tone Curve")],
+            Group::Tone => &[("levels", "Levels"), ("toneEq", "Tone Equalizer"), ("curve", "Tone Curve")],
             Group::Detail => &[("detail", "Detail"), ("retouch", "Retouch")],
             Group::Optics => &[("optics", "Lens Corrections"), ("geometry", "Transform")],
             Group::Effects => &[("effects", "Effects"), ("plugins", "Plug-in Filters")],
@@ -144,6 +144,7 @@ fn section_of(control: &str) -> Option<&'static str> {
         ("vignette" | "grain", _) => "effects",
         ("curve", _) => "curve",
         ("levels", _) => "levels",
+        ("toneEq", _) => "toneEq",
         ("wb", _) => "light",
         ("detail", _) => "detail",
         ("optics", _) => "optics",

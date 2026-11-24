@@ -341,6 +341,19 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "levels", "Levels", |app, ui, d| {
         super::levels::levels(app, ui, id, d);
     });
+    // the Tone Equalizer works on the scene-linear image, before Exposure is applied and before Levels
+    section(app, ui, &d, "toneEq", "Tone Equalizer", |app, ui, d| {
+        sub_title(ui, crate::i18n::tr("Exposure by Luminance"));
+        for c in lcc_develop::controls::in_section(lcc_develop::Section::ToneEq).take(lcc_develop::tone_eq::BANDS) {
+            control(app, ui, d, c.id, true);
+        }
+        ui.add_space(6.0);
+        sub_title(ui, crate::i18n::tr("Mask"));
+        for c in ["toneEq.detail", "toneEq.size", "toneEq.edges", "toneEq.smoothing"] {
+            control(app, ui, d, c, true);
+        }
+        ui.add_space(8.0);
+    });
     section(app, ui, &d, "curve", "Tone Curve", |app, ui, d| {
         curve_editor(app, ui, id, d, CurveTarget::Photo);
         ui.add_space(8.0);

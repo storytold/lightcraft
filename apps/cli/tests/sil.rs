@@ -620,7 +620,7 @@ fn sil_workflow() {
     s.check(b["light"]["exposure"] == a["light"]["exposure"], "a preset did not carry the exposure", &format!("{} vs {}", a["light"], b["light"]));
 
     // --- copy / paste, then Synchronize to a selection
-    s.ok("develop.copy", json!({}));
+    s.ok("develop.copy", json!({"groups": ["toneEq"]}));
     s.ok("develop.paste", json!({"ids": [ids[2]]}));
     let c = s.ok("develop.get", json!({"id": ids[2]}));
     s.check(c["light"] == a["light"], "paste did not carry the Light settings", &format!("{} vs {}", a["light"], c["light"]));
@@ -839,6 +839,8 @@ fn random_action(r: &mut Rng, ids: &[u64], albums: &[u64], root: &Path, step: us
                 "color.vibrance",
                 "effects.clarity",
                 "detail.sharpenAmount",
+                "toneEq.ev3",
+                "toneEq.detail",
                 "nope.control",
             ]);
             ("develop.set", json!({"control": c, "value": num(r, -2.0, 2.0)}))
@@ -1032,6 +1034,54 @@ fn sil_vignetting_calibration() {
     let after = s.ok("vignettingCalibration.photo", json!({"id": others[1]}));
     s.check(after["map"]["id"] == map && after["missing"] == false, "the map didn't survive a reopen", &after.to_string());
     s.check(after["map"]["withdrawn"] == true, "the withdrawn state didn't survive a reopen", &after.to_string());
+    s.finish();
+}
+
+/// Mean linear luminance of a decoded export.
+fn mean_luma(path: &Path) -> f64 {
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let Ok(d) = lcc_codecs::decode(&bytes, Default::default()) else { return f64::NAN };
+    let px = &d.image.data;
+    px.iter().map(|p| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64).sum::<f64>() / px.len().max(1) as f64
+}
+
+/// Tone Equalizer (completion plan 7.10): band exposures through `develop.set`, hostile values clamped, undo and
+/// redo, the section's eye, an export that gets brighter when every band is raised, copy/paste to another photo and
+/// a reopen that keeps it. No corpus needed.
+#[test]
+fn sil_tone_equalizer() {
+    let mut s = Sil::new("toneeq");
+    let (dir, n) = shoot(&s.root, 2, 0);
+    s.start();
+    let ids = import(&mut s, &dir, n);
+    s.ok("library.select", json!({"ids": [ids[0]], "active": ids[0]}));
+    let export = json!({"format": "jpeg", "longEdge": 300});
+    let before = s.export_decodes(&[ids[0]], export.clone(), true);
+    let values: serde_json::Map<String, Value> = (0..9).map(|i| (format!("toneEq.ev{i}"), json!(1.0))).collect();
+    s.ok("develop.set", json!({"values": values}));
+    // hostile values: clamped, never a panic
+    s.ok("develop.set", json!({"control": "toneEq.ev8", "value": 1e300}));
+    s.cmd("develop.set", json!({"control": "toneEq.detail", "value": "lots"}));
+    s.ok("develop.set", json!({"control": "toneEq.size", "value": -1e9}));
+    let d = s.ok("develop.get", json!({"id": ids[0]}));
+    let t = d["settings"]["tone_eq"].clone();
+    let t = if t.is_null() { d["tone_eq"].clone() } else { t };
+    s.check(t["ev8"] == json!(2.0) && t["size"] == json!(0.0), "Tone Equalizer values weren't clamped", &d.to_string());
+    s.undo_redo_roundtrip();
+    let after = s.export_decodes(&[ids[0]], export.clone(), true);
+    let (b, a) = (mean_luma(&before[0]), mean_luma(&after[0]));
+    s.check(a > b * 1.2, "raising every band didn't brighten the export", &format!("{b} -> {a}"));
+    // the eye switches it off: the export is back where it was
+    s.ok("develop.sectionEnabled", json!({"section": "toneEq", "enabled": false}));
+    let off = s.export_decodes(&[ids[0]], export.clone(), true);
+    let o = mean_luma(&off[0]);
+    s.check((o - b).abs() < 0.02 * b.max(1e-3) + 1e-3, "the eye didn't switch the Tone Equalizer off", &format!("{b} vs {o}"));
+    s.ok("develop.sectionEnabled", json!({"section": "toneEq", "enabled": true}));
+    s.ok("develop.copy", json!({"groups": ["toneEq"]}));
+    s.ok("library.select", json!({"ids": [ids[1]], "active": ids[1]}));
+    s.ok("develop.paste", json!({}));
+    s.consistent();
+    s.reopen_keeps_everything();
     s.finish();
 }
 
