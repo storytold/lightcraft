@@ -65,6 +65,7 @@
 //! | 18 | vignetting calibration maps (like Capture One's LCC "Uniform Light"), stored once and referenced from the develop settings | `Op::AddVignettingMap`, `Op::SetVignettingMapState`, `Catalog.vignetting_maps`, `Optics.vignetting_calibration` (an id), `Optics.vignetting_calibration_amount` |
 //! | 19 | Pixel Shift merges remember their frames | `Op::SetMergeSources`, `Photo.merge_sources` |
 //! | 20 | Image Quality Scanner scores (issue #1313) | `Analysis.quality` (`QualityScan`: sharpness, noise, exposure, compression, score, verdict, the flag a scan wrote) |
+//! | 21 | the Image Quality Scanner assigns star ratings (issue #1362) | `QualityScan.rating_written` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -97,7 +98,7 @@ pub(crate) const FORMAT: &str = "lcc-catalog";
 pub(crate) const V4_FORMAT: &str = "lcc-catalog-db";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 20;
+pub const VERSION: u32 = 21;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

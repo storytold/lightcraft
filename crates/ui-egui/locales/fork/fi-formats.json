@@ -37,6 +37,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Laitteen {device} muutokset on päivätty {minutes} minuuttia tulevaisuuteen, joten ne pidätetään siihen asti. Aseta laitteen {device} kello oikeaan aikaan.",
   "Chart · greys about {cct:.0} K": "Testikartta · harmaat noin {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Tarkistettu {checked}/{total} DNG-tiedostoa: {intact} ehjää, {damaged} vioittunutta, {unverifiable} ei vahvistettavissa",
+  "Closest: {name}, {percent:.0}%": "Lähin vastine: {name}, {percent:.0} %",
   "Collection imported: {n} photos found, {m} not in this catalog": "Kokoelma tuotu: kuvia löytyi {n}, joista {m} ei ole tässä katalogissa",
   "Confirm all {}": "Vahvista kaikki ({})",
   "Confirm all {} suggestions": "Vahvista kaikki {} ehdotusta",
@@ -105,7 +106,6 @@
   "Imported {n} metadata preset{}": "Tuotuja metatietoesiasetuksia: {n}{:.0}",
   "Importing {n} photos…": "Tuodaan {n} kuvaa…",
   "Installed {name} {version}": "Asennettu: {name} {version}",
-  "Installing it will {action}.": "Asennus: {action}.",
   "Invite {name}": "Kutsu {name}",
   "It is {}: name this face": "Tämä on {}: nimeä tämä kasvo",
   "It isn't available for {platform}.": "Ei saatavilla järjestelmälle {platform}.",
@@ -116,7 +116,9 @@
   "Key from the environment variable {}": "Avain ympäristömuuttujasta {}",
   "Key saved (ends in {})": "Avain tallennettu (päättyy {})",
   "Key saved ({})": "Avain tallennettu ({})",
-  "Last checked {when}": "Viimeksi tarkistettu {when}",
+  "Last checked {n} hours ago": "Viimeksi tarkistettu {n} tuntia sitten",
+  "Last checked {n} minutes ago": "Viimeksi tarkistettu {n} minuuttia sitten",
+  "Last checked {n} seconds ago": "Viimeksi tarkistettu {n} sekuntia sitten",
   "Last synced on {date}": "Viimeksi synkronoitu {date}",
   "Last synced {n} h ago": "Viimeksi synkronoitu {n} h sitten",
   "Last synced {n} min ago": "Viimeksi synkronoitu {n} min sitten",
@@ -195,6 +197,7 @@
   "Step {n} of {total}": "Vaihe {n}/{total}",
   "Stop waiting: {task}?": "Lopetetaanko odottaminen: {task}?",
   "Style {n}": "Tyyli {n}",
+  "Suggested as {name}: {percent:.0}%": "Ehdotettu henkilöksi {name}: {percent:.0} %",
   "Suggested as {}": "Ehdotettu henkilöksi {}",
   "Suggested as {}. Confirm the faces that are them.": "Ehdotettu henkilöksi {}. Vahvista kasvot, jotka ovat hän.",
   "Sync this catalog with {name}:": "Synkronoi tämä katalogi laitteen {name} kanssa:",
@@ -333,5 +336,6 @@
   "“{name}” added to Camera Profiles": "”{name}” lisätty kameraprofiileihin",
   "“{name}” has its old settings again": "”{name}” sai vanhat asetuksensa takaisin",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "”{name}” on uusi. Mitä tätä katalogia synkronoivat muut laitteet saavat siitä?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” ottaa aktiivisen kuvan asetukset. Nimi, ryhmä, paikka ja merkinnät säilyvät."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” ottaa aktiivisen kuvan asetukset. Nimi, ryhmä, paikka ja merkinnät säilyvät.",
+  "★{n} at or above": "★{n} tai enemmän"
 }

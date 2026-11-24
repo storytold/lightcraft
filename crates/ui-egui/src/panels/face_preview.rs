@@ -19,6 +19,26 @@ fn place(r: Rect, at: lcc_geom::Rect) -> Rect {
     )
 }
 
+/// The closest confirmed-person match, named with its percentage above a face's hover preview.
+pub fn similarity_caption(match_info: Option<(&str, f32)>) -> Option<String> {
+    let (name, score) = match_info?;
+    if name.trim().is_empty() || !score.is_finite() {
+        return None;
+    }
+    let percent = score.clamp(0.0, 1.0) * 100.0;
+    Some(crate::i18n::tr_format!("Closest: {name}, {percent:.0}%", name = name, percent = percent).to_string())
+}
+
+/// A suggested person and its score, named above a suggested face's hover preview.
+pub fn suggestion_caption(suggestion: Option<(&str, f32)>) -> Option<String> {
+    let (name, score) = suggestion?;
+    if name.trim().is_empty() || !score.is_finite() {
+        return None;
+    }
+    let percent = score.clamp(0.0, 1.0) * 100.0;
+    Some(crate::i18n::tr_format!("Suggested as {name}: {percent:.0}%", name = name, percent = percent).to_string())
+}
+
 /// A face's box: a light line with a dark one under it, so it shows on bright and dark faces alike.
 fn mark(p: &egui::Painter, b: Rect) {
     p.rect_stroke(b, 2.0, Stroke::new(3.0, Color32::from_black_alpha(140)), StrokeKind::Middle);
@@ -65,6 +85,17 @@ pub fn on_hover(app: &mut LccApp, resp: &egui::Response, photo: u64, face: lcc_g
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn similarity_is_named_and_shown_as_a_bounded_percentage_when_available() {
+        assert_eq!(similarity_caption(Some(("Jane Doe", 0.846))), Some("Closest: Jane Doe, 85%".to_string()));
+        assert_eq!(similarity_caption(Some(("Jane Doe", 1.2))), Some("Closest: Jane Doe, 100%".to_string()));
+        assert_eq!(similarity_caption(Some(("Jane Doe", f32::NAN))), None);
+        assert_eq!(similarity_caption(Some(("  ", 0.8))), None);
+        assert_eq!(similarity_caption(None), None);
+        assert_eq!(suggestion_caption(Some(("Jane Doe", 0.846))), Some("Suggested as Jane Doe: 85%".to_string()));
+        assert_eq!(suggestion_caption(None), None);
+    }
 
     // a box at fractions of the tile lands on the same fractions of the tile on screen
     #[test]

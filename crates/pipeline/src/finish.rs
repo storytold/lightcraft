@@ -35,8 +35,14 @@ pub fn sharpen_limit(detail: f64) -> f32 {
 /// mask (`mask` = Masking / 100) so flat areas and noise can be left alone.
 #[inline]
 pub fn sharpen_term(det: f32, limit: f32, mask: f32) -> f32 {
-    let m = if mask > 0.0 { smooth(mask * 0.1, mask * 0.1 + 0.06, det.abs()) } else { 1.0 };
-    SHARPEN_GAIN * m * det / (1.0 + det.abs() / limit)
+    SHARPEN_GAIN * sharpen_gate(det, mask) * det / (1.0 + det.abs() / limit)
+}
+
+/// The Masking edge mask (`mask` = Masking / 100) at band detail `det`: 1 where the photo is
+/// sharpened, 0 in the flat areas Masking leaves alone.
+#[inline]
+pub fn sharpen_gate(det: f32, mask: f32) -> f32 {
+    if mask > 0.0 { smooth(mask * 0.1, mask * 0.1 + 0.06, det.abs()) } else { 1.0 }
 }
 
 /// Whether `s` sharpens with process V4's unsharp mask (older processes boost the Texture band).
