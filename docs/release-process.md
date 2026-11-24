@@ -27,8 +27,11 @@ Written after 26.46.2; keep it current. CI mechanics: [`ci.md`](ci.md). Changelo
    A download with no entry fails too (a new or renamed file: add its entry, drop the old name's); a pre-release
    (`26.48.0-rc.1`) is checked against the release's entries. The desktop packages build with the `dist` cargo
    profile (thin LTO, one codegen unit; `PACKAGE_PROFILE=release` for a quicker local package).
-   macOS ships `-macos-arm64.dmg` and `-macos-x64.dmg` only (no universal image since #1269): the updater since
-   26.48.0 takes the one for the Mac it runs on; Macs on 26.47.x or earlier download one of them once by hand.
+   macOS ships `-macos-arm64.dmg`, `-macos-x64.dmg` and, through 26.48.x only, `-macos-universal.dmg`: the
+   updater since 26.48.0 takes the image for the Mac it runs on, while 26.47.x and earlier take only the
+   universal one, so 26.48 keeps it to bring them over. **With 26.49.0, remove it (#1269):** drop
+   `--arch universal` (and `--skip-build` from the next line) in `release.yml`, the `macos-universal.dmg` entry in
+   `packaging/size-budget.toml`, and the universal mentions on the download/install pages.
 7. **Publish** when the Release workflow succeeded and the draft has all assets (19 in 26.46.2; compare with the
    previous release): `gh release edit v<ver> --draft=false --latest`.
 8. **Clean up** local prep branches, finished agents' worktrees and scratch/target dirs.

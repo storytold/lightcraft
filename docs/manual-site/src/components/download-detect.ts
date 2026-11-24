@@ -27,11 +27,11 @@ export function detect(e: Env): string | null {
     if (arch === 'arm') return 'mac-arm';
     if (arch === 'x86') return 'mac-intel';
     // Chrome/Firefox name the chip ("Apple M2"); Safari masks every Mac as "Apple GPU", so
-    // that alone proves nothing: there is one image per chip (no universal one), so the visitor picks.
+    // that alone proves nothing and the universal file (runs on both) is the safe pick.
     const r = e.renderer || '';
     if (/\bM\d+\b/.test(r)) return 'mac-arm';
     if (/intel|amd|radeon|nvidia/i.test(r)) return 'mac-intel';
-    return null;
+    return 'mac-any';
   }
   if (plat.includes('linux') || /linux|x11/i.test(ua)) {
     if (arch === 'arm' || /aarch64|arm/i.test(plat) || /aarch64|armv/i.test(ua)) return null;
