@@ -2,7 +2,8 @@
 # PRs and pushes to main run the FAST gate: Linux `cargo xtask ci --fast` (fmt, brand, docs, clippy, heif
 # clippy, parity, layers, assets, deny, wasm), on PRs the tests of the changed crates and their dependents
 # (`cargo xtask affected-tests`), plus the SIL suite when it exists; macOS
-# and Windows clippy only. A push to main whose tree a green PR run already tested is skipped (`tested`).
+# and Windows clippy only (on PRs: the changed crates and their dependents, `cargo xtask affected-clippy`).
+# A push to main whose tree a green PR run already tested is skipped (`tested`).
 # Manual dispatch runs the FULL gate (before a release, on the commit that goes to `release`):
 # `cargo xtask ci` with every test on Linux, and the workspace tests on macOS and Windows. A push to
 # `release` runs no CI: the dispatched run tested that commit. FreeBSD has its own workflow (freebsd.yml).
@@ -19,9 +20,10 @@ concurrency:
   # A manual (full) run has its own group: GitHub keeps one waiting run per group, so a push to the same
   # ref would otherwise replace a dispatched pre-release run that is still waiting for a runner.
   group: ci-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && 'full' || 'push' }}
-  # On main every push keeps its run (a newer push waits behind it), so a run of merges still gets
-  # a result; on other refs a newer push replaces the older run.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # A newer push replaces the older run everywhere, main included: a burst of merges tests only the
+  # newest commit, which contains the earlier ones (the runners are CPU-bound; a failure then points
+  # at the range of merges since the last green run).
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -157,6 +159,9 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # the PR's merge commit and its first parent (the base), for `affected-clippy --base HEAD^1`
+          fetch-depth: 2
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
@@ -192,7 +197,14 @@ jobs:
       - name: build
         if: env.FULL_CI == '1'
         run: cargo build --workspace --locked
+      # PRs: only the packages the PR changes and their dependents, nothing for a docs-only PR (the
+      # Windows runner is the maintainer's one x64 Windows machine); pushes and full runs: everything
+      - name: clippy (changed packages)
+        if: github.event_name == 'pull_request' && env.FULL_CI != '1'
+        shell: bash
+        run: cargo xtask affected-clippy --base HEAD^1
       - name: clippy
+        if: github.event_name != 'pull_request' || env.FULL_CI == '1'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # nextest with retries; quarantined tests (ci/quarantine.toml) run apart and only warn (docs/ci.md)
       - name: test
