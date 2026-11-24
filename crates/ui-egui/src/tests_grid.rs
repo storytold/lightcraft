@@ -281,7 +281,7 @@ fn scale_100k_grid_frames() {
     change(&mut h, "sort capture date (command + next frame)", "library.sort", json!({"key": "captureDate", "ascending": true}), &mut rows);
     frames(&mut h, "unchanged frame after sorts", 20, &mut rows);
     for (what, v) in &rows {
-        eprintln!("grid 100k | {what}: {v:.1} ms");
+        eprintln!("grid 100k | {what}: {v:.1} ms wall");
     }
     // ceilings an order of magnitude over the budgets, so only a real regression fails
     for (what, v) in &rows {
@@ -350,13 +350,13 @@ fn scale_filter_bar_scroll() {
         }
     }
     for (bar, churn, v) in &rows {
-        eprintln!("filter bar {} | {churn:<6} changes | wheel-scroll frame: {v:.1} ms", if *bar { "shown " } else { "hidden" });
+        eprintln!("filter bar {} | {churn:<6} changes | wheel-scroll frame: {v:.1} ms wall", if *bar { "shown " } else { "hidden" });
     }
     // what opening a metadata picker costs after a metadata change: the cameras, lenses and keywords listed again
     let t = Instant::now();
     let values = h.app.caches.filter_values(&h.app.session.catalog);
     eprintln!(
-        "picker values listed again: {:.1} ms ({} cameras, {} lenses, {} keywords)",
+        "picker values listed again: {:.1} ms wall, ({} cameras, {} lenses, {} keywords)",
         ms(t),
         values.cameras.len(),
         values.lenses.len(),

@@ -34,7 +34,7 @@ CPU slider path and export (both now met); the import miss and the 1:1 tile miss
 
 ```sh
 cargo xtask corpus --download                    # CC0 raws into corpus/
-cargo xtask bench                                # render: slider / loupe / export rows (CPU and GPU)
+cargo xtask bench                                # all probes + budget table (see Budget gate)
 <PREFIX>_PROFILE=1 cargo run --release -p lcc-cli -- render corpus/raw/arw-sony-a7m3-compressed.arw -o /tmp/o.jpg --size 2048
 ONLY=source N=3 cargo run --release -p lcc-engine --example render_bench -- corpus/raw/arw-sony-a7m3-compressed.arw
 cargo run --release -p lcc-engine --example perf_tile -- $PWD/corpus/raw/arw-sony-a7m3-compressed.arw   # 1:1 tile
@@ -52,6 +52,52 @@ appended (so their content hashes differ), then driven headless with the CLI:
                                                # publish.createCollection {addSelected}, publish.run {service}
 <cli> run --library L --script pages.jsonl     # print.render / book.render with the built-in templates at 300 dpi
 ```
+
+## Budget gate (`cargo xtask bench --strict`)
+
+`cargo xtask bench` runs every probe in `PROBES` (`xtask/src/bench.rs`) with `<PREFIX>_PROBES=1`, release build:
+
+| Probe | What runs |
+|---|---|
+| `render` | `render_bench` example (24 MP raw, or a procedural 24 MP source): slider drags (draft), loupe drags @ 1920×1280, export |
+| `grid` | `tests_grid::scale_*` in `lcc-ui-egui`: Library grid at 100k photos, filter bar at 68k |
+| `tiff` | `tiff_zip::bench` in `lcc-codecs`: 24 MP 16-bit TIFF, none / ZIP / LZW |
+| `keywords` | `probe_keyword_tree_cost` in `lcc-catalog`: keyword tree at 58k photos, 2,000 keywords |
+
+It prints each budget in `BUDGETS` (draft slider ≤ 16 ms, loupe ≤ 60 ms at 2.5 MP, grid frame ≤ 16 ms, TIFF ZIP ≤ 3 s,
+kept keyword tree ≤ 16 ms, …) with the measured wall time, then compares with this machine's baseline
+(`target/bench/baseline.json`, or the previous run on this host when there is none) using CPU time where a probe
+reports it and wall time otherwise. `--strict` fails on an enforced budget breach or a regression over 20 %
+(`--threshold PCT`). Budgets marked advisory are known misses and never fail; they become enforced once met. A
+baseline from another host is never used: numbers compare only on one machine.
+
+First run (Windows, shared machine under heavy concurrent build load, 2026-11-24, 24 MP ARW; wall ms):
+
+| Budget | Ceiling | Measured | Gate |
+|---|---|---|---|
+| draft highlights / clarity drag, GPU | 16 | 3.9 / 4.1 | enforced |
+| draft highlights / clarity drag, CPU | 16 | 78 / 51 | advisory |
+| draft NR drag, GPU / CPU (4.5) | 16 | 30 / 519 | advisory |
+| loupe 1920×1280 exposure drag, GPU / CPU | 60 | 13 / 127 | GPU enforced, CPU advisory |
+| loupe 1920×1280 NR drag, GPU / CPU | 60 | 255 / 573 | advisory |
+| grid 100k unchanged frame | 16 | 13.2 | enforced |
+| grid wheel-scroll frame, filter bar hidden (4.8) | 16 | 17.5 | advisory |
+| grid 100k jump to 90k / filter change | 1500 / 1000 | 971 / 232 | enforced (guessed ceilings with headroom) |
+| TIFF ZIP 24 MP 16-bit | 3000 | 960 | enforced (guessed ceiling) |
+| keyword tree kept / rebuilt | 16 / 400 | 0.6 / 198 | enforced (rebuilt: guessed ceiling) |
+
+The CPU rows ran at several times the 4.5 figures (CPU NR drag 33 ms idle-ish vs 519 ms here) because of the load;
+re-measure on a quiet machine before turning them into enforced budgets.
+
+```sh
+cargo xtask bench --save-baseline            # on main: record this machine's baseline
+cargo xtask bench --strict                   # on the branch: budgets + regressions vs that baseline
+cargo xtask bench --only grid,keywords       # a subset (with --save-baseline it updates only those rows)
+```
+
+Adding a probe or a budget is one line: `probe("name", &[cargo args…])` in `PROBES` (it must print
+`label: N ms wall[, N ms cpu]` lines on stdout or stderr), and `budget("name:label/cpu/wall", ms, "why")` (or
+`advisory(…)`) in `BUDGETS`; a unit test checks every budget names a probe.
 
 ## Render (`cargo xtask bench`)
 
