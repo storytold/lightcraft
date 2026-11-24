@@ -398,6 +398,7 @@
   "Checking Immich's locked folders": "Gesperrte Ordner von Immich prüfen",
   "Checking and installing the model…": "Modell wird geprüft und installiert …",
   "Checking folders for new photos": "Ordner werden auf neue Fotos geprüft",
+  "Watching folders for changes": "Ordner werden auf Änderungen überwacht",
   "Checking for updates when the app starts is still off": "Die Update-Prüfung beim Start bleibt ausgeschaltet",
   "Checking for updates…": "Suche nach Updates…",
   "Checking plug-ins for updates": "Plug-ins werden auf Updates geprüft",

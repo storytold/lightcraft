@@ -449,6 +449,7 @@
   "Check that the keypad shows the same code.": "Sprawdź, czy klawiatura pokazuje ten sam kod.",
   "Checking Immich's locked folders": "Sprawdzanie zablokowanych folderów Immich",
   "Checking folders for new photos": "Sprawdzanie folderów pod kątem nowych zdjęć",
+  "Watching folders for changes": "Obserwowanie zmian w folderach",
   "Checking for updates when the app starts is still off": "Sprawdzanie aktualizacji przy uruchomieniu jest nadal wyłączone",
   "Checking for updates…": "Sprawdzanie aktualizacji…",
   "Checking plug-ins for updates": "Sprawdzanie aktualizacji wtyczek",

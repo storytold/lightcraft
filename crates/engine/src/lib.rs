@@ -74,6 +74,10 @@ pub mod finishing;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod folder_watch;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod folder_notify;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod instance;
 pub mod fonts;
 pub mod genfill;
 pub mod guard;

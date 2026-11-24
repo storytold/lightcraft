@@ -442,6 +442,7 @@
   "Check that the keypad shows the same code.": "Tarkista, että näppäimistö näyttää saman koodin.",
   "Checking Immich's locked folders": "Tarkistetaan Immichin lukittuja kansioita",
   "Checking folders for new photos": "Tarkistetaan kansioista uusia kuvia",
+  "Watching folders for changes": "Kansioiden muutoksia seurataan",
   "Checking for updates when the app starts is still off": "Päivitysten tarkistus sovelluksen käynnistyessä on yhä pois päältä",
   "Checking for updates…": "Tarkistetaan päivityksiä…",
   "Checking plug-ins for updates": "Tarkistetaan laajennusten päivityksiä",

@@ -1038,6 +1038,10 @@ pub struct LccApp {
     pub folder_poll: folder_poll::FolderPoll,
     /// A link (`<scheme>://sync?path=…`) the app was started with, followed once a frame runs.
     pub pending_link: Option<String>,
+    /// Single-instance hand-off (gap 37): what later launches hand this copy (their links and
+    /// files), followed each frame (`folder_poll::take_handoffs`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub handoff: Option<lcc_engine::instance::Server>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -1383,6 +1387,8 @@ impl LccApp {
             sync_run: None,
             folder_poll: Default::default(),
             pending_link: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            handoff: None,
             lightroom: None,
             lightroom_last: None,
             catalog_ui: Default::default(),
@@ -2535,6 +2541,8 @@ impl LccApp {
         if let Some(url) = self.pending_link.take() {
             folder_poll::follow_link(self, ctx, &url);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        folder_poll::take_handoffs(self, ctx);
         self.ui.was_focused = focused;
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)

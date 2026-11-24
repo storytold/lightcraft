@@ -447,6 +447,7 @@
   "Check that both screens show this code:": "Убедитесь, что на обоих экранах этот код:",
   "Checking Immich's locked folders": "Проверка заблокированных папок Immich",
   "Checking folders for new photos": "Проверка папок на новые фото",
+  "Watching folders for changes": "Отслеживание изменений в папках",
   "Checking for updates when the app starts is still off": "Проверка обновлений при запуске по-прежнему выключена",
   "Checking for updates…": "Проверка обновлений…",
   "Checking names…": "Проверка имён…",

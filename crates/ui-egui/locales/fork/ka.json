@@ -466,6 +466,7 @@
   "Check that the keypad shows the same code.": "დარწმუნდით, რომ კლავიატურა იმავე კოდს აჩვენებს.",
   "Checking Immich's locked folders": "Immich-ის ჩაკეტილი საქაღალდეების შემოწმება",
   "Checking folders for new photos": "საქაღალდეებში ახალი ფოტოები მოწმდება",
+  "Watching folders for changes": "საქაღალდეების ცვლილებების თვალყურის დევნება",
   "Checking for updates when the app starts is still off": "განახლებების შემოწმება აპის გაშვებისას ისევ გამორთულია",
   "Checking for updates…": "განახლებები მოწმდება…",
   "Checking plug-ins for updates": "დანამატების განახლებების შემოწმება",

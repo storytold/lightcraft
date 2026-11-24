@@ -424,6 +424,7 @@
   "Check that both screens show this code:": "请确认两台设备的屏幕都显示此代码：",
   "Checking Immich's locked folders": "正在检查 Immich 的已锁定文件夹",
   "Checking folders for new photos": "正在检查文件夹中的新照片",
+  "Watching folders for changes": "正在监视文件夹的更改",
   "Checking for updates when the app starts is still off": "启动时检查更新仍处于关闭状态",
   "Checking for updates…": "正在检查更新…",
   "Checking plug-ins for updates": "正在检查插件更新",

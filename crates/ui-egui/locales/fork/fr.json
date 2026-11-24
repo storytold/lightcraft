@@ -401,6 +401,7 @@
   "Check that both screens show this code:": "Vérifiez que les deux écrans affichent ce code :",
   "Checking Immich's locked folders": "Vérification des dossiers verrouillés d’Immich",
   "Checking folders for new photos": "Recherche de nouvelles photos dans les dossiers",
+  "Watching folders for changes": "Surveillance des modifications des dossiers",
   "Checking for updates when the app starts is still off": "La recherche de mises à jour au démarrage reste désactivée",
   "Checking for updates…": "Recherche des mises à jour…",
   "Checking plug-ins for updates": "Recherche de mises à jour des modules",

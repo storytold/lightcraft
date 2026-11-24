@@ -405,6 +405,7 @@
   "Check that both screens show this code:": "Переконайтеся, що на обох екранах цей код:",
   "Checking Immich's locked folders": "Перевірка заблокованих папок Immich",
   "Checking folders for new photos": "Перевірка папок на нові фото",
+  "Watching folders for changes": "Відстеження змін у папках",
   "Checking for updates when the app starts is still off": "Перевірка оновлень під час запуску досі вимкнена",
   "Checking for updates…": "Перевірка оновлень…",
   "Checking plug-ins for updates": "Перевірка оновлень плагінів",

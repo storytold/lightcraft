@@ -418,6 +418,7 @@
   "Check that the keypad shows the same code.": "Zkontrolujte, že klávesnice zobrazuje stejný kód.",
   "Checking Immich's locked folders": "Kontrola zamčených složek Immich",
   "Checking folders for new photos": "Kontrola nových fotografií ve složkách",
+  "Watching folders for changes": "Sledování změn ve složkách",
   "Checking for updates when the app starts is still off": "Vyhledávání aktualizací při spuštění aplikace je stále vypnuté",
   "Checking for updates…": "Vyhledávání aktualizací…",
   "Checking plug-ins for updates": "Hledání aktualizací zásuvných modulů",

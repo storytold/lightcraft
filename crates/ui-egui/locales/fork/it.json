@@ -414,6 +414,7 @@
   "Check that the keypad shows the same code.": "Verifica che il tastierino mostri lo stesso codice.",
   "Checking Immich's locked folders": "Controllo delle cartelle bloccate di Immich",
   "Checking folders for new photos": "Ricerca di nuove foto nelle cartelle",
+  "Watching folders for changes": "Monitoraggio delle modifiche alle cartelle",
   "Checking for updates when the app starts is still off": "La ricerca di aggiornamenti all'avvio dell'app è ancora disattivata",
   "Checking for updates…": "Ricerca di aggiornamenti…",
   "Checking plug-ins for updates": "Ricerca aggiornamenti dei plug-in",
