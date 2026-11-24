@@ -267,7 +267,7 @@ fn word_key(w: &str) -> String {
 
 /// Is `w` a word of a maker's company name ("IMAGING CORP.", "COMPANY, LTD.", "CAMERA AG"), or punctuation alone?
 fn company_word(w: &str) -> bool {
-    const WORDS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag imaging camera optical electronics";
+    const WORDS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag imaging camera computer optical electronics";
     let key = word_key(w);
     key.is_empty() || WORDS.split(' ').any(|c| c == key)
 }
@@ -889,5 +889,9 @@ mod camera_name_tests {
         assert_eq!(name("OM Digital Solutions", "OM Digital Solutions OM-1").as_deref(), Some("OM Digital Solutions OM-1"));
         assert_eq!(name("", "ILCE-7M4").as_deref(), Some("ILCE-7M4"));
         assert_eq!(name("", " "), None, "no camera");
+        // a maker whose company words follow its name ("COMPUTER CO.,LTD."), known or taken from the first word
+        for make in ["CASIO COMPUTER CO.,LTD.", ""] {
+            assert_eq!(name(make, "CASIO COMPUTER CO.,LTD. EX-Z1050").as_deref(), Some("Casio EX-Z1050"), "make {make:?}");
+        }
     }
 }
