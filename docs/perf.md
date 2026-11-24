@@ -100,6 +100,31 @@ load_bytes(2560):          93.0 ms wall,  1855.4 ms cpu
 load_bytes(full):         425.3 ms wall, 10448.3 ms cpu
 ```
 
+## CPU-only stages against the loupe budget (plan 4.6, 2026-11-24)
+
+Two stages have no WGSL kernel: soft proofs against an output-device profile (a 3D table; the GPU renderer declines
+the whole render, `lcc_gpu::handles`) and Even Out / Fill spots (the GPU renderer runs the scene-linear stage on the
+CPU for such a photo, `lin_needs_cpu`). Matrix soft proofs and Clone / Heal / sourced Remove spots already run on the
+GPU. Probe: `cargo test -p lcc-pipeline --release cpu_only_stage_cost -- --ignored --nocapture` (1920×1280, median of 7,
+synthetic source). The machine was heavily loaded by other agents (16 cores; a plain CPU loupe render took 74–681 ms
+across runs against 16 ms idle in the summary), so only the quietest run is quoted, and it is an upper bound:
+
+| Case (1920×1280) | Quietest run |
+|---|---|
+| CPU render, plain | 74 ms |
+| + device proof (33³ table) | +6 ms; with both gamut warnings +12 ms |
+| + 1 Even Out spot (size 0.05) | +12 ms in the render; spot stage alone 34 ms |
+| 1 Even Out spot, size 0.20 (box ≈ the whole frame) | spot stage 223 ms |
+| 10 Even Out spots, size 0.05 | spot stage 325 ms |
+| 1 Fill spot, size 0.05 / 0.20 | 84 / 334 ms on first solve (cached afterwards: `fills()`) |
+
+Conclusion: a device proof adds a few per cent to a CPU render, which fits the 60 ms loupe budget on an idle machine
+(CPU loupe drag 16 ms in the summary); a WGSL port of the table lookup isn't needed for the budget. Even Out with one
+small spot fits; large or many Even Out spots miss it (the three box blurs per spot over a box that grows with the
+radius), and Fill pays its PatchMatch solve once per stroke. A port of Even Out's blurs to the GPU blur kernels is the
+next step if the idle re-measure confirms the miss. Tried and dropped: taller `box_v` bands for wide radii (fewer
+primes, less parallelism): no difference distinguishable from the load noise.
+
 ## Catalog (`cargo xtask bench-catalog`)
 
 | backend | photos | open | peak RSS | filter (worst) | first snapshot | snapshot after 1000 edits | import | disk |
