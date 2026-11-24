@@ -141,15 +141,27 @@ fn summary(dir: &Path, whose: &str, db: &LensDb) -> (log::Level, String) {
 
 /// The database in use, loaded on first use after a change; `None` when none is configured or it holds no lenses.
 pub fn database() -> Option<Arc<LensDb>> {
-    let env = env_dir();
-    let mut c = cache();
-    if let Some(db) = &c.loaded {
+    if let Some(db) = &cache().loaded {
         return db.clone();
     }
-    let source = env.map(|d| (d, Origin::Env)).or_else(|| c.dir.clone().map(|d| (d, Origin::Folder)));
-    // loaded under the lock: a second caller waits for this load instead of repeating it
+    // One load at a time (a second caller waits for it instead of repeating it), but not under the
+    // cache lock: `generation`, `source` and the setters stay quick while the folder is read, e.g. on
+    // the UI thread while the background preload runs.
+    static LOADING: Mutex<()> = Mutex::new(());
+    let _one = LOADING.lock().unwrap_or_else(PoisonError::into_inner);
+    let (source, generation) = {
+        let c = cache();
+        if let Some(db) = &c.loaded {
+            return db.clone();
+        }
+        (env_dir().map(|d| (d, Origin::Env)).or_else(|| c.dir.clone().map(|d| (d, Origin::Folder))), c.generation)
+    };
     let db = source.and_then(|(dir, origin)| load_from(&dir, origin)).map(Arc::new);
-    c.loaded = Some(db.clone());
+    let mut c = cache();
+    // (the source changed during the read: the next lookup reads the new one)
+    if c.generation == generation && c.loaded.is_none() {
+        c.loaded = Some(db.clone());
+    }
     db
 }
 
