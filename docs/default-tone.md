@@ -73,20 +73,20 @@ The offset was fitted on 5 training photos of the DC-S9 and checked on 5 others 
 
 ## Results
 
-Held-out Panasonic Lumix DC-S9 photos (RW2, Adobe Standard profile, 1,500 px, aligned against Camera Raw's renders),
-lightness RMS and mean a/b error (OkLab × 100), lower is better:
+Held-out Panasonic Lumix DC-S9 photos (RW2, Adobe Standard profile, 24 edits each plus Neutral, 1,500 px, aligned
+against Camera Raw's renders), lightness RMS and mean a/b error (OkLab × 100), lower is better. "Before" is LightCraft
+before the V9 series (V7); "V9" is the whole series with every stage's fitted model, this curve included.
 
-| Edits | Tone: before → this | Colour: before → this |
+| Edits | Tone: before → V9 | Colour: before → V9 |
 |---|---|---|
-| Unedited | 5.03 → 0.69 | 1.00 → 0.27 |
-| Highlights, Shadows | 6.20 → 3.26 | 1.02 → 0.38 |
-| Highlights and Shadows together | 8.66 → 6.59 | 1.01 → 0.62 |
-| 19 presets (7 groups) | 6.38 → 2.61 | 1.26 → 0.73 |
+| Unedited | 5.03 → 0.70 | 1.00 → 0.27 |
+| Highlights | 6.68 → 2.16 | 0.89 → 0.27 |
+| Shadows | 5.71 → 3.24 | 1.14 → 0.39 |
+| Highlights and Shadows together | 8.66 → 4.03 | 1.01 → 0.43 |
+| 19 presets (7 groups, equal weight) | 6.96 → 2.12 | 1.74 → 0.64 |
 
-"Before" is process V9 without this change.
-
-Unedited, the five photos are off by 0.44 to 1.10 in lightness and on average 0.09 darker than Lightroom (2.41
-lighter before). No preset gets worse in tone or in colour.
+With the measured grey steps instead of the fitted knots the series gives 0.69 and 0.27 unedited, and 2.418 and
+0.556 over all groups against 2.424 and 0.557 with them.
 
 ## Limits
 
