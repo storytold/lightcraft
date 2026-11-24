@@ -77,6 +77,11 @@ fn main() {
         println!("cargo::error=CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing");
     }
     src.push_str("];\n");
+    let _ = writeln!(
+        src,
+        "/// The one UI language this build was made for (`CRAFT_FONTS_LANGUAGE`), or `None` for every language.\npub const BUILD_LANGUAGE: Option<&str> = {:?};",
+        language.filter(|code| ui_languages::scripts_for(code).is_some()),
+    );
     if !wasm {
         let _ = writeln!(src, "/// Built with `CRAFT_FONTS_EMBED=0`: the fonts are files beside the program.\nconst BESIDE: bool = {beside};");
     }
