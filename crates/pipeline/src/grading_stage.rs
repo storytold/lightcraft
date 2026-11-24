@@ -70,7 +70,7 @@ fn bracket(keys: &[f32], x: f32) -> (usize, usize, f32) {
 /// `c0 + Σ c[2k−1] cos(k h) + c[2k] sin(k h)`.
 fn fourier(c: &[f64], h: f64) -> f64 {
     let (first, rest) = c.split_first().map_or((0.0, &[][..]), |(f, r)| (*f, r));
-    first + rest.chunks_exact(2).enumerate().map(|(k, p)| p[0] * ((k + 1) as f64 * h).cos() + p[1] * ((k + 1) as f64 * h).sin()).sum::<f64>()
+    first + rest.as_chunks::<2>().0.iter().enumerate().map(|(k, [c, s])| c * ((k + 1) as f64 * h).cos() + s * ((k + 1) as f64 * h).sin()).sum::<f64>()
 }
 
 /// A bump of peak 1 at `p / (p + q)`, 0 at black and white and outside them.
@@ -95,7 +95,9 @@ fn tint(w: usize, hue: f32, sat: f32) -> [f32; 2] {
 
 /// Two bumps whose gain and exponents are quadratic in `b` and `c`, at lightness `l` ([`m::SHARE`]).
 fn share(p: &[f64; 30], b: f64, c: f64, l: f64) -> f64 {
-    p.chunks_exact(15)
+    p.as_chunks::<15>()
+        .0
+        .iter()
         .map(|q| {
             let f = |i: usize| q[i] + q[i + 1] * b + q[i + 2] * b * b + q[i + 3] * c + q[i + 4] * c * c;
             f(0) * bump(l, f(5).exp(), f(10).exp())
@@ -119,8 +121,12 @@ fn luminance(w: usize, v: f32) -> [f32; GRID] {
     let (a, side) = (t.abs(), if t < 0.0 { 0 } else { 12 });
     std::array::from_fn(|i| {
         let l = i as f64 / (GRID - 1) as f64;
-        let r: f64 =
-            p[side..side + 12].chunks_exact(6).map(|q| (q[0] * a + q[1] * a * a) * bump(l, (q[2] + q[3] * a).exp(), (q[4] + q[5] * a).exp())).sum();
+        let r: f64 = p[side..side + 12]
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .map(|[g1, g2, p0, p1, q0, q1]| (g1 * a + g2 * a * a) * bump(l, (p0 + p1 * a).exp(), (q0 + q1 * a).exp()))
+            .sum();
         (t.signum() * r) as f32
     })
 }
