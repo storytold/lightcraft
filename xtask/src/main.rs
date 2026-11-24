@@ -50,9 +50,11 @@ commands:
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
-  fidelity [--regen] [--refs DIR]
+  fidelity [--regen] [--baseline] [--refs DIR]
                   render-fidelity suite: tools × processes × scenes/corpus against local references
-                  (default fidelity-refs/); --regen writes them from the current renderer (docs/testing-sil.md)
+                  (default fidelity-refs/); --regen writes them from the current renderer; --baseline
+                  rewrites the committed process-retune gate (tests/fidelity/process-baseline.json)
+                  (docs/testing-sil.md)
   fuzz [TARGET…|all] [--secs N] [--rng N] [--parallel] [--list]
                   time-boxed pure-Rust fuzzing (default 60 s per target, all targets): raw, tiff, codecs,
                   meta, develop, lightroom, peer; --parallel builds all, then runs them at once;
@@ -3908,6 +3910,9 @@ fn cmd_fidelity(args: &[&str]) -> Result<(), String> {
         match args[i] {
             "--regen" => {
                 c.env(env_name("FIDELITY_REGEN"), "1");
+            }
+            "--baseline" => {
+                c.env(env_name("FIDELITY_BASELINE"), "1");
             }
             "--refs" => {
                 let v = args.get(i + 1).ok_or("--refs needs a folder")?;

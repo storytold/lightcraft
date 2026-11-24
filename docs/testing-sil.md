@@ -89,9 +89,17 @@ goldens in the repository (`crates/pipeline/tests/it/fidelity.rs`, measures in `
 cargo xtask fidelity --regen        # write the references from the current renderer
 cargo xtask fidelity                # compare against them (also part of `cargo xtask sil`)
 cargo xtask fidelity --refs DIR     # another reference folder
+cargo xtask fidelity --baseline     # rewrite the committed process baseline (after adding a process)
 ```
 
-Without references the test records an `Input` skip and passes. **Process-version retunes are gated on it**
+**Process baseline (CI gate).** `frozen_processes_keep_their_committed_baseline` needs no references and runs with
+every `cargo test -p lcc-pipeline`: for each process other than the latest and each tool, the mean L\*a\*b\* of the
+renders of the procedural scenes and the tool's mean ΔE2000 from the unedited render must stay within the committed
+`crates/pipeline/tests/fidelity/process-baseline.json` (± its `tolerance`, in ΔE / L\*a\*b\* units). Every process
+and tool needs an entry, so a new process lands with `--baseline`.
+
+Without references the test records an `Input` skip and passes. **Process-version retunes are gated on it** (and,
+without references, on the process baseline below)
 ([process-versions](process-versions.md)): before changing how a process renders, regenerate the references on
 `main`, make the change, and run the suite. Every process except the new one must stay within tolerance; the new
 process's numbers show how far the retune moved each tool. References made by another editor from the same inputs

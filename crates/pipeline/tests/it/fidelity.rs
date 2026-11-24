@@ -196,3 +196,94 @@ fn the_colorchecker_chart_survives_the_unedited_pipeline() {
 fn rendered_at(src: &Rgb32f, s: &DevelopSettings) -> Rgba8 {
     render(src, &SourceInfo::default(), s, &RenderRequest::fit(src.width, src.height)).image
 }
+
+/// Mean CIE L*a*b* (D50) of a render.
+fn mean_lab(img: &Rgba8) -> [f64; 3] {
+    let mut acc = [0.0f64; 3];
+    for px in &img.data {
+        for (a, v) in acc.iter_mut().zip(lcc_color::lab::srgb8_to_lab([px[0], px[1], px[2]])) {
+            *a += v;
+        }
+    }
+    acc.map(|v| v / img.data.len().max(1) as f64)
+}
+
+/// One (tool, process) aggregate of the committed process baseline: averaged over the procedural
+/// scenes, the render's mean L*a*b* and its mean ΔE2000 from the same process's unedited render.
+fn process_aggregate(tool: fn(&mut DevelopSettings), p: Process, scenes: &[Rgb32f], plains: &[Rgba8]) -> [f64; 4] {
+    let mut acc = [0.0f64; 4];
+    for (src, plain) in scenes.iter().zip(plains) {
+        let img = rendered(src, &settings(tool, p));
+        let lab = mean_lab(&img);
+        let de = compare(&img, plain).map(|c| c.mean_de2000).unwrap_or(f64::NAN);
+        for (a, v) in acc.iter_mut().zip([lab[0], lab[1], lab[2], de]) {
+            *a += v;
+        }
+    }
+    acc.map(|v| v / scenes.len().max(1) as f64)
+}
+
+/// The process-retune gate (runs in CI, needs no local references): every process other than
+/// [`Process::LATEST`] must render each tool on the procedural scenes as its committed aggregates in
+/// `tests/fidelity/process-baseline.json` say (mean L\*, a\*, b\* and the tool's ΔE2000 from the
+/// unedited render), and every process and tool must have an entry. A retune of a frozen process, or
+/// a new process without a baseline, fails here; `cargo xtask fidelity --baseline`
+/// (`<PREFIX>_FIDELITY_BASELINE=1`) rewrites the file, which makes the change visible in review.
+#[test]
+fn frozen_processes_keep_their_committed_baseline() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fidelity").join("process-baseline.json");
+    let scenes: Vec<Rgb32f> = lcc_scenes::demo_library().iter().take(4).map(|s| s.render_fit_serial(EDGE * 2)).collect();
+    if lcc_brand::env_is_set("FIDELITY_BASELINE") {
+        let mut processes = serde_json::Map::new();
+        for p in Process::ALL {
+            let plains: Vec<Rgba8> = scenes.iter().map(|src| rendered(src, &settings(|_| {}, p))).collect();
+            let mut tools = serde_json::Map::new();
+            for (tool, apply) in TOOLS {
+                let [l, a, b, de] = process_aggregate(*apply, p, &scenes, &plains).map(|v| (v * 1000.0).round() / 1000.0);
+                tools.insert((*tool).into(), serde_json::json!([l, a, b, de]));
+            }
+            processes.insert(format!("V{}", p.version().0), serde_json::Value::Object(tools));
+        }
+        let doc = serde_json::json!({
+            "about": "Process-retune gate (crates/pipeline/tests/it/fidelity.rs, docs/testing-sil.md): per process and tool, [mean L*, a*, b*, mean ΔE2000 from the unedited render] averaged over the procedural scenes. Aggregate numbers only. Rewrite with cargo xtask fidelity --baseline.",
+            "tolerance": 0.35,
+            "processes": processes,
+        });
+        let text = serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n";
+        std::fs::write(&path, text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        eprintln!("fidelity: wrote the process baseline to {}", path.display());
+        return;
+    }
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (cargo xtask fidelity --baseline)", path.display()));
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let tol = doc.get("tolerance").and_then(serde_json::Value::as_f64).unwrap_or(f64::NAN);
+    assert!(tol.is_finite() && tol > 0.0, "process-baseline.json: no tolerance");
+    let mut failures = Vec::new();
+    for p in Process::ALL {
+        let key = format!("V{}", p.version().0);
+        let plains: Vec<Rgba8> =
+            if p == Process::LATEST { Vec::new() } else { scenes.iter().map(|src| rendered(src, &settings(|_| {}, p))).collect() };
+        for (tool, apply) in TOOLS {
+            let Some(want) = doc.get("processes").and_then(|ps| ps.get(&key)).and_then(|t| t.get(*tool)).and_then(serde_json::Value::as_array) else {
+                failures.push(format!("{key} {tool}: no baseline (cargo xtask fidelity --baseline)"));
+                continue;
+            };
+            if p == Process::LATEST {
+                continue;
+            }
+            let got = process_aggregate(*apply, p, &scenes, &plains);
+            let want: Vec<f64> = want.iter().filter_map(serde_json::Value::as_f64).collect();
+            let moved = want.len() != 4
+                || got.iter().zip(&want).any(|(g, w)| (g - w).abs().partial_cmp(&tol) != Some(std::cmp::Ordering::Less) && (g - w).abs() != tol);
+            if moved {
+                failures.push(format!("{key} {tool}: [L a b ΔE] {got:.3?}, baseline {want:.3?} (± {tol})"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "a frozen process renders differently (a retune belongs in a new process, docs/process-versions.md; \
+         a deliberate in-place fix rewrites the baseline with cargo xtask fidelity --baseline):\n{}",
+        failures.join("\n")
+    );
+}
