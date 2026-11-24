@@ -2,12 +2,12 @@
 
 ## Unreleased
 
-### The colour mixer behaves as in Lightroom (process V9)
-- Each band of the colour mixer now covers the colours Lightroom's does (a red-orange such as skin answers to
-  Orange, Blue reaches further towards aqua and purple), and Hue, Saturation and Luminance follow Lightroom's
-  measured response, including how strongly they act at large amounts. The mixer works before the tone curves, as in
-  Lightroom. This is part of rendering process 9: photos you already edited keep their look until you choose
-  Photo ▸ Update to Current Process. See [The colour mixer](mixer-stage.md).
+### Colour mixer bands in new places, stronger at large amounts (process 9)
+- Each band of the colour mixer now covers different colours (a red-orange such as skin answers to Orange, Blue
+  reaches further towards aqua and purple), and Hue, Saturation and Luminance act more strongly at large amounts
+  than at small ones. The mixer now works before the tone curves. This is part of rendering process 9: photos you
+  already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [The colour mixer](mixer-stage.md).
 
 ### Broader Whites and parametric curve, hue-preserving tone curves (process 9)
 - Whites now reaches into the upper midtones, and the Highlights, Lights, Darks and Shadows regions of the

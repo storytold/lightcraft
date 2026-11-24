@@ -48,6 +48,8 @@ pub mod lut;
 pub mod mask_space;
 pub mod masks;
 pub mod mixer_stage;
+#[rustfmt::skip]
+mod mixer_stage_model;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;

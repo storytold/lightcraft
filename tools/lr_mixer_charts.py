@@ -6,20 +6,15 @@
         as XMP: one neutral chart and every mixer band's Hue, Saturation and Luminance at -100, -75, -50, -25, 25,
         50, 75 and 100.
     (render every DNG through Camera Raw to a 16-bit Adobe RGB (1998) TIFF with the same file name)
-    python3 tools/lr_mixer_charts.py table RENDER_DIR OUT_BIN
-        Reads the renders and writes the response table of `lightcraft_pipeline::mixer_stage` (format below).
+    python3 tools/lr_mixer_charts.py fit RENDER_DIR OUT_RS
+        Reads the renders, fits LightCraft's model of each mixer slider to them and writes the model's constants
+        (`lightcraft_pipeline::mixer_stage_model`). The measurements themselves are not written out.
 
 The charts are original test data generated here; nothing in them comes from Adobe. Only Camera Raw's output is
-measured. Requires numpy and tifffile (tools/requirements-lr-tone-charts.txt).
-
-Table format, little-endian: b"LCCS", u32 version 1, u32 sliders, amounts, rows per amount (9), outputs (3), hue
-bins (72); f32 amounts; f32 chroma levels (3 per lightness level, 9); f32 lightness levels (3). Then for each slider, amount, lightness
-level, chroma level and output: f32 scale and 72 i8 (value = scale x i8). Outputs per OkLab hue bin (5 degrees):
-hue shift in degrees, relative chroma change, lightness change.
+measured. Requires numpy, scipy and tifffile (tools/requirements-lr-tone-charts.txt).
 """
 import json
 import os
-import struct
 import sys
 
 import numpy as np
@@ -129,37 +124,126 @@ def response(lab0, lab, light, chroma):
     return out
 
 
-def table(render_dir, out_bin):
-    """Measure the Camera Raw renders in `render_dir` and write the binary table to `out_bin`."""
+# ---- fit ----------------------------------------------------------------------------------------------------
+#
+# LightCraft's own model of the colour mixer, fitted to the measured chart responses. Nothing measured is written
+# out: only the model's 168 constants. For slider `kind` (Hue, Saturation, Luminance) of band `b` and output `o` (hue
+# shift in degrees, relative chroma change, lightness change), with t = amount / 100, dc = (C - 0.09) / 0.05 and
+# dl = (L - 0.75) / 0.15 for an OkLCh colour:
+#
+#     response = amp[b][kind][o] * gain[kind][o](t) * band[b](h) * exp(ac dc + al dl)
+#     gain(t)  = g1 |t| + g2 t^2 + g3 |t|^3      (g4..g6 for positive amounts)
+#     band(h)  = exp(-z^2 / 2),  z = wrap(h - centre) / e^(left or right)
+#
+# Each band's centre and widths are shared by its three sliders; each kind's gain curve and level dependence are
+# shared by all bands.
+
+FIT_C, FIT_L = (0.09, 0.05), (0.75, 0.15)
+CENTRES = (10, 50, 95, 140, 180, 255, 320, 350)
+
+
+def unpack(p):
+    """(bands 8 x [centre, left, right], kinds 3 x 3 x [g1..g6, ac, al], amps 8 x 3 x 3)."""
+    return p[:24].reshape(8, 3), p[24:96].reshape(3, 3, 8), p[96:168].reshape(8, 3, 3)
+
+
+def model(p, t, dc, dl):
+    """The responses (slider, output, amount, level, hue) at amounts `t` and level coordinates `dc`, `dl`."""
+    bands, kinds, amps = unpack(p)
+    hue = np.arange(HUES) * (360 / HUES)
+    at, neg = np.abs(t), t < 0
+    out = np.zeros((24, 3, len(t), len(dc), HUES))
+    for b in range(8):
+        centre, left, right = bands[b]
+        d = (hue - centre + 180) % 360 - 180
+        shape = np.exp(-0.5 * (d / np.exp(np.where(d < 0, left, right))) ** 2)
+        for k in range(3):
+            for o in range(3):
+                g = kinds[k, o]
+                gain = np.where(neg, g[0] * at + g[1] * at ** 2 + g[2] * at ** 3, g[3] * at + g[4] * at ** 2 + g[5] * at ** 3)
+                level = np.exp(g[6] * dc + g[7] * dl)
+                out[b * 3 + k, o] = amps[b, k, o] * gain[:, None, None] * level[None, :, None] * shape[None, None, :]
+    return out
+
+
+def fit_model(measured, chroma, dc, dl):
+    """Fit the model to the measured responses (slider, amount, level, output, hue); returns the constants."""
+    from scipy.optimize import least_squares
+    t = np.array(AMOUNTS) / 100
+
+    def oklab(v, o):
+        """A response in OkLab x 100 at each level's chroma: hue shift and chroma change scale with chroma."""
+        return (np.radians(v) * chroma[None, :, None] if o == 0 else v * chroma[None, :, None] if o == 1 else v) * 100
+
+    target = np.stack([np.stack([oklab(measured[s, :, :, o], o) for o in range(3)]) for s in range(24)])
+
+    def residual(p):
+        m = model(p, t, dc, dl)
+        return (np.stack([np.stack([oklab(m[s, o], o) for o in range(3)]) for s in range(24)]) - target).ravel()
+
+    kinds = np.zeros((3, 3, 8))
+    # starting signs and sizes: each kind's main output, then its smaller side effects
+    for (k, o), (neg, pos) in {(0, 0): (-40, 40), (0, 1): (0.1, 0.1), (0, 2): (0.01, 0.01), (1, 0): (1, -1), (1, 1): (-0.6, 0.6),
+                               (1, 2): (0.01, -0.01), (2, 0): (1, -1), (2, 1): (0.1, -0.1), (2, 2): (-0.1, 0.1)}.items():
+        kinds[k, o, 0], kinds[k, o, 3] = neg, pos
+    p0 = np.r_[np.ravel([[c, 3.0, 3.0] for c in CENTRES]), kinds.ravel(), np.ones(72)]
+    return least_squares(residual, p0, max_nfev=3000).x, residual
+
+
+def fit(render_dir, out_rs):
+    """Fit the model to the Camera Raw renders in `render_dir` and write its constants to `out_rs`."""
     patches = [p for p in json.load(open(os.path.join(render_dir, "manifest.json")))["patches"] if p["ok"]]
     tif = lambda n: os.path.join(render_dir, f"mixer__{n}.tif")
     lab0 = oklab_patches(tif("neutral"), patches)
     light = np.array([p["L"] for p in patches])
     chroma = np.array([p["C"] for p in patches])
     c0 = np.hypot(lab0[:, 1], lab0[:, 2])
-    # Camera Raw's neutral render desaturates bright colours, so each lightness level has its own chroma keys
-    chroma_levels = []
+    # each level's chroma and lightness on Camera Raw's neutral render (it desaturates bright colours), as the fit's
+    # coordinates of the measured rows
+    level_c, level_l = [], []
     for v in LIGHTNESS:
         for c in CHROMA:
             m = (light == v) & (chroma == c)
-            chroma_levels.append(float(c0[m].mean() if m.sum() else c0[chroma == c].mean()))
-    light_levels = [float(lab0[light == v, 0].mean()) for v in LIGHTNESS]
-    names = sliders()
-    out = bytearray(b"LCCS" + struct.pack("<6I", 1, len(names), len(AMOUNTS), 9, 3, HUES))
-    out += struct.pack(f"<{len(AMOUNTS)}f", *AMOUNTS) + struct.pack("<9f", *chroma_levels) + struct.pack("<3f", *light_levels)
-    for stem, _ in names:
-        for a in AMOUNTS:
-            t = response(lab0, oklab_patches(tif(f"{stem}{a:+d}"), patches), light, chroma)
-            for row in t.reshape(-1, HUES):
-                scale = float(np.abs(row).max()) / 127.0
-                q = np.zeros(HUES) if scale == 0 else np.round(row / scale)
-                out += struct.pack("<f", scale) + q.astype(np.int8).tobytes()
-    with open(out_bin, "wb") as f:
-        f.write(out)
+            level_c.append(float(c0[m].mean() if m.sum() else c0[chroma == c].mean()))
+            level_l.append(float(lab0[light == v, 0].mean()))
+    level_c, level_l = np.array(level_c), np.array(level_l)
+    dc, dl = (level_c - FIT_C[0]) / FIT_C[1], (level_l - FIT_L[0]) / FIT_L[1]
+    stems = [n for n, _ in sliders()][:24]
+    measured = np.stack([np.stack([response(lab0, oklab_patches(tif(f"{stem}{a:+d}"), patches), light, chroma) for a in AMOUNTS])
+                         for stem in stems])
+    params, residual = fit_model(measured, level_c, dc, dl)
+    e = residual(params).reshape(24, 3, -1)
+    for i, stem in enumerate(stems):
+        print(f"{stem:22s} rms " + " ".join(f"{np.sqrt((e[i, o] ** 2).mean()):.3f}" for o in range(3)) + " (hue, chroma, lightness; OkLab x 100)")
+    bands, kinds, amps = unpack(params)
+    num = lambda v: f"{v:.6e}"
+    row = lambda vs: "[" + ", ".join(num(v) for v in vs) + "]"
+    s = ["// Written by `tools/lr_mixer_charts.py fit`: LightCraft's model of the colour mixer, fitted to the tool's OkLCh",
+         "// charts (provenance in docs/mixer-stage.md). Constants of the model only.",
+         "",
+         "/// The model's reference chroma and lightness: `dc = (C - centre) / scale`, `dl` likewise.",
+         f"pub const REF_CHROMA: (f64, f64) = ({FIT_C[0]}, {FIT_C[1]});",
+         f"pub const REF_LIGHT: (f64, f64) = ({FIT_L[0]}, {FIT_L[1]});",
+         "",
+         "/// Per band (Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta): centre (OkLab hue, degrees), and the log",
+         "/// width below and above it.",
+         "pub const BANDS: [[f64; 3]; 8] = [" + ", ".join(row(b) for b in bands) + "];",
+         "/// Per kind of slider (Hue, Saturation, Luminance) and output (hue shift, chroma change, lightness change):",
+         "/// `[g1, g2, g3, g4, g5, g6, ac, al]`, the gain over the amount and the dependence on chroma and lightness.",
+         "pub const KINDS: [[[f64; 8]; 3]; 3] = [",
+         *[f"    [{', '.join(row(o) for o in k)}]," for k in kinds],
+         "];",
+         "/// Per band, kind and output: the amplitude.",
+         "pub const AMPS: [[[f64; 3]; 3]; 8] = [",
+         *[f"    [{', '.join(row(k) for k in a)}]," for a in amps],
+         "];",
+         ""]
+    with open(out_rs, "w") as f:
+        f.write("\n".join(s))
 
 
 def main():
-    """Command line: `charts OUT_DIR` or `table RENDER_DIR OUT_BIN`."""
+    """Command line: `charts OUT_DIR` or `fit RENDER_DIR OUT_RS`."""
     if len(sys.argv) == 3 and sys.argv[1] == "charts":
         out = sys.argv[2]
         os.makedirs(out, exist_ok=True)
@@ -167,8 +251,8 @@ def main():
         json.dump(dict(patches=patches), open(os.path.join(out, "manifest.json"), "w"))
         for name, settings in variants().items():
             write_dng(os.path.join(out, f"mixer__{name}.dng"), img, xmp(**settings))
-    elif len(sys.argv) == 4 and sys.argv[1] == "table":
-        table(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == "fit":
+        fit(sys.argv[2], sys.argv[3])
     else:
         sys.exit(__doc__)
 
