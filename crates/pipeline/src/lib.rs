@@ -25,6 +25,7 @@
 
 pub mod auto;
 pub mod blemish;
+mod bridge;
 pub mod colorops;
 pub mod crystal;
 pub mod cull;
@@ -43,8 +44,6 @@ pub mod lut;
 pub mod mask_space;
 pub mod masks;
 pub mod nrc_joint;
-#[cfg(test)]
-mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod profiles;
@@ -60,7 +59,7 @@ pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
-use lightcraft_develop::{DevelopSettings, Treatment};
+use lightcraft_develop::DevelopSettings;
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -198,6 +197,27 @@ pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
     let pixels = max_w.checked_mul(max_h);
     if max_w > MAX_OUTPUT_SIDE || max_h > MAX_OUTPUT_SIDE || pixels.is_none_or(|n| n > MAX_OUTPUT_PIXELS) {
         return Err(format!("output size {max_w}×{max_h} is too large (at most {MAX_OUTPUT_SIDE} px per side and {MAX_OUTPUT_PIXELS} pixels)"));
+    }
+    Ok(())
+}
+
+/// Fails when a visible brush mask holds more dabs than its budget ([`masks::MAX_STROKE_DABS`]) at this render's
+/// output size: the render would otherwise skip its later strokes and show a wrong mask.
+pub fn check_brush_budget(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Result<(), String> {
+    let brush =
+        |m: &lightcraft_develop::Mask| m.visible && m.components.iter().any(|c| matches!(c.shape, lightcraft_develop::MaskShape::Brush { .. }));
+    if !s.masks.iter().any(brush) {
+        return Ok(());
+    }
+    let p = plan(src, info, s, req);
+    for m in s.masks.iter().filter(|m| brush(m)) {
+        for c in &m.components {
+            if let lightcraft_develop::MaskShape::Brush { strokes } = &c.shape
+                && masks::brush_over_budget(strokes, &p.frame.for_mask(m.on_photo), p.w, p.h)
+            {
+                return Err(format!("mask \"{}\": the brush strokes hold more than {} dabs at this size", m.name, masks::MAX_STROKE_DABS));
+            }
+        }
     }
     Ok(())
 }
@@ -520,7 +540,11 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let pre_nr_key = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+        // the process picks checked vs legacy Bradford WB (Update to Current Process, undo)
+        local::checked_wb(s),
         format!("{:?}", s.spots),
+        // the process picks how spots heal (Update to Current Process, undo)
+        (!s.spots.is_empty()).then(|| spots::HealMethod::of(s)),
         format!("{eyes:?}"),
         // defringe runs in this stage
         format!("{:?}", s.optics),
@@ -626,7 +650,7 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply(img, &s.spots, &p.frame, p.px_per_long);
+    spots::apply(img, &s.spots, &p.frame, p.px_per_long, spots::HealMethod::of(s));
     redeye::apply(img, &p.eyes);
 }
 
@@ -669,7 +693,15 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
     };
     let deep = render(src, info, s, &hreq).deep?;
     let DeepSamples::F32(v) = &deep.samples else { return None };
-    Some(Histogram::of_hdr(v.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32))
+    let shared = craft_develop::raster::Histogram::of_hdr(v.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32);
+    Some(Histogram {
+        r: shared.r,
+        g: shared.g,
+        b: shared.b,
+        luma: shared.luma,
+        total: shared.total,
+        hdr: shared.hdr.map(|bins| lightcraft_raster::HdrBins { from: bins.from, stops: bins.stops }),
+    })
 }
 
 /// Render `src` with settings `s`.
@@ -867,7 +899,7 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
 
 /// Whether the photo renders in black & white (treatment, or one of the B&W profiles): it has no Point Color.
 pub fn is_bw(s: &DevelopSettings) -> bool {
-    s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
+    s.treatment == lightcraft_develop::Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
 }
 
 /// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.

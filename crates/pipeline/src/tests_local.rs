@@ -1,4 +1,4 @@
-//! Pixel tests of the local (mask) Noise, Moiré and Defringe sliders.
+//! Pixel tests of the local (mask) adjustment sliders.
 
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
 use lightcraft_geom::Point;
@@ -43,6 +43,27 @@ fn luma(p: [u8; 4]) -> f32 {
 
 fn chroma(p: [u8; 4]) -> f32 {
     p[0] as f32 - p[2] as f32
+}
+
+#[test]
+fn local_clarity_changes_only_the_visible_mask() {
+    // Two identical midtone edges, well inside and well outside the mask.
+    let src = Rgb32f::from_fn(W, H, |x, _| [if x % (W / 2) < W / 4 { 0.10 } else { 0.28 }; 3]);
+    let mut s = left_mask(LocalAdjustments::default());
+    let neutral = shot(&src, &s);
+    let clarity_plane = |s: &DevelopSettings| crate::local::plane_sigmas(s, W as f64, W as f64, crate::Quality::Full).clarity;
+    assert!(clarity_plane(&s).is_none());
+
+    s.masks[0].adjust.clarity = 100.0;
+    assert!(clarity_plane(&s).is_some());
+    let visible = shot(&src, &s);
+    let peak = |center| (center - 4..=center + 4).map(|x| visible.get(x, H / 2)[1].abs_diff(neutral.get(x, H / 2)[1])).max().unwrap_or(0);
+    assert!(peak(W / 4) >= 3, "visible Clarity must move the inside edge by at least 3/255");
+    assert!(peak(3 * W / 4) <= 1, "the far outside edge must stay within 1/255");
+
+    s.masks[0].visible = false;
+    assert!(clarity_plane(&s).is_none());
+    assert!(shot(&src, &s).data == neutral.data, "hidden Clarity must not affect the render");
 }
 
 #[test]

@@ -455,9 +455,16 @@ fn indexed_field<'a>(s: &'a mut DevelopSettings, id: &str) -> Option<&'a mut f64
 }
 
 fn indexed_get(s: &DevelopSettings, id: &str) -> Option<f64> {
-    // (a clone keeps one accessor for get and set; these lists are tiny)
-    let mut c = DevelopSettings { point_colors: s.point_colors.clone(), red_eye: s.red_eye.clone(), ..DevelopSettings::default() };
-    indexed_field(&mut c, id).map(|v| *v)
+    // one accessor for get and set: a copy of the one element read (never of the lists, which a
+    // read of every indexed control would copy once per control)
+    let (fam, i, field) = split_indexed(id)?;
+    let mut c = DevelopSettings::default();
+    match fam {
+        "pointColor" => c.point_colors.push(*s.point_colors.get(i)?),
+        "redEye" => c.red_eye.push(*s.red_eye.get(i)?),
+        _ => return None,
+    }
+    indexed_field(&mut c, &format!("{fam}.0.{field}")).map(|v| *v)
 }
 
 fn indexed_set(s: &mut DevelopSettings, id: &str, v: f64) -> bool {

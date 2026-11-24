@@ -1,3 +1,17 @@
+fn settle_timeout_for_instrumentation(instrumented: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if instrumented { 600 } else { 120 })
+}
+
+fn ui_settle_timeout() -> std::time::Duration {
+    settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn settle_budget_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(settle_timeout_for_instrumentation(false), std::time::Duration::from_secs(120));
+    assert_eq!(settle_timeout_for_instrumentation(true), std::time::Duration::from_secs(600));
+}
+
 mod activity;
 mod album_picker;
 mod album_remove;
@@ -66,6 +80,7 @@ mod masking_layout;
 mod menubar;
 mod merge_preview;
 mod missing_sweep;
+mod mode_dropdowns;
 mod move_folder;
 mod offline;
 mod open_lightroom;

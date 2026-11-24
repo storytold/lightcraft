@@ -15,4 +15,4 @@ serde = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
-image = { workspace = true }
+craft-image-codecs = { workspace = true }

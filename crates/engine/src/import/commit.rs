@@ -338,12 +338,14 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
 }
 
 /// Move, after the commit: save the library, then remove each source whose destination is
-/// still intact. Nothing is removed when the library can't be saved.
+/// still intact. Nothing is removed when the library can't be saved: saved is on disk, not just
+/// handed to the catalog log's thread, which looks at the folder only when it writes (issue #3240),
+/// so the log is flushed first.
 fn finish_moves(s: &mut Session, placed: Vec<crate::import_move::Placed>, log0: usize, report: &mut ImportReport) {
     // (saving here clears the pending ops, so the sidecars `execute` would auto-write are written here)
     let auto: Vec<Op> = if s.xmp.auto_write { s.pending_log.get(log0..).map(<[Op]>::to_vec).unwrap_or_default() } else { Vec::new() };
     let before = s.pending_log.len();
-    if let Err(e) = s.persist() {
+    if let Err(e) = s.persist().and_then(|()| s.flush_log()) {
         for p in placed {
             let reason = format!("the library could not be saved ({e}): the original stays; the photo uses the copy at {}", p.dst.display());
             report.kept.push(Kept { path: p.src.to_string_lossy().to_string(), reason });
