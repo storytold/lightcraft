@@ -53,7 +53,7 @@ fn a_medium_grey_loupe_and_dark_grey_filmstrip_are_painted_and_saved() {
     assert!(fills(&h).iter().any(|(r, f)| *f == dark && r.contains_rect(cell)), "the strip behind the cells is dark grey");
     assert!(fills(&h).iter().any(|(r, f)| *f == dark && *r == cell), "an unselected cell takes the strip's shade");
 
-    // View ▸ Appearance shows the choices, the current one checked
+    // Window ▸ Appearance shows the choices, the current one checked
     let menu = serde_json::to_value(crate::menubar::expanded(&h.app, "Appearance").unwrap()).unwrap().to_string();
     assert!(menu.contains("Loupe Background") && menu.contains("Filmstrip Background"), "{menu}");
     assert!(menu.contains(r#""id":"view.loupeBackground","params":{"shade":"mediumGray"},"label":"Medium Gray","enabled":true,"checked":true"#), "{menu}");

@@ -1243,7 +1243,7 @@ mod tests {
 }
 
 /// The shade behind the photo in the loupe (and Compare/Survey/Reference) or behind the filmstrip
-/// (Settings ▸ Interface, View ▸ Appearance ▸ Background, the loupe's right-click Background menu,
+/// (Settings ▸ Interface, Window ▸ Appearance, the loupe's right-click Background menu,
 /// `view.loupeBackground` / `view.filmstripBackground`). `Theme` keeps the theme's own canvas; the
 /// greys are fixed sRGB levels so a photo can be judged against a neutral surround (issue #1295:
 /// a 50 % grey round the photo in dark mode).

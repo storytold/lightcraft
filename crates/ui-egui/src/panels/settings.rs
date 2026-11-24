@@ -2397,7 +2397,7 @@ fn appearance(
         let options = crate::theme::SliderText::ALL.map(|size| (size, size.label()));
         choices(ui, "settingsSliderText", &options, &mut s.slider_text);
     });
-    // issue #1295: a neutral surround for judging colour (also View ▸ Appearance, the loupe's right-click)
+    // issue #1295: a neutral surround for judging colour (also Window ▸ Appearance, the loupe's right-click)
     row(ui, t, crate::i18n::tr("Loupe background"), |ui| {
         let options = crate::theme::CanvasShade::ALL.map(|shade| (shade, shade.label()));
         choices(ui, "settingsLoupeBackground", &options, &mut s.loupe_background);
