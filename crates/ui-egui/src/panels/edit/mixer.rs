@@ -143,17 +143,50 @@ fn point_color_srgb(color: Color32) -> craft::theme::Srgba {
     craft::theme::Srgba::rgb(color.r() as f32 / 255.0, color.g() as f32 / 255.0, color.b() as f32 / 255.0)
 }
 
-/// Samples select an index only; deliberately no picker/member or ColorRequest key.
-fn point_color_swatch(ui: &mut egui::Ui, index: usize, color: Color32, selected: bool) -> bool {
+/// The samples, one choice out of the set: a radio group of swatches (one Tab stop, the arrows move, Space or Enter or
+/// a click picks), each a member standing for its index. Picking selects a sample only: no colour picker or
+/// ColorRequest key. Returns the sample picked this pass.
+fn point_color_swatches(ui: &mut egui::Ui, colors: &[Color32], selected: usize) -> Option<usize> {
+    use craft::behavior::NavShape;
+    use craft::ui::choice::RadioGroup;
+    use craft::ui::contract::ShowContainer as _;
     let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
-    let id = format!("pointColor:{index}");
-    let label = format!("{} {}", crate::i18n::tr("Point Color"), index + 1);
-    let shown = Swatch::new(label, point_color_srgb(color)).id_salt(id.as_str()).selected(selected).show(ui);
+    let body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            for (index, color) in colors.iter().enumerate() {
+                let id = format!("pointColor:{index}");
+                let label = format!("{} {}", crate::i18n::tr("Point Color"), index + 1);
+                let shown = Swatch::new(label, point_color_srgb(*color)).member(index as u8).id_salt(id.as_str()).show(ui);
+                if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
+                    crate::widgets::register_response(id, shown.response.rect, &shown.response);
+                }
+            }
+        });
+    };
+    let group = || {
+        RadioGroup::new(crate::i18n::tr("Point Color").to_owned(), Bind::given(selected.min(usize::from(u8::MAX)) as u8))
+            .id_salt("pointColorSamples")
+            .nav(NavShape::Flat)
+            .enabled(ui.is_enabled())
+    };
+    // Measured in an invisible sizing child, then shown at the room it takes in a real run only: the swatches join
+    // their group's arena in a real run alone, never in egui's sizing pass or an SDK measure.
+    let width = ui.available_width().max(1.0);
+    let child = ui.new_child(
+        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, vec2(width, f32::INFINITY))).sizing_pass().invisible(),
+    );
+    let ctx = ui.ctx().clone();
+    let size = craft::ui::runtime::measure::run(&ctx, || group().measure_in(&child, craft::behavior::Proposal::Ideal, body));
+    let (rect, _) = ui.allocate_exact_size(vec2(size.x.min(width), size.y.max(24.0)), Sense::hover());
     if measuring {
-        return false;
+        return None;
     }
-    crate::widgets::register_response(id, shown.response.rect, &shown.response);
-    shown.clicked
+    let shown = group().show_at(ui, rect, body);
+    if !ui.is_enabled() {
+        return None;
+    }
+    shown.output.events.committed().copied().map(usize::from)
 }
 
 /// Bind a local copy so speculative SDK/egui sizing never changes application UI state.
@@ -202,8 +235,9 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
             {
                 app.ui.tool = if active { String::new() } else { "pointColor".into() };
             }
-            for (i, p) in d.point_colors.iter().enumerate() {
-                if point_color_swatch(ui, i, oklch_color(p.lum, p.chroma, p.hue), i == sel) {
+            if !d.point_colors.is_empty() {
+                let colors: Vec<Color32> = d.point_colors.iter().map(|p| oklch_color(p.lum, p.chroma, p.hue)).collect();
+                if let Some(i) = point_color_swatches(ui, &colors, sel) {
                     app.ui.point_color = i;
                 }
             }
