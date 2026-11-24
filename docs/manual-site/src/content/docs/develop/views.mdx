@@ -6,7 +6,6 @@ sidebar:
 ---
 
 import Shot from '../../../components/Shot.astro';
-import NeedsImage from '../../../components/NeedsImage.astro';
 import { Aside } from '@astrojs/starlight/components';
 
 <Shot name="before-after" alt="Split before and after view of the sky edit" />
@@ -25,10 +24,12 @@ import { Aside } from '@astrojs/starlight/components';
 
 - **Histogram** modes: RGB, Luminance, Separated, Chroma; scopes **Vectorscope**, **Waveform**, **RGB Parade**; linear or log scale. Colour readout in RGB, HSL or Lab.
 - **Drag on the histogram** to change Blacks, Shadows, Exposure, Highlights, Whites.
-- **Soft Proofing** (`S`): preview the output colour space or a CMYK/ICC profile with intent and paper-and-ink simulation. <NeedsImage what="the loupe with soft proofing on and its destination-gamut warning" />
+- **Soft Proofing** (`S`): preview the output colour space or a CMYK/ICC profile with intent and paper-and-ink simulation.
 - **Second window** (**Window ▸ Second Window**) shows the photo on another display.
 - **High quality adjustment previews**: **Settings ▸ Performance**. Keeps the preview at full quality while a slider is dragged. Off by default.
 - **GPU**: **Settings ▸ Performance** turns the GPU on or off and sets preview size; a crash building the GPU device turns it off.
+
+<Shot name="soft-proof" alt="Soft Proofing on in Develop: Proof Preview · sRGB over the photo, the destination-gamut warning showing out-of-gamut colour in red, and the profile picker" />
 
 <Aside type="note" title="Modern layout">
   Before/After, zoom and scopes: **View** menu. The histogram is the small card at the top right.

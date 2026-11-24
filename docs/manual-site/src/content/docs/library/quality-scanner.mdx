@@ -5,10 +5,10 @@ sidebar:
   order: 17
 ---
 
+import Shot from '../../../components/Shot.astro';
 import { Aside } from '@astrojs/starlight/components';
-import NeedsImage from '../../../components/NeedsImage.astro';
 
-<NeedsImage what="The Image Quality Scanner window: the scope buttons (the selected photos, the folder shown, the whole catalog), the Accepted and Rejected cutoffs, the four Basic Factors weights, Write the flags onto photos you have not flagged, Scan, and the same controls with the filter bar's quality picker behind them." />
+<Shot name="quality-scanner" menu="Library ▸ Image Quality Scanner…" alt="The Image Quality Scanner window: what to scan, the Accepted and Rejected cutoffs, writing the flags, the four Basic Factors weights, and Scan" />
 
 - **Library ▸ Image Quality Scanner…** measures photos for four technical factors and combines them into one 0–100 score, kept on the photo.
 - **Sorting, the filter bar, smart collections and rules** read that score without measuring anything again.

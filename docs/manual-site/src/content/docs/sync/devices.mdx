@@ -6,11 +6,14 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import Shot from '../../../components/Shot.astro';
 import NeedsImage from '../../../components/NeedsImage.astro';
 
 Paired devices on the same network sync directly. No account, no cloud.
 
-<NeedsImage what="Settings ▸ Sync: this device's name, a paired device online, the catalog syncing and the Collections table with its choices and pills" />
+<Shot name="settings-sync" alt="Settings ▸ Sync: this device's name and the search for devices on the network, before any device is paired" />
+
+<NeedsImage what="Settings ▸ Sync with a paired device online, the catalog syncing and the Collections table with its choices and pills" />
 
 ## Setup
 - Open **Settings ▸ Sync** on both devices; both must be on the same network. Devices appear under *Devices* while the tab is open.

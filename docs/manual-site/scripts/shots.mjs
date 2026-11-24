@@ -76,7 +76,7 @@ function isolatedEnv(dir) {
 }
 
 // PNG -> 1280 px wide JPEG: ImageMagick when installed, else ffmpeg.
-let converter;
+var converter; // var: toJpeg runs before this line is reached
 function toJpeg(png, jpg) {
   converter ??= ['magick', 'ffmpeg'].find((c) => { try { execFileSync(c, ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } });
   if (converter === 'magick') {
