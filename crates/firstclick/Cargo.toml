@@ -1,0 +1,20 @@
+[package]
+name = "lcc-firstclick"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clicks in a background window (L0, macOS): whether the click that brings the app's window forward is also acted on. One of the crates allowed `unsafe` (one Objective-C method replaced); reports unsupported elsewhere."
+
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the single
+# `mac` module below; every other crate root has `#![forbid(unsafe_code)]`. See CLAUDE.md.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["NSView"] }
+objc2-foundation = { workspace = true, features = ["NSEnumerator"] }
