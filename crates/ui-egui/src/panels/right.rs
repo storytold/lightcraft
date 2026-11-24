@@ -109,6 +109,7 @@ const HOLD: &str = "right-scroll-hold";
 /// in place (a scroll asked for during a pass only lands a frame later).
 fn held_offset(ctx: &egui::Context) -> Option<f32> {
     let (grew, asked) = ctx.data_mut(|d| d.remove_temp::<(f32, u64)>(egui::Id::unique(HOLD)))?;
+    eprintln!("DBGHELD grew={grew} asked={asked} now={}", ctx.cumulative_pass_nr());
     if asked.checked_add(1) != Some(ctx.cumulative_pass_nr()) {
         return None;
     }

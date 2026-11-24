@@ -329,6 +329,7 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     // (the height drawn on the pass before: one from an earlier visit to the panel says nothing)
     let before = ui.data(|d| d.get_temp::<(f32, u64)>(key)).filter(|&(_, drawn)| drawn.checked_add(1) == Some(pass)).map(|(h, _)| h);
     ui.data_mut(|d| d.insert_temp(key, (height, pass)));
+    eprintln!("DBGHOLD pass={pass} height={height} before={before:?} top={top} clip_top={}", ui.clip_rect().top());
     let Some(before) = before else { return };
     let grew = height - before;
     if !grew.is_finite() || grew.abs() < 0.5 || top >= ui.clip_rect().top() - 0.5 {
