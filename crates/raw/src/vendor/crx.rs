@@ -1209,7 +1209,7 @@ mod tests {
     fn flat_qp_map(width: usize, height: usize, qp: u32) -> Vec<u8> {
         let mut bits = Vec::new();
         for b in (0..32).rev() {
-            bits.push(((2 * qp >> b) & 1) as u8);
+            bits.push((((2 * qp) >> b) & 1) as u8);
         }
         let mut k = update_rice(0, 2 * qp);
         for _ in 1..width * height {

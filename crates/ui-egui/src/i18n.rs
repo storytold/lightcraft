@@ -141,12 +141,34 @@ language_table! {
 }
 
 impl Locale {
+    /// Whether this build offers `self`: every language, unless it was built for one
+    /// (`CRAFT_FONTS_LANGUAGE`, [`lcc_engine::fonts::BUILD_LANGUAGE`]); then only that one and English.
+    pub fn in_build(self) -> bool {
+        Self::offered_by(lcc_engine::fonts::BUILD_LANGUAGE, self)
+    }
+
+    /// [`Self::in_build`] for a build made for `build_language`.
+    fn offered_by(build_language: Option<&str>, language: Self) -> bool {
+        build_language.is_none_or(|code| language == Self::En || language.code() == code)
+    }
+
+    /// `self` when this build offers it, else English (a saved setting naming a language a
+    /// single-language build left out).
+    pub fn or_english(self) -> Self {
+        if self.in_build() { self } else { Self::En }
+    }
+
+    /// The languages this build offers, in [`Self::ALL`] order.
+    pub fn available() -> impl Iterator<Item = Self> {
+        Self::ALL.iter().copied().filter(|language| language.in_build())
+    }
+
     /// Every language in the order the Settings row and Edit ▸ Language list them: English first
     /// (the source language), then the rest by their own name with accents folded, so Čeština
     /// sits under C. Names in other scripts follow the Latin ones in code point order: Cyrillic,
     /// Georgian, then the CJK languages.
     pub fn for_picker() -> Vec<Self> {
-        let mut rest: Vec<Self> = Self::ALL.iter().copied().filter(|l| *l != Self::En).collect();
+        let mut rest: Vec<Self> = Self::available().filter(|l| *l != Self::En).collect();
         rest.sort_by_cached_key(|l| name_sort_key(l.name()));
         std::iter::once(Self::En).chain(rest).collect()
     }
@@ -184,7 +206,10 @@ impl Serialize for Locale {
 impl<'de> Deserialize<'de> for Locale {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let code = String::deserialize(deserializer)?;
-        Locale::parse(&code).or_else(|| Locale::parse_tag(&code)).ok_or_else(|| serde::de::Error::custom(format!("unknown language {code:?}")))
+        Locale::parse(&code)
+            .or_else(|| Locale::parse_tag(&code))
+            .map(Locale::or_english)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown language {code:?}")))
     }
 }
 
@@ -219,7 +244,7 @@ pub fn default_language() -> Locale {
 }
 
 pub fn set_language(language: Locale) {
-    LOCALE.with(|value| value.set(language));
+    LOCALE.with(|value| value.set(language.or_english()));
 }
 
 pub fn language() -> Locale {
@@ -633,6 +658,22 @@ pub fn rules_label(rules: &lcc_catalog::RuleSet, catalog: &lcc_catalog::Catalog)
 
 #[cfg(test)]
 mod tests {
+    /// A single-language build (`CRAFT_FONTS_LANGUAGE`, #1231) offers that language and English only.
+    #[test]
+    fn single_language_build_offers_its_language_and_english() {
+        for language in Locale::ALL {
+            assert!(Locale::offered_by(None, *language), "{language:?} in a full build");
+            let only_ja = Locale::offered_by(Some("ja"), *language);
+            assert_eq!(only_ja, matches!(language, Locale::En | Locale::Ja), "{language:?} in a ja build");
+            assert!(Locale::offered_by(Some("de"), Locale::En));
+        }
+        // this test binary is a full build unless CRAFT_FONTS_LANGUAGE was set
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_none() {
+            assert_eq!(Locale::available().count(), Locale::ALL.len());
+            assert_eq!(Locale::De.or_english(), Locale::De);
+        }
+        assert!(Locale::available().any(|l| l == Locale::En));
+    }
     use super::*;
 
     /// Each language through its menu command and the control channel's locale tags, saved by its

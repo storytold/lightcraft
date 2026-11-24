@@ -100,6 +100,7 @@ load_bytes(2560):          93.0 ms wall,  1855.4 ms cpu
 load_bytes(full):         425.3 ms wall, 10448.3 ms cpu
 ```
 
+<<<<<<< HEAD
 ## Start-up (`cargo xtask bench`, `startup_bench`; plan item 4.1, #979)
 
 `cargo run --release -p lcc-ui-egui --example startup_bench -- [DIR] [PHOTOS]` makes a synthetic library (default
@@ -117,6 +118,32 @@ own photos) goes 16 384 photos a tick, the view is signed in place and a build c
 photo. The lens database is read on a worker after a library opens (an activity-stack row) instead of by the first
 photo that needs it. Library ready 1.0–3.9 s before, 1.0–8.2 s after, same noise: the remaining long frame is the
 session open on the interface thread, not measured apart here.
+=======
+## CPU-only stages against the loupe budget (plan 4.6, 2026-11-24)
+
+Two stages have no WGSL kernel: soft proofs against an output-device profile (a 3D table; the GPU renderer declines
+the whole render, `lcc_gpu::handles`) and Even Out / Fill spots (the GPU renderer runs the scene-linear stage on the
+CPU for such a photo, `lin_needs_cpu`). Matrix soft proofs and Clone / Heal / sourced Remove spots already run on the
+GPU. Probe: `cargo test -p lcc-pipeline --release cpu_only_stage_cost -- --ignored --nocapture` (1920×1280, median of 7,
+synthetic source). The machine was heavily loaded by other agents (16 cores; a plain CPU loupe render took 74–681 ms
+across runs against 16 ms idle in the summary), so only the quietest run is quoted, and it is an upper bound:
+
+| Case (1920×1280) | Quietest run |
+|---|---|
+| CPU render, plain | 74 ms |
+| + device proof (33³ table) | +6 ms; with both gamut warnings +12 ms |
+| + 1 Even Out spot (size 0.05) | +12 ms in the render; spot stage alone 34 ms |
+| 1 Even Out spot, size 0.20 (box ≈ the whole frame) | spot stage 223 ms |
+| 10 Even Out spots, size 0.05 | spot stage 325 ms |
+| 1 Fill spot, size 0.05 / 0.20 | 84 / 334 ms on first solve (cached afterwards: `fills()`) |
+
+Conclusion: a device proof adds a few per cent to a CPU render, which fits the 60 ms loupe budget on an idle machine
+(CPU loupe drag 16 ms in the summary); a WGSL port of the table lookup isn't needed for the budget. Even Out with one
+small spot fits; large or many Even Out spots miss it (the three box blurs per spot over a box that grows with the
+radius), and Fill pays its PatchMatch solve once per stroke. A port of Even Out's blurs to the GPU blur kernels is the
+next step if the idle re-measure confirms the miss. Tried and dropped: taller `box_v` bands for wide radii (fewer
+primes, less parallelism): no difference distinguishable from the load noise.
+>>>>>>> origin/main
 
 ## Catalog (`cargo xtask bench-catalog`)
 
@@ -234,6 +261,13 @@ thread `prepare` 18.7 → 7 ms. At the budget edge: the rest is NR itself (~30 m
 shared with every drag. Original analysis: **CPU fallback misses the slider budget for NR.** Idle, draft-size highlights/clarity drags on the CPU take
 6–7 ms (met; 34–47 ms under load), but an NR drag takes 22.8 ms (297 ms under load). Proposal: a smaller draft size during drags on the CPU path (e.g. 768 px), and skipping NR in
 draft renders while a slider moves.
+
+**Draft NR drag, task 4.5 (2026-11-24):** a draft with luminance NR now runs the colour NR first and keeps that image
+(`Plan::draft_col_key`, `local::denoise_lum_draft`); a Luminance / Detail drag reruns only the luminance NR on it (it
+only scales each pixel's rgb, so the swapped order is a close stand-in). Full-quality renders and exports keep the
+original order and are bit-identical (`tests_draft_nr.rs`). Windows, loaded machine, paired alternating runs, median of
+4: 63.8 → **33.4 ms** wall (single thread 280 → 200 ms). `cargo xtask bench` now carries wall budgets (`BUDGETS`,
+incl. this row at 16 ms) that `--strict` fails on, and compares wall time where there is no process CPU time.
 
 **U4 — export 24 MP JPEG at 1.25 s** (under load; idle: 0.43 s GPU / 0.55 s CPU, budget met — keep as a nice-to-have) (GPU render 865 ms of which most is the full-size source develop, plus 386 ms
 encode). Overlapping the JPEG encode of strip *n* with the render of strip *n+1*, or a faster demosaic for export
