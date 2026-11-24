@@ -25,6 +25,17 @@ fn register(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
     }
 }
 
+/// The restore button's ↺: LightCraft's own arrow drawing (the UI font has no ↺, so a painted "↺" was cut to an
+/// ellipsis).
+#[derive(craft::ui::contract::MemoProps)]
+struct RestoreGlyph(crate::icons::Icon);
+
+impl craft::ui::primitives::Glyph for RestoreGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: egui::Rect, color: egui::Color32, _: bool) {
+        crate::icons::paint(painter, rect, self.0, color);
+    }
+}
+
 const SEARCH: &str = "shortcuts-search";
 const SHOW_ALL: &str = "shortcuts-show-all";
 
@@ -92,6 +103,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // (shorter on a short window, so the dialog fits it)
     let h = crate::panels::dialogs::list_height(ui, 400.0);
     egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h).auto_shrink([false, false]).id_salt("shortcuts-list").show(ui, |ui| {
+        // a faint stripe over the dialog's own surface, as main's was (the theme's inset colour is near black on
+        // the dialog's grey, which banded the list and hid the grey command ids)
+        ui.visuals_mut().faint_bg_color = t.text.gamma_multiply(0.05);
         egui::Grid::new("shortcuts").striped(true).num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
             for (b, sc) in &rows {
                 row(app, ui, t, b, sc.as_deref(), mac);
@@ -159,7 +173,13 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
             Some(d) => crate::i18n::tr_format!("Restore {}", menu_text(d, mac)),
             None => crate::i18n::tr("Restore (no shortcut)").to_string(),
         };
-        let shown = Button::new(restore.clone()).painted("↺").id_salt(("shortcutReset", b.id)).enabled(changed).show(ui);
+        let glyph = RestoreGlyph(crate::icons::Icon::Rotate);
+        let shown = Button::new(restore.clone())
+            .painted(String::new())
+            .icon(craft::ui::primitives::IconSpec::glyph(&glyph))
+            .id_salt(("shortcutReset", b.id))
+            .enabled(changed)
+            .show(ui);
         let clicked = !measuring(ui) && shown.clicked();
         let response = shown.response.on_hover_text(restore);
         register(ui, format!("button:shortcutReset-{}", b.id), &response);

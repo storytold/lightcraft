@@ -116,7 +116,10 @@ pub(super) fn number(ui: &mut egui::Ui, spec: &lightcraft_develop::controls::Con
         {
             current = spec.default;
         }
-        let width = (ui.available_width() - 72.0).clamp(40.0, 180.0);
+        // The review's thumbnail size takes the row up to its value box, as main's full-width row did; the recipe's
+        // rows keep their compact track.
+        let room = (ui.available_width() - 64.0 - 2.0 * ui.spacing().item_spacing.x).floor();
+        let width = if spec.id == "importThumbSize" && room.is_finite() { room.max(40.0) } else { (ui.available_width() - 72.0).clamp(40.0, 180.0) };
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
         let shown = Slider::new(Bind::bound(&mut current).reset(spec.default), spec.min..=spec.max)
             .id_salt(("import-slider", spec.id))

@@ -278,9 +278,7 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
 }
 
 fn action_width(ui: &egui::Ui, label: &str) -> f32 {
-    let text = egui::WidgetText::from(crate::i18n::tr(label));
-    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
-    (galley.size().x + 24.0).max(72.0)
+    controls::button_width(ui, label, label, 72.0)
 }
 
 /// A rule's problem, shown under it in the caution colour (`ruleProblem:<salt>` for tests and
@@ -345,7 +343,9 @@ fn edit_body(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path
                     // − and + at the end of the row, after the value however long it is: a
                     // right-to-left layout put them over the value when the row had no room left
                     // (#2353), and the dialog widens to the row instead
-                    let buttons = 48.0 + ui.spacing().item_spacing.x;
+                    let buttons = controls::button_width(ui, "−", "Remove this rule", 24.0)
+                        + controls::button_width(ui, "+", "Add a rule (⌥-click: a group)", 24.0)
+                        + ui.spacing().item_spacing.x;
                     ui.add_space((ui.available_width() - buttons).max(0.0));
                     if controls::button(ui, &format!("button:ruleRemove-{rsalt}"), "−", "Remove this rule", 24.0) {
                         remove = Some(i);

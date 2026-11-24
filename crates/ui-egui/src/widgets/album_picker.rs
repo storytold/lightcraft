@@ -234,15 +234,13 @@ impl<'a> AlbumPicker<'a> {
             return ui.allocate_exact_size(size, egui::Sense::hover()).1;
         }
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-        let mut button = Button::new(text.clone())
-            .id(egui::Id::unique(("albumPickerButton", id.as_str())))
-            .trailing_icon(DisclosureGlyph::dropdown())
-            .show_at(ui, rect);
-        button.response = button.response.on_hover_text(text);
-        register(ui, format!("albumPicker:{id}"), &button.response);
+        // the closed box of a dropdown: the album at the start, the chevron at the end
+        let mut button = super::menu_field_with_id(ui, rect, egui::Id::unique(("albumPickerButton", id.as_str())), &text, &text);
+        button = button.on_hover_text(text);
+        register(ui, format!("albumPicker:{id}"), &button);
         let key = egui::Id::unique(("albumPicker", id.as_str()));
         let mut state: State = ui.data(|d| d.get_temp(key)).unwrap_or_default();
-        if button.clicked() {
+        if craft::ui::contract::clicked(&button) {
             // Explicit SDK activation drives the legacy popup host, including long releases and
             // keyboard activation; never narrow it back to egui's independent click predicate.
             state.popup_open = !state.popup_open;
@@ -260,7 +258,7 @@ impl<'a> AlbumPicker<'a> {
         let search_name = format!("albumPickerSearch:{id}");
         Popover::new(crate::i18n::tr("Albums").to_owned(), Bind::bound(&mut popup_open))
             .id(key.with("popover"))
-            .opened_by(&button.response)
+            .opened_by(&button)
             .dismiss(Dismiss::new().outside(Outside::Absorb))
             // the search field takes the keyboard when the popup opens, as typing is how most picks start
             .initial_focus(Initial::FirstField)
@@ -439,9 +437,9 @@ impl<'a> AlbumPicker<'a> {
         ui.data_mut(|d| d.insert_temp(key, state));
         if let Some(p) = picked {
             *value = Some(p);
-            button.response.mark_changed();
+            button.mark_changed();
         }
-        button.response
+        button
     }
 }
 

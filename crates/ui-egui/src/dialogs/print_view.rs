@@ -380,7 +380,9 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     let ctx = ui.ctx().clone();
     let l = &st.layout;
     let unit = st.guides.units;
-    ui.spacing_mut().item_spacing.y = 5.0;
+    // main's density: the SDK rows are a little taller than the old native ones, so a 5 pt gap pushed the last
+    // margin row (Bottom) out of the column
+    ui.spacing_mut().item_spacing.y = 3.0;
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
 
     let close = templates_section(app, ui, t, pu);
