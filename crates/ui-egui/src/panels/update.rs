@@ -171,11 +171,16 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
             let notes = a["notes"].as_str().unwrap_or("").trim().to_string();
             if !notes.is_empty() {
                 ui.add_space(4.0);
-                egui::ScrollArea::vertical()
+                // the release notes: the app's Markdown subset, like What's New
+                let clicked = egui::ScrollArea::vertical()
                     .id_salt("update-notes")
                     .max_height(crate::panels::dialogs::list_height(ui, 220.0))
                     .auto_shrink([false, true])
-                    .show(ui, |ui| notes_body(ui, &t, &notes));
+                    .show(ui, |ui| crate::notes_view::flat(ui, &t, crate::notes_view::UPDATE_LOOK, notes.lines().take(400)))
+                    .inner;
+                if let Some(url) = clicked {
+                    crate::notes_view::open_link(app, ui.ctx(), &url);
+                }
             }
         }
         "current" => {
@@ -368,27 +373,6 @@ fn settings(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     if !app.session.updater.persistent() {
         ui.label(egui::RichText::new(tr("These settings are saved in the app's settings folder.")).font(t.font(11.0)).color(t.text_dim));
     }
-}
-
-/// The release notes: the app's Markdown subset (`### Heading`, `- item`, prose).
-fn notes_body(ui: &mut egui::Ui, t: &Tokens, notes: &str) {
-    ui.scope(|ui| {
-        for line in notes.lines().take(400) {
-            let l = line.trim_end();
-            if let Some(h) = l.strip_prefix("### ") {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
-            } else if let Some(h) = l.strip_prefix("## ") {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(13.5)).color(t.text));
-            } else if l.starts_with("# ") || l.is_empty() {
-            } else if let Some(b) = l.strip_prefix("- ") {
-                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
-            } else {
-                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
-            }
-        }
-    });
 }
 
 /// `12.3 MB`.
