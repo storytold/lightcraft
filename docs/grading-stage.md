@@ -85,9 +85,10 @@ the share by lightness within 0.7 to 2.6 RMS (× 100, the shadows wheel worst); 
 angle (the midtones wheel's at chroma 0.12 go 1.02, 0.99, 0.90, 0.92, 0.96, 1.02), so the smooth model leaves part of
 that out.
 
-On 5 held-out Panasonic DC-S9 photos with 19 presets, rendered at 1,500 px and compared with Camera Raw's renders
-after aligning the two engines' geometry, the mean OkLab a/b error falls from 1.32 to 1.19 (OkLab × 100) over all
-edit groups, and on the Teal & Orange preset from 2.66 to 1.34.
+On 5 held-out Panasonic DC-S9 photos (24 edits each plus Neutral, 1,500 px, aligned against Camera Raw's renders),
+the whole V9 series with every stage's fitted model (curves, mixer, this stage, the default base curve, Highlights and
+Calibration) is 2.424 in tone and 0.557 in colour (OkLab × 100, lower is better), against 2.418 and 0.556 with the
+measured tables it replaces, and 6.98 and 1.52 before the series (V7).
 
 ## Limits
 
