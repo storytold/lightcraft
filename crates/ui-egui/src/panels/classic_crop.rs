@@ -104,56 +104,8 @@ pub(crate) fn transform_body(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let video = crate::video_ui::photo_is_video(app, id);
     crate::video_ui::video_gate(ui, video, |ui| {
         padded(ui, |ui| {
-            crate::widgets::row_caption(ui, "upright", "Upright");
-            {
-                use lcc_develop::Upright;
-                let modes = [
-                    ("Off", Upright::Off, "off"),
-                    ("Auto", Upright::Auto, "auto"),
-                    ("Guided", Upright::Guided, "guided"),
-                    ("Level", Upright::Level, "level"),
-                    ("Vertical", Upright::Vertical, "vertical"),
-                    ("Full", Upright::Full, "full"),
-                ];
-                let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
-                let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-                if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3)
-                    && let Some((_, mode, key)) = modes.get(i)
-                {
-                    let _ = app.run("geometry.upright", json!({"mode": key, "again": Some(i) == active}));
-                    app.ui.tool = if *mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
-                }
-            }
-            let guided = d.geometry.upright == lcc_develop::Upright::Guided;
-            ui.horizontal_wrapped(|ui| {
-                if !guided
-                    && d.geometry.upright != lcc_develop::Upright::Off
-                    && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
-                {
-                    let mode = serde_json::to_value(d.geometry.upright).unwrap_or_default();
-                    let _ = app.run("geometry.upright", json!({"mode": mode}));
-                }
-                if guided {
-                    let drawing = app.ui.tool == "guidedUpright";
-                    if text_button(ui, "uprightDraw", crate::i18n::tr("Draw Guides"), drawing).clicked() {
-                        app.ui.tool = if drawing { String::new() } else { "guidedUpright".into() };
-                    }
-                    if !d.geometry.guides.is_empty() && text_button(ui, "uprightClear", crate::i18n::tr("Clear Guides"), false).clicked() {
-                        let _ = app.run("geometry.guides", json!({"guides": []}));
-                    }
-                }
-            });
-            if guided {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr_format!(
-                        "{} of 4 guides. Drag along lines that should be vertical or horizontal.",
-                        d.geometry.guides.len()
-                    ))
-                    .size(11.0)
-                    .color(Tokens::get(ui.ctx()).text_dim),
-                );
-            }
-            ui.add_space(4.0);
+            upright_controls(app, ui, &d);
+            ui.add_space(6.0);
             let mut c = d.geometry.constrain_crop;
             if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
@@ -169,4 +121,75 @@ pub(crate) fn transform_body(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             super::super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
         }
     });
+}
+
+/// Upright's controls, shared by the Crop panel's Geometry and the Edit panel's Transform (#1274):
+/// a status row that names the mode in use (no separate "Upright" heading: the panel says what it
+/// is) with the Guided Upright tool's icon and Update at its right, then the six modes. The status
+/// row keeps one height whatever the mode, so switching modes never moves the buttons under it.
+pub(crate) fn upright_controls(app: &mut LccApp, ui: &mut egui::Ui, d: &lcc_develop::DevelopSettings) {
+    use lcc_develop::Upright;
+    let modes = [
+        ("Off", Upright::Off, "off"),
+        ("Auto", Upright::Auto, "auto"),
+        ("Guided", Upright::Guided, "guided"),
+        ("Level", Upright::Level, "level"),
+        ("Vertical", Upright::Vertical, "vertical"),
+        ("Full", Upright::Full, "full"),
+    ];
+    let mode = d.geometry.upright;
+    let guided = mode == Upright::Guided;
+    let drawing = app.ui.tool == "guidedUpright";
+    let t = Tokens::get(ui.ctx());
+    let row_h = 26.0;
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), row_h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.set_min_height(row_h);
+        if cmd_icon(app, ui, "uprightGuidedTool", Icon::GuidedUpright, "Guided Upright", Some("tool.guidedUpright"), drawing).clicked() {
+            if drawing {
+                app.ui.tool = String::new();
+            } else {
+                if !guided {
+                    let r = app.run("geometry.upright", json!({"mode": "guided"}));
+                    super::upright_note(app, ui.ctx(), r.as_ref().ok());
+                }
+                app.ui.tool = "guidedUpright".into();
+            }
+        }
+        if guided {
+            if !d.geometry.guides.is_empty() && text_button(ui, "uprightClear", crate::i18n::tr("Clear Guides"), false).clicked() {
+                let _ = app.run("geometry.guides", json!({"guides": []}));
+            }
+        } else if mode != Upright::Off && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked() {
+            let key = serde_json::to_value(mode).unwrap_or_default();
+            let r = app.run("geometry.upright", json!({"mode": key}));
+            super::upright_note(app, ui.ctx(), r.as_ref().ok());
+        }
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let name = modes.iter().find(|(_, m, _)| *m == mode).map_or("Off", |(l, ..)| *l);
+            let color = if mode == Upright::Off { t.text_dim } else { t.text };
+            let r = ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(name)).font(t.semibold(12.0)).color(color)).truncate());
+            crate::widgets::register(ui.ctx(), "label:uprightMode".to_string(), r.rect);
+        });
+    });
+    ui.add_space(4.0);
+    let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
+    let active = modes.iter().position(|(_, m, _)| *m == mode);
+    if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3)
+        && let Some(&(_, picked, key)) = modes.get(i)
+    {
+        let r = app.run("geometry.upright", json!({"mode": key, "again": Some(i) == active}));
+        super::upright_note(app, ui.ctx(), r.as_ref().ok());
+        app.ui.tool = if picked == Upright::Guided { "guidedUpright".into() } else { String::new() };
+    }
+    if guided {
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "{} of 4 guides. Drag along lines that should be vertical or horizontal.",
+                d.geometry.guides.len()
+            ))
+            .size(11.0)
+            .color(t.text_dim),
+        );
+    }
 }

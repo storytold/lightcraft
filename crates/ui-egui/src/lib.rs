@@ -507,6 +507,8 @@ mod tests_unsaved;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_update;
 #[cfg(test)]
+mod tests_upright_panel;
+#[cfg(test)]
 mod tests_view_state;
 #[cfg(test)]
 mod tests_viewperf;
