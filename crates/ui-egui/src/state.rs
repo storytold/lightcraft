@@ -587,6 +587,10 @@ pub struct AppSettings {
     pub ml_device: String,
     /// Windows DirectComposition to prevent VRR flicker; opt-in, applies at next launch.
     pub compose_window: bool,
+    /// macOS: a click in a background window also acts on what is under the pointer (the default),
+    /// or only brings the window forward, as Lightroom Classic does there (Settings ▸ Interface;
+    /// `app.backgroundClicks`). Applies at once, through the host's `background_clicks`.
+    pub accept_background_clicks: bool,
     /// An HDR (extended-range) window where the display offers one; off: always an SDR window.
     /// Applies at next launch. Off helps where the compositor resamples HDR windows on an SDR
     /// monitor (KDE with mixed scaling: small text looked stretched).
@@ -842,6 +846,7 @@ impl Default for AppSettings {
             gpu_helper: String::new(),
             ml_device: String::new(),
             compose_window: false,
+            accept_background_clicks: true,
             hdr_display: true,
             preview_limit: 0,
             high_quality_adjustment_previews: false,
