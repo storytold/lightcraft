@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (AVIF import; Render to DNG command and export format; lossy DNG export; HEIC / HEIF and AVIF metadata read from the container, #693) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-24 · **Change:** minor (HDR gain map export for AVIF and JPEG XL, `hdrMode: gainMap`; readiness unchanged); minor (AVIF import; Render to DNG command and export format; lossy DNG export; HEIC / HEIF and AVIF metadata read from the container, #693) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 Every format Lightroom reads or writes, with our support, fidelity and tests. Camera raw formats are
 deep enough to have their own document: [raw-parity.md](raw-parity.md).
@@ -20,14 +20,14 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | PNG | ✅ | ✅ | ✅ | ✅ | |
 | PSD / PSB | ✅ (maximized-compatibility composite) | ✅ (Classic: PSD export, edit-in round trip) | ✅ merged composite | ⬜ (external-editor round trip writes 16-bit TIFF) | `crates/codecs/src/psd.rs` |
 | HEIC / HEIF | ✅ | ⬜ (Classic) / HDR only | ✅ in every release build (`crates/heif`, heic-rs) | ⬜ | `heif` feature on by packaging scripts; EXIF and XMP read from the container in every build (`crates/meta/src/heif.rs`, #693) |
-| AVIF | ✅ | ✅ (HDR) | ✅ native builds, `filmcraft-av1` (pure Rust): 8/10/12-bit, 4:2:0/4:2:2/4:4:4/mono, grids, nclx / ICC, PQ / HLG to linear (highlights kept), clap / irot / imir; alpha ignored, image sequences unsupported; ⬜ web (refused: a decoder panic would abort the page) | ✅ 8/10-bit, PQ HDR | `crates/codecs/src/avif.rs`; EXIF and XMP read from the container (`crates/meta/src/heif.rs`), also by the decode; exported EXIF reads back |
-| JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR (`jixel`, native only; ⬜ web) | `crates/engine/src/tests_export.rs` |
+| AVIF | ✅ | ✅ (HDR) | ✅ native builds, `filmcraft-av1` (pure Rust): 8/10/12-bit, 4:2:0/4:2:2/4:4:4/mono, grids, nclx / ICC, PQ / HLG to linear (highlights kept), clap / irot / imir; alpha ignored, image sequences unsupported; ⬜ web (refused: a decoder panic would abort the page) | ✅ 8/10-bit, PQ / HLG HDR, gain map HDR (`hdrMode: gainMap`: SDR base, a `tmap` derived item and a hidden gain map item, as libavif 1.2 writes) | `crates/codecs/src/avif.rs`, `crates/codecs/src/avif_gainmap.rs`; EXIF and XMP read from the container (`crates/meta/src/heif.rs`), also by the decode; exported EXIF reads back |
+| JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR, gain map HDR (`hdrMode: gainMap`: `jhgm` box, libjxl's layout) (`jixel`, native only; ⬜ web) | `crates/engine/src/tests_export.rs` |
 | WebP | not in its document types | ⬜ | ✅ | ✅ | beyond target |
 | GIF, BMP | ⬜ | ⬜ | ✅ | ⬜ | beyond target |
 | DNG (from raw) | ✅ | ✅ incl. lossy, embedded original | ✅ | ✅ uncompressed, LJ92, Deflate or lossy (JPEG tiles, optional long edge); ⬜ embedded original | `crates/raw/src/dngwrite.rs` |
 | Render to DNG (15.5) | — | ✅ | — | ✅ Photo ▸ File ▸ Render to DNG (stacked with the original) and the "Rendered DNG" export (linear float DNG, edit baked in) | `crates/raw/src/dngwrite.rs` (`write_rendered_dng`), `crates/engine/src/render_dng.rs` |
 | Original + sidecar | — | ✅ | — | ✅ | |
-| HDR gain map JPEG (ISO 21496-1) | ✅ | ✅ | ✅ (gain map read) | ✅ | `crates/codecs/src/gainmap.rs` |
+| HDR gain map (ISO 21496-1) | ✅ | ✅ | ✅ JPEG (gain map read); AVIF and JPEG XL as their SDR base (the gain map is read by `gainmap::read_avif` / `read_jxl`, not shown on import) | ✅ JPEG always; AVIF and JPEG XL with `hdrMode: gainMap` | `crates/codecs/src/gainmap.rs`, `crates/codecs/src/avif_gainmap.rs`, `crates/codecs/src/jxl_encode.rs` |
 | PQ / HLG HDR | ✅ | ✅ AVIF, JXL, TIFF | — | 🟡 PQ AVIF, PQ JPEG XL, float TIFF; no HLG | |
 | Contact sheet / print PDF | — | ✅ (Print module: PDF / JPEG / printer) | — | 🟡 paginated contact-sheet PDF (A4 / Letter, 150 dpi, sRGB) | `crates/engine/src/contact_sheet.rs` |
 | Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 catalogued (kind, duration) | ⬜ | see video gap |
@@ -76,6 +76,8 @@ Remaining: **11–17 h** (HLG 3–5 h; catalog import depth 8–12 h).
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | major | Created from the code and the installed Lightroom's document types |
+
+| 2026-11-24 | minor | HDR gain map export for AVIF (`tmap` derived item) and JPEG XL (`jhgm` box), `hdrMode: gainMap`; verified with libavif 1.4.2 (avifdec, `avifImageApplyGainMap`) and libjxl 0.13.0 (`jxlinfo`, decoder) |
 | 2026-10-10 | minor | JPEG XL export (#247): JXL write ✅ (native only), PQ JPEG XL HDR |
 | 2026-10-12 | minor | Render to DNG: "Rendered DNG" export format (linear 16-bit float DNG of the rendered photo) |
 | 2026-10-12 | minor | HEIC / HEIF and AVIF: EXIF and XMP read from the container, without the decoder (#693); statuses unchanged |
@@ -84,3 +86,5 @@ Remaining: **11–17 h** (HLG 3–5 h; catalog import depth 8–12 h).
 | 2026-10-13 | minor | AVIF import (`crates/codecs/src/avif.rs`, `filmcraft-av1`) |
 | 2026-10-13 | minor | AVIF import (`crates/codecs/src/avif.rs`, `filmcraft-av1`, native builds) |
 | 2026-10-13 | patch | JPEG write (#1373): Huffman tables made for each image, 12–14 % smaller files at the same pixels; statuses unchanged |
+
+Known difference from `avifenc` in the gain map AVIFs we write (open, 2026-11-25): the `tmap` item's `colr` box describes the alternate (HDR) image as linear light, because that is what our gain map rebuilds; `avifenc` writes PQ there, the convention of gain map JPEGs. libavif 1.4.2 reads ours and applies the gain map; how other viewers treat that field is untested. Revisit if a viewer shows the highlights wrong.

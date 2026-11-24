@@ -749,6 +749,37 @@ impl HdrCurve {
     }
 }
 
+/// How an HDR export stores its dynamic range (`hdrMode`), for the formats that can do both,
+/// AVIF and JPEG XL. JPEG always writes a gain map; PNG, TIFF and DNG always one HDR image.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HdrMode {
+    /// One HDR image: AVIF and JPEG XL as 10- or 16-bit Rec. 2020 PQ (or HLG). The default, and
+    /// what earlier versions wrote. Viewers without HDR support show it washed out.
+    #[default]
+    #[serde(rename = "hdr")]
+    SingleLayer,
+    /// An SDR image plus an ISO 21496-1 gain map, as gain map JPEGs (Ultra HDR) do: the file
+    /// looks right everywhere and shows HDR on viewers that read gain maps (Android, Chrome,
+    /// Safari, recent Photos and image editors). The gain map is measured against the base as
+    /// written, so previews match exports.
+    #[serde(rename = "gainMap")]
+    GainMap,
+}
+
+impl HdrMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "hdr" => Some(Self::SingleLayer),
+            "gainmap" => Some(Self::GainMap),
+            _ => None,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::SingleLayer
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ExportOptions {
@@ -806,6 +837,10 @@ pub struct ExportOptions {
     /// TIFF with the highlights above SDR white kept. Other formats, and photos without an HDR
     /// edit, are SDR.
     pub hdr: bool,
+    /// AVIF and JPEG XL only: one HDR image (`hdr`, the default) or an SDR image with a gain map
+    /// (`gainMap`, see [`HdrMode`]). See [`ExportOptions::gain_map`].
+    #[serde(skip_serializing_if = "HdrMode::is_default")]
+    pub hdr_mode: HdrMode,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
     /// JPEG XL: mathematically lossless instead of lossy (`quality` is then unused).
@@ -851,6 +886,7 @@ impl Default for ExportOptions {
             color_space: OutputSpace::Srgb,
             bit_depth: None,
             hdr: false,
+            hdr_mode: HdrMode::SingleLayer,
             hdr_transfer: HdrCurve::Pq,
             jxl_lossless: false,
             jxl_effort: JxlEffort::Normal,
@@ -900,6 +936,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "colorSpace",
     "bitDepth",
     "hdr",
+    "hdrMode",
     "hdrTransfer",
     "jxlLossless",
     "jxlEffort",
@@ -1153,6 +1190,7 @@ impl ExportOptions {
                 }
                 "sharpen" => parses(k, v, |s| SharpenFor::parse(s).is_some(), &["none", "screen", "matte", "glossy"])?,
                 "sharpenAmount" => parses(k, v, |s| SharpenAmount::parse(s).is_some(), &["low", "standard", "high"])?,
+                "hdrMode" => one_of(k, v, &["hdr", "gainMap"])?,
                 "hdrTransfer" => one_of(k, v, &["pq", "hlg"])?,
                 "conflict" => parses(k, v, |s| Conflict::parse(s).is_some(), &["unique", "overwrite", "skip"])?,
                 "destinationMode" => one_of(k, v, &["specificFolder", "sameAsOriginal", "chooseLater"])?,
@@ -1192,6 +1230,23 @@ impl ExportOptions {
                     }
                 }
                 _ => return Err(bad(unknown_key("parameter", k, &known))),
+            }
+        }
+        // a gain map needs a format that can carry one, and an SDR base image to carry it in
+        if obj.get("hdr").and_then(Value::as_bool) == Some(true)
+            && obj.get("hdrMode").and_then(Value::as_str).and_then(HdrMode::parse) == Some(HdrMode::GainMap)
+            && let Some(format) = format
+        {
+            let name = serde_json::to_value(format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+            let why = match format {
+                ExportFormat::Jpeg => None,
+                ExportFormat::Avif | ExportFormat::Jxl => {
+                    obj.get("bitDepth").and_then(whole).filter(|d| *d != 8).map(|_| "the base image of a gain map is 8-bit: drop `bitDepth`")
+                }
+                _ => Some("only JPEG, AVIF and JPEG XL can carry a gain map (`hdrMode: \"gainMap\"`)"),
+            };
+            if let Some(why) = why {
+                return Err(bad(format!("`hdrMode`: {why} for {name}")));
             }
         }
         // issue #1952: a depth the format doesn't have would be written at the format's own depth
@@ -1324,6 +1379,7 @@ impl ExportOptions {
             color_space: s("colorSpace").and_then(OutputSpace::parse).unwrap_or(d.color_space),
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
             hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
+            hdr_mode: s("hdrMode").and_then(HdrMode::parse).unwrap_or(d.hdr_mode),
             hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
             jxl_lossless: p.get("jxlLossless").and_then(Value::as_bool).unwrap_or(d.jxl_lossless),
             jxl_effort: s("jxlEffort").and_then(JxlEffort::parse).unwrap_or(d.jxl_effort),
@@ -1415,9 +1471,11 @@ impl ExportOptions {
             (ExportFormat::RenderedDng, _) => OutputDepth::F32Linear,
             (ExportFormat::Psd, Some(8)) => OutputDepth::U8,
             (ExportFormat::Psd, _) => OutputDepth::U16,
+            (ExportFormat::Avif, _) if self.gain_map() => OutputDepth::U8,
             (ExportFormat::Avif, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Avif, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Avif, _) => OutputDepth::U8,
+            (ExportFormat::Jxl, _) if self.gain_map() => OutputDepth::U8,
             (ExportFormat::Jxl, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Jxl, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Jxl, _) => OutputDepth::U8,
@@ -1447,12 +1505,25 @@ impl ExportOptions {
             )
     }
 
+    /// Whether these options write an SDR base image with an ISO 21496-1 gain map: JPEG with
+    /// [`ExportOptions::hdr`], AVIF and JPEG XL with [`HdrMode::GainMap`] (which needs
+    /// [`ExportOptions::hdr`], as every HDR output does).
+    pub fn gain_map(&self) -> bool {
+        self.hdr
+            && match self.format {
+                ExportFormat::Jpeg => true,
+                ExportFormat::Avif | ExportFormat::Jxl => self.hdr_mode == HdrMode::GainMap,
+                _ => false,
+            }
+    }
+
     /// The colour space the file is actually written in (AVIF: sRGB; AVIF, PNG and JPEG XL HDR:
     /// Rec. 2020; lossy JPEG XL: Adobe RGB and ProPhoto as Rec. 2020, the widest space its encoder
-    /// can declare without a profile).
+    /// can declare without a profile). A gain map file's base image is an SDR image in the
+    /// format's ordinary space.
     pub fn effective_space(&self) -> OutputSpace {
         match self.format {
-            ExportFormat::Avif | ExportFormat::Png | ExportFormat::Jxl if self.hdr => OutputSpace::Rec2020,
+            ExportFormat::Avif | ExportFormat::Png | ExportFormat::Jxl if self.hdr && !self.gain_map() => OutputSpace::Rec2020,
             ExportFormat::Avif => OutputSpace::Srgb,
             ExportFormat::Jxl if !self.jxl_lossless && matches!(self.color_space, OutputSpace::AdobeRgb | OutputSpace::ProPhoto) => {
                 OutputSpace::Rec2020
@@ -1842,6 +1913,53 @@ fn finish_deep_over<'a>(img: &'a DeepImage, alpha: Option<&mut Plane>, o: &Expor
     std::borrow::Cow::Owned(img)
 }
 
+/// Encode a gain map file of `o.format` (JPEG, AVIF or JPEG XL; see [`ExportOptions::gain_map`])
+/// from an SDR and an HDR rendition: the JPEG path with its file-size limit, or the single encode
+/// of AVIF and JPEG XL (their gain map is written once, with the base).
+fn encode_gain_map_file(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<(Vec<u8>, Option<u8>), String> {
+    match o.format {
+        ExportFormat::Jpeg => encode_gain_map_with_quality(sdr, hdr, o, meta),
+        ExportFormat::Avif | ExportFormat::Jxl => {
+            note_encode();
+            use lcc_codecs::gainmap;
+            let mut t = lap_clock();
+            let base = finish_8bit(sdr, o);
+            let hdr = finish_deep(hdr, o);
+            lap("gain map: output sharpening and watermark", &mut t);
+            let DeepSamples::F32(hv) = &hdr.samples else {
+                return Err("HDR export needs a float HDR render".into());
+            };
+            let (w, h) = (base.width, base.height);
+            if (hdr.width, hdr.height) != (w, h) || hv.len() < w * h * 3 {
+                return Err("HDR and SDR renders differ in size".into());
+            }
+            let space = o.effective_space();
+            let sdr_lin = linear_of_8bit(&base, space.trc());
+            let hdr_lin: &[[f32; 3]] = hv.as_chunks::<3>().0;
+            lap("gain map: SDR to linear", &mut t);
+            // the map is measured against the base as written (decoded from its 8-bit codes)
+            let (map, gm) =
+                gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gainmap::GainMapOptions::default()).map_err(|e| e.to_string())?;
+            drop(sdr_lin);
+            lap("gain map: compute", &mut t);
+            let profile = icc::write_named(named_space(space));
+            let exif = meta.map(lcc_meta::write_exif);
+            let xmp = meta.map(|m| lcc_meta::write_xmp(m, None));
+            let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+            let e = EncodeImage::rgba8(&base);
+            // AVIF is always sRGB (`effective_space`), so the map measured in the output space fits
+            let bytes = match o.format {
+                ExportFormat::Avif => lcc_codecs::encode_avif_gain_map(&e, &map, &gm, o.quality, 8, &em),
+                _ => lcc_codecs::encode_jxl_gain_map(&e, &map, &gm, &o.jxl(space, false), &em),
+            };
+            let bytes = bytes.map_err(|e| e.to_string())?;
+            lap("gain map: encode", &mut t);
+            Ok((bytes, None))
+        }
+        f => Err(format!("{f:?} cannot carry a gain map")),
+    }
+}
+
 /// Encode an ISO 21496-1 gain map JPEG from the SDR rendition `sdr` (8-bit, in the output space)
 /// and the HDR rendition `hdr` (float linear, same space and size). The gain map is measured
 /// against the base as written, so its 8-bit rounding is handed back by the map.
@@ -2224,12 +2342,16 @@ pub struct PreparedExport {
     mix: bool,
     /// Its renders may use the GPU ([`export_gpu`] when it was prepared).
     gpu: bool,
+    /// [`Self::preview_until`] also renders an HDR file's HDR rendition ([`Self::keep_hdr`]).
+    want_hdr: bool,
 }
 
 struct RenderWork {
     job: crate::media::RenderJob,
     /// The HDR rendition of a gain map JPEG (`job` renders its SDR base).
     hdr_job: Option<crate::media::RenderJob>,
+    /// An HDR file's SDR rendition for a preview ([`prepare_preview`]); `None` for an export.
+    sdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
     /// Source pixels the render reads (its GPU memory, for a gain map's turn at the device).
@@ -2312,6 +2434,7 @@ pub(crate) fn prepare_guarded(
             weight,
             mix: false,
             gpu: export_gpu(),
+            want_hdr: true,
         });
     }
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
@@ -2329,7 +2452,7 @@ pub(crate) fn prepare_guarded(
         let native_px = (nw.round().max(1.0) * nh.round().max(1.0)) as usize;
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
-        let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
+        let gain_map = o.gain_map();
         // (HDR files are written without alpha: their transparent areas stay on white)
         let alpha = o.format.keeps_alpha() && !o.hdr_output();
         let mut job = session.export_job_with_alpha(id, w, h, o.effective_space(), o.effective_depth(), alpha)?;
@@ -2351,7 +2474,7 @@ pub(crate) fn prepare_guarded(
         // stages the two renders share
         let weight = if gain_map { weight.saturating_add(w.saturating_mul(h).saturating_mul(GAIN_MAP_BYTES_PER_PX)) } else { weight };
         let src_px = source_px(full_px, long, job.level);
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), src_px })), weight)
+        (Work::Render(Box::new(RenderWork { job, hdr_job, sdr_job: None, meta, opts: o.clone(), src_px })), weight)
     } else {
         let lcc_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -2376,7 +2499,7 @@ pub(crate) fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight, mix: export_mix(), gpu: export_gpu() })
+    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight, mix: export_mix(), gpu: export_gpu(), want_hdr: true })
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo
@@ -2424,6 +2547,213 @@ fn source_px(full_px: usize, long: usize, level: crate::media::SourceLevel) -> u
     let edge = level.max_edge().min(long.max(1));
     let scale = edge as f64 / long.max(1) as f64;
     (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize
+}
+
+/// Steps 1 and 2 of a rendered export ([`PreparedExport::run_until`]): decode the original, then the
+/// SDR rendition, and a gain map JPEG's HDR one (`hdr_job`); on the GPU behind a turn of its own.
+/// `t` times the steps for `<PREFIX>_PROFILE`.
+#[allow(clippy::too_many_arguments)]
+fn render_pair(
+    job: crate::media::RenderJob,
+    hdr_job: Option<crate::media::RenderJob>,
+    src_px: usize,
+    mix: bool,
+    gpu: bool,
+    check: &dyn Fn() -> Result<(), String>,
+    t: &mut Option<std::time::Instant>,
+) -> Result<(lcc_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
+    let mut job = job;
+    let mut hdr_job = hdr_job;
+    let out_px = job.request.max_w.saturating_mul(job.request.max_h);
+    // 1. The original is decoded before the photo's turn at the GPU, on this lane's
+    // thread: other photos render on the GPU meanwhile (the turn used to cover
+    // the decode and the encode too, so photos side by side took turns at an idle card).
+    if needs_source(&job) {
+        let src = job.source.load_source()?;
+        if let Some(hj) = &mut hdr_job {
+            hj.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
+        }
+        job.source = crate::media::SourceRef::Loaded(Box::new(src));
+        lap("decode", t);
+    }
+    // 2. The renders (the GPU's part): the SDR rendition, and a gain map's HDR one. A
+    // gain map's HDR rendition starts from the SDR render's decoded original and its
+    // stages instead of redoing them; the two take one turn at the GPU (the memory the
+    // SDR render leaves for the HDR one is never another export's to take meanwhile).
+    let one_turn = hdr_job.is_some();
+    let renders = || -> Result<(lcc_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
+        lap("waiting for the GPU", t);
+        // (cancelled while it waited for its turn: give the turn back at once)
+        check()?;
+        let _mark = TurnMark::enter();
+        let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lcc_pipeline::StageCache::default()));
+        if let Some(st) = &stages {
+            job.stages = Some(st.clone());
+        }
+        let mut result = job.run();
+        lap("render", t);
+        let loaded = result.loaded.take();
+        let r = result.rendered?;
+        let gpu_fallback = result.gpu_fallback;
+        let hdr = match hdr_job {
+            Some(mut hj) => {
+                check()?;
+                if let Some(src) = loaded {
+                    hj.source = crate::media::SourceRef::Loaded(Box::new(src));
+                }
+                if let Some(st) = stages {
+                    hj.stages = Some(st);
+                }
+                let hr = hj.run().rendered?;
+                lap("HDR render", t);
+                Some(hr.deep.ok_or("the HDR render has no float samples")?)
+            }
+            None => None,
+        };
+        Ok((r, hdr, gpu_fallback))
+    };
+    if mix {
+        // the GPU and the processor at once: this photo takes the GPU when it is free,
+        // else it renders on the processor rather than wait
+        match card_turn_now(src_px, out_px) {
+            Some(_turn) => renders(),
+            None => {
+                if lcc_pipeline::profiling() {
+                    eprintln!("  export: the GPU is busy: rendering on the processor");
+                }
+                lcc_gpu::on_cpu(renders)
+            }
+        }
+    } else if gpu && two_cards() {
+        // two cards: the photo waits for whichever has room and would finish it
+        // soonest, holding that card's turn for both its renditions (one card: as
+        // before, each render queues at the card after its plan)
+        match card_turn_waiting(src_px, out_px, &|| check().is_err() || lcc_gpu::shutting_down()) {
+            Some(_turn) => renders(),
+            // no GPU to wait for (the renders go to the processor by themselves), or cancelled
+            None => {
+                check()?;
+                renders()
+            }
+        }
+    } else if one_turn {
+        lcc_gpu::in_one_turn(src_px, out_px, renders)
+    } else {
+        renders()
+    }
+}
+
+/// What an export writes, before it is encoded ([`PreparedExport::preview_until`]): what a preview
+/// of the export shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportPreview {
+    /// The SDR rendition, 8-bit in the options' output space ([`ExportOptions::effective_space`]),
+    /// with the output sharpening and the watermark as the file has them. For an HDR file it is
+    /// what SDR viewers show (a gain map JPEG's base image; the tone-mapped rendition otherwise).
+    pub sdr: Rgba8,
+    /// The HDR rendition of an HDR file ([`ExportOptions::hdr_output`]): linear float in the output
+    /// space, SDR white = 1, highlights above it, sharpened and watermarked like the file.
+    pub hdr: Option<DeepImage>,
+    /// The output space of `sdr` ([`ExportOptions::effective_space`]).
+    pub space: OutputSpace,
+    /// What went wrong without failing the render (skipped plug-in filters and the like).
+    pub warnings: Vec<String>,
+}
+
+impl ExportPreview {
+    /// The preview for a screen: the SDR rendition as sRGB, and the HDR one as linear-light sRGB
+    /// (SDR white = 1, highlights above it: what an HDR output takes). With an output space other
+    /// than sRGB both are converted with the same matrix the pipeline uses.
+    pub fn to_display(&self) -> (Rgba8, Option<(usize, usize, Vec<[f32; 3]>)>) {
+        let to_srgb = |space: OutputSpace| lcc_color::RgbSpace::to_space(&space.rgb_space(), &lcc_color::SRGB).to_f32();
+        let trc = self.space.trc();
+        let m = to_srgb(self.space);
+        let mut sdr = self.sdr.clone();
+        for p in sdr.data.iter_mut() {
+            let lin = [0, 1, 2].map(|c| trc.decode(f32::from(p[c]) / 255.0));
+            let out = [0, 1, 2].map(|i| {
+                let v = (0..3).map(|k| m[i][k] * lin[k]).sum::<f32>();
+                lcc_color::transfer::linear_to_srgb(if v.is_finite() { v.max(0.0) } else { 0.0 })
+            });
+            let v: [u8; 3] = out.map(|v| (v * 255.0 + 0.5) as u8);
+            *p = [v[0], v[1], v[2], p[3]];
+        }
+        let hdr = self.hdr.as_ref().map(|h| {
+            let m = to_srgb(h.space);
+            let v = match &h.samples {
+                DeepSamples::F32(v) => v.clone(),
+                // (a 16-bit rendition has no highlights above white: linear light, SDR white = 1)
+                DeepSamples::U16(v) => v.iter().map(|&x| h.space.trc().decode(f32::from(x) / 65535.0)).collect::<Vec<f32>>(),
+            };
+            let v: Vec<[f32; 3]> = v
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|c| {
+                    [0, 1, 2].map(|i| {
+                        let x = (0..3).map(|k| m[i][k] * c[k]).sum::<f32>();
+                        if x.is_finite() { x.max(0.0) } else { 0.0 }
+                    })
+                })
+                .collect();
+            (h.width, h.height, v)
+        });
+        (sdr, hdr)
+    }
+}
+
+/// The long edge of the largest render a preview makes ([`prepare_preview`]).
+pub const PREVIEW_LONG_EDGE: u32 = 4096;
+
+/// The export of photo `id` for a preview of what it writes ([`PreparedExport::preview_until`]),
+/// through the export's own rendering: where the format has no render of its own ([`ExportFormat::Original`],
+/// [`ExportFormat::Dng`], a video clip), the photo as developed, as a JPEG would be.
+pub fn prepare_preview(session: &mut crate::Session, id: lcc_catalog::PhotoId, o: &ExportOptions) -> Result<PreparedExport, String> {
+    let developed;
+    let capped;
+    let o = if !o.format.is_rendered() {
+        developed = ExportOptions { format: ExportFormat::Jpeg, hdr: false, ..o.clone() };
+        &developed
+    } else if session.catalog.photo(id).is_some_and(|p| {
+        let (w, h) = output_size(p, o);
+        w.max(h) > usize::try_from(PREVIEW_LONG_EDGE).unwrap_or(usize::MAX)
+    }) {
+        // a full-size export of a large photo is previewed at a smaller size (a preview needn't
+        // hold a 50 MP float image): with the export's own resize, so its resampling is the same
+        capped = ExportOptions { resize: Some(Resize::long_edge(PREVIEW_LONG_EDGE)), ..o.clone() };
+        &capped
+    } else {
+        o
+    };
+    let mut prepared = prepare_export(session, id, o, 1)?;
+    // a PQ or float HDR file renders in HDR only: its SDR rendition is a render of its own
+    if let Work::Render(w) = &mut prepared.work
+        && w.opts.hdr_output()
+        && w.hdr_job.is_none()
+    {
+        let (w_, h_) = (w.job.request.max_w, w.job.request.max_h);
+        let mut job = session.export_job(id, w_, h_, w.opts.effective_space(), OutputDepth::U8)?;
+        job.request.exact_size = true;
+        w.sdr_job = Some(job);
+    }
+    Ok(prepared)
+}
+
+/// `img` with its straight alpha `a` (its size) flattened on white.
+fn over_white(img: &Rgba8, a: &lcc_raster::Plane) -> Result<Vec<[u8; 4]>, String> {
+    if (a.width, a.height) != (img.width, img.height) || a.data.len() != img.data.len() {
+        return Err("export: the transparency does not match the rendered image".into());
+    }
+    Ok(img
+        .data
+        .iter()
+        .zip(&a.data)
+        .map(|(p, &av)| {
+            let k = if av.is_finite() { av.clamp(0.0, 1.0) } else { 1.0 };
+            let v = [0, 1, 2].map(|c| (f32::from(p[c]) * k + 255.0 * (1.0 - k) + 0.5) as u8);
+            [v[0], v[1], v[2], 255]
+        })
+        .collect())
 }
 
 /// Give the clips among `items` the batch's cancel flag and progress callback.
@@ -2481,90 +2811,14 @@ impl PreparedExport {
                 })
             }
             Work::Render(w) => {
-                let RenderWork { mut job, mut hdr_job, meta, opts, src_px } = *w;
-                let out_px = job.request.max_w.saturating_mul(job.request.max_h);
+                let RenderWork { job, hdr_job, meta, opts, src_px, sdr_job: _ } = *w;
                 let mut t = lap_clock();
                 check()?;
-                // 1. The original is decoded before the photo's turn at the GPU, on this lane's
-                // thread: other photos render on the GPU meanwhile (the turn used to cover the
-                // decode and the encode too, so photos side by side took turns at an idle card).
-                if needs_source(&job) {
-                    let src = job.source.load_source()?;
-                    if let Some(hj) = &mut hdr_job {
-                        hj.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
-                    }
-                    job.source = crate::media::SourceRef::Loaded(Box::new(src));
-                    lap("decode", &mut t);
-                }
-                // 2. The renders (the GPU's part): the SDR rendition, and a gain map's HDR one. A
-                // gain map's HDR rendition starts from the SDR render's decoded original and its
-                // stages instead of redoing them; the two take one turn at the GPU (the memory the
-                // SDR render leaves for the HDR one is never another export's to take meanwhile).
-                let one_turn = hdr_job.is_some();
-                let renders = || -> Result<(lcc_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
-                    lap("waiting for the GPU", &mut t);
-                    // (cancelled while it waited for its turn: give the turn back at once)
-                    check()?;
-                    let _mark = TurnMark::enter();
-                    let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lcc_pipeline::StageCache::default()));
-                    if let Some(st) = &stages {
-                        job.stages = Some(st.clone());
-                    }
-                    let mut result = job.run();
-                    lap("render", &mut t);
-                    let loaded = result.loaded.take();
-                    let r = result.rendered?;
-                    let gpu_fallback = result.gpu_fallback;
-                    let hdr = match hdr_job {
-                        Some(mut hj) => {
-                            check()?;
-                            if let Some(src) = loaded {
-                                hj.source = crate::media::SourceRef::Loaded(Box::new(src));
-                            }
-                            if let Some(st) = stages {
-                                hj.stages = Some(st);
-                            }
-                            let hr = hj.run().rendered?;
-                            lap("HDR render", &mut t);
-                            Some(hr.deep.ok_or("the HDR render has no float samples")?)
-                        }
-                        None => None,
-                    };
-                    Ok((r, hdr, gpu_fallback))
-                };
-                let (r, hdr, gpu_fallback) = if mix {
-                    // the GPU and the processor at once: this photo takes the GPU when it is free,
-                    // else it renders on the processor rather than wait
-                    match card_turn_now(src_px, out_px) {
-                        Some(_turn) => renders(),
-                        None => {
-                            if lcc_pipeline::profiling() {
-                                eprintln!("  export: the GPU is busy: rendering on the processor");
-                            }
-                            lcc_gpu::on_cpu(renders)
-                        }
-                    }
-                } else if gpu && two_cards() {
-                    // two cards: the photo waits for whichever has room and would finish it
-                    // soonest, holding that card's turn for both its renditions (one card: as
-                    // before, each render queues at the card after its plan)
-                    match card_turn_waiting(src_px, out_px, &|| stop() || lcc_gpu::shutting_down()) {
-                        Some(_turn) => renders(),
-                        // no GPU to wait for (the renders go to the processor by themselves), or cancelled
-                        None => {
-                            check()?;
-                            renders()
-                        }
-                    }
-                } else if one_turn {
-                    lcc_gpu::in_one_turn(src_px, out_px, renders)
-                } else {
-                    renders()
-                }?;
+                let (r, hdr, gpu_fallback) = render_pair(job, hdr_job, src_px, mix, gpu, &check, &mut t)?;
                 // 3. The encode, on this lane's thread after its turn (the next photo renders meanwhile)
                 check()?;
                 let (bytes, limit_quality) = match &hdr {
-                    Some(hdr) => encode_gain_map_with_quality(&r.image, hdr, &opts, meta.as_ref())?,
+                    Some(hdr) => encode_gain_map_file(&r.image, hdr, &opts, meta.as_ref())?,
                     None => encode_rendered_with_quality(&r, &opts, meta.as_ref())?,
                 };
                 lap("encode", &mut t);
@@ -2646,6 +2900,47 @@ impl PreparedExport {
                 })
             }
         }
+    }
+
+    /// [`Self::preview_until`] without an HDR file's HDR rendition (a preview that shows its SDR
+    /// rendition alone: half the rendering).
+    pub fn keep_hdr(mut self, want: bool) -> Self {
+        self.want_hdr = want;
+        self
+    }
+
+    /// The export's picture without encoding it ([`ExportPreview`]), giving up once `stop()` says
+    /// so. An export that copies a file or writes a movie has none: an error saying so.
+    pub fn preview_until(self, stop: &dyn Fn() -> bool) -> Result<ExportPreview, String> {
+        let check = || if stop() { Err(CANCELLED.to_string()) } else { Ok(()) };
+        let RenderWork { job, hdr_job, sdr_job, opts, src_px, .. } = match self.work {
+            Work::Render(w) => *w,
+            _ => return Err("this export copies its file unchanged or writes a movie: there is no picture to preview".into()),
+        };
+        let mut t = lap_clock();
+        let hdr_job = hdr_job.filter(|_| self.want_hdr);
+        let (r, hdr, _) = render_pair(job, hdr_job, src_px, self.mix, self.gpu, &check, &mut t)?;
+        // a PQ or float file's render is its HDR one: its SDR rendition is a render of its own
+        let sdr = match sdr_job {
+            Some(sj) => {
+                check()?;
+                sj.run().rendered?.image
+            }
+            None => r.image,
+        };
+        // (transparent areas are shown on white, as the file has them when it is HDR)
+        let sdr = match r.alpha {
+            Some(ref a) => lcc_raster::Rgba8 { width: sdr.width, height: sdr.height, data: over_white(&sdr, a)? },
+            None => sdr,
+        };
+        let sdr = finish_8bit(&sdr, &opts).into_owned();
+        let hdr = match hdr.filter(|_| opts.hdr_output()) {
+            Some(h) => Some(h),
+            None if opts.hdr_output() && opts.effective_depth() == OutputDepth::F32Hdr => r.deep,
+            None => None,
+        };
+        let hdr = hdr.map(|h| finish_deep_over(&h, None, &opts).into_owned());
+        Ok(ExportPreview { space: opts.effective_space(), sdr, hdr, warnings: r.warnings })
     }
 }
 
@@ -3799,6 +4094,120 @@ mod tests {
         assert!(decoded.meta.alternate_headroom > 1.0, "the gain map must survive size limiting");
         let impossible = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(1), ..opts }, None);
         assert!(impossible.is_err_and(|e| e.contains("cannot fit within 1 KB")));
+    }
+
+    fn gain_map_pair(w: usize, h: usize) -> (Rgba8, DeepImage) {
+        // a grey ramp with a bright patch that is 4 × as bright in HDR
+        let img = Rgba8::from_fn(w, h, |x, _| {
+            let v = if x > w * 3 / 4 { 230 } else { (x * 200 / w) as u8 };
+            [v, v, v, 255]
+        });
+        let hdr = DeepImage {
+            width: img.width,
+            height: img.height,
+            space: OutputSpace::Srgb,
+            samples: DeepSamples::F32(
+                img.data
+                    .iter()
+                    .flat_map(|p| {
+                        let g = if p[0] > 200 { 4.0 } else { 1.0 };
+                        [0; 3].map(|i| lcc_color::transfer::decode_srgb8(p[i]) * g)
+                    })
+                    .collect(),
+            ),
+        };
+        (img, hdr)
+    }
+
+    /// `hdrMode: gainMap` writes an SDR base with an ISO 21496-1 gain map for AVIF and JPEG XL;
+    /// the gain map rebuilds the HDR rendition from the base as written.
+    #[test]
+    fn gain_map_avif_and_jxl_carry_the_hdr_rendition() {
+        use lcc_codecs::gainmap::{self, FileGainMap};
+        let (img, hdr) = gain_map_pair(96, 64);
+        let readers: [(ExportFormat, fn(&[u8]) -> Option<FileGainMap>); 2] =
+            [(ExportFormat::Avif, gainmap::read_avif), (ExportFormat::Jxl, gainmap::read_jxl)];
+        for (format, read) in readers {
+            let o = ExportOptions { format, hdr: true, hdr_mode: HdrMode::GainMap, quality: 95, ..Default::default() };
+            assert!(o.gain_map() && o.hdr_output(), "{format:?}");
+            assert_eq!((o.effective_depth(), o.effective_space()), (OutputDepth::U8, OutputSpace::Srgb));
+            let (bytes, limit_quality) = encode_gain_map_file(&img, &hdr, &o, None).unwrap();
+            assert!(limit_quality.is_none(), "no file size limit for {format:?}");
+            // an ordinary SDR image of the format to every reader
+            let d = lcc_codecs::decode(&bytes, lcc_codecs::DecodeOptions::default()).unwrap();
+            let want = if format == ExportFormat::Avif { lcc_codecs::Format::Avif } else { lcc_codecs::Format::Jxl };
+            assert_eq!(d.format, want);
+            let shown: Vec<u8> = d.to_srgb8().data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+            let diff: f64 =
+                shown.iter().zip(img.data.iter().flat_map(|p| p[..3].iter())).map(|(&a, &b)| (f64::from(a) - f64::from(b)).abs()).sum::<f64>()
+                    / shown.len() as f64;
+            assert!(diff < 4.0, "{format:?}: base mean difference {diff}");
+            // applied to the decoded base, the map brings the highlight back to 4 × white
+            let gm = read(&bytes).unwrap_or_else(|| panic!("{format:?}: the gain map is found"));
+            assert!(gm.meta.alternate_headroom > 1.9, "{format:?}: {}", gm.meta.alternate_headroom);
+            let mut lin: Vec<[f32; 3]> = d.image.data.iter().map(|p| [p[0], p[1], p[2]]).collect();
+            gainmap::apply(&mut lin, img.width, img.height, &gm.gain, &gm.meta, 1.0).unwrap();
+            let at = |x: usize| lin[x][1];
+            assert!(
+                (at(img.width * 7 / 8) / lcc_color::transfer::decode_srgb8(230) / 4.0 - 1.0).abs() < 0.12,
+                "{format:?}: highlight {}",
+                at(img.width * 7 / 8)
+            );
+            let mid = (img.width / 4 * 200 / img.width) as u8;
+            assert!((at(img.width / 4) / lcc_color::transfer::decode_srgb8(mid) - 1.0).abs() < 0.08, "{format:?}: midtone {}", at(img.width / 4));
+            // the default stays one HDR image
+            let single = ExportOptions { format, hdr: true, ..Default::default() };
+            assert!(!single.gain_map() && single.hdr_output());
+            assert_eq!((single.effective_depth(), single.effective_space()), (OutputDepth::F32Hdr, OutputSpace::Rec2020));
+        }
+    }
+
+    /// `hdrMode` is validated per format, round-trips through params, and older params (without
+    /// it) and the default serialisation keep their meaning.
+    #[test]
+    fn hdr_mode_params() {
+        let o = |v: serde_json::Value| ExportOptions::from_params(&v);
+        let avif = |extra: serde_json::Value| {
+            let mut v = serde_json::json!({ "format": "avif", "hdr": true, "hdrMode": "gainMap" });
+            v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            v
+        };
+        let g = o(avif(serde_json::json!({}))).unwrap();
+        assert_eq!((g.hdr_mode, g.gain_map()), (HdrMode::GainMap, true));
+        assert_eq!(
+            o(serde_json::json!({ "format": "jxl", "hdrMode": "gainmap" })).unwrap().hdr_mode,
+            HdrMode::GainMap,
+            "case-insensitive, and without `hdr`"
+        );
+        // no gain map in these formats
+        for format in ["png", "tif", "psd", "original", "dng", "webp"] {
+            let e = o(serde_json::json!({ "format": format, "hdr": true, "hdrMode": "gainMap" })).unwrap_err();
+            assert!(e.to_string().contains("`hdrMode`") && e.to_string().contains("gain map"), "{format}: {e}");
+        }
+        // JPEG has no other HDR form
+        assert!(o(serde_json::json!({ "format": "jpeg", "hdr": true, "hdrMode": "gainMap" })).is_ok());
+        // the base of a gain map is 8-bit
+        for (format, depth) in [("avif", 10), ("jxl", 16)] {
+            let e = o(avif(serde_json::json!({ "format": format, "bitDepth": depth }))).unwrap_err();
+            assert!(e.to_string().contains("8-bit"), "{format}: {e}");
+            // 8-bit (said or not) is the base of a gain map
+            o(avif(serde_json::json!({ "format": format, "bitDepth": 8 }))).unwrap();
+        }
+        // unknown values
+        assert!(o(serde_json::json!({ "hdrMode": "hdr10" })).is_err());
+        assert!(o(serde_json::json!({ "hdrMode": true })).is_err());
+        // without `hdr`, a gain map for a format that has one is accepted (it applies once HDR is asked for)
+        assert!(o(serde_json::json!({ "format": "avif", "hdrMode": "gainMap" })).is_ok());
+        // round trip: the default is not written (older params and stored presets read the same)
+        let d = ExportOptions::default();
+        assert!(d.to_json().get("hdrMode").is_none());
+        assert_eq!(ExportOptions::from_json(&serde_json::json!({ "format": "avif" })).hdr_mode, HdrMode::SingleLayer);
+        let on = ExportOptions { hdr: true, hdr_mode: HdrMode::GainMap, format: ExportFormat::Avif, ..Default::default() };
+        assert_eq!(on.to_json().get("hdrMode"), Some(&serde_json::json!("gainMap")));
+        assert_eq!(ExportOptions::from_json(&on.to_json()), on);
+        assert_eq!(serde_json::to_value(HdrMode::SingleLayer).unwrap(), serde_json::json!("hdr"));
+        ExportOptions::validate("app.export", &on.to_json()).unwrap();
+        ExportOptions::validate("app.export", &serde_json::json!({ "hdrMode": "gainMap" })).unwrap();
     }
 
     #[test]

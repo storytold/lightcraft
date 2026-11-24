@@ -62,6 +62,7 @@ pub mod email_photo;
 mod enhance_pump;
 pub mod enhance_ui;
 pub mod export_module;
+mod export_preview;
 pub mod export_task;
 pub mod eye_strip;
 pub mod eyedropper;
@@ -105,6 +106,7 @@ pub mod modern_sheets;
 mod modern_sources;
 pub mod module;
 pub mod motion;
+mod notes_view;
 pub mod onboarding;
 pub mod overlay;
 pub mod panels;
@@ -257,6 +259,8 @@ mod tests_enhance_dialog;
 #[cfg(test)]
 mod tests_error_kinds;
 #[cfg(test)]
+mod tests_export_preview;
+#[cfg(test)]
 mod tests_filmstrip;
 #[cfg(test)]
 mod tests_filmstrip_resize;
@@ -382,6 +386,8 @@ mod tests_module_help;
 mod tests_modules;
 #[cfg(test)]
 mod tests_mouse_nav;
+#[cfg(test)]
+mod tests_notes_view;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
@@ -569,6 +575,10 @@ pub type SaveToGalleryFn = Box<dyn FnMut(&[String], bool) -> Result<std::sync::m
 pub type OpenWithFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// Open several files with one start of an application (`app` as for [`OpenWithFn`]).
 pub type OpenAllWithFn = Box<dyn FnMut(&[String], &str) -> Result<(), String>>;
+/// Start an editor once with arguments and several files (an Edit In preset's menu item on a
+/// batch): `args` (one holding `{file}` takes the paths where it stands), then the files, unless
+/// `args` is empty and there is one file, which [`Services::open_with`] opens.
+pub type OpenPresetFn = Box<dyn FnMut(&[String], &str, &[String]) -> Result<(), String>>;
 /// Linux model-folder work: wait for the default opener on a background task.
 #[cfg(target_os = "linux")]
 pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -728,6 +738,10 @@ pub struct Services {
     /// Open several files with one start of the editor (Open Original; desktop only): an editor
     /// that keeps one window takes them all. None = [`Services::open_with`] for each.
     pub open_all_with: Option<OpenAllWithFn>,
+    /// Start a preset's editor with its arguments and every file of a batch (desktop only). None =
+    /// a preset without arguments opens through [`Services::open_all_with`] / [`Services::open_with`];
+    /// one with arguments can't be started.
+    pub open_preset: Option<OpenPresetFn>,
     /// Optional worker-safe model-folder opener alongside `open_with` (Linux desktop only).
     #[cfg(target_os = "linux")]
     pub open_model_folder: Option<OpenModelFolderFn>,
@@ -1122,6 +1136,9 @@ pub struct LccApp {
     /// The display's headroom when the window shows HDR now ([`HdrOutput::headroom`]): the loupe
     /// then draws HDR edits from their HDR render ([`render::Slot::HdrView`]).
     pub hdr_headroom: Option<f32>,
+    /// The Export screen's preview's HDR texture ([`export_preview`]), while it has one: freed
+    /// when the screen closes or the preview shows SDR.
+    pub export_preview_hdr: Option<egui::TextureId>,
     /// The last GPU event told (`lcc_gpu::events_after`: the graphics card stopped
     /// responding, was restarted …).
     gpu_event_seen: u64,
@@ -1439,6 +1456,7 @@ impl LccApp {
             font_problems: None,
             startup_update_check: false,
             hdr_display_sdr: false,
+            export_preview_hdr: None,
             hdr_headroom: None,
             gpu_event_seen: 0,
             last_screen: egui::Vec2::ZERO,
@@ -2440,6 +2458,10 @@ impl LccApp {
             for slot in self.renderer.hdr_unused_slots() {
                 h.release(slot);
             }
+        }
+        // the Export screen's preview (its renders, its HDR texture) goes with the screen
+        if !matches!(self.ui.dialog, Some(state::Dialog::Export { .. })) {
+            export_preview::forget(self, ctx);
         }
         self.logic_inner(ctx);
         self.perf.logic_ms = now_ms() - t0;

@@ -50,6 +50,10 @@ fn panel(width: f32, scale: f32, locale: Locale, describe: bool) -> (Vec<egui::e
 
 #[test]
 fn masking_tile_labels_fit_without_eliding_at_supported_panel_widths() {
+    if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+        lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+        return;
+    }
     for locale in [Locale::En, Locale::De, Locale::PtBr] {
         for width in [250.0, 270.0, 330.0, 520.0] {
             // (the high-density pass only at the narrowest width, where a label is closest to its tile's edge)
@@ -74,6 +78,10 @@ fn masking_tile_labels_fit_without_eliding_at_supported_panel_widths() {
 
 #[test]
 fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
+    if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+        lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+        return;
+    }
     for locale in [Locale::En, Locale::De, Locale::PtBr] {
         for width in [250.0, 270.0, 520.0] {
             let (texts, widgets) = panel(width, 2.0, locale, true);

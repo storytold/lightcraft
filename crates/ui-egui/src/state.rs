@@ -1563,6 +1563,10 @@ pub struct UiState {
     /// HDR edits are shown in HDR on an HDR display (View ▸ HDR Preview, `view.hdrPreview`);
     /// off, every view shows their SDR rendition, as on an SDR display.
     pub hdr_preview: bool,
+    /// The Export screen's preview shows the HDR rendition of an HDR export (SDR otherwise);
+    /// kept for the session (`export.previewMode`).
+    #[serde(skip)]
+    pub export_preview_hdr: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
     /// The ids of other folded panels (the Classic modules' `panel:<key>` panels), saved here. Settings files
@@ -2006,6 +2010,9 @@ pub struct UiState {
     /// A Settings section to bring into view once (`app.settings {section}`), e.g. `lensProfiles`.
     #[serde(skip)]
     pub settings_section: Option<String>,
+    /// How many times Help ▸ What's New was opened: each opening starts its entries over (the newest open, the rest closed).
+    #[serde(skip)]
+    pub whats_new_opens: u64,
     /// Develop ▸ Lens Corrections: the lens maker picked in the lens picker before a model (issue #307).
     #[serde(skip)]
     pub lens_pick_make: Option<String>,
@@ -2776,6 +2783,7 @@ impl Default for UiState {
             face_boxes: false,
             draw_faces: false,
             hdr_preview: true,
+            export_preview_hdr: false,
             sidebar: Default::default(),
             collapsed_sidebar: Vec::new(),
             group_open: Default::default(),
@@ -2946,6 +2954,7 @@ impl Default for UiState {
             status: String::new(),
             dialog: None,
             settings_section: None,
+            whats_new_opens: 0,
             lens_pick_make: None,
             vignetting_calibration_info: None,
             vignetting_calibration_creating: None,
