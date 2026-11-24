@@ -35,6 +35,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Zmiany z urządzenia {device} mają datę {minutes} min w przyszłości, więc są wstrzymane do tego czasu. Ustaw poprawny czas na urządzeniu {device}.",
   "Chart · greys about {cct:.0} K": "Wzornik · szarości ok. {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Sprawdzono {checked} z {total} plików DNG: {intact} w porządku, {damaged} uszkodzonych, {unverifiable} niemożliwych do zweryfikowania",
+  "Closest: {name}, {percent:.0}%": "Najbardziej podobna osoba: {name}, {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "Zaimportowano kolekcję: znaleziono zdjęć: {n}, poza tym katalogiem: {m}",
   "Confirm all {}": "Potwierdź wszystkie ({})",
   "Confirm all {} suggestions": "Potwierdź wszystkie sugestie ({})",
@@ -185,6 +186,7 @@
   "Step {n} of {total}": "Krok {n} z {total}",
   "Stop waiting: {task}?": "Przestać czekać: {task}?",
   "Style {n}": "Styl {n}",
+  "Suggested as {name}: {percent:.0}%": "Sugerowana osoba: {name} ({percent:.0}%)",
   "Suggested as {}": "Sugerowane jako {}",
   "Suggested as {}. Confirm the faces that are them.": "Sugerowane jako {}. Potwierdź twarze, które są tą osobą.",
   "Sync this catalog with {name}:": "Synchronizuj ten katalog z {name}:",
@@ -315,5 +317,6 @@
   "“{name}” added to Camera Profiles": "Dodano „{name}” do profili aparatu",
   "“{name}” has its old settings again": "„{name}” ma znów dawne ustawienia",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "„{name}” jest nowa. Co mogą z niej mieć inne urządzenia synchronizujące ten katalog?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}” przejmuje ustawienia aktywnego zdjęcia. Nazwa, grupa, miejsce i oznaczenia zostają."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}” przejmuje ustawienia aktywnego zdjęcia. Nazwa, grupa, miejsce i oznaczenia zostają.",
+  "★{n} at or above": "★{n} i więcej"
 }
