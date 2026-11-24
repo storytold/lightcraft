@@ -20,7 +20,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lr_tone_charts import ADOBE_TO_XYZ, H, W, write_dng, xmp  # noqa: E402
+from lr_tone_charts import ADOBE_TO_XYZ, XYZ_TO_PROPHOTO, H, W, write_dng, xmp  # noqa: E402
 
 CELL = 60
 BANDS = ("Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta")
@@ -77,6 +77,14 @@ def variants():
 
 
 # ---- table --------------------------------------------------------------------------------------------------
+
+def rgb_patches(path, patches):
+    """Mean encoded Adobe RGB of each in-gamut patch of a Camera Raw render, 0..1."""
+    import tifffile
+    a = tifffile.imread(path).astype(np.float64)
+    a /= 65535.0 if a.max() > 255 else 255.0
+    return np.array([a[q["y"] + 10:q["y"] + q["h"] - 10, q["x"] + 10:q["x"] + q["w"] - 10].reshape(-1, 3).mean(0) for q in patches])
+
 
 def oklab_patches(path, patches):
     """Mean colour of each in-gamut patch of a Camera Raw render, as OkLab."""
@@ -140,18 +148,17 @@ def response(lab0, lab, light, chroma):
 #     band(h)  = exp(-z^2 / 2),  z = wrap(h - centre) / e^(left or right)
 #
 # Each band's centre and widths are shared by its three sliders; each kind's gain curve and level dependence are
-# shared by all bands. Calibration's primaries (red, green, blue) get a model of the same form: each primary a band,
-# with two kinds (Hue, Saturation), 75 constants.
+# shared by all bands.
+#
+# Calibration's primaries act on every colour, not on a band: each of its six sliders is a 3 x 3 matrix on linear
+# ProPhoto RGB, I + A t + Q t^2 (Q for positive or negative amounts), every row of A and Q summing to 0 so greys stay
+# grey. 18 constants per slider.
 
 FIT_C, FIT_L = (0.09, 0.05), (0.75, 0.15)
 CENTRES = (10, 50, 95, 140, 180, 255, 320, 350)
-CAL_CENTRES = (29, 142, 264)
 # starting signs and sizes per (kind, output): each kind's main output, then its smaller side effects
 MIXER_START = {(0, 0): (-40, 40), (0, 1): (0.1, 0.1), (0, 2): (0.01, 0.01), (1, 0): (1, -1), (1, 1): (-0.6, 0.6),
                (1, 2): (0.01, -0.01), (2, 0): (1, -1), (2, 1): (0.1, -0.1), (2, 2): (-0.1, 0.1)}
-CAL_START = {(0, 0): (-20, 20), (0, 1): (0.05, 0.05), (0, 2): (0.01, 0.01), (1, 0): (1, -1), (1, 1): (-0.3, 0.3),
-             (1, 2): (0.01, -0.01)}
-
 
 def unpack(p, nb=8, nk=3):
     """(bands nb x [centre, left, right], kinds nk x 3 x [g1..g6, ac, al], amps nb x nk x 3)."""
@@ -176,6 +183,27 @@ def model(p, t, dc, dl, nb=8, nk=3):
                 level = np.exp(g[6] * dc + g[7] * dl)
                 out[b * nk + k, o] = amps[b, k, o] * gain[:, None, None] * level[None, :, None] * shape[None, None, :]
     return out
+
+
+def calibration_matrix(p, t):
+    """One calibration slider's matrix at amount `t` (-1..1) from its 18 constants [A, Q positive, Q negative]."""
+    rows = lambda v: np.c_[np.reshape(v, (3, 2)), -np.reshape(v, (3, 2)).sum(1)]
+    return np.eye(3) + rows(p[:6]) * t + rows(p[6:12] if t > 0 else p[12:18]) * t * t
+
+
+def fit_calibration(neutral, edited):
+    """Fit one calibration slider's matrix to linear ProPhoto patches: `neutral` (n x 3) and `edited` {amount: n x 3};
+    returns the constants and the mean OkLab x 100 error and effect."""
+    from scipy.optimize import least_squares
+    to_lab = lambda p: (M2 @ np.cbrt(np.clip(M1 @ (p @ np.linalg.inv(XYZ_TO_PROPHOTO).T).T, 0, None))).T
+    lab0 = to_lab(neutral)
+    target = {a: to_lab(e) for a, e in edited.items()}
+    residual = lambda p: np.concatenate([((to_lab(np.clip(neutral @ calibration_matrix(p, a / 100).T, 0, None)) - target[a]) * 100).ravel()
+                                         for a in edited])
+    p = least_squares(residual, np.zeros(18)).x
+    e = residual(p).reshape(len(edited), -1, 3)
+    effect = np.mean([np.linalg.norm((target[a] - lab0) * 100, axis=1).mean() for a in edited])
+    return p, float(np.linalg.norm(e, axis=2).mean()), float(effect)
 
 
 def fit_model(measured, chroma, dc, dl, centres=CENTRES, nk=3, start=MIXER_START):
@@ -224,13 +252,17 @@ def fit(render_dir, out_rs):
     measure = lambda stems: np.stack([np.stack([response(lab0, oklab_patches(tif(f"{stem}{a:+d}"), patches), light, chroma)
                                                 for a in AMOUNTS]) for stem in stems])
     params, residual = fit_model(measure(every[:24]), level_c, dc, dl)
-    cal, cal_residual = fit_model(measure(every[24:]), level_c, dc, dl, CAL_CENTRES, 2, CAL_START)
-    for stems, e in ((every[:24], residual(params)), (every[24:], cal_residual(cal))):
-        e = e.reshape(len(stems), 3, -1)
-        for i, stem in enumerate(stems):
-            print(f"{stem:22s} rms " + " ".join(f"{np.sqrt((e[i, o] ** 2).mean()):.3f}" for o in range(3)) + " (hue, chroma, lightness; OkLab x 100)")
+    e = residual(params).reshape(24, 3, -1)
+    for i, stem in enumerate(every[:24]):
+        print(f"{stem:22s} rms " + " ".join(f"{np.sqrt((e[i, o] ** 2).mean()):.3f}" for o in range(3)) + " (hue, chroma, lightness; OkLab x 100)")
+    pro = lambda n: (rgb_patches(tif(n), patches) ** (563 / 256)) @ ADOBE_TO_XYZ.T @ XYZ_TO_PROPHOTO.T
+    neutral = pro("neutral")
+    cal = []
+    for stem in every[24:]:
+        p, err, effect = fit_calibration(neutral, {a: pro(f"{stem}{a:+d}") for a in AMOUNTS})
+        cal.append(p)
+        print(f"{stem:22s} mean error {err:.3f} of an effect of {effect:.3f} (OkLab x 100)")
     bands, kinds, amps = unpack(params)
-    cal_bands, cal_kinds, cal_amps = unpack(cal, 3, 2)
     num = lambda v: f"{v:.6e}"
     row = lambda vs: "[" + ", ".join(num(v) for v in vs) + "]"
     s = ["// Written by `tools/lr_mixer_charts.py fit`: LightCraft's model of the colour mixer, fitted to the tool's OkLCh",
@@ -253,15 +285,10 @@ def fit(render_dir, out_rs):
          *[f"    [{', '.join(row(k) for k in a)}]," for a in amps],
          "];",
          "",
-         "/// Calibration's primaries (Red, Green, Blue) as bands of the same form: centre and log widths.",
-         "pub const CAL_BANDS: [[f64; 3]; 3] = [" + ", ".join(row(b) for b in cal_bands) + "];",
-         "/// Per kind (Hue, Saturation) and output: the gain over the amount and the dependence on chroma and lightness.",
-         "pub const CAL_KINDS: [[[f64; 8]; 3]; 2] = [",
-         *[f"    [{', '.join(row(o) for o in k)}]," for k in cal_kinds],
-         "];",
-         "/// Per primary, kind and output: the amplitude.",
-         "pub const CAL_AMPS: [[[f64; 3]; 2]; 3] = [",
-         *[f"    [{', '.join(row(k) for k in a)}]," for a in cal_amps],
+         "/// Calibration's sliders (Red Hue, Red Saturation, Green Hue, Green Saturation, Blue Hue, Blue Saturation): the",
+         "/// first two columns of each row of `A`, `Q` positive and `Q` negative, row by row (the third makes the row sum 0).",
+         "pub const CALIBRATION: [[f64; 18]; 6] = [",
+         *[f"    {row(p)}," for p in cal],
          "];",
          ""]
     with open(out_rs, "w") as f:

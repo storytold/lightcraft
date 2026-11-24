@@ -9,8 +9,9 @@
 //! - The bands differ from V8's: their centres sit elsewhere on the hue circle (Orange at OkLab hue 50, not 82), Blue
 //!   is wider and Red and Magenta narrower.
 //! - All 24 mixer sliders act on the same input colour: their hue and lightness changes add and their chroma changes
-//!   multiply. Calibration's 6 sliders have a model of the same form (each primary a band) and combine the same way,
-//!   in a pass of their own before the mixer.
+//!   multiply.
+//! - Calibration's 6 sliders are a fitted 3 × 3 matrix on linear ProPhoto RGB that keeps greys grey
+//!   ([`calibration_matrix`]), sampled into a table of the same form and applied in a pass of its own before the mixer.
 //! - The mixer acts before the tone curves.
 //!
 //! The stage runs after the tone map and Process V4's calibrated Contrast and Blacks, before the curve stage
@@ -32,9 +33,7 @@ const OUTPUTS: usize = 3;
 pub const TABLE_LEN: usize = ROWS * OUTPUTS * HUES;
 /// Mixer sliders: bands (red … magenta) × (hue, saturation, luminance).
 const SLIDERS: usize = 24;
-/// The first calibration slider: then the primaries (red, green, blue) × (hue, saturation).
-const CALIBRATION: usize = SLIDERS;
-/// Calibration sliders.
+/// Calibration's sliders: the primaries (red, green, blue) × (hue, saturation).
 const CAL_SLIDERS: usize = 6;
 /// Where the combined table samples the model: OkLab lightness levels.
 const LIGHT: [f32; 3] = [0.55, 0.78, 0.92];
@@ -55,27 +54,17 @@ pub struct MixerStage {
     pub table: Option<Box<[f32; TABLE_LEN]>>,
 }
 
-/// The fitted response of slider `slider` (a mixer band × 3 + kind, or [`CALIBRATION`] + primary × 2 + kind) output
-/// `out` at amount `t` (−1 to 1) for OkLCh chroma `c`, lightness `l` and hue `h` (degrees): a hue shift in degrees, a
-/// relative chroma change or a lightness change. `amp · gain(t) · band(h) · level(dc, dl)` with the band's shape
-/// shared by its sliders, and the gain and level dependence shared by all bands' sliders of one kind
-/// (docs/mixer-stage.md).
+/// The fitted response of mixer slider `slider` (band × 3 + kind) output `out` at amount `t` (−1 to 1) for OkLCh
+/// chroma `c`, lightness `l` and hue `h` (degrees): a hue shift in degrees, a relative chroma change or a lightness
+/// change. `amp · gain(t) · band(h) · level(dc, dl)` with the band's shape shared by its three sliders, and the gain
+/// and level dependence shared by all bands' sliders of one kind (docs/mixer-stage.md).
 fn response(slider: usize, out: usize, t: f64, c: f64, l: f64, h: f64) -> f64 {
-    let fitted = match slider.checked_sub(CALIBRATION) {
-        None => {
-            let (band, kind) = (slider / 3, slider % 3);
-            (m::BANDS.get(band), m::KINDS.get(kind).and_then(|k| k.get(out)), m::AMPS.get(band).and_then(|a| a.get(kind)).and_then(|a| a.get(out)))
-        }
-        Some(i) => {
-            let (band, kind) = (i / 2, i % 2);
-            (
-                m::CAL_BANDS.get(band),
-                m::CAL_KINDS.get(kind).and_then(|k| k.get(out)),
-                m::CAL_AMPS.get(band).and_then(|a| a.get(kind)).and_then(|a| a.get(out)),
-            )
-        }
+    let (band, kind) = (slider / 3, slider % 3);
+    let (Some([centre, left, right]), Some(k), Some(amp)) =
+        (m::BANDS.get(band), m::KINDS.get(kind).and_then(|k| k.get(out)), m::AMPS.get(band).and_then(|a| a.get(kind)).and_then(|a| a.get(out)))
+    else {
+        return 0.0;
     };
-    let (Some([centre, left, right]), Some(k), Some(amp)) = fitted else { return 0.0 };
     let [g1, g2, g3, g4, g5, g6, ac, al] = *k;
     let (at, dc, dl) = (t.abs(), (c - m::REF_CHROMA.0) / m::REF_CHROMA.1, (l - m::REF_LIGHT.0) / m::REF_LIGHT.1);
     let gain = if t < 0.0 { g1 * at + g2 * at * at + g3 * at * at * at } else { g4 * at + g5 * at * at + g6 * at * at * at };
@@ -84,11 +73,66 @@ fn response(slider: usize, out: usize, t: f64, c: f64, l: f64, h: f64) -> f64 {
     amp * gain * (-0.5 * z * z).exp() * (ac * dc + al * dl).exp()
 }
 
+/// Calibration's primaries as one 3 × 3 matrix on linear ProPhoto RGB: `I + Σ (A t + Q t²)` over the six sliders at
+/// amounts `t` (−1 to 1), `Q` the slider's positive or negative curvature. Every row of `A` and `Q` sums to 0, so greys
+/// stay grey ([`m::CALIBRATION`]).
+fn calibration_matrix(primaries: &[f64; CAL_SLIDERS]) -> [[f64; 3]; 3] {
+    let mut out = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for (fit, a) in m::CALIBRATION.iter().zip(primaries) {
+        let t = (a / 100.0).clamp(-1.0, 1.0);
+        if t == 0.0 || !t.is_finite() {
+            continue;
+        }
+        let curve = if t > 0.0 { &fit[6..12] } else { &fit[12..18] };
+        for (r, row) in out.iter_mut().enumerate() {
+            let (a0, a1, q0, q1) = (fit[2 * r], fit[2 * r + 1], curve[2 * r], curve[2 * r + 1]);
+            let d = [a0 * t + q0 * t * t, a1 * t + q1 * t * t];
+            row[0] += d[0];
+            row[1] += d[1];
+            row[2] -= d[0] + d[1];
+        }
+    }
+    out
+}
+
+/// Calibration's matrix sampled into the stage's table: at every row's lightness and chroma and every hue bin, the hue
+/// shift (radians), chroma factor and lightness change the matrix gives that colour. `None` when every primary is 0.
+fn calibration_table(primaries: &[f64; CAL_SLIDERS]) -> Option<Box<[f32; TABLE_LEN]>> {
+    if primaries.iter().all(|v| *v == 0.0 || !v.is_finite()) {
+        return None;
+    }
+    let cal = calibration_matrix(primaries);
+    let (to, from) = crate::light_v3::prophoto_matrices();
+    let mul = |m: &[[f64; 3]; 3], v: [f64; 3]| -> [f64; 3] { std::array::from_fn(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2]) };
+    let f = |m: &[[f32; 3]; 3]| -> [[f64; 3]; 3] { m.map(|r| r.map(f64::from)) };
+    let (to, from) = (f(&to), f(&from));
+    let mut t = Box::new([0.0f32; TABLE_LEN]);
+    for row in 0..ROWS {
+        let (li, ci) = (row / 3, row % 3);
+        let l = LIGHT.get(li).copied().unwrap_or(0.0);
+        let c = CHROMA.get(li).and_then(|r| r.get(ci)).copied().unwrap_or(0.0);
+        for bin in 0..HUES {
+            let h = (bin as f32 * (360.0 / HUES as f32)).to_radians();
+            let lin = oklab_to_2020(lch_to_lab([l, c, h])).map(f64::from);
+            let out = mul(&from, mul(&cal, mul(&to, lin))).map(|v| v.max(0.0) as f32);
+            let [l1, c1, h1] = lab_to_lch(oklab_from_2020(out));
+            let dh = (h1 - h + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            let values = [dh, if c > 0.0 { c1 / c } else { 1.0 }, l1 - l];
+            for (out, v) in values.into_iter().enumerate() {
+                if let Some(slot) = t.get_mut((row * OUTPUTS + out) * HUES + bin) {
+                    *slot = v;
+                }
+            }
+        }
+    }
+    Some(t)
+}
+
 /// The combined table of `(slider, amount)` pairs: hue and lightness changes add, chroma changes multiply.
 fn combine(sliders: &[(usize, f32)]) -> Option<Box<[f32; TABLE_LEN]>> {
     let active: Vec<(usize, f64)> = sliders
         .iter()
-        .filter(|(i, v)| *v != 0.0 && v.is_finite() && *i < CALIBRATION + CAL_SLIDERS)
+        .filter(|(i, v)| *v != 0.0 && v.is_finite() && *i < SLIDERS)
         .map(|(i, v)| (*i, (f64::from(*v) / 100.0).clamp(-1.0, 1.0)))
         .collect();
     if active.is_empty() {
@@ -140,12 +184,13 @@ impl MixerStage {
             return None;
         }
         let sliders: Vec<(usize, f32)> = s.mixer.bands().iter().flat_map(|b| [b.hue, b.sat, b.lum]).enumerate().map(|(i, v)| (i, v as f32)).collect();
-        let primaries: Vec<(usize, f32)> = if s.section_enabled("calibration") {
-            s.calibration.primaries().iter().flat_map(|(h, sat)| [*h, *sat]).enumerate().map(|(i, v)| (CALIBRATION + i, v as f32)).collect()
-        } else {
-            Vec::new()
-        };
-        let (calibration, table) = (combine(&primaries), combine(&sliders));
+        let mut primaries = [0.0f64; CAL_SLIDERS];
+        if s.section_enabled("calibration") {
+            for (slot, v) in primaries.iter_mut().zip(s.calibration.primaries().iter().flat_map(|(h, sat)| [*h, *sat])) {
+                *slot = v;
+            }
+        }
+        let (calibration, table) = (calibration_table(&primaries), combine(&sliders));
         (calibration.is_some() || table.is_some()).then_some(MixerStage { chroma: CHROMA, light: LIGHT, calibration, table })
     }
 
@@ -224,7 +269,7 @@ mod tests {
     /// and is 0 at amount 0.
     #[test]
     fn the_fitted_responses_stay_plausible() {
-        for slider in 0..CALIBRATION + CAL_SLIDERS {
+        for slider in 0..SLIDERS {
             for out in 0..OUTPUTS {
                 // Blue Luminance −100 darkens pale blues and raises their chroma severalfold
                 let limit = [180.0, 8.0, 0.5][out];
@@ -241,6 +286,17 @@ mod tests {
                 assert_eq!(response(slider, out, 0.0, 0.1, 0.7, 50.0), 0.0);
             }
         }
+    }
+
+    /// Calibration keeps greys grey at any setting, and is the identity at 0.
+    #[test]
+    fn calibration_keeps_greys_grey() {
+        let m = calibration_matrix(&[40.0, -70.0, 100.0, 25.0, -100.0, 60.0]);
+        for row in m {
+            assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-12, "{m:?}");
+        }
+        assert_eq!(calibration_matrix(&[0.0; CAL_SLIDERS]), [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        assert!(calibration_table(&[0.0; CAL_SLIDERS]).is_none());
     }
 
     /// Each band acts around its own centre: a slider moves colours at its band's centre more than colours half the
