@@ -2703,6 +2703,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             Ok(Value::Null)
         }
         "app.whatsNew" => {
+            app.ui.whats_new_opens = app.ui.whats_new_opens.wrapping_add(1);
             app.ui.dialog = Some(Dialog::WhatsNew);
             Ok(json!({"text": crate::i18n::brand_fill(crate::panels::dialogs::WHATS_NEW)}))
         }
