@@ -231,3 +231,75 @@ fn different_radii_differ_at_upscale() {
     let diff = rms(&r2, &r3);
     assert!(diff > 0.1, "Radius 2 and 3 should differ at 2x scale (got {})", diff);
 }
+
+/// The Sharpening views (⌥/Alt on a Sharpening slider) replace the photo with black-and-white
+/// images of the band sharpening boosts, whatever the edit: no sharpening, or an old process.
+fn view(src: &Rgb32f, s: &DevelopSettings, v: crate::SharpenView) -> Rgba8 {
+    render(src, &info(), s, &RenderRequest { overlay: crate::Overlay::Sharpen(v), ..RenderRequest::fit(256, 256) }).image
+}
+
+#[test]
+fn sharpening_views_are_grey_and_differ_by_view() {
+    use crate::{Overlay, SharpenView};
+    let src = scene(256);
+    // (masked: the edit has Masking up, so its mask view is a picture rather than all white)
+    for (s, masked) in [(DevelopSettings::default(), false), (sharp(80.0, 1.0, 25.0, 40.0), true)] {
+        let greys: Vec<Vec<u8>> = SharpenView::ALL
+            .iter()
+            .map(|v| {
+                view(&src, &s, *v)
+                    .data
+                    .iter()
+                    .map(|p| {
+                        assert_eq!((p[0], p[1]), (p[1], p[2]), "grey");
+                        p[0]
+                    })
+                    .collect()
+            })
+            .collect();
+        // each view is a picture, not one flat tone (how far it spreads depends on the photo's
+        // detail, so only a modest range is asked of this smooth scene)
+        for (v, g) in SharpenView::ALL.iter().zip(&greys).filter(|(_, _)| masked) {
+            let (lo, hi) = g.iter().fold((255u8, 0u8), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+            assert!(hi - lo > 24, "{v:?}: {lo}..{hi}");
+        }
+        // no two views show the same picture
+        for (i, a) in greys.iter().enumerate() {
+            for b in &greys[i + 1..] {
+                assert!(a.iter().zip(b).any(|(&x, &y)| x.abs_diff(y) > 8), "{:?} {:?}", SharpenView::ALL[i], SharpenView::ALL[i + 1]);
+            }
+        }
+    }
+    for v in SharpenView::ALL {
+        let (kind, value) = Overlay::Sharpen(v).to_parts();
+        assert_eq!(Overlay::from_parts(kind, value), Overlay::Sharpen(v), "{v:?}");
+    }
+    assert_ne!(Overlay::Sharpen(SharpenView::Masking).key(), Overlay::Sharpen(SharpenView::Radius).key());
+}
+
+/// Masking's view is the mask the render sharpens by: all white with Masking at 0, and with Masking
+/// up, white on the edge and dark over the flat texture.
+#[test]
+fn masking_view_is_the_edge_mask() {
+    use crate::SharpenView;
+    let src = scene(256);
+    let off = view(&src, &sharp(80.0, 1.0, 25.0, 0.0), SharpenView::Masking);
+    assert!(off.data.iter().all(|p| p[0] == 255), "Masking 0 sharpens everywhere");
+    let on = view(&src, &sharp(80.0, 1.0, 25.0, 100.0), SharpenView::Masking);
+    let at = |img: &Rgba8, u: f32, v: f32| img.data[(v * img.height as f32) as usize * img.width + (u * img.width as f32) as usize][0];
+    assert!(at(&on, 0.5, 0.5) > 200, "the hard edge is sharpened: {}", at(&on, 0.5, 0.5));
+    assert!(at(&on, 0.9, 0.5) < 60, "the flat gradient is left alone: {}", at(&on, 0.9, 0.5));
+}
+
+/// An edit too old to sharpen with its own band still gets the views.
+#[test]
+fn sharpening_views_need_no_v4_sharpening_edit() {
+    use crate::SharpenView;
+    let src = scene(256);
+    let mut old = sharp(0.0, 1.0, 25.0, 80.0);
+    old.process = lcc_develop::Process::V1.version();
+    let img = view(&src, &old, SharpenView::Masking);
+    assert!(img.data.iter().any(|p| p[0] < 60), "the mask is shown, not the photo");
+    // the settings the caller handed in are not changed
+    assert_eq!(old.detail.sharpen_amount, 0.0);
+}

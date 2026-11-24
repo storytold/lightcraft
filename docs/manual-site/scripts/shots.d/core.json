@@ -46,6 +46,21 @@
       {
         "method": "engine.execute",
         "params": {
+          "command": "tool.done"
+        }
+      },
+      {
+        "method": "ui.clickWidget",
+        "params": {
+          "id": "modern:group:light"
+        },
+        "only": [
+          "modern"
+        ]
+      },
+      {
+        "method": "engine.execute",
+        "params": {
           "command": "develop.set",
           "params": {
             "values": {
