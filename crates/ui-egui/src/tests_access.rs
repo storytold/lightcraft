@@ -187,7 +187,9 @@ fn library_and_develop_core_widgets_are_named() {
     let film: BTreeSet<NodeId> = h.app.session.visible_cloned().iter().map(|p| egui::Id::new(("film", p.0)).accesskit_id()).collect();
     let nameless_buttons = |all: &[(NodeId, Node)]| -> Vec<String> {
         all.iter()
-            .filter(|(id, n)| matches!(n.role(), Role::Button | Role::CheckBox | Role::Slider | Role::ComboBox) && !named(n) && !shared_widget(&film, *id, n))
+            .filter(|(id, n)| {
+                matches!(n.role(), Role::Button | Role::CheckBox | Role::Slider | Role::ComboBox) && !named(n) && !shared_widget(&film, *id, n)
+            })
             .map(|(_, n)| format!("{:?} at {:?}", n.role(), n.bounds()))
             .collect()
     };

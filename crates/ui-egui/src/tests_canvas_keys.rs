@@ -228,7 +228,8 @@ fn the_brush_paints_by_keyboard() {
     h.view.ctx.enable_accesskit();
     focus(&mut h, "brush");
     // announced: a name and its place and state
-    let node = h.view.access.as_ref().and_then(|u| u.nodes.iter().find(|(id, _)| *id == canvas_keys::id("brush").accesskit_id()).map(|(_, n)| n.clone()));
+    let node =
+        h.view.access.as_ref().and_then(|u| u.nodes.iter().find(|(id, _)| *id == canvas_keys::id("brush").accesskit_id()).map(|(_, n)| n.clone()));
     let node = node.expect("the brush is in the AccessKit tree");
     assert!(node.label().is_some_and(|l| !l.is_empty()) && node.value().is_some_and(|v| v.contains('%')), "{node:?}");
     key(&mut h, "enter", false);
