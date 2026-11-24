@@ -27,6 +27,28 @@
     "name": "develop",
     "steps": [
       {
+        "method": "ui.dialog.cancel",
+        "params": {}
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.manager",
+          "params": {
+            "open": false
+          }
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.marketplace",
+          "params": {
+            "open": false
+          }
+        }
+      },
+      {
         "method": "engine.execute",
         "params": {
           "command": "library.select",
@@ -47,6 +69,12 @@
         "method": "engine.execute",
         "params": {
           "command": "tool.done"
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "tool.none"
         }
       },
       {
