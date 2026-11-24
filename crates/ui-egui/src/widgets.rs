@@ -874,6 +874,8 @@ pub(crate) fn elide_head(text: &str, max: f32, width: impl Fn(&str) -> f32) -> S
 pub mod album_picker;
 pub mod button;
 pub mod date_picker;
+mod menu_field;
+pub(crate) use menu_field::{menu_field, menu_field_with_id};
 mod hit_area;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]

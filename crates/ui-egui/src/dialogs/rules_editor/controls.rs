@@ -1,7 +1,6 @@
 //! SDK controls mounted inside the rule editor's native, content-sized rows.
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
-use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::text::{NumberField, TextField};
 
@@ -20,13 +19,22 @@ pub(super) fn rect(ui: &mut egui::Ui, width: f32) -> egui::Rect {
     ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover()).0
 }
 
+/// A button at least `width` wide, wider when its painted text needs it: a fixed width cut "+ Group" and the − and +
+/// glyphs of the rule rows down to an ellipsis.
 pub(super) fn button(ui: &mut egui::Ui, id: &str, glyph: &str, label: &str, width: f32) -> bool {
-    let rect = rect(ui, width);
-    let shown = Button::new(crate::i18n::tr(label).to_owned()).painted(crate::i18n::tr(glyph).to_owned()).id_salt(id).show_at(ui, rect);
+    let button = || Button::new(crate::i18n::tr(label).to_owned()).painted(crate::i18n::tr(glyph).to_owned()).id_salt(id);
+    let rect = rect(ui, button_width(ui, glyph, label, width));
+    let shown = button().show_at(ui, rect);
     let clicked = !measuring(ui) && shown.clicked();
     let response = shown.response.on_hover_text(crate::i18n::tr(label));
     register(ui, id, &response);
     clicked
+}
+
+/// The width [`button`] takes: at least `width`, else what its painted text needs.
+pub(super) fn button_width(ui: &egui::Ui, glyph: &str, label: &str, width: f32) -> f32 {
+    let ideal = Button::new(crate::i18n::tr(label).to_owned()).painted(crate::i18n::tr(glyph).to_owned()).measure_in(ui, craft::behavior::Proposal::Ideal).x;
+    width.max(ideal.ceil())
 }
 
 pub(super) fn text(ui: &mut egui::Ui, id: &str, value: &mut String, width: f32, hint: &str) {
@@ -54,15 +62,13 @@ pub(super) fn number(ui: &mut egui::Ui, id: &str, label: &str, value: f64, lo: f
     next.filter(|next| !measuring(ui) && ui.is_enabled() && next.is_finite() && *next != value)
 }
 
+/// The closed box of one of the rule's dropdowns: the value at the start, the chevron at the end, as the
+/// framework's selects look.
 pub(super) fn face(ui: &mut egui::Ui, id: &str, label: &str, shown: &str, width: f32) -> egui::Response {
     let rect = rect(ui, width);
-    let face = Button::new(crate::i18n::tr(label).to_owned())
-        .painted(shown.to_owned())
-        .trailing_icon(DisclosureGlyph::dropdown())
-        .id_salt(id)
-        .show_at(ui, rect);
-    register(ui, id, &face.response);
-    face.response
+    let face = crate::widgets::menu_field(ui, rect, id, crate::i18n::tr(label), shown);
+    register(ui, id, &face);
+    face
 }
 
 pub(super) fn item(ui: &mut egui::Ui, id: &str, label: &str, checked: bool) -> bool {

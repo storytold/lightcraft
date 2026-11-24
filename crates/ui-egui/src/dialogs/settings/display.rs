@@ -147,21 +147,16 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         for (i, line) in lines.iter_mut().enumerate() {
             let id = format!("viewOptionsInfo{n}Line{}", i + 1);
             let name = crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label()));
-            use craft::ui::buttons::Button;
             use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
-            use craft::ui::controls::disclosure::DisclosureGlyph;
             use craft::ui::menu::{Menu, MenuItem};
 
             let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
             if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
                 continue;
             }
-            let face = Button::new(name.clone())
-                .painted(crate::i18n::tr(line.label()).to_owned())
-                .trailing_icon(DisclosureGlyph::dropdown())
-                .id_salt(("view-options-line", &id))
-                .show_at(ui, rect);
-            crate::widgets::register_response(format!("combo:{id}"), rect, &face.response);
+            // the closed box of a dropdown (the value at the start, the chevron at the end), as main's combo was
+            let face = crate::widgets::menu_field(ui, rect, ("view-options-line", &id), &name, crate::i18n::tr(line.label()));
+            crate::widgets::register_response(format!("combo:{id}"), rect, &face);
             // A value menu retains the existing semantic option locators, unlike indexed
             // Select rows. Only activation commits; navigating or dismissing edits nothing.
             let mut picked = None;
@@ -169,18 +164,18 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
             // button's actual activation (pointer, keyboard or AT) own the toggle instead.
             // Stale state expires when this field leaves the presented subtree.
             let pass = ui.ctx().cumulative_pass_nr();
-            let slot = face.response.id.with("menu-open");
+            let slot = face.id.with("menu-open");
             let mut open = ui
                 .data(|data| data.get_temp::<(u64, bool)>(slot))
                 .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
                 .is_some_and(|(_, open)| open);
-            if ui.is_enabled() && face.clicked() {
+            if ui.is_enabled() && craft::ui::contract::clicked(&face) {
                 open = !open;
             }
             Menu::new(name)
                 .id_salt(("view-options-menu", &id))
                 .values()
-                .opened_by(&face.response, Trigger::Manual)
+                .opened_by(&face, Trigger::Manual)
                 .open(Bind::bound(&mut open))
                 .show(ui, |ui, _| {
                     for f in F::ALL {
