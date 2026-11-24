@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, channel};
 
 use notify::{EventKind, RecursiveMode, Watcher};
 
@@ -59,11 +59,8 @@ impl OsWatch {
     /// The watched folders something changed in since the last call.
     pub fn changed(&self) -> Vec<String> {
         let mut paths = Vec::new();
-        loop {
-            match self.rx.try_recv() {
-                Ok(p) => paths.extend(p),
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-            }
+        while let Ok(p) = self.rx.try_recv() {
+            paths.extend(p);
             // (a flood of events: what we have is enough to say "poll")
             if paths.len() > 100_000 {
                 break;
