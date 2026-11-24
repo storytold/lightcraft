@@ -111,7 +111,7 @@ pub fn write_jpegs(
         let jpg = color.jpeg(page, job.jpeg_quality)?;
         let target = folder.join(format!("{name}-{:0digits$}.jpg", i + 1));
         guard.check(&target)?;
-        let (part, mut f) = PartFile::new(&target)?;
+        let (part, mut f) = PartFile::new(&target, guard)?;
         f.write_all(&jpg).map_err(|e| format!("{}: {e}", part.part.display()))?;
         f.sync_all().map_err(|e| format!("{}: {e}", part.part.display()))?;
         bytes = bytes.saturating_add(jpg.len());
@@ -246,6 +246,48 @@ mod tests {
         assert_eq!(jpeg_name(None, "/tmp/Proofs").unwrap(), "Proofs");
         assert_eq!(jpeg_name(None, "/tmp/a:b").unwrap(), "Print");
         assert_eq!(jpeg_name(None, "/").unwrap(), "Print");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The staging name `<file>.part` keeps main's rule (#3673): a leftover there, or a link
+    /// planted there, is removed and a new file made, and what a link points to is left alone. A
+    /// catalogued photo whose file is that entry refuses the print instead (#4675).
+    #[test]
+    fn a_staging_name_never_removes_an_original() {
+        let dir = std::env::temp_dir().join(format!("lc-print-jpeg-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pages = [raster(40, 50, [255, 255, 255])];
+        let job = PrintJob::default();
+        // a leftover from an earlier print is replaced
+        std::fs::write(dir.join("Proofs-001.jpg.part"), b"leftover").unwrap();
+        let (files, _) = write_jpegs(&pages, &job, &dir, "Proofs", &OriginalGuard::default(), &|| false).unwrap();
+        assert!(std::fs::read(&files[0]).unwrap().starts_with(&[0xFF, 0xD8]));
+        assert!(!dir.join("Proofs-001.jpg.part").exists());
+        // the file of a catalogued photo is never removed: the print is refused
+        std::fs::write(dir.join("Proofs-001.jpg.part"), b"a photo").unwrap();
+        let mut guard = OriginalGuard::default();
+        guard.add(&dir.join("Proofs-001.jpg.part"), "Proofs-001.jpg.part");
+        let err = write_jpegs(&pages, &job, &dir, "Proofs", &guard, &|| false).unwrap_err();
+        assert!(err.contains("never writes over an original"), "{err}");
+        assert_eq!(std::fs::read(dir.join("Proofs-001.jpg.part")).unwrap(), b"a photo");
+        #[cfg(unix)]
+        {
+            // nor when the catalogue reaches it through a link with another name
+            std::os::unix::fs::symlink(dir.join("Proofs-001.jpg.part"), dir.join("IMG_1.jpg")).unwrap();
+            let mut guard = OriginalGuard::default();
+            guard.add(&dir.join("IMG_1.jpg"), "IMG_1.jpg");
+            let err = write_jpegs(&pages, &job, &dir, "Proofs", &guard, &|| false).unwrap_err();
+            assert!(err.contains("never writes over an original"), "{err}");
+            assert_eq!(std::fs::read(dir.join("Proofs-001.jpg.part")).unwrap(), b"a photo");
+            // a link planted at the staging name is removed; the photo it points to is untouched
+            std::fs::remove_file(dir.join("IMG_1.jpg")).unwrap();
+            std::fs::rename(dir.join("Proofs-001.jpg.part"), dir.join("IMG_1.jpg")).unwrap();
+            std::os::unix::fs::symlink(dir.join("IMG_1.jpg"), dir.join("Proofs-001.jpg.part")).unwrap();
+            write_jpegs(&pages, &job, &dir, "Proofs", &guard, &|| false).unwrap();
+            assert_eq!(std::fs::read(dir.join("IMG_1.jpg")).unwrap(), b"a photo");
+            assert!(std::fs::symlink_metadata(dir.join("Proofs-001.jpg.part")).is_err());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

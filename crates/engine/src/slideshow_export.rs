@@ -387,7 +387,11 @@ pub(crate) struct PartFile {
 }
 
 impl PartFile {
-    pub(crate) fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
+    /// `guard` keeps the staging name from removing an original: a catalogued photo whose file is
+    /// the entry already named `<path>.part`, by that name or through a symlink the catalogue
+    /// holds, refuses the export. Removing a hard link or a planted symlink there leaves the
+    /// photo's own file in place.
+    pub(crate) fn new(target: &Path, guard: &OriginalGuard) -> Result<(PartFile, std::fs::File), String> {
         if let Some(dir) = target.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
@@ -395,7 +399,11 @@ impl PartFile {
         name.push(".part");
         let part = target.with_file_name(name);
         // an entry already under the staging name (a leftover, or a link planted to point the
-        // encoder's bytes at another file) is removed, never opened and written through
+        // encoder's bytes at another file) is removed, never opened and written through; removing
+        // a link leaves what it points to, but a file there is checked first, as the target is
+        if std::fs::symlink_metadata(&part).is_ok_and(|m| !m.file_type().is_symlink()) {
+            guard.check(&part)?;
+        }
         let _ = std::fs::remove_file(&part);
         let f = std::fs::OpenOptions::new().write(true).create_new(true).open(&part).map_err(|e| format!("{}: {e}", part.display()))?;
         Ok((PartFile { part, target: target.to_path_buf(), done: false }, f))
@@ -479,7 +487,7 @@ impl Prepared {
 
     fn run_pdf(mut self, progress: Progress, cancel: &AtomicBool) -> Result<Outcome, String> {
         let target = PathBuf::from(&self.request.path);
-        let (part, file) = PartFile::new(&target)?;
+        let (part, file) = PartFile::new(&target, &self.guard)?;
         let mut pdf = crate::pdf::Pdf::new(BufWriter::new(file))?;
         let (w, h) = (self.width, self.height);
         let total = self.slides.len() as u64;
@@ -561,7 +569,7 @@ impl Prepared {
             let jpg = self.jpeg(&img)?;
             let target = dir.join(format!("{prefix}-{:0digits$}.jpg", parts.len() + 1));
             self.guard.check(&target)?;
-            let (part, mut f) = PartFile::new(&target)?;
+            let (part, mut f) = PartFile::new(&target, &self.guard)?;
             f.write_all(&jpg).map_err(|e| format!("{}: {e}", part.part.display()))?;
             f.sync_all().map_err(|e| format!("{}: {e}", part.part.display()))?;
             bytes = bytes.saturating_add(jpg.len());
@@ -593,7 +601,7 @@ impl Prepared {
         let mut enc = Av1Encoder::new(&VideoConfig { width: w as u32, height: h as u32, fps, quality: st.quality, speed: st.speed })
             .map_err(|e| e.to_string())?;
         let target = PathBuf::from(&self.request.path);
-        let (part, file) = PartFile::new(&target)?;
+        let (part, file) = PartFile::new(&target, &self.guard)?;
         let mut mux = VideoWriter::new(BufWriter::new(file), container, w as u32, h as u32, fps).map_err(|e| e.to_string())?;
         let total = self.total();
         let mut warnings = std::mem::take(&mut self.warnings);
