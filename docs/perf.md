@@ -68,7 +68,9 @@ It prints each budget in `BUDGETS` (draft slider ≤ 16 ms, loupe ≤ 60 ms at 2
 kept keyword tree ≤ 16 ms, …) with the measured wall time, then compares with this machine's baseline
 (`target/bench/baseline.json`, or the previous run on this host when there is none) using CPU time where a probe
 reports it and wall time otherwise. `--strict` fails on an enforced budget breach or a regression over 20 %
-(`--threshold PCT`). Budgets marked advisory are known misses and never fail; they become enforced once met. A
+(`--threshold PCT`). The same threshold is the budgets' noise allowance: an enforced budget fails only above
+ceiling × (1 + threshold), so one noisy reading just over a ceiling on a shared machine is reported as "over
+(within noise allowance)" and does not fail. Budgets marked advisory are known misses and never fail; they become enforced once met. A
 baseline from another host is never used: numbers compare only on one machine.
 
 First run (Windows, shared machine under heavy concurrent build load, 2026-11-24, 24 MP ARW; wall ms):
@@ -82,6 +84,7 @@ First run (Windows, shared machine under heavy concurrent build load, 2026-11-24
 | loupe 1920×1280 NR drag, GPU / CPU | 60 | 255 / 573 | advisory |
 | grid 100k unchanged frame | 16 | 13.2 | enforced |
 | grid wheel-scroll frame, filter bar hidden (4.8) | 16 | 17.5 | advisory |
+| grid wheel-scroll frame median, 100k (`wheel` probe, 4.8; 2026-11-24) | 16 | 6.2 | enforced |
 | grid 100k jump to 90k / filter change | 1500 / 1000 | 971 / 232 | enforced (guessed ceilings with headroom) |
 | TIFF ZIP 24 MP 16-bit | 3000 | 960 | enforced (guessed ceiling) |
 | keyword tree kept / rebuilt | 16 / 400 | 0.6 / 198 | enforced (rebuilt: guessed ceiling) |
