@@ -93,6 +93,7 @@
   "Goes into the group “{group}” that exists already.": "Půjde do existující skupiny „{group}“.",
   "Healed {n} blemishes": "Vyretušované nedokonalosti: {n}",
   "Healed {n} mark{} from the infrared pass": "Vyretušované stopy z infračerveného průchodu: {n}{:.0}",
+  "Hold {} and drag or scroll": "Podržte {} a táhněte nebo posouvejte",
   "Ignored {} face": "Ignorován {} obličej",
   "Ignored {} faces": "Ignorováno obličejů: {}",
   "Image Quality Scan stopped: {n} photos scanned": "Skenování kvality obrazu zastaveno: naskenováno {n} fotografií",

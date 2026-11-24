@@ -1,0 +1,28 @@
+---
+title: Speed-edit keys
+description: Hold a key and drag or scroll on the photo to move a slider.
+sidebar:
+  order: 13
+---
+
+import NeedsImage from '../../../components/NeedsImage.astro';
+
+<NeedsImage what="Develop loupe with E held: the resize-sideways pointer over the photo and the Exposure slider moving" />
+
+- **What**: in **Develop**, hold a speed-edit key and **scroll** or **drag sideways** on the photo. The key's slider moves; the view does not zoom or pan.
+- **Direction**: scroll up or drag right raises the value. One wheel notch is one nudge, the same step as the slider's arrow keys.
+- **Undo**: everything done while the key is held is **one history step**. Let go, then **Undo** takes it back in one go.
+- **Tap**: a key pressed and let go without scrolling or dragging still runs its normal shortcut (on release).
+
+| Hold | Slider |
+|---|---|
+| `E` | Exposure |
+| `C` | Contrast |
+| `H` | Highlights |
+| `S` | Shadows |
+| `W` | Whites |
+| `B` | Blacks |
+
+- **Change the keys**: `app.setSpeedKey {"key": "T", "control": "wb.temp"}` gives a key to any Develop slider (control ids as in `develop.set`); `"control": null` frees it, `{"reset": true}` restores the table above. `app.speedKeys` lists them. Use the command console, the control channel or MCP.
+- **Where they are listed**: **Help ▸ Keyboard Shortcuts** (section **Speed-Edit Keys**) and the Develop key sheet (**Ctrl+/**).
+- Only plain keys (no modifiers) work, and only while a photo is in the Develop loupe with no dialog open. In a text field the key types as usual.

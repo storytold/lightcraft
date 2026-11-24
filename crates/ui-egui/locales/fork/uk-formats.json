@@ -86,6 +86,7 @@
   "Goes into the group “{group}” that exists already.": "Потрапить до наявної групи «{group}».",
   "Healed {n} blemishes": "Виправлено вад шкіри: {n}",
   "Healed {n} mark{} from the infrared pass": "Виправлено слідів за інфрачервоним проходом: {n}{:.0}",
+  "Hold {} and drag or scroll": "Утримуйте {} і тягніть або прокручуйте",
   "Ignored {} face": "Проігноровано облич: {}",
   "Ignored {} faces": "Проігноровано облич: {}",
   "Image Quality Scan stopped: {n} photos scanned": "Сканування якості зображення зупинено: відскановано фото: {n}",

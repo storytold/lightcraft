@@ -40,6 +40,9 @@ struct Entry {
     lin: Option<(u64, Arc<Buf>)>,
     /// The joint colour NR's noise model of the whole frame, keyed by `Plan::noise_key`.
     colour_noise: Option<(u64, JointNoise)>,
+    /// A draft's image after colour NR alone, keyed by `Plan::draft_col_key`: a luminance NR drag
+    /// reruns only luminance NR on it (as the CPU's `StageCache` does).
+    draft_col: Option<(u64, Arc<Buf>)>,
     planes: Planes,
 }
 
@@ -868,13 +871,14 @@ pub fn render(
 
     // 2. white balance, defringe, spots, noise reduction
     let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let mut draft_col = plan.draft_col_key.and_then(|k| cached.as_ref().and_then(|e| e.draft_col.clone()).filter(|(ck, _)| *ck == k));
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key) {
         Some((_, b)) => b,
         None => {
-            if colour_noise.is_none() {
+            if colour_noise.is_none() && draft_col.is_none() {
                 colour_noise = lcc_pipeline::colour_noise(src, info, plan).map(|n| (plan.noise_key, n));
             }
-            Arc::new(linear(&mut cx, &sampled, info, plan, &mut host, colour_noise.as_ref().map(|c| &c.1)))
+            Arc::new(linear(&mut cx, &sampled, info, plan, &mut host, colour_noise.as_ref().map(|c| &c.1), &mut draft_col))
         }
     };
     lap("wb/nr", &mut t, &mut cx);
@@ -895,7 +899,7 @@ pub fn render(
     let (masks, terms, curves) = masks(&mut cx, src, &lin, &prep, plan, &mut host, &mut planes);
     lap("masks", &mut t, &mut cx);
     if let Some(c) = stages {
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), colour_noise, planes });
+        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), colour_noise, draft_col, planes });
     }
 
     // 5. per-pixel stage
@@ -1298,12 +1302,50 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
     data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
 }
 
-/// The white-balanced, retouched, denoised image (`colour_noise`: see `denoise`).
-fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host, colour_noise: Option<&JointNoise>) -> Buf {
+/// The white-balanced, retouched, denoised image (`colour_noise`: see `denoise`). `draft_col`: a
+/// luminance NR draft's colour-NR'd image (`Plan::draft_col_key`); when it holds one, only luminance
+/// NR reruns on it, otherwise it is set to the one this render makes.
+fn linear(
+    cx: &mut Cx<'_>,
+    sampled: &Buf,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    colour_noise: Option<&JointNoise>,
+    draft_col: &mut Option<(u64, Arc<Buf>)>,
+) -> Buf {
+    // (`draft_col_key` is set only with luminance NR on, so the copies below are never made; Smooth
+    // Skin works in place on the image after NR, so the cached one is never handed on itself)
+    let img = match (plan.draft_col_key, draft_col.as_ref()) {
+        (Some(k), Some((ck, col))) if *ck == k => match denoise_lum_of(cx, col, plan) {
+            Some(img) => img,
+            None => cx.copy(col),
+        },
+        _ => {
+            let img = pre_nr(cx, sampled, info, plan, host);
+            match plan.draft_col_key {
+                Some(k) => {
+                    let col = Arc::new(denoise_colour(cx, img, plan, colour_noise));
+                    let img = match denoise_lum_of(cx, &col, plan) {
+                        Some(img) => img,
+                        None => cx.copy(&col),
+                    };
+                    *draft_col = Some((k, col));
+                    img
+                }
+                None => denoise(cx, img, plan, colour_noise),
+            }
+        }
+    };
+    post_nr(cx, img, plan, host)
+}
+
+/// [`linear`] up to noise reduction: white balance, defringe, spots, red eye.
+fn pre_nr(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lcc_pipeline::lin_needs_cpu(s, info) {
+    if lcc_pipeline::lin_needs_cpu(s, info) {
         // content-aware Fill spots / the camera's local tone map: the whole stage on the CPU
         let mut img = match host.sampled.take() {
             Some(i) => i,
@@ -1329,8 +1371,13 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
             map(cx, "redeye_k", n, &p, [Some(&out), None, None], &eyed);
             eyed
         }
-    };
-    let img = denoise(cx, img, plan, colour_noise);
+    }
+}
+
+/// [`linear`] after noise reduction: Smooth Skin and the retouch of people's parts.
+fn post_nr(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, host: &mut Host) -> Buf {
+    let (w, h) = (plan.w, plan.h);
+    let s = &*plan.settings;
     if !lcc_pipeline::skin_needs_cpu(s) {
         return img;
     }
@@ -1446,7 +1493,7 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     out
 }
 
-/// Spot removal (`spots::apply`; Clone, Heal, Remove), spot by spot on `img` in place: each spot
+/// Spot removal (`spots::apply`; Clone, Heal, Remove, Even Out), spot by spot on `img` in place: each spot
 /// reads the image as the earlier ones left it.
 fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     use lcc_pipeline::spots;
@@ -1463,7 +1510,7 @@ fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
         let (al, sp, df, wt) = (cx.gpu.buffer(nb), cx.gpu.buffer(3 * nb), cx.gpu.buffer(3 * nb), cx.gpu.buffer(nb));
         let mut p = vec![w as u32, h as u32, l.bx as u32, l.by as u32, l.bw as u32, l.bh as u32, l.pts.len() as u32];
         p.extend([l.r, l.inner, l.opacity, offset.0, offset.1].map(f32::to_bits));
-        p.push(l.heal as u32);
+        p.extend([l.heal as u32, l.flat as u32]);
         let groups = groups2(l.bw, l.bh, [16, 16]);
         cx.run("spot_prep", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(&df), Some(&wt)], groups);
         // Heal: the tone correction is the masked difference's normalized blur
@@ -1471,8 +1518,18 @@ fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
             let sigma = (l.r * 0.6).max(1.0);
             (gaussian(cx, &df, l.bw, l.bh, 3, sigma), gaussian(cx, &wt, l.bw, l.bh, 1, sigma))
         });
-        let (bd, bm) = blurred.as_ref().map_or((&df, &wt), |(d, m)| (d, m));
-        cx.run("spot_apply", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(bd), Some(bm)], groups);
+        // Even Out: the surroundings' and weights' blur, and the target's own finer one in place of the patch
+        let flat = l.flat.then(|| {
+            let sigma = (l.r * 0.6).max(1.0);
+            let own = gaussian(cx, &sp, l.bw, l.bh, 3, (l.r * 0.15).max(1.0));
+            (gaussian(cx, &df, l.bw, l.bh, 3, sigma), gaussian(cx, &wt, l.bw, l.bh, 1, sigma), own)
+        });
+        let (bd, bm, sp) = match (&blurred, &flat) {
+            (_, Some((d, m, o))) => (d, m, o),
+            (Some((d, m)), None) => (d, m, &sp),
+            (None, None) => (&df, &wt, &sp),
+        };
+        cx.run("spot_apply", &p, &[Some(&img), Some(&pts), Some(&al), Some(sp), Some(bd), Some(bm)], groups);
     }
     img
 }
@@ -1508,15 +1565,23 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&Joi
 
 /// The luminance half of [`denoise`].
 fn denoise_lum(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
+    match denoise_lum_of(cx, &img, plan) {
+        Some(out) => out,
+        None => img,
+    }
+}
+
+/// Luminance NR of `img` into a new buffer (`img` untouched); `None` when luminance NR is off.
+fn denoise_lum_of(cx: &mut Cx<'_>, img: &Buf, plan: &Plan<'_>) -> Option<Buf> {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let Some(nr) = local::nr_params(&plan.settings, plan.detail_scale).0 else { return img };
+    let nr = local::nr_params(&plan.settings, plan.detail_scale).0?;
     let l = cx.gpu.buffer(n);
-    map(cx, "log_lum_k", n, &[], [Some(&img), None, None], &l);
+    map(cx, "log_lum_k", n, &[], [Some(img), None, None], &l);
     let f = guided(cx, &l, w, h, nr.sigma, nr.eps);
     let out = cx.gpu.buffer(n * 3);
-    map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);
-    out
+    map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(img), Some(&l), Some(&f)], &out);
+    Some(out)
 }
 
 /// The colour half of [`denoise`].

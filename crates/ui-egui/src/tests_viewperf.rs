@@ -211,5 +211,6 @@ fn wheel_scroll_100k_frame() {
     };
     let (median, p95, in_grid) = (pick(&mut frames, 0.5), pick(&mut frames, 0.95), pick(&mut panel, 0.5));
     eprintln!("wheel scroll 100k | frame median {median:.1} ms, p95 {p95:.1} ms, grid panel median {in_grid:.2} ms (budget 16 ms)");
+    eprintln!("wheel scroll 100k | frame median: {median:.1} ms wall"); // the `cargo xtask bench` row
     assert!(median < 160.0, "wheel-scroll frame median {median:.0} ms, ten times the 16 ms budget");
 }

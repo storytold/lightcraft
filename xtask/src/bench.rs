@@ -1,5 +1,5 @@
 //! `cargo xtask bench [FILE] [--only P,P…] [--strict] [--threshold PCT] [--save-baseline]`: run the
-//! performance probes in [`PROBES`] (render, Library grid at 100k, TIFF ZIP export, keyword tree, start-up at 100k), record
+//! performance probes in [`PROBES`] (render, Library grid at 100k, TIFF ZIP export, keyword tree, start-up at 100k, wheel-scroll at 100k), record
 //! the results in `target/bench/history.jsonl` (one JSON object per run, with git revision, host and load
 //! average), check them against the budgets in [`BUDGETS`] and compare with this machine's stored baseline
 //! (`target/bench/baseline.json`, written by `--save-baseline`; the previous run on this host when there is
@@ -8,7 +8,7 @@
 //! Comparisons use **process CPU time** where a probe reports it (it reflects the work done even on a busy
 //! shared machine), wall-clock otherwise. Budgets are wall-clock: what a user waits for. `--strict` exits
 //! non-zero when a metric regressed by more than the threshold (default 20 %) or an enforced budget is
-//! breached. A baseline from another host is never compared against. Where the platform reports no
+//! breached by more than the same threshold (a noise allowance, see [`ceiling`]). A baseline from another host is never compared against. Where the platform reports no
 //! process CPU time (Windows: the `cpu` column is 0), wall time is compared instead.
 //!
 //! Adding a probe or a budget is one line in [`PROBES`] / [`BUDGETS`]. A probe prints lines of the form
@@ -84,6 +84,7 @@ pub const PROBES: &[Probe] = &[
     probe("tiff", &["test", "--release", "-q", "-p", "lcc-codecs", "--test", "it", "tiff_zip::bench", "--", "--nocapture"]),
     probe("keywords", &["test", "--release", "-q", "-p", "lcc-catalog", "--lib", "probe_keyword_tree_cost", "--", "--nocapture"]),
     probe("startup", &["run", "--release", "-q", "-p", "lcc-ui-egui", "--example", "startup_bench"]), // 100k-photo library (4.1)
+    probe("wheel", &["test", "--release", "-q", "-p", "lcc-ui-egui", "--lib", "tests_viewperf::wheel_scroll_100k_frame", "--", "--nocapture"]), // 4.8
 ];
 
 /// A wall-clock ceiling on one metric. `enforce: false` is reported but never fails `--strict`: a known miss
@@ -126,12 +127,22 @@ pub const BUDGETS: &[Budget] = &[
     budget("tiff:tiff 24 MP 16-bit noise 1300 Deflate/cpu/wall", 3000.0, "TIFF ZIP export, 24 MP 16-bit (960)"),
     budget("keywords:keyword tree 58k (kept)/cpu/wall", 16.0, "Keyword List, kept tree (0.6)"),
     advisory("startup:startup library ready/cpu/wall", 3000.0, "start-up to a usable library, 100k photos (4.1; 1.0-8.2 s loaded)"),
+    budget("wheel:wheel scroll 100k | frame median/cpu/wall", 16.0, "grid wheel-scroll frame, 100k (4.8)"),
     budget("keywords:keyword tree 58k (built with its index)/cpu/wall", 400.0, "Keyword List after an edit (198)"),
 ];
 
-/// Budgets breached in `now`: (budget, measured ms).
-pub fn breaches<'a>(now: &BTreeMap<String, f64>, budgets: &'a [Budget]) -> Vec<(&'a Budget, f64)> {
-    budgets.iter().filter_map(|b| now.get(b.metric).filter(|&&v| v > b.max_ms).map(|&v| (b, v))).collect()
+/// The noise allowance on a budget: a reading fails only above `max_ms * (1 + allowance)`, the same
+/// fraction as the regression `--threshold` (default 20 %), so one noisy run just over a ceiling on a shared
+/// machine does not fail `--strict`. A reading between the ceiling and the allowance is reported as over
+/// (within noise). Negative or non-finite allowances count as 0.
+pub fn ceiling(b: &Budget, allowance: f64) -> f64 {
+    let a = if allowance.is_finite() { allowance.max(0.0) } else { 0.0 };
+    b.max_ms * (1.0 + a)
+}
+
+/// Budgets breached in `now` beyond the noise allowance (see [`ceiling`]): (budget, measured ms).
+pub fn breaches<'a>(now: &BTreeMap<String, f64>, budgets: &'a [Budget], allowance: f64) -> Vec<(&'a Budget, f64)> {
+    budgets.iter().filter_map(|b| now.get(b.metric).filter(|&&v| v > ceiling(b, allowance)).map(|&v| (b, v))).collect()
 }
 
 fn load_avg() -> Option<f64> {
@@ -245,13 +256,14 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         let status = match metrics.get(b.metric) {
             None => "not measured".to_string(),
             Some(&v) if v <= b.max_ms => format!("{v:.1} ms  ok"),
+            Some(&v) if v <= ceiling(b, threshold) => format!("{v:.1} ms  over (within {:.0}% noise allowance)", threshold * 100.0),
             Some(&v) if b.enforce => format!("{v:.1} ms  OVER BUDGET"),
             Some(&v) => format!("{v:.1} ms  over (advisory)"),
         };
         eprintln!("budget ≤ {:>5.0} ms  {:<46} {status}", b.max_ms, b.why);
     }
-    for (b, v) in breaches(&metrics, BUDGETS).into_iter().filter(|(b, _)| b.enforce) {
-        failures.push(format!("{} over budget: {v:.1} ms > {:.0} ms ({})", b.metric, b.max_ms, b.why));
+    for (b, v) in breaches(&metrics, BUDGETS, threshold).into_iter().filter(|(b, _)| b.enforce) {
+        failures.push(format!("{} over budget: {v:.1} ms > {:.0} ms + {:.0}% ({})", b.metric, b.max_ms, threshold * 100.0, b.why));
     }
     let against = match (baseline.clone(), prev) {
         (Some(b), _) => Some((b, "the baseline")),
@@ -349,9 +361,22 @@ window pan (new window, warm src):     cpu: 912.0 ms wall, 2210.5 ms cpu  |  gpu
     fn breaches_report_only_metrics_over_their_ceiling() {
         let m: BTreeMap<String, f64> = [("a".to_string(), 20.0), ("b".to_string(), 10.0)].into();
         let budgets = [budget("a", 16.0, "x"), budget("b", 16.0, "y"), advisory("c", 1.0, "z")];
-        let r = breaches(&m, &budgets);
+        let r = breaches(&m, &budgets, 0.0);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0.metric, "a");
+    }
+
+    #[test]
+    fn a_reading_just_over_the_ceiling_is_within_the_noise_allowance() {
+        let budgets = [budget("a", 16.0, "x")];
+        let just_over: BTreeMap<String, f64> = [("a".to_string(), 17.5)].into();
+        assert!(breaches(&just_over, &budgets, 0.2).is_empty());
+        let well_over: BTreeMap<String, f64> = [("a".to_string(), 19.3)].into();
+        assert_eq!(breaches(&well_over, &budgets, 0.2).len(), 1);
+        assert_eq!(breaches(&just_over, &budgets, 0.0).len(), 1, "no allowance: the bare ceiling");
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(ceiling(&budgets[0], bad), 16.0, "{bad}");
+        }
     }
 
     #[test]

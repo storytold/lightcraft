@@ -81,6 +81,8 @@ $MsiVersion = ($Version -split '-')[0]
 $Target = switch ($Arch) { 'x64' { 'x86_64-pc-windows-msvc' } 'x86' { 'i686-pc-windows-msvc' } 'arm64' { 'aarch64-pc-windows-msvc' } }
 $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
+# Cargo profile: dist (thin LTO, one codegen unit) for releases; PACKAGE_PROFILE=release for a quicker local build.
+$CargoProfile = if ($env:PACKAGE_PROFILE) { $env:PACKAGE_PROFILE } else { 'dist' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
 if (-not $env:BUILD_SHA) { $env:BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
@@ -97,10 +99,10 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   [Environment]::SetEnvironmentVariable("$($Brand.env_prefix)_REQUIRE_WINRES", '1')
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p lcc-app -p lcc-cli-launcher --features lcc-app/heif --target $Target }
+  Invoke-Native "cargo build ($Target, $CargoProfile)" { cargo build --profile $CargoProfile --locked -p lcc-app -p lcc-cli-launcher --features lcc-app/heif --target $Target }
 }
 
-$Bin = Join-Path $TargetDir "$Target\release"
+$Bin = Join-Path $TargetDir "$Target\$CargoProfile"
 
 # Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
 # x64 build can never ship labelled arm64. Subsystem (optional header): 2 = Windows GUI, 3 = console.

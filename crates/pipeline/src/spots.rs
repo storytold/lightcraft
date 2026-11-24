@@ -357,7 +357,7 @@ pub struct SpotLayout {
     /// Rebuilt from the box around it ([`synthesises`]: Fill, Generate, a Remove without a source;
     /// CPU only: the GPU renderer runs this stage on the CPU for such a photo).
     pub fill: bool,
-    /// Even Out ([`SpotMode::Flat`]: CPU only, as `fill`).
+    /// Even Out ([`SpotMode::Flat`]; the GPU renderer's `spot_apply` mirrors [`flat_gain`]).
     pub flat: bool,
 }
 

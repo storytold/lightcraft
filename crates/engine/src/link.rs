@@ -20,6 +20,22 @@ pub fn is_link(s: &str) -> bool {
         && s.get(lcc_brand::URL_SCHEME.len()..).is_some_and(|r| r.starts_with(':'))
 }
 
+/// A `file://` URL's local path (a Linux file manager hands files over as URLs to an app whose
+/// desktop file takes `%U`, as ours does for its links); `None` for anything else, a remote host
+/// or a path that doesn't decode.
+pub fn file_url_path(s: &str) -> Option<String> {
+    let rest = s.get(..7).filter(|p| p.eq_ignore_ascii_case("file://")).and_then(|_| s.get(7..))?;
+    // `file:///p` or `file://localhost/p`
+    let path = if rest.starts_with('/') { rest } else { rest.strip_prefix("localhost").filter(|r| r.starts_with('/'))? };
+    let path = decode_path(path).ok()?;
+    if path.contains('\0') {
+        return None;
+    }
+    // (Windows: `file:///C:/x` is `C:/x`)
+    let windows_drive = path.get(1..3).is_some_and(|d| d.ends_with(':') && d.starts_with(|c: char| c.is_ascii_alphabetic()));
+    Some(if windows_drive { path.get(1..).unwrap_or_default().to_string() } else { path })
+}
+
 /// The link that synchronizes `folder`.
 pub fn sync_link(folder: &str) -> String {
     format!("{}://sync?path={}", lcc_brand::URL_SCHEME, encode(folder))
@@ -62,7 +78,16 @@ fn encode(s: &str) -> String {
     out
 }
 
+/// `%`-escapes only (a `+` in a path is a plus).
+fn decode_path(s: &str) -> Result<String, String> {
+    decode_with(s, false)
+}
+
 fn decode(s: &str) -> Result<String, String> {
+    decode_with(s, true)
+}
+
+fn decode_with(s: &str, plus_is_space: bool) -> Result<String, String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -73,7 +98,7 @@ fn decode(s: &str) -> Result<String, String> {
                 out.push(u8::from_str_radix(hex, 16).map_err(|_| "bad %-escape in the link")?);
                 i += 3;
             }
-            b'+' => {
+            b'+' if plus_is_space => {
                 out.push(b' ');
                 i += 1;
             }
@@ -96,6 +121,18 @@ mod tests {
             let l = parse(&sync_link(f)).unwrap();
             assert_eq!(l.command, "folder.synchronize");
             assert_eq!(l.params["path"], f);
+        }
+    }
+
+    #[test]
+    fn file_urls_are_paths() {
+        assert_eq!(file_url_path("file:///home/me/a%20b+c.jpg").as_deref(), Some("/home/me/a b+c.jpg"));
+        assert_eq!(file_url_path("FILE://localhost/p/x").as_deref(), Some("/p/x"));
+        assert_eq!(file_url_path("file:///C:/Users/x.jpg").as_deref(), Some("C:/Users/x.jpg"));
+        for bad in
+            ["", "file:", "file://", "file://host/p", "file:///%", "file:///%FF", "file:///a%00b", "/p/x", "http://x/y", "file://é", "filé:///x"]
+        {
+            assert_eq!(file_url_path(bad), None, "{bad}");
         }
     }
 

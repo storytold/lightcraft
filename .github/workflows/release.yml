@@ -229,9 +229,11 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: packaging/macos/import-cert.sh
-      # Three disk images from one build of each architecture: Apple silicon (arm64), Intel (x64), and
-      # the universal one, which installs from before the per-architecture images update through
-      # (issue #1228; dropping it is a separate change). Each is signed, notarized and stapled.
+      # Three disk images from one dist-profile build of each architecture: Apple silicon (arm64),
+      # Intel (x64), and the universal one. The universal image is kept through 26.48.x only, so
+      # installs of 26.47.x and earlier (whose updater takes only it) can update to 26.48; remove it
+      # (the `--arch universal` line and its size-budget entry) with 26.49.0 (#1269). Each is signed,
+      # notarized and stapled.
       - name: Build, sign, notarize
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -491,7 +493,7 @@ jobs:
           dpkg-deb --info dist/release/*.deb
           . packaging/env.sh
           dpkg-deb --contents dist/release/*.deb | grep -E "usr/bin/$BRAND_BINARY\$|metainfo|applications"
-          ldd "${CARGO_TARGET_DIR:-target}/release/app"
+          ldd "${CARGO_TARGET_DIR:-target}/${PACKAGE_PROFILE:-dist}/app"
           cargo xtask package --render-only
           python3 -c "import yaml, os; a = os.environ['BRAND_APP_ID']; m = yaml.safe_load(open(os.path.join(os.environ.get('CARGO_TARGET_DIR', 'target'), f'package/linux/flatpak/{a}.yml'))); assert m['id'] == a"
           for appimage in dist/release/*.AppImage; do
@@ -607,6 +609,14 @@ jobs:
           XDG_RUNTIME_DIR="$(mktemp -d)"
           export XDG_RUNTIME_DIR
           dbus-run-session -- packaging/linux/flatpak-bundle.sh "dist/linux/${{ needs.version.outputs.binary }}-$PACKAGE_VERSION-linux-${{ matrix.arch }}.tar.gz"
+      # Fails when a download grew more than 10 % over packaging/size-budget.toml (docs/release-process.md).
+      # The container has no Rust: a minimal toolchain (and a linker) for xtask only.
+      - name: Package size
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev
+          export CARGO_HOME=/tmp/flatpak-cargo RUSTUP_HOME=/tmp/flatpak-rustup
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
+          "$CARGO_HOME/bin/cargo" xtask package-size dist/release/*.flatpak
       # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
       - name: Checksums
         run: |

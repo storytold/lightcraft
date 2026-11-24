@@ -24,6 +24,14 @@ Written after 26.46.2; keep it current. CI mechanics: [`ci.md`](ci.md). Changelo
    Each packaging job runs `cargo xtask package-size dist/release/*`, which fails when a download grew more than
    10 % over its entry in `packaging/size-budget.toml`. A deliberate growth raises the entry with
    `cargo xtask package-size --update <files>` (or by hand from the draft's asset sizes) in a commit that says why.
+   A download with no entry fails too (a new or renamed file: add its entry, drop the old name's); a pre-release
+   (`26.48.0-rc.1`) is checked against the release's entries. The desktop packages build with the `dist` cargo
+   profile (thin LTO, one codegen unit; `PACKAGE_PROFILE=release` for a quicker local package).
+   macOS ships `-macos-arm64.dmg`, `-macos-x64.dmg` and, through 26.48.x only, `-macos-universal.dmg`: the
+   updater since 26.48.0 takes the image for the Mac it runs on, while 26.47.x and earlier take only the
+   universal one, so 26.48 keeps it to bring them over. **With 26.49.0, remove it (#1269):** drop
+   `--arch universal` (and `--skip-build` from the next line) in `release.yml`, the `macos-universal.dmg` entry in
+   `packaging/size-budget.toml`, and the universal mentions on the download/install pages.
 7. **Publish** when the Release workflow succeeded and the draft has all assets (19 in 26.46.2; compare with the
    previous release): `gh release edit v<ver> --draft=false --latest`.
 8. **Clean up** local prep branches, finished agents' worktrees and scratch/target dirs.
