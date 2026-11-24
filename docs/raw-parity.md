@@ -205,7 +205,7 @@ sample files. A pointer for contributors, not legal advice.
 
 | Stage | Target | The app | Status |
 |---|---|---|---|
-| Bayer demosaic | Adobe's own, plus AI "Raw Details" | AHD (default), PPG, bilinear (`crates/raw/src/demosaic`) | 🟡 quality unmeasured against Lightroom; no Raw Details |
+| Bayer demosaic | Adobe's own, plus AI "Raw Details" | AHD (default), PPG, bilinear, RCD (translated from RawTherapee; not wired to a user choice yet) (`crates/raw/src/demosaic`) | 🟡 quality unmeasured against Lightroom; no Raw Details |
 | X-Trans demosaic | ✅ | classified LMMSE green + residual-interpolated red/blue on the white-balanced mosaic, trained on CC0 X-Trans raws (`crates/raw/src/demosaic/xtrans_ri.rs`, [xtrans-demosaic.md](xtrans-demosaic.md)) | 🟡 +4.8 dB CPSNR and 40 % less false colour than the previous directional method on held-out real X-Trans scenes; not measured against Lightroom |
 | Foveon | ✅ (older bodies) | — | ⬜ |
 | Monochrome / LinearRaw | ✅ | handled, no demosaic | ✅ |
