@@ -122,6 +122,8 @@ pub fn inspect(app: &LccApp, ctx: &egui::Context) -> Value {
     let r = ctx.content_rect();
     // (its own object: one more level of fields in the reply below passes `json!`'s recursion limit)
     let frame_gaps = json!({"hostFrameMs": app.perf.host_frame_ms, "gapMs": app.perf.gap_ms, "maxGapMs": app.perf.max_gap_ms, "maxGapHostMs": app.perf.max_gap_host_ms});
+    // the window's focus/visibility changes and their UI-thread time (issue #1188)
+    let focus = json!({"count": app.focus_watch.changes, "lastMs": app.focus_watch.last_ms, "worstMs": app.focus_watch.worst_ms});
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
         "window": [r.width(), r.height()],
@@ -165,6 +167,7 @@ pub fn inspect(app: &LccApp, ctx: &egui::Context) -> Value {
         // commands waiting on a native file dialog shown off the UI thread (`pick`)
         "fileDialogs": app.pending_picks.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
         "memory": memory(app),
+        "windowFocus": focus,
     })
 }
 
