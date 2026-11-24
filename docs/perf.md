@@ -68,9 +68,26 @@ It prints each budget in `BUDGETS` (draft slider ≤ 16 ms, loupe ≤ 60 ms at 2
 kept keyword tree ≤ 16 ms, …) with the measured wall time, then compares with this machine's baseline
 (`target/bench/baseline.json`, or the previous run on this host when there is none) using CPU time where a probe
 reports it and wall time otherwise. `--strict` fails on an enforced budget breach or a regression over 20 %
-(`--threshold PCT`). Budgets marked advisory are known misses with their own plan item (grid
-wheel-scroll at 100k: 4.8) and never fail. A baseline from another host is never used: numbers compare only on one
-machine.
+(`--threshold PCT`). Budgets marked advisory are known misses and never fail; they become enforced once met. A
+baseline from another host is never used: numbers compare only on one machine.
+
+First run (Windows, shared machine under heavy concurrent build load, 2026-11-24, 24 MP ARW; wall ms):
+
+| Budget | Ceiling | Measured | Gate |
+|---|---|---|---|
+| draft highlights / clarity drag, GPU | 16 | 3.9 / 4.1 | enforced |
+| draft highlights / clarity drag, CPU | 16 | 78 / 51 | advisory |
+| draft NR drag, GPU / CPU (4.5) | 16 | 30 / 519 | advisory |
+| loupe 1920×1280 exposure drag, GPU / CPU | 60 | 13 / 127 | GPU enforced, CPU advisory |
+| loupe 1920×1280 NR drag, GPU / CPU | 60 | 255 / 573 | advisory |
+| grid 100k unchanged frame | 16 | 13.2 | enforced |
+| grid wheel-scroll frame, filter bar hidden (4.8) | 16 | 17.5 | advisory |
+| grid 100k jump to 90k / filter change | 1500 / 1000 | 971 / 232 | enforced (guessed ceilings with headroom) |
+| TIFF ZIP 24 MP 16-bit | 3000 | 960 | enforced (guessed ceiling) |
+| keyword tree kept / rebuilt | 16 / 400 | 0.6 / 198 | enforced (rebuilt: guessed ceiling) |
+
+The CPU rows ran at several times the 4.5 figures (CPU NR drag 33 ms idle-ish vs 519 ms here) because of the load;
+re-measure on a quiet machine before turning them into enforced budgets.
 
 ```sh
 cargo xtask bench --save-baseline            # on main: record this machine's baseline
