@@ -413,6 +413,7 @@ pub fn checked(app: &LccApp, id: &str) -> Option<bool> {
         "view.filterBar" => Some(u.filter_bar),
         "library.toggleFilters" => Some(!app.session.filters_off()),
         "view.soloSections" => Some(u.single_panel),
+        "mask.solo" => Some(u.mask_solo),
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
         "library.holdView" => Some(app.session.hold_view),
