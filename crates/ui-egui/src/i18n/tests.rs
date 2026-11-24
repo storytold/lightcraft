@@ -947,6 +947,8 @@ fn traditional_chinese_presets_and_panel_headers_are_painted() {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
     let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    // The docked Presets panel sends dock commands, which need the framework runtime installed before the first pass.
+    app.install_framework(&ctx);
     app.ui.presets = true;
     let builtin = app.session.presets.iter().find(|p| p.name == "Warm Glow").unwrap().clone();
     app.session.presets.push(lightcraft_develop::Preset { id: "user.test".into(), builtin: false, ..builtin });

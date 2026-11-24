@@ -131,16 +131,21 @@ impl Frames {
     fn tab_to(&mut self, name: &str, mut draw: impl FnMut(&mut Ui)) {
         // Tab enters the real one-stop menu group; arrows travel its actual members. Never request focus.
         let mut trace = Vec::new();
+        // At least one real navigation key first: Enter or Space as the first key of a pointer-opened menu is withheld by
+        // its row (it only runs the row the pointer lit, or closes the menu), so a target that already holds the focus
+        // still needs the keyboard to have started before the key under test.
+        let mut pressed = false;
         for _ in 0..16 {
             let native = self.ctx.memory(|memory| memory.focused());
             let focused = craft::ui::runtime::focus::focused_rec(&self.ctx).map(|rec| rec.stop.id);
-            if focused == Some(self.hit(name).id) {
+            if pressed && focused == Some(self.hit(name).id) {
                 assert_eq!(native, focused, "the actual SDK hit owner must hold real egui focus, not a manufactured parallel focus");
                 return;
             }
             let menu_focus = self.hits.iter().find(|(key, hit)| key.contains("Menu:") && Some(hit.id) == focused);
             trace.push((focused, menu_focus.map(|(key, _)| key.clone())));
             self.key(if menu_focus.is_some() { Key::ArrowDown } else { Key::Tab }, &mut draw);
+            pressed = true;
         }
         panic!("Natural Tab/arrow travel never reached the actual popup owner {name}: {trace:?}; key frames: {:?}", self.key_trace);
     }
