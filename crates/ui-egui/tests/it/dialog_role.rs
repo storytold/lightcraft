@@ -8,7 +8,11 @@ use lightcraft_ui_egui::{LightcraftApp, Services};
 fn harness() -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.headless_host = true;
-    let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
+    // The framework runtime is installed before the first pass, as the app's host does (its command sets: the dock's
+    // group commands are scoped to their group).
+    let mut builder = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx));
     // Settings lists each language by its own name, and some scripts (Georgian, the CJK
     // languages) have glyphs only in the craft-fonts faces (releases always have them): without
     // them the names are drawn as boxes, which this check of roles and titles doesn't need

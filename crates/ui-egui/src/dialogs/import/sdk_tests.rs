@@ -272,7 +272,8 @@ fn sdk_import_rename_focus_and_caret_survive_measurement_without_disabling_calle
     ask(&mut r.h, "ui.text", json!({"text": "a"}));
     let rename = egui::Id::unique("import-rename");
     assert_eq!(draft(&r.h).rename, "a");
-    assert!(r.h.view.ctx.memory(|memory| memory.has_focus(rename)));
+    // (the framework's Rename field keeps egui's focus on its text part)
+    assert!(crate::text_field::has_focus_id(&r.h.view.ctx, rename));
     let mut measured = draft(&r.h).clone();
     let before = measured.clone();
     let ctx = r.h.view.ctx.clone();
@@ -286,12 +287,12 @@ fn sdk_import_rename_focus_and_caret_survive_measurement_without_disabling_calle
         facts.0 = ui.is_enabled();
         craft::ui::runtime::measure::run(&ctx, || super::body(&mut r.h.app, ui, &mut measured));
         facts.1 = ui.is_enabled();
-        facts.2 = ctx.memory(|memory| memory.has_focus(rename));
+        facts.2 = crate::text_field::has_focus_id(&ctx, rename);
         facts.3 = crate::widgets::take_registry(&ctx).is_empty();
         // Render the original dialog through the real app, on its actual modal layer.
         // Directly remounting body() at the root would legitimately lose modal focus.
         r.h.app.ui(ui);
-        facts.4 = ctx.memory(|memory| memory.has_focus(rename));
+        facts.4 = crate::text_field::has_focus_id(&ctx, rename);
     });
     out.textures_delta.clear();
     assert!(facts.0 && facts.1, "speculative disable cannot leak into the caller");

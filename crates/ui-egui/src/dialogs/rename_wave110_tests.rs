@@ -31,8 +31,8 @@ fn rename_wave110_batch_preset_tags_and_confirm() {
     ask(&mut h, "ui.clickWidget", json!({"id": "button:renameTemplateTags"}));
     let widgets = ask(&mut h, "ui.widgets", json!({})).to_string();
     assert!(widgets.contains("button:renameTemplateTag-0"), "{widgets}");
-    // Native shared tag-help still replaces the actual selection at the cursor.
-    let id = egui::Id::unique("rename-template");
+    // The shared tag help replaces the actual selection at the cursor: the framework field keeps it on its text part.
+    let id = crate::text_field::text_id(egui::Id::unique("rename-template"));
     let mut state = egui::text_edit::TextEditState::default();
     state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(0))));
     state.store(&h.view.ctx, id);

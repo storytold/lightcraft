@@ -22,6 +22,13 @@ fn response(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
     }
 }
 
+/// [`response`] for a control shown at `rect`: the rect it was laid out at, also below the body's visible part.
+fn response_at(ui: &egui::Ui, id: impl Into<String>, rect: egui::Rect, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, rect, response);
+    }
+}
+
 pub(super) struct ButtonHit {
     response: egui::Response,
     activated: bool,
@@ -57,7 +64,7 @@ pub(super) fn text(ui: &mut egui::Ui, id: &str, label: &str, value: &mut String,
         .limit(None)
         .submits()
         .show_at(ui, rect);
-    response(ui, id, &shown.response);
+    response_at(ui, id, rect, &shown.response);
 }
 
 /// A value menu preserves stable option IDs, unlike position-indexed picker entries.
@@ -104,7 +111,7 @@ pub(super) fn number(ui: &mut egui::Ui, spec: &lightcraft_develop::controls::Con
             .label(crate::i18n::tr(spec.label))
             .step(spec.step)
             .show_at(ui, rect);
-        response(ui, format!("slider:{}", spec.id), &shown.response);
+        response_at(ui, format!("slider:{}", spec.id), rect, &shown.response);
         let mut exact = Some(current);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 24.0), egui::Sense::hover());
         let shown = NumberField::new(crate::i18n::tr(spec.label), Bind::bound(&mut exact))
@@ -115,8 +122,8 @@ pub(super) fn number(ui: &mut egui::Ui, spec: &lightcraft_develop::controls::Con
             .commit_decimals(spec.decimals as usize)
             .fixed_decimals(spec.decimals as usize)
             .show_at(ui, rect);
-        response(ui, format!("sliderValue:{}", spec.id), &shown.response);
-        response(ui, format!("sliderField:{}", spec.id), &shown.response);
+        response_at(ui, format!("sliderValue:{}", spec.id), rect, &shown.response);
+        response_at(ui, format!("sliderField:{}", spec.id), rect, &shown.response);
         if let Some(exact) = exact.filter(|v| v.is_finite()) {
             current = spec.clamp(exact);
         }

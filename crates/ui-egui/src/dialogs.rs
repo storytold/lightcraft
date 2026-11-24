@@ -549,7 +549,11 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.width().max(1.0)).clamp(0.5, 1.0),
         (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.height().max(1.0)).clamp(0.5, 1.0),
     );
-    dialog = dialog.overlay(|overlay| overlay.fit(craft::ui::contract::overlay::OverlayFit::ContentCapped(share)));
+    // The app dims the window under the dialog itself ("dialog-dim" above), leaving the integrated title bar lit like a
+    // macOS sheet: the framework's own scrim would dim the bar too.
+    dialog = dialog
+        .backdrop(craft::ui::runtime::overlay::Backdrop::None)
+        .overlay(|overlay| overlay.fit(craft::ui::contract::overlay::OverlayFit::ContentCapped(share)));
     // Return presses OK in a dialog without a text field of its own (Lightroom's default button); a dialog with a
     // field confirms from the field.
     dialog = dialog.close_on_enter(return_confirms(&dlg));

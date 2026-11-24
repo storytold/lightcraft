@@ -129,7 +129,8 @@ fn number(
     if measuring(ui) {
         return None;
     }
-    crate::widgets::register_response(format!("drag:{id}"), shown.response.rect, &shown.response);
+    // (the rect it was laid out at: below the column's visible part too)
+    crate::widgets::register_response(format!("drag:{id}"), rect, &shown.response);
     typed.filter(|v| ui.is_enabled() && v.is_finite() && *v != value)
 }
 

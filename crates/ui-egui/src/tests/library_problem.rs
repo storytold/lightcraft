@@ -509,7 +509,12 @@ fn assert_shielded_return(h: &mut Headless, what: &str) {
         "{what}: the return frame must shield (and discard) the window's first pass, then draw the background"
     );
     h.step();
-    assert_eq!(pass_log(h), vec![LibraryPass::Background], "{what}: once settled, later frames draw normally without re-shielding");
+    // (a frame may run a second background pass: the framework discards a pass whose layout it is still settling)
+    let later = pass_log(h);
+    assert!(
+        !later.is_empty() && later.iter().all(|pass| *pass == LibraryPass::Background),
+        "{what}: once settled, later frames draw normally without re-shielding: {later:?}"
+    );
 }
 
 /// A notice dismissed after the error window was already settled must shield the first frame that
