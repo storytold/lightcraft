@@ -1,6 +1,6 @@
 # CI and landing changes
 
-> **Last updated:** 2026-11-23 · **Change:** patch (dependency updates: the hand-held `windows` 0.62.2 lockfile pin); minor (PRs run the tests of the changed crates and their dependents; the nightly full run covers macOS and Windows, files an issue when red, and a red nightly blocks `release.yml`); minor (nightly `Fuzz` runs all targets in parallel in one job); minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
+> **Last updated:** 2026-11-24 · **Change:** minor (`cargo xtask bench` runs the probes and gates on budgets); patch (dependency updates: the hand-held `windows` 0.62.2 lockfile pin); minor (PRs run the tests of the changed crates and their dependents; the nightly full run covers macOS and Windows, files an issue when red, and a red nightly blocks `release.yml`); minor (nightly `Fuzz` runs all targets in parallel in one job); minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
 
 ## How changes reach `main`
 
@@ -18,8 +18,8 @@ Every change goes on a branch, opens a PR and is set to auto-merge
 
 | Trigger | Linux ("Linux (cargo xtask ci)") | macOS / Windows |
 |---|---|---|
-| Pull request to `main` | `cargo xtask ci --fast` + changed-crate tests + SIL suite | clippy |
-| Push to `main` | `cargo xtask ci --fast` + SIL suite | clippy |
+| Pull request to `main` | `cargo xtask ci --fast` + changed-crate tests + SIL suite | clippy of the changed crates and their dependents (`cargo xtask affected-clippy`; none for a docs-only PR) |
+| Push to `main` (newest only: a newer push cancels the run) | `cargo xtask ci --fast` + SIL suite | clippy |
 | Manual dispatch (Actions → CI → Run workflow) | full `cargo xtask ci` + SIL suite | build + clippy + `cargo test --workspace` |
 | Push to `release` | none: the dispatched run tested that commit | none |
 
@@ -35,7 +35,11 @@ associative, idempotent merges and no grant leakage). Clippy also denies `indexi
 reads go through `json_ext::JsonExt::field`). `apps/android` builds only for Android, so the Android check also runs
 `cargo clippy --target <abi> -p lcc-android --all-targets -- -D warnings` (gap 40, closed 2026-11-22). The engine's import → develop → export → re-import scenario
 (`crates/engine/tests/it/roundtrip.rs`) runs with `cargo test -p lcc-engine` (the full run's workspace tests),
-not in the SIL step. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
+not in the SIL step. Locally, `cargo xtask ci` stays the full run. Before pushing, run `cargo xtask ci --quick`: fmt, brand, docs,
+layers and assets, clippy on the changed crates and every crate depending on them, the changed crates' tests (built
+with `-p`), and heif / parity / wasm when the changes touch them. Don't repeat `ci --fast` locally: the PR's CI runs
+it, and the Windows runner is also the maintainers' development machine. Open a PR once the work is ready; every
+push to an open PR starts a run, and a branch push starts none.
 
 The fast gate checks the wasm and Android crates in one `cargo check` per target, so a crate shared by several
 of them is checked once; when that fails it checks each crate on its own to name the broken ones. The full run,
@@ -62,7 +66,9 @@ GitHub's PR run checks out the merge of the PR into `main`. When the PR then mer
 merge commit has exactly that tree, so testing it again finds nothing new. Each green PR run of the Linux job
 uploads a marker artifact `ci-tree-<tree hash>` (kept 14 days); the `tested` job of a push to `main` looks for the
 pushed commit's tree and, when a marker exists, skips the Linux, macOS and Windows jobs. If `main` moved in between,
-the tree is new and everything runs. (GitHub's merge queue, which would test each merge exactly once, is only
+the tree is new and everything runs. Runs on `main` cancel each other (`cancel-in-progress`), so a burst of merges
+tests only the newest commit, which contains the earlier ones; a failure then points at the merges since the last
+green run. (GitHub's merge queue, which would test each merge exactly once, is only
 offered to repositories owned by an organization.)
 
 The other workflows avoid repeats the same way: Brand (the throw-away brand build, `cargo xtask brand test`) runs
@@ -335,7 +341,8 @@ A test that can't run here calls `lcc_testkit::skip!(Need, "why")`; `cargo xtask
 `if !lcc_testkit::probe("what") { return; }`, which records a `probe` skip unless `<PREFIX>_PROBES=1` is set. Run them
 in release, for example `<PREFIX>_PROBES=1 cargo test --release -p lcc-pipeline --lib bench_ -- --nocapture`.
 The nightly skip gate (`cargo xtask skips check`) does not count `probe` skips: they are opt-in by design, not a
-missing corpus, font or GPU.
+missing corpus, font or GPU. `cargo xtask bench` runs the main ones and checks their budgets
+(`--strict` fails on a breach or a > 20 % regression vs this machine's baseline; [`perf.md`](perf.md#budget-gate-cargo-xtask-bench---strict)).
 
 ## Dependency updates
 

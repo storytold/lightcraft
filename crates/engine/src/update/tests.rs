@@ -51,6 +51,37 @@ fn a_check_that_finds_a_release_reports_it() {
 }
 
 #[test]
+fn the_status_says_how_many_seconds_ago_the_last_check_finished() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let clock = std::sync::Arc::new(AtomicU64::new(1_000));
+    let seen = clock.clone();
+    let mut u = Updater::new(Some(scratch("ago")));
+    u.set_test_clock(Box::new(move || seen.load(Ordering::SeqCst)));
+    assert!(u.status()["lastCheckedAgo"].is_null(), "no check yet: nothing to say");
+    u.apply(lcc_updater::Checked::Current("1.0.0".into()));
+    assert_eq!(u.status()["lastCheckedAgo"], json!(0));
+    clock.store(1_000 + 125, Ordering::SeqCst);
+    assert_eq!(u.status()["lastCheckedAgo"], json!(125));
+    // a clock that moved back: negative, never a panic
+    clock.store(10, Ordering::SeqCst);
+    assert_eq!(u.status()["lastCheckedAgo"], json!(-990));
+    assert_eq!(u.status()["lastChecked"], json!(iso_from_unix(1_000)));
+}
+
+#[test]
+fn a_found_release_says_whether_installing_it_starts_the_install() {
+    let mut u = Updater::new(Some(scratch("offers")));
+    // an installer starts and relaunches
+    u.apply(lcc_updater::Checked::Found(Box::new(update("1.2.0"))));
+    assert_eq!(u.status()["available"]["offersInstall"], json!(true));
+    // a checksum list is laid out by hand
+    let mut manual = update("1.3.0");
+    manual.asset.kind = lcc_updater::Kind::Checksums;
+    u.apply(lcc_updater::Checked::Found(Box::new(manual)));
+    assert_eq!(u.status()["available"]["offersInstall"], json!(false));
+}
+
+#[test]
 fn a_current_build_and_a_failure_are_both_reported() {
     let dir = scratch("current");
     let mut u = Updater::new(Some(dir.clone()));

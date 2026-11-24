@@ -1146,11 +1146,10 @@ mod tests {
         let new = time(&|| c.keyword_tree());
         let cold = time(&|| KeywordIndex::build(&c).tree(&c));
         let old = time(&|| reference_tree(&c));
-        eprintln!(
-            "keyword_tree (kept): {new:?}; built with its index: {cold:?}; the old build: {old:?} ({:.1}x, {:.1}x)",
-            old.as_secs_f64() / new.as_secs_f64(),
-            old.as_secs_f64() / cold.as_secs_f64()
-        );
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+        eprintln!("keyword tree 58k (kept): {:.3} ms wall", ms(new));
+        eprintln!("keyword tree 58k (built with its index): {:.3} ms wall", ms(cold));
+        eprintln!("keyword tree 58k (the old build): {:.3} ms wall, {:.1}x", ms(old), old.as_secs_f64() / new.as_secs_f64());
     }
 
     /// A keyword can be listed before any photo has it (Lightroom Classic's Create Keyword Tag):

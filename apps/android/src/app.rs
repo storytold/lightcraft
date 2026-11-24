@@ -264,7 +264,9 @@ impl Keyboard {
 }
 
 impl eframe::App for App {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // (set before logic too: the focus watch reads the previous frame's host time there)
+        self.app.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
         self.app.logic(ctx);
         // a picker's answer that came after the system restarted the app (see `Unclaimed`)
         for u in self.host.as_ref().map(|h| h.take_unclaimed()).unwrap_or_default() {

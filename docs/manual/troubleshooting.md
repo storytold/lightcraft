@@ -26,9 +26,13 @@ JSON line for each command says why it failed. If the app does crash, please rep
   `<PREFIX>_GPU_BACKEND=vulkan|metal|dx12|gl` (`off` also disables the GPU). Settings has a GPU rendering switch too.
 - The window stopped drawing and the app ended with "its window stopped drawing: the graphics driver lost the …
   renderer's GPU device": the library and settings were saved first. From the next start the window uses the next
-  renderer (Windows: Vulkan → DX12 → GL → OpenGL) and keeps trying the lost one last; `<PREFIX>_GPU_BACKEND=dx12`
+  renderer (Windows: Vulkan → DX12 → GL → OpenGL; Windows on ARM: DX12 → Vulkan → GL → OpenGL) and keeps trying the lost one last; `<PREFIX>_GPU_BACKEND=dx12`
   (or `vulkan`, `gl`, `glow`) still forces one. Deleting `window-lost` in the settings folder forgets the loss.
 - `<PREFIX>_PROFILE=1` prints per-stage pipeline timings to standard error.
+- A spinning cursor when the window comes back to the front: start with `<PREFIX>_PROFILE=1` from a terminal; each
+  time the window gains or loses focus, or is hidden or shown, a `[profile] window focus gained: … ms` line says how
+  long that frame held the app, and the next frame adds a `… ms host frame` line with the same change's painting and
+  presenting included. Include those lines when reporting it.
 - Library → Previews → Clear Preview Cache rebuilds thumbnails and previews.
 - A very large library on a network share or hard disk opens much faster since 26.46.2; culling stays responsive while previews are prepared in the background, and a raw's first picture is its camera JPEG.
 
@@ -61,7 +65,9 @@ Library → Validate DNG Files checks the selected DNGs' raw data against their 
 ## Updating the app
 
 Help → Check for Updates… reads the project's release feed and, when something newer exists, offers to
-download it for this system and install it; the app restarts afterwards. Things that can go wrong:
+download it for this system and install it; the app restarts afterwards. The dialog says how long ago it last
+checked ("Last checked 5 minutes ago"). When the download is ready, "Install and Relaunch" is highlighted and has
+the keyboard focus, so Return presses it. Things that can go wrong:
 
 - "Could not reach the release server" or "the release server answered 403": no internet, a proxy, or GitHub's
   rate limit. The check uses the release's `latest.json` first, which usually still works; try again later.

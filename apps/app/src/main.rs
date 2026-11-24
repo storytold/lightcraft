@@ -140,7 +140,10 @@ impl eframe::App for App {
         let [r, g, b, _] = visuals.panel_fill.to_srgba_unmultiplied();
         egui::Color32::from_rgb(r, g, b).to_normalized_gamma_f32()
     }
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // (set before logic too: the focus watch there reads the previous frame's host time, which
+        // `ui` would only set after it, one frame late)
+        self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
         // the window's GPU device is gone for good (issue #1194): nothing can be drawn again, so
         // save what closing the window saves, tell the user outside the window, and end
         if let Some(which) = window_gpu::take_device_lost() {
@@ -871,6 +874,12 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         }),
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         screen_profile: None,
+        // Settings ▸ Interface ▸ Click through: macOS asks the window's view on
+        // each such click; elsewhere the click is always passed on
+        #[cfg(target_os = "macos")]
+        background_clicks: Some(Box::new(|accept| lcc_firstclick::set_accept_background_clicks(accept).map_err(|e| e.to_string()))),
+        #[cfg(not(target_os = "macos"))]
+        background_clicks: None,
         pick_display_profile: picker!(|| {
             let mut d = file_dialog()
                 .set_title(lcc_ui_egui::i18n::tr("Choose Monitor Profile"))

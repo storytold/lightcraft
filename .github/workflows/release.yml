@@ -243,6 +243,10 @@ jobs:
           packaging/macos/package.sh --arch universal
           packaging/macos/package.sh --arch arm64 --skip-build
           packaging/macos/package.sh --arch x64 --skip-build
+      # Fails when a download grew more than 10 % over packaging/size-budget.toml (docs/release-process.md).
+      - name: Package size
+        shell: bash
+        run: cargo xtask package-size dist/release/*
       # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
       - name: Checksums
         run: |
@@ -378,6 +382,10 @@ jobs:
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
         run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
+      # Fails when a download grew more than 10 % over packaging/size-budget.toml (docs/release-process.md).
+      - name: Package size
+        shell: bash
+        run: cargo xtask package-size dist/release/*
       # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
       - name: Checksums
         shell: bash
@@ -493,6 +501,10 @@ jobs:
             "$appimage" --appimage-updateinformation | grep -F 'gh-releases-zsync|'
             test -s "$appimage.zsync"
           done
+      # Fails when a download grew more than 10 % over packaging/size-budget.toml (docs/release-process.md).
+      - name: Package size
+        shell: bash
+        run: cargo xtask package-size dist/release/*
       # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
       - name: Checksums
         run: |
@@ -789,6 +801,10 @@ jobs:
           mkdir -p dist/release
           /bin/cp -f "$CARGO_TARGET_DIR"/android/*.apk "$CARGO_TARGET_DIR"/android/*.aab dist/release/
           rm -f "$RUNNER_TEMP/release.keystore"
+      # Fails when a download grew more than 10 % over packaging/size-budget.toml (docs/release-process.md).
+      - name: Package size
+        shell: bash
+        run: cargo xtask package-size dist/release/*
       # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
       - name: Checksums
         run: |
@@ -936,6 +952,10 @@ jobs:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
         run: packaging/web/package.sh
+      # Fails when a download grew more than 10 % over packaging/size-budget.toml (docs/release-process.md).
+      - name: Package size
+        shell: bash
+        run: cargo xtask package-size dist/release/*
       # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
       - name: Checksums
         run: |

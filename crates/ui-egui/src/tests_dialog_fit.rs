@@ -111,6 +111,17 @@ fn long_dialogs_fit_a_short_window_and_a_list_shrinks() {
             h.settle(T);
         }
     }
+    // the Image Quality Scanner is a long one too: its new Auto-Assign Metadata and Performance
+    // sections (issue #1362) must not push Scan off the window
+    {
+        let r = h.request("ui.menu.invoke", json!({"id": "dialog.qualityScan"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::QualityScanner { .. })), "{:?}", h.app.ui.dialog);
+        h.settle(T);
+        assert_fits(&h, "dialog.qualityScan");
+        h.app.ui.dialog = None;
+        h.settle(T);
+    }
     // a dialog list shrinks to fit a short window
     // Scenario: a list that scrolls on its own (the shortcuts) gets shorter instead of scrolling inside a scrolling dialog
     {

@@ -215,6 +215,203 @@ fn a_manual_install_never_quits_the_app() {
 }
 
 #[test]
+fn the_install_button_is_the_one_to_press_once_the_download_is_ready() {
+    let dir = Scratch::new("install-default");
+    let mut h = app();
+    let file = offer(&mut h, &dir, "9.9.9", lcc_engine::update::Kind::Archive);
+    let desktop = std::sync::Arc::new(lcc_engine::desktop::Recorder::default());
+    h.app.session.desktop = desktop.clone();
+    ask(&mut h, "ui.menu.invoke", json!({"id": "app.checkForUpdates"}));
+    h.step();
+    h.step();
+    // the button holds the keyboard as soon as it appears, so Return is its press
+    let install = egui::Id::new("update-install-focus");
+    assert!(h.view.ctx.data(|d| d.get_temp::<bool>(install)).unwrap_or(false), "the install button asked for the focus");
+    assert!(h.view.ctx.memory(|m| m.focused()).is_some(), "the install button has the keyboard focus");
+    assert!(h.app.session.updater.installed().is_none(), "nothing installs by itself");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    h.step();
+    assert!(h.app.session.updater.installed().is_some(), "Return pressed the install button");
+    assert!(file.exists());
+    assert_eq!(desktop.requests(), vec![lcc_engine::desktop::Request::Reveal(file.clone())]);
+}
+
+#[test]
+fn the_install_button_takes_the_focus_again_when_the_dialog_is_reopened() {
+    let dir = Scratch::new("install-reopen");
+    let mut h = app();
+    let _ = offer(&mut h, &dir, "9.9.9", lcc_engine::update::Kind::Archive);
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    let asked = |h: &Headless| h.view.ctx.data(|d| d.get_temp::<bool>(egui::Id::new("update-install-focus"))).unwrap_or(false);
+    assert!(asked(&h), "asked for the focus when it first appeared");
+    h.app.ui.dialog = None;
+    h.step();
+    h.step();
+    assert!(!asked(&h), "closing the dialog forgets it");
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    assert!(asked(&h), "asked again on the next opening");
+}
+
+#[test]
+fn return_installs_nothing_before_the_download_is_ready() {
+    let dir = Scratch::new("install-not-ready");
+    let mut h = app();
+    let _ = offer(&mut h, &dir, "9.9.9", lcc_engine::update::Kind::Archive);
+    h.app.session.updater.set_progress(lcc_engine::update::Progress::Idle);
+    ask(&mut h, "ui.menu.invoke", json!({"id": "app.checkForUpdates"}));
+    h.step();
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    h.step();
+    assert!(h.app.session.updater.installed().is_none(), "Return does not install a file that isn't downloaded");
+}
+
+/// A clock the test moves (Unix seconds), given to the updater; starts at a fixed time.
+fn clocked(h: &mut Headless) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let now = std::sync::Arc::new(AtomicU64::new(1_800_000_000));
+    let seen = now.clone();
+    h.app.session.updater.set_test_clock(Box::new(move || seen.load(Ordering::SeqCst)));
+    now
+}
+
+/// The dialog's text with a check that finished at the clock's start, the clock now `later` seconds on.
+fn last_checked_after(later: i64) -> Option<String> {
+    use std::sync::atomic::Ordering;
+    let mut h = app();
+    let now = clocked(&mut h);
+    h.app.session.updater.apply(lcc_updater::Checked::Current("1.0.0".into()));
+    now.store((1_800_000_000 + later) as u64, Ordering::SeqCst);
+    // (the dialog opened directly: the menu command also asks the feed, and a repeat answer would be stamped again)
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    h.painted_text().into_iter().find(|t| t.starts_with("Last checked"))
+}
+
+#[test]
+fn the_last_check_reads_as_the_time_since() {
+    assert_eq!(last_checked_after(40).as_deref(), Some("Last checked 40 seconds ago"));
+    assert_eq!(last_checked_after(12 * 60).as_deref(), Some("Last checked 12 minutes ago"));
+    assert_eq!(last_checked_after(50 * 3600).as_deref(), Some("Last checked 50 hours ago"));
+    assert_eq!(last_checked_after(48 * 3600).as_deref(), Some("Last checked 48 hours ago"), "no days");
+}
+
+#[test]
+fn a_check_under_ten_seconds_old_reads_just_now() {
+    assert_eq!(last_checked_after(0).as_deref(), Some("Last checked just now"));
+    assert_eq!(last_checked_after(9).as_deref(), Some("Last checked just now"));
+    assert_eq!(last_checked_after(10).as_deref(), Some("Last checked 10 seconds ago"), "the cut-off");
+}
+
+#[test]
+fn the_singular_reads_as_one_minute_and_one_hour() {
+    assert_eq!(last_checked_after(60).as_deref(), Some("Last checked 1 minute ago"));
+    assert_eq!(last_checked_after(3600).as_deref(), Some("Last checked 1 hour ago"));
+}
+
+#[test]
+fn a_check_in_the_future_reads_just_now_and_does_not_panic() {
+    assert_eq!(last_checked_after(-3600).as_deref(), Some("Last checked just now"));
+    assert_eq!(last_checked_after(-1_800_000_000).as_deref(), Some("Last checked just now"));
+}
+
+#[test]
+fn before_any_check_there_is_no_last_checked_line() {
+    let mut h = app();
+    // (the dialog opened directly: the menu command also asks the feed, and a repeat answer would be stamped again)
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    assert!(!h.painted_text().iter().any(|t| t.starts_with("Last checked")), "{:?}", h.painted_text());
+}
+
+#[test]
+fn a_failed_check_still_says_when_it_was_made() {
+    use std::sync::atomic::Ordering;
+    let mut h = app();
+    let now = clocked(&mut h);
+    h.app.session.updater.apply(lcc_updater::Checked::Failed("no network".into()));
+    now.store(1_800_000_000 + 300, Ordering::SeqCst);
+    // (the dialog opened directly: the menu command also asks the feed, and a repeat answer would be stamped again)
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    assert!(h.painted_text().iter().any(|t| t == "Last checked 5 minutes ago"), "{:?}", h.painted_text());
+}
+
+#[test]
+fn the_line_follows_the_clock_while_the_window_stays_open_with_no_input() {
+    use std::sync::atomic::Ordering;
+    let mut h = app();
+    let now = clocked(&mut h);
+    h.app.session.updater.apply(lcc_updater::Checked::Current("1.0.0".into()));
+    // (the dialog opened directly: the menu command also asks the feed, and a repeat answer would be stamped again)
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    let has = |h: &Headless, text: &str| h.painted_text().iter().any(|t| t == text);
+    assert!(has(&h, "Last checked just now"), "{:?}", h.painted_text());
+    now.store(1_800_000_000 + 61, Ordering::SeqCst);
+    // no key, no pointer: only frames
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(has(&h, "Last checked 1 minute ago"), "{:?}", h.painted_text());
+}
+
+#[test]
+fn the_window_asks_to_be_redrawn_when_the_words_would_change() {
+    use crate::panels::update::next_change;
+    assert_eq!(next_change(0), 10, "just now holds until 10 seconds");
+    assert_eq!(next_change(9), 1);
+    assert_eq!(next_change(10), 1, "seconds count one by one");
+    assert_eq!(next_change(59), 1);
+    assert_eq!(next_change(60), 60, "a minute reads the same for a minute");
+    assert_eq!(next_change(119), 1);
+    assert_eq!(next_change(3599), 1);
+    assert_eq!(next_change(3600), 3600);
+    assert_eq!(next_change(-5), 10, "a clock that went back");
+    assert!(next_change(i64::MAX) >= 1);
+}
+
+#[test]
+fn the_download_sentence_names_what_the_button_does_and_the_app() {
+    let dir = Scratch::new("sentence");
+    let mut h = app();
+    let _ = offer(&mut h, &dir, "9.9.9", lcc_engine::update::Kind::Msi);
+    h.app.session.updater.set_progress(lcc_engine::update::Progress::Idle);
+    // (the dialog opened directly: the menu command also asks the feed, and a repeat answer would be stamped again)
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    let name = lcc_brand::DISPLAY_NAME;
+    let text = h.painted_text();
+    let line = text.iter().find(|t| t.starts_with("Download will download")).unwrap_or_else(|| panic!("{text:?}"));
+    assert!(line.contains(&format!("signed by the {name} authors")), "{line}");
+    assert!(line.ends_with("offer to install it over this version."), "{line}");
+    assert!(!text.iter().any(|t| t.contains("SHA-256") || t.starts_with("Installing it will")), "the two old lines are gone: {text:?}");
+}
+
+#[test]
+fn where_the_download_only_opens_a_folder_the_sentence_says_so() {
+    let dir = Scratch::new("sentence-manual");
+    let mut h = app();
+    let _ = offer(&mut h, &dir, "9.9.9", lcc_engine::update::Kind::Archive);
+    h.app.session.updater.set_progress(lcc_engine::update::Progress::Idle);
+    // (the dialog opened directly: the menu command also asks the feed, and a repeat answer would be stamped again)
+    h.app.ui.dialog = Some(Dialog::Update);
+    h.step();
+    h.step();
+    let text = h.painted_text();
+    let line = text.iter().find(|t| t.starts_with("Download will download")).unwrap_or_else(|| panic!("{text:?}"));
+    assert!(line.ends_with("and open its folder, so you can install it over this version."), "{line}");
+}
+
+#[test]
 fn skipping_remembers_the_version() {
     let dir = Scratch::new("skip");
     let mut h = app();

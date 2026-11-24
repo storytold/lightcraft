@@ -16,6 +16,7 @@ use crate::json_ext::JsonExt as _;
 use serde_json::{Value, json};
 
 use crate::LccApp;
+use crate::button::Button;
 use crate::i18n::{tr, tr_format};
 use crate::state::Dialog;
 use crate::theme::Tokens;
@@ -33,6 +34,10 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     if app.session.updater.poll() {
         // what the dialog shows just changed (a check's answer, a download's outcome)
         ctx.request_repaint();
+    }
+    // the install button asks for the keyboard once per time the dialog is up with a download ready
+    if !matches!(app.ui.dialog, Some(Dialog::Update)) {
+        ctx.data_mut(|d| d.remove::<bool>(egui::Id::new("update-install-focus")));
     }
     let now = ctx.input(|i| i.time);
     if app.session.updater.checking() || app.session.updater.downloading() {
@@ -131,9 +136,6 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
                 line = tr_format!("{info} · {size}", info = line, size = megabytes(size));
             }
             ui.label(egui::RichText::new(line).font(t.font(11.5)).color(t.text_dim));
-            if let Some(action) = a["action"].as_str() {
-                ui.label(egui::RichText::new(tr_format!("Installing it will {action}.", action = action)).color(t.text_label));
-            }
             let self_update = a["selfUpdate"].as_bool().unwrap_or(true);
             if !self_update {
                 // installed by a package manager or by hand: this copy can't replace itself
@@ -146,11 +148,17 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
                 };
                 ui.label(egui::RichText::new(how).color(t.text_label));
             } else if a["verified"].as_bool().unwrap_or(false) {
-                ui.label(
-                    egui::RichText::new(tr("The download is checked against the release's SHA-256 before anything is installed."))
-                        .font(t.font(11.0))
-                        .color(t.text_dim),
-                );
+                // what the Download button does, in one sentence for every platform
+                let words = if a["offersInstall"].as_bool().unwrap_or(true) {
+                    tr(
+                        "Download will download the new version, verify that it was signed by the {app} authors, and offer to install it over this version.",
+                    )
+                } else {
+                    tr(
+                        "Download will download the new version, verify that it was signed by the {app} authors, and open its folder, so you can install it over this version.",
+                    )
+                };
+                ui.label(egui::RichText::new(words).color(t.text_label));
             } else {
                 // a build without an update key downloads nothing: say so, and offer the page instead
                 ui.label(
@@ -176,18 +184,10 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
             }
         }
         "current" => {
-            let last = status.field("lastChecked").as_str().unwrap_or_default().to_string();
             ui.label(egui::RichText::new(tr("This is the newest version.")).color(t.text_label));
-            if !last.is_empty() {
-                ui.label(egui::RichText::new(tr_format!("Last checked {when}", when = last)).font(t.font(11.5)).color(t.text_dim));
-            }
+            last_checked(ui, &t, &status);
         }
-        _ => {
-            let last = status.field("lastChecked").as_str().unwrap_or_default().to_string();
-            if !last.is_empty() {
-                ui.label(egui::RichText::new(tr_format!("Last checked {when}", when = last)).font(t.font(11.5)).color(t.text_dim));
-            }
-        }
+        _ => last_checked(ui, &t, &status),
     }
 
     // the download and the install
@@ -272,19 +272,21 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
         if check == "found" && can_verify && !ready && !downloading && button(ui, "button:updateDownload", tr("Download")) {
             let _ = app.session.execute("update.download", &json!({}));
         }
-        if ready && button(ui, "button:updateInstall", tr("Install and Relaunch")) {
-            match app.session.execute("update.install", &json!({"confirm": true})) {
-                Ok(v) => {
-                    if let Some(message) = v.field("message").as_str() {
-                        app.toast(ui.ctx(), message);
-                    }
-                    if v.field("exit").as_bool().unwrap_or(false) {
-                        // the installer or the replacement script needs this process gone
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-                Err(e) => app.toast(ui.ctx(), e.to_string()),
+        if ready {
+            // the one thing left to do: highlighted, focused when it appears, and what Enter does
+            let r = Button::new("Install and Relaunch").primary().widget("button:updateInstall").show(ui);
+            let asked = egui::Id::new("update-install-focus");
+            if !ui.data(|d| d.get_temp::<bool>(asked).unwrap_or(false)) {
+                ui.data_mut(|d| d.insert_temp(asked, true));
+                r.request_focus();
             }
+            // (nothing else has the keyboard: a focused button takes Enter itself)
+            let enter = ui.ctx().memory(|m| m.focused().is_none()) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            if r.clicked() || enter {
+                install(app, ui.ctx());
+            }
+        } else {
+            ui.data_mut(|d| d.remove::<bool>(egui::Id::new("update-install-focus")));
         }
         if check == "found"
             && let Some(version) = status.field("available").field("version").as_str()
@@ -296,6 +298,57 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
     });
 
     settings(app, ui, &t);
+}
+
+/// How long ago the last check finished, in words: "just now" under 10 seconds, then seconds, minutes
+/// and hours (never days). A time in the future (a clock that moved back) reads as just now.
+fn ago_text(seconds: i64) -> String {
+    match seconds {
+        ..10 => tr("Last checked just now").to_string(),
+        10..60 => tr_format!("Last checked {n} seconds ago", n = seconds),
+        60..120 => tr("Last checked 1 minute ago").to_string(),
+        120..3600 => tr_format!("Last checked {n} minutes ago", n = seconds / 60),
+        3600..7200 => tr("Last checked 1 hour ago").to_string(),
+        _ => tr_format!("Last checked {n} hours ago", n = seconds / 3600),
+    }
+}
+
+/// Seconds until [`ago_text`] reads differently: the next second while it counts seconds, else the next
+/// minute (or hour) boundary.
+pub(crate) fn next_change(seconds: i64) -> u64 {
+    let seconds = seconds.max(0);
+    let unit = match seconds {
+        ..60 => return if seconds < 10 { (10 - seconds) as u64 } else { 1 },
+        60..3600 => 60,
+        _ => 3600,
+    };
+    (unit - seconds % unit) as u64
+}
+
+/// The "Last checked … ago" line (nothing before the first check). The window repaints when the words
+/// would change, so the line stays true without any input.
+fn last_checked(ui: &mut egui::Ui, t: &Tokens, status: &Value) {
+    let Some(seconds) = status.field("lastCheckedAgo").as_i64() else {
+        return;
+    };
+    ui.label(egui::RichText::new(ago_text(seconds)).font(t.font(11.5)).color(t.text_dim));
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs(next_change(seconds)));
+}
+
+/// Install the downloaded file and relaunch, as the button and Enter both do.
+fn install(app: &mut LccApp, ctx: &egui::Context) {
+    match app.session.execute("update.install", &json!({"confirm": true})) {
+        Ok(v) => {
+            if let Some(message) = v.field("message").as_str() {
+                app.toast(ctx, message);
+            }
+            if v.field("exit").as_bool().unwrap_or(false) {
+                // the installer or the replacement script needs this process gone
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+        Err(e) => app.toast(ctx, e.to_string()),
+    }
 }
 
 /// The two settings, and where the download lands.

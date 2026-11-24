@@ -63,6 +63,8 @@ pub mod eye_prep;
 pub mod eye_store;
 pub mod eyes;
 pub mod face_download;
+#[cfg(not(target_arch = "wasm32"))]
+mod face_suggestions;
 pub mod face_tiles;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_index;
@@ -152,6 +154,7 @@ mod sync_same;
 pub mod template_folders;
 pub mod text;
 pub mod timelapse;
+pub mod ui_languages;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
 pub mod upright_jobs;

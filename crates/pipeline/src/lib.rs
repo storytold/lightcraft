@@ -67,7 +67,7 @@ pub mod visualize;
 
 pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
-pub use visualize::{MaskView, Overlay};
+pub use visualize::{MaskView, Overlay, SharpenView};
 
 use lcc_develop::{DevelopSettings, Treatment};
 use std::any::Any;
@@ -594,6 +594,8 @@ struct CacheEntry {
     nr: Option<(u64, Arc<Rgb32f>)>,
     /// The joint colour NR's noise model of the whole frame ([`colour_noise`]), keyed by [`Plan::noise_key`].
     colour_noise: Option<(u64, nrc_joint::JointNoise)>,
+    /// A draft's image after colour NR alone, keyed by [`Plan::draft_col_key`].
+    draft_col: Option<(u64, Arc<Rgb32f>)>,
     planes: local::Planes,
 }
 
@@ -635,6 +637,11 @@ pub struct Plan<'a> {
     /// Key of the whole frame's noise model for the joint colour NR ([`colour_noise`]): what it is
     /// measured after (everything before the colour NR), not the colour NR's own settings.
     pub noise_key: u64,
+    /// A draft with luminance NR (a slider drag): the key of the image after colour NR alone,
+    /// before luminance NR ([`local::denoise_lum_draft`]). The draft applies luminance NR on top of that
+    /// cached image, so a Luminance / Detail drag skips the colour NR. Full renders: `None` (they
+    /// run luminance NR first, then colour NR, as always).
+    pub draft_col_key: Option<u64>,
     /// Red eye / pet eye corrections with their detected pupils, in output pixels.
     pub eyes: Vec<redeye::EyeK>,
     /// The whole frame's dehaze airlight, for a windowed render (which can't see the whole frame).
@@ -778,11 +785,25 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     // (the joint colour NR of V8 has no draft form)
     let joint_nr = local::joint_colour_nr(s);
     let draft_nr = req.quality == Quality::Draft && d.nr_color > 0.0 && !joint_nr;
+    // a draft's luminance NR runs on the colour-NR'd image with half-resolution coefficients
+    // (`local::denoise_lum_draft`): never a final render's result either
+    let draft_lum = req.quality == Quality::Draft && local::nr_params(s, detail_scale).0.is_some();
+    let draft_col_key = draft_lum.then(|| {
+        hash_of((
+            pre_nr_key,
+            [d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+            detail_scale.to_bits(),
+            draft_nr,
+            joint_nr,
+            "draft col",
+        ))
+    });
     let nr_key = hash_of((
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
         draft_nr,
+        draft_lum,
         // the process picks the colour filter (Update to Current Process, undo)
         joint_nr,
     ));
@@ -796,6 +817,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
         draft_nr,
+        draft_lum,
         joint_nr,
         skin::key(s),
         retouch::key(s),
@@ -823,6 +845,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         nr_key,
         pre_nr_key,
         noise_key,
+        draft_col_key,
         eyes,
         fixed_air,
         mask_tone,
@@ -1123,6 +1146,8 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let base = filtered.as_ref().map_or(&sampled, |(_, i)| i);
 
     let cached_nr = cached.as_ref().and_then(|e| e.nr.clone()).filter(|(k, _)| *k == nr_key);
+    // kept from the cache unless this render makes a new one (a full render drops it)
+    let mut draft_col = cached.as_ref().and_then(|e| e.draft_col.clone()).filter(|_| plan.draft_col_key.is_some());
     let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
     let (lin, nr) = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
         Some((_, img)) => (img, cached_nr.map(|(_, n)| n)),
@@ -1130,14 +1155,35 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             let nr = match cached_nr {
                 Some((_, img)) => img,
                 None => {
-                    // Without a cache (or filters) the resampled buffer is ours: work on it in place.
-                    let mut img = if shared.is_some() || filtered.is_some() { (**base).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
-                    lin_cpu(&mut img, info, &plan);
-                    if colour_noise.is_none() {
-                        colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
+                    let col_key = plan.draft_col_key.map(|k| if draft_src { hash_of((k, "draft source")) } else { k });
+                    match (col_key, cached.as_ref().and_then(|e| e.draft_col.clone())) {
+                        (Some(k), Some((ck, col))) if ck == k => {
+                            // a luminance NR drag: the colour-NR'd image is kept, only luminance NR reruns
+                            let mut img = (*col).clone();
+                            local::denoise_lum_draft(&mut img, s, detail_scale);
+                            draft_col = Some((k, col));
+                            Arc::new(img)
+                        }
+                        _ => {
+                            // Without a cache (or filters) the resampled buffer is ours: work on it in place.
+                            let mut img =
+                                if shared.is_some() || filtered.is_some() { (**base).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
+                            lin_cpu(&mut img, info, &plan);
+                            if colour_noise.is_none() {
+                                colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
+                            }
+                            let noise = colour_noise.as_ref().map(|c| &c.1);
+                            if let Some(k) = col_key {
+                                local::denoise_colour_only(&mut img, s, detail_scale, noise);
+                                let col = Arc::new(img.clone());
+                                local::denoise_lum_draft(&mut img, s, detail_scale);
+                                draft_col = Some((k, col));
+                            } else {
+                                local::denoise_with(&mut img, s, detail_scale, req.quality == Quality::Draft, noise);
+                            }
+                            Arc::new(img)
+                        }
                     }
-                    local::denoise_with(&mut img, s, detail_scale, req.quality == Quality::Draft, colour_noise.as_ref().map(|c| &c.1));
-                    Arc::new(img)
                 }
             };
             if lin_key == nr_key {
@@ -1176,6 +1222,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
                 lin: Some((lin_key, lin)),
                 nr: nr.map(|n| (nr_key, n)),
                 colour_noise,
+                draft_col,
                 planes,
             });
         }
@@ -1222,6 +1269,9 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
+    if let Some(b) = prep.sharpen_blur.as_deref() {
+        visualize::sharpen_view(req.overlay, &mut image, &plan.settings, &prep.log_l, b);
+    }
     if req.overlay == Overlay::Infrared
         && let Some(ir) = film_dust::infrared_for(info, frame, w, h)
     {
@@ -1458,9 +1508,13 @@ fn an_exact_box_past_the_pixel_ceiling_is_shrunk() {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_cpu_only_cost;
+#[cfg(test)]
 mod tests_curve_space;
 #[cfg(test)]
 mod tests_dehaze;
+#[cfg(test)]
+mod tests_draft_nr;
 #[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]

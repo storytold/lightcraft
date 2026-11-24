@@ -23,7 +23,7 @@ fn library() -> Session {
     library_of(N)
 }
 
-fn library_of(n: u64) -> Session {
+pub(crate) fn library_of(n: u64) -> Session {
     let mut s = Session::new();
     // newest first: the tests here were written around the newest day heading the grid
     s.sort.ascending = false;
@@ -246,11 +246,16 @@ fn scale_100k_grid_frames() {
     h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
     let before = h.app.caches.grid_stats.clone();
     let t = Instant::now();
+    let mut in_grid = std::time::Duration::ZERO;
     for _ in 0..30 {
         h.request("ui.scroll", json!({"dy": -400.0}), T);
         h.step();
+        in_grid += h.app.caches.grid_stats.last_show;
     }
-    rows.push(("wheel-scroll frame", ms(t) / 30.0));
+    // (a control request runs several frames and may sleep between them: `wheel_scroll_100k_frame` in
+    // tests_viewperf.rs times single frames against the 16 ms budget)
+    rows.push(("wheel-scroll request (several frames)", ms(t) / 30.0));
+    rows.push(("  grid panel, last frame of each", in_grid.as_secs_f64() * 1e3 / 30.0));
     let s = &h.app.caches.grid_stats;
     let per = (s.cells_visited - before.cells_visited) / (s.frames - before.frames).max(1);
     assert!(per < 400, "scrolling visited {per} cells per frame");
@@ -276,11 +281,19 @@ fn scale_100k_grid_frames() {
     change(&mut h, "sort capture date (command + next frame)", "library.sort", json!({"key": "captureDate", "ascending": true}), &mut rows);
     frames(&mut h, "unchanged frame after sorts", 20, &mut rows);
     for (what, v) in &rows {
-        eprintln!("grid 100k | {what}: {v:.1} ms");
+        eprintln!("grid 100k | {what}: {v:.1} ms wall");
     }
     // ceilings an order of magnitude over the budgets, so only a real regression fails
     for (what, v) in &rows {
-        let budget = if what.ends_with("frame") && !what.starts_with("first") || what.contains("frame after") { 250.0 } else { 5000.0 };
+        let budget = if what.ends_with("frame") && !what.starts_with("first")
+            || what.contains("frame after")
+            || what.starts_with("wheel")
+            || what.contains("grid panel")
+        {
+            250.0
+        } else {
+            5000.0
+        };
         assert!(*v < budget, "{what}: {v:.0} ms over {budget} ms");
     }
 }
@@ -337,13 +350,13 @@ fn scale_filter_bar_scroll() {
         }
     }
     for (bar, churn, v) in &rows {
-        eprintln!("filter bar {} | {churn:<6} changes | wheel-scroll frame: {v:.1} ms", if *bar { "shown " } else { "hidden" });
+        eprintln!("filter bar {} | {churn:<6} changes | wheel-scroll frame: {v:.1} ms wall", if *bar { "shown " } else { "hidden" });
     }
     // what opening a metadata picker costs after a metadata change: the cameras, lenses and keywords listed again
     let t = Instant::now();
     let values = h.app.caches.filter_values(&h.app.session.catalog);
     eprintln!(
-        "picker values listed again: {:.1} ms ({} cameras, {} lenses, {} keywords)",
+        "picker values listed again: {:.1} ms wall, ({} cameras, {} lenses, {} keywords)",
         ms(t),
         values.cameras.len(),
         values.lenses.len(),

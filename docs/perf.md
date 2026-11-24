@@ -34,7 +34,7 @@ CPU slider path and export (both now met); the import miss and the 1:1 tile miss
 
 ```sh
 cargo xtask corpus --download                    # CC0 raws into corpus/
-cargo xtask bench                                # render: slider / loupe / export rows (CPU and GPU)
+cargo xtask bench                                # all probes + budget table (see Budget gate)
 <PREFIX>_PROFILE=1 cargo run --release -p lcc-cli -- render corpus/raw/arw-sony-a7m3-compressed.arw -o /tmp/o.jpg --size 2048
 ONLY=source N=3 cargo run --release -p lcc-engine --example render_bench -- corpus/raw/arw-sony-a7m3-compressed.arw
 cargo run --release -p lcc-engine --example perf_tile -- $PWD/corpus/raw/arw-sony-a7m3-compressed.arw   # 1:1 tile
@@ -52,6 +52,52 @@ appended (so their content hashes differ), then driven headless with the CLI:
                                                # publish.createCollection {addSelected}, publish.run {service}
 <cli> run --library L --script pages.jsonl     # print.render / book.render with the built-in templates at 300 dpi
 ```
+
+## Budget gate (`cargo xtask bench --strict`)
+
+`cargo xtask bench` runs every probe in `PROBES` (`xtask/src/bench.rs`) with `<PREFIX>_PROBES=1`, release build:
+
+| Probe | What runs |
+|---|---|
+| `render` | `render_bench` example (24 MP raw, or a procedural 24 MP source): slider drags (draft), loupe drags @ 1920×1280, export |
+| `grid` | `tests_grid::scale_*` in `lcc-ui-egui`: Library grid at 100k photos, filter bar at 68k |
+| `tiff` | `tiff_zip::bench` in `lcc-codecs`: 24 MP 16-bit TIFF, none / ZIP / LZW |
+| `keywords` | `probe_keyword_tree_cost` in `lcc-catalog`: keyword tree at 58k photos, 2,000 keywords |
+
+It prints each budget in `BUDGETS` (draft slider ≤ 16 ms, loupe ≤ 60 ms at 2.5 MP, grid frame ≤ 16 ms, TIFF ZIP ≤ 3 s,
+kept keyword tree ≤ 16 ms, …) with the measured wall time, then compares with this machine's baseline
+(`target/bench/baseline.json`, or the previous run on this host when there is none) using CPU time where a probe
+reports it and wall time otherwise. `--strict` fails on an enforced budget breach or a regression over 20 %
+(`--threshold PCT`). Budgets marked advisory are known misses and never fail; they become enforced once met. A
+baseline from another host is never used: numbers compare only on one machine.
+
+First run (Windows, shared machine under heavy concurrent build load, 2026-11-24, 24 MP ARW; wall ms):
+
+| Budget | Ceiling | Measured | Gate |
+|---|---|---|---|
+| draft highlights / clarity drag, GPU | 16 | 3.9 / 4.1 | enforced |
+| draft highlights / clarity drag, CPU | 16 | 78 / 51 | advisory |
+| draft NR drag, GPU / CPU (4.5) | 16 | 30 / 519 | advisory |
+| loupe 1920×1280 exposure drag, GPU / CPU | 60 | 13 / 127 | GPU enforced, CPU advisory |
+| loupe 1920×1280 NR drag, GPU / CPU | 60 | 255 / 573 | advisory |
+| grid 100k unchanged frame | 16 | 13.2 | enforced |
+| grid wheel-scroll frame, filter bar hidden (4.8) | 16 | 17.5 | advisory |
+| grid 100k jump to 90k / filter change | 1500 / 1000 | 971 / 232 | enforced (guessed ceilings with headroom) |
+| TIFF ZIP 24 MP 16-bit | 3000 | 960 | enforced (guessed ceiling) |
+| keyword tree kept / rebuilt | 16 / 400 | 0.6 / 198 | enforced (rebuilt: guessed ceiling) |
+
+The CPU rows ran at several times the 4.5 figures (CPU NR drag 33 ms idle-ish vs 519 ms here) because of the load;
+re-measure on a quiet machine before turning them into enforced budgets.
+
+```sh
+cargo xtask bench --save-baseline            # on main: record this machine's baseline
+cargo xtask bench --strict                   # on the branch: budgets + regressions vs that baseline
+cargo xtask bench --only grid,keywords       # a subset (with --save-baseline it updates only those rows)
+```
+
+Adding a probe or a budget is one line: `probe("name", &[cargo args…])` in `PROBES` (it must print
+`label: N ms wall[, N ms cpu]` lines on stdout or stderr), and `budget("name:label/cpu/wall", ms, "why")` (or
+`advisory(…)`) in `BUDGETS`; a unit test checks every budget names a probe.
 
 ## Render (`cargo xtask bench`)
 
@@ -99,6 +145,51 @@ demosaic AHD:             193.5 ms wall,  4844.3 ms cpu
 load_bytes(2560):          93.0 ms wall,  1855.4 ms cpu
 load_bytes(full):         425.3 ms wall, 10448.3 ms cpu
 ```
+
+<<<<<<< HEAD
+## Start-up (`cargo xtask bench`, `startup_bench`; plan item 4.1, #979)
+
+`cargo run --release -p lcc-ui-egui --example startup_bench -- [DIR] [PHOTOS]` makes a synthetic library (default
+100 000 raws, a third edited) and starts the app on it headless: `startup first frame`, `startup library ready`
+(budget ≤ 3 s, an advisory row in `BUDGETS` in `xtask/src/bench.rs` until a quiet machine shows it met), `startup slowest frame`, and `startup prep tick` (the
+slowest of the background preparation's first 30 ticks after the library opened). `cargo xtask bench` runs it as the `startup`
+probe (`--only startup` alone; other sizes by running the example directly).
+
+2026-11-24, Windows 11, machine shared with other builds (wall times vary ±100 % between runs of one binary), three
+interleaved before/after runs at 100 000 photos: preparation tick 12–19 ms → **4 ms**. Before, each catalog change
+compared every photo's settings in one tick and copied the whole view (twice) to sign it, and a build started from a
+photo not in the view asked for previews of every photo in it — about 4 s a tick at 329 000 photos in the report on
+#979. Now the catalog's change log names the photos to compare, a full walk (library opened, an op over more than its
+own photos) goes 16 384 photos a tick, the view is signed in place and a build covers only the stretch around the
+photo. The lens database is read on a worker after a library opens (an activity-stack row) instead of by the first
+photo that needs it. Library ready 1.0–3.9 s before, 1.0–8.2 s after, same noise: the remaining long frame is the
+session open on the interface thread, not measured apart here.
+=======
+## CPU-only stages against the loupe budget (plan 4.6, 2026-11-24)
+
+Two stages have no WGSL kernel: soft proofs against an output-device profile (a 3D table; the GPU renderer declines
+the whole render, `lcc_gpu::handles`) and Even Out / Fill spots (the GPU renderer runs the scene-linear stage on the
+CPU for such a photo, `lin_needs_cpu`). Matrix soft proofs and Clone / Heal / sourced Remove spots already run on the
+GPU. Probe: `cargo test -p lcc-pipeline --release cpu_only_stage_cost -- --ignored --nocapture` (1920×1280, median of 7,
+synthetic source). The machine was heavily loaded by other agents (16 cores; a plain CPU loupe render took 74–681 ms
+across runs against 16 ms idle in the summary), so only the quietest run is quoted, and it is an upper bound:
+
+| Case (1920×1280) | Quietest run |
+|---|---|
+| CPU render, plain | 74 ms |
+| + device proof (33³ table) | +6 ms; with both gamut warnings +12 ms |
+| + 1 Even Out spot (size 0.05) | +12 ms in the render; spot stage alone 34 ms |
+| 1 Even Out spot, size 0.20 (box ≈ the whole frame) | spot stage 223 ms |
+| 10 Even Out spots, size 0.05 | spot stage 325 ms |
+| 1 Fill spot, size 0.05 / 0.20 | 84 / 334 ms on first solve (cached afterwards: `fills()`) |
+
+Conclusion: a device proof adds a few per cent to a CPU render, which fits the 60 ms loupe budget on an idle machine
+(CPU loupe drag 16 ms in the summary); a WGSL port of the table lookup isn't needed for the budget. Even Out with one
+small spot fits; large or many Even Out spots miss it (the three box blurs per spot over a box that grows with the
+radius), and Fill pays its PatchMatch solve once per stroke. A port of Even Out's blurs to the GPU blur kernels is the
+next step if the idle re-measure confirms the miss. Tried and dropped: taller `box_v` bands for wide radii (fewer
+primes, less parallelism): no difference distinguishable from the load noise.
+>>>>>>> origin/main
 
 ## Catalog (`cargo xtask bench-catalog`)
 
@@ -216,6 +307,13 @@ thread `prepare` 18.7 → 7 ms. At the budget edge: the rest is NR itself (~30 m
 shared with every drag. Original analysis: **CPU fallback misses the slider budget for NR.** Idle, draft-size highlights/clarity drags on the CPU take
 6–7 ms (met; 34–47 ms under load), but an NR drag takes 22.8 ms (297 ms under load). Proposal: a smaller draft size during drags on the CPU path (e.g. 768 px), and skipping NR in
 draft renders while a slider moves.
+
+**Draft NR drag, task 4.5 (2026-11-24):** a draft with luminance NR now runs the colour NR first and keeps that image
+(`Plan::draft_col_key`, `local::denoise_lum_draft`); a Luminance / Detail drag reruns only the luminance NR on it (it
+only scales each pixel's rgb, so the swapped order is a close stand-in). Full-quality renders and exports keep the
+original order and are bit-identical (`tests_draft_nr.rs`). Windows, loaded machine, paired alternating runs, median of
+4: 63.8 → **33.4 ms** wall (single thread 280 → 200 ms). `cargo xtask bench` now carries wall budgets (`BUDGETS`,
+incl. this row at 16 ms) that `--strict` fails on, and compares wall time where there is no process CPU time.
 
 **U4 — export 24 MP JPEG at 1.25 s** (under load; idle: 0.43 s GPU / 0.55 s CPU, budget met — keep as a nice-to-have) (GPU render 865 ms of which most is the full-size source develop, plus 386 ms
 encode). Overlapping the JPEG encode of strip *n* with the render of strip *n+1*, or a faster demosaic for export

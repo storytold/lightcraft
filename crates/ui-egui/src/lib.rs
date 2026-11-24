@@ -67,6 +67,7 @@ pub mod eye_strip;
 pub mod eyedropper;
 pub mod face_menu;
 mod focus_scan;
+pub mod focus_watch;
 pub mod folder_poll;
 mod frame_rate;
 pub mod headless;
@@ -169,6 +170,8 @@ mod tests_album_picker;
 mod tests_album_remove;
 #[cfg(test)]
 mod tests_appearance;
+#[cfg(test)]
+mod tests_background_clicks;
 #[cfg(test)]
 mod tests_background_prep;
 #[cfg(test)]
@@ -568,6 +571,9 @@ pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> +
 /// The ICC profile of the screen showing the window, as the system colour-manages it (`None`:
 /// not known).
 pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
+/// Sets whether a click in a background window also acts (`true`) or only brings the window
+/// forward; an error says why it can't.
+pub type BackgroundClicksFn = Box<dyn FnMut(bool) -> Result<(), String>>;
 /// Re-reads the MIDI map and says what happened (`midi.reload`; see `docs/midi.md`).
 pub type MidiReload = Box<dyn FnMut() -> Result<String, String>>;
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
@@ -666,6 +672,9 @@ pub struct Services {
     /// The profile of the screen showing the window, used while none is chosen in Settings ▸
     /// Display (macOS, whose windows aren't colour-managed: issue #787).
     pub screen_profile: Option<ScreenProfileFn>,
+    /// Whether a click in a background window also acts or only brings the window forward
+    /// (Settings ▸ Interface; macOS only, where the choice exists).
+    pub background_clicks: Option<BackgroundClicksFn>,
     /// Save dialog for an exported `.lcpreset` file.
     pub save_preset_file: Option<SaveFile>,
     /// Open dialog for a keyword list file (`.txt`, Photo Supreme's `.utf8`; File ▸ Import Keywords…).
@@ -834,6 +843,8 @@ pub struct LccApp {
     pub services: Services,
     pub renderer: render::Renderer,
     pub perf: Perf,
+    /// The window's focus and visibility changes, timed (issue #1188).
+    pub focus_watch: focus_watch::FocusWatch,
     /// What this frame ran (commands, control requests, slow panels), for [`SlowFrame`]: at most
     /// [`FRAME_LOG_LEN`] names.
     frame_log: Vec<String>,
@@ -1122,6 +1133,8 @@ pub struct LccApp {
     /// and when it was last read (egui time, s).
     pub(crate) screen_profile: Option<Vec<u8>>,
     pub(crate) screen_profile_read: Option<f64>,
+    /// The background-click choice last passed to `services.background_clicks`.
+    pub(crate) background_clicks_applied: Option<bool>,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
@@ -1290,6 +1303,7 @@ impl LccApp {
             services,
             renderer: render::Renderer::default(),
             perf: Perf::default(),
+            focus_watch: focus_watch::FocusWatch::default(),
             frame_log: Vec::new(),
             slowest_frame: None,
             caches: Caches::default(),
@@ -1423,6 +1437,7 @@ impl LccApp {
             display_error: None,
             screen_profile: None,
             screen_profile_read: None,
+            background_clicks_applied: None,
             library_problem: None,
             waiting_import: Vec::new(),
             alt_asks_for_library: false,
@@ -2380,6 +2395,10 @@ impl LccApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
         self.frame_log.clear();
+        // (a frame that focuses, unfocuses, hides or shows the window says so in its log, and is timed)
+        if let Some(what) = self.focus_watch.observe(focus_watch::WindowState::of(ctx), self.perf.host_frame_ms) {
+            self.note_ran(what);
+        }
         // painting on the loupe (OneSlips, NOTES-1028 note 29): a brush stroke in progress and a moment after it
         let now = ctx.input(|i| i.time);
         let painting = matches!(self.gesture, Some(panels::detail::Gesture::Brush { .. }));
@@ -2830,6 +2849,7 @@ impl LccApp {
         if self.ui.settings.display_profile.is_empty() {
             self.follow_screen_profile(ctx);
         }
+        self.apply_background_clicks();
         if let Some(fs) = ctx.input(|i| i.viewport().fullscreen) {
             self.window_is_fullscreen = fs;
         }
@@ -2867,6 +2887,21 @@ impl LccApp {
         }
         self.screen_profile_read = Some(now);
         self.apply_screen_profile();
+    }
+
+    /// Passes Settings ▸ Interface ▸ Click through to the host when it changes
+    /// (macOS). A failure is logged and clicks keep working as before; it is tried again only
+    /// once the choice changes.
+    fn apply_background_clicks(&mut self) {
+        let accept = self.ui.settings.accept_background_clicks;
+        if self.background_clicks_applied == Some(accept) {
+            return;
+        }
+        let Some(set) = self.services.background_clicks.as_mut() else { return };
+        self.background_clicks_applied = Some(accept);
+        if let Err(msg) = set(accept) {
+            log::warn!("background clicks: {msg}");
+        }
     }
 
     /// Read the screen's profile now and show previews through it (sRGB without one).
@@ -3005,6 +3040,7 @@ impl LccApp {
         self.perf.frame_ms = now_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+        self.focus_watch.finish(self.perf.logic_ms, self.perf.frame_ms);
         self.note_slow_frame(ctx.cumulative_pass_nr());
     }
 
@@ -3556,7 +3592,7 @@ pub struct Caches {
     /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
     pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
     /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
-    pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
+    pub unnamed: Option<(u64, u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The library filter (any person filter aside) the two above were asked for with: when the sidebar picks another
     /// year, folder or album, they are asked for again.
     pub faces_filter: Option<lcc_catalog::Filter>,

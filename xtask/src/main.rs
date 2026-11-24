@@ -19,6 +19,7 @@ mod ico;
 mod immich;
 mod layers;
 mod notes;
+mod package_size;
 mod parity;
 mod quarantine;
 mod rename;
@@ -44,9 +45,10 @@ commands:
                   name) in any source file outside the allowlist (xtask/src/brand.rs);
                   test: build the CLI with xtask/test-brand.toml and check help, UI snapshot,
                   MCP serverInfo and config/log paths show only that brand; vars: list template keys
-  bench [FILE] [--strict] [--threshold PCT]
-                  run the render benchmark, append to target/bench/history.jsonl, compare CPU time with
-                  the previous run (default input: corpus/raw/arw-sony-a7m3-compressed.arw)
+  bench [FILE] [--only render,grid,tiff,keywords] [--strict] [--threshold PCT] [--save-baseline]
+                  run the perf probes, check the budgets, append to target/bench/history.jsonl and compare
+                  with this host's baseline (target/bench/baseline.json) or previous run; --strict fails on
+                  a regression over PCT (default 20) or a budget breach (docs/perf.md)
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
@@ -87,6 +89,8 @@ commands:
   package [--skip-build] [--render-only]
                   release build + rendered packaging/**/*.in templates, branded binaries, man page and
                   completions into target/package/ (installers: packaging/<os>/package.*)
+  package-size [--update] [--budget FILE] FILE…
+                  compare release downloads with packaging/size-budget.toml; fails on > 10 % growth
   rename-crates <prefix> [--from OLD] | --upstream [--since REV]
                   change the internal crate prefix (lcc-*) everywhere; --upstream rewrites incoming
                   upstream crate paths (UPSTREAM_PREFIX-*) in files changed since REV (fork-base)
@@ -132,6 +136,10 @@ commands:
                   the tests of the packages changed since the merge base with origin/main (or REF) and
                   of every workspace package depending on them (all packages when a workspace-wide
                   file changed); the PR gate's test step (docs/ci.md)
+  affected-clippy [--base REF]
+                  clippy -D warnings on the packages changed since the merge base with origin/main (or REF)
+                  and their dependents (all when a workspace-wide file changed; none for a docs-only
+                  change); the macOS / Windows PR jobs (docs/ci.md)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite, CC0 raw samples (raw.pixls.us) and public-domain / CC-BY video clips into corpus/ and checks their sha256
   upstream-review [--ref REF] | --done [REF]
@@ -174,6 +182,7 @@ fn main() -> ExitCode {
         Some("run") => dist::cmd_run(&root(), &rest),
         Some("install") => dist::cmd_install(&root(), &rest),
         Some("package") => dist::cmd_package(&root(), &rest),
+        Some("package-size") => package_size::run(&root(), &rest),
         Some("rename-crates") => rename::run(&root(), &rest),
         Some("immich") => immich::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
@@ -193,6 +202,7 @@ fn main() -> ExitCode {
         Some("ci") => cmd_ci_cli(&rest),
         Some("quarantine") => quarantine::run(&root(), &rest),
         Some("affected-tests") => cmd_affected_tests(&rest),
+        Some("affected-clippy") => cmd_affected_clippy(&rest),
         Some("skips") => skip_gate::run(&root(), &rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("upstream-merge") => upstream::merge(&root(), &rest),
@@ -381,11 +391,13 @@ fn doctests() -> (Command, String) {
     (c, "cargo test --workspace --doc".to_owned())
 }
 
-/// `ci --quick`'s tests: build every workspace test target, then run only the test binaries of
-/// `packages`. Building with `-p` instead would resolve features per selection: different
-/// artifacts from `ci`'s workspace build, so it would recompile ~130 crates. Doc tests are left to
-/// the full `ci`.
-fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, skip_log: &Path) -> Result<(), String> {
+/// The tests of `packages`: build test targets, then run only the test binaries of `packages`.
+/// `narrow` (`ci --quick`, the local pre-push check) builds only `packages` (`-p`): far less to
+/// compile in an agent's own target dir, at the cost of per-selection feature resolution, so the
+/// artifacts differ from a workspace build. Without it (`affected-tests` on CI) every workspace test
+/// target is built, sharing the artifacts of CI's workspace clippy/build. Doc tests are left to the
+/// full `ci`.
+fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, skip_log: &Path, narrow: bool) -> Result<(), String> {
     let manifests: std::collections::BTreeMap<String, String> = metadata()?["packages"]
         .as_array()
         .into_iter()
@@ -393,13 +405,16 @@ fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, ski
         .filter_map(|p| Some((p["manifest_path"].as_str()?.to_owned(), p["name"].as_str()?.to_owned())))
         .filter(|(_, name)| packages.contains(name))
         .collect();
-    let what = "cargo test --workspace --no-run --lib --bins --tests";
+    let mut sel: Vec<&str> = vec!["test", "--no-run", "--message-format=json-render-diagnostics"];
+    if narrow {
+        sel.extend(packages.iter().flat_map(|p| ["-p", p.as_str()]));
+    } else {
+        sel.push("--workspace");
+    }
+    let what = if narrow { "cargo test -p <packages> --no-run --lib --bins --tests" } else { "cargo test --workspace --no-run --lib --bins --tests" };
     eprintln!("$ {what} (then the test binaries of {})", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-    let out = cargo()
-        .args(with_test_targets(&["test", "--workspace", "--no-run", "--message-format=json-render-diagnostics"]))
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+    let out =
+        cargo().args(with_test_targets(&sel)).stderr(std::process::Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
     if !out.status.success() {
         return Err(format!("{what}: exited with {}", out.status));
     }
@@ -638,12 +653,44 @@ fn cmd_affected_tests(args: &[&str]) -> Result<(), String> {
     if let Some(dir) = skip_log.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    test_selected(&root, &packages, &skip_log)
+    test_selected(&root, &packages, &skip_log, false)
+}
+
+/// `cargo xtask affected-clippy [--base REF]`: `clippy --all-targets -D warnings` on the packages changed
+/// since REF and every package depending on them; the whole workspace when a workspace-wide file
+/// changed; nothing when no compiled file changed (a docs-only PR). The macOS / Windows PR jobs use it.
+fn cmd_affected_clippy(args: &[&str]) -> Result<(), String> {
+    let base = match args {
+        [] => None,
+        ["--base", r] => Some(*r),
+        _ => return Err("usage: cargo xtask affected-clippy [--base REF]".into()),
+    };
+    let root = root();
+    let meta = metadata()?;
+    let (base, files) = ci_quick::changed_files(&root, base)?;
+    let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &meta), base);
+    eprintln!("=== affected-clippy: {} changed file(s) since {} ===", plan.files, plan.base);
+    let mut c = cargo();
+    c.arg("clippy");
+    if plan.workspace_wide {
+        eprintln!("  a workspace-wide file changed: linting every package");
+        c.arg("--workspace");
+    } else {
+        let packages = ci_quick::with_dependents(&plan.packages, &ci_quick::workspace_deps(&meta));
+        if packages.is_empty() {
+            println!("no compiled file changed: nothing to lint");
+            return Ok(());
+        }
+        eprintln!("  packages: {}", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
+        c.args(packages.iter().flat_map(|n| ["-p", n.as_str()]));
+    }
+    c.args(["--all-targets", "--locked", "--", "-D", "warnings"]);
+    run(c, "cargo clippy (affected packages) --all-targets --locked -- -D warnings")
 }
 
 /// The app's environment variable `<PREFIX>_<suffix>` (`env_prefix` from brand.toml), for the
 /// child processes CI starts; the bare suffix when the brand file can't be read.
-fn env_name(suffix: &str) -> String {
+pub(crate) fn env_name(suffix: &str) -> String {
     brand::Brand::current().ok().and_then(|b| b.get("env_prefix").map(|p| format!("{p}_{suffix}"))).unwrap_or_else(|| suffix.to_string())
 }
 
@@ -758,6 +805,16 @@ fn run_ci(opts: &CiOptions, args: &[&str]) -> Result<(), String> {
             "clippy",
             Box::new(|| {
                 let mut c = cargo();
+                // `--quick`: the changed packages and every package depending on them (an API change
+                // breaks callers), not the whole workspace; a workspace-wide change lints everything
+                if let Some(p) = plan.as_ref().filter(|p| !p.workspace_wide) {
+                    let deps = ci_quick::workspace_deps(&metadata()?);
+                    let pkgs = ci_quick::with_dependents(&p.packages, &deps);
+                    c.arg("clippy");
+                    c.args(pkgs.iter().flat_map(|n| ["-p", n.as_str()]));
+                    c.args(["--all-targets", "--keep-going", "--", "-D", "warnings"]);
+                    return run(c, &format!("cargo clippy -p <{} packages> --all-targets --keep-going -- -D warnings", pkgs.len()));
+                }
                 c.args(["clippy", "--workspace", "--all-targets", "--keep-going", "--", "-D", "warnings"]);
                 run(c, "cargo clippy --workspace --all-targets --keep-going -- -D warnings")
             }),
@@ -781,7 +838,7 @@ fn run_ci(opts: &CiOptions, args: &[&str]) -> Result<(), String> {
             "test",
             Box::new(|| {
                 if let Some(p) = plan.as_ref().filter(|p| !p.workspace_wide) {
-                    return test_selected(&root, &p.packages, &ci_report::skip_log(&root, "test"));
+                    return test_selected(&root, &p.packages, &ci_report::skip_log(&root, "test"), true);
                 }
                 // on CI (`CI=true`): cargo-nextest with retries and the quarantine (ci/quarantine.toml);
                 // locally: strict `cargo test` unless `XTASK_NEXTEST=1` asks for the CI run

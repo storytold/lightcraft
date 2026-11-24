@@ -256,6 +256,10 @@ pub struct Headless {
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
     pub window_maximized: bool,
+    /// The simulated window has the keyboard focus (as a host reports it; on by default).
+    pub window_focused: bool,
+    /// The simulated window is covered or minimized (off by default).
+    pub window_occluded: bool,
     /// Window-management and pointer commands the app sent (`StartDrag`, `Maximized`,
     /// `CursorPosition`, …), oldest first.
     pub window_commands: Vec<ViewportCommand>,
@@ -327,6 +331,8 @@ impl Headless {
             control: tx,
             quit: false,
             window_maximized: false,
+            window_focused: true,
+            window_occluded: false,
             window_commands: vec![],
             last_cursor: egui::CursorIcon::Default,
         }
@@ -361,7 +367,13 @@ impl Headless {
     pub fn step(&mut self) {
         (self.size, self.pixels_per_point) = bounded_viewport(self.size, self.pixels_per_point);
         let mut raw = HeadlessView::raw_input(self.size, self.pixels_per_point, self.time, std::mem::take(&mut self.events));
-        raw.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.window_maximized);
+        raw.focused = self.window_focused;
+        {
+            let info = raw.viewports.entry(ViewportId::ROOT).or_default();
+            info.maximized = Some(self.window_maximized);
+            info.focused = Some(self.window_focused);
+            info.occluded = Some(self.window_occluded);
+        }
         raw.max_texture_side = (self.reported_texture_side != Some(self.max_texture_side)).then_some(self.max_texture_side);
         self.reported_texture_side = Some(self.max_texture_side);
         raw.dropped_files =
@@ -2148,8 +2160,13 @@ mod tests {
         // from the engine, which has nothing to say without a model
         let put_listing = |h: &mut Headless| {
             let at = h.time();
-            h.app.caches.unnamed =
-                Some((h.app.session.catalog.revision, h.app.caches.faces_indexed, at, Arc::new(crate::panels::unnamed::parse(&list))));
+            h.app.caches.unnamed = Some((
+                h.app.session.catalog.revision,
+                h.app.caches.faces_indexed,
+                h.app.caches.faces_epoch,
+                at,
+                Arc::new(crate::panels::unnamed::parse(&list)),
+            ));
             h.step();
         };
         h.request("engine.execute", json!({"command": "view.people"}), t);
@@ -5889,6 +5906,43 @@ mod tests {
         h.settle(SETTLE);
         assert_eq!(tex(&h, thumb), thumb0, "back to the sRGB thumbnail");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue #1188 (a spinning cursor on macOS when the app comes back to the front, even idle): a
+    /// frame that hides, shows or focuses the window is seen and timed, stays within a frame budget,
+    /// and the work a regained focus starts (here the folder poll) runs as an activity row on a
+    /// worker thread, never on the UI thread.
+    #[test]
+    fn regaining_focus_is_timed_and_does_no_blocking_work() {
+        let mut h = demo([1000.0, 700.0]);
+        h.app.session.folder_watch.poll = true;
+        for _ in 0..10 {
+            h.step();
+        }
+        assert!(h.step_until(SETTLE, |h| h.app.folder_poll.task.is_none()), "the first poll ends");
+        let steady = h.app.perf.update_ms;
+        let before = h.app.focus_watch.changes;
+
+        // another app comes to the front and covers the window
+        h.window_focused = false;
+        h.window_occluded = true;
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(h.app.focus_watch.changes, before + 1, "hiding and unfocusing in one frame is one change");
+
+        // back to the front
+        h.window_focused = true;
+        h.window_occluded = false;
+        h.step();
+        assert_eq!(h.app.focus_watch.changes, before + 2);
+        let ms = h.app.focus_watch.last_ms.expect("the regained focus was timed");
+        assert!(ms < steady.max(50.0) + 500.0, "regaining focus took {ms:.0} ms on the UI thread (steady frame {steady:.0} ms)");
+        // the poll a regained focus starts is a background task with its activity row
+        assert!(h.app.folder_poll.task.is_some(), "a poll started on coming forward");
+        assert!(h.app.session.activity.list().iter().any(|t| t.kind == "folderPoll"), "it holds an activity row");
+        let r = h.request("ui.inspect", json!({}), Duration::from_secs(10));
+        assert!(r.to_string().contains("windowFocus"), "{r}");
     }
 
     /// With no profile chosen, previews follow the profile of the screen showing the window (the
