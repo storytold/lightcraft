@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use lcc_engine::activity::{Cancel, TaskGuard};
+#[cfg(not(target_arch = "wasm32"))]
+use lcc_engine::folder_notify;
 use lcc_engine::folder_watch::{self, NewFilePolicy, Polled};
 use lcc_engine::sync::{FolderChanges, SyncInput, SyncJob, SyncProgress, scan_with};
 use web_time::{Duration, Instant};
@@ -56,7 +58,29 @@ pub struct FolderPoll {
     /// Scans whose new files wait to be added (new files: add) while another synchronize or
     /// an import runs.
     to_add: Vec<FolderChanges>,
+    /// The folders the last poll listed (what the OS watch should cover).
+    dirs: Vec<String>,
+    /// OS change notifications on those folders (gap 37), while polling is on.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub os: Option<OsState>,
 }
+
+/// OS change notifications for one library's folders (`lcc_engine::folder_notify`): a change
+/// starts a poll a moment later; the interval poll stays as the fallback.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct OsState {
+    library: Arc<()>,
+    dirs: Vec<String>,
+    /// Being set up on a worker (adding watches on a share can take a while).
+    setup: Option<(Receiver<Result<folder_notify::OsWatch, String>>, TaskGuard)>,
+    pub watch: Option<folder_notify::OsWatch>,
+    /// When the last notification arrived that no poll has followed yet.
+    pending: Option<Instant>,
+}
+
+/// How long after a notification the poll starts (a copy usually brings many files at once).
+#[cfg(not(target_arch = "wasm32"))]
+const SETTLE_AFTER_CHANGE: Duration = Duration::from_secs(2);
 
 /// Start a poll now unless one is running (polling on or not: the person or an agent asked).
 pub fn start(app: &mut LccApp) {
@@ -64,6 +88,7 @@ pub fn start(app: &mut LccApp) {
         return;
     }
     let dirs = folder_watch::watched_dirs(&app.session.catalog);
+    app.folder_poll.dirs = dirs.iter().map(|d| d.path.clone()).collect();
     let prev = app.session.folder_stamps.clone();
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();
@@ -88,6 +113,10 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context, came_forward: bool) {
     collect(app, ctx);
     add_waiting(app, ctx);
     let prefs = app.session.folder_watch;
+    #[cfg(not(target_arch = "wasm32"))]
+    let changed = os_tick(app, ctx, prefs.poll);
+    #[cfg(target_arch = "wasm32")]
+    let changed = false;
     if !prefs.poll || app.folder_poll.task.is_some() || cfg!(target_arch = "wasm32") {
         return;
     }
@@ -96,7 +125,7 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context, came_forward: bool) {
         // a library just opened
         None => true,
         Some((_, l)) if !Arc::ptr_eq(l, &library) => true,
-        Some((at, _)) => came_forward || at.elapsed() >= Duration::from_secs(u64::from(prefs.interval_minutes) * 60),
+        Some((at, _)) => changed || came_forward || at.elapsed() >= Duration::from_secs(u64::from(prefs.interval_minutes) * 60),
     };
     if due {
         start(app);
@@ -238,6 +267,99 @@ pub fn follow_link(app: &mut LccApp, ctx: &egui::Context, url: &str) {
     });
     if let Err(e) = r {
         app.toast_error(ctx, e);
+    }
+}
+
+/// Keep the OS watch on the folders the last poll listed (set up on a worker, under a row in the
+/// activity stack); `true` when a notification asks for a poll now.
+#[cfg(not(target_arch = "wasm32"))]
+fn os_tick(app: &mut LccApp, ctx: &egui::Context, on: bool) -> bool {
+    if !on {
+        app.folder_poll.os = None;
+        return false;
+    }
+    let library = folder_watch::library_token(&app.session);
+    if app.folder_poll.dirs.is_empty() || app.folder_poll.last.as_ref().is_none_or(|(_, l)| !Arc::ptr_eq(l, &library)) {
+        return false;
+    }
+    let current = app.folder_poll.os.as_ref().is_some_and(|o| Arc::ptr_eq(&o.library, &library) && o.dirs == app.folder_poll.dirs);
+    if !current {
+        let dirs = app.folder_poll.dirs.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let guard = app.session.activity.start("folderWatch", "Watching folders for changes", Cancel::Flag(cancel.clone()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let d = dirs.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(folder_notify::OsWatch::start(&d, &cancel));
+        });
+        app.folder_poll.os = Some(OsState { library, dirs, setup: Some((rx, guard)), watch: None, pending: None });
+    }
+    let Some(os) = app.folder_poll.os.as_mut() else { return false };
+    if let Some((rx, guard)) = &os.setup {
+        match rx.try_recv() {
+            Ok(r) => {
+                match r {
+                    Ok(w) if !guard.is_cancelled() => {
+                        log::info!("folder notifications on {} folders; {} polled only", w.len(), w.unwatched.len());
+                        os.watch = Some(w);
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::info!("{e}; polling only"),
+                }
+                os.setup = None;
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(200)),
+            Err(TryRecvError::Disconnected) => os.setup = None,
+        }
+    }
+    let Some(watch) = &os.watch else { return false };
+    if !watch.changed().is_empty() {
+        os.pending = Some(Instant::now());
+    }
+    match os.pending {
+        Some(at) if at.elapsed() >= SETTLE_AFTER_CHANGE => {
+            if app.folder_poll.task.is_some() {
+                // (the poll at work may have missed it: poll again after it)
+                return false;
+            }
+            os.pending = None;
+            true
+        }
+        Some(_) => {
+            ctx.request_repaint_after(Duration::from_millis(500));
+            false
+        }
+        None => {
+            // (wake up for notifications)
+            ctx.request_repaint_after(Duration::from_secs(1));
+            false
+        }
+    }
+}
+
+/// Follow what later launches handed this copy (`lcc_engine::instance`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn take_handoffs(app: &mut LccApp, ctx: &egui::Context) {
+    let Some(server) = &app.handoff else { return };
+    let got: Vec<Vec<String>> = server.rx.try_iter().take(16).collect();
+    // (the listener thread wakes nobody: look again soon)
+    ctx.request_repaint_after(Duration::from_millis(500));
+    for args in got {
+        handoff(app, ctx, args);
+    }
+}
+
+/// One later launch's arguments: the window comes to the front; links are followed as a launch
+/// link is, files and folders are imported as a launch's are.
+pub fn handoff(app: &mut LccApp, ctx: &egui::Context, args: Vec<String>) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    for a in args {
+        if lcc_engine::link::is_link(&a) {
+            follow_link(app, ctx, &a);
+        } else if !a.starts_with('-') && !a.trim().is_empty() {
+            app.catalog_ui.pending_import.push(a);
+        }
     }
 }
 

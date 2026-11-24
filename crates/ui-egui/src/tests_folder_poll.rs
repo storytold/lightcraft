@@ -109,3 +109,54 @@ fn a_sync_link_opens_synchronize_folder() {
     h.step();
     assert!(h.app.ui.dialog.is_none());
 }
+
+/// Gap 37: with polling on, the OS's change notifications on the library's folders start a poll
+/// (no interval poll is due: the interval is five minutes).
+#[test]
+fn a_change_notification_starts_a_poll() {
+    let dir = Scratch::new("notify");
+    let mut h = app(&dir, json!({"poll": true, "intervalMinutes": 5}));
+    // the watch is set up on a worker after the poll on open
+    let watching = h.step_until(SETTLE, |h| h.app.folder_poll.os.as_ref().is_some_and(|o| o.watch.is_some()));
+    assert!(watching, "the folders are watched");
+    if h.app.folder_poll.os.as_ref().and_then(|o| o.watch.as_ref()).is_none_or(|w| w.is_empty()) {
+        lcc_testkit::skip!(System, "the OS watches no folder here");
+    }
+    write_png(&dir.path("trip/b.png"), 2);
+    let found = h.step_until(SETTLE, |h| lcc_engine::folder_watch::new_in(&h.app.session, &dir.path("trip")) == Some(1));
+    if !found {
+        lcc_testkit::skip!(System, "no change notification for the temp folder here");
+    }
+    assert_eq!(in_library(&h), 1, "ask adds nothing by itself");
+    // polling turned off: the watch goes too
+    h.app.session.execute("folder.watchPreferences", &json!({"poll": false})).unwrap();
+    h.step();
+    assert!(h.app.folder_poll.os.is_none());
+}
+
+/// Gap 37: a second launch hands its link and files to the running copy, which follows the link
+/// (Synchronize Folder opens) and imports the files.
+#[test]
+fn a_second_launch_hands_over_its_link_and_files() {
+    let dir = Scratch::new("handoff");
+    let mut h = app(&dir, json!({}));
+    let settings = dir.0.join("settings");
+    h.app.handoff = Some(lcc_engine::instance::Server::start(&settings).unwrap());
+    write_png(&dir.path("more/x.png"), 4);
+    let args = vec![lcc_engine::link::sync_link(&dir.path("trip")), dir.path("more/x.png")];
+    assert!(lcc_engine::instance::hand_off(&settings, &args).unwrap(), "the running copy took them");
+    let opened = h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })));
+    assert!(opened, "the link was followed");
+    assert!(
+        h.app.catalog_ui.pending_import.contains(&dir.path("more/x.png")) || in_library(&h) == 2,
+        "the file is imported (or waits for the library)"
+    );
+    // a hostile hand-off (wrong token) is refused and changes nothing
+    h.app.ui.dialog = None;
+    let mut rec = lcc_engine::instance::parse_record(&std::fs::read_to_string(settings.join(lcc_engine::instance::FILE)).unwrap()).unwrap();
+    rec.token = "0".repeat(32);
+    std::fs::write(settings.join(lcc_engine::instance::FILE), serde_json::to_string(&rec).unwrap()).unwrap();
+    assert!(!lcc_engine::instance::hand_off(&settings, &args).unwrap());
+    h.step();
+    assert!(h.app.ui.dialog.is_none());
+}

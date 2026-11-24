@@ -586,5 +586,26 @@
     ]
    }
   ]
+ },
+ {
+  "name": "soft-proof",
+  "steps": [
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "module.develop"
+    }
+   },
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "view.softProof",
+     "params": {
+      "on": true,
+      "destWarning": true
+     }
+    }
+   }
+  ]
  }
 ]

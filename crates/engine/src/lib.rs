@@ -75,6 +75,8 @@ pub mod filter_plugins;
 pub mod finishing;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod folder_notify;
 pub mod folder_watch;
 pub mod fonts;
 pub mod genfill;
@@ -84,6 +86,8 @@ pub mod history_groups;
 pub mod identity;
 pub mod import;
 mod import_move;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod instance;
 pub mod legacy;
 pub mod lens_download;
 pub mod lens_profiles;

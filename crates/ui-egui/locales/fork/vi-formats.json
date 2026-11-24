@@ -110,6 +110,7 @@
   "Goes into the group “{group}” that exists already.": "Sẽ vào nhóm “{group}” đã có sẵn.",
   "Healed {n} blemishes": "Đã chữa {n} vết mụn",
   "Healed {n} mark{} from the infrared pass": "Đã sửa {n}{:.0} vết từ lượt quét hồng ngoại",
+  "Hold {} and drag or scroll": "Giữ {} rồi kéo hoặc cuộn",
   "Ignored {} face": "Đã bỏ qua {} khuôn mặt",
   "Ignored {} faces": "Đã bỏ qua {} khuôn mặt",
   "Image Quality Scan stopped: {n} photos scanned": "Đã dừng quét chất lượng ảnh: đã quét {n} ảnh",

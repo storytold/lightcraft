@@ -97,6 +97,7 @@
   "Goes into the group “{group}” that exists already.": "Hamnar i den befintliga gruppen ”{group}”.",
   "Healed {n} blemishes": "Läkte {n} hudfläckar",
   "Healed {n} mark{} from the infrared pass": "Lagade märken från det infraröda passet: {n}{:.0}",
+  "Hold {} and drag or scroll": "Håll {} och dra eller rulla",
   "Ignored {} face": "{} ansikte ignorerat",
   "Ignored {} faces": "{} ansikten ignorerade",
   "Image Quality Scan stopped: {n} photos scanned": "Bildkvalitetsskanning stoppad: {n} foton skannade",

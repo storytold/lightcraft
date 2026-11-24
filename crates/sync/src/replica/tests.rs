@@ -454,3 +454,59 @@ fn held_items_are_capped() {
     assert_eq!(r.hold("\u{0}", item.clone()), 1);
     assert!(!r.held.contains_key("\u{0}"));
 }
+
+/// A desktop and a phone a patch release apart (#1294: 26.47.2 on a Mac, a store build behind on
+/// the phone) say hello, the desktop invites the phone into its group, and edits from either side
+/// reach the other, every message through the wire format.
+#[test]
+fn a_desktop_and_a_phone_a_patch_apart_pair_and_sync_both_ways() {
+    use crate::proto::{self, Hello, Msg};
+    let (mut mac, mut phone) = (Dev::new("mac"), Dev::new("phone"));
+    let hello = |d: &Dev, app: &str, invite: Option<crate::model::Group>| Hello {
+        proto: proto::VERSION,
+        app: app.into(),
+        name: d.r.device.clone(),
+        now_ms: d.now,
+        group: d.r.group.as_ref().map(|g| g.id.clone()),
+        catalogue: "Photos".into(),
+        invite,
+    };
+    let wire = |h: Hello| -> Hello {
+        match serde_json::from_str::<Msg>(&serde_json::to_string(&Msg::Hello(h)).unwrap()).unwrap() {
+            Msg::Hello(h) => h,
+            other => panic!("{other:?}"),
+        }
+    };
+    // the desktop starts a group sharing its catalogue, with one photo in an album
+    let now = mac.tick();
+    mac.r.start_group("g", Mode::Catalogue, Some("mac".into()), "Mac", now).unwrap();
+    mac.r.add_collection("c", CollectionKind::Album, "Trip", None, Grant::Sync, Some(1), now);
+    mac.import("p");
+    mac.r.set_member("c", "p", true, now);
+    // hellos: the invitation travels in the desktop's; neither side refuses the other
+    let from_mac = wire(hello(&mac, "26.47.2", mac.r.group.clone()));
+    let from_phone = wire(hello(&phone, "26.47.1", None));
+    assert_eq!(proto::check(&from_phone, &from_mac), Ok(()));
+    assert_eq!(proto::check(&from_mac, &from_phone), Ok(()));
+    let now = phone.tick();
+    phone.r.join_group(from_mac.invite.as_ref().unwrap(), "Phone", now).unwrap();
+    phone.import("p");
+    both(&mut phone, &mut mac);
+    both(&mut mac, &mut phone);
+    assert!(mac.r.in_group_with("phone") && phone.r.in_group_with("mac"));
+    let now = phone.tick();
+    phone.r.set_take("c", Take::FullSync, now).unwrap();
+    both(&mut phone, &mut mac);
+    // an edit on each side reaches the other
+    mac.edit("p", "rating", json!(5));
+    both(&mut mac, &mut phone);
+    phone.edit("p", "develop", json!({"exposure": 0.5}));
+    both(&mut phone, &mut mac);
+    for d in [&mac, &phone] {
+        assert_eq!((d.value("p", "rating"), d.value("p", "develop")), (json!(5), json!({"exposure": 0.5})), "{}", d.r.device);
+    }
+    assert_eq!(send(&mut mac, &mut phone) + send(&mut phone, &mut mac), 0, "settled");
+    // a phone on another release line is refused with its version named, not dropped silently
+    let old = wire(hello(&phone, "26.46.1", None));
+    assert_eq!(proto::check(&from_mac, &old), Err(proto::Refusal::Version("26.46.1".into())));
+}

@@ -673,6 +673,8 @@ pub struct AppSettings {
     pub keymap: crate::shortcuts::Keymap,
     /// The keymap set the user's changes apply over (Classic by default).
     pub keymap_set: crate::shortcuts::KeymapSet,
+    /// Speed-edit keys: hold the key and drag or scroll on the photo to move the slider (`app.setSpeedKey`).
+    pub speed_keys: crate::speed_edit::SpeedKeys,
     /// Auto (follow the system), Dark or Light.
     pub appearance_mode: AppearanceMode,
     /// The theme of the dark appearance.
@@ -702,6 +704,12 @@ pub struct AppSettings {
     pub slider_text: crate::theme::SliderText,
     /// How dragging a slider and scrubbing its value follow the pointer (Settings ▸ Interface).
     pub slider_control: crate::theme::SliderControl,
+    /// The shade behind the photo in the loupe, Compare, Survey and Reference (`view.loupeBackground`).
+    #[serde(deserialize_with = "lenient")]
+    pub loupe_background: crate::theme::CanvasShade,
+    /// The shade behind the filmstrip's thumbnails (`view.filmstripBackground`).
+    #[serde(deserialize_with = "lenient")]
+    pub filmstrip_background: crate::theme::CanvasShade,
     /// Theme shortcuts in the appearance context menu.
     #[serde(deserialize_with = "deserialize_favorite_themes")]
     pub favorite_themes: Vec<String>,
@@ -877,6 +885,7 @@ impl Default for AppSettings {
             loupe_messages: true,
             keymap: Default::default(),
             keymap_set: Default::default(),
+            speed_keys: crate::speed_edit::default_keys(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
             light_theme: LightTheme::Silver,
@@ -888,6 +897,8 @@ impl Default for AppSettings {
             auto_sync: false,
             slider_text: Default::default(),
             slider_control: Default::default(),
+            loupe_background: Default::default(),
+            filmstrip_background: Default::default(),
             favorite_themes: Vec::new(),
             display_profile: String::new(),
             color_readout: Default::default(),
@@ -1288,6 +1299,9 @@ pub fn crop_mask_alpha(percent: u8) -> u8 {
 /// The most toasts on screen at once: a newer one pushes the oldest out.
 pub const MAX_TOASTS: usize = 3;
 
+/// The Masking panel's folding sections, top to bottom (`section:mask:<key>`).
+pub const MASK_SECTIONS: [&str; 5] = ["light", "color", "grading", "effects", "detail"];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
@@ -1416,6 +1430,9 @@ pub struct UiState {
     pub open_flyouts: Vec<String>,
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
+    /// Solo Mode for the Masking panel's sections (`mask.solo`, issue #1305): opening one of
+    /// [`MASK_SECTIONS`] folds the others.
+    pub mask_solo: bool,
     pub show_clipping: bool,
     pub histogram: bool,
     /// Which distribution the Histogram panel draws and how tall its bins are, as the *names* of a
@@ -2727,6 +2744,7 @@ impl Default for UiState {
             open_sections: vec!["light".into(), "primaries".into()],
             open_flyouts: vec![],
             single_panel: false,
+            mask_solo: false,
             show_clipping: false,
             histogram: true,
             histogram_mode: lcc_raster::HistogramMode::default().name().into(),
@@ -3073,6 +3091,22 @@ impl UiState {
             self.folded_sections.retain(|s| s != id);
         } else {
             self.folded_sections.push(id.to_string());
+        }
+    }
+
+    /// Opens the mask section `key` (one of [`MASK_SECTIONS`]) and folds every other one.
+    pub fn solo_mask_section(&mut self, key: &str) {
+        self.folded_sections.retain(|s| s.strip_prefix("mask:").is_none_or(|k| !MASK_SECTIONS.contains(&k)));
+        for k in MASK_SECTIONS.iter().filter(|k| **k != key) {
+            self.folded_sections.push(format!("mask:{k}"));
+        }
+    }
+    /// Turns the Masking panel's Solo Mode on or off. Turning it on keeps only the first open
+    /// section open.
+    pub fn set_mask_solo(&mut self, on: bool) {
+        self.mask_solo = on;
+        if on && let Some(k) = MASK_SECTIONS.iter().find(|k| !self.section_folded(&format!("mask:{k}"))) {
+            self.solo_mask_section(k);
         }
     }
 

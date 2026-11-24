@@ -72,6 +72,8 @@ chrono = { workspace = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# OS change notifications for folder polling (folder_watch::os)
+notify = { workspace = true }
 lcc-fetch = { workspace = true }
 lcc-genfill = { workspace = true, features = ["cloud"] }
 # auto updates: the release feed, the download, and starting the install
