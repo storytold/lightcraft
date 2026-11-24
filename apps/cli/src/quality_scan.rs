@@ -1,6 +1,7 @@
-//! `quality-scan [OPTIONS] [FOLDER]` (issue #1313): the Image Quality Scanner from a shell, the
-//! same as `run [OPTIONS] photo.qualityScan '{…}'` — every option here becomes one of its params,
-//! so the scan, the cutoffs, the weights and the summary are the engine's, not a second copy.
+//! `quality-scan [OPTIONS] [FOLDER]` (issue #1313, extended by #1362): the Image Quality Scanner
+//! from a shell, the same as `run [OPTIONS] photo.qualityScan '{…}'` — every option here becomes
+//! one of its params, so the scan, the cutoffs, the star breakpoints, the weights and the summary
+//! are the engine's, not a second copy.
 //!
 //! The scan runs where `run` runs it: in the running app with `--connect` (its activity stack
 //! shows it, and the scores land in the library it has open), else headless in `--library`'s
@@ -9,7 +10,7 @@
 
 use serde_json::{Map, Value, json};
 
-const USAGE: &str = "quality-scan [--demo] [--library DIR] [--import PATH]… [--connect [ADDR]] [--scope selection|view|folder|catalog] [--accepted N] [--rejected N] [--apply-flags] [--rescan] [--weights a,b,c,d] [--ids 1,2,3] [FOLDER]";
+const USAGE: &str = "quality-scan [--demo] [--library DIR] [--import PATH]… [--connect [ADDR]] [--scope selection|view|folder|catalog] [--accepted N] [--rejected N] [--apply-flags|--auto-flag] [--auto-rate] [--overwrite-metadata] [--star-breaks a,b,c,d,e] [--rescan] [--weights a,b,c,d] [--ids 1,2,3] [FOLDER]";
 
 /// The `run` arguments that scan quality with these options.
 pub fn to_run_args(args: &[String]) -> Result<Vec<String>, String> {
@@ -53,8 +54,23 @@ pub fn to_run_args(args: &[String]) -> Result<Vec<String>, String> {
                 let n: f64 = v.parse().map_err(|_| format!("{a} takes a number from 0 to 100, not {v:?}"))?;
                 params.insert(a.trim_start_matches("--").into(), json!(n));
             }
-            "--apply-flags" => {
+            "--apply-flags" | "--auto-flag" => {
                 params.insert("applyFlags".into(), json!(true));
+            }
+            "--auto-rate" => {
+                params.insert("autoRate".into(), json!(true));
+            }
+            "--overwrite-metadata" => {
+                params.insert("overwriteMetadata".into(), json!(true));
+            }
+            "--star-breaks" => {
+                let v = value!();
+                let parts: Vec<&str> = v.split(',').map(str::trim).collect();
+                let [a, b, c, d, e] = parts.as_slice() else {
+                    return Err(format!("--star-breaks takes five numbers, a,b,c,d,e, not {v:?}"));
+                };
+                let num = |s: &str| -> Result<f64, String> { s.parse::<f64>().map_err(|_| format!("--star-breaks takes numbers, not {s:?}")) };
+                params.insert("starBreaks".into(), json!([num(a)?, num(b)?, num(c)?, num(d)?, num(e)?]));
             }
             "--rescan" => {
                 params.insert("rescan".into(), json!(true));
@@ -148,6 +164,19 @@ mod tests {
         assert_eq!(p["rejected"], 30.0);
         assert_eq!(p["applyFlags"], true);
         assert_eq!(p["weights"], json!({"blur": 2.0, "noise": 1.0, "exposure": 1.0, "compression": 0.5}));
+    }
+
+    #[test]
+    fn the_auto_assign_options_are_the_commands_params_too() {
+        let p = params(&to_run_args(&s(&["--auto-flag", "--auto-rate", "--overwrite-metadata", "--star-breaks", "10,30,50,70,90"])).unwrap());
+        assert_eq!(p["applyFlags"], true, "--auto-flag is the command's applyFlags");
+        assert_eq!(p["autoRate"], true);
+        assert_eq!(p["overwriteMetadata"], true);
+        assert_eq!(p["starBreaks"], json!([10.0, 30.0, 50.0, 70.0, 90.0]));
+        let bads = [s(&["--star-breaks", "1,2,3,4"]), s(&["--star-breaks", "1,2,3,4,x"])];
+        for bad in bads {
+            assert!(to_run_args(&bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
 use super::people::{self, PAD};
-use super::unnamed::{SuggestionGroup, Unnamed, UnnamedFace};
+use super::unnamed::{Unnamed, UnnamedFace};
 use crate::LccApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -40,34 +40,70 @@ pub struct Decision {
     pub faces: Vec<UnnamedFace>,
 }
 
+/// One person's suggested faces as the category draws them: the person as the engine named them, how many faces they
+/// have waiting, and the faces themselves, borrowed from the listing so a frame does not copy every one of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Section<'a> {
+    pub name: &'a str,
+    pub total: usize,
+    pub faces: Vec<&'a UnnamedFace>,
+}
+
 /// The suggested faces of `list` under the person suggested, the most faces first; a face in `decided` (about which the
 /// session has already run a decision) is left out, since a confirmed one is named by now and a rejected one is not this
 /// person's suggestion any more.
-pub fn groups(list: &Unnamed, decided: &[(u64, usize)]) -> Vec<SuggestionGroup> {
-    let mut out: Vec<SuggestionGroup> = Vec::new();
+///
+/// The engine's `groups` hold every suggestion the library has within the filter, not only the faces of the page it
+/// lists (issue #1365), so a face does not have to fall on that page to be reviewed here; a listing asked for without
+/// `bySuggestion` has none, and its own faces are all it can offer.
+pub fn sections<'a>(list: &'a Unnamed, decided: &[(u64, usize)]) -> Vec<Section<'a>> {
+    if !list.groups.is_empty() {
+        return list
+            .groups
+            .iter()
+            .filter_map(|g| {
+                let faces: Vec<&UnnamedFace> = g.faces.iter().filter(|f| !decided.contains(&(f.photo, f.index))).collect();
+                (!faces.is_empty()).then(|| Section { name: &g.name, total: faces.len(), faces })
+            })
+            .collect();
+    }
+    let mut out: Vec<(&str, Vec<&UnnamedFace>)> = Vec::new();
     for face in &list.faces {
         if decided.contains(&(face.photo, face.index)) {
             continue;
         }
         let Some(name) = face.suggestion.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
-        match out.iter_mut().find(|g| g.name.eq_ignore_ascii_case(name)) {
-            Some(group) => {
-                // one person's spellings are one group, shown by a capitalised spelling when there is one
-                if !starts_upper(&group.name) && starts_upper(name) {
-                    group.name = name.to_string();
+        match out.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            Some((group, faces)) => {
+                // one person's spellings are one person, shown by a capitalised spelling when there is one
+                if !starts_upper(group) && starts_upper(name) {
+                    *group = name;
                 }
-                group.faces.push(face.clone());
-                group.total = group.faces.len();
+                faces.push(face);
             }
-            None => out.push(SuggestionGroup { name: name.to_string(), total: 1, faces: vec![face.clone()] }),
+            None => out.push((name, vec![face])),
         }
     }
-    out.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-    out
+    out.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    out.into_iter().map(|(name, faces)| Section { name, total: faces.len(), faces }).collect()
 }
 
 fn starts_upper(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// The most faces one decision command takes at once (`faces.confirmSuggestions`, `faces.rejectSuggestions` and
+/// `faces.ignore` refuse more than 5000).
+const MAX_DECISION: usize = 5000;
+
+/// `verdict` over `faces`: one decision, or as many as a command takes at once. The Suggested category holds every
+/// suggested face the filter lets through (issue #1365), which a large library can have more of than one command
+/// accepts, so a "Confirm all"/"Reject all" over them goes in batches; each says how many it took.
+fn batched(verdict: Verdict, person: &str, faces: &[&UnnamedFace]) -> Vec<Decision> {
+    faces
+        .chunks(MAX_DECISION)
+        .map(|batch| Decision { verdict, person: person.to_string(), faces: batch.iter().map(|f| (*f).clone()).collect() })
+        .collect()
 }
 
 /// The command `d` runs, with the faces it covers and the box each has in its photo (so a face that changed in the
@@ -182,18 +218,26 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     let chips = lcc_engine::filter_chips(&app.session.filter, &app.session.catalog);
     super::chips::show(app, ui, &chips);
     let list = super::unnamed::faces(app, now);
+    // while the engine is still comparing the library's faces, keep asking it, so the groups fill in as it goes
+    super::unnamed::keep_scanning(ui, &list);
     let mut decided: Vec<(u64, usize)> = app.ui.confirmed_suggestions.iter().copied().collect();
     decided.extend(app.ui.rejected_suggestions.iter().copied());
-    let groups = groups(&list, &decided);
+    let groups = sections(&list, &decided);
     let waiting: usize = groups.iter().map(|g| g.total).sum();
     // the heading: how many people, how many faces; its one button confirms every suggestion shown
-    let note = if groups.is_empty() {
+    let mut note = if groups.is_empty() {
         String::new()
     } else if groups.len() == 1 {
         crate::i18n::tr_format!("{} faces wait under 1 person", waiting).to_string()
     } else {
         crate::i18n::tr_format!("{} faces wait under {} people", waiting, groups.len()).to_string()
     };
+    // what is shown is what has been found so far, not the whole answer, until the library has been gone through
+    let looking = list.scan.filter(|s| !s.complete);
+    if let Some(scan) = looking {
+        let done = crate::i18n::tr_format!("{done} of {total}", done = scan.judged, total = scan.total).to_string();
+        note = if note.is_empty() { done } else { format!("{done} · {note}") };
+    }
     let action = (waiting > 0).then(|| {
         let label = if waiting == 1 {
             crate::i18n::tr("Confirm the suggestion").to_string()
@@ -205,9 +249,9 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     let row = people::heading_row(ui);
     let mut decisions: Vec<Decision> = Vec::new();
     if people::heading(ui, row, &people::Heading { title: "Suggested people", count: groups.len(), note, action }).is_some() {
-        // every suggested face at once, each named what it was suggested as, in one undo step
-        let faces: Vec<UnnamedFace> = groups.iter().flat_map(|g| g.faces.iter().cloned()).collect();
-        decisions.push(Decision { verdict: Verdict::Confirm, person: String::new(), faces });
+        // every suggested face at once, each named what it was suggested as
+        let faces: Vec<&UnnamedFace> = groups.iter().flat_map(|g| g.faces.iter().copied()).collect();
+        decisions.extend(batched(Verdict::Confirm, "", &faces));
     }
     if groups.is_empty() {
         // nothing to review: why, and where the faces are instead (the message box translates its own two texts)
@@ -217,6 +261,14 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                 ui.available_rect_before_wrap(),
                 "No suggested faces",
                 "Turn on face recognition in Settings ▸ Faces: the faces that look like the people you have named then wait here.",
+            );
+        } else if looking.is_some() {
+            // the look has not finished: saying there is nothing would be wrong, so say what it is doing
+            super::empty_message(
+                ui,
+                ui.available_rect_before_wrap(),
+                "Looking for suggested faces",
+                "Comparing the faces in your photos with the people you have named; what looks like them appears here as it is found.",
             );
         } else if list.rejected > 0 {
             super::empty_message(
@@ -259,13 +311,13 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
             }
             let heading_rect = Rect::from_min_size(pos2(area.left(), top), vec2(width, people::SECTION_H));
             let h = people::Heading {
-                title: &group.name,
+                title: group.name,
                 count: group.total,
                 note: crate::i18n::tr_format!("Suggested as {}. Confirm the faces that are them.", group.name).to_string(),
                 action: Some((crate::i18n::tr_format!("Confirm all {}", group.total).to_string(), format!("suggested:confirmAll:{}", group.name))),
             };
             if people::heading(ui, heading_rect, &h).is_some() {
-                decisions.push(Decision { verdict: Verdict::Confirm, person: group.name.clone(), faces: group.faces.clone() });
+                decisions.extend(batched(Verdict::Confirm, group.name, &group.faces));
             }
             // Reject all for every face of theirs, left of the heading's Confirm all (so neither covers a count or a name)
             let reject_all = Rect::from_min_size(
@@ -276,7 +328,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
             register(ui.ctx(), format!("suggested:rejectAll:{}", group.name), b.rect);
             let b = b.on_hover_text(crate::i18n::tr_format!("None of these {} faces is {}", group.total, group.name));
             if b.clicked() {
-                decisions.push(Decision { verdict: Verdict::Reject, person: group.name.clone(), faces: group.faces.clone() });
+                decisions.extend(batched(Verdict::Reject, group.name, &group.faces));
             }
             for (i, face) in group.faces.iter().enumerate() {
                 let (row, col) = (i / cols, i % cols);
@@ -285,8 +337,8 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                     top + people::SECTION_H + row as f32 * (tile + people::TILE_GAP),
                 );
                 shown += 1;
-                if let Some(verdict) = self::tile(app, ui, group, face, Rect::from_min_size(min, vec2(tile, tile)), ppp) {
-                    decisions.push(Decision { verdict, person: group.name.clone(), faces: vec![face.clone()] });
+                if let Some(verdict) = self::tile(app, ui, group.name, face, Rect::from_min_size(min, vec2(tile, tile)), ppp) {
+                    decisions.push(Decision { verdict, person: group.name.to_string(), faces: vec![(*face).clone()] });
                 }
             }
         }
@@ -300,10 +352,10 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
 
 /// One suggested face: its picture, who it was suggested as along the bottom, and, while it is pointed at, **✓** at the
 /// right, **✗** under it and **−** at the left. Returns what was clicked, if anything.
-fn tile(app: &mut LccApp, ui: &mut egui::Ui, group: &SuggestionGroup, f: &UnnamedFace, r: Rect, ppp: f32) -> Option<Verdict> {
+fn tile(app: &mut LccApp, ui: &mut egui::Ui, person: &str, f: &UnnamedFace, r: Rect, ppp: f32) -> Option<Verdict> {
     let t = Tokens::get(ui.ctx());
     let resp = ui.interact(r, egui::Id::new(("suggested-face", f.photo, f.index)), Sense::hover());
-    crate::widgets::announce(&resp, crate::i18n::tr_format!("Suggested as {}", group.name));
+    crate::widgets::announce(&resp, crate::i18n::tr_format!("Suggested as {}", person));
     register(ui.ctx(), format!("suggested:face:{}:{}", f.photo, f.index), r);
     // the three controls, each found by a script whether it is drawn yet or not (they show while the tile is pointed at)
     let check = Rect::from_min_size(pos2(r.right() - 32.0, r.top() + 5.0), vec2(26.0, 26.0));
@@ -335,7 +387,7 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, group: &SuggestionGroup, f: &Unname
     // who it was suggested as, along the bottom edge
     let strip = Rect::from_min_max(pos2(r.left(), r.bottom() - 20.0), r.right_bottom());
     p.rect_filled(strip, 0.0, Color32::from_black_alpha(165));
-    let label = people::fit(p, &group.name, t.font(11.5), r.width() - 18.0);
+    let label = people::fit(p, person, t.font(11.5), r.width() - 18.0);
     p.text(pos2(r.left() + 5.0, strip.center().y), Align2::LEFT_CENTER, label, t.font(11.5), Color32::from_gray(225));
     if hovered {
         // ✓
@@ -358,11 +410,17 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, group: &SuggestionGroup, f: &Unname
     let tip = |r: &egui::Response, text: String| {
         let _ = r.clone().on_hover_text(text);
     };
-    tip(&check_r, crate::i18n::tr_format!("It is {}: name this face", group.name));
-    tip(&cross_r, crate::i18n::tr_format!("Not {}: keep this face unknown", group.name));
+    tip(&check_r, crate::i18n::tr_format!("It is {}: name this face", person));
+    tip(&cross_r, crate::i18n::tr_format!("Not {}: keep this face unknown", person));
     tip(&ignore_r, crate::i18n::tr("Ignore this face, so it is not found again").to_string());
     // pointed at: the whole photo, this face marked (#1147)
-    super::face_preview::on_hover(app, &resp, f.photo, f.view, None);
+    super::face_preview::on_hover(
+        app,
+        &resp,
+        f.photo,
+        f.view,
+        super::face_preview::suggestion_caption(f.suggestion.as_deref().zip(f.suggestion_similarity)),
+    );
     if check_r.clicked() {
         return Some(Verdict::Confirm);
     }
@@ -377,6 +435,7 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, group: &SuggestionGroup, f: &Unname
 
 #[cfg(test)]
 mod tests {
+    use super::super::unnamed::SuggestionGroup;
     use super::*;
 
     fn face(photo: u64, index: usize, suggestion: Option<&str>) -> UnnamedFace {
@@ -386,12 +445,14 @@ mod tests {
             rect: lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
             view: lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
             suggestion: suggestion.map(str::to_string),
+            similarity: None,
+            suggestion_similarity: None,
             group: None,
         }
     }
 
     fn listing(faces: Vec<UnnamedFace>) -> Unnamed {
-        Unnamed { total: faces.len(), faces, ordered: true, ready: true, groups: Vec::new(), rejected: 0 }
+        Unnamed { total: faces.len(), faces, ordered: true, ready: true, groups: Vec::new(), rejected: 0, scan: None }
     }
 
     /// Issue #1050: the groups hold the suggested faces under the person suggested, the most faces first and one
@@ -400,18 +461,35 @@ mod tests {
     #[test]
     fn the_groups_hold_each_persons_suggested_faces_until_they_are_decided() {
         let l = listing(vec![face(1, 0, Some("Ann")), face(2, 0, Some("ann")), face(3, 0, Some("Bob")), face(4, 0, None)]);
-        let g = groups(&l, &[]);
+        let g = sections(&l, &[]);
         assert_eq!(g.len(), 2, "{g:?}");
-        assert_eq!((g[0].name.as_str(), g[0].total), ("Ann", 2), "one name's spellings are one person");
-        assert_eq!((g[1].name.as_str(), g[1].total), ("Bob", 1));
+        assert_eq!((g[0].name, g[0].total), ("Ann", 2), "one name's spellings are one person");
+        assert_eq!((g[1].name, g[1].total), ("Bob", 1));
         // the biggest group first, then by name
         let l = listing(vec![face(1, 0, Some("Bob")), face(2, 0, Some("ann")), face(3, 0, Some("Ann")), face(4, 0, Some("Cy"))]);
-        let names: Vec<String> = groups(&l, &[]).into_iter().map(|g| g.name).collect();
+        let names: Vec<String> = sections(&l, &[]).into_iter().map(|g| g.name.to_string()).collect();
         assert_eq!(names, ["Ann", "Bob", "Cy"], "ann and Ann are one person, before Bob");
         // a confirmed face is named, a rejected one is not Ann's any more
-        let g = groups(&l, &[(2, 0), (3, 0)]);
+        let g = sections(&l, &[(2, 0), (3, 0)]);
         assert!(g.iter().all(|group| group.name != "Ann"), "{g:?}");
-        assert!(groups(&l, &[(1, 0), (2, 0), (3, 0), (4, 0)]).is_empty(), "every face decided");
+        assert!(sections(&l, &[(1, 0), (2, 0), (3, 0), (4, 0)]).is_empty(), "every face decided");
+    }
+
+    /// Issue #1365: the engine's `groups` hold every suggested face in the library within the filter, so a face that
+    /// does not fall on the listed page is still offered here (that page is what the Unknown category can show at a
+    /// time, not where suggestions are found); a decision about one leaves it out at once.
+    #[test]
+    fn suggestions_beyond_the_listed_page_are_still_offered() {
+        // a page whose own faces carry no suggestion at all
+        let mut l = listing(vec![face(1, 0, None)]);
+        l.total = 5000;
+        let mut beyond = face(900, 2, Some("Jane Doe"));
+        beyond.suggestion_similarity = Some(0.61);
+        l.groups = vec![SuggestionGroup { name: "Jane Doe".into(), total: 1, faces: vec![beyond] }];
+        let g = sections(&l, &[]);
+        assert_eq!((g.len(), g[0].name, g[0].total), (1, "Jane Doe", 1), "{g:?}");
+        assert_eq!((g[0].faces[0].photo, g[0].faces[0].index), (900, 2));
+        assert!(sections(&l, &[(900, 2)]).is_empty(), "a face decided this session is out of the groups");
     }
 
     /// Issue #1050: a decision runs the command its verdict names, with every face it covers and the box each is shown

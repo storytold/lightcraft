@@ -206,7 +206,8 @@ USAGE:
       Print the camera database entry a camera's raws use, with its provenance.
   {cli} quality-scan [OPTIONS] [FOLDER]
       Score the library's photos for technical quality (sharpness, noise, exposure, JPEG
-      artifacts), store each score on the photo and map it to Pick / Reject flags. Options:
+      artifacts), store each score on the photo, map it to star ratings and Pick / Reject flags.
+      Options:
         --demo            the procedural demo library
         --library DIR     the library to scan
         --import PATH     headless: import a file or folder first (repeatable)
@@ -215,10 +216,19 @@ USAGE:
         --accepted N      the score at or above which a photo is a pick (default 70)
         --rejected N      the score at or below which a photo is a reject (default 25)
         --apply-flags     write the flags the scores ask for (photos you flagged are left alone)
+        --auto-flag       same as --apply-flags
+        --auto-rate       write the star ratings the scores ask for (photos you rated, or the scan
+                          itself rated before, are left alone)
+        --overwrite-metadata
+                          \"Overwrite existing\": write the ratings and flags even onto photos
+                          you rated or flagged yourself
+        --star-breaks a,b,c,d,e
+                          the scores at which a star steps up (default 20,40,55,70,85:
+                          <20 0★, 20–39 1★, 40–54 2★, 55–69 3★, 70–84 4★, ≥85 5★)
         --rescan          measure photos that carry a score already
         --weights a,b,c,d blur, noise, exposure, compression weights (default 1,1,1,1)
       Prints the summary as one JSON line ({measured, skipped, accepted, pending, rejected,
-      flagged, failed, photos}). `run photo.qualityScan …` does the same from a script.
+      flagged, rated, failed, photos}). `run photo.qualityScan …` does the same from a script.
   {cli} bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
       Time what culling a shoot costs on its own files: reading the folder (browse), the first
       screen of grid thumbnails, camera previews at loupe sizes and full size, a loupe render,
