@@ -11,6 +11,11 @@
 //! tries Vulkan last next time, and the compute devices follow the window's backend. macOS uses
 //! Metal, Linux Vulkan (plus GL for the window when the build has it).
 //!
+//! Windows on ARM (issue #1029) prefers DX12 for both: the Qualcomm Adreno Vulkan driver loses
+//! its device under load (library scrolling on an Adreno X1-45) where DX12 holds. Those machines
+//! have no other GPU, so the platform key [`WINDOWS_ARM`] puts DX12 first and keeps Vulkan as the
+//! fallback.
+//!
 //! Overrides, read once per process:
 //! - `{ENV_PREFIX}_GPU_BACKEND` = `dx12` | `vulkan` | `metal` | `gl` (comma lists allowed), `auto`
 //!   (the platform default), or `off` (no GPU compute; the window still needs one backend and
@@ -80,6 +85,20 @@ pub fn choose(app: Option<&str>, wgpu: Option<&str>) -> BackendChoice {
     BackendChoice::Auto
 }
 
+/// The platform key for Windows on ARM (`aarch64`): DX12 before Vulkan (issue #1029).
+pub const WINDOWS_ARM: &str = "windows-aarch64";
+
+/// The platform key the backend defaults are chosen by, from `os` and `arch`
+/// (`std::env::consts::OS`/`ARCH`): [`WINDOWS_ARM`] for Windows on ARM, else `os`.
+pub fn platform_key<'a>(os: &'a str, arch: &str) -> &'a str {
+    if os == "windows" && arch == "aarch64" { WINDOWS_ARM } else { os }
+}
+
+/// [`platform_key`] for this process.
+pub fn this_platform() -> &'static str {
+    platform_key(std::env::consts::OS, std::env::consts::ARCH)
+}
+
 /// The backends compute devices use when nothing is asked for on `os` (`std::env::consts::OS`):
 /// the first of [`compute_backend_order`].
 pub fn default_compute_backends(os: &str) -> Backends {
@@ -91,6 +110,7 @@ pub fn default_compute_backends(os: &str) -> Backends {
 pub fn compute_backend_order(os: &str) -> Vec<Backends> {
     match os {
         "windows" => vec![Backends::VULKAN, Backends::DX12],
+        WINDOWS_ARM => vec![Backends::DX12, Backends::VULKAN],
         "macos" | "ios" => vec![Backends::METAL],
         _ => vec![Backends::PRIMARY],
     }
@@ -141,7 +161,7 @@ pub fn software_forced_from(env: Option<&str>) -> bool {
 fn auto_compute_backends() -> Backends {
     static AUTO: std::sync::OnceLock<Backends> = std::sync::OnceLock::new();
     *AUTO.get_or_init(|| {
-        let os = std::env::consts::OS;
+        let os = this_platform();
         let window = *WINDOW_BACKEND.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let b = pick_compute_backend(&compute_backend_order(os), wgpu::Instance::enabled_backend_features(), window, has_hardware_adapter);
         log::info!("gpu: compute backend {b:?} (window {window:?})");
@@ -153,6 +173,7 @@ fn auto_compute_backends() -> Backends {
 pub fn default_window_backends(os: &str) -> Backends {
     match os {
         "windows" => Backends::VULKAN,
+        WINDOWS_ARM => Backends::DX12,
         "macos" | "ios" => Backends::METAL,
         // eframe's default (GL only when the build has it)
         _ => Backends::PRIMARY | Backends::GL,
@@ -213,14 +234,14 @@ pub fn compute_backends() -> Option<Backends> {
     let compiled = wgpu::Instance::enabled_backend_features();
     match choice {
         BackendChoice::Auto => Some(auto_compute_backends()),
-        c => resolve(c, default_compute_backends(std::env::consts::OS), compiled),
+        c => resolve(c, default_compute_backends(this_platform()), compiled),
     }
 }
 
 /// The backends for the desktop window's renderer (eframe/egui-wgpu). The window always needs
 /// one: `off` keeps the platform default.
 pub fn window_backends() -> Backends {
-    let default = default_window_backends(std::env::consts::OS);
+    let default = default_window_backends(this_platform());
     let choice = match env_choice() {
         BackendChoice::Off => BackendChoice::Auto,
         c => c,
@@ -545,7 +566,7 @@ pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<W
     app.and_then(WindowRenderer::parse).or_else(|| wgpu.and_then(WindowRenderer::parse))
 }
 
-/// The order in which the window's renderers are tried on `os`: the forced one (environment)
+/// The order in which the window's renderers are tried on `os` (a [`platform_key`]): the forced one (environment)
 /// first, then the one remembered from the last good start, then the platform chain — on Windows
 /// Vulkan, DX12, GL, then glow (issue #934: Vulkan builds the kernels much faster than DX12's FXC).
 /// A broken Vulkan driver can crash the process uncatchably (issue #136): the start's marker then
@@ -562,6 +583,7 @@ pub fn window_renderer_order(
 ) -> Vec<WindowRenderer> {
     let platform = match os {
         "windows" => vec![Backends::VULKAN, Backends::DX12, Backends::GL],
+        WINDOWS_ARM => vec![Backends::DX12, Backends::VULKAN, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
         _ => vec![Backends::VULKAN, Backends::GL],
     };
@@ -793,6 +815,16 @@ mod tests {
         // no card anywhere: still the first in the build (creation then reports why)
         assert_eq!(pick_compute_backend(&order, all, None, |_| false), vk);
         assert_eq!(compute_backend_order("macos"), [Backends::METAL]);
+        // Windows on ARM (issue #1029): DX12 first, Vulkan as the fallback
+        assert_eq!(compute_backend_order(WINDOWS_ARM), [Backends::DX12, Backends::VULKAN]);
+        assert_eq!(default_window_backends(WINDOWS_ARM), Backends::DX12);
+        assert_eq!(platform_key("windows", "aarch64"), WINDOWS_ARM);
+        assert_eq!(platform_key("windows", "x86_64"), "windows");
+        assert_eq!(platform_key("linux", "aarch64"), "linux");
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL;
+        let order = window_renderer_order(None, None, None, WINDOWS_ARM, all, false);
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::DX12)));
+        assert!(order.contains(&WindowRenderer::Wgpu(Backends::VULKAN)));
         assert_eq!(compute_backend_order("linux"), [Backends::PRIMARY]);
     }
 
