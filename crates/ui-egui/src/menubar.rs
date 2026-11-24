@@ -660,6 +660,17 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     v.push(item("view.theme", json!({"theme": k.id()}), k.label(), None, true, Some(on)));
                 }
             }
+            v.push(MenuNode::Separator);
+            for (label, command, current) in [
+                ("Loupe Background", "view.loupeBackground", s.loupe_background),
+                ("Filmstrip Background", "view.filmstripBackground", s.filmstrip_background),
+            ] {
+                let children = crate::theme::CanvasShade::ALL
+                    .into_iter()
+                    .map(|shade| item(command, json!({"shade": shade.id()}), shade.label(), None, true, Some(current == shade)))
+                    .collect();
+                v.push(MenuNode::Submenu { label: label.into(), children });
+            }
             v
         }
         "Loupe Overlay" => {

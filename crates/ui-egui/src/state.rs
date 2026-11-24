@@ -702,6 +702,12 @@ pub struct AppSettings {
     pub slider_text: crate::theme::SliderText,
     /// How dragging a slider and scrubbing its value follow the pointer (Settings ▸ Interface).
     pub slider_control: crate::theme::SliderControl,
+    /// The shade behind the photo in the loupe, Compare, Survey and Reference (`view.loupeBackground`).
+    #[serde(deserialize_with = "lenient")]
+    pub loupe_background: crate::theme::CanvasShade,
+    /// The shade behind the filmstrip's thumbnails (`view.filmstripBackground`).
+    #[serde(deserialize_with = "lenient")]
+    pub filmstrip_background: crate::theme::CanvasShade,
     /// Theme shortcuts in the appearance context menu.
     #[serde(deserialize_with = "deserialize_favorite_themes")]
     pub favorite_themes: Vec<String>,
@@ -888,6 +894,8 @@ impl Default for AppSettings {
             auto_sync: false,
             slider_text: Default::default(),
             slider_control: Default::default(),
+            loupe_background: Default::default(),
+            filmstrip_background: Default::default(),
             favorite_themes: Vec::new(),
             display_profile: String::new(),
             color_readout: Default::default(),
