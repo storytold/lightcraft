@@ -3472,5 +3472,10 @@
   "© Year Name": "© Jahr Name",
   "‹ Library": "‹ Bibliothek",
   "↑ This device has changes still to send": "↑ Dieses Gerät hat noch Änderungen zu senden",
-  "↓ Another device has changes still to fetch": "↓ Ein anderes Gerät hat noch Änderungen zum Abrufen"
+  "↓ Another device has changes still to fetch": "↓ Ein anderes Gerät hat noch Änderungen zum Abrufen",
+  "Rebuild": "Rekonstruieren",
+  "Inpaint Opposed": "Aus Gegenkanälen ergänzen",
+  "Guided Laplacian": "Geführter Laplace",
+  "Highlight Reconstruction": "Lichterrekonstruktion",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Wie abgeschnittene Lichter wiederhergestellt werden: Rekonstruieren nimmt die Farbe verlässlicher Details in der Nähe; Aus Gegenkanälen ergänzen und Geführter Laplace sind Verfahren von darktable"
 }

@@ -3817,5 +3817,10 @@
   "‹ Library": "‹ Pustaka",
   "↑ This device has changes still to send": "↑ Perangkat ini masih punya perubahan untuk dikirim",
   "↓ Another device has changes still to fetch": "↓ Perangkat lain masih punya perubahan untuk diambil",
-  "★ Favorites": "★ Favorit"
+  "★ Favorites": "★ Favorit",
+  "Rebuild": "Bangun ulang",
+  "Inpaint Opposed": "Isi dari kanal berlawanan",
+  "Guided Laplacian": "Laplacian terpandu",
+  "Highlight Reconstruction": "Rekonstruksi sorotan",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Cara sorotan yang terpotong dibangun ulang: Bangun ulang memakai warna detail andal di dekatnya; Isi dari kanal berlawanan dan Laplacian terpandu adalah metode darktable"
 }

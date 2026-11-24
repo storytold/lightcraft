@@ -3471,5 +3471,10 @@
   "‹ Library": "‹ Bibliothèque",
   "↑ This device has changes still to send": "↑ Cet appareil a encore des modifications à envoyer",
   "↓ Another device has changes still to fetch": "↓ Un autre appareil a encore des modifications à récupérer",
-  "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-glisser pour redresser, ⇧G Upright guidé, une grille pendant la transformation."
+  "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-glisser pour redresser, ⇧G Upright guidé, une grille pendant la transformation.",
+  "Rebuild": "Reconstruire",
+  "Inpaint Opposed": "Remplissage par canaux opposés",
+  "Guided Laplacian": "Laplacien guidé",
+  "Highlight Reconstruction": "Reconstruction des hautes lumières",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Comment les hautes lumières écrêtées sont reconstruites : Reconstruire reprend la couleur des détails fiables voisins ; Remplissage par canaux opposés et Laplacien guidé sont des méthodes de darktable"
 }

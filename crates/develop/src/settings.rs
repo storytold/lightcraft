@@ -484,11 +484,16 @@ pub struct Sensor {
     /// photo shows), 0 = off (the data as the camera recorded it). A number so it is a develop control
     /// (`sensor.pixelFix`).
     pub pixel_fix: f64,
+    /// How sensor-clipped highlights are rebuilt (`sensor.highlightMode`): 0 = Rebuild (the default: the colour of
+    /// reliable content nearby), 1 = Inpaint Opposed, 2 = Guided Laplacian (both ported from darktable). A number so
+    /// it is a develop control. Not written while 0, so settings from before it keep their JSON and hash.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub highlight_mode: f64,
 }
 
 impl Default for Sensor {
     fn default() -> Self {
-        Self { pixel_fix: 1.0 }
+        Self { pixel_fix: 1.0, highlight_mode: 0.0 }
     }
 }
 
@@ -532,6 +537,19 @@ impl Sensor {
     /// Whether hot, dead and stuck pixels are fixed.
     pub fn fixes_pixels(&self) -> bool {
         self.pixel_fix >= 0.5 || self.pixel_fix.is_nan()
+    }
+
+    /// The highlight reconstruction method's index (`sensor.highlightMode`): 0 Rebuild, 1 Inpaint Opposed, 2 Guided
+    /// Laplacian; anything out of range (NaN included) is 0.
+    pub fn highlight_mode(&self) -> u8 {
+        let r = self.highlight_mode.round();
+        if r == 1.0 {
+            1
+        } else if r == 2.0 {
+            2
+        } else {
+            0
+        }
     }
 }
 

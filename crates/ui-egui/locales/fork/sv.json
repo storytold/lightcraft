@@ -3885,5 +3885,10 @@
   "© Year Name": "© År Namn",
   "‹ Library": "‹ Bibliotek",
   "↑ This device has changes still to send": "↑ Den här enheten har ändringar kvar att skicka",
-  "↓ Another device has changes still to fetch": "↓ En annan enhet har ändringar kvar att hämta"
+  "↓ Another device has changes still to fetch": "↓ En annan enhet har ändringar kvar att hämta",
+  "Rebuild": "Återskapa",
+  "Inpaint Opposed": "Fyll från motsatta kanaler",
+  "Guided Laplacian": "Styrd Laplace",
+  "Highlight Reconstruction": "Högdagerrekonstruktion",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Hur klippta högdagrar återskapas: Återskapa använder färgen från pålitliga detaljer i närheten; Fyll från motsatta kanaler och Styrd Laplace är darktables metoder"
 }

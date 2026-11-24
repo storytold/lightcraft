@@ -4079,5 +4079,10 @@
   "‹ Library": "‹ Thư viện",
   "↑ This device has changes still to send": "↑ Thiết bị này còn thay đổi cần gửi",
   "↓ Another device has changes still to fetch": "↓ Một thiết bị khác còn thay đổi cần tải về",
-  "★ Favorites": "★ Yêu thích"
+  "★ Favorites": "★ Yêu thích",
+  "Rebuild": "Dựng lại",
+  "Inpaint Opposed": "Bù từ kênh đối diện",
+  "Guided Laplacian": "Laplacian có dẫn hướng",
+  "Highlight Reconstruction": "Tái tạo vùng sáng",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Cách dựng lại vùng sáng bị cắt: Dựng lại dùng màu của chi tiết đáng tin cậy gần đó; Bù từ kênh đối diện và Laplacian có dẫn hướng là các phương pháp của darktable"
 }

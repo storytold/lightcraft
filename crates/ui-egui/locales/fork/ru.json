@@ -3840,5 +3840,10 @@
   "≥  at least": "≥  не менее",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-перетаскивание для выравнивания, ⇧G Upright по направляющим, сетка во время трансформации.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Rebuild": "Восстановить",
+  "Inpaint Opposed": "Заполнение по противоположным каналам",
+  "Guided Laplacian": "Управляемый лапласиан",
+  "Highlight Reconstruction": "Восстановление светов",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Как восстанавливаются обрезанные света: Восстановить берёт цвет надёжных деталей рядом; Заполнение по противоположным каналам и Управляемый лапласиан — методы darktable"
 }

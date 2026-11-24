@@ -3830,5 +3830,10 @@
   "↑ This device has changes still to send": "↑ このデバイスにはまだ送信する変更があります",
   "↓ Another device has changes still to fetch": "↓ 別のデバイスにまだ取得する変更があります",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-ドラッグで水平補正、⇧G でガイド付き Upright、変形中はグリッドを表示。",
-  "★ Favorites": "★ お気に入り"
+  "★ Favorites": "★ お気に入り",
+  "Rebuild": "再構築",
+  "Inpaint Opposed": "反対チャンネルで補完",
+  "Guided Laplacian": "ガイド付きラプラシアン",
+  "Highlight Reconstruction": "ハイライト再構築",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "白飛びしたハイライトの再構築方法：再構築は近くの信頼できるディテールの色を使い、反対チャンネルで補完とガイド付きラプラシアンは darktable の手法です"
 }

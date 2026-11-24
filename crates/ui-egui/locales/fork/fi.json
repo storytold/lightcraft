@@ -3824,5 +3824,10 @@
   "↑ This device has changes still to send": "↑ Tällä laitteella on vielä lähetettäviä muutoksia",
   "↓ Another device has changes still to fetch": "↓ Toisella laitteella on vielä haettavia muutoksia",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Rebuild": "Rakenna uudelleen",
+  "Inpaint Opposed": "Täyttö vastakanavista",
+  "Guided Laplacian": "Ohjattu Laplace",
+  "Highlight Reconstruction": "Valoalueiden rekonstruktio",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Miten leikkautuneet valoalueet rakennetaan: Rakenna uudelleen käyttää läheisten luotettavien yksityiskohtien väriä; Täyttö vastakanavista ja Ohjattu Laplace ovat darktablen menetelmiä"
 }

@@ -3831,5 +3831,10 @@
   "↑ This device has changes still to send": "↑ Este dispositivo aún tiene cambios por enviar",
   "↓ Another device has changes still to fetch": "↓ Otro dispositivo aún tiene cambios por obtener",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-arrastrar para enderezar, ⇧G Upright guiado, una cuadrícula al transformar.",
-  "★ Favorites": "★ Favoritos"
+  "★ Favorites": "★ Favoritos",
+  "Rebuild": "Reconstruir",
+  "Inpaint Opposed": "Relleno por canales opuestos",
+  "Guided Laplacian": "Laplaciano guiado",
+  "Highlight Reconstruction": "Reconstrucción de altas luces",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Cómo se reconstruyen las altas luces recortadas: Reconstruir usa el color de los detalles fiables cercanos; Relleno por canales opuestos y Laplaciano guiado son métodos de darktable"
 }

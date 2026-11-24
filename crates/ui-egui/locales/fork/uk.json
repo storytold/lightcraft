@@ -3582,5 +3582,10 @@
   "‹ Library": "‹ Бібліотека",
   "↑ This device has changes still to send": "↑ Цей пристрій має ще не надіслані зміни",
   "↓ Another device has changes still to fetch": "↓ Інший пристрій має зміни для завантаження",
-  "★ Favorites": "★ Улюблені"
+  "★ Favorites": "★ Улюблені",
+  "Rebuild": "Відновити",
+  "Inpaint Opposed": "Заповнення за протилежними каналами",
+  "Guided Laplacian": "Керований лапласіан",
+  "Highlight Reconstruction": "Відновлення світел",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Як відновлюються обрізані світла: Відновити бере колір надійних деталей поруч; Заповнення за протилежними каналами та Керований лапласіан — методи darktable"
 }

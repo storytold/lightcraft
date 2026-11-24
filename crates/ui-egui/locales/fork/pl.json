@@ -3861,5 +3861,10 @@
   "‹ Library": "‹ Biblioteka",
   "↑ This device has changes still to send": "↑ To urządzenie ma jeszcze zmiany do wysłania",
   "↓ Another device has changes still to fetch": "↓ Inne urządzenie ma jeszcze zmiany do pobrania",
-  "★ Favorites": "★ Ulubione"
+  "★ Favorites": "★ Ulubione",
+  "Rebuild": "Odbuduj",
+  "Inpaint Opposed": "Uzupełnianie z kanałów przeciwnych",
+  "Guided Laplacian": "Laplasjan sterowany",
+  "Highlight Reconstruction": "Rekonstrukcja świateł",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Jak odbudowywane są przycięte światła: Odbuduj używa koloru wiarygodnych szczegółów w pobliżu; Uzupełnianie z kanałów przeciwnych i Laplasjan sterowany to metody programu darktable"
 }

@@ -3584,5 +3584,10 @@
   "© Year Name": "© Rok Jméno",
   "‹ Library": "‹ Knihovna",
   "↑ This device has changes still to send": "↑ Toto zařízení má ještě změny k odeslání",
-  "↓ Another device has changes still to fetch": "↓ Jiné zařízení má ještě změny ke stažení"
+  "↓ Another device has changes still to fetch": "↓ Jiné zařízení má ještě změny ke stažení",
+  "Rebuild": "Obnovit",
+  "Inpaint Opposed": "Doplnění z protějších kanálů",
+  "Guided Laplacian": "Řízený laplacián",
+  "Highlight Reconstruction": "Rekonstrukce světel",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Jak se obnovují oříznutá světla: Obnovit použije barvu spolehlivých detailů poblíž; Doplnění z protějších kanálů a Řízený laplacián jsou metody programu darktable"
 }

@@ -4023,5 +4023,10 @@
   "‹ Library": "‹ ბიბლიოთეკა",
   "↑ This device has changes still to send": "↑ ამ მოწყობილობას ჯერ კიდევ აქვს გასაგზავნი ცვლილებები",
   "↓ Another device has changes still to fetch": "↓ სხვა მოწყობილობას ჯერ კიდევ აქვს ჩამოსატვირთი ცვლილებები",
-  "★ Favorites": "★ რჩეულები"
+  "★ Favorites": "★ რჩეულები",
+  "Rebuild": "აღდგენა",
+  "Inpaint Opposed": "საპირისპირო არხებით შევსება",
+  "Guided Laplacian": "მართული ლაპლასიანი",
+  "Highlight Reconstruction": "ნათელი უბნების აღდგენა",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "როგორ აღდგება ჩამოჭრილი ნათელი უბნები: აღდგენა იყენებს ახლომდებარე სანდო დეტალების ფერს; საპირისპირო არხებით შევსება და მართული ლაპლასიანი darktable-ის მეთოდებია"
 }

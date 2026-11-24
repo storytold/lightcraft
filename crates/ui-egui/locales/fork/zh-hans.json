@@ -3753,5 +3753,10 @@
   "↑ This device has changes still to send": "↑ 此设备仍有更改待发送",
   "↓ Another device has changes still to fetch": "↓ 另一台设备仍有更改待获取",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘ 拖动以拉直，⇧G 引导式垂直，变换时显示网格。",
-  "★ Favorites": "★ 收藏"
+  "★ Favorites": "★ 收藏",
+  "Rebuild": "重建",
+  "Inpaint Opposed": "对立通道补全",
+  "Guided Laplacian": "引导拉普拉斯",
+  "Highlight Reconstruction": "高光重建",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "如何重建溢出的高光：重建使用附近可靠细节的颜色；对立通道补全和引导拉普拉斯是 darktable 的方法"
 }

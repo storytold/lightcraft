@@ -3591,5 +3591,10 @@
   "‹ Library": "‹ Libreria",
   "↑ This device has changes still to send": "↑ Questo dispositivo ha ancora modifiche da inviare",
   "↓ Another device has changes still to fetch": "↓ Un altro dispositivo ha ancora modifiche da scaricare",
-  "★ Favorites": "★ Preferiti"
+  "★ Favorites": "★ Preferiti",
+  "Rebuild": "Ricostruisci",
+  "Inpaint Opposed": "Riempimento da canali opposti",
+  "Guided Laplacian": "Laplaciano guidato",
+  "Highlight Reconstruction": "Ricostruzione delle alte luci",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Come vengono ricostruite le alte luci tagliate: Ricostruisci usa il colore dei dettagli affidabili vicini; Riempimento da canali opposti e Laplaciano guidato sono metodi di darktable"
 }
