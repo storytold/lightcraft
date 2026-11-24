@@ -587,6 +587,10 @@ pub struct AppSettings {
     pub ml_device: String,
     /// Windows DirectComposition to prevent VRR flicker; opt-in, applies at next launch.
     pub compose_window: bool,
+    /// macOS: a click in a background window also acts on what is under the pointer (the default),
+    /// or only brings the window forward, as Lightroom Classic does there (Settings ▸ Interface;
+    /// `app.backgroundClicks`). Applies at once, through the host's `background_clicks`.
+    pub accept_background_clicks: bool,
     /// An HDR (extended-range) window where the display offers one; off: always an SDR window.
     /// Applies at next launch. Off helps where the compositor resamples HDR windows on an SDR
     /// monitor (KDE with mixed scaling: small text looked stretched).
@@ -842,6 +846,7 @@ impl Default for AppSettings {
             gpu_helper: String::new(),
             ml_device: String::new(),
             compose_window: false,
+            accept_background_clicks: true,
             hdr_display: true,
             preview_limit: 0,
             high_quality_adjustment_previews: false,
@@ -2282,7 +2287,7 @@ pub enum Dialog {
     /// Library ▸ Image Quality Scanner… (issue #1313): score photos for technical
     /// quality (blur, noise, exposure, JPEG blockiness) in the background and flag them Pick /
     /// Reject by two cutoffs; the scores stay on the photos for the Library's quality filter and
-    /// sort.
+    /// sort. Also assigns the star ratings the scores ask for (issue #1362).
     QualityScanner {
         /// The scope: `selection`, `folder` or `catalog` (`photo.qualityScan`'s `scope`).
         scope: String,
@@ -2296,6 +2301,12 @@ pub enum Dialog {
         rescan: bool,
         /// The factors measured, as `photo.qualityScan`'s `weights`: blur, noise, exposure, compression.
         weights: [f32; 4],
+        /// Write the star ratings the scores ask for (photos the user never rated themselves).
+        auto_rate: bool,
+        /// “Overwrite existing”: write the ratings and flags even onto photos the user set.
+        overwrite_metadata: bool,
+        /// The scores at which a star steps up (0★→1★ … 4★→5★), non-decreasing.
+        star_breaks: [f32; 5],
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {

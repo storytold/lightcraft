@@ -32,6 +32,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "{device} からの変更は {minutes} 分先の日時になっているため、その時刻まで保留されます。{device} の時計を正しく設定してください。",
   "Chart · greys about {cct:.0} K": "チャート · グレーは約 {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "{total} 個の DNG ファイルのうち {checked} 個を確認: 正常 {intact}、破損 {damaged}、検証不可 {unverifiable}",
+  "Closest: {name}, {percent:.0}%": "最も近い人物: {name}、{percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "コレクションを読み込みました: {n} 枚が見つかり、{m} 枚はこのカタログにありません",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "カラースペース：Rec. 2020 {curve}（HDR AVIF）",
   "Confirm all {}": "すべて確定（{}）",
@@ -99,7 +100,6 @@
   "Importing {n} photos…": "{n} 枚の写真を読み込み中…",
   "In line for AI Denoise ({ahead} ahead)…": "AIノイズ除去の順番待ち（前に{ahead}件）…",
   "Installed {name} {version}": "{name} {version} をインストールしました",
-  "Installing it will {action}.": "インストールすると{action}。",
   "Invite {name}": "{name} を招待",
   "It is {}: name this face": "{} です：この顔に名前を付ける",
   "It isn't available for {platform}.": "{platform} では利用できません。",
@@ -107,7 +107,9 @@
   "Its manifest has values this version can't use, which it leaves out: {values}": "マニフェストに、このバージョンが使えず省く値があります: {values}",
   "JPEG quality {q} to fit the size limit": "サイズ制限に収めるため JPEG 画質 {q}",
   "JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)": "サイズ制限に収めるため JPEG 画質 {q}（サイズを小さくするか制限を大きくすると画質を保てます）",
-  "Last checked {when}": "最後の確認: {when}",
+  "Last checked {n} hours ago": "最後の確認: {n}時間前",
+  "Last checked {n} minutes ago": "最後の確認: {n}分前",
+  "Last checked {n} seconds ago": "最後の確認: {n}秒前",
   "Last synced on {date}": "最終同期：{date}",
   "Last synced {n} h ago": "最終同期：{n} 時間前",
   "Last synced {n} min ago": "最終同期：{n} 分前",
@@ -179,6 +181,7 @@
   "Step {n} of {total}": "ステップ {n} / {total}",
   "Stop waiting: {task}?": "待機を中止しますか: {task}",
   "Style {n}": "スタイル {n}",
+  "Suggested as {name}: {percent:.0}%": "{name} として提案: {percent:.0}%",
   "Suggested as {}": "{} の候補",
   "Suggested as {}. Confirm the faces that are them.": "{} の候補です。本人の顔を確定してください。",
   "Sync this catalog with {name}:": "このカタログを {name} と同期：",
@@ -305,5 +308,6 @@
   "“{name}” added to Camera Profiles": "「{name}」をカメラプロファイルに追加しました",
   "“{name}” has its old settings again": "「{name}」は以前の設定に戻りました",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "「{name}」は新規です。このカタログを同期している他のデバイスに何を許可しますか？",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」はアクティブな写真の設定を取り込みます。名前、グループ、位置、マークはそのままです。"
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」はアクティブな写真の設定を取り込みます。名前、グループ、位置、マークはそのままです。",
+  "★{n} at or above": "★{n} 以上"
 }

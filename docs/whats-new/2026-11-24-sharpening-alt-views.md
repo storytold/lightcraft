@@ -1,0 +1,2 @@
+### Sharpening views while dragging
+- Hold `Alt` (`Option` on macOS) while dragging a Sharpening slider in the Detail section and the photo turns black and white to show what that slider does: **Masking** shows the mask (white is sharpened, black is left alone), **Radius** the photo blurred at that radius, **Detail** the fine edges, and **Amount** the sharpening being applied. Release the key to see the photo again.
