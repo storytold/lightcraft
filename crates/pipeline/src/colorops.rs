@@ -144,7 +144,7 @@ pub struct ColorOps {
     pub grading: Option<([WheelK; 4], f32, f32)>,
     /// OkLCh hue of skin tones (protected by vibrance).
     pub skin: f32,
-    /// Process V9's Colour Grading, measured against Lightroom (`grading` is `None` from V9 on).
+    /// Process V9's Colour Grading from its fitted model (`grading` is `None` from V9 on).
     pub measured_grading: Option<crate::grading_stage::GradingStage>,
 }
 

@@ -105,7 +105,7 @@ fn hs_range_highlights(hh: f32, base: f32) -> f32 {
 }
 
 // `default_tone::rgb_tone`: the base tone on the largest and smallest linear ProPhoto channel, the middle
-// channel keeping its place between them (process V9 with Lightroom's default curve).
+// channel keeping its place between them (process V9 with the fitted default curve).
 fn rgb_tone(c: vec3<f32>) -> vec3<f32> {
     let p = max(mul3(PRO_FROM_2020, c), vec3<f32>(0.0));
     let a = max(p.x, max(p.y, p.z));
@@ -435,7 +435,7 @@ fn measured_grade(lab: vec3<f32>) -> vec3<f32> {
         let d0 = aux[w + 2u + j] * (1.0 - fa) + aux[w + 3u + j] * fa;
         let d1 = aux[w + 8u + j] * (1.0 - fa) + aux[w + 9u + j] * fa;
         let d2 = aux[w + 14u + j] * (1.0 - fa) + aux[w + 15u + j] * fa;
-        // the damping's chroma levels (`grading_stage_tables::CHROMA`)
+        // the damping's chroma levels (`grading_stage::CHROMA`)
         var damp = 1.0;
         if (c <= 0.04) {
             damp = 1.0 + (d0 - 1.0) * c / 0.04;

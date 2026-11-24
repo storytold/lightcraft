@@ -1,11 +1,11 @@
-# Lightroom's default base curve, measured (process V9)
+# The default base curve for profiles without one (process V9)
 
 > **Changes:** [revision history](#revision-history)
 
 Process V9 gives a raw rendered through a camera profile without a tone curve of its own the base tone Lightroom
-gives it, from measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versions.md`). The code is
-`crates/pipeline/src/default_tone.rs`, its measured table `crates/pipeline/src/default_tone_table.rs`, and the GPU
-kernel's `rgb_tone` in `crates/gpu/src/wgsl/finish.wgsl`.
+gives it, with LightCraft's own curve fitted to measurements of Camera Raw's output. V1 to V8 are unchanged
+(`docs/process-versions.md`). The code is `crates/pipeline/src/default_tone.rs`, the curve's fitted knots
+`crates/pipeline/src/default_tone_model.rs`, and the GPU kernel's `rgb_tone` in `crates/gpu/src/wgsl/finish.wgsl`.
 
 ## What was wrong
 
@@ -28,8 +28,9 @@ photo's own tone instead: the file's DNG tone curve, or else the curve fitted to
 For a raw whose profile has no tone curve (`SourceInfo::default_tone`, set by `files::load` when a camera profile
 without `ProfileToneCurve` is chosen):
 
-1. The base tone map's camera curve is the measured default curve (`default_tone::curve`): 32 knots evenly spaced in
-   stops over the chart's grey steps, the scene shifted by the camera's exposure offset. Past the last knot it rolls
+1. The base tone map's camera curve is the fitted default curve (`default_tone::curve`): a monotone curve through 12
+   fitted knots, evenly spaced in stops from the chart's darkest grey step (0.002) to its white, sampled into 32
+   knots of the camera curve, the scene shifted by the camera's exposure offset. Past the last knot it rolls
    off into white in stops, as V5 extends every camera curve (#1632).
 2. The tone map applies hue preserving on linear ProPhoto channels (`default_tone::rgb_tone`), not by luminance.
 3. Contrast and Blacks keep V4's calibrated operators, and Whites, the curves, the colour mixer and Colour Grading
@@ -60,11 +61,13 @@ camera not measured can be off by about that much.
 ## How it was measured
 
 `tools/lr_tone_charts.py base RENDER_DIR OUT_RS` reads Camera Raw's render of the neutral chart of
-`tools/lr_tone_charts.py charts` (48 grey steps, geometric from 0.002 to 1, linear DNG, settings neutral) and writes
-the grey steps (chart value in, linear ProPhoto value out) to `default_tone_table.rs`. The chart is original test
-data. It was rendered through Camera Raw to a 16-bit Adobe RGB (1998) TIFF, and only that output is measured. Nothing
-of Adobe's is copied or shipped, and no profile's contents are read: the only fact taken from a profile is whether it
-has a tone curve. Running the tool again writes the committed table byte for byte.
+`tools/lr_tone_charts.py charts` (48 grey steps, geometric from 0.002 to 1, linear DNG, settings neutral), fits the
+12 knots to its grey steps (chart value in, linear ProPhoto value out) with LightCraft's own monotone spline, and
+writes only the knots, `default_tone_model.rs`. No measurement is committed. The fit ends the curve at exactly 1 at
+the chart's white and minimises the error in 8-bit levels of the sRGB-encoded output: 0.29 RMS and 1.08 at most over
+the 48 steps. The chart is original test data. It was rendered through Camera Raw to a 16-bit Adobe RGB (1998) TIFF,
+and only that output is measured. Nothing of Adobe's is copied or shipped, and no profile's contents are read: the
+only fact taken from a profile is whether it has a tone curve.
 
 The offset was fitted on 5 training photos of the DC-S9 and checked on 5 others held out from fitting.
 
@@ -89,7 +92,7 @@ lighter before). No preset gets worse in tone or in colour.
 
 - Four cameras' offsets are measured (the Lumix S9, S5, S5 II and S5 IIX). Other cameras render with the chart's
   curve as it is, which on these four would be 0.3 to 1.2 lighter than Lightroom.
-- The curve is measured for Camera Raw's process version 2012 (`crs:ProcessVersion` 11.0), one chart, grey steps up to
+- The curve is fitted for Camera Raw's process version 2012 (`crs:ProcessVersion` 11.0), one chart, grey steps up to
   the DNG's white. Above white it rolls off as V5's camera curves do, not as measured.
 - Smart previews are built without the imported camera profile, so a photo whose original is offline renders
   without the profile, and so without this curve, until the original is back (as before).
@@ -99,3 +102,4 @@ lighter before). No preset gets worse in tone or in colour.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-11 | minor | Process V9: Lightroom's default base curve for a raw whose camera profile has none |
+| 2026-11-24 | minor | The base curve is 12 fitted knots instead of the measured grey steps |

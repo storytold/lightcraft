@@ -46,6 +46,7 @@ fn decode_stand_in(bytes: &[u8], jpeg: &[u8], opts: lightcraft_codecs::DecodeOpt
             let space = match space {
                 lightcraft_raw::PreviewColorSpace::Srgb => lightcraft_codecs::NamedSpace::Srgb,
                 lightcraft_raw::PreviewColorSpace::AdobeRgb => lightcraft_codecs::NamedSpace::AdobeRgb,
+                lightcraft_raw::PreviewColorSpace::ProPhoto => lightcraft_codecs::NamedSpace::ProPhoto,
             };
             lightcraft_codecs::decode_jpeg_with_fallback(jpeg, opts, space).ok()
         }

@@ -925,7 +925,8 @@ pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSetting
 
 /// The tonal range of the whole output frame for process V9's Highlights ([`crate::hs_range`]): the base layer's
 /// percentiles on a small render of it (`proxy_w` px wide), so that a window, a preview and an export of one photo
-/// share it. Before exposure, like [`Prepared::base`](crate::Prepared).
+/// share it. Before exposure, like [`Prepared::base`](crate::Prepared), and after the same stages before it that
+/// change tone: the camera's local tone mapping when it is on, then the white balance (as `lin_cpu`).
 pub(crate) fn frame_range(
     src: &Rgb32f,
     info: &SourceInfo,
@@ -935,6 +936,7 @@ pub(crate) fn frame_range(
     proxy_h: usize,
 ) -> Option<crate::hs_range::FrameRange> {
     let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
+    crate::local_tone::apply_framed(&mut img, info, s, frame);
     white_balance(&mut img, info, s);
     let ppl = frame.px_per_long(proxy_w);
     let base = tone_base(&img.map(log_lum), (0.015 * ppl as f32).max(1.0), tone_base_detail(s, ppl), base_keeps_gaps(s));
@@ -985,6 +987,47 @@ pub fn airlight_of(mut v: Vec<f32>) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// Highlights' range is measured on the tones it adjusts: with the camera's local tone mapping on, the range proxy
+    /// gets the same gain as the render before its base (review on #4100).
+    #[test]
+    fn the_range_is_measured_after_the_local_tone_map() {
+        use lightcraft_develop::{DevelopSettings, Process};
+        use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
+        let src = Rgb32f::from_fn(192, 128, |x, y| {
+            let t = 0.02 + 0.2 * ((x * 5 + y * 3) % 192) as f32 / 192.0;
+            [t, t, t]
+        });
+        // a gain rising from 1 at the left of the frame to 4 at the right
+        let local_tone = crate::local_tone::LocalTone {
+            map: GainTableMap {
+                points_v: 1,
+                points_h: 2,
+                points_n: 1,
+                spacing_v: 1.0,
+                spacing_h: 1.0,
+                origin_v: 0.0,
+                origin_h: 0.0,
+                weights: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0, 0.0],
+                gamma: 1.0,
+                gains: vec![1.0, 4.0],
+            },
+            placement: SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lightcraft_geom::Orientation::Normal },
+        };
+        let info = SourceInfo { raw: true, local_tone: Some(Arc::new(local_tone)), ..Default::default() };
+        let mut s = DevelopSettings { process: Process::V9.version(), ..Default::default() };
+        s.light.highlights = -60.0;
+        let range = |on: bool| {
+            let mut s = s.clone();
+            s.profile.camera_local_tone = on;
+            let frame = crate::frame_for(&src, &info, &s, true);
+            frame_range(&src, &info, &s, &frame, 96, 64).expect("a range")
+        };
+        let (off, on) = (range(false), range(true));
+        // the brightened right lifts the top of the range by up to log2(4) = 2 stops, the dark end by less
+        assert!(on.hi - off.hi > 1.0, "{off:?} -> {on:?}");
+        assert!(on.hi - off.hi > on.lo - off.lo, "{off:?} -> {on:?}");
+    }
+
     /// Edits saved under V1 to V5 keep main's colour noise reduction (blurred chromaticity); V6 gets
     /// the joint method of `nrc_joint`.
     #[test]

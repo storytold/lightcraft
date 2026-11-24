@@ -33,16 +33,16 @@ pub mod cull;
 pub mod curve;
 pub mod curve_stage;
 #[rustfmt::skip]
-mod curve_stage_tables;
+mod curve_stage_model;
 pub mod default_tone;
 #[rustfmt::skip]
-mod default_tone_table;
+mod default_tone_model;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
 pub mod grading_stage;
 #[rustfmt::skip]
-mod grading_stage_tables;
+mod grading_stage_model;
 pub mod hs_range;
 pub mod lens_blur;
 pub mod light_v3;
@@ -55,6 +55,8 @@ pub mod lut;
 pub mod mask_space;
 pub mod masks;
 pub mod mixer_stage;
+#[rustfmt::skip]
+mod mixer_stage_model;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
@@ -70,6 +72,7 @@ pub mod upright;
 pub mod visualize;
 
 pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
+pub use curve_stage::ParametricGraph;
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
@@ -114,8 +117,8 @@ pub struct SourceInfo {
     pub camera_color: Option<Arc<CameraColor>>,
     pub camera_tone: Option<tone::CameraTone>,
     /// The raw is rendered through a camera profile without a tone curve of its own (a DCP without
-    /// `ProfileToneCurve`, such as Adobe Standard): from process V9 its base tone is Lightroom's default curve,
-    /// measured, with the scene shifted by this many stops, the camera's measured exposure offset
+    /// `ProfileToneCurve`, such as Adobe Standard): from process V9 its base tone is the fitted default curve,
+    /// with the scene shifted by this many stops, the camera's measured exposure offset
     /// ([`default_tone`]; 0 for a camera not measured). `None`: the profile has its own curve, or no profile.
     pub default_tone: Option<f32>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.

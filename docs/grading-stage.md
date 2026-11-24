@@ -3,9 +3,10 @@
 > **Changes:** [revision history](#revision-history)
 
 Process V9 renders Colour Grading (the shadows, midtones, highlights and global wheels with Blending and Balance) the
-way Lightroom does, from measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versions.md`).
-The code is `crates/pipeline/src/grading_stage.rs`, its measured tables `crates/pipeline/src/grading_stage_tables.rs`,
-and the GPU kernel's `measured_grade` in `crates/gpu/src/wgsl/finish.wgsl`.
+way Lightroom does, with LightCraft's own model fitted to measurements of Camera Raw's output. V1 to V8 are unchanged
+(`docs/process-versions.md`). The code is `crates/pipeline/src/grading_stage.rs`, the model's fitted constants
+`crates/pipeline/src/grading_stage_model.rs`, and the GPU kernel's `measured_grade` in
+`crates/gpu/src/wgsl/finish.wgsl`.
 
 ## What was wrong
 
@@ -27,16 +28,30 @@ patches:
 At the end of the colour tools, where V8 grades (`ColorOps::grade`), in OkLab:
 
 1. Each wheel with a saturation above 0 adds its tint times its share at the pixel's lightness, times the damping.
-   - The tint comes from the measured table: 12 hues of 30°, saturation 25, 50 and 100, linear in between, and
-     from none at saturation 0.
-   - The share comes from the profile measured at the pixel's Blending, plus the change that Balance makes (not for
-     the global wheel).
+   - The tint comes from the model (below): its direction and size around the hue circle, the wheel's size and its
+     saturation curve, from none at saturation 0.
+   - The share comes from the model's profile at the pixel's lightness, for the Blending and Balance set (the global
+     wheel ignores Balance).
    - The damping depends on the pixel's chroma (levels 0.04, 0.08 and 0.12, from none at 0) and on the angle between
-     its hue and the tint's (measured in bins of 30°, linear between their centres).
-2. Each wheel's Luminance adds a lightness change by lightness, measured at ±50 and ±100, linear in between.
+     its hue and the tint's (the model sampled at the centres of bins of 30°, linear between them).
+2. Each wheel's Luminance adds a lightness change by lightness, from the model.
 3. The wheels act on the same input colour and their changes add.
 
 V8's grading is off under V9 (`ColorOps::grading` is `None`). With Colour Grading neutral the stage does not run.
+
+## The model
+
+262 constants (`grading_stage_model.rs`):
+
+- **Tint.** All four wheels share one shape around the hue circle: a Fourier series of the wheel hue (4 harmonics) for
+  the tint's direction as an offset from the wheel hue, and one for its log size. Each wheel adds its own size and a
+  saturation curve `s (1 + g1 (s − 1) + g2 (s − 1)²)`, `s` = saturation / 100. 30 constants.
+- **Share by lightness.** Per wheel, two bumps of the kind the curve stage uses ([curve-stage.md](curve-stage.md)),
+  whose gain and exponents are quadratic in Blending and in Balance. 30 constants per wheel.
+- **Luminance.** Per wheel and direction, two bumps whose gain and exponents change with the amount. 24 constants
+  per wheel.
+- **Damping.** Per wheel, `1 + (C / 0.12)^e (d0 + d1 cos a + d2 cos 2a)` for chroma `C` and angle `a` between the
+  colour's hue and the tint's. 4 constants per wheel.
 
 ## How it was measured
 
@@ -52,20 +67,23 @@ V8's grading is off under V9 (`ColorOps::grading` is `None`). With Colour Gradin
 The charts are original test data. Every chart was rendered through Camera Raw to a 16-bit Adobe RGB (1998) TIFF.
 Only that output is measured, and nothing of Adobe's is copied or shipped.
 
-`tools/lr_grading_charts.py tables RENDER_DIR OUT_RS` reads each render's patches as OkLab and writes
-`grading_stage_tables.rs`:
+`tools/lr_grading_charts.py fit RENDER_DIR OUT_RS` reads each render's patches as OkLab, measures the following in
+memory, fits the model to it and writes only the model's constants, `grading_stage_model.rs`. No measurement is
+committed.
 
 - The tints and profiles are fitted on the grey steps: the profile's shape is the mean tint size over the hues,
   and each tint is the least-squares scale of its grey-step change against that shape.
 - The damping comes from the colour patches.
 - The Luminance curves are the grey steps' lightness change.
 
-It needs numpy and tifffile (`tools/requirements-lr-tone-charts.txt`). Running the tool again reproduces the
-committed charts and the committed tables byte for byte.
+It needs numpy, scipy and tifffile (`tools/requirements-lr-tone-charts.txt`). Running the tool again reproduces the
+committed charts byte for byte, and the constants with the pinned packages.
 
-Predicting Camera Raw's edited charts from its neutral chart with the stage's rules leaves 1.26 (OkLab × 100) on
-average, against an average effect of 3.12. By kind: wheel hue and saturation 1.18 against 3.05, Luminance 0.79
-against 2.84, Blending 1.89 against 3.82, Balance 1.60 against 3.27, the two combinations 1.43 against 2.67.
+How close the model is to those measurements: the tints within 0.57 RMS (OkLab × 100) of an average tint of 6.94;
+the share by lightness within 0.7 to 2.6 RMS (× 100, the shadows wheel worst); Luminance within 0.01 to 0.27 RMS
+(OkLab L × 100); the damping within 1.0 to 4.7 RMS (× 100). The damping's measurements do not change steadily with the
+angle (the midtones wheel's at chroma 0.12 go 1.02, 0.99, 0.90, 0.92, 0.96, 1.02), so the smooth model leaves part of
+that out.
 
 On 5 held-out Panasonic DC-S9 photos with 19 presets, rendered at 1,500 px and compared with Camera Raw's renders
 after aligning the two engines' geometry, the mean OkLab a/b error falls from 1.32 to 1.19 (OkLab × 100) over all
@@ -83,3 +101,4 @@ edit groups, and on the Teal & Orange preset from 2.66 to 1.34.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-10 | minor | Process V9: Colour Grading measured against Lightroom |
+| 2026-11-24 | minor | Colour Grading is a fitted model of 262 constants instead of measured tables |

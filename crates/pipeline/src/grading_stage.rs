@@ -1,11 +1,10 @@
-//! Process V9's Colour Grading ([`lightcraft_develop::Process::V9`], `docs/grading-stage.md`), applied the way
-//! Lightroom applies it.
-//!
-//! Measured on Camera Raw renders of synthetic charts (`tools/lr_grading_charts.py`, tables in
-//! `grading_stage_tables`). Per wheel (shadows, midtones, highlights, global):
-//! - an OkLab tint (a, b) by wheel hue (12 steps of 30°) and saturation (25, 50, 100);
-//! - a lightness profile, the share of the tint each lightness gets, by Blending and Balance. Lightroom's shadows
-//!   wheel reaches well into the midtones and its global wheel peaks in the midtones;
+//! Process V9's Colour Grading ([`lightcraft_develop::Process::V9`]), from a fitted model (`grading_stage_model`,
+//! written by `tools/lr_grading_charts.py fit`). `docs/grading-stage.md` records how it was measured and fitted. Per
+//! wheel (shadows, midtones, highlights, global):
+//! - an OkLab tint (a, b) by wheel hue and saturation: one smooth shape around the hue circle shared by the wheels,
+//!   a size per wheel and a saturation curve per wheel;
+//! - a lightness profile, the share of the tint each lightness gets, by Blending and Balance. The shadows wheel
+//!   reaches well into the midtones and the global wheel peaks in the midtones;
 //! - a damping: colours that already lean the tint's way get less of it (55 to 87% for saturated colours in the same
 //!   direction), by their chroma and the angle between their hue and the tint's;
 //! - the wheel's Luminance as a lightness change by lightness.
@@ -15,7 +14,11 @@
 
 use lightcraft_develop::{ColorGrading, DevelopSettings, Process, Wheel};
 
-use crate::grading_stage_tables as t;
+use crate::grading_stage_model as m;
+
+/// The damping's chroma levels: the chart's colour patches (`tools/lr_grading_charts.py`), where the stage samples
+/// the model.
+pub const CHROMA: [f32; 3] = [0.04, 0.08, 0.12];
 
 /// Lightness grid entries (0 to 1).
 pub const GRID: usize = 65;
@@ -27,7 +30,7 @@ pub struct WheelStage {
     pub tint: [f32; 2],
     /// Share of the tint by lightness.
     pub profile: [f32; GRID],
-    /// Share by chroma level and angle bin (see [`t::DAMPING`]).
+    /// Share by chroma level ([`CHROMA`]) and angle (6 bins of 30°, sampled at their centres).
     pub damping: [[f32; 6]; 3],
 }
 
@@ -64,58 +67,75 @@ fn bracket(keys: &[f32], x: f32) -> (usize, usize, f32) {
     }
 }
 
-/// Linear blend of two lightness grids, `f` = 0 gives `a`.
-fn lerp_grid(a: &[f32; GRID], b: &[f32; GRID], f: f32) -> [f32; GRID] {
-    std::array::from_fn(|i| a[i] * (1.0 - f) + b[i] * f)
+/// `c0 + Σ c[2k−1] cos(k h) + c[2k] sin(k h)`.
+fn fourier(c: &[f64], h: f64) -> f64 {
+    let (first, rest) = c.split_first().map_or((0.0, &[][..]), |(f, r)| (*f, r));
+    first + rest.chunks_exact(2).enumerate().map(|(k, p)| p[0] * ((k + 1) as f64 * h).cos() + p[1] * ((k + 1) as f64 * h).sin()).sum::<f64>()
 }
 
-/// The tint of wheel `w` at `hue` (degrees) and `sat` (0..100): linear in hue around the circle, and in saturation
-/// from none at 0 through the measured saturations.
-fn tint(w: usize, hue: f32, sat: f32) -> [f32; 2] {
-    let Some(table) = t::TINT.get(w) else { return [0.0; 2] };
-    let n = t::HUES.len();
-    let step = 360.0 / n as f32;
-    let h = hue.rem_euclid(360.0);
-    let i = (h / step) as usize % n;
-    let fh = h / step - (h / step).floor();
-    let at = |hi: usize| -> [f32; 2] {
-        let s = sat.clamp(0.0, t::SATS[t::SATS.len() - 1]);
-        let row = &table[hi % n];
-        let k = t::SATS.iter().position(|v| s <= *v).unwrap_or(t::SATS.len() - 1);
-        let (s0, v0) = if k == 0 { (0.0, [0.0; 2]) } else { (t::SATS[k - 1], row[k - 1]) };
-        let (s1, v1) = (t::SATS[k], row[k]);
-        let f = if s1 > s0 { (s - s0) / (s1 - s0) } else { 1.0 };
-        [v0[0] + (v1[0] - v0[0]) * f, v0[1] + (v1[1] - v0[1]) * f]
-    };
-    let (a, b) = (at(i), at(i + 1));
-    [a[0] * (1.0 - fh) + b[0] * fh, a[1] * (1.0 - fh) + b[1] * fh]
-}
-
-/// The share of wheel `w`'s tint by lightness: the Blending profile, shifted by Balance (not for the global wheel).
-fn profile(w: usize, blending: f32, balance: f32) -> [f32; GRID] {
-    let (Some(pb), Some(pa)) = (t::PROFILE_BLEND.get(w), t::PROFILE_BALANCE.get(w)) else { return [0.0; GRID] };
-    let (b0, b1, fb) = bracket(&t::BLENDS, blending);
-    let blend = lerp_grid(&pb[b0], &pb[b1], fb);
-    if w == 3 {
-        return blend.map(|v| v.max(0.0));
+/// A bump of peak 1 at `p / (p + q)`, 0 at black and white and outside them.
+fn bump(x: f64, p: f64, q: f64) -> f64 {
+    if x <= 0.0 || x >= 1.0 {
+        return 0.0;
     }
-    let (a0, a1, fa) = bracket(&t::BALANCES, balance);
-    let bal = lerp_grid(&pa[a0], &pa[a1], fa);
-    let zero = t::BALANCES.iter().position(|v| *v == 0.0).unwrap_or(0);
-    std::array::from_fn(|i| (blend[i] + bal[i] - pa[zero][i]).max(0.0))
+    let peak = p / (p + q);
+    (p * (x / peak).ln() + q * ((1.0 - x) / (1.0 - peak)).ln()).exp()
 }
 
-/// Wheel `w`'s Luminance `v` as a lightness change by lightness (measured at ±50 and ±100, 0 in between).
+/// The tint of wheel `w` at `hue` (degrees) and `sat` (0..100): the shared direction and size around the hue circle,
+/// the wheel's size and its saturation curve `s (1 + g1 (s − 1) + g2 (s − 1)²)`, `s` = sat / 100.
+fn tint(w: usize, hue: f32, sat: f32) -> [f32; 2] {
+    let (Some(scale), Some([g1, g2])) = (m::WHEEL_SIZE.get(w), m::WHEEL_SAT.get(w)) else { return [0.0; 2] };
+    let h = f64::from(hue).to_radians();
+    let s = (f64::from(sat) / 100.0).clamp(0.0, 1.0);
+    let angle = h + fourier(&m::TINT_ANGLE, h);
+    let size = (fourier(&m::TINT_SIZE, h) + scale).exp() * s * (1.0 + g1 * (s - 1.0) + g2 * (s - 1.0) * (s - 1.0));
+    [(size * angle.cos()) as f32, (size * angle.sin()) as f32]
+}
+
+/// Two bumps whose gain and exponents are quadratic in `b` and `c`, at lightness `l` ([`m::SHARE`]).
+fn share(p: &[f64; 30], b: f64, c: f64, l: f64) -> f64 {
+    p.chunks_exact(15)
+        .map(|q| {
+            let f = |i: usize| q[i] + q[i + 1] * b + q[i + 2] * b * b + q[i + 3] * c + q[i + 4] * c * c;
+            f(0) * bump(l, f(5).exp(), f(10).exp())
+        })
+        .sum()
+}
+
+/// The share of wheel `w`'s tint by lightness, at Blending and Balance (the global wheel ignores Balance).
+fn profile(w: usize, blending: f32, balance: f32) -> [f32; GRID] {
+    let Some(p) = m::SHARE.get(w) else { return [0.0; GRID] };
+    let b = f64::from(blending.clamp(0.0, 100.0)) / 100.0 - 0.5;
+    let c = if w == 3 { 0.0 } else { f64::from(balance.clamp(-100.0, 100.0)) / 100.0 };
+    std::array::from_fn(|i| share(p, b, c, i as f64 / (GRID - 1) as f64).max(0.0) as f32)
+}
+
+/// Wheel `w`'s Luminance `v` (−100..100) as a lightness change by lightness: per direction two bumps, gain and
+/// exponents changing with the amount ([`m::LUM`]).
 fn luminance(w: usize, v: f32) -> [f32; GRID] {
-    let Some(table) = t::LUM.get(w) else { return [0.0; GRID] };
-    let mut keys: Vec<(f32, Option<&[f32; GRID]>)> = t::LUMS.iter().zip(table.iter()).map(|(a, c)| (*a, Some(c))).collect();
-    keys.push((0.0, None));
-    keys.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let amounts: Vec<f32> = keys.iter().map(|k| k.0).collect();
-    let (i0, i1, f) = bracket(&amounts, v);
-    let zero = [0.0; GRID];
-    let at = |i: usize| keys.get(i).and_then(|k| k.1).unwrap_or(&zero);
-    lerp_grid(at(i0), at(i1), f)
+    let Some(p) = m::LUM.get(w) else { return [0.0; GRID] };
+    let t = (f64::from(v) / 100.0).clamp(-1.0, 1.0);
+    let (a, side) = (t.abs(), if t < 0.0 { 0 } else { 12 });
+    std::array::from_fn(|i| {
+        let l = i as f64 / (GRID - 1) as f64;
+        let r: f64 =
+            p[side..side + 12].chunks_exact(6).map(|q| (q[0] * a + q[1] * a * a) * bump(l, (q[2] + q[3] * a).exp(), (q[4] + q[5] * a).exp())).sum();
+        (t.signum() * r) as f32
+    })
+}
+
+/// Wheel `w`'s damping by chroma level and angle bin: `1 + (C / 0.12)^e (d0 + d1 cos a + d2 cos 2a)` at the bins'
+/// centres (15°, 45° … 165°).
+fn damping(w: usize) -> [[f32; 6]; 3] {
+    let Some([d0, d1, d2, e]) = m::DAMPING.get(w).copied() else { return [[1.0; 6]; 3] };
+    std::array::from_fn(|k| {
+        let c = f64::from(CHROMA.get(k).copied().unwrap_or(0.0)) / 0.12;
+        std::array::from_fn(|j| {
+            let a = (15.0 + 30.0 * j as f64).to_radians();
+            (1.0 + c.powf(e.exp()) * (d0 + d1 * a.cos() + d2 * (2.0 * a).cos())) as f32
+        })
+    })
 }
 
 impl GradingStage {
@@ -134,7 +154,7 @@ impl GradingStage {
                 out.push(WheelStage {
                     tint: tint(w, wheel.hue as f32, wheel.sat as f32),
                     profile: profile(w, blending, balance),
-                    damping: t::DAMPING.get(w).copied().unwrap_or([[1.0; 6]; 3]),
+                    damping: damping(w),
                 });
             }
             if wheel.lum != 0.0 && wheel.lum.is_finite() {
@@ -163,10 +183,10 @@ impl GradingStage {
             let j = (pos as usize).min(4);
             let fa = pos - j as f32;
             let level = |k: usize| w.damping.get(k).map_or(1.0, |r| r[j] * (1.0 - fa) + r[j + 1] * fa);
-            let damp = if c <= t::CHROMA[0] {
-                1.0 + (level(0) - 1.0) * c / t::CHROMA[0]
+            let damp = if c <= CHROMA[0] {
+                1.0 + (level(0) - 1.0) * c / CHROMA[0]
             } else {
-                let (k0, k1, f) = bracket(&t::CHROMA, c);
+                let (k0, k1, f) = bracket(&CHROMA, c);
                 level(k0) * (1.0 - f) + level(k1) * f
             };
             a += p * w.tint[0] * damp;
@@ -216,7 +236,7 @@ mod tests {
         let bright = st.apply([0.95, 0.0, 0.0]);
         let size = |x: [f32; 3]| x[1].hypot(x[2]);
         assert!(dark[1] > 0.0 && dark[2] > 0.0, "warm: {dark:?}");
-        assert!(size(mid) > 0.3 * size(dark), "Lightroom's shadows wheel reaches the midtones: {mid:?} vs {dark:?}");
+        assert!(size(mid) > 0.3 * size(dark), "the shadows wheel reaches the midtones: {mid:?} vs {dark:?}");
         assert!(size(bright) < 0.3 * size(dark), "{bright:?}");
         assert_eq!(dark[0], 0.3, "the tint leaves lightness alone");
     }
@@ -238,7 +258,7 @@ mod tests {
 
     #[test]
     fn the_damping_has_no_step_along_a_hue_gradient() {
-        // shadows at chroma 0.12: the measured bins 0° to 30° and 30° to 60° are 0.62 and 0.78
+        // shadows at chroma 0.12, where the damping changes most with the angle
         let st = stage(|g| {
             g.shadows.hue = 30.0;
             g.shadows.sat = 100.0;
@@ -273,7 +293,6 @@ mod tests {
         let (s25, h25) = size(25.0, 120.0);
         let (s75, _) = size(75.0, 120.0);
         assert!(s10 < s25 && s25 < s75, "{s10} {s25} {s75}");
-        assert!((s10 - 0.4 * s25).abs() < 1e-4, "below 25 the tint grows linearly from none");
         let (_, h_mid) = size(25.0, 135.0);
         let (_, h150) = size(25.0, 150.0);
         assert!((h25.min(h150)..=h25.max(h150)).contains(&h_mid), "{h25} {h_mid} {h150}");
