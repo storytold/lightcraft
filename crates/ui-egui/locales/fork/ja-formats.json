@@ -308,5 +308,6 @@
   "“{name}” added to Camera Profiles": "「{name}」をカメラプロファイルに追加しました",
   "“{name}” has its old settings again": "「{name}」は以前の設定に戻りました",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "「{name}」は新規です。このカタログを同期している他のデバイスに何を許可しますか？",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」はアクティブな写真の設定を取り込みます。名前、グループ、位置、マークはそのままです。"
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "「{name}」はアクティブな写真の設定を取り込みます。名前、グループ、位置、マークはそのままです。",
+  "★{n} at or above": "★{n} 以上"
 }

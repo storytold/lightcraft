@@ -394,5 +394,6 @@
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "„{name}“ ახალია. რა შეიძლება ჰქონდეთ მისგან ამ კატალოგის სინქრონიზებულ სხვა მოწყობილობებს?",
   "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "„{name}“ იღებს აქტიური ფოტოს პარამეტრებს. სახელი, ჯგუფი, ადგილი და ნიშნები რჩება.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "„{to}“ უკვე ადამიანია. გაერთიანებით ერთი ადამიანი მიიღება; დაბრუნება მათ ისევ გაყოფს.",
-  "…and {more} more": "…და კიდევ {more}"
+  "…and {more} more": "…და კიდევ {more}",
+  "★{n} at or above": "★{n} და ზემოთ"
 }

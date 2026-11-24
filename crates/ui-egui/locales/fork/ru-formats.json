@@ -312,5 +312,6 @@
   "“{name}” added to Camera Profiles": "«{name}» добавлен в профили камеры",
   "“{name}” has its old settings again": "У «{name}» снова прежние настройки",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}»: новая. Что из неё могут получать другие устройства, синхронизирующие этот каталог?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» получает настройки активного фото. Название, группа, место и отметки сохраняются."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» получает настройки активного фото. Название, группа, место и отметки сохраняются.",
+  "★{n} at or above": "★{n} и выше"
 }

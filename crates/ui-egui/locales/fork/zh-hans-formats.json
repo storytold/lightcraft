@@ -308,5 +308,6 @@
   "“{name}” added to Camera Profiles": "已将“{name}”添加到相机配置文件",
   "“{name}” has its old settings again": "“{name}”已恢复原来的设置",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "“{name}”是新的。同步此目录的其他设备可以获得它的哪些内容？",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}”将采用当前照片的设置。名称、分组、位置和标记保持不变。"
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}”将采用当前照片的设置。名称、分组、位置和标记保持不变。",
+  "★{n} at or above": "★{n} 及以上"
 }

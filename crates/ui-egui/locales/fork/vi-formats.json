@@ -383,5 +383,6 @@
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "“{name}” là mới. Các thiết bị khác đang đồng bộ catalog này được có gì từ nó?",
   "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "“{name}” lấy cài đặt của ảnh đang chọn. Tên, nhóm, vị trí và đánh dấu được giữ nguyên.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "«{to}» đã là một người. Gộp lại sẽ thành một người; Hoàn tác sẽ tách chúng ra.",
-  "…and {more} more": "…và {more} mục khác"
+  "…and {more} more": "…và {more} mục khác",
+  "★{n} at or above": "★{n} trở lên"
 }

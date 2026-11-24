@@ -8,6 +8,10 @@
 //! [`crate::cull`]'s). A learned aesthetic score may join them later through the AI backend
 //! (`lcc_ml`, issue #488); this module says in [`QualityFactors`] what it measured and nothing it
 //! did not.
+//!
+//! The luminance is made once per photo and the factors are finished from it by
+//! [`factors_from_luma`], so the factors are computed once from a plane every caller shares rather
+//! than twice from the pixels.
 
 use lcc_raster::Rgb32f;
 
@@ -72,13 +76,8 @@ impl QualityFactors {
     /// Never panics on a hostile buffer: an empty or one-pixel image measures cleanly.
     #[must_use]
     pub fn measure(img: &Rgb32f, weights: QualityWeights, jpeg: bool) -> QualityFactors {
-        let w = weights.sane();
-        let sharpness = sharpness_score(img);
-        let noise = noise_score(img);
-        let exposure = exposure_score(img);
-        let compression = jpeg.then(|| compression_score(img));
-        let score = combine(sharpness, noise, exposure, compression, w);
-        QualityFactors { sharpness, noise, exposure, compression, score }
+        let (l, w, h) = luma(img);
+        factors_from_luma(&l, w, h, weights, jpeg)
     }
 
     /// The combined score again from other weights (the factors are stored as measured, so a
@@ -87,6 +86,33 @@ impl QualityFactors {
     pub fn rescore(&self, weights: QualityWeights) -> Option<f32> {
         combine(self.sharpness, self.noise, self.exposure, self.compression, weights.sane())
     }
+}
+
+/// The factors of a luminance copy already made (box-filtered to fit 512 px by [`luma`]: `l` is
+/// `w` × `h`, row-major, 0..=1 once encoded; every sample not finite is read as 0). `weights`,
+/// `jpeg` and the weights' refusal of nothing-to-score behave as in [`QualityFactors::measure`].
+/// [`QualityFactors::measure`] finishes through here, so a plane measured on its own and a photo
+/// measured from its pixels cannot diverge in the factors (issue #1362).
+///
+/// `l` shorter than `w` × `h` measures only what is there.
+#[must_use]
+fn factors_from_luma(l: &[f32], w: usize, h: usize, weights: QualityWeights, jpeg: bool) -> QualityFactors {
+    // a plane a caller built by hand may carry NaN or ±inf (a decode, a transfer, a copy): it is
+    // read as 0 where it is one, so no factor can come out not a number
+    let clean;
+    let l = if l.iter().any(|v| !v.is_finite()) {
+        clean = l.iter().map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }).collect::<Vec<f32>>();
+        &clean
+    } else {
+        l
+    };
+    let sane = weights.sane();
+    let sharpness = sharpness_luma(l, w, h);
+    let noise = noise_luma(l, w, h);
+    let exposure = exposure_luma(l);
+    let compression = jpeg.then(|| compression_luma(l, w, h));
+    let score = combine(sharpness, noise, exposure, compression, sane);
+    QualityFactors { sharpness, noise, exposure, compression, score }
 }
 
 /// The weighted mean of the factors that have a value, `None` when no weight is positive.
@@ -109,10 +135,6 @@ fn combine(sharpness: f32, noise: f32, exposure: f32, compression: Option<f32>, 
 /// one reads well above, a smoothed one below (and scores full marks).
 const NOISE_REFERENCE: f32 = 0.0035;
 
-/// Noise 0..100 (100: grain-free): the grain in the flattest half of the photo, where there is no
-/// real detail to mistake for grain. Grain is what a 3 × 3 smoothing takes away; the blocks with
-/// the smallest spread pick where that is measured, so an edge-heavy photo (a brick wall) doesn't
-/// read as noisy.
 /// The 3 × 3 mean of `l` (`w` × `h`), clamped at the borders: the grain and JPEG blocks a real
 /// measure should not count as detail. Length matches `l`, zero where `l` is short.
 fn smooth3(l: &[f32], w: usize, h: usize) -> Vec<f32> {
@@ -140,9 +162,8 @@ fn smooth3(l: &[f32], w: usize, h: usize) -> Vec<f32> {
 /// Sharpness 0..100: assisted culling's own focus measure ([`crate::cull::sharpness`]), taken on the
 /// 3 × 3 smoothed luminance. Grain is exactly what that smoothing removes, so a noisy photo is not
 /// read as a detailed one (a soft photo's noise otherwise scores as its sharpest detail).
-fn sharpness_score(img: &Rgb32f) -> f32 {
-    let (l, w, h) = luma(img);
-    let l = smooth3(&l, w, h);
+fn sharpness_luma(l: &[f32], w: usize, h: usize) -> f32 {
+    let l = smooth3(l, w, h);
     crate::cull::sharpness_luma(&l, w, h).clamp(0.0, 100.0)
 }
 
@@ -150,12 +171,11 @@ fn sharpness_score(img: &Rgb32f) -> f32 {
 /// real detail to mistake for grain. Grain is what a 3 × 3 smoothing takes away; the blocks with
 /// the smallest spread pick where that is measured, so an edge-heavy photo (a brick wall) doesn't
 /// read as noisy.
-fn noise_score(img: &Rgb32f) -> f32 {
-    let (l, w, h) = luma(img);
+fn noise_luma(l: &[f32], w: usize, h: usize) -> f32 {
     if w < 4 || h < 4 {
         return 100.0;
     }
-    let smooth = smooth3(&l, w, h);
+    let smooth = smooth3(l, w, h);
     // per block: the mean grain and the block's own spread (its detail)
     const B: usize = 16;
     let mut blocks: Vec<(f32, f32)> = Vec::new();
@@ -205,12 +225,11 @@ fn noise_score(img: &Rgb32f) -> f32 {
 /// Exposure 0..100: 60 % the share of the photo that isn't clipped (blown highlights or crushed
 /// blacks), 40 % how close its mean tone sits to a well-exposed middle (0.42). A blown-out or
 /// crushed photo reads worse than a mid-toned one.
-fn exposure_score(img: &Rgb32f) -> f32 {
-    let (l, _, _) = luma(img);
+fn exposure_luma(l: &[f32]) -> f32 {
     let mut clipped = 0u32;
     let mut sum = 0f32;
     let mut n = 0u32;
-    for v in &l {
+    for v in l {
         if !v.is_finite() {
             continue;
         }
@@ -233,8 +252,7 @@ fn exposure_score(img: &Rgb32f) -> f32 {
 /// transform blocks meet) beyond what the photo's other columns carry, against that ordinary
 /// energy (a photo with strong real edges tolerates a larger step). A re-compressed or heavily
 /// compressed JPEG reads lower than a mild one; a photo without blocks reads near 100.
-fn compression_score(img: &Rgb32f) -> f32 {
-    let (l, w, h) = luma(img);
+fn compression_luma(l: &[f32], w: usize, h: usize) -> f32 {
     if w < 32 || h < 32 {
         return 100.0;
     }
@@ -289,6 +307,27 @@ mod tests {
             }
         }
         img
+    }
+
+    /// The three factors as the tests call them: measured on the same luminance `measure` uses.
+    fn sharpness_score(img: &Rgb32f) -> f32 {
+        let (l, w, h) = luma(img);
+        sharpness_luma(&l, w, h)
+    }
+
+    fn noise_score(img: &Rgb32f) -> f32 {
+        let (l, w, h) = luma(img);
+        noise_luma(&l, w, h)
+    }
+
+    fn exposure_score(img: &Rgb32f) -> f32 {
+        let (l, _, _) = luma(img);
+        exposure_luma(&l)
+    }
+
+    fn compression_score(img: &Rgb32f) -> f32 {
+        let (l, w, h) = luma(img);
+        compression_luma(&l, w, h)
     }
 
     /// A clean, detailed, mid-toned photo scores high on every factor it is measured for: flat
@@ -430,6 +469,29 @@ mod tests {
         // and a noisy photo's noise score is what says it is noisy
         assert!(noise_score(&noisy) < 20.0, "grain {}", noise_score(&noisy));
         assert!(noise_score(&flat) > 95.0, "clean {}", noise_score(&flat));
+    }
+
+    /// Finishing from a luminance plane gives exactly what measuring the same picture gives: the
+    /// plane is the only thing the two paths share, so this is the invariant that lets
+    /// `measure` and a hand-made plane agree.
+    #[test]
+    fn finishing_from_the_luma_plane_matches_measuring() {
+        let img = image(192, 128, |x, y| 0.2 + 0.5 * (((x / 7 + y / 5) % 3) as f32 / 2.0));
+        let (l, w, h) = luma(&img);
+        let via_luma = factors_from_luma(&l, w, h, QualityWeights::default(), true);
+        let via_measure = QualityFactors::measure(&img, QualityWeights::default(), true);
+        assert_eq!(via_luma, via_measure);
+        // and a plane carrying NaN and infinite samples is measured on the clean ones, as the
+        // source measures it: no factor is not a number
+        let mut poisoned = l.clone();
+        if let Some(v) = poisoned.first_mut() {
+            *v = f32::NAN;
+        }
+        if let Some(v) = poisoned.get_mut(3) {
+            *v = f32::INFINITY;
+        }
+        let q = factors_from_luma(&poisoned, w, h, QualityWeights::default(), true);
+        assert!(q.sharpness.is_finite() && q.noise.is_finite() && q.exposure.is_finite() && q.score.unwrap().is_finite());
     }
 
     /// A re-weighting gives the score measuring with those weights gives.
