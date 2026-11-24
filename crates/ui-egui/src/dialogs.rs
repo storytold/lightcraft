@@ -1636,13 +1636,18 @@ fn new_album_name_field(ui: &mut egui::Ui, value: &mut String) -> bool {
 fn paste_settings_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::PasteSettings { groups } = dlg else { return };
     let n = app.session.selected().len();
-    ui.label(
-        egui::RichText::new(crate::i18n::tr_format!(
-            "Paste into {n} photo{} — only settings that were copied are pasted",
-            if n == 1 { "" } else { "s" },
-            n = n
-        ))
-        .color(t.text_dim),
+    // (not selectable: a selectable label senses clicks, and the framework's measuring run lays it out once more at
+    // another place in the same pass, which egui reports as the same widget id used twice)
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "Paste into {n} photo{} — only settings that were copied are pasted",
+                if n == 1 { "" } else { "s" },
+                n = n
+            ))
+            .color(t.text_dim),
+        )
+        .selectable(false),
     );
     group_checklist(ui, "pasteGroup", groups);
 }
