@@ -1183,6 +1183,13 @@ pub fn render(
         return Some(Rendered { image, histogram, deep: Some(deep), warnings: Vec::new(), coverage, alpha: None });
     }
     lcc_pipeline::visualize::apply(&mut image, req.overlay, plan, overlay_mask.as_ref(), all_overlay_alphas.as_deref());
+    // a Sharpening view is drawn on the CPU from the sharpening band: two planes read back, only
+    // while that view shows
+    if let (Some(sh), true) = (prep.sharpen.as_ref(), matches!(req.overlay, lcc_pipeline::Overlay::Sharpen(_))) {
+        let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(&prep.log_l, w, h))).clone();
+        let b = cx.read_plane(sh, w, h);
+        lcc_pipeline::visualize::sharpen_view(req.overlay, &mut image, s, &l, &b);
+    }
     // spots grew the window the render worked on: cut it back to the request
     if let Some(k) = plan.keep {
         image = image.crop(k.x, k.y, k.w, k.h);
