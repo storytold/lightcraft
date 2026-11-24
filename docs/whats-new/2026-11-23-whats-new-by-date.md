@@ -1,0 +1,2 @@
+### What's New is grouped by date and opens faster
+- Help ▸ What's New now has a heading for each date, with the newest open and the older ones closed: click a date to open or close it. The window shows only as many dates as fit and adds more as you scroll, so it opens and scrolls faster. Code, bold text and links in the notes now show as such, here and in Help ▸ Check for Updates…. A link opens in your browser.
