@@ -3471,5 +3471,9 @@
   "‹ Library": "‹ Bibliothèque",
   "↑ This device has changes still to send": "↑ Cet appareil a encore des modifications à envoyer",
   "↓ Another device has changes still to fetch": "↓ Un autre appareil a encore des modifications à récupérer",
-  "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-glisser pour redresser, ⇧G Upright guidé, une grille pendant la transformation."
+  "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-glisser pour redresser, ⇧G Upright guidé, une grille pendant la transformation.",
+  "Export with Several Presets…": "Exporter avec plusieurs paramètres prédéfinis…",
+  "Export with Several Presets": "Exporter avec plusieurs paramètres prédéfinis",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Chaque photo est lue une seule fois et exportée avec chaque paramètre coché, chacun dans son propre dossier.",
+  "Export To": "Exporter vers"
 }

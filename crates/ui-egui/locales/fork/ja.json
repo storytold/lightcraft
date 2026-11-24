@@ -3830,5 +3830,9 @@
   "↑ This device has changes still to send": "↑ このデバイスにはまだ送信する変更があります",
   "↓ Another device has changes still to fetch": "↓ 別のデバイスにまだ取得する変更があります",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-ドラッグで水平補正、⇧G でガイド付き Upright、変形中はグリッドを表示。",
-  "★ Favorites": "★ お気に入り"
+  "★ Favorites": "★ お気に入り",
+  "Export with Several Presets…": "複数のプリセットで書き出し…",
+  "Export with Several Presets": "複数のプリセットで書き出し",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "各写真は一度だけ読み込まれ、チェックした各プリセットでそれぞれのフォルダーに書き出されます。",
+  "Export To": "書き出し先"
 }

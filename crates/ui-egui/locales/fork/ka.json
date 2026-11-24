@@ -4023,5 +4023,9 @@
   "‹ Library": "‹ ბიბლიოთეკა",
   "↑ This device has changes still to send": "↑ ამ მოწყობილობას ჯერ კიდევ აქვს გასაგზავნი ცვლილებები",
   "↓ Another device has changes still to fetch": "↓ სხვა მოწყობილობას ჯერ კიდევ აქვს ჩამოსატვირთი ცვლილებები",
-  "★ Favorites": "★ რჩეულები"
+  "★ Favorites": "★ რჩეულები",
+  "Export with Several Presets…": "რამდენიმე პრესეტით ექსპორტი…",
+  "Export with Several Presets": "რამდენიმე პრესეტით ექსპორტი",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "თითოეული ფოტო ერთხელ იკითხება და ექსპორტდება ყველა მონიშნული პრესეტით, თითოეული საკუთარ საქაღალდეში.",
+  "Export To": "ექსპორტი სად"
 }

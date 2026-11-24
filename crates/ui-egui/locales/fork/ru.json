@@ -3840,5 +3840,9 @@
   "≥  at least": "≥  не менее",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-перетаскивание для выравнивания, ⇧G Upright по направляющим, сетка во время трансформации.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Export with Several Presets…": "Экспорт с несколькими пресетами…",
+  "Export with Several Presets": "Экспорт с несколькими пресетами",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Каждое фото читается один раз и экспортируется со всеми отмеченными пресетами, каждый в свою папку.",
+  "Export To": "Экспортировать в"
 }

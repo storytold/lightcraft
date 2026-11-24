@@ -3591,5 +3591,9 @@
   "‹ Library": "‹ Libreria",
   "↑ This device has changes still to send": "↑ Questo dispositivo ha ancora modifiche da inviare",
   "↓ Another device has changes still to fetch": "↓ Un altro dispositivo ha ancora modifiche da scaricare",
-  "★ Favorites": "★ Preferiti"
+  "★ Favorites": "★ Preferiti",
+  "Export with Several Presets…": "Esporta con più predefiniti…",
+  "Export with Several Presets": "Esporta con più predefiniti",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Ogni foto viene letta una volta ed esportata con ogni predefinito selezionato, ciascuno nella propria cartella.",
+  "Export To": "Esporta in"
 }

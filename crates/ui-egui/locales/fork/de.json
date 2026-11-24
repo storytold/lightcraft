@@ -3472,5 +3472,9 @@
   "© Year Name": "© Jahr Name",
   "‹ Library": "‹ Bibliothek",
   "↑ This device has changes still to send": "↑ Dieses Gerät hat noch Änderungen zu senden",
-  "↓ Another device has changes still to fetch": "↓ Ein anderes Gerät hat noch Änderungen zum Abrufen"
+  "↓ Another device has changes still to fetch": "↓ Ein anderes Gerät hat noch Änderungen zum Abrufen",
+  "Export with Several Presets…": "Mit mehreren Vorgaben exportieren…",
+  "Export with Several Presets": "Mit mehreren Vorgaben exportieren",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Jedes Foto wird einmal gelesen und mit jeder angehakten Vorgabe exportiert, jeweils in ihren eigenen Ordner.",
+  "Export To": "Exportieren nach"
 }

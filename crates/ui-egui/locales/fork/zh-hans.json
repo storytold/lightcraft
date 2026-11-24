@@ -3753,5 +3753,9 @@
   "↑ This device has changes still to send": "↑ 此设备仍有更改待发送",
   "↓ Another device has changes still to fetch": "↓ 另一台设备仍有更改待获取",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘ 拖动以拉直，⇧G 引导式垂直，变换时显示网格。",
-  "★ Favorites": "★ 收藏"
+  "★ Favorites": "★ 收藏",
+  "Export with Several Presets…": "使用多个预设导出…",
+  "Export with Several Presets": "使用多个预设导出",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "每张照片只读取一次，并用每个勾选的预设分别导出到各自的文件夹。",
+  "Export To": "导出到"
 }

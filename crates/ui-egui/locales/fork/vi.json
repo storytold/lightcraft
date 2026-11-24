@@ -4079,5 +4079,9 @@
   "‹ Library": "‹ Thư viện",
   "↑ This device has changes still to send": "↑ Thiết bị này còn thay đổi cần gửi",
   "↓ Another device has changes still to fetch": "↓ Một thiết bị khác còn thay đổi cần tải về",
-  "★ Favorites": "★ Yêu thích"
+  "★ Favorites": "★ Yêu thích",
+  "Export with Several Presets…": "Xuất với nhiều thiết lập sẵn…",
+  "Export with Several Presets": "Xuất với nhiều thiết lập sẵn",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Mỗi ảnh được đọc một lần và xuất với mọi thiết lập sẵn đã chọn, mỗi cái vào thư mục riêng.",
+  "Export To": "Xuất tới"
 }

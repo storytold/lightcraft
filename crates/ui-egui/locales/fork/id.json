@@ -3817,5 +3817,9 @@
   "‹ Library": "‹ Pustaka",
   "↑ This device has changes still to send": "↑ Perangkat ini masih punya perubahan untuk dikirim",
   "↓ Another device has changes still to fetch": "↓ Perangkat lain masih punya perubahan untuk diambil",
-  "★ Favorites": "★ Favorit"
+  "★ Favorites": "★ Favorit",
+  "Export with Several Presets…": "Ekspor dengan Beberapa Preset…",
+  "Export with Several Presets": "Ekspor dengan Beberapa Preset",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Setiap foto dibaca sekali dan diekspor dengan setiap preset yang dicentang, masing-masing ke foldernya sendiri.",
+  "Export To": "Ekspor Ke"
 }

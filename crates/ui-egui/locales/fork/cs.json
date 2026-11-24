@@ -3584,5 +3584,9 @@
   "© Year Name": "© Rok Jméno",
   "‹ Library": "‹ Knihovna",
   "↑ This device has changes still to send": "↑ Toto zařízení má ještě změny k odeslání",
-  "↓ Another device has changes still to fetch": "↓ Jiné zařízení má ještě změny ke stažení"
+  "↓ Another device has changes still to fetch": "↓ Jiné zařízení má ještě změny ke stažení",
+  "Export with Several Presets…": "Exportovat s více předvolbami…",
+  "Export with Several Presets": "Exportovat s více předvolbami",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Každá fotka se načte jednou a exportuje se všemi zaškrtnutými předvolbami, každá do vlastní složky.",
+  "Export To": "Exportovat do"
 }

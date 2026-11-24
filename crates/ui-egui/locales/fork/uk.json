@@ -3582,5 +3582,9 @@
   "‹ Library": "‹ Бібліотека",
   "↑ This device has changes still to send": "↑ Цей пристрій має ще не надіслані зміни",
   "↓ Another device has changes still to fetch": "↓ Інший пристрій має зміни для завантаження",
-  "★ Favorites": "★ Улюблені"
+  "★ Favorites": "★ Улюблені",
+  "Export with Several Presets…": "Експорт із кількома пресетами…",
+  "Export with Several Presets": "Експорт із кількома пресетами",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Кожне фото читається один раз і експортується з кожним позначеним пресетом, кожен у свою теку.",
+  "Export To": "Експортувати до"
 }

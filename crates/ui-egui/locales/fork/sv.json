@@ -3885,5 +3885,9 @@
   "© Year Name": "© År Namn",
   "‹ Library": "‹ Bibliotek",
   "↑ This device has changes still to send": "↑ Den här enheten har ändringar kvar att skicka",
-  "↓ Another device has changes still to fetch": "↓ En annan enhet har ändringar kvar att hämta"
+  "↓ Another device has changes still to fetch": "↓ En annan enhet har ändringar kvar att hämta",
+  "Export with Several Presets…": "Exportera med flera förinställningar…",
+  "Export with Several Presets": "Exportera med flera förinställningar",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Varje foto läses en gång och exporteras med varje markerad förinställning, var och en till sin egen mapp.",
+  "Export To": "Exportera till"
 }

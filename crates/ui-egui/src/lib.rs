@@ -143,6 +143,7 @@ pub mod tasks;
 pub mod template_browser;
 pub mod text_field;
 pub mod theme;
+pub mod run_presets_ui;
 pub mod timelapse_ui;
 pub mod titlebar;
 pub mod tool_profiles;

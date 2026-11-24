@@ -3831,5 +3831,9 @@
   "↑ This device has changes still to send": "↑ Este dispositivo aún tiene cambios por enviar",
   "↓ Another device has changes still to fetch": "↓ Otro dispositivo aún tiene cambios por obtener",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-arrastrar para enderezar, ⇧G Upright guiado, una cuadrícula al transformar.",
-  "★ Favorites": "★ Favoritos"
+  "★ Favorites": "★ Favoritos",
+  "Export with Several Presets…": "Exportar con varios ajustes preestablecidos…",
+  "Export with Several Presets": "Exportar con varios ajustes preestablecidos",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Cada foto se lee una vez y se exporta con cada ajuste marcado, cada uno a su propia carpeta.",
+  "Export To": "Exportar a"
 }
