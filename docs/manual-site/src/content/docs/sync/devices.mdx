@@ -6,11 +6,14 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import Shot from '../../../components/Shot.astro';
 import NeedsImage from '../../../components/NeedsImage.astro';
 
 Paired devices on the same network sync directly. No account, no cloud.
 
-<NeedsImage what="Settings ▸ Sync: this device's name, a paired device online, the catalog syncing and the Collections table with its choices and pills" />
+<Shot name="settings-sync" alt="Settings ▸ Sync: this device's name and the search for devices on the network, before any device is paired" />
+
+<NeedsImage what="Settings ▸ Sync with a paired device online, the catalog syncing and the Collections table with its choices and pills" />
 
 ## Setup
 - Open **Settings ▸ Sync** on both devices; both must be on the same network. Devices appear under *Devices* while the tab is open.
@@ -75,7 +78,7 @@ Hover a pill for the same in words.
 
 ## Not built yet
 - Virtual copies, versions and history, and the keyword tree don't travel.
-- Both devices need the same version of the app, and their clocks within five minutes of each other. A change stamped more than five minutes ahead of this device's clock is held back until it is due, and a notice names the device it came from: set that device's clock right. Only the fields dated in the future wait (the rest of the photo's changes arrive at once), and held changes are kept, so nothing is lost, while a device whose clock ran far ahead can't make its edits win over everyone's later ones.
+- Both devices need the same release of the app (the first two numbers of its version: 26.47.1 and 26.47.3 sync, 26.46 and 26.47 don't; the message names both versions), and their clocks within five minutes of each other. A change stamped more than five minutes ahead of this device's clock is held back until it is due, and a notice names the device it came from: set that device's clock right. Only the fields dated in the future wait (the rest of the photo's changes arrive at once), and held changes are kept, so nothing is lost, while a device whose clock ran far ahead can't make its edits win over everyone's later ones.
 - Local network only. Importing identical bytes a second time doesn't sync as a new photo.
 
 ## Privacy

@@ -59,7 +59,11 @@ fn refusal(r: &Refusal, name: &str) -> String {
     match r {
         Refusal::Protocol => format!("{name} runs a version of the app that syncs differently: update the app on both devices"),
         Refusal::Version(v) => {
-            format!("{name} runs version {v} and this device {}: both need the same version to sync", lcc_catalog::APP_VERSION)
+            format!(
+                "{name} runs version {v} and this device {}: update both to the same release ({}) to sync",
+                lcc_catalog::APP_VERSION,
+                lcc_sync::proto::release_line(lcc_catalog::APP_VERSION)
+            )
         }
         Refusal::Clock(min) => format!("the clocks of this device and {name} differ by {min} minutes: set both to the right time"),
     }

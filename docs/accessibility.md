@@ -22,8 +22,12 @@ no screen-reader bridge).
   (egui's focus order is the order widgets are drawn: top to bottom, left to right).
 - The canvas tools answer the arrow keys (`shortcuts.rs`, `canvas_nudge`): while cropping they
   move the crop frame and ⌥ arrows move its right / bottom edge; in Remove they move the selected
-  spot. Each press is 1 % of the image (⇧ ×10) and one undo step. Mask pins and brush strokes are
-  still pointer-only.
+  spot. Each press is 1 % of the image (⇧ ×10) and one undo step. Every handle on the photo (crop,
+  spots, red-eye, gradient handles, mask pins) and the brush have a focusable stand-in
+  (`canvas_keys.rs`): Return puts the brush down and the arrows paint while it is down
+  (`tests_canvas_keys::the_brush_paints_by_keyboard`). Library grid cells, Develop sliders (name
+  and value), panel headers and buttons are checked by
+  `tests_access::library_and_develop_core_widgets_are_named`.
 
 ## The test
 

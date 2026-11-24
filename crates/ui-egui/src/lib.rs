@@ -174,6 +174,8 @@ mod tests_background_clicks;
 #[cfg(test)]
 mod tests_background_prep;
 #[cfg(test)]
+mod tests_backgrounds;
+#[cfg(test)]
 mod tests_bar_buttons;
 #[cfg(test)]
 mod tests_before_after;
@@ -2298,6 +2300,7 @@ impl LccApp {
         theme::set_compact(ctx, self.compact());
         theme::set_slider_text(ctx, self.ui.settings.slider_text);
         theme::set_slider_control(ctx, self.ui.settings.slider_control);
+        theme::set_canvas_shades(ctx, self.ui.settings.loupe_background, self.ui.settings.filmstrip_background);
         let wanted = self.ui.settings.theme(self.system_theme(ctx));
         if theme::current(ctx) != Some(wanted) {
             theme::apply_kind(ctx, wanted);
@@ -3257,7 +3260,7 @@ impl LccApp {
         let t = theme::Tokens::get(&ctx);
         let bg = if matches!(self.ui.view, state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference)
         {
-            t.canvas
+            theme::loupe_shade(&ctx).color(t.canvas)
         } else {
             t.grid_bg
         };
@@ -4289,6 +4292,8 @@ mod tests_modern_gestures;
 mod tests_modern_library;
 #[cfg(test)]
 mod tests_modern_sheets;
+#[cfg(test)]
+mod tests_phone_menus;
 #[cfg(test)]
 mod tests_pill_slider;
 #[cfg(test)]

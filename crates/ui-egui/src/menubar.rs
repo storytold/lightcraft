@@ -413,6 +413,7 @@ pub fn checked(app: &LccApp, id: &str) -> Option<bool> {
         "view.filterBar" => Some(u.filter_bar),
         "library.toggleFilters" => Some(!app.session.filters_off()),
         "view.soloSections" => Some(u.single_panel),
+        "mask.solo" => Some(u.mask_solo),
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
         "library.holdView" => Some(app.session.hold_view),
@@ -659,6 +660,17 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     let on = if k.is_dark() { s.dark_theme.kind() == k } else { s.light_theme.kind() == k };
                     v.push(item("view.theme", json!({"theme": k.id()}), k.label(), None, true, Some(on)));
                 }
+            }
+            v.push(MenuNode::Separator);
+            for (label, command, current) in [
+                ("Loupe Background", "view.loupeBackground", s.loupe_background),
+                ("Filmstrip Background", "view.filmstripBackground", s.filmstrip_background),
+            ] {
+                let children = crate::theme::CanvasShade::ALL
+                    .into_iter()
+                    .map(|shade| item(command, json!({"shade": shade.id()}), shade.label(), None, true, Some(current == shade)))
+                    .collect();
+                v.push(MenuNode::Submenu { label: label.into(), children });
             }
             v
         }

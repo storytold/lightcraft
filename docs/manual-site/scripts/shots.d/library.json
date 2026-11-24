@@ -3,6 +3,16 @@
   "name": "lib-grid",
   "steps": [
    {
+    "method": "engine.execute",
+    "params": {
+     "command": "view.softProof",
+     "params": {
+      "on": false,
+      "destWarning": false
+     }
+    }
+   },
+   {
     "method": "ui.key",
     "params": {
      "key": "Escape"
@@ -356,6 +366,23 @@
     "only": [
      "modern"
     ]
+   }
+  ]
+ },
+ {
+  "name": "quality-scanner",
+  "steps": [
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "module.library"
+    }
+   },
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "dialog.qualityScan"
+    }
    }
   ]
  }
