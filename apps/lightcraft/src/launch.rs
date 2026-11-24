@@ -11,9 +11,13 @@ OPTIONS:
                    a list of the recent ones with Settings > General > At launch: Ask me or Alt/Option held,
                    else ~/Pictures/LightCraft Library)
   --no-demo        don't seed a new library with the procedural demo photos
-  --memory         throwaway in-memory session (alias --demo); nothing is saved
+  --memory         throwaway in-memory session (alias --demo); nothing is saved (with --control, a generated
+                   control token is logged instead of written to ~/.lightcraft)
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)
+  --control-token T   the token every control connection must send first (env LIGHTCRAFT_CONTROL_TOKEN; default:
+                   a random one written to ~/.lightcraft/control-PORT.token, which lightcraft-cli reads too).
+                   LIGHTCRAFT_CONTROL_NO_AUTH=1 turns the token off: set it for the app and for lightcraft-cli
   --version, --help
 
 ENVIRONMENT:
@@ -103,6 +107,16 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
         log::warn!("{what} {value:?} is not a port number; no control server");
     }
     port
+}
+
+/// The value after `--control-token`: an error when it is missing or looks like the next option
+/// (`--control-token --library x` would otherwise take `--library` as the token and drop the option).
+/// A token that really starts with `--` goes in `LIGHTCRAFT_CONTROL_TOKEN`.
+pub(crate) fn control_token_value(next: Option<String>) -> Result<Option<String>, &'static str> {
+    match next {
+        Some(v) if !v.starts_with("--") => Ok(crate::control_server::clean_token(Some(v))),
+        _ => Err("--control-token needs a value (a token starting with `--` can be given in LIGHTCRAFT_CONTROL_TOKEN)"),
+    }
 }
 
 /// An isolated profile keeps the emergency crash log with its other app data. With no

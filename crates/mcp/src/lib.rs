@@ -19,12 +19,14 @@
 mod backend;
 mod base64;
 mod headless;
+mod policy;
 mod server;
 mod tools;
 
 pub use backend::{Backend, ProgressHook, Remote};
 pub use base64::{base64_decode, base64_encode};
 pub use headless::{Headless, encode_image, expand_paths, write_image};
+pub use policy::{Policy, SAFE_DENY, SAFE_DENY_TOOLS};
 pub use server::{PROTOCOL_VERSION, Server};
 pub use tools::{COMMAND_TOOL_PREFIX, ToolResult, call_tool, command_tool_name, helper_tools, tool_definitions};
 

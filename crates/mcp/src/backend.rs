@@ -30,29 +30,72 @@ pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    /// Sent as the first line of every connection when the app requires it
+    /// (`LIGHTCRAFT_CONTROL_TOKEN`, else `<home>/.lightcraft/control-<port>.token`).
+    token: Option<String>,
+    /// Whether `token` was given by the caller or found, and so is looked up again on each connect.
+    token_source: TokenSource,
+    /// How a discovered token is found; `control_token_for` (a test replaces it).
+    token_lookup: fn(&str) -> Option<String>,
+}
+
+/// Where a [`Remote`]'s token came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TokenSource {
+    /// Set with [`Remote::with_token`] (an explicit `None` too): never looked up again.
+    Explicit,
+    /// Read from the environment or the token file. The app writes a new token each time it starts,
+    /// so it is read again on every connect, or a restarted app could never be reached again.
+    Discovered,
 }
 
 impl Remote {
     /// Connect to `addr` (e.g. `127.0.0.1:7980`), failing fast when nothing is listening.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+        let mut r = Self::lazy(addr);
         r.reconnect()?;
         Ok(r)
     }
 
     /// A remote that connects on first use (the app may start after the MCP server).
     pub fn lazy(addr: &str) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1 }
+        Self {
+            addr: addr.to_string(),
+            conn: None,
+            next_id: 1,
+            token: control_token_for(addr),
+            token_source: TokenSource::Discovered,
+            token_lookup: control_token_for,
+        }
+    }
+
+    /// Use this token (or none) instead of the environment / token file, now and on every reconnect.
+    pub fn with_token(mut self, token: Option<String>) -> Self {
+        self.token = token;
+        self.token_source = TokenSource::Explicit;
+        self
     }
 
     pub fn addr(&self) -> &str {
         &self.addr
     }
 
+    /// Open a new connection (dropping any old one) and authenticate it. A discovered token is read
+    /// again first: the app may have restarted with a new one.
     fn reconnect(&mut self) -> std::io::Result<()> {
         self.conn = None;
+        if self.token_source == TokenSource::Discovered {
+            self.token = (self.token_lookup)(&self.addr);
+        }
         let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, format!("cannot resolve {}", self.addr));
         for sa in self.addr.to_socket_addrs()? {
+            // The token is a secret for the local app: never hand it to another host.
+            if self.token.is_some() && !sa.ip().is_loopback() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("a control token is configured, so --connect must point at a loopback address (127.0.0.1 / ::1); got {sa}"),
+                ));
+            }
             match TcpStream::connect_timeout(&sa, Duration::from_millis(800)) {
                 Ok(s) => {
                     s.set_nodelay(true).ok();
@@ -60,7 +103,7 @@ impl Remote {
                     s.set_read_timeout(Some(Duration::from_secs(90))).ok();
                     let read = s.try_clone()?;
                     self.conn = Some((BufReader::new(read), s));
-                    return Ok(());
+                    return self.authenticate();
                 }
                 Err(e) => last = e,
             }
@@ -68,6 +111,71 @@ impl Remote {
         Err(last)
     }
 
+    /// First line of a new connection when a token is configured; the app answers
+    /// `{"id":0,"ok":true,"result":"authenticated"}` or closes the connection. Any other success reply
+    /// is `InvalidData`, and an app that does not know `auth` (started without a token, or older) is
+    /// an error, never a silent downgrade.
+    fn authenticate(&mut self) -> std::io::Result<()> {
+        let Some(token) = self.token.clone() else { return Ok(()) };
+        let Some((reader, writer)) = self.conn.as_mut() else { return Ok(()) };
+        let line = json!({"id": 0, "method": "auth", "params": {"token": token}}).to_string();
+        writer.write_all(line.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        let reply = read_reply(reader, MAX_REPLY)?;
+        let v: Value =
+            serde_json::from_str(&reply).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("bad auth reply: {e}")))?;
+        if v.get("ok").and_then(Value::as_bool) == Some(true) {
+            if v.get("id").and_then(Value::as_u64) == Some(0) && v.get("result").and_then(Value::as_str) == Some("authenticated") {
+                return Ok(());
+            }
+            self.conn = None;
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("unexpected reply to `auth` from the app at {}: {reply}", self.addr)))
+        } else {
+            self.conn = None;
+            let error = v.get("error").and_then(Value::as_str).unwrap_or("?");
+            // `control.rs` words it "unknown method `auth`".
+            let lower = error.to_lowercase();
+            if lower.contains("unknown method") || lower.contains("method not found") {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "the app at {} does not require a control token (it answered: {error}). To connect anyway, start lightcraft-cli with \
+                         LIGHTCRAFT_CONTROL_NO_AUTH=1, or restart the app without LIGHTCRAFT_CONTROL_NO_AUTH so it requires the token.",
+                        self.addr
+                    ),
+                ));
+            }
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("control token rejected by the app at {}: {error}", self.addr)))
+        }
+    }
+}
+
+/// `LIGHTCRAFT_CONTROL_TOKEN`, else the token file the app writes for this port, else none
+/// (an app started without authentication, or an older app). `LIGHTCRAFT_CONTROL_NO_AUTH=1` means
+/// none at all: the same variable that starts the app without a token.
+fn control_token_for(addr: &str) -> Option<String> {
+    let no_auth = matches!(std::env::var("LIGHTCRAFT_CONTROL_NO_AUTH").as_deref(), Ok("1") | Ok("true"));
+    if no_auth {
+        return token_for_env(true, None, None);
+    }
+    let env_token = std::env::var("LIGHTCRAFT_CONTROL_TOKEN").ok();
+    let file = addr.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).and_then(|port| {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+        std::fs::read_to_string(std::path::PathBuf::from(home).join(".lightcraft").join(format!("control-{port}.token"))).ok()
+    });
+    token_for_env(false, env_token.as_deref(), file.as_deref())
+}
+
+/// The token to send: none when authentication is switched off, else the environment's, else the file's.
+fn token_for_env(no_auth: bool, env_token: Option<&str>, file: Option<&str>) -> Option<String> {
+    if no_auth {
+        return None;
+    }
+    [env_token, file].into_iter().flatten().map(str::trim).find(|t| !t.is_empty()).map(str::to_string)
+}
+
+impl Remote {
     /// Send one request line and read the reply line. On failure the flag says whether the request
     /// may have reached the app (written in full); only an unsent request is safe to resend.
     fn roundtrip(&mut self, line: &str) -> Result<String, (std::io::Error, bool)> {
@@ -167,6 +275,11 @@ impl Backend for Remote {
                     self.conn = None;
                     if sent {
                         return Err(self.unknown_outcome(method, &e));
+                    }
+                    // The app refused the handshake (token rejected, no token needed, non-loopback
+                    // address): a second try fails the same way, and the message says what to do.
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        return Err(e.to_string());
                     }
                     if resent {
                         return Err(format!("LightCraft app at {} is not reachable: {e} (start it with `lightcraft --control PORT`)", self.addr));
@@ -555,5 +668,171 @@ mod tests {
         drop(listener);
         let err = Remote::lazy(&addr).call("engine.commands", json!({})).unwrap_err();
         assert!(err.contains("not reachable"), "{err}");
+    }
+
+    #[test]
+    fn a_token_is_never_sent_to_a_non_loopback_address() {
+        // 192.0.2.1 is TEST-NET-1: never routable, so a refusal here happened before any socket opened.
+        let started = std::time::Instant::now();
+        let err = Remote::lazy("192.0.2.1:7980").with_token(Some("x".into())).call("engine.commands", json!({})).unwrap_err();
+        assert!(err.contains("loopback"), "{err}");
+        assert!(started.elapsed() < Duration::from_millis(700), "a connect attempt was made: {err}");
+    }
+
+    /// A server that answers the first line of each connection with `replies[n]` for connection n.
+    fn serve_first_lines(replies: Vec<&'static str>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let worker = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for reply in replies {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut writer = stream.try_clone().unwrap();
+                let mut line = String::new();
+                BufReader::new(stream).read_line(&mut line).unwrap();
+                seen.push(line.trim().to_string());
+                writer.write_all(reply.as_bytes()).unwrap();
+            }
+            seen
+        });
+        (addr, worker)
+    }
+
+    #[test]
+    fn an_app_without_auth_is_an_error_that_names_the_opt_out() {
+        let _serial = crate::serial_sockets_and_children();
+        let (addr, worker) = serve_first_lines(vec![
+            "{\"id\":0,\"ok\":false,\"error\":\"unknown method `auth`\"}
+",
+        ]);
+        let mut remote = Remote::lazy(&addr).with_token(Some("secret".into()));
+        let err = remote.call("engine.commands", json!({})).unwrap_err();
+        assert!(err.contains("LIGHTCRAFT_CONTROL_NO_AUTH") && err.contains("does not require a control token"), "{err}");
+        assert_eq!(remote.token.as_deref(), Some("secret"), "the token is kept, not dropped");
+        assert!(remote.conn.is_none());
+        let seen = worker.join().unwrap();
+        assert!(seen[0].contains("\"auth\""), "{seen:?}");
+    }
+
+    #[test]
+    fn the_token_comes_from_the_environment_then_the_file_and_not_at_all_without_auth() {
+        assert_eq!(token_for_env(false, Some(" env "), Some("file")).as_deref(), Some("env"));
+        assert_eq!(
+            token_for_env(
+                false,
+                Some("  "),
+                Some(
+                    "file
+"
+                )
+            )
+            .as_deref(),
+            Some("file")
+        );
+        assert_eq!(token_for_env(false, None, Some("file")).as_deref(), Some("file"));
+        assert_eq!(token_for_env(false, None, None), None);
+        assert_eq!(token_for_env(true, Some("env"), Some("file")), None, "NO_AUTH wins over any token");
+    }
+
+    #[test]
+    fn a_rejected_token_is_an_error_and_is_not_retried_without_it() {
+        let _serial = crate::serial_sockets_and_children();
+        let rejected = "{\"ok\":false,\"error\":\"control token rejected; closing the connection\"}
+";
+        let (addr, worker) = serve_first_lines(vec![rejected]);
+        let mut remote = Remote::lazy(&addr).with_token(Some("wrong".into()));
+        let err = remote.call("engine.commands", json!({})).unwrap_err();
+        assert!(err.contains("token rejected"), "{err}");
+        assert_eq!(remote.token.as_deref(), Some("wrong"));
+        // a refused handshake is reported as it is: one connection, no retry, no downgrade
+        let seen = worker.join().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].contains("wrong"), "{seen:?}");
+    }
+
+    static CURRENT_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+    /// Stands in for reading the token file: whatever the test last stored.
+    fn current_token(_addr: &str) -> Option<String> {
+        Some(CURRENT_TOKEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
+    }
+
+    /// Change what [`current_token`] returns, as a restarted app writing a new token file would.
+    fn set_current_token(t: &str) {
+        *CURRENT_TOKEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = t.to_string();
+    }
+
+    #[test]
+    fn a_discovered_token_is_read_again_when_the_app_restarts() {
+        let _serial = crate::serial_sockets_and_children();
+        set_current_token("tokenA");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let worker = std::thread::spawn(move || {
+            let mut auth_lines = Vec::new();
+            for n in 1..=2u64 {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut writer = stream.try_clone().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut auth = String::new();
+                reader.read_line(&mut auth).unwrap();
+                auth_lines.push(auth.trim().to_string());
+                writer.write_all(b"{\"id\":0,\"ok\":true,\"result\":\"authenticated\"}\n").unwrap();
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                let id = serde_json::from_str::<Value>(&request).unwrap()["id"].clone();
+                writer.write_all(format!("{}\n", json!({"id": id, "ok": true, "result": n})).as_bytes()).unwrap();
+            }
+            auth_lines
+        });
+        let mut remote = Remote::lazy(&addr);
+        remote.token_lookup = current_token;
+        assert_eq!(remote.call("engine.commands", json!({})).unwrap(), json!(1));
+        // the app restarts: its connection is gone and the new run wrote another token
+        set_current_token("tokenB");
+        remote.conn = None;
+        assert_eq!(remote.call("engine.commands", json!({})).unwrap(), json!(2));
+        let seen = worker.join().unwrap();
+        assert!(seen[0].contains("tokenA") && !seen[0].contains("tokenB"), "{seen:?}");
+        assert!(seen[1].contains("tokenB") && !seen[1].contains("tokenA"), "{seen:?}");
+    }
+
+    #[test]
+    fn an_explicit_token_is_never_replaced_by_a_lookup() {
+        let _serial = crate::serial_sockets_and_children();
+        set_current_token("discovered");
+        let (addr, worker) = serve_first_lines(vec!["{\"id\":0,\"ok\":true,\"result\":\"authenticated\"}\n"]);
+        let mut remote = Remote::lazy(&addr).with_token(Some("fixed".into()));
+        remote.token_lookup = current_token;
+        let _ = remote.reconnect();
+        let seen = worker.join().unwrap();
+        assert!(seen[0].contains("fixed") && !seen[0].contains("discovered"), "{seen:?}");
+        assert_eq!(remote.token.as_deref(), Some("fixed"));
+    }
+
+    #[test]
+    fn only_the_exact_authenticated_reply_is_accepted() {
+        let _serial = crate::serial_sockets_and_children();
+        for reply in [
+            "{\"id\":0,\"ok\":true}\n",
+            "{\"id\":0,\"ok\":true,\"result\":null}\n",
+            "{\"id\":0,\"ok\":true,\"result\":\"anything else\"}\n",
+            "{\"id\":7,\"ok\":true,\"result\":\"authenticated\"}\n",
+            "{\"ok\":true,\"result\":\"authenticated\"}\n",
+        ] {
+            let (addr, worker) = serve_first_lines(vec![reply]);
+            let mut remote = Remote::lazy(&addr).with_token(Some("t".into()));
+            let err = remote.reconnect().unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{reply}: {err}");
+            assert!(remote.conn.is_none(), "the connection is dropped: {reply}");
+            worker.join().unwrap();
+        }
+        let (addr, worker) = serve_first_lines(vec!["{\"id\":0,\"ok\":true,\"result\":\"authenticated\"}\n"]);
+        let mut remote = Remote::lazy(&addr).with_token(Some("t".into()));
+        remote.reconnect().unwrap();
+        assert!(remote.conn.is_some());
+        worker.join().unwrap();
     }
 }
