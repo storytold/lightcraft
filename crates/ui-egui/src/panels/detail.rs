@@ -4944,6 +4944,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         } else {
             app.brush_live = None;
         }
+        brush_keys(app, ui, map, d, active, long);
         let _ = finish_brush_gesture(app, resp, map, d);
         return;
     }
@@ -5296,6 +5297,55 @@ fn mask_keys(app: &mut LccApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSe
         let new_shape = moved_shape(&shape, handle, Point::new(dx, dy), to, &map, false);
         let _ = app.run("mask.update", json!({"id": mid, "component": ci, "shape": new_shape}));
         let _ = app.run("develop.endInteraction", json!({}));
+    }
+}
+
+/// The brush by keyboard: a focusable stand-in (`canvasHandle:brush`) at the brush's place, the
+/// photo's centre at first. The arrows move it (Shift: further); Return or Space puts the brush
+/// down, painting a dab there, and lifts it again; while it is down each arrow press paints a
+/// stroke from where it was to where it goes (one undo step a press), with the panel's brush
+/// settings (Erase too).
+fn brush_keys(app: &mut LccApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings, active: Option<u32>, long: f64) {
+    let key = egui::Id::new("lc-brush-placement");
+    let (x, y, down): (f64, f64, bool) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5, false));
+    let mmap = map.for_mask_id(d, active);
+    let q = mmap.screen(Point::new(x, y));
+    let state = crate::i18n::tr(if down { "brush down" } else { "brush up" });
+    let keys = crate::canvas_keys::handle(
+        ui,
+        "brush",
+        crate::i18n::tr("Brush (Return puts it down and paints, the arrows paint while it is down)"),
+        format!("{}, {state}", crate::canvas_keys::position_text(x, y)),
+        q,
+    );
+    if ui.memory(|m| m.has_focus(crate::canvas_keys::id("brush"))) {
+        let r = crate::state::brush_core_points(app.ui.brush_set(app.ui.brush_erasing()).size);
+        ui.painter().circle_stroke(q, r, Stroke::new(if down { 2.0 } else { 1.0 }, Color32::WHITE));
+    }
+    let paint = |app: &mut LccApp, points: &[Point]| {
+        let erase = vec![app.ui.brush_erase; points.len()];
+        let params = brush_params(app, d, points, &[], &erase, 0, false, long);
+        let _ = app.run("develop.beginInteraction", json!({"label": "Brush"}));
+        let _ = app.run("mask.brushStroke", params);
+        let _ = app.run("develop.endInteraction", json!({}));
+    };
+    let mut next = (x, y, down);
+    if keys.activated {
+        if !down {
+            paint(app, &[Point::new(x, y)]);
+        }
+        next.2 = !down;
+    }
+    if let Some((dx, dy)) = keys.delta {
+        let to = ((x + dx).clamp(0.0, 1.0), (y + dy).clamp(0.0, 1.0));
+        if down && to != (x, y) {
+            paint(app, &[Point::new(x, y), Point::new(to.0, to.1)]);
+        }
+        next = (to.0, to.1, next.2);
+    }
+    if next != (x, y, down) {
+        ui.data_mut(|m| m.insert_temp(key, next));
+        ui.ctx().request_repaint();
     }
 }
 
