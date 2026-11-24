@@ -217,7 +217,12 @@ fn library_and_develop_core_widgets_are_named() {
         assert!(named(s) && (s.numeric_value().is_some() || s.value().is_some()), "a slider has a name and a value: {s:?}");
     }
     assert!(sliders.iter().any(|s| s.label() == Some("Exposure")), "Exposure is announced");
-    let headers = all.iter().filter(|(_, n)| (n.is_expanded().is_some() || n.is_selected().is_some() || n.toggled().is_some()) && n.label().is_some_and(|l| !l.trim().is_empty())).count();
+    let headers = all
+        .iter()
+        .filter(|(_, n)| {
+            (n.is_expanded().is_some() || n.is_selected().is_some() || n.toggled().is_some()) && n.label().is_some_and(|l| !l.trim().is_empty())
+        })
+        .count();
     assert!(headers >= 3, "panel headers are named and say whether they are open ({headers})");
     let dev = nameless_buttons(&all);
     assert!(lib.is_empty() && dev.is_empty(), "nameless controls:\nlibrary: {lib:#?}\ndevelop: {dev:#?}");
