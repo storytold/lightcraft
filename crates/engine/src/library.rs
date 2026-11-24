@@ -67,6 +67,52 @@ pub fn prepare_library(dir: &Path) -> Result<bool> {
     Ok(lcc_catalog::library::prepare_upgrade(dir)?)
 }
 
+/// A library's catalog read and locked by [`load_catalog`], on a worker thread, for
+/// [`Session::stage_catalog`]: the slow part of opening a large library (reading its store,
+/// replaying the log), so the interface's thread only swaps it in (#979).
+pub struct LoadedCatalog {
+    dir: PathBuf,
+    journal: Journal,
+    catalog: lcc_catalog::Catalog,
+    report: LoadReport,
+    lock: LibraryLock,
+}
+
+impl LoadedCatalog {
+    /// The library folder it was read from.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Its number of photos.
+    pub fn len(&self) -> usize {
+        self.catalog.len()
+    }
+
+    /// Whether it holds no photos.
+    pub fn is_empty(&self) -> bool {
+        self.catalog.len() == 0
+    }
+}
+
+/// Read the catalog of the library in `dir` (creating it when there is none, as opening does)
+/// and hold its lock, without touching any session: the part of [`Session::open_library`] that
+/// takes time on a large library, for a worker thread. Run [`prepare_library`] first. A
+/// Lightroom folder or a library in use is the same error the open gives.
+pub fn load_catalog(dir: &Path) -> Result<LoadedCatalog> {
+    if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(dir) {
+        return Err(EngineError::LightroomCatalog { path: dir.to_path_buf(), catalog: place.catalog });
+    }
+    let dir = resolve_dir(dir)?;
+    let lock = LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?;
+    let store = FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open catalog {}: {e}", dir.display())))?;
+    let (journal, catalog, report) = Journal::open(Box::new(store))?;
+    // the first view of a large library builds the catalog's indexes and the order of its photos
+    // (kept in the catalog, valid until the photos change): built here, not in the open's frame
+    let _ = catalog.query(&lcc_catalog::Filter::default(), &lcc_catalog::Sort::default());
+    Ok(LoadedCatalog { dir, journal, catalog, report, lock })
+}
+
 /// The library folder `path` names. A library is a folder; naming one of its own files
 /// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
@@ -698,8 +744,10 @@ impl Session {
             return Err(EngineError::Other(format!("{} is not a folder", dir.display())));
         }
         std::fs::read_dir(&dir).map_err(|e| EngineError::Other(format!("can't open catalog {}: {e}", dir.display())))?;
-        // the library open in this session keeps its lock when reopened; any other must be free
-        let current = self.library.as_ref().is_some_and(|l| l.on_disk && same_dir(&l.dir, &dir));
+        // the library open in this session keeps its lock when reopened, as does a catalog of it
+        // staged for the open ([`Session::stage_catalog`]); any other must be free
+        let current = self.library.as_ref().is_some_and(|l| l.on_disk && same_dir(&l.dir, &dir))
+            || self.staged_catalog.as_ref().is_some_and(|s| same_dir(&s.dir, &dir));
         if !current && is_library(&dir) {
             drop(LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?);
         }
@@ -728,11 +776,15 @@ impl Session {
         // the library open in this session (same directory): hand its lock over
         let reused = self.library.as_mut().filter(|l| same_dir(&l.dir, &dir)).and_then(|l| l.lock.take());
         let reusing = reused.is_some();
-        let mut lock = match reused {
-            Some(l) => Some(l),
-            None => Some(LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?),
+        // a catalog of this folder read on a worker ([`load_catalog`]) is opened as read, under
+        // the lock it holds; one of another folder (or with the library already open here) is let go
+        let staged = self.staged_catalog.take().filter(|s| !reusing && same_dir(&s.dir, &dir));
+        let (mut lock, loaded) = match (reused, staged) {
+            (Some(l), _) => (Some(l), None),
+            (None, Some(s)) => (Some(s.lock), Some((s.journal, s.catalog, s.report))),
+            (None, None) => (Some(LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?), None),
         };
-        if let Err(e) = self.open_stores(stores, seed_demo, &mut lock) {
+        if let Err(e) = self.open_stores(stores, seed_demo, &mut lock, loaded) {
             if reusing && let Some(lib) = self.library.as_mut() {
                 lib.lock = lock.take();
             }
@@ -745,7 +797,7 @@ impl Session {
     /// this session's catalog. Not locked: the host guards against a second opener (see
     /// [`Session::open_library`] for directories).
     pub fn open_library_in(&mut self, stores: LibraryStores, seed_demo: bool) -> Result<&LoadReport> {
-        self.open_stores(stores, seed_demo, &mut None)?;
+        self.open_stores(stores, seed_demo, &mut None, None)?;
         self.loaded_report()
     }
 
@@ -756,8 +808,21 @@ impl Session {
         }
     }
 
-    /// Open `stores`; the new library takes `lock` once nothing can fail any more.
-    fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
+    /// Hand a catalog read on a worker ([`load_catalog`]) to the next [`Session::open_library`]
+    /// of its folder, which then doesn't read it again (a staged one before it is let go).
+    pub fn stage_catalog(&mut self, loaded: LoadedCatalog) {
+        self.staged_catalog = Some(loaded);
+    }
+
+    /// Open `stores`; the new library takes `lock` once nothing can fail any more. `loaded`: its
+    /// catalog, already read ([`load_catalog`]).
+    fn open_stores(
+        &mut self,
+        stores: LibraryStores,
+        seed_demo: bool,
+        lock: &mut Option<LibraryLock>,
+        loaded: Option<(Journal, lcc_catalog::Catalog, LoadReport)>,
+    ) -> Result<()> {
         // the old library's queued sidecar writes are made against its catalog; one still stuck (a share that stopped
         // answering) keeps this library open, with its retries, rather than lose or misplace its result. First, before
         // anything of the session changes.
@@ -783,7 +848,10 @@ impl Session {
         self.faces.library_changed();
         self.ml.library_changed();
         let mut stages = OpenStages::start();
-        let (mut journal, mut catalog, report) = Journal::open(catalog)?;
+        let (mut journal, mut catalog, report) = match loaded {
+            Some(l) => l,
+            None => Journal::open(catalog)?,
+        };
         stages.mark("catalog");
         // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
         // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
@@ -1734,6 +1802,47 @@ mod resolve_tests {
         let e = Session::new().with_fs().open_library(&other, false).err().unwrap().to_string();
         assert!(e.contains("is a file"), "{e}");
         assert!(!e.contains("File exists"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A catalog read on a worker thread ([`load_catalog`]) and staged opens as read, under the
+    /// lock it holds; one staged for another folder is let go and the open reads its own (#979).
+    #[test]
+    fn a_staged_catalog_read_on_a_worker_is_what_the_open_uses() {
+        let dir = std::env::temp_dir().join(format!("lc-staged-catalog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        for (d, demo) in [(&a, true), (&b, false)] {
+            let mut s = Session::new().with_fs();
+            s.open_library(d, demo).unwrap();
+            s.close_library().unwrap();
+            s.release_library_lock();
+        }
+        let demo_photos = {
+            let worker = a.clone();
+            let loaded = std::thread::spawn(move || load_catalog(&worker)).join().unwrap().unwrap();
+            assert!(!loaded.is_empty());
+            assert!(matches!(LibraryLock::acquire(&a, "other"), Err(lcc_catalog::lock::LockError::InUse(_))), "it holds the lock");
+            let n = loaded.len();
+            let mut s = Session::new().with_fs();
+            s.stage_catalog(loaded);
+            assert_eq!(s.check_library(&a).unwrap(), a, "the staged catalog's lock is this session's");
+            s.open_library(&a, false).unwrap();
+            assert_eq!(s.catalog.len(), n);
+            assert!(s.staged_catalog.is_none());
+            assert!(matches!(LibraryLock::acquire(&a, "other"), Err(lcc_catalog::lock::LockError::InUse(_))), "the library keeps it");
+            n
+        };
+        // (the session above is gone with its lock) a catalog staged for another folder is not used
+        let mut s = Session::new().with_fs();
+        s.stage_catalog(load_catalog(&a).unwrap());
+        s.open_library(&b, false).unwrap();
+        assert_eq!(s.catalog.len(), 0, "b's own (empty) catalog, not a's {demo_photos} photos");
+        assert!(s.staged_catalog.is_none());
+        drop(LibraryLock::acquire(&a, "other").unwrap());
+        // a library in use is refused by the worker as by the open
+        assert!(matches!(load_catalog(&b), Err(EngineError::LibraryInUse(_))));
+        drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -430,6 +430,9 @@ pub struct Session {
     pub(crate) appearance: identity::Appearance,
     /// The folder metadata save or read waiting for `folder.metadataPump` ([`cmd::folder_metadata`]); dropped when another library opens.
     pub(crate) folder_metadata: Option<cmd::folder_metadata::FolderMetadataJob>,
+    /// A catalog read off the interface's thread ([`library::load_catalog`]) waiting for the
+    /// next [`Session::open_library`] of its folder, which takes it instead of reading it again.
+    pub(crate) staged_catalog: Option<library::LoadedCatalog>,
     /// The order of Reload from Disk runs, so an older one finishing late is dropped ([`cmd::reload`]).
     pub(crate) reload_tickets: cmd::reload::Tickets,
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
@@ -894,6 +897,7 @@ impl Session {
             appearance: Default::default(),
             stems: Default::default(),
             folder_metadata: None,
+            staged_catalog: None,
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
