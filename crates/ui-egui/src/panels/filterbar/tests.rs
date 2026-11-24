@@ -51,11 +51,6 @@ fn pick(h: &mut Headless, text: &str) {
             _ => None,
         })
         .unwrap_or_else(|| panic!("visible option {text:?} not painted"));
-    {
-        use craft::ui::runtime::overlay::{OpenFilter, any_open};
-        let n = h.view.painted_shapes().iter().filter(|s| matches!(s, egui::Shape::Text(t) if t.galley.job.text == text)).count();
-        eprintln!("DBGPICK {text} pos={pos:?} texts={n} open={} rows={:?}", any_open(&h.view.ctx, OpenFilter::Any), h.app.widgets.iter().filter(|(w, _)| w.starts_with("filter:kind")).collect::<Vec<_>>());
-    }
     ask(h, "ui.click", json!({"x": pos.x, "y": pos.y}));
 }
 

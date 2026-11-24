@@ -62,9 +62,19 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
             h.settle(SETTLE);
             check_bar_clear(&h, "menu-level:1", &what);
             // Hover each submenu row in view, top to bottom: rows low in the menu open upward.
-            let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu"));
-            if top == "Photo" {
-                eprintln!("DBGLEVEL {size:?} level={level:?} rows={:?}", widgets_with(&h, "menusub:").into_iter().map(|(id, r)| (id.clone(), r, visible_rect(&h, &id))).collect::<Vec<_>>());
+            let mut level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu"));
+            // A menu taller than the window scrolls. Scroll it so a submenu row lands across the viewport's edge: its
+            // centre is then out of sight while a part of it is still there to point at.
+            if let Some((_, row)) = widgets_with(&h, "menusub:").into_iter().find(|(_, r)| r.top() >= level.bottom()) {
+                let at = level.center();
+                let r = h.request("ui.move", json!({"x": at.x, "y": at.y}), T);
+                assert_eq!(r["ok"], true, "{what}: {r}");
+                h.settle(SETTLE);
+                let r = h.request("ui.scroll", json!({"dx": 0, "dy": -(row.center().y - level.bottom())}), T);
+                assert_eq!(r["ok"], true, "{what}: {r}");
+                h.settle(SETTLE);
+                level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu after scrolling"));
+                check_bar_clear(&h, "menu-level:1", &what);
             }
             let rows: Vec<String> = widgets_with(&h, "menusub:").into_iter().filter(|(_, r)| level.contains_rect(*r)).map(|(id, _)| id).collect();
             for row in rows {
@@ -165,10 +175,6 @@ fn click_outside_and_escape_close_the_open_menu() {
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    {
-        use craft::ui::runtime::overlay::{OpenFilter, any_open, top};
-        eprintln!("DBGESC any={} keys={} top={:?} bar_open={} focused_rec={:?}", any_open(&h.view.ctx, OpenFilter::Any), any_open(&h.view.ctx, OpenFilter::Keys), top(&h.view.ctx), craft::ui::menu::bar::is_open(&h.view.ctx), craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id));
-    }
     assert_eq!(open_menu(&h), None, "Escape");
 }
 
