@@ -76,7 +76,7 @@ L0 `geom`, `color`, `raster`, `fetch`, `sysmem`, `wincolor` -> L1 `raw`, `codecs
 - `cargo xtask roots` checks the `#![deny(clippy::unwrap_used, ...)]` and `#![forbid(unsafe_code)]` crate-root attributes; crates use `[lints] workspace = true`.
 
 ### Paths and conventions
-- `unsafe` is allowed only in `crates/sysmem` and `crates/wincolor`.
+- `unsafe` is allowed only in `crates/sysmem`, `crates/wincolor` and `crates/macos-open`.
 - Attribution file: `assets/ATTRIBUTION.md`; `cargo xtask assets` checks it. Brand files in `docs/brand/` are trademarks under `docs/brand/LICENSE-brand.txt`.
 - Fonts come from storytold/craft-fonts through `CRAFT_FONTS_DIR`; Inter in `assets/fonts/` is the one font kept here. Releases set `CRAFT_FONTS_REQUIRED=1`.
 - Test corpora: `cargo xtask corpus --download` into the gitignored `corpus/`; shared PSDs are in storytold/photocraft-corpus.

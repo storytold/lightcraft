@@ -26,7 +26,8 @@ Release jobs build macOS universal, Windows x86/x64/ARM64, Linux x86_64/aarch64/
 and the WASM web app. The platform scripts in [`packaging/`](../packaging/) write their outputs to
 `dist/release/` (the full list of files is the README's Downloads section):
 
-- macOS: app DMG and CLI ZIP.
+- macOS: app DMG and CLI ZIP. The bundle registers supported photographs as an alternate editor;
+  see [macOS document opening](macos-open.md) for the generated types and native checks.
 - Windows: MSI installer and portable ZIP for each architecture.
 - Linux: AppImage (with its `.AppImage.zsync`), `.deb`, `.rpm`, and `.tar.gz` for each
   architecture (`packaging/linux/package.sh`). Each AppImage embeds
