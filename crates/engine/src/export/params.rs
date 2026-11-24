@@ -32,6 +32,8 @@ impl Default for ExportOptions {
             jxl_progressive: false,
             add_to_photos: false,
             photos_album: String::new(),
+            photos_favorite_picked: false,
+            photos_favorite_rating: 0,
             hdr_transfer: HdrCurve::Pq,
         }
     }
@@ -76,6 +78,8 @@ pub const OPTION_PARAMS: &[&str] = &[
     "jxlProgressive",
     "addToPhotos",
     "photosAlbum",
+    "photosFavoritePicked",
+    "photosFavoriteRating",
     "hdrTransfer",
 ];
 
@@ -297,6 +301,12 @@ impl ExportOptions {
                         return Err(bad(format!("`{k}` can't contain a NUL character")));
                     }
                 }
+                "photosFavoritePicked" => {
+                    boolean(k, v)?;
+                }
+                "photosFavoriteRating" => {
+                    int(k, v, 0, 5)?;
+                }
                 "naming" | "subfolder" | "path" | "dir" | "preset" => {
                     string(cmd, k, v)?;
                 }
@@ -328,6 +338,18 @@ impl ExportOptions {
                     }
                 }
                 _ => return Err(bad(unknown_key("parameter", k, &known))),
+            }
+        }
+        // issue #4717: under `copyright` or `none` the rating and pick aren't exported, so they
+        // mustn't reach Photos as favourites either
+        let favorites = obj.get("photosFavoritePicked").and_then(Value::as_bool).unwrap_or(false)
+            || obj.get("photosFavoriteRating").and_then(whole).is_some_and(|r| r > 0);
+        if favorites && obj.get("addToPhotos").and_then(Value::as_bool).unwrap_or(false) {
+            let policy = obj.get("metadata").and_then(Value::as_str).and_then(MetadataPolicy::parse).unwrap_or_default();
+            if matches!(policy, MetadataPolicy::Copyright | MetadataPolicy::None) {
+                return Err(bad(
+                    "`photosFavoritePicked` and `photosFavoriteRating` need `metadata` all or allExceptCamera: with copyright or none the rating isn't exported, so it isn't passed to Photos either".into(),
+                ));
             }
         }
         // issue #1952: a depth the format doesn't have would be written at the format's own depth
@@ -403,7 +425,7 @@ impl ExportOptions {
 
     /// Read options from command params (`format`, `quality`, `limitKb`, `sharpen`, `sharpenAmount`,
     /// `naming`, `metadata`, `removeLocation`, `watermark`, `colorSpace`, `bitDepth`, `ppi`,
-    /// `addToPhotos`, `photosAlbum`) and the
+    /// `addToPhotos`, `photosAlbum`, `photosFavoritePicked`, `photosFavoriteRating`) and the
     /// size: one of `longEdge`, `shortEdge`, `width`, `height` (both = fit inside W × H),
     /// `megapixels`, `percent` (absent or 0 = full size), or a [`Resize`] object as `resize`; plus
     /// `dontEnlarge` (default true).
@@ -455,6 +477,8 @@ impl ExportOptions {
             jxl_progressive: p.get("jxlProgressive").and_then(Value::as_bool).unwrap_or(d.jxl_progressive),
             add_to_photos: p.get("addToPhotos").and_then(Value::as_bool).unwrap_or(d.add_to_photos),
             photos_album: s("photosAlbum").map_or(d.photos_album, |a| a.trim().to_string()),
+            photos_favorite_picked: p.get("photosFavoritePicked").and_then(Value::as_bool).unwrap_or(d.photos_favorite_picked),
+            photos_favorite_rating: u("photosFavoriteRating").map_or(d.photos_favorite_rating, |r| r.min(5) as u8),
             hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
         }
     }

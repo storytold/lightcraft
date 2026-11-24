@@ -2125,7 +2125,7 @@ fn a_slow_photos_import_never_blocks_the_window() {
     h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
         // a regression (Photos on the UI thread) fails the timing below instead of hanging
         let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
-        let n = args.len() - args.iter().position(|a| a == lightcraft_engine::apple_photos::MARKER).unwrap() - 2;
+        let n = args.len() - args.iter().position(|a| a == lightcraft_engine::apple_photos::MARKER).unwrap() - 3;
         Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
     }));
     let t0 = Instant::now();

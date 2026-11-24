@@ -30,18 +30,22 @@ use serde_json::{Value, json};
 
 use crate::activity::{Activity, Cancel, TaskGuard};
 
-/// Run by osascript with `argv` = [`MARKER`], the album name (empty: none), then the files' POSIX
-/// paths. Prints the imported media items' ids, one per line.
+/// Run by osascript with `argv` = [`MARKER`], the album name (empty: none), `"1"` when the files
+/// become favourites (issue #4717; else `"0"`), then the files' POSIX paths. Prints the imported
+/// media items' ids, one per line. Favourites are marked on the items this import returned, so no
+/// file name is matched back to an item; an export sends its favourites and its other files as
+/// separate runs ([`execute`]).
 ///
 /// The album is looked for by its exact name among the albums at the top level of the library
 /// (Photos' `album` elements are every album, folders included, in no set order): albums inside
 /// folders are never used. None there: a new top-level album is made. More than one: nothing is
 /// imported (error [`AMBIGUOUS_ALBUM`]).
 pub const SCRIPT: &str = r#"on run argv
-	if (count of argv) < 3 then error "LightCraft: no files to import" number -50
+	if (count of argv) < 4 then error "LightCraft: no files to import" number -50
 	set albumName to item 2 of argv
+	set markFavorite to (item 3 of argv is "1")
 	set mediaFiles to {}
-	repeat with i from 3 to (count of argv)
+	repeat with i from 4 to (count of argv)
 		set end of mediaFiles to (POSIX file (item i of argv)) as alias
 	end repeat
 	set importedItems to {}
@@ -92,6 +96,15 @@ pub const SCRIPT: &str = r#"on run argv
 		repeat with mediaItem in importedItems
 			set end of mediaIds to (id of mediaItem)
 		end repeat
+		if markFavorite then
+			try
+				repeat with mediaItem in importedItems
+					set favorite of mediaItem to true
+				end repeat
+			on error errText number errNum
+				error "LightCraft: added, but not marked as favourites: " & errText number 23602
+			end try
+		end if
 	end tell
 	set AppleScript's text item delimiters to linefeed
 	set output to mediaIds as text
@@ -105,6 +118,10 @@ pub const MARKER: &str = "lightcraft-photos-import";
 
 /// The error number [`SCRIPT`] raises when more than one top-level album has the name asked for.
 pub const AMBIGUOUS_ALBUM: i64 = 23601;
+
+/// The error number [`SCRIPT`] raises when Photos imported the files but refused to mark them as
+/// favourites.
+pub const FAVORITE_FAILED: i64 = 23602;
 
 /// Where macOS keeps Photos.
 pub const PHOTOS_APP: &str = "/System/Applications/Photos.app";
@@ -144,16 +161,18 @@ pub enum RunError {
 /// Runs osascript with these arguments, stopping it after the timeout.
 pub type Runner = Arc<dyn Fn(&[String], Duration) -> Result<Output, RunError> + Send + Sync>;
 
-/// osascript's arguments: the script, one `-e` per line, then [`MARKER`], the album name and the
-/// paths, each a whole argument of its own, unchanged.
-pub fn osascript_args(album: &str, paths: &[String]) -> Vec<String> {
-    let mut args = Vec::with_capacity(SCRIPT.lines().count() * 2 + 2 + paths.len());
+/// osascript's arguments: the script, one `-e` per line, then [`MARKER`], the album name, `"1"`
+/// when the files become favourites (else `"0"`) and the paths, each a whole argument of its own,
+/// unchanged.
+pub fn osascript_args(album: &str, favorite: bool, paths: &[String]) -> Vec<String> {
+    let mut args = Vec::with_capacity(SCRIPT.lines().count() * 2 + 3 + paths.len());
     for line in SCRIPT.lines() {
         args.push("-e".to_string());
         args.push(line.to_string());
     }
     args.push(MARKER.to_string());
     args.push(album.to_string());
+    args.push(if favorite { "1" } else { "0" }.to_string());
     args.extend(paths.iter().cloned());
     args
 }
@@ -180,6 +199,9 @@ pub fn explain(out: &Output, album: &str) -> String {
         Some(-128) => "The import was cancelled in Photos.".into(),
         Some(-1712) => "Photos didn't answer in time; it may still be importing. Check Photos before trying again.".into(),
         Some(-43) => "Photos couldn't find a file to add (it was moved or deleted after the export).".into(),
+        Some(FAVORITE_FAILED) => {
+            "Photos added the files but didn't mark them as favourites. Mark them in Photos, or export again without the favourite options.".into()
+        }
         Some(AMBIGUOUS_ALBUM) => format!(
             "More than one album at the top level of Photos is named “{album}”, so nothing was added. Rename one of them in Photos, or use another album name."
         ),
@@ -268,15 +290,18 @@ pub fn check(paths: &[String], album: &str) -> Result<String, String> {
 pub const BATCH: usize = 200;
 
 /// Run osascript for a checked request (`album` trimmed; see [`check`]): [`BATCH`] files at a
-/// time, all within [`timeout_for`] the whole request. The first run makes the album when it is
-/// missing; the others find it.
-fn execute(runner: &Runner, paths: &[String], album: &str) -> Result<Imported, String> {
+/// time, all within [`timeout_for`] the whole request. The first `favorites` paths become
+/// favourites (issue #4717): they go first, in runs of their own, so each run is all favourites or
+/// none. The first run makes the album when it is missing; the others find it.
+fn execute(runner: &Runner, paths: &[String], favorites: usize, album: &str) -> Result<Imported, String> {
     let limit = timeout_for(paths.len());
     let deadline = std::time::Instant::now() + limit;
     let mut ids = Vec::new();
-    for (i, batch) in paths.chunks(BATCH).enumerate() {
+    let (marked, plain) = paths.split_at(favorites.min(paths.len()));
+    let runs = marked.chunks(BATCH).map(|b| (true, b)).chain(plain.chunks(BATCH).map(|b| (false, b)));
+    for (i, (favorite, batch)) in runs.enumerate() {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
-        let out = if left.is_zero() { Err(RunError::Timeout(limit)) } else { runner(&osascript_args(album, batch), left) };
+        let out = if left.is_zero() { Err(RunError::Timeout(limit)) } else { runner(&osascript_args(album, favorite, batch), left) };
         let failed = match out {
             Ok(out) if out.status == Some(0) => {
                 ids.extend(parse_ids(&out.stdout));
@@ -299,7 +324,7 @@ fn execute(runner: &Runner, paths: &[String], album: &str) -> Result<Imported, S
 /// here and now.
 pub fn import(runner: &Runner, paths: &[String], album: &str) -> Result<Imported, String> {
     let album = check(paths, album)?;
-    execute(runner, paths, &album)
+    execute(runner, paths, 0, &album)
 }
 
 /// How an import ended.
@@ -569,19 +594,19 @@ fn row(activity: Option<&Activity>, album: &str) -> Option<TaskGuard> {
 
 /// Ask Photos to import `paths` (checked; `album` trimmed) for `job`: here, or on a worker thread,
 /// holding `row` (the activity stack's) until Photos is done.
-fn launch(runner: &Runner, job: &Arc<ImportJob>, paths: Vec<String>, album: String, background: bool, row: Option<TaskGuard>) {
+fn launch(runner: &Runner, job: &Arc<ImportJob>, paths: Vec<String>, favorites: usize, album: String, background: bool, row: Option<TaskGuard>) {
     job.requested.store(paths.len(), Ordering::Relaxed);
     *job.started.lock().unwrap_or_else(PoisonError::into_inner) = Some(std::time::Instant::now());
     job.exporting.store(false, Ordering::Relaxed);
     if !background {
         let _row = row;
-        run_to_completion(runner, job, &paths, &album);
+        run_to_completion(runner, job, &paths, favorites, &album);
         return;
     }
     let (r, j) = (runner.clone(), job.clone());
     let started = std::thread::Builder::new().name("apple-photos".into()).spawn(move || {
         let _row = row;
-        run_to_completion(&r, &j, &paths, &album)
+        run_to_completion(&r, &j, &paths, favorites, &album)
     });
     if let Err(e) = started {
         job.finish(Outcome::Failed(format!("Couldn't start adding the photos to Apple Photos: {e}")));
@@ -601,12 +626,12 @@ impl Drop for Completion<'_> {
     }
 }
 
-/// Run the import for `job` and record its outcome, on this thread. A panic in the runner is
-/// that import's error, never a job that stays "running" (holding the slot) or a panic for the
-/// caller.
-fn run_to_completion(runner: &Runner, job: &ImportJob, paths: &[String], album: &str) {
+/// Run the import for `job` and record its outcome, on this thread (the first `favorites` paths
+/// become favourites). A panic in the runner is that import's error, never a job that stays
+/// "running" (holding the slot) or a panic for the caller.
+fn run_to_completion(runner: &Runner, job: &ImportJob, paths: &[String], favorites: usize, album: &str) {
     let _done = Completion(job);
-    let out = crate::guard::catch("the Apple Photos import", || execute(runner, paths, album)).unwrap_or_else(|_| Err(STOPPED.into()));
+    let out = crate::guard::catch("the Apple Photos import", || execute(runner, paths, favorites, album)).unwrap_or_else(|_| Err(STOPPED.into()));
     job.finish(out.map_or_else(Outcome::Failed, Outcome::Imported));
 }
 
@@ -626,7 +651,7 @@ pub fn import_job(
     let job = imports.begin(paths.len(), &album, false)?;
     job.quiet.store(!background, Ordering::Relaxed);
     let row = row(activity, &album);
-    launch(runner, &job, paths, album, background, row);
+    launch(runner, &job, paths, 0, album, background, row);
     Ok(job)
 }
 
@@ -654,10 +679,21 @@ impl Reservation {
     }
 
     /// The absolute paths of the files an export wrote (`files`, as `export_batch` reports them:
-    /// entries with a `path`; skipped and failed ones are left out), or why there is nothing to do.
-    fn take(&mut self, files: &[Value], cancelled: bool) -> Result<(Arc<ImportJob>, Vec<String>), Value> {
+    /// entries with a `path`; skipped and failed ones are left out), the favourites
+    /// (`photosFavorite: true`) first, and how many of those there are; or why there is nothing
+    /// to do.
+    fn take(&mut self, files: &[Value], cancelled: bool) -> Result<(Arc<ImportJob>, Vec<String>, usize), Value> {
         let Some(job) = self.job.take() else { return Err(json!({"error": "this import was already handed its files"})) };
-        let paths: Vec<String> = files.iter().filter_map(|f| f.get("path").and_then(Value::as_str)).map(absolute).collect();
+        let written = |favorite: bool| {
+            files
+                .iter()
+                .filter(move |f| f.get("photosFavorite").and_then(Value::as_bool).unwrap_or(false) == favorite)
+                .filter_map(|f| f.get("path").and_then(Value::as_str))
+                .map(absolute)
+        };
+        let mut paths: Vec<String> = written(true).collect();
+        let favorites = paths.len();
+        paths.extend(written(false));
         let skipped = if cancelled {
             Some("the export was cancelled")
         } else if paths.is_empty() {
@@ -673,15 +709,15 @@ impl Reservation {
             job.finish(Outcome::Failed(e));
             return Err(job.json());
         }
-        Ok((job, paths))
+        Ok((job, paths, favorites))
     }
 
     /// Add the files an export wrote and wait for Photos (a worker thread, or a caller without a
     /// window). The finished job's [`ImportJob::json`]; never an error for the export.
     pub fn run(mut self, files: &[Value], cancelled: bool) -> Value {
         match self.take(files, cancelled) {
-            Ok((job, paths)) => {
-                launch(&self.runner, &job, paths, self.album.clone(), false, None);
+            Ok((job, paths, favorites)) => {
+                launch(&self.runner, &job, paths, favorites, self.album.clone(), false, None);
                 job.json()
             }
             Err(done) => done,
@@ -692,10 +728,10 @@ impl Reservation {
     /// job is returned, and the app announces its outcome.
     pub fn start(mut self, files: &[Value]) -> Value {
         match self.take(files, false) {
-            Ok((job, paths)) => {
+            Ok((job, paths, favorites)) => {
                 job.quiet.store(false, Ordering::Relaxed);
                 let row = row(self.activity.as_ref(), &self.album);
-                launch(&self.runner, &job, paths, self.album.clone(), true, row);
+                launch(&self.runner, &job, paths, favorites, self.album.clone(), true, row);
                 job.json()
             }
             Err(done) => done,
