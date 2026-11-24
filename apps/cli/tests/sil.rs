@@ -620,7 +620,7 @@ fn sil_workflow() {
     s.check(b["light"]["exposure"] == a["light"]["exposure"], "a preset did not carry the exposure", &format!("{} vs {}", a["light"], b["light"]));
 
     // --- copy / paste, then Synchronize to a selection
-    s.ok("develop.copy", json!({"groups": ["toneEq"]}));
+    s.ok("develop.copy", json!({}));
     s.ok("develop.paste", json!({"ids": [ids[2]]}));
     let c = s.ok("develop.get", json!({"id": ids[2]}));
     s.check(c["light"] == a["light"], "paste did not carry the Light settings", &format!("{} vs {}", a["light"], c["light"]));
