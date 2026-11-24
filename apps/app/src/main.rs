@@ -1409,7 +1409,9 @@ fn run() -> eframe::Result {
     // `std::env::args` panics on an argument that isn't UTF-8 (a file a file manager hands over, say):
     // read it lossily, so such a file is reported as not found instead
     let mut args = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).peekable();
+    let mut options_given = false;
     while let Some(a) = args.next() {
+        options_given |= a.starts_with('-');
         match a.as_str() {
             "--control" => control_port = control_port_from("--control", Some(args.next().unwrap_or_default())),
             "--control-token" => control_token_arg = Some(args.next().unwrap_or_default()),
@@ -1436,7 +1438,34 @@ fn run() -> eframe::Result {
             }
             // one of the app's links (`<scheme>://sync?path=…`): followed once the window is up
             l if lcc_engine::link::is_link(l) => launch_link = Some(a.clone()),
-            _ => files.push(a),
+            // (a Linux file manager hands files over as `file://` URLs: the desktop file takes `%U`)
+            _ => files.push(lcc_engine::link::file_url_path(&a).unwrap_or(a)),
+        }
+    }
+    // a copy is already running (gap 37): hand it this launch's links and files and end here. Only a
+    // plain launch (the OS handing over a link or files, a double-click) — any option, a control
+    // port, an in-memory session or `<PREFIX>_NEW_INSTANCE` starts a copy of its own
+    let handoff_dir = lcc_brand::settings_dir().filter(|_| {
+        !options_given && !in_memory && control_port.is_none() && !lcc_brand::env_is_set("NEW_INSTANCE") && !lcc_brand::env_is_set("NO_PREFS")
+    });
+    if let Some(dir) = &handoff_dir {
+        let cwd = std::env::current_dir().ok();
+        let mut handed: Vec<String> = files
+            .iter()
+            .map(|f| match &cwd {
+                // (the running copy has its own working folder)
+                Some(c) if std::path::Path::new(f).is_relative() => c.join(f).to_string_lossy().into_owned(),
+                _ => f.clone(),
+            })
+            .collect();
+        handed.extend(launch_link.clone());
+        match lcc_engine::instance::hand_off(dir, &handed) {
+            Ok(true) => {
+                eprintln!("{}: handed to the copy already running", lcc_brand::BINARY);
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => eprintln!("{}: {e}; starting a new copy", lcc_brand::BINARY),
         }
     }
     // first start under this name: copy the settings folder of a previous name (never moved). Before the
@@ -1668,6 +1697,13 @@ fn run() -> eframe::Result {
                 app.notices.extend(recent_skipped.as_deref().map(lcc_ui_egui::panels::notices::recent_catalogs_notice));
                 app.notices.extend(window_notice);
                 app.pending_link = launch_link;
+                // later launches hand their links and files to this copy (gap 37)
+                if let Some(dir) = &handoff_dir {
+                    match lcc_engine::instance::Server::start(dir) {
+                        Ok(server) => app.handoff = Some(server),
+                        Err(e) => log::warn!("{e}; later launches start copies of their own"),
+                    }
+                }
                 app.gpu_notice = true;
                 app.font_problems = Some(lcc_engine::fonts::craft_font_problems());
                 // the start-up update check, when the user turned it on (off by default)

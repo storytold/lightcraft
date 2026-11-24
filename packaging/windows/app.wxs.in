@@ -208,6 +208,12 @@
 
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\{{binary}}.exe" Value="[#AppExe]" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\{{display_name}}" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
+        <!-- The app's links ({{url_scheme}}://sync?path=…, gap 37): Windows starts the app with the link as its
+             argument, and a copy already running is handed it (single-instance hand-off). -->
+        <RegistryValue Root="HKCR" Key="{{url_scheme}}" Value="URL:{{display_name}}" Type="string" />
+        <RegistryValue Root="HKCR" Key="{{url_scheme}}" Name="URL Protocol" Value="" Type="string" />
+        <RegistryValue Root="HKCR" Key="{{url_scheme}}\DefaultIcon" Value="&quot;[#AppExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKCR" Key="{{url_scheme}}\shell\open\command" Value="&quot;[#AppExe]&quot; &quot;%1&quot;" Type="string" />
       </Component>
 
       <Component Id="AppCli">
