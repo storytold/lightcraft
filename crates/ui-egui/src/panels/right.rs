@@ -52,6 +52,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 return;
             }
             let r = ui.max_rect();
+            // the panel's frame goes round the whole panel, as it does round a photo's tools: with nothing allocated it
+            // drew its border round an empty rect, a stray dot under the tab
+            ui.allocate_rect(r, egui::Sense::hover());
             // every tab (Edit, Info, Versions…) says it: nothing to show until photos come in
             if super::empty_library::shown(&app.session) {
                 super::empty_message(ui, r, "No photos yet", "Import photos to get started");

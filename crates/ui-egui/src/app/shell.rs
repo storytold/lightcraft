@@ -41,7 +41,11 @@ fn shell_sizes(ctx: &egui::Context) -> Arc<craft::theme::AppSizes> {
 /// shortcut dispatcher and panel visibility commands; the framework must not add a Tab toggle.
 pub(super) fn prepare(app: &LightcraftApp, ctx: &egui::Context) {
     let kind = crate::theme::current(ctx).unwrap_or_else(|| app.ui.settings.theme(app.system_theme(ctx)));
-    let mut root = RootEnv::new();
+    // The framework's controls, docks and dialogs in LightCraft's own colours (`theme::framework_theme`).
+    let mut root = match crate::theme::framework_theme(kind) {
+        Some(theme) => RootEnv::new().library_theme(theme),
+        None => RootEnv::new(),
+    };
     root.sizes = shell_sizes(ctx);
     root.mode = if kind.is_dark() { craft::theme::ModeChoice::Dark } else { craft::theme::ModeChoice::Light };
     root.scale = Scale::new(ctx.zoom_factor());

@@ -45,6 +45,8 @@ impl LightcraftApp {
     /// A host must not report successful startup with an unsensed SDK shell or About dialog.
     pub fn try_install_framework(&self, ctx: &egui::Context) -> Result<(), String> {
         install_runtime(ctx)?;
+        // (before LightCraft's own fonts reach the context in its first pass)
+        theme::tell_framework_fonts(ctx);
         completion::install(ctx);
         shell::prepare(self, ctx);
         Ok(())
