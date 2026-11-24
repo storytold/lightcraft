@@ -10,6 +10,7 @@ use craft::ui::display::Divider;
 use craft::ui::list::{List, ListRow, TreeLeaves};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::IconSpec;
+use craft::ui::style::TypeRole;
 use egui::{Pos2, Rect};
 
 use super::{SidebarSection, Tokens, pos2, register, vec2};
@@ -132,6 +133,8 @@ pub(super) struct SideRow {
     pub open: bool,
     /// The label in the strong weight (a section's title).
     pub strong: bool,
+    /// The type role of the label, when it is not the list's own (the My Photos title).
+    pub role: Option<TypeRole>,
     /// Text for the count's column that is not a count of photos (a folded section's rows).
     pub note: Option<String>,
     /// A second, smaller line under the label.
@@ -162,6 +165,7 @@ impl SideRow {
             group: false,
             open: false,
             strong: false,
+            role: None,
             note: None,
             detail: None,
             mark: None,
@@ -207,6 +211,11 @@ impl SideRow {
 
     pub(super) fn strong(mut self) -> Self {
         self.strong = true;
+        self
+    }
+
+    pub(super) fn role(mut self, role: TypeRole) -> Self {
+        self.role = Some(role);
         self
     }
 
@@ -459,7 +468,7 @@ fn list_row(item: &SideRow, cells: &[(ColumnKey, Rect)], tree: bool, show_counts
         row = row.depth(item.depth);
     }
     if item.strong {
-        row = row.strong(true);
+        row = row.strong(true).role(item.role.unwrap_or(TypeRole::BodyStrong));
     }
     if let Some(detail) = &item.detail {
         row = row.detail(detail.clone());
@@ -475,11 +484,8 @@ fn list_row(item: &SideRow, cells: &[(ColumnKey, Rect)], tree: bool, show_counts
     if let Some(note) = &item.note {
         row = row.cell(COUNT, note.clone());
     } else if show_counts && let Some(n) = item.count {
-        row = row.cell(COUNT, n.to_string());
-        if n == 0 {
-            // a count of nothing is there, but fainter: the rows that hold photos stand out
-            row = row.cell_muted(COUNT);
-        }
+        // counts read quieter than the names
+        row = row.cell(COUNT, n.to_string()).cell_muted(COUNT);
     }
     row
 }
