@@ -1,4 +1,4 @@
-use super::pairs::{EDGE_CONTRAST, MAX_MIDTONE_LOSS, Pair};
+use super::pairs::{ChromaPairs, EDGE_CONTRAST, MAX_MIDTONE_LOSS, Pair};
 use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
 use lightcraft_color::SRGB;
@@ -2001,7 +2001,7 @@ fn a_mostly_bright_frame_gets_its_sky_from_the_bright_pairs() {
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let neutral = ToneMap::new(0.0, 0.0, 0.0);
     let (midtones, bright) = collect_pairs(&sensor, &reference, 0.005, None, false).unwrap();
-    let (sky, _) = super::pairs::bright_tone_pairs(&bright, None);
+    let (sky, _) = super::pairs::bright_tone_pairs(&bright.pairs, None);
     let before = held_out_render_error(&sky, &neutral, Mat3::IDENTITY, |v| v);
     let after = held_out_render_error(&sky, &tone, look.matrix, |v| v);
     assert!(after.powi(2) < before.powi(2) * super::pairs::MIN_IMPROVEMENT, "sky RMS {before} to {after}");
@@ -2441,6 +2441,44 @@ fn jpeg_noise_in_a_neutral_dark_scene_teaches_no_colour_matrix() {
         let (a, b) = (look.matrix.apply(x), known.apply(x));
         let (la, lb) = (luma(a), luma(b));
         assert!((0..3).all(|c| (a[c] / la - b[c] / lb).abs() < 0.05), "{x:?}: {a:?} vs {b:?}");
+    }
+}
+
+/// JPEG noise can make a dull scene qualify for a matrix even when its clean colour is unchanged.
+#[test]
+fn noisy_identity_camera_colour_is_no_worse_than_identity_with_the_same_tone() {
+    for (width, height, noise) in [(96, 64, 0.015), (20, 20, 0.032)] {
+        for mut seed in [4u64, 71, 165] {
+            let case = seed;
+            let mut next = || {
+                seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut bits = seed;
+                bits = (bits ^ (bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                bits = (bits ^ (bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                (f32::from(((bits ^ (bits >> 31)) >> 48) as u16) + 0.5) / 65536.0
+            };
+            let mut sensor = Rgb32f::new(width, height);
+            let mut reference = sensor.clone();
+            for (x, y) in sensor.data.iter_mut().zip(&mut reference.data) {
+                let level = 0.012 + 0.028 * next();
+                *x = std::array::from_fn(|_| level * (1.0 + 0.04 * (2.0 * next() - 1.0)));
+                *y = x.map(|v| 4.0 * v + noise * (2.0 * next() - 1.0));
+            }
+            let highlight_check = HighlightCheck { jpeg_space: None, pairs: Vec::new(), clipped: Vec::new(), dro: false, grey: false };
+            let partial = fit_partial_on(&sensor, &reference, None, &highlight_check, false).expect("a partial tone fit");
+            let look = fit_look(&sensor, &reference, &vec![false; sensor.data.len()], None).expect("a camera tone fit");
+            for (path, look) in [("camera look", look), ("partial", partial)] {
+                let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+                let hue_sat = look.hue_sat.as_ref().and_then(HueSat::new);
+                let error = |colour: &dyn Fn([f64; 3]) -> [f64; 3]| mean_error(&sensor, |x| x.map(|v| 4.0 * v), |x| displayed(colour(x), &tone));
+                let fitted = error(&|x| {
+                    let rgb = look.matrix.apply(x);
+                    hue_sat.as_ref().map_or(rgb, |table| table.apply(rgb.map(|v| v as f32)).map(f64::from))
+                });
+                let identity = error(&|x| x);
+                assert!(fitted <= identity, "{path}, {width}×{height}, seed {case}: {fitted:.8} > {identity:.8}");
+            }
+        }
     }
 }
 
@@ -3193,6 +3231,45 @@ fn look_proxies_keep_the_decoders_effective_jpeg_primaries() {
     }
 }
 
+/// A highlight shifts the wider list by one, but its neighbouring matrix holdout still cannot
+/// train the chroma curve.
+#[test]
+fn matrix_holdouts_cannot_train_the_chroma_curve() {
+    let knots = std::array::from_fn(|i| {
+        let x = 0.001 + 0.979 * i as f32 / 31.0;
+        [x, x]
+    });
+    let look = CameraLook { matrix: Mat3::IDENTITY, tone: CameraTone::new(knots).unwrap(), hue_sat: None, preserve_luminance: false };
+    let mut sensor = Rgb32f::new(20, 20);
+    let mut reference = sensor.clone();
+    for (i, (x, y)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        if i == 0 {
+            *x = [0.9; 3];
+            *y = *x;
+            continue;
+        }
+        let level = 0.2 + 0.2 * (i % 47) as f32 / 47.0;
+        *x = [level * 0.8, level, level * 1.2];
+        let luma = luminance_2020(*x);
+        *y = x.map(|v| luma + (v - luma) * 0.3);
+    }
+    let fit = |reference: &Rgb32f| {
+        let (_, bright) = collect_pairs(&sensor, reference, 0.0, None, false).unwrap();
+        super::hue_sat::fit_chroma_excluding(&bright, &look, &[]).expect("enough measured chroma to fit")
+    };
+    let expected = fit(&reference);
+    for y in reference.data.iter_mut().skip(1).step_by(3) {
+        let luma = luminance_2020(*y);
+        *y = y.map(|v| luma + (v - luma) * 2.0);
+    }
+    assert_eq!(fit(&reference), expected, "a matrix holdout changed the trained chroma curve");
+    for y in reference.data.iter_mut().skip(2).step_by(3) {
+        let luma = luminance_2020(*y);
+        *y = y.map(|v| luma + (v - luma) * 2.0);
+    }
+    assert_ne!(fit(&reference), expected, "the training pairs must still train chroma");
+}
+
 /// Filtering the first bright pair shifts every retry holdout into the old chroma training set.
 /// Changing only those holdouts must leave the trained curve unchanged.
 #[test]
@@ -3218,7 +3295,11 @@ fn filtered_bright_holdouts_cannot_train_the_chroma_curve() {
     assert_eq!(held.len(), bright.len());
     assert_eq!(extra.len(), bright.len() - 1, "only the first pair is filtered out");
     assert!(held[1] && !held[3], "the filtered and original holdout indices must differ");
-    let fit = |pairs: &[Pair]| super::hue_sat::fit_chroma_excluding(pairs, &look, &held).expect("enough measured chroma to fit");
+    let fit = |pairs: &[Pair]| {
+        let holdouts = (0..pairs.len()).map(|i| i % 3 == 0).collect();
+        let bright = ChromaPairs { pairs: pairs.to_vec(), holdouts };
+        super::hue_sat::fit_chroma_excluding(&bright, &look, &held).expect("enough measured chroma to fit")
+    };
     let expected = fit(&bright);
     let changed = |select: &dyn Fn(usize) -> bool| {
         bright

@@ -1,4 +1,4 @@
-use super::hue_sat::{HueSat, fit_chroma, fit_chroma_excluding, fit_hue_sat};
+use super::hue_sat::{HueSat, fit_chroma_excluding, fit_hue_sat};
 use super::proxy::DARK_FLOOR;
 #[cfg(test)]
 use super::tone::highlights;
@@ -99,7 +99,19 @@ pub(super) type Pair = ([f64; 3], [f64; 3]);
 
 pub(super) type Pairs = Vec<Pair>;
 
-pub(super) fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32, edge_limit: Option<f32>, dark: bool) -> Option<(Pairs, Pairs)> {
+/// Chroma can use a wider range than the matrix. Shared pixels retain their matrix fold.
+pub(super) struct ChromaPairs {
+    pub(super) pairs: Pairs,
+    pub(super) holdouts: Vec<bool>,
+}
+
+pub(super) fn collect_pairs(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    min_chroma: f32,
+    edge_limit: Option<f32>,
+    dark: bool,
+) -> Option<(Pairs, ChromaPairs)> {
     collect_pairs_by(sensor, reference, |_| min_chroma, edge_limit, dark)
 }
 
@@ -111,13 +123,13 @@ pub(super) fn collect_pairs_by(
     min_chroma: impl Fn(f32) -> f32,
     edge_limit: Option<f32>,
     dark: bool,
-) -> Option<(Pairs, Pairs)> {
+) -> Option<(Pairs, ChromaPairs)> {
     if (sensor.width, sensor.height) != (reference.width, reference.height) || sensor.data.len() != reference.data.len() {
         return None;
     }
     let mut pairs = Vec::new();
     // Highlights too (camera JPEGs bleach colours toward white there), for the chroma curve only.
-    let mut bright = Vec::new();
+    let mut bright = ChromaPairs { pairs: Vec::new(), holdouts: Vec::new() };
     let mut colour = 0;
     for (i, (input, output)) in sensor.data.iter().zip(&reference.data).enumerate() {
         if edge_limit.is_some_and(|limit| local_contrast(sensor, i) > limit || local_contrast(reference, i) > limit) {
@@ -127,17 +139,21 @@ pub(super) fn collect_pairs_by(
         if !input.iter().all(|v| v.is_finite() && *v > 0.001 && *v < 1.5) || !output.iter().all(|v| v.is_finite() && *v >= 0.0) {
             continue;
         }
-        if (0.015..=1.0).contains(&y) {
-            bright.push((input.map(f64::from), output.map(f64::from)));
-        }
         let floors = if dark { DARK_FLOOR } else { (0.015, 0.004) };
-        if !colour_pair_above(*input, *output, floors) {
+        let for_matrix = colour_pair_above(*input, *output, floors);
+        let pair = (input.map(f64::from), output.map(f64::from));
+        if (0.015..=1.0).contains(&y) {
+            let index = if for_matrix { pairs.len() } else { bright.pairs.len() };
+            bright.holdouts.push(index % 3 == 0);
+            bright.pairs.push(pair);
+        }
+        if !for_matrix {
             continue;
         }
         let min = output.iter().copied().fold(f32::INFINITY, f32::min);
         let max = output.iter().copied().fold(0.0, f32::max);
         colour += usize::from(max - min > min_chroma(y));
-        pairs.push((input.map(f64::from), output.map(f64::from)));
+        pairs.push(pair);
     }
     (pairs.len() >= 256 && colour >= pairs.len() / 20).then_some((pairs, bright))
 }
@@ -289,6 +305,32 @@ pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
     matrix.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0).then_some(matrix)
 }
 
+/// Compare learned colour with identity at equal luminance on the matrix holdouts.
+/// Local brightness changes (and the fitted tone curve) would otherwise dominate the
+/// colour error. Both sides use the same luminance normalisation as the matrix fit.
+fn colour_beats_identity(pairs: &[Pair], matrix: Mat3) -> bool {
+    let chromaticity = |rgb: [f64; 3]| {
+        let rgb = rgb.map(|v| v.max(0.0));
+        let y = luma(rgb);
+        if y > 0.0 { rgb.map(|v| v / y) } else { rgb }
+    };
+    let (mut identity, mut fitted) = (0.0, 0.0);
+    for (x, y) in pairs.iter().step_by(3) {
+        let (x, corrected, target) = (chromaticity(*x), chromaticity(matrix.apply(*x)), chromaticity(*y));
+        for c in 0..3 {
+            identity += (x[c] - target[c]).powi(2);
+            fitted += (corrected[c] - target[c]).powi(2);
+        }
+    }
+    // Noisy small holdouts need a larger gain to justify a learned transform.
+    let n = pairs.len().div_ceil(3);
+    let margin = if n < 1000 { 1.0 - 4.0 / (n.max(1) as f64).sqrt() } else { 0.995 };
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera colour: held-out chromaticity error {identity:.5} -> {fitted:.5}, needs ratio below {margin:.3}");
+    }
+    fitted.is_finite() && fitted < identity * margin
+}
+
 /// Neighbourhood luminance ratio above which a pixel counts as an edge for the second attempt
 /// of [`search_ordered`]. Camera JPEGs are often lens-corrected (Sony "Distortion Comp.: Auto",
 /// compacts and kit zooms): on a 51 mm ILCE-7RM2 shot of a glass façade the JPEG is up to 15 px
@@ -409,6 +451,9 @@ fn fit_pairs_on(
                 }
                 return None;
             }
+            if !colour_beats_identity(&pairs, matrix) {
+                return None;
+            }
             vec![(matrix, fit_hue_sat(&pairs, &matrix)), (matrix, None)]
         }
     };
@@ -425,7 +470,7 @@ fn fit_pairs_on(
         };
         let Some(curve) = fit_tone_with_shadows(tone_fit, &pairs, &[], sensor, reference, edge_limit, colour) else { continue };
         let mut look = CameraLook { matrix, tone: curve, hue_sat: hue_sat.clone(), preserve_luminance };
-        if let Some(tone) = fit_chroma(&bright, &look) {
+        if let Some(tone) = fit_chroma_excluding(&bright, &look, &[]) {
             look.tone = tone;
         }
         let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
@@ -572,7 +617,8 @@ pub(super) fn bright_tone_pairs(bright: &[Pair], jpeg_space: Option<lightcraft_c
     let holdouts = bright
         .iter()
         .map(|pair| {
-            if luma(pair.1) >= 0.85 && !jpeg_clipped(pair.1, jpeg_space) {
+            // Match the precision of the matrix cutoff so these two splits never share a pair.
+            if luminance_2020(pair.1.map(|v| v as f32)) >= 0.85 && !jpeg_clipped(pair.1, jpeg_space) {
                 let held = extra.len() % 3 == 0;
                 extra.push(*pair);
                 held
@@ -613,7 +659,7 @@ pub(super) fn fit_partial_on(
 ) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
-    let (extra, chroma_holdouts) = if bright_tone { bright_tone_pairs(&bright, highlights.jpeg_space) } else { (Vec::new(), Vec::new()) };
+    let (extra, chroma_holdouts) = if bright_tone { bright_tone_pairs(&bright.pairs, highlights.jpeg_space) } else { (Vec::new(), Vec::new()) };
     if bright_tone && extra.is_empty() {
         return None;
     }
@@ -626,12 +672,16 @@ pub(super) fn fit_partial_on(
     }
     let spread = |y: &[f64; 3]| y.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y.iter().copied().fold(f64::INFINITY, f64::min);
     let colourful = pairs.iter().filter(|(_, y)| spread(y) > f64::from(MATRIX_SPREAD)).count() >= pairs.len() / 20;
-    let matrix = match colourful.then(|| fit_matrix(&pairs)).flatten() {
-        Some(own) => Mat3(std::array::from_fn(|r| {
-            std::array::from_fn(|c| Mat3::IDENTITY.0[r][c] + PARTIAL_MATRIX_WEIGHT * (own.0[r][c] - Mat3::IDENTITY.0[r][c]))
-        })),
-        None => Mat3::IDENTITY,
-    };
+    let matrix = colourful
+        .then(|| fit_matrix(&pairs))
+        .flatten()
+        .map(|own| {
+            Mat3(std::array::from_fn(|r| {
+                std::array::from_fn(|c| Mat3::IDENTITY.0[r][c] + PARTIAL_MATRIX_WEIGHT * (own.0[r][c] - Mat3::IDENTITY.0[r][c]))
+            }))
+        })
+        .filter(|&matrix| colour_beats_identity(&pairs, matrix))
+        .unwrap_or(Mat3::IDENTITY);
     let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, &extra, sensor, reference, edge_limit, |x| matrix.apply(x))?;
     let mut look = CameraLook { matrix, tone, hue_sat: None, preserve_luminance: false };
     if let Some(tone) = fit_chroma_excluding(&bright, &look, &chroma_holdouts) {

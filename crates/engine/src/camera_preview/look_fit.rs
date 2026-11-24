@@ -89,10 +89,9 @@ pub(super) fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], co
 ///
 /// The colour a photo's own matrix needs is asked of darker pixels in proportion to their luminance
 /// ([`super::pairs::matrix_spread`], issue #865) only after the fixed spread finds nothing, and only where the fit
-/// sees no clipped pixels. Every search with the fixed spread, and the refit, run as before, so a
-/// photo that had a look keeps it. A photo that learns its colour only through the scaled spread
-/// had no such look to keep, and gets one fitted on what the sensor measured: on all pixels when
-/// none is clipped, else without the clipped ones. On a dark DMC-G10 scene the search on all pixels
+/// sees no clipped pixels. A photo that learns its colour through the scaled spread gets a look
+/// fitted on what the sensor measured: on all pixels when none is clipped, else without the clipped
+/// ones. On a dark DMC-G10 scene the search on all pixels
 /// with the scaled spread passed the gates only through its 56 clipped pairs (its conditional-median
 /// curve cut the held-out RMS from the neutral fallback's 0.066 to 0.021; refitted without them,
 /// 0.0220 to 0.0192, and the quantile curve 0.0220 to 0.0201, both short of the 30% cut) and
