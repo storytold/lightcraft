@@ -4,7 +4,9 @@
 //!
 //! Comparisons use **process CPU time**, which reflects the work done even on a busy shared machine;
 //! wall-clock is recorded for reference. `--strict` exits non-zero when a CPU metric regressed by more
-//! than the threshold (default 20 %).
+//! than the threshold (default 20 %), or when a budgeted metric ([`BUDGETS`]) misses its budget by more
+//! than the threshold. Where the platform reports no process CPU time (Windows: the `cpu` column is 0),
+//! the regression check compares wall time instead.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -41,11 +43,37 @@ pub fn parse(output: &str) -> BTreeMap<String, f64> {
     out
 }
 
+/// Wall-time budgets (ms) of `render_bench` metrics (docs/perf.md; AGENTS.md: slider ≤ 16 ms draft,
+/// loupe ≤ 60 ms). Lane 4.4 grows this into the full budget table.
+pub const BUDGETS: &[(&str, f64)] = &[
+    // a Luminance NR slider drag at draft size, CPU path (task 4.5)
+    ("loupe draft NR drag (warm)/cpu/wall", 16.0),
+    ("loupe draft highlights drag (warm)/cpu/wall", 16.0),
+    ("loupe 1920×1280 NR drag (warm)/cpu/wall", 60.0),
+];
+
+/// Budgeted metrics over their budget by more than `threshold` (fraction): (key, budget, now).
+pub fn over_budget(now: &BTreeMap<String, f64>, threshold: f64) -> Vec<(String, f64, f64)> {
+    BUDGETS.iter().filter_map(|(k, b)| now.get(*k).map(|&v| (k.to_string(), *b, v))).filter(|(_, b, v)| *v > b * (1.0 + threshold)).collect()
+}
+
 /// CPU-time metrics that got slower than `threshold` (fraction) vs `prev`: (key, prev, now).
 pub fn regressions(prev: &BTreeMap<String, f64>, now: &BTreeMap<String, f64>, threshold: f64) -> Vec<(String, f64, f64)> {
     now.iter()
         .filter(|(k, _)| k.ends_with("/cpu"))
         .filter_map(|(k, &v)| prev.get(k).map(|&p| (k.clone(), p, v)))
+        // no process CPU time on this platform: compare wall time
+        .map(|(k, p, v)| {
+            if p == 0.0 && v == 0.0 {
+                let w = format!("{}/wall", k.strip_suffix("/cpu").unwrap_or(&k));
+                match (prev.get(&w), now.get(&w)) {
+                    (Some(&pw), Some(&vw)) => (w, pw, vw),
+                    _ => (k, p, v),
+                }
+            } else {
+                (k, p, v)
+            }
+        })
         .filter(|(_, p, v)| *p > 1.0 && *v > p * (1.0 + threshold))
         .collect()
 }
@@ -112,19 +140,28 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     use std::io::Write;
     std::fs::OpenOptions::new().create(true).append(true).open(&hist).and_then(|mut f| f.write_all(line.as_bytes())).map_err(|e| e.to_string())?;
     eprintln!("bench: {} metrics recorded in {}", metrics.len(), hist.display());
-    let Some(prev) = prev else {
-        eprintln!("bench: first run — nothing to compare");
-        return Ok(());
+    let over = over_budget(&metrics, threshold);
+    for (k, b, v) in &over {
+        eprintln!("bench: OVER BUDGET {k}: {v:.1} ms (budget {b:.0} ms)");
+    }
+    let reg = match &prev {
+        Some(prev) => regressions(prev, &metrics, threshold),
+        None => {
+            eprintln!("bench: first run — nothing to compare");
+            Vec::new()
+        }
     };
-    let reg = regressions(&prev, &metrics, threshold);
-    if reg.is_empty() {
+    if prev.is_some() && reg.is_empty() {
         eprintln!("bench: no CPU-time regressions > {:.0}% vs previous run", threshold * 100.0);
-        return Ok(());
     }
     for (k, p, v) in &reg {
         eprintln!("bench: REGRESSION {k}: {p:.1} → {v:.1} ms (+{:.0}%)", (v / p - 1.0) * 100.0);
     }
-    if strict { Err(format!("{} CPU-time regression(s)", reg.len())) } else { Ok(()) }
+    if strict && !(reg.is_empty() && over.is_empty()) {
+        Err(format!("{} CPU-time regression(s), {} budget miss(es)", reg.len(), over.len()))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -161,5 +198,34 @@ window pan (new window, warm src):     cpu: 912.0 ms wall, 2210.5 ms cpu  |  gpu
         let r = regressions(&prev, &now, 0.2);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, "export JPEG encode/cpu/cpu");
+    }
+
+    #[test]
+    fn without_cpu_time_wall_time_is_compared() {
+        let prev = parse(
+            "loupe draft NR drag (warm):  cpu: 30.0 ms wall, 0.0 ms cpu
+",
+        );
+        let now = parse(
+            "loupe draft NR drag (warm):  cpu: 40.0 ms wall, 0.0 ms cpu
+",
+        );
+        let r = regressions(&prev, &now, 0.2);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].0, "loupe draft NR drag (warm)/cpu/wall");
+    }
+
+    #[test]
+    fn the_cpu_nr_drag_has_a_budget() {
+        let fast = parse(
+            "loupe draft NR drag (warm):  cpu: 15.0 ms wall, 200.0 ms cpu
+",
+        );
+        assert!(over_budget(&fast, 0.2).is_empty());
+        let slow = parse(
+            "loupe draft NR drag (warm):  cpu: 34.0 ms wall, 200.0 ms cpu
+",
+        );
+        assert_eq!(over_budget(&slow, 0.2).len(), 1);
     }
 }

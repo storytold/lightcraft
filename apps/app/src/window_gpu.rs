@@ -3,7 +3,7 @@
 //! `egui_pipeline` — and wgpu's default error handler panicked, killing the app at start-up).
 //!
 //! - **Windows:** each renderer of [`backend::window_renderer_order`] (Vulkan, DX12, GL, then
-//!   eframe's glow) is *probed* before the window opens: a device is created with an error handler
+//!   eframe's glow; DX12 first on Windows on ARM, issue #1029) is *probed* before the window opens: a device is created with an error handler
 //!   that logs instead of panicking, and egui's pipeline is built inside error scopes. The first
 //!   that builds cleanly is handed to eframe as an existing device (so its error handler stays).
 //! - **Everywhere:** a marker file names the renderer being started and is emptied once the
@@ -196,7 +196,7 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let failed = files.take_failed();
     let remembered = if cfg!(windows) { Files::read(files.remembered()) } else { None };
     let compiled = wgpu::Instance::enabled_backend_features();
-    let os = std::env::consts::OS;
+    let os = backend::this_platform();
     let order = demote_lost(backend::window_renderer_order(forced, remembered, failed, os, compiled, true), forced, files.lost_renderer());
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {

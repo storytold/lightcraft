@@ -41,6 +41,18 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lcc-app
 Without it the app builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
 repo — the standard for what goes there lives with it: see the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
+**Building for one language:** add `CRAFT_FONTS_LANGUAGE=<code>` (a code from `crates/ui-egui/locales/`, e.g. `ja`,
+`zh-hans`, `de`) to embed only the fonts that language's interface needs. Latin, Cyrillic and Greek languages need
+none beyond the built-in Inter; `ja`, `zh-hans`, `zh-hant` and `ka` take their own script's faces. The app then offers
+only that language and English, and a saved setting naming another language falls back to English. Text in other
+scripts — file and folder names, keywords, captions, watermarks — shows boxes. Release builds never use it: it fails
+the build together with `CRAFT_FONTS_REQUIRED` or `CRAFT_FONTS_EMBED=0`, and an unknown code fails with the list of
+valid ones.
+
+```sh
+CRAFT_FONTS_DIR=../craft-fonts CRAFT_FONTS_LANGUAGE=ja cargo run --release -p lcc-app
+```
+
 **Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](../localization.md).
 

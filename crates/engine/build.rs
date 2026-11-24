@@ -12,6 +12,15 @@
 //! package puts the manifest and its fonts beside the program instead (the macOS app bundle's
 //! `Contents/Resources/fonts/`), where `fonts::craft_fonts` reads them at run time, so the app and
 //! the CLI inside it share one copy.
+//!
+//! `CRAFT_FONTS_LANGUAGE=<code>` (opt-in, never for releases) builds for one UI language: only the
+//! faces that language's UI needs are embedded (`src/ui_languages.rs`, none for Latin, Cyrillic and
+//! Greek languages), and the UI offers only that language and English. An unknown code, or the
+//! setting with `CRAFT_FONTS_REQUIRED` or `CRAFT_FONTS_EMBED=0`, fails the build.
+#[path = "src/ui_languages.rs"]
+#[allow(dead_code)]
+mod ui_languages;
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -20,14 +29,33 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_EMBED");
+    println!("cargo::rerun-if-changed=src/ui_languages.rs");
+    println!("cargo::rerun-if-env-changed=CRAFT_FONTS_LANGUAGE");
     let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     // the web build has no files beside it: it always embeds
     let beside = !wasm && std::env::var_os("CRAFT_FONTS_EMBED").is_some_and(|v| v == "0");
+    let language = std::env::var("CRAFT_FONTS_LANGUAGE").ok().map(|code| code.trim().to_ascii_lowercase()).filter(|code| !code.is_empty());
+    let needed: Option<&'static [&'static str]> = match language.as_deref() {
+        None => None,
+        Some(code) => match ui_languages::scripts_for(code) {
+            Some(scripts) => Some(scripts),
+            None => {
+                println!("cargo::error=CRAFT_FONTS_LANGUAGE={code} is not a UI language; valid codes: {}", ui_languages::valid_codes());
+                Some(&[])
+            }
+        },
+    };
+    if language.is_some() && required {
+        println!("cargo::error=CRAFT_FONTS_LANGUAGE and CRAFT_FONTS_REQUIRED conflict: release builds embed every language's fonts");
+    }
+    if language.is_some() && beside {
+        println!("cargo::error=CRAFT_FONTS_LANGUAGE and CRAFT_FONTS_EMBED=0 conflict: a single-language build embeds its fonts");
+    }
     let mut src = String::from("static EMBEDDED: &[CraftFont] = &[\n");
     let mut embedded = 0;
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from).map(resolve) {
-        match craft_fonts(&dir, required) {
+        match craft_fonts(&dir, required, needed) {
             Ok(entries) => {
                 // the checkout, for the tests that load it the way a package's copy is loaded
                 if let Ok(root) = dir.canonicalize()
@@ -49,6 +77,11 @@ fn main() {
         println!("cargo::error=CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing");
     }
     src.push_str("];\n");
+    let _ = writeln!(
+        src,
+        "/// The one UI language this build was made for (`CRAFT_FONTS_LANGUAGE`), or `None` for every language.\npub const BUILD_LANGUAGE: Option<&str> = {:?};",
+        language.filter(|code| ui_languages::scripts_for(code).is_some()),
+    );
     if !wasm {
         let _ = writeln!(src, "/// Built with `CRAFT_FONTS_EMBED=0`: the fonts are files beside the program.\nconst BESIDE: bool = {beside};");
     }
@@ -57,7 +90,7 @@ fn main() {
     }
     // Without them the app still runs and every language still selectable, so Chinese and Japanese
     // just paint boxes — the one failure a user cannot diagnose from what they see.
-    if embedded == 0 && !beside {
+    if embedded == 0 && !beside && needed.is_none() {
         println!(
             "cargo::warning=no craft-fonts embedded: Chinese and Japanese text will render as empty boxes. \
              Clone https://github.com/storytold/craft-fonts next to this repo and rebuild with \
@@ -85,7 +118,7 @@ fn resolve(dir: PathBuf) -> PathBuf {
 }
 
 /// One `CraftFont { .. }` initialiser per manifest line.
-fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
+fn craft_fonts(dir: &Path, required: bool, needed: Option<&[&str]>) -> Result<String, String> {
     let manifest = dir.join("fonts/manifest.txt");
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
@@ -105,6 +138,12 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
         has_chinese_ui |= (*family, *style) == ("Noto Sans CJK SC", "Regular") && scripts.split(',').any(|script| script.trim() == "Hans");
         has_thai_ui |= (*family, *style) == ("Noto Sans Thai", "Regular") && scripts.split(',').any(|script| script.trim() == "Thai");
         has_hebrew_ui |= (*family, *style) == ("Noto Sans Hebrew", "Regular") && scripts.split(',').any(|script| script.trim() == "Hebr");
+        if let Some(needed) = needed {
+            let face: Vec<&str> = scripts.split(',').map(str::trim).collect();
+            if !ui_languages::face_needed(needed, &face) {
+                continue;
+            }
+        }
         if wasm && !matches!((*family, *style), ("BIZ UDPGothic" | "Noto Sans Thai" | "Noto Sans Georgian" | "Noto Sans Hebrew", "Regular")) {
             continue;
         }
