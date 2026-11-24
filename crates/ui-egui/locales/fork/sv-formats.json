@@ -38,6 +38,7 @@
   "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.": "Ändringar från {device} är daterade {minutes} minuter fram i tiden och hålls kvar tills dess. Ställ klockan på {device} rätt.",
   "Chart · greys about {cct:.0} K": "Färgkarta · gråtoner kring {cct:.0} K",
   "Checked {checked} of {total} DNG files: {intact} intact, {damaged} damaged, {unverifiable} could not be verified": "Kontrollerade {checked} av {total} DNG-filer: {intact} hela, {damaged} skadade, {unverifiable} som inte kunde verifieras",
+  "Closest: {name}, {percent:.0}%": "Närmaste person: {name}, {percent:.0}%",
   "Collection imported: {n} photos found, {m} not in this catalog": "Samlingen importerad: {n} foton hittades, {m} finns inte i den här katalogen",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Färgrymd: Rec. 2020 {curve} (HDR AVIF)",
   "Confirm all {}": "Bekräfta alla ({})",
@@ -107,7 +108,6 @@
   "Imported {n} metadata preset{}": "Importerade metadataförinställningar: {n}{:.0}",
   "Importing {n} photos…": "Importerar {n} foton…",
   "Installed {name} {version}": "Installerade {name} {version}",
-  "Installing it will {action}.": "Installationen kommer att {action}.",
   "Invite {name}": "Bjud in {name}",
   "It is {}: name this face": "Det är {}: namnge ansiktet",
   "It isn't available for {platform}.": "Det finns inte för {platform}.",
@@ -118,7 +118,9 @@
   "Key from the environment variable {}": "Nyckel från miljövariabeln {}",
   "Key saved (ends in {})": "Nyckel sparad (slutar på {})",
   "Key saved ({})": "Nyckel sparad ({})",
-  "Last checked {when}": "Senast kontrollerat {when}",
+  "Last checked {n} hours ago": "Senast kontrollerat för {n} timmar sedan",
+  "Last checked {n} minutes ago": "Senast kontrollerat för {n} minuter sedan",
+  "Last checked {n} seconds ago": "Senast kontrollerat för {n} sekunder sedan",
   "Last synced on {date}": "Senast synkad {date}",
   "Last synced {n} h ago": "Senast synkad för {n} h sedan",
   "Last synced {n} min ago": "Senast synkad för {n} min sedan",
@@ -200,6 +202,7 @@
   "Step {n} of {total}": "Steg {n} av {total}",
   "Stop waiting: {task}?": "Sluta vänta: {task}?",
   "Style {n}": "Stil {n}",
+  "Suggested as {name}: {percent:.0}%": "Föreslagen som {name}: {percent:.0}%",
   "Suggested as {}": "Föreslaget som {}",
   "Suggested as {}. Confirm the faces that are them.": "Föreslaget som {}. Bekräfta de ansikten som är personen.",
   "Sync this catalog with {name}:": "Synka den här katalogen med {name}:",
@@ -340,5 +343,6 @@
   "“{name}” added to Camera Profiles": "”{name}” har lagts till i kameraprofiler",
   "“{name}” has its old settings again": "”{name}” har sina gamla inställningar igen",
   "“{name}” is new. What may the other devices syncing this catalog have of it?": "”{name}” är ny. Vad får de andra enheterna som synkar den här katalogen ha av den?",
-  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” tar det aktiva fotots inställningar. Namn, grupp, plats och markeringar behålls."
+  "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "”{name}” tar det aktiva fotots inställningar. Namn, grupp, plats och markeringar behålls.",
+  "★{n} at or above": "★{n} eller fler"
 }

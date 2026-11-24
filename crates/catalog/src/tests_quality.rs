@@ -1,6 +1,7 @@
 //! The Image Quality Scanner's catalog side (issue #1313): the `QualityScan` a photo carries, the
 //! verdict from the two cutoffs, the filter (`quality`, `qualityMin`, `qualityMax`), the sort key
-//! and the filter bar's tally. The scanner itself (measuring pixels) is the engine's.
+//! and the filter bar's tally. The scanner itself (measuring pixels) is the engine's. Format 21
+//! added the rating a scan wrote (`rating_written`, issue #1362).
 
 use crate::rules;
 use crate::*;
@@ -128,11 +129,23 @@ fn a_scan_is_written_and_read_back_on_the_photo() {
     let v = serde_json::to_value(scan).unwrap();
     assert!(v.get("compression").is_none(), "an unmeasured factor is absent: {v}");
     assert!(v.get("flag_written").is_none(), "no flag written: absent, and a scan of an older build reads with none");
+    assert!(v.get("rating_written").is_none(), "no rating written: absent, and a format-20 scan reads with none");
     // the flag a scan wrote is kept with the score, so the next scan may change it (and only it)
     let scan = QualityScan { flag_written: Some(Flag::Pick), ..scanned(50.0, 70.0, 25.0) };
     let v = serde_json::to_value(scan).unwrap();
     assert_eq!(v["flag_written"], "pick", "{v}");
     assert_eq!(serde_json::from_value::<QualityScan>(v).unwrap(), scan);
+    // the rating a scan wrote travels with the score the same way
+    let with_rating = QualityScan { flag_written: None, rating_written: Some(4), ..scanned(50.0, 70.0, 25.0) };
+    let v = serde_json::to_value(with_rating).unwrap();
+    assert_eq!(v["rating_written"], 4, "{v}");
+    assert_eq!(serde_json::from_value::<QualityScan>(v).unwrap(), with_rating);
+    // a format-20 scan (no rating_written key at all) reads exactly as it did
+    let raw = r#"{"sharpness":81.5,"noise":63.0,"exposure":90.0,"score":72.5,"verdict":"accepted","flag_written":"pick"}"#;
+    let old: QualityScan = serde_json::from_str(raw).unwrap();
+    assert_eq!(old.rating_written, None);
+    assert_eq!(old.flag_written, Some(Flag::Pick));
+    assert_eq!(old.sharpness, 81.5);
 }
 
 /// The rule fields read the same numbers the filter and the sort do, so a smart collection and the
