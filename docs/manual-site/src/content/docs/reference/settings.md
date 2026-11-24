@@ -76,7 +76,8 @@ sidebar:
   See [Tethering](../../library/tethering/).
 
 ### Lens profiles
-- The lens database used for raws whose files carry no correction of their own, and where it is kept. See
+- The lens database used for raws whose files carry no correction of their own, and where it is kept. The desktop
+  app downloads lensfun's database once on its first run; Remove deletes it and it is not fetched again by itself. See
   [Lens corrections](../../develop/lens/#where-profiles-come-from).
 
 ## Folders

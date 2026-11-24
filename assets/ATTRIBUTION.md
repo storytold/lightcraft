@@ -86,3 +86,7 @@ Notes
   `ATTRIBUTION.md`, and are embedded only in builds made with the optional `CRAFT_FONTS_DIR` build input (all official
   releases). Never commit font files here; add new fonts to craft-fonts (rules in `AGENTS.md` → Assets: fonts are OFL,
   shipped unmodified, credited here, with their licence files shipped next to them).
+- The lensfun lens profile database (`data/db/*.xml` of https://github.com/lensfun/lensfun, Copyright the lensfun
+  contributors, Creative Commons Attribution-ShareAlike 3.0) is not in this repository or the binary. The desktop app
+  downloads it once on its first run (and again from Settings ▸ Import ▸ Lens profiles) into the settings folder,
+  unmodified apart from keeping only those XML files; Settings ▸ Lens profiles shows the attribution. Added 2026-11-24.
