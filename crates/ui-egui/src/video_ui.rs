@@ -328,17 +328,18 @@ pub fn spoken_suffix(p: &Photo) -> String {
     }
 }
 
-/// Edit panel sections video can take (global grading only; plan §7). The others are greyed out.
+/// Edit panel sections video can take (global grading, lens corrections and Transform; plan §7).
+/// The others are greyed out.
 pub fn section_allowed(section: &str) -> bool {
     // (the fork's Lightroom Classic panels split Color into Tone Curve, Color Mixer and Color Grading)
-    matches!(section, "light" | "color" | "curve" | "mixer" | "grading")
+    matches!(section, "light" | "color" | "curve" | "mixer" | "grading" | "optics" | "geometry")
 }
 
-/// Develop controls (by spec id, or a panel row key) that video can't take: everything outside
-/// the global Light and Color controls, plus HDR editing and Point Color.
+/// Develop controls (by spec id, or a panel row key) that video can take: the global Light and
+/// Color controls, lens corrections and Transform (HDR editing and Point Color stay photo-only).
 pub fn control_allowed(id: &str) -> bool {
     let section = id.split('.').next().unwrap_or(id);
-    matches!(section, "light" | "wb" | "color" | "curve" | "mixer" | "hsl" | "grading" | "profile")
+    matches!(section, "light" | "wb" | "color" | "curve" | "mixer" | "hsl" | "grading" | "profile" | "optics" | "geometry")
 }
 
 /// UI and engine commands that a clip can't take: the Remove, Masking and Red Eye panels,
