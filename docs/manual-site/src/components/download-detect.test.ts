@@ -5,7 +5,7 @@ const cases: [Partial<Env>, string | null][] = [
   [{ ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130', platform: 'Windows', arch: 'x86' }, 'win-x64'],
   [{ ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130', platform: 'Windows', arch: 'arm' }, 'win-arm64'],
   [{ ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130) Firefox/130', platform: 'Win32' }, 'win-x64'],
-  [{ ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605', platform: 'MacIntel', renderer: 'Apple GPU' }, null],
+  [{ ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605', platform: 'MacIntel', renderer: 'Apple GPU' }, 'mac-any'],
   [{ ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/130', platform: 'macOS', arch: 'arm' }, 'mac-arm'],
   [{ ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/130', platform: 'macOS', arch: 'x86' }, 'mac-intel'],
   [{ ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:130) Firefox/130', platform: 'MacIntel', renderer: 'Apple M1' }, 'mac-arm'],
