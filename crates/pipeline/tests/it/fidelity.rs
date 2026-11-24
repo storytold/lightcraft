@@ -273,7 +273,8 @@ fn frozen_processes_keep_their_committed_baseline() {
             }
             let got = process_aggregate(*apply, p, &scenes, &plains);
             let want: Vec<f64> = want.iter().filter_map(serde_json::Value::as_f64).collect();
-            let moved = want.len() != 4 || got.iter().zip(&want).any(|(g, w)| !((g - w).abs() <= tol));
+            let moved = want.len() != 4
+                || got.iter().zip(&want).any(|(g, w)| (g - w).abs().partial_cmp(&tol) != Some(std::cmp::Ordering::Less) && (g - w).abs() != tol);
             if moved {
                 failures.push(format!("{key} {tool}: [L a b ΔE] {got:.3?}, baseline {want:.3?} (± {tol})"));
             }
