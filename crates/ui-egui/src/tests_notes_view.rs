@@ -64,18 +64,20 @@ fn each_date_is_a_header_and_only_the_newest_starts_open() {
     let all = parsed();
     assert!(all.len() > 3);
     assert!(is_shown(&h, all[0].heading), "the newest date is a header: {:?}", shown(&h));
-    assert!(is_shown(&h, all[1].heading), "so is the next");
+    assert!(header_ids(&h).len() >= 2, "every date has a header, built as far as the batch goes");
     assert!(is_shown(&h, title_of(0)), "the newest date's entries are shown");
-    assert!(!is_shown(&h, title_of(1)), "the next date's are folded away");
+    // closing the newest brings the next header into the window whatever the newest holds
+    click(&mut h, "disclosure:whatsNew-0");
+    assert!(!is_shown(&h, title_of(0)), "the newest closed");
+    assert!(is_shown(&h, all[1].heading), "so the next date's header is in view: {:?}", shown(&h));
+    assert!(!is_shown(&h, title_of(1)), "the next date's entries are folded away");
     // opening one leaves the others as they were
     click(&mut h, "disclosure:whatsNew-1");
     assert!(is_shown(&h, title_of(1)), "the header opened");
-    assert!(is_shown(&h, title_of(0)), "the newest stayed open");
+    assert!(!is_shown(&h, title_of(0)), "the newest stayed closed");
     assert!(!is_shown(&h, title_of(2)), "the third stayed closed");
-    // and closing one too
     click(&mut h, "disclosure:whatsNew-0");
-    assert!(!is_shown(&h, title_of(0)), "the newest closed");
-    assert!(is_shown(&h, title_of(1)), "the second stayed open");
+    assert!(is_shown(&h, title_of(0)), "the newest opened again");
 }
 
 #[test]
