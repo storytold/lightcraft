@@ -162,6 +162,10 @@ fn click_outside_and_escape_close_the_open_menu() {
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
+    {
+        use craft::ui::runtime::overlay::{OpenFilter, any_open, top};
+        eprintln!("DBGESC any={} keys={} top={:?} bar_open={} focused_rec={:?}", any_open(&h.view.ctx, OpenFilter::Any), any_open(&h.view.ctx, OpenFilter::Keys), top(&h.view.ctx), craft::ui::menu::bar::is_open(&h.view.ctx), craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id));
+    }
     assert_eq!(open_menu(&h), None, "Escape");
 }
 
