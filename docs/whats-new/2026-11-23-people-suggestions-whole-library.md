@@ -1,0 +1,3 @@
+### Suggestions across a whole library
+- Every unnamed face is compared with the people you have named, a slice at a time, so a face that looks like someone waits under Suggested wherever it falls in the list; before, only the faces on the first page of the list were compared, so in a large library Suggested could look empty. The category says how far the comparison has got, and what it found stays while naming a face starts it again. (Part of #1365)
+- Confirming or rejecting a person's suggested faces covers every one of them in the library, not just the ones on screen, and a person with more than a command takes is offered in batches of 5000. (Part of #1365)

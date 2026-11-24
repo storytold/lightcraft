@@ -121,3 +121,25 @@ fn the_clipping_overlay_follows_j_and_alt_drags_on_the_tone_sliders() {
         assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, false), Overlay::Clipping(None));
     }
 }
+
+/// The Sharpening sliders each show their own black-and-white view while ⌥/Alt is held on a drag,
+/// and nothing without Alt or once the drag ends.
+#[test]
+fn alt_drags_on_the_sharpening_sliders_show_their_views() {
+    use lcc_pipeline::SharpenView;
+    let mut h = detail_edit();
+    let id = h.app.session.active().expect("active photo");
+    let d = (*h.app.session.develop_of(id).unwrap_or_default()).clone();
+    for (control, view) in [
+        ("detail.sharpenAmount", SharpenView::Amount),
+        ("detail.sharpenRadius", SharpenView::Radius),
+        ("detail.sharpenDetail", SharpenView::Detail),
+        ("detail.sharpenMasking", SharpenView::Masking),
+    ] {
+        begin_drag(&mut h, control);
+        assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, false), Overlay::None, "{control}");
+        assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, true), Overlay::Sharpen(view), "{control}");
+        end_drag(&mut h);
+        assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, true), Overlay::None, "{control} after the drag");
+    }
+}
