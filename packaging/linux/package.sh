@@ -175,7 +175,7 @@ WRAPPER
     chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_CLI"
     rm -f "$NFPM_STAGE/usr/bin/lightcraft-cli"
     mv "$NFPM_STAGE/usr/share/doc/lightcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
-    sed -e "s|^Exec=lightcraft\([[:space:]]\|$\)|Exec=$NFPM_BIN\1|" \
+    sed -e "s#^Exec=lightcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
         -e "s|^TryExec=lightcraft$|TryExec=$NFPM_BIN|" \
         -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
         -e "s|^Name=LightCraft$|Name=LightCraft Nightly|" \
