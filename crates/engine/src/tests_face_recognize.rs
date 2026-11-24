@@ -519,7 +519,11 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     // a face the named ones recognise carries the name they suggest
     let like_ann = faces.iter().find(|f| at(f) == (b.0, 0)).unwrap();
     assert_eq!(like_ann["suggestion"]["name"], "Ann", "{like_ann}");
-    assert!(faces.iter().find(|f| at(f) == (b.0, 1)).unwrap()["suggestion"].is_null(), "Bob is nobody the named faces know");
+    assert!(like_ann["similarity"]["score"].is_number(), "suggested faces expose their hover score: {like_ann}");
+    let unknown_bob = faces.iter().find(|f| at(f) == (b.0, 1)).unwrap();
+    assert!(unknown_bob["suggestion"].is_null(), "Bob is nobody the named faces know");
+    assert_eq!(unknown_bob["similarity"]["name"], "Ann", "Unknown also exposes its closest confirmed-person match");
+    assert!(unknown_bob["similarity"]["score"].is_number(), "{unknown_bob}");
     // each face says which box to show it by; with no scan view it is its own box
     for k in ["x0", "y0", "x1", "y1"] {
         assert!((like_ann["view"][k].as_f64().unwrap() - like_ann["rect"][k].as_f64().unwrap()).abs() < 1e-3, "{like_ann}");
@@ -551,10 +555,15 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     for k in ["x0", "y0", "x1", "y1"] {
         assert!(groups[0]["faces"][0]["view"][k].is_number(), "{groups:?}");
     }
-    // a limited list groups only the faces it lists, and a spell of the same name is one group
+    // issue #1365: the groups are the library's suggestions, not the listed page's, so limiting the list does not hide
+    // a face the named ones recognise
     let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "limit": 1})).unwrap();
+    assert_eq!(r["faces"].as_array().unwrap().len(), 1, "{r}");
     let total: u64 = r["groups"].as_array().unwrap().iter().filter_map(|g| g["total"].as_u64()).sum();
-    assert!(total <= 1, "one listed face, at most one group of it: {r}");
+    assert_eq!(total, 2, "both of Ann's suggested faces are grouped though the page holds one: {r}");
+    // every unnamed face with an embedding was judged, so the answer is the library's whole one
+    assert_eq!(r["scan"]["complete"].clone(), json!(true), "{r}");
+    assert_eq!(r["scan"]["judged"].clone(), r["scan"]["total"].clone(), "{r}");
     // without asking, no groups are worked out; and not true/false is refused
     assert!(s.execute("faces.unnamed", &json!({})).unwrap().get("groups").is_none());
     for bad in [json!({"bySuggestion": "yes"}), json!({"bySuggestion": 1})] {
@@ -1148,5 +1157,143 @@ fn a_persons_odd_face_brings_no_look_alikes() {
     assert_eq!(more_for(&mut s, "Ann"), vec![0], "her face, not the other back of a head");
     assert_eq!(s.execute("faces.matching", &json!({"skipOdd": false})).unwrap()["skipOdd"], false);
     assert_eq!(more_for(&mut s, "Ann"), vec![0, 1]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Issue #1365: a face must be suggested as the person it looks like wherever it falls in the unnamed list. Here a
+/// crowd of faces that look like each other fills the page (and the look-alike order's own bound), and the one face
+/// that looks like the confirmed person Ann comes after all of them. It is not on the listed page, and it is not in
+/// the part of the order the view compares; it is still suggested as Ann, so the Suggested category has it.
+#[test]
+fn a_suggestion_is_found_beyond_the_listed_page_and_the_look_alike_bound() {
+    let d = temp("beyondpage");
+    let (mut s, _) = setup(&d, 8);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    // 1501 faces that all look alike, so they come first in the look-alike order (and fill its 1500-face bound), and
+    // last the one that looks like Ann
+    const CROWD: usize = 1501;
+    let mut regions = Vec::new();
+    for i in 0..=CROWD {
+        regions.push(region(f64::from(i as u32) * 4e-4, None));
+    }
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    set_regions(&mut s, b, regions.clone());
+    let unit = |parts: &[(usize, f32)]| {
+        let mut v = [0.0f32; 8];
+        for (i, x) in parts {
+            v[*i] = *x;
+        }
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.iter().map(|x| x / n).collect::<Vec<f32>>()
+    };
+    s.faces.index.insert(a.0, &region(0.1, None).rect, unit(&[(0, 1.0)]));
+    for r in regions.iter().take(CROWD) {
+        s.faces.index.insert(b.0, &r.rect, unit(&[(1, 1.0)]));
+    }
+    s.faces.index.insert(b.0, &regions[CROWD].rect, unit(&[(0, 0.97), (2, 0.2)]));
+    // before anything is judged the answer says so, rather than pretending the library holds no suggestion
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "limit": 1, "budgetMs": 0})).unwrap();
+    assert_eq!((r["scan"]["complete"].clone(), r["scan"]["judged"].clone()), (json!(false), json!(0)), "{r}");
+    assert!(r["groups"].as_array().is_some_and(|g| g.is_empty()), "nothing judged yet: {r}");
+    // a generous budget judges the library; the page still holds only the crowd
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "limit": 600, "budgetMs": 60_000})).unwrap();
+    assert_eq!(r["scan"]["complete"].clone(), json!(true), "{r}");
+    let page: Vec<(u64, u64)> = r["faces"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect();
+    assert_eq!(page.len(), 600, "{r}");
+    let hers = (b.0, CROWD as u64);
+    assert!(!page.contains(&hers), "the face that looks like Ann is beyond the listed page");
+    // ... and still under Ann in the Suggested category
+    let groups = r["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "{r}");
+    assert_eq!((groups[0]["name"].clone(), groups[0]["total"].clone()), (json!("Ann"), json!(1)), "{r}");
+    let suggested: Vec<(u64, u64)> =
+        groups[0]["faces"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect();
+    assert_eq!(suggested, vec![hers], "{r}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Issue #1365: comparing the whole library holds the same bound `faces.suggest` does: a face that looks too little
+/// like anyone stays Unknown, and so does one that looks almost as much like a second person; only the closest person
+/// is named on them, for the hover caption.
+#[test]
+fn the_library_wide_comparison_keeps_faces_below_its_bound_out_of_suggested() {
+    let d = temp("bound");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let c = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
+    set_regions(&mut s, a, vec![region(0.1, None)]);
+    set_regions(&mut s, b, vec![region(0.1, Some("Ann")), region(0.5, Some("Bob"))]);
+    // on c: a face too little like either person, one like Ann but nearly as much like Bob, and one plainly Ann
+    set_regions(&mut s, c, vec![region(0.1, None), region(0.4, None), region(0.7, None)]);
+    s.faces.index.insert(a.0, &region(0.1, None).rect, unit64(&[(3, 1.0)]));
+    s.faces.index.insert(b.0, &region(0.1, None).rect, unit64(&[(0, 1.0)])); // Ann
+    s.faces.index.insert(b.0, &region(0.5, None).rect, unit64(&[(1, 1.0)])); // Bob
+    s.faces.index.insert(c.0, &region(0.1, None).rect, unit64(&[(0, 0.40), (2, 0.9165)]));
+    s.faces.index.insert(c.0, &region(0.4, None).rect, unit64(&[(0, 0.60), (1, 0.58), (2, 0.5514)]));
+    s.faces.index.insert(c.0, &region(0.7, None).rect, unit64(&[(0, 0.70), (1, 0.10)]));
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "budgetMs": 60_000})).unwrap();
+    assert_eq!(r["scan"]["complete"].clone(), json!(true), "{r}");
+    let groups = r["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "{r}");
+    assert_eq!((groups[0]["name"].clone(), groups[0]["total"].clone()), (json!("Ann"), json!(1)), "{r}");
+    assert_eq!(groups[0]["faces"][0]["index"].clone(), json!(2), "the face plainly Ann, and only it: {r}");
+    // the other two are Unknown, with the closest person named for the caption and no suggestion
+    let page = r["faces"].as_array().unwrap();
+    let at = |i: u64| page.iter().find(|f| f["photo"] == c.0 && f["index"] == i).unwrap();
+    assert_eq!((at(0)["suggestion"].clone(), at(1)["suggestion"].clone()), (json!(null), json!(null)), "{r}");
+    assert_eq!(
+        (at(0)["similarity"]["name"].clone(), at(1)["similarity"]["name"].clone()),
+        (json!("Ann"), json!("Ann")),
+        "the closest person is still named on them: {r}"
+    );
+    assert_eq!(at(2)["suggestion"]["name"].clone(), json!("Ann"), "{r}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Issue #1365: what a suggestion depends on changed when a face is named, so the library-wide judging starts over
+/// (without embedding anything again) and the faces the new name recognises are suggested.
+#[test]
+fn naming_someone_judges_the_library_again_for_suggestions() {
+    let d = temp("restamp");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let c = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    // a face nobody has named yet, which the second unnamed face of b looks like
+    set_regions(&mut s, c, vec![region(0.1, None)]);
+    s.faces.index.insert(a.0, &region(0.1, None).rect, unit64(&[(0, 1.0)]));
+    s.faces.index.insert(b.0, &region(0.1, None).rect, unit64(&[(0, 0.97), (2, 0.2)]));
+    s.faces.index.insert(b.0, &region(0.5, None).rect, unit64(&[(1, 1.0)]));
+    s.faces.index.insert(c.0, &region(0.1, None).rect, unit64(&[(1, 0.99), (3, 0.1)]));
+    let groups = |s: &mut Session| -> Vec<String> {
+        let r = s.execute("faces.unnamed", &json!({"bySuggestion": true})).unwrap();
+        r["groups"].as_array().unwrap().iter().map(|g| g["name"].as_str().unwrap().to_string()).collect()
+    };
+    // only Ann is known, so only her face is suggested
+    assert_eq!(groups(&mut s), vec!["Ann".to_string()]);
+    // naming the face that looks like b's second face makes it a suggestion, at the next answer
+    let faces = json!({"photo": c.0, "index": 0});
+    s.execute("faces.nameFaces", &json!({"faces": [faces], "name": "Bob"})).unwrap();
+    assert_eq!(groups(&mut s), vec!["Ann".to_string(), "Bob".to_string()]);
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true})).unwrap();
+    let bob = r["groups"].as_array().unwrap().iter().find(|g| g["name"] == "Bob").unwrap();
+    assert_eq!(bob["faces"][0]["photo"], b.0, "{r}");
+    assert_eq!(bob["faces"][0]["index"], 1, "{r}");
+    // a person renamed: what the last comparison found under the old name is not shown, since nobody is called that now,
+    // even before the library has been judged again
+    s.execute("faces.renamePerson", &json!({"from": "Bob", "to": "Robert"})).unwrap();
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "budgetMs": 0})).unwrap();
+    let names: Vec<&str> = r["groups"].as_array().unwrap().iter().map(|g| g["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Ann"], "Bob's suggestion is not shown: {r}");
+    assert_eq!(r["scan"]["complete"].clone(), json!(false), "the library is judged again under the new name: {r}");
+    // and once it has been, the face is suggested as Robert
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "budgetMs": 60_000})).unwrap();
+    assert_eq!(r["scan"]["complete"].clone(), json!(true), "{r}");
+    let robert = r["groups"].as_array().unwrap().iter().find(|g| g["name"] == "Robert").unwrap();
+    assert_eq!((robert["faces"][0]["photo"].clone(), robert["faces"][0]["index"].clone()), (json!(b.0), json!(1)), "{r}");
     let _ = std::fs::remove_dir_all(&d);
 }
