@@ -63,19 +63,31 @@ pub fn adaptive() -> Vec<Preset> {
             "subjectPop",
             "Subject Pop",
             json!({"treatment": "color", "color": {"vibrance": 8.0}}),
-            json!([mask("Subject Pop", json!([{"op": "add", "shape": {"kind": "subject"}}]), json!({"exposure": 0.25, "texture": 12.0, "clarity": 8.0, "amount": 100.0}))]),
+            json!([mask(
+                "Subject Pop",
+                json!([{"op": "add", "shape": {"kind": "subject"}}]),
+                json!({"exposure": 0.25, "texture": 12.0, "clarity": 8.0, "amount": 100.0})
+            )]),
         ),
         adaptive_preset(
             "deepSky",
             "Deep Sky",
             json!({"treatment": "color", "effects": {"dehaze": 4.0}}),
-            json!([mask("Deep Sky", json!([{"op": "add", "shape": {"kind": "sky"}}]), json!({"exposure": -0.4, "highlights": -25.0, "saturation": 12.0, "temp": -6.0, "amount": 100.0}))]),
+            json!([mask(
+                "Deep Sky",
+                json!([{"op": "add", "shape": {"kind": "sky"}}]),
+                json!({"exposure": -0.4, "highlights": -25.0, "saturation": 12.0, "temp": -6.0, "amount": 100.0})
+            )]),
         ),
         adaptive_preset(
             "quietBackground",
             "Quiet Background",
             json!({"treatment": "color", "light": {"contrast": 6.0}}),
-            json!([mask("Quiet Background", json!([{"op": "add", "shape": {"kind": "background"}}]), json!({"exposure": -0.3, "clarity": -15.0, "saturation": -15.0, "amount": 100.0}))]),
+            json!([mask(
+                "Quiet Background",
+                json!([{"op": "add", "shape": {"kind": "background"}}]),
+                json!({"exposure": -0.3, "clarity": -15.0, "saturation": -15.0, "amount": 100.0})
+            )]),
         ),
         adaptive_preset(
             "subjectAndSky",
@@ -83,7 +95,11 @@ pub fn adaptive() -> Vec<Preset> {
             json!({"treatment": "color", "color": {"vibrance": 6.0}}),
             json!([
                 mask("", json!([{"op": "add", "shape": {"kind": "subject"}}]), json!({"exposure": 0.2, "shadows": 15.0, "amount": 100.0})),
-                mask("", json!([{"op": "add", "shape": {"kind": "sky"}}]), json!({"exposure": -0.35, "highlights": -20.0, "saturation": 8.0, "amount": 100.0}))
+                mask(
+                    "",
+                    json!([{"op": "add", "shape": {"kind": "sky"}}]),
+                    json!({"exposure": -0.35, "highlights": -20.0, "saturation": 8.0, "amount": 100.0})
+                )
             ]),
         ),
     ]

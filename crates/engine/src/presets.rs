@@ -149,7 +149,10 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
                 return Err(format!("unknown preset format `{}`", f.format));
             }
             if f.version == 0 || f.version > LCPRESET_VERSION {
-                return Err(format!("preset file version {} is not supported (this build reads 1 to {LCPRESET_VERSION}); a newer version made it", f.version));
+                return Err(format!(
+                    "preset file version {} is not supported (this build reads 1 to {LCPRESET_VERSION}); a newer version made it",
+                    f.version
+                ));
             }
             f.presets
         }
@@ -185,7 +188,8 @@ fn checked_masks(p: &mut Preset) -> Result<(), String> {
         return Err(format!("preset `{}` has {} masks; at most {MAX_PRESET_MASKS} are read", p.name, list.len()));
     }
     for (k, m) in list.iter().enumerate() {
-        serde_json::from_value::<lcc_develop::Mask>(m.clone()).map_err(|e| format!("preset `{}`: mask {} is not a mask recipe: {e}", p.name, k + 1))?;
+        serde_json::from_value::<lcc_develop::Mask>(m.clone())
+            .map_err(|e| format!("preset `{}`: mask {} is not a mask recipe: {e}", p.name, k + 1))?;
     }
     lcc_develop::presets::to_recipes(&mut p.settings);
     Ok(())
@@ -745,7 +749,14 @@ mod tests {
             {"id": 1, "name": "Pick", "components": [{"op": "add", "shape": {"kind": "object", "hint": [{"x": 0.4, "y": 0.5}]}}], "adjust": {"exposure": 0.5, "amount": 100.0}},
             {"id": 2, "name": "Sky", "components": [{"op": "add", "shape": {"kind": "sky"}}], "adjust": {"exposure": -0.5, "amount": 100.0}}
         ]);
-        Preset { id: "user.a".into(), name: "A".into(), group: "G".into(), settings: json!({"light": {"exposure": 0.3}, "masks": masks}), favorite: false, builtin: false }
+        Preset {
+            id: "user.a".into(),
+            name: "A".into(),
+            group: "G".into(),
+            settings: json!({"light": {"exposure": 0.3}, "masks": masks}),
+            favorite: false,
+            builtin: false,
+        }
     }
 
     #[test]

@@ -1763,8 +1763,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             |s, p| {
                 let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
-                let found =
-                    s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                let found = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
                 // adaptive: masks this build can't compute are left out, and reported
                 let (mut preset, skipped) = crate::presets::without_unavailable_masks(&found, crate::presets::model_masks_in_build());
                 // a preset's flat-field map is stored with the edit that applies it
