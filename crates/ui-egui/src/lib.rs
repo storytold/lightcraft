@@ -278,8 +278,6 @@ mod tests_grid_style;
 #[cfg(test)]
 mod tests_guided_guides;
 #[cfg(test)]
-mod tests_upright_panel;
-#[cfg(test)]
 mod tests_hdr_zoom_cache;
 #[cfg(test)]
 mod tests_help_links;
@@ -503,6 +501,8 @@ mod tests_tool_row;
 mod tests_unsaved;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_update;
+#[cfg(test)]
+mod tests_upright_panel;
 #[cfg(test)]
 mod tests_view_state;
 #[cfg(test)]

@@ -184,9 +184,12 @@ pub(crate) fn upright_controls(app: &mut LccApp, ui: &mut egui::Ui, d: &lcc_deve
     if guided {
         ui.add_space(2.0);
         ui.label(
-            egui::RichText::new(crate::i18n::tr_format!("{} of 4 guides. Drag along lines that should be vertical or horizontal.", d.geometry.guides.len()))
-                .size(11.0)
-                .color(t.text_dim),
+            egui::RichText::new(crate::i18n::tr_format!(
+                "{} of 4 guides. Drag along lines that should be vertical or horizontal.",
+                d.geometry.guides.len()
+            ))
+            .size(11.0)
+            .color(t.text_dim),
         );
     }
 }
