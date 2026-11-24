@@ -200,8 +200,15 @@ fn external_sort_popup_actions_dispatch_exactly_once_with_deterministic_state() 
                 f.open();
                 let response = f.row(label).clone();
                 if let Some(key) = key {
-                    f.ctx.memory_mut(|memory| memory.request_focus(response.id));
-                    f.frame(vec![], Pass::Real);
+                    // The menu's rows are one roving group the framework moves through with the arrow keys: reach the row
+                    // the way a user does, then activate it.
+                    for _ in 0..16 {
+                        if craft::ui::runtime::focus::focused_rec(&f.ctx).map(|rec| rec.stop.id) == Some(response.id) {
+                            break;
+                        }
+                        f.key(Key::ArrowDown);
+                    }
+                    assert_eq!(craft::ui::runtime::focus::focused_rec(&f.ctx).map(|rec| rec.stop.id), Some(response.id), "arrow keys reach {label}");
                     f.key(key);
                 } else {
                     f.click_at(response.interact_rect.center(), true);

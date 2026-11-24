@@ -62,7 +62,20 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
             h.settle(SETTLE);
             check_bar_clear(&h, "menu-level:1", &what);
             // Hover each submenu row in view, top to bottom: rows low in the menu open upward.
-            let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu"));
+            let mut level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu"));
+            // A menu taller than the window scrolls. Scroll it so a submenu row lands across the viewport's edge: its
+            // centre is then out of sight while a part of it is still there to point at.
+            if let Some((_, row)) = widgets_with(&h, "menusub:").into_iter().find(|(_, r)| r.top() >= level.bottom()) {
+                let at = level.center();
+                let r = h.request("ui.move", json!({"x": at.x, "y": at.y}), T);
+                assert_eq!(r["ok"], true, "{what}: {r}");
+                h.settle(SETTLE);
+                let r = h.request("ui.scroll", json!({"dx": 0, "dy": -(row.center().y - level.bottom())}), T);
+                assert_eq!(r["ok"], true, "{what}: {r}");
+                h.settle(SETTLE);
+                level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu after scrolling"));
+                check_bar_clear(&h, "menu-level:1", &what);
+            }
             let rows: Vec<String> = widgets_with(&h, "menusub:").into_iter().filter(|(_, r)| level.contains_rect(*r)).map(|(id, _)| id).collect();
             for row in rows {
                 let full = widget(&h, &row).unwrap_or_else(|| panic!("{what}: no {row}"));
