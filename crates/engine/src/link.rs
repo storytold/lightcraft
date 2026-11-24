@@ -129,7 +129,9 @@ mod tests {
         assert_eq!(file_url_path("file:///home/me/a%20b+c.jpg").as_deref(), Some("/home/me/a b+c.jpg"));
         assert_eq!(file_url_path("FILE://localhost/p/x").as_deref(), Some("/p/x"));
         assert_eq!(file_url_path("file:///C:/Users/x.jpg").as_deref(), Some("C:/Users/x.jpg"));
-        for bad in ["", "file:", "file://", "file://host/p", "file:///%", "file:///%FF", "file:///a%00b", "/p/x", "http://x/y", "file://é", "filé:///x"] {
+        for bad in
+            ["", "file:", "file://", "file://host/p", "file:///%", "file:///%FF", "file:///a%00b", "/p/x", "http://x/y", "file://é", "filé:///x"]
+        {
             assert_eq!(file_url_path(bad), None, "{bad}");
         }
     }
