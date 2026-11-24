@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PackagingRoot 'nightly.ps1') -FunctionsOnly
 $sign = Join-Path $PackagingRoot 'sign.ps1'
-$names = @('WINDOWS_CERTIFICATE','WINDOWS_CERTIFICATE_PASSWORD','AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET','AZURE_SIGNING_ENDPOINT','AZURE_SIGNING_ACCOUNT','AZURE_CERT_PROFILE')
+$names = @('WINDOWS_CERTIFICATE','WINDOWS_CERTIFICATE_PASSWORD','AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET','AZURE_SIGNING_ENDPOINT','AZURE_SIGNING_ACCOUNT','AZURE_CERT_PROFILE','LIGHTCRAFT_BUILD_SHA','LIGHTCRAFT_BUILD_DATE')
 function Clear-SigningFixtures { foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $null) } }
 function Assert-Policy([bool] $Value, [string] $Message) { if (-not $Value) { throw $Message } }
 function Invoke-Refusal([scriptblock] $Operation, [string] $Message) {
@@ -20,7 +20,12 @@ $global:SigningFixtureCargoCalls = 0
 if (-not [IO.Path]::IsPathRooted($FixtureRoot)) { throw 'use an owned absolute FixtureRoot' }
 $root = Join-Path $FixtureRoot ('signing-policy-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
-$version = '0.23.1-nightly.20261121.12345.1.gaaaaaaaaaaaa'
+# nightly.ps1 builds the checkout it lives in, and its source identity must name that commit: the
+# version's trailing 12 hex are the checkout's, and LIGHTCRAFT_BUILD_DATE is the version's own date.
+$repositoryRoot = (Resolve-Path (Join-Path $PackagingRoot '..\..')).Path
+$sourceState = Get-NightlySourceState $repositoryRoot
+if ($sourceState.Status) { throw "these contracts need a clean checkout: $($sourceState.Status)" }
+$version = '0.23.1-nightly.20261121.12345.1.g' + $sourceState.Head.Substring(0, 12)
 $env:LIGHTCRAFT_VERSION = $version
 function Invoke-Build([switch] $BuildOnly) {
   $arguments = @{Arch='x64';Version=$version;Target='x86_64-pc-windows-msvc';TargetDir=$root;Dist=(Join-Path $root 'dist')}
@@ -43,7 +48,10 @@ try {
   Write-Output 'PASS: credentials-rejected-before-compilation'
 
   Clear-SigningFixtures
+  $env:LIGHTCRAFT_BUILD_SHA = $sourceState.Head
+  $env:LIGHTCRAFT_BUILD_DATE = '2026-11-21'
   Invoke-Refusal { Invoke-Build -BuildOnly } 'FIXTURE_COMPILER_BOUNDARY'
+  Clear-SigningFixtures
   Assert-Policy ($global:SigningFixtureCargoCalls -eq 1) 'clean compilation did not reach the mocked compiler boundary'
   Assert-Policy (-not (Test-Path (Join-Path $root 'dist'))) 'mocked compilation produced an artifact'
   Write-Output 'PASS: secret-free-build-reaches-only-mocked-boundary'
