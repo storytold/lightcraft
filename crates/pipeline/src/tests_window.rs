@@ -377,7 +377,7 @@ fn a_spot_overlapping_the_window_edge_matches_the_whole_render() {
 }
 
 /// Given a spot whose reads span exactly the 8192 px a window may grow to, a window over it is grown
-/// to hold them, not refused and read at its own edge, on the processes before V11 and V11's whole
+/// to hold them, not refused and read at its own edge, on the processes before V14 and V14's whole
 /// pixels alike (a 2×2 window then read the dark half for the bright source: 89 instead of 243).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -397,7 +397,7 @@ fn a_spot_reading_exactly_the_span_limit_matches_the_whole_render() {
         source_offset: Some(Point::new(0.8188, 0.0)),
     };
     let win = PixelWindow { x: 999, y: 7, w: 2, h: 2 };
-    for p in [Process::V1, Process::V8, Process::V10, Process::V11] {
+    for p in [Process::V1, Process::V8, Process::V13, Process::V14] {
         let s = DevelopSettings { process: p.version(), spots: vec![spot.clone()], ..Default::default() };
         let f = render(&src, &SourceInfo::default(), &s, &req).image;
         let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
@@ -409,11 +409,11 @@ fn a_spot_reading_exactly_the_span_limit_matches_the_whole_render() {
     }
 }
 
-/// Saved V8, 9 (no process; it renders as V8) and V10 edits keep their Heal, Remove and Clone
-/// spots exactly as main rendered them before V11 (sources read between pixels, the averaged heal);
-/// V11 renders them differently. The pixels are those main rendered at the time, inside each spot.
+/// Saved V8, 9 (no process; it renders as V8), V10, 11 and 12 (no process; they render as V10) and V13 edits keep their Heal, Remove and Clone
+/// spots exactly as main rendered them before V14 (sources read between pixels, the averaged heal);
+/// V14 renders them differently. The pixels are those main rendered at the time, inside each spot.
 #[test]
-fn saved_spots_before_v11_render_as_they_did() {
+fn saved_spots_before_v14_render_as_they_did() {
     use lightcraft_develop::{Process, ProcessVersion, Spot, SpotMode};
     use lightcraft_geom::Point;
     let src = lightcraft_scenes::demo_library()[0].render(480, 320);
@@ -443,10 +443,10 @@ fn saved_spots_before_v11_render_as_they_did() {
             })
             .collect()
     };
-    for p in [Process::V8.version(), ProcessVersion(9), Process::V10.version()] {
+    for p in [Process::V8.version(), ProcessVersion(9), Process::V10.version(), ProcessVersion(11), ProcessVersion(12), Process::V13.version()] {
         assert_eq!(pixels(p), main, "saved {p:?}");
     }
-    assert_ne!(pixels(Process::V11.version()), main, "V11's heal");
+    assert_ne!(pixels(Process::V14.version()), main, "V14's heal");
 }
 
 // Given a spot with an automatic source, two windows over the same spot choose the same source
