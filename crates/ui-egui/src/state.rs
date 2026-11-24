@@ -2006,6 +2006,9 @@ pub struct UiState {
     /// A Settings section to bring into view once (`app.settings {section}`), e.g. `lensProfiles`.
     #[serde(skip)]
     pub settings_section: Option<String>,
+    /// How many times Help ▸ What's New was opened: each opening starts its entries over (the newest open, the rest closed).
+    #[serde(skip)]
+    pub whats_new_opens: u64,
     /// Develop ▸ Lens Corrections: the lens maker picked in the lens picker before a model (issue #307).
     #[serde(skip)]
     pub lens_pick_make: Option<String>,
@@ -2946,6 +2949,7 @@ impl Default for UiState {
             status: String::new(),
             dialog: None,
             settings_section: None,
+            whats_new_opens: 0,
             lens_pick_make: None,
             vignetting_calibration_info: None,
             vignetting_calibration_creating: None,
