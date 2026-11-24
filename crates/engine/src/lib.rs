@@ -75,7 +75,6 @@ pub mod finishing;
 mod focus_scan;
 pub mod folder_watch;
 pub mod fonts;
-pub mod ui_languages;
 pub mod genfill;
 pub mod guard;
 pub mod hdr_texture;
@@ -153,6 +152,7 @@ mod sync_same;
 pub mod template_folders;
 pub mod text;
 pub mod timelapse;
+pub mod ui_languages;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
 pub mod upright_jobs;

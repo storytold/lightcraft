@@ -206,7 +206,10 @@ impl Serialize for Locale {
 impl<'de> Deserialize<'de> for Locale {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let code = String::deserialize(deserializer)?;
-        Locale::parse(&code).or_else(|| Locale::parse_tag(&code)).map(Locale::or_english).ok_or_else(|| serde::de::Error::custom(format!("unknown language {code:?}")))
+        Locale::parse(&code)
+            .or_else(|| Locale::parse_tag(&code))
+            .map(Locale::or_english)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown language {code:?}")))
     }
 }
 
