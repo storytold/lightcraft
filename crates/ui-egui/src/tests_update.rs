@@ -64,6 +64,10 @@ fn services() -> Services {
 
 /// The app with an in-memory session (no library, no network) and the start-up check already done.
 fn app() -> Headless {
+    app_with(services())
+}
+
+fn app_with(services: Services) -> Headless {
     let mut session = lcc_engine::Session::new();
     // a fresh updater: the settings are the defaults, not whatever this machine's are
     session.updater = lcc_engine::update::Updater::new(None);
@@ -71,7 +75,7 @@ fn app() -> Headless {
     // without a key installs nothing (lcc-engine's update tests cover that)
     let key = lcc_updater::UpdateKey::parse("GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=").unwrap();
     session.updater.trust_test_key(Some(key));
-    let app = LccApp::new(session, services());
+    let app = LccApp::new(session, services);
     let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
     // no start-up check: these tests drive the dialog themselves
     h.app.ui.update_checked_at_startup = true;
@@ -81,6 +85,11 @@ fn app() -> Headless {
 
 /// Offer `version` as a newer release, as a check would, with its file already downloaded.
 fn offer(h: &mut Headless, dir: &Scratch, version: &str, kind: lcc_engine::update::Kind) -> PathBuf {
+    offer_with_notes(h, dir, version, kind, "### Fixed\n- a thing")
+}
+
+/// [`offer`] with the release's notes.
+fn offer_with_notes(h: &mut Headless, dir: &Scratch, version: &str, kind: lcc_engine::update::Kind, notes: &str) -> PathBuf {
     use lcc_engine::update::{Kind, Progress, Staged};
     let file = dir.0.join(format!("app-{version}-{}.bin", kind.text()));
     std::fs::write(&file, b"an installer").unwrap();
@@ -102,7 +111,7 @@ fn offer(h: &mut Headless, dir: &Scratch, version: &str, kind: lcc_engine::updat
         asset: lcc_updater::Asset { name: name.clone(), url: "http://127.0.0.1:1/app.bin".into(), size: 12, sha256: None, kind: engine_kind },
         sha256: Some("ab".repeat(32)),
         published: Some("2026-10-12".into()),
-        notes: "### Fixed\n- a thing".into(),
+        notes: notes.into(),
         action: "run the installer".into(),
     };
     h.app.session.updater.apply(lcc_updater::Checked::Found(Box::new(update)));
@@ -113,7 +122,7 @@ fn offer(h: &mut Headless, dir: &Scratch, version: &str, kind: lcc_engine::updat
         sha256,
         file: name,
         kind,
-        notes: "### Fixed\n- a thing".into(),
+        notes: notes.into(),
     })));
     file
 }
@@ -885,4 +894,35 @@ fn the_settings_checkbox_says_so_when_it_cannot_be_saved() {
     let toast = toast_text(&h);
     assert!(toast.contains("updates.json"), "the error is shown, naming the file: {toast:?}");
     assert!(!h.app.session.updater.prefs().check_at_startup, "the box shows what is stored: off");
+}
+
+#[test]
+fn the_release_notes_show_inline_markup_and_open_their_links() {
+    use std::sync::{Arc, Mutex};
+    let opened = Arc::new(Mutex::new(Vec::<String>::new()));
+    let o = opened.clone();
+    let mut services = services();
+    services.open_url = Some(Box::new(move |u: &str| {
+        o.lock().unwrap().push(u.to_string());
+        Ok(())
+    }));
+    let dir = Scratch::new("notes-markup");
+    let mut h = app_with(services);
+    let notes = "### Fixed\n- Press `Cmd+K` for **quick** help, see [the guide](https://example.com/guide)\n- [not a web page](javascript:alert(1)) stays text";
+    let _ = offer_with_notes(&mut h, &dir, "9.9.9", lcc_engine::update::Kind::Archive, notes);
+    ask(&mut h, "ui.menu.invoke", json!({"id": "app.checkForUpdates"}));
+    for _ in 0..10 {
+        h.step();
+    }
+    let text = h.painted_text().join("\n");
+    assert!(text.contains("Cmd+K") && text.contains("quick") && text.contains("the guide"), "{text}");
+    assert!(!text.contains('`') && !text.contains("**") && !text.contains("](https"), "the markers are not shown: {text}");
+    assert!(text.contains("not a web page"), "a link the host won't open is shown as its text: {text}");
+    let links: Vec<&str> = h.app.widgets.iter().map(|(w, _)| w.as_str()).filter(|w| w.starts_with("link:notes:")).collect();
+    assert_eq!(links, ["link:notes:0"], "only the https link can be clicked");
+    ask(&mut h, "ui.clickWidget", json!({"id": "link:notes:0"}));
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(opened.lock().unwrap().as_slice(), ["https://example.com/guide"], "the click opened the link, through the host");
 }

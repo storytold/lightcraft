@@ -105,6 +105,7 @@ pub mod modern_sheets;
 mod modern_sources;
 pub mod module;
 pub mod motion;
+mod notes_view;
 pub mod onboarding;
 pub mod overlay;
 pub mod panels;
@@ -382,6 +383,8 @@ mod tests_module_help;
 mod tests_modules;
 #[cfg(test)]
 mod tests_mouse_nav;
+#[cfg(test)]
+mod tests_notes_view;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
