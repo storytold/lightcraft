@@ -675,7 +675,10 @@ fn highlight_method_is_a_control_and_each_decodes_a_clipped_raw() {
     assert!(lcc_develop::controls::set(&mut s, "sensor.highlightMode", 2.0));
     assert_eq!(s.to_json()["sensor"]["highlight_mode"], json!(2.0));
     assert_eq!(DevelopSettings::from_json(&s.to_json()).unwrap(), s);
-    assert_ne!(s.hash64(), { s.sensor.highlight_mode = 0.0; s.hash64() });
+    assert_ne!(s.hash64(), {
+        s.sensor.highlight_mode = 0.0;
+        s.hash64()
+    });
     s.sensor.highlight_mode = 1.0;
     let opts = crate::media::LoadOptions::of(&s);
     assert_eq!(opts.highlight, Mode::Opposed);

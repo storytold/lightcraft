@@ -220,7 +220,15 @@ pub struct LoadOptions {
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        LoadOptions { colour: Default::default(), outliers: false, camera: String::new(), camera_look: true, pixel_fix: true, highlight: Default::default(), path: None }
+        LoadOptions {
+            colour: Default::default(),
+            outliers: false,
+            camera: String::new(),
+            camera_look: true,
+            pixel_fix: true,
+            highlight: Default::default(),
+            path: None,
+        }
     }
 }
 

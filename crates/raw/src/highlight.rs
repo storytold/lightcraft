@@ -969,8 +969,10 @@ mod tests {
             (y.saturating_sub(2)..=(y + 2).min(h - 1)).any(|yy| (x.saturating_sub(2)..=(x + 2).min(w - 1)).any(|xx| is_clipped(&clipped.get(xx, yy))))
         };
         // the rim: pixels with only red clipped
-        let rim: Vec<(usize, usize)> =
-            (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| clipped.get(x, y)[0] >= 0.999 && clipped.get(x, y)[1] < 0.999).collect();
+        let rim: Vec<(usize, usize)> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| clipped.get(x, y)[0] >= 0.999 && clipped.get(x, y)[1] < 0.999)
+            .collect();
         assert!(rim.len() > 50);
         let err = |img: &Rgb32f| -> f32 { rim.iter().map(|&(x, y)| (img.get(x, y)[0] - truth.get(x, y)[0]).abs()).sum::<f32>() / rim.len() as f32 };
         for mode in PORTED {
