@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Renaming one photo of a pair no longer gives it the other's metadata
+- When two photos in the library share a name apart from the extension (a raw and its JPEG, or `IMG_0001.jpg` and
+  `IMG_0001.tif`), Rename Photos and Move to Folder now move the shared `IMG_0001.xmp` only with the photo it belongs
+  to. A photo whose same-named sibling is not in the library still copies the shared sidecar, leaving the sibling's. Renaming or
+  moving the other photo used to put a copy of that sidecar under its new name, and renaming the owner left a copy
+  behind; either way one photo later read the other's rating, metadata and edits. Undo and redo do the same
+  (issue #4713).
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges

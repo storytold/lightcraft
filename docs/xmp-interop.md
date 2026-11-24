@@ -112,6 +112,12 @@ An import ranks the files it is adding the same way, before they are catalogued:
 raw of its stem reads its own `<file>.xmp` and takes nothing from the raw's `IMG_0001.xmp`, whether it arrives
 with the raw or after it (issue #1905).
 
+Rename Photos, Move to Folder and their undo and redo follow the same ownership. The file that owns the stem sidecar
+takes it along; the other file takes only its own `<file>.xmp` and leaves the stem sidecar where it is, so no copy of
+its sibling's packet appears under its new name, and the file left behind never finds a copy of the owner's packet
+beside it either (issue #4713). Only a file that is the one file of its stem in the library copies a stem sidecar
+that another file on disk (not in the library) still shares, rather than taking it from that file (issue #92).
+
 ## Face regions (MWG)
 
 LightCraft reads face, pet, focus and barcode regions in the Metadata Working Group's region schema

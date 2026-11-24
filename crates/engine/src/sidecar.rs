@@ -1013,6 +1013,12 @@ impl StemOwners {
         file_path(p).is_none_or(|path| self.0.get(&stem_key(path)).is_none_or(|owner| *owner == p.id))
     }
 
+    /// For photo `p` whose stem another catalogued file shares: whether `p` owns the stem sidecar.
+    /// `None` when no other catalogued file has its stem.
+    pub(crate) fn owns_shared(&self, p: &Photo) -> Option<bool> {
+        file_path(p).and_then(|path| self.0.get(&stem_key(path))).map(|owner| *owner == p.id)
+    }
+
     /// `naming` for photo `p`, except that a stem sidecar another file owns becomes Full.
     fn naming(&self, p: &Photo, naming: SidecarNaming) -> SidecarNaming {
         match (naming, file_path(p)) {

@@ -227,38 +227,43 @@ fn a_later_save_recognizes_companions_after_an_earlier_repair_retires() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A raw and a JPEG share `a.xmp`, which belongs to the raw (issue #4713). The batch rename moves
+/// the JPEG, then the raw, whose packet can't move and whose file can't go back: the batch
+/// rollback restores the JPEG beside `a.xmp`, and the packet is queued. The retry still moves the
+/// packet to the raw (it is the raw's, not the JPEG's) instead of leaving a copy beside the JPEG.
 #[test]
-fn queued_stem_retry_preserves_shared_packet_after_batch_rollback() {
+fn queued_owned_stem_retry_moves_the_packet_after_batch_rollback() {
     let dir = crate::tests_xmp::temp_dir("queued-stem-batch-rollback");
     let a = dir.join("a.jpg");
-    let b = dir.join("a.png");
+    let b = dir.join("a.dng");
     let first = dir.join("Trip_1.jpg");
-    let second = dir.join("Trip_2.png");
+    let second = dir.join("Trip_2.dng");
     let shared = dir.join("a.xmp");
     let first_packet = dir.join("Trip_1.xmp");
     let second_packet = dir.join("Trip_2.xmp");
     let jpeg = b"first physical photo; rename does not decode".to_vec();
-    let png = b"second physical photo; rename does not decode".to_vec();
-    let bytes = packet("shared-after-batch-rollback").into_bytes();
+    let raw = b"second physical photo; rename does not decode".to_vec();
+    let bytes = packet("raw-after-batch-rollback").into_bytes();
     std::fs::write(&a, &jpeg).unwrap();
-    std::fs::write(&b, &png).unwrap();
+    std::fs::write(&b, &raw).unwrap();
     std::fs::write(&shared, &bytes).unwrap();
     let mut s = session(&a);
-    let photo = Photo::new(PhotoId(2), Source::File { path: b.to_string_lossy().into_owned() }, "a.png", "PNG", 4, 3, "");
+    let mut photo = Photo::new(PhotoId(2), Source::File { path: b.to_string_lossy().into_owned() }, "a.dng", "DNG", 4, 3, "");
+    photo.kind = lightcraft_catalog::MediaKind::Raw;
     s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
     s.xmp.auto_write = false;
 
-    // Existing Faults refuses renames only: the first shared-packet copy must succeed.
+    // Faults refuses renames only: the raw's packet can't move, nor the raw back.
     let faults = Faults(vec![shared.clone(), second.clone()]);
     let plans = s.plan_rename_with(&faults, &[PhotoId(1), PhotoId(2)], "Trip_{seq}", 1);
     assert!(s.execute_fn("photo.rename", |s| Ok(json!({"renamed": s.apply_rename_with(&faults, &plans)?}))).is_err());
     assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path: a.to_string_lossy().into_owned() });
     assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().source, Source::File { path: second.to_string_lossy().into_owned() });
     assert_eq!(std::fs::read(&a).unwrap(), jpeg);
-    assert_eq!(std::fs::read(&second).unwrap(), png);
+    assert_eq!(std::fs::read(&second).unwrap(), raw);
     assert!(!b.exists() && !first.exists());
     assert_eq!(std::fs::read(&shared).unwrap(), bytes);
-    assert_eq!(std::fs::read(&first_packet).unwrap(), bytes);
+    assert!(!first_packet.exists(), "the JPEG took no copy of the raw's packet");
     assert!(!second_packet.exists());
     let pending = queues(&s);
     assert_eq!(pending.len(), 1);
@@ -272,9 +277,9 @@ fn queued_stem_retry_preserves_shared_packet_after_batch_rollback() {
     let catalog_after = s.catalog.to_snapshot();
     let history_after = (s.undo.len(), s.redo.len(), s.commits());
     let repaired = queues(&s).is_empty();
-    let old_paths_absent = !b.exists() && !first.exists();
-    let files = [&a, &second, &first_packet, &second_packet].map(|p| std::fs::read(p).map_err(|e| e.kind()));
-    let retained = std::fs::read(&shared).map_err(|e| e.kind());
+    let old_paths_absent = !b.exists() && !first.exists() && !first_packet.exists();
+    let files = [&a, &second, &second_packet].map(|p| std::fs::read(p).map_err(|e| e.kind()));
+    let left_beside_jpeg = shared.exists();
     drop(s);
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(!dir.exists(), "fixture cleanup must precede the qualifying assertion");
@@ -283,6 +288,6 @@ fn queued_stem_retry_preserves_shared_packet_after_batch_rollback() {
     assert_eq!(catalog_after, catalog_before, "repair must preserve both catalog sources");
     assert_eq!(history_after, history_before);
     assert!(repaired && old_paths_absent);
-    assert_eq!(files, [Ok(jpeg), Ok(png), Ok(bytes.clone()), Ok(bytes.clone())]);
-    assert_eq!(retained, Ok(bytes), "queued repair took shared XMP from the photo restored by batch rollback");
+    assert_eq!(files, [Ok(jpeg), Ok(raw), Ok(bytes)]);
+    assert!(!left_beside_jpeg, "the retry copied the raw's packet beside the JPEG instead of moving it");
 }
