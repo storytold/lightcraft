@@ -4,14 +4,25 @@
 //! <https://github.com/lclevy/canon_cr3/blob/master/readme.md> (CMP1 and marker layouts),
 //! Canon patent US20160323602A1 (MED prediction, signed mapping, adaptive Rice coding),
 //! Canon patent JP2017192077A (zero-run flag and MELCODE of run length minus one), and
-//! ITU-T T.87 (MELCODE run index table). No third-party decoder source was consulted.
-//! CRX-specific boundaries and adaptive parameters were established by comparing
+//! ITU-T T.87 (MELCODE run index table). The core decoder was written without third-party decoder
+//! source; CRX-specific boundaries and adaptive parameters were established by comparing
 //! CC0 raw.pixls.us files against an external decoder used only as a black-box oracle.
+//!
+//! Translated from LibRaw `src/decoders/crx.cpp` (Copyright 2018-2019 Alexey Danilchenko,
+//! 2019-2026 Alex Tutubalin, LibRaw LLC; GNU LGPL 2.1 or CDDL 1.0, used under the LGPL 2.1, licence
+//! text in `LICENSE-LibRaw-LGPL-2.1.txt` next to this file; read at LibRaw master, 2026-11-24):
+//! partial subbands (`crxUpdateQparam`: a quantization delta before each row, see [`RowQuant`]),
+//! empty subbands decoding to zero, the version 0x200 per-level quantization tables including the
+//! low-frequency level (`crxMakeQStep`, see [`adaptive_step`]) and the tile add-on geometry that
+//! lets version 0x200 use several tiles (`crxProcessSubbands`, `crxSetupSubbandIdx`, see
+//! [`qp_cell`]). None of these variants occurs in a public file; they are checked on synthetic
+//! streams only, and the ten CC0 files of the oracle test below still decode bit for bit.
 //!
 //! Current support: version 0x100 lossless Bayer RAW and tiled C-RAW (horizontal and vertical
 //! tiles; vertical tiles use the same 5/3 overlap rule at top/bottom tile edges as the verified
-//! left/right edges, and are not yet checked against a real file),
-//! plus version 0x200 single-tile 14-bit C-RAW with adaptive QP quantization
+//! left/right edges, and are not yet checked against a real file), with or without partial subbands,
+//! plus version 0x200 14-bit C-RAW with adaptive QP quantization on every band (single tile verified
+//! on real files, several tiles synthetic only)
 //! (including odd-height QP maps, as on the EOS R7, and odd-height Bayer planes, as on the EOS R5 Mark II).
 //! Both ff01/ff02/ff03 and ff11/ff12/ff13 marker families are supported.
 //! Six full M50/R100/R8 sensor fixtures match an external decoder sample for sample.
@@ -112,7 +123,13 @@ pub(crate) fn decode(sample: &[u8], config: &Cr3Compression) -> Result<Vec<u16>>
             let plane = tile.planes.get(p).ok_or_else(|| corrupt("missing plane"))?;
             if config.levels == 0 {
                 let band = plane.bands.first().ok_or_else(|| corrupt("missing lossless band"))?;
-                lossless_plane(band_bytes(sample, band)?, tile.width / 2, tile.height / 2)
+                let bytes = band_bytes(sample, band)?;
+                // A plane without data is all zero (LibRaw `crxDecodePlane`).
+                if bytes.is_empty() {
+                    zeros((tile.width / 2).saturating_mul(tile.height / 2))
+                } else {
+                    lossless_plane(bytes, tile.width / 2, tile.height / 2)
+                }
             } else {
                 let edges =
                     TileEdges { left: tile.x > 0, right: tile.x + tile.width < width, top: tile.y > 0, bottom: tile.y + tile.height < height };
@@ -214,10 +231,8 @@ fn supports(config: &Cr3Compression) -> Result<()> {
     if !(8..=16).contains(&config.bit_depth) {
         return Err(RawError::Unsupported(format!("Canon CRX {}-bit samples", config.bit_depth)));
     }
-    if config.version == 0x200
-        && (config.levels != 3 || config.bit_depth != 14 || config.tile_width != config.width || config.tile_height != config.height)
-    {
-        return Err(RawError::Unsupported("Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image".into()));
+    if config.version == 0x200 && (config.levels != 3 || config.bit_depth != 14) {
+        return Err(RawError::Unsupported("Canon CRX version 0x200 requires a 14-bit Bayer C-RAW image".into()));
     }
     if config.median_bit_depth.is_some() {
         return Err(RawError::Unsupported("Canon CRX extended median-bit-depth header".into()));
@@ -231,21 +246,23 @@ fn validate_planes(tiles: &[Tile], config: &Cr3Compression) -> Result<()> {
             if !plane.partial || plane.rounded_bits != 0 || plane.bands.len() != 1 + usize::from(config.levels) * 3 {
                 return Err(RawError::Unsupported("Canon CRX plane coding flags".into()));
             }
-            for (index, band) in plane.bands.iter().enumerate() {
-                if band.partial {
-                    return Err(RawError::Unsupported("Canon CRX partial subband coding".into()));
+            for band in &plane.bands {
+                // Lossless planes ignore the subband quantization fields, the partial flag included
+                // (as LibRaw does); version 0x200 subband headers never carry it.
+                if config.levels == 0 {
+                    continue;
                 }
-                if config.levels != 0 {
-                    match band.quant {
-                        Quantization::Uniform(value) => {
-                            quant_step(value, MAX_UNIFORM_QUANT)?;
-                        }
-                        Quantization::Adaptive { gain, .. } => {
-                            if index < 4 && gain != 0 {
-                                return Err(RawError::Unsupported("Canon CRX adaptive quantization subband parameters".into()));
-                            }
-                        }
+                match band.quant {
+                    // A partial subband sends a quantization delta before every row: the header value
+                    // is only the starting point, each row's value is checked as it is decoded.
+                    Quantization::Uniform(_) if band.partial => {}
+                    Quantization::Uniform(value) => {
+                        quant_step(value, MAX_UNIFORM_QUANT)?;
                     }
+                    Quantization::Adaptive { .. } if band.partial => {
+                        return Err(RawError::Unsupported("Canon CRX partial subband with adaptive quantization".into()));
+                    }
+                    Quantization::Adaptive { .. } => {}
                 }
             }
         }
@@ -411,8 +428,8 @@ fn coded_band_width(index: usize, width: usize, edges: TileEdges) -> usize {
 }
 
 /// A high-frequency band entropy coded `coded_width` columns wide, cropped to its `width` synthesis columns.
-fn coded_high_frequency_band(src: &[u8], width: usize, coded_width: usize, height: usize) -> Result<Vec<i32>> {
-    let values = high_frequency_band(src, coded_width, height)?;
+fn coded_high_frequency_band(src: &[u8], width: usize, coded_width: usize, height: usize, rows: Option<&mut RowQuant>) -> Result<Vec<i32>> {
+    let values = high_frequency_rows(src, coded_width, height, rows)?;
     if coded_width == width {
         return Ok(values);
     }
@@ -445,13 +462,34 @@ fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edge
         .enumerate()
         .map(|(i, (&(w, h), band))| {
             let bytes = band_bytes(sample, band)?;
-            let mut data = if i == 0 { lossless_plane(bytes, w, h)? } else { coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h)? };
+            if bytes.is_empty() {
+                // A subband without data is all zero (LibRaw `crxDecodeLineWithIQuantization`).
+                return Ok(WaveletBand { width: w, height: h, data: zeros(w.saturating_mul(h))? });
+            }
+            let mut rows = match band.quant {
+                Quantization::Uniform(value) if band.partial => Some(RowQuant::new(value)),
+                _ => None,
+            };
+            let mut data = if i == 0 {
+                lossless_rows(bytes, w, h, rows.as_mut())?
+            } else {
+                coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h, rows.as_mut())?
+            };
+            let row_steps = rows.map(RowQuant::steps).transpose()?;
+            let uniform = match (&band.quant, &row_steps) {
+                (Quantization::Uniform(value), None) => Some(quant_step(*value, MAX_UNIFORM_QUANT)?),
+                _ => None,
+            };
             for (position, value) in data.iter_mut().enumerate() {
-                let step = match band.quant {
-                    Quantization::Uniform(value) => quant_step(value, MAX_UNIFORM_QUANT)?,
-                    Quantization::Adaptive { base, gain } => {
-                        adaptive_step(qp.ok_or_else(|| corrupt("missing QP map"))?, i, position % w, position / w, base, gain)?
+                let (x, y) = (position % w, position / w);
+                let step = match (&band.quant, uniform, &row_steps) {
+                    (_, Some(step), _) => step,
+                    (_, None, Some(steps)) => *steps.get(y).ok_or_else(|| corrupt("missing partial subband row quantization"))?,
+                    (Quantization::Adaptive { base, gain }, None, None) => {
+                        let (column, row) = qp_cell(i, x, y, width, height, edges)?;
+                        adaptive_step(qp.ok_or_else(|| corrupt("missing QP map"))?, i, column, row, *base, *gain)?
                     }
+                    (Quantization::Uniform(_), None, None) => return Err(corrupt("missing subband quantization")),
                 };
                 *value = value.checked_mul(step).ok_or_else(|| corrupt("dequantized coefficient overflow"))?;
             }
@@ -465,37 +503,127 @@ fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edge
     crx_wavelet::reconstruct(&bands, width, height, 3, edges)
 }
 
-fn adaptive_step(map: &QpMap, band: usize, x: usize, y: usize, base: u32, gain: u32) -> Result<i32> {
+/// `count` zero coefficients.
+fn zeros(count: usize) -> Result<Vec<i32>> {
+    let mut data = Vec::new();
+    data.try_reserve_exact(count).map_err(|_| RawError::Limit("CRX empty band allocation"))?;
+    data.resize(count, 0);
+    Ok(data)
+}
+
+/// The wavelet level of subband `band` (1 = finest, 3 = coarsest, which also holds LL) and whether
+/// it is high-pass across columns and across rows.
+fn band_level(band: usize) -> Result<(u32, bool, bool)> {
+    let level = match band {
+        0..=3 => 3,
+        4..=6 => 2,
+        7..=9 => 1,
+        _ => return Err(corrupt("subband index outside three levels")),
+    };
+    Ok(match band {
+        0 => (level, false, false),
+        b => match (b - 1) % 3 {
+            0 => (level, true, false),
+            1 => (level, false, true),
+            _ => (level, true, true),
+        },
+    })
+}
+
+/// The cell of the quantization tables that subband `band`'s coefficient (`x`, `y`) uses, as
+/// (QP-map column, row of its level's table), in a tile plane `plane_width` x `plane_height` with
+/// neighbours on `edges`.
+///
+/// Translated from LibRaw `crxProcessSubbands`, `crxSetupSubbandIdx` and
+/// `crxDecodeLineWithIQuantization` (src/decoders/crx.cpp, LGPL-2.1 or CDDL-1.0): a band's core is
+/// its size without the coefficients a neighbouring tile adds (low-pass `ceil(n / 2)`, high-pass
+/// `floor(n / 2)` of the previous level's core, starting from the tile plane), and a high-pass band of
+/// a tile with a left (top) neighbour starts with one added coefficient. Added coefficients use the
+/// nearest core cell. Columns shift right by `3 - level`, since every level shares the full-width QP
+/// map; rows index the level's own table (see [`adaptive_step`]). LibRaw's row lookup
+/// (`getSubbandRow`) subtracts the bottom add-on count where the column rule subtracts the left one,
+/// which reads before its table in a tile with a neighbour below; rows here follow the column rule.
+/// No public file has vertically tiled version 0x200 data to settle it.
+fn qp_cell(band: usize, x: usize, y: usize, plane_width: usize, plane_height: usize, edges: TileEdges) -> Result<(usize, usize)> {
+    let (level, x_high, y_high) = band_level(band)?;
+    let index = |position: usize, mut length: usize, high: bool, before: bool| {
+        for _ in 1..level {
+            length = length.div_ceil(2);
+        }
+        let core = if high { length / 2 } else { length.div_ceil(2) };
+        position.saturating_sub(usize::from(high && before)).min(core.saturating_sub(1))
+    };
+    Ok((index(x, plane_width, x_high, edges.left) >> (3 - level), index(y, plane_height, y_high, edges.top)))
+}
+
+/// The dequantization step of an adaptive (version 0x200) subband coefficient at `column` of the QP
+/// map and `row` of its level's table: level 1 (bands 7-9) reads QP row `row`, level 2 (bands 4-6)
+/// the mean of rows `2 row` and `2 row + 1`, level 3 (LL and bands 1-3, the adaptive low-frequency
+/// gains) the mean of rows `4 row` to `4 row + 3`; a row past the map's end repeats its last row.
+/// Level 3 follows LibRaw `crxMakeQStep` (LGPL-2.1 or CDDL-1.0), which builds the same tables.
+fn adaptive_step(map: &QpMap, band: usize, column: usize, row: usize, base: u32, gain: u32) -> Result<i32> {
     let step = if gain == 0 {
         u64::from(base)
     } else {
-        let (row, column) = if (4..=6).contains(&band) {
-            (y * 2, x / 2)
-        } else if (7..=9).contains(&band) {
-            (y, x / 4)
-        } else {
-            return Err(RawError::Unsupported("Canon CRX adaptive low-frequency quantization".into()));
-        };
-        if row >= map.height || column >= map.width {
+        let (level, ..) = band_level(band)?;
+        let rows = 1usize << (level - 1);
+        let first = row.checked_mul(rows).ok_or(RawError::Limit("CRX QP map index"))?;
+        if first >= map.height || column >= map.width {
             return Err(corrupt("QP coordinate outside map"));
         }
-        let index = row.checked_mul(map.width).and_then(|n| n.checked_add(column)).ok_or(RawError::Limit("CRX QP map index"))?;
-        let first = *map.data.get(index).ok_or_else(|| corrupt("QP coordinate outside map"))?;
-        let value = if band < 7 {
+        let mut sum = 0i32;
+        for r in first..first + rows {
             // An odd-height map (R7: 4732 rows give 1183 QP rows) leaves the
-            // last row of the coarser bands without a partner; it is used alone.
-            let second_row = (row + 1).min(map.height - 1);
-            let second = *map.data.get(second_row * map.width + column).ok_or_else(|| corrupt("QP average outside map"))?;
-            (first + second) / 2
-        } else {
-            first
-        };
+            // last row of the coarser bands without a partner; it is used again.
+            let at = r.min(map.height - 1) * map.width + column;
+            let value = *map.data.get(at).ok_or_else(|| corrupt("QP average outside map"))?;
+            sum = sum.checked_add(value).ok_or_else(|| corrupt("QP sum overflow"))?;
+        }
         // QP rows are averaged before looking up the integer step. R8 field
         // mutations distinguish this order from averaging dequantization steps.
+        let value = sum / rows as i32;
         let quant = u8::try_from(value - 124).map_err(|_| corrupt("QP value outside quantization table"))?;
         u64::from(base) + u64::from(gain) * quant_step(quant, MAX_ADAPTIVE_QUANT)? as u64 / 8
     };
     i32::try_from(step.max(1)).map_err(|_| corrupt("adaptive quantization step outside precision"))
+}
+
+/// The per-row quantization of a partial subband (version 0x100): every row opens with a signed delta
+/// of the quantization value, coded like a QP-map symbol with its own adaptive Rice parameter.
+/// Translated from LibRaw `crxUpdateQparam` (src/decoders/crx.cpp, LGPL-2.1 or CDDL-1.0).
+struct RowQuant {
+    value: i32,
+    k: u32,
+    rows: Vec<i32>,
+}
+
+impl RowQuant {
+    fn new(start: u8) -> Self {
+        Self { value: i32::from(start), k: 0, rows: Vec::new() }
+    }
+
+    fn next_row(&mut self, bits: &mut Bits<'_>) -> Result<()> {
+        let code = bits.qp_rice(self.k)?;
+        self.value = self.value.checked_add(signed(code)).ok_or_else(|| corrupt("partial subband quantization overflow"))?;
+        self.k = update_rice(self.k, code);
+        if self.k > 7 {
+            return Err(corrupt("partial subband Rice parameter exceeds 7"));
+        }
+        self.rows.try_reserve(1).map_err(|_| RawError::Limit("CRX partial subband rows"))?;
+        self.rows.push(self.value);
+        Ok(())
+    }
+
+    /// Each row's dequantization step.
+    fn steps(self) -> Result<Vec<i32>> {
+        self.rows
+            .into_iter()
+            .map(|value| {
+                let quant = u8::try_from(value).map_err(|_| RawError::Unsupported(format!("Canon CRX quantization value {value}")))?;
+                quant_step(quant, MAX_UNIFORM_QUANT)
+            })
+            .collect()
+    }
 }
 
 struct Header<'a> {
@@ -674,6 +802,11 @@ fn run(bits: &mut Bits<'_>, index: &mut usize, remaining: usize) -> Result<usize
 }
 
 fn lossless_plane(src: &[u8], width: usize, height: usize) -> Result<Vec<i32>> {
+    lossless_rows(src, width, height, None)
+}
+
+/// [`lossless_plane`], reading a partial subband's quantization delta before each row.
+fn lossless_rows(src: &[u8], width: usize, height: usize, mut rows: Option<&mut RowQuant>) -> Result<Vec<i32>> {
     let count = width
         .checked_mul(height)
         .filter(|&n| width > 0 && n > 0 && n <= MAX_SAMPLES.min(MAX_CRX_SAMPLES) / 4)
@@ -689,6 +822,9 @@ fn lossless_plane(src: &[u8], width: usize, height: usize) -> Result<Vec<i32>> {
     let (mut k, mut run_index) = (0u32, 0usize);
     let mut bits = Bits { src, at: 0 };
     for y in 0..height {
+        if let Some(rows) = rows.as_deref_mut() {
+            rows.next_row(&mut bits)?;
+        }
         let mut x = 0;
         let mut left = previous.first().copied().ok_or_else(|| corrupt("empty plane row"))?;
         while x < width {
@@ -734,7 +870,13 @@ fn lossless_plane(src: &[u8], width: usize, height: usize) -> Result<Vec<i32>> {
     Ok(output)
 }
 
+#[cfg(test)]
 fn high_frequency_band(src: &[u8], width: usize, height: usize) -> Result<Vec<i32>> {
+    high_frequency_rows(src, width, height, None)
+}
+
+/// A high-frequency band, reading a partial subband's quantization delta before each row.
+fn high_frequency_rows(src: &[u8], width: usize, height: usize, mut rows: Option<&mut RowQuant>) -> Result<Vec<i32>> {
     let count = width
         .checked_mul(height)
         .filter(|&n| width > 0 && n > 0 && n <= MAX_SAMPLES.min(MAX_CRX_SAMPLES) / 4)
@@ -752,6 +894,9 @@ fn high_frequency_band(src: &[u8], width: usize, height: usize) -> Result<Vec<i3
     let (mut k, mut run_index) = (0u32, 0usize);
     let mut bits = Bits { src, at: 0 };
     for y in 0..height {
+        if let Some(rows) = rows.as_deref_mut() {
+            rows.next_row(&mut bits)?;
+        }
         let (mut x, mut left) = (0, 0);
         while x < width {
             let above = *previous.get(x).ok_or_else(|| corrupt("above coefficient outside row"))?;
@@ -963,17 +1108,21 @@ mod tests {
         // unverified variants stay explicit unsupported errors
         {
             let (sample, config) = zero_craw(32, 64, 32, 32);
-            // Partial subband flag on the first band (flags at byte 32), then nonzero rounded bits on
-            // the first plane (flags at byte 20).
-            for (at, bit) in [(32, 0x08), (20, 0x02)] {
-                let mut broken = sample.clone();
-                broken[at] |= bit;
-                assert!(matches!(decode(&broken, &config), Err(RawError::Unsupported(_))), "byte {at}");
-                assert!(matches!(validate(&broken, &config), Err(RawError::Unsupported(_))), "byte {at}");
-            }
+            // Nonzero rounded bits on the first plane (flags at byte 20).
+            let mut broken = sample.clone();
+            broken[20] |= 0x02;
+            assert!(matches!(decode(&broken, &config), Err(RawError::Unsupported(_))));
+            assert!(matches!(validate(&broken, &config), Err(RawError::Unsupported(_))));
+            // A partial subband flag on a band coded without per-row deltas misreads the stream:
+            // an error, never a picture.
+            let mut broken = sample.clone();
+            broken[32] |= 0x08;
+            validate(&broken, &config).unwrap();
+            assert!(decode(&broken, &config).is_err());
+            // Version 0x100 markers in a version 0x200 sample.
             let mut config = config;
             config.version = 0x200;
-            assert!(matches!(decode(&sample, &config), Err(RawError::Unsupported(_))));
+            assert!(decode(&sample, &config).is_err());
         }
     }
 
@@ -1010,9 +1159,15 @@ mod tests {
 
     /// Bits of an all-zero CRX band (lossless or high-frequency: both code it as zero runs).
     fn zero_band(width: usize, height: usize) -> Vec<u8> {
+        zero_band_with(width, height, &[])
+    }
+
+    /// [`zero_band`] with `prefix` bits before every row.
+    fn zero_band_with(width: usize, height: usize, prefix: &[u8]) -> Vec<u8> {
         let mut bits = Vec::new();
         let mut index = 0usize;
         for _ in 0..height {
+            bits.extend_from_slice(prefix);
             if width == 1 {
                 bits.push(1); // Rice(0, k0).
                 continue;
@@ -1039,8 +1194,41 @@ mod tests {
         bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |byte, (i, &b)| byte | (b << (7 - i)))).collect()
     }
 
+    /// Bits packed MSB first, zero padded to a byte.
+    fn pack(bits: &[u8]) -> Vec<u8> {
+        bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |byte, (i, &b)| byte | (b << (7 - i)))).collect()
+    }
+
+    /// An all-zero band coded as a partial subband: each row opens with a zero quantization delta
+    /// (Rice code 0 at k = 0, a single 1 bit).
+    fn zero_partial_band(width: usize, height: usize) -> Vec<u8> {
+        zero_band_with(width, height, &[1])
+    }
+
+    /// A QP map of `width` x `height` cells, all at `qp`: the 32-bit literal, then zero deltas.
+    fn flat_qp_map(width: usize, height: usize, qp: u32) -> Vec<u8> {
+        let mut bits = Vec::new();
+        for b in (0..32).rev() {
+            bits.push(((2 * qp >> b) & 1) as u8);
+        }
+        let mut k = update_rice(0, 2 * qp);
+        for _ in 1..width * height {
+            bits.push(1);
+            bits.extend(std::iter::repeat_n(0, k as usize));
+            k = update_rice(k, 0);
+        }
+        pack(&bits)
+    }
+
     /// A version 0x100 C-RAW sample with all-zero coefficients, tiled `tw`×`th`.
     fn zero_craw(width: usize, height: usize, tw: usize, th: usize) -> (Vec<u8>, Cr3Compression) {
+        zero_craw_coded(width, height, tw, th, 0x100, false)
+    }
+
+    /// An all-zero C-RAW sample tiled `tw`×`th`: version 0x100 (with partial subbands when `partial`)
+    /// or version 0x200 with a flat QP map per tile and nonzero gains on every band, LL included.
+    fn zero_craw_coded(width: usize, height: usize, tw: usize, th: usize, version: u16, partial: bool) -> (Vec<u8>, Cr3Compression) {
+        let modern = version == 0x200;
         let (columns, rows) = (width.div_ceil(tw), height.div_ceil(th));
         let mut header = Vec::new();
         let mut data = Vec::new();
@@ -1061,18 +1249,50 @@ mod tests {
             for level in high.iter().rev() {
                 shapes.extend_from_slice(level);
             }
-            let bands: Vec<Vec<u8>> = shapes.iter().map(|&(w, h)| zero_band(w, h)).collect();
+            let bands: Vec<Vec<u8>> = shapes
+                .iter()
+                .enumerate()
+                .map(|(band, &(w, h))| {
+                    // Bands 5 and 8 of a tile with a right neighbour are coded one column wider.
+                    let edges = TileEdges { left: edges.0, right: edges.1, top: edges.2, bottom: edges.3 };
+                    let w = if band == 0 { w } else { coded_band_width(band, w, edges) };
+                    if partial { zero_partial_band(w, h) } else { zero_band(w, h) }
+                })
+                .collect();
             let plane_size: usize = bands.iter().map(Vec::len).sum();
-            marker(&mut header, 0xff01, (plane_size * 4) as u32, (index as u32) << 16);
+            let qp = if modern { flat_qp_map(w.div_ceil(16), h.div_ceil(4), 150) } else { Vec::new() };
+            if modern {
+                header.extend(0xff11u16.to_be_bytes());
+                header.extend(16u16.to_be_bytes());
+                header.extend(((plane_size * 4 + qp.len()) as u32).to_be_bytes());
+                header.extend((index as u16).to_be_bytes());
+                header.extend(0x4000u16.to_be_bytes());
+                header.extend((qp.len() as u32).to_be_bytes());
+                header.extend([0u8; 4]);
+                data.extend_from_slice(&qp);
+            } else {
+                marker(&mut header, 0xff01, (plane_size * 4) as u32, (index as u32) << 16);
+            }
             for plane in 0..4u32 {
-                marker(&mut header, 0xff02, plane_size as u32, (plane << 28) | 0x0800_0000);
+                marker(&mut header, if modern { 0xff12 } else { 0xff02 }, plane_size as u32, (plane << 28) | 0x0800_0000);
                 for (band, bytes) in bands.iter().enumerate() {
-                    marker(&mut header, 0xff03, bytes.len() as u32, ((band as u32) << 28) | 0x0020_0000);
+                    if modern {
+                        header.extend(0xff13u16.to_be_bytes());
+                        header.extend(16u16.to_be_bytes());
+                        header.extend((bytes.len() as u32).to_be_bytes());
+                        header.extend((((band as u32) << 28) | 8).to_be_bytes());
+                        header.extend(1u32.to_be_bytes());
+                        header.extend([0u8; 4]);
+                    } else {
+                        let flags = ((band as u32) << 28) | 0x0020_0000 | if partial { 0x0800_0000 } else { 0 };
+                        marker(&mut header, 0xff03, bytes.len() as u32, flags);
+                    }
                     data.extend_from_slice(bytes);
                 }
             }
         }
         let mut config = coding();
+        config.version = version;
         (config.width, config.height, config.tile_width, config.tile_height) = (width as u32, height as u32, tw as u32, th as u32);
         config.levels = 3;
         config.header_size = header.len() as u32;
@@ -1135,20 +1355,20 @@ mod tests {
         // width is coded one column wider, so the geometry selects 3 and crops it.
         let coded = coded_band_width(8, 2, TileEdges { right: true, ..TileEdges::default() });
         assert_eq!(coded, 3);
-        assert_eq!(coded_high_frequency_band(&src, 2, coded, 2).unwrap(), [0, 0, 0, 0]);
+        assert_eq!(coded_high_frequency_band(&src, 2, coded, 2, None).unwrap(), [0, 0, 0, 0]);
         // Elsewhere the same stream is read at its synthesis width.
-        assert_eq!(coded_high_frequency_band(&src, 2, coded_band_width(7, 2, TileEdges::default()), 2).unwrap(), [0, 0, 5, -2]);
+        assert_eq!(coded_high_frequency_band(&src, 2, coded_band_width(7, 2, TileEdges::default()), 2, None).unwrap(), [0, 0, 5, -2]);
         // The #899 reproducer: an odd width is never extended, so the narrow reading is kept.
         let src = [0x00, 0x33];
         assert_eq!(coded_band_width(5, 3, TileEdges { right: true, ..TileEdges::default() }), 3);
-        assert_eq!(coded_high_frequency_band(&src, 3, 3, 1).unwrap(), [5, 0, -1]);
+        assert_eq!(coded_high_frequency_band(&src, 3, 3, 1, None).unwrap(), [5, 0, -1]);
         assert_eq!(high_frequency_band(&src, 4, 1).unwrap(), [5, 0, 0, 0]);
         // a band that fails at its coded width is an error
         {
             // No fallback to another width: a stream that only fits 2 columns is corrupt where 3 are coded.
             let src = [0xc0, 0x0f];
             assert!(high_frequency_band(&src, 4, 2).is_err());
-            assert!(coded_high_frequency_band(&src, 3, 4, 2).is_err());
+            assert!(coded_high_frequency_band(&src, 3, 4, 2, None).is_err());
         }
     }
 
@@ -1330,6 +1550,121 @@ mod tests {
         assert_eq!(decode(&sample, &config).unwrap(), vec![8192; 256]);
         for end in 0..sample.len() {
             assert!(decode(&sample[..end], &config).is_err());
+        }
+    }
+
+    #[test]
+    fn partial_subbands_read_a_quantization_delta_before_every_row() {
+        // Width 1, two rows: delta +1 (Rice code 2 at k 0: 001) then coefficient symbol 2 (+1, 001);
+        // delta -1 (code 1: 01) then symbol 1 (-1, 01). Rows take quantization 9 + 1 and 10 - 1.
+        let mut rows = RowQuant::new(9);
+        let band = high_frequency_rows(&pack(&[0, 0, 1, 0, 0, 1, 0, 1, 0, 1]), 1, 2, Some(&mut rows)).unwrap();
+        assert_eq!(band, [1, -1]);
+        assert_eq!(rows.rows, [10, 9]);
+        assert_eq!(rows.steps().unwrap(), [2, 1]);
+        // A delta that leaves the quantization table is unsupported, never a zero step.
+        let mut rows = RowQuant::new(4);
+        high_frequency_rows(&pack(&[0, 0, 0, 1, 1]), 1, 1, Some(&mut rows)).unwrap();
+        assert!(matches!(rows.steps(), Err(RawError::Unsupported(_))));
+        // A delta Rice parameter above 7 is corrupt: every row escapes (23 zeros, 1, symbol 255).
+        let mut escape = vec![0u8; 23];
+        escape.push(1);
+        escape.extend([1u8; 8]);
+        let mut bits = Vec::new();
+        for _ in 0..4 {
+            bits.extend(&escape);
+            bits.push(1);
+        }
+        // Four escapes raise k to 7; then 3 zeros, 1 and 7 bits give 384, which would make it 8.
+        bits.extend([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+        let mut rows = RowQuant::new(4);
+        assert!(high_frequency_rows(&pack(&bits), 1, 5, Some(&mut rows)).is_err());
+        // Whole samples: all-zero partial subbands in single, horizontal, vertical and grid tiles.
+        for (width, height, tw, th) in [(16, 16, 16, 16), (64, 32, 32, 32), (32, 64, 32, 32), (48, 40, 32, 24)] {
+            let (sample, config) = zero_craw_coded(width, height, tw, th, 0x100, true);
+            validate(&sample, &config).unwrap();
+            assert_eq!(decode(&sample, &config).unwrap(), vec![8192; width * height], "{width}x{height} in {tw}x{th}");
+            for end in (0..sample.len()).step_by(5) {
+                assert!(decode(&sample[..end], &config).is_err());
+            }
+        }
+        // The partial flag on a lossless plane is ignored, as LibRaw does.
+        let mut sample = flat_sample();
+        sample[20] |= 0x08;
+        assert_eq!(decode(&sample, &coding()).unwrap(), vec![8193; 16]);
+    }
+
+    #[test]
+    fn adaptive_low_frequency_gains_average_four_qp_rows() {
+        // LL and bands 1-3 read the mean of four QP rows: floor((150+153+151+149)/4) = 150, value 26,
+        // step 12; gain 8/8. Band 7 reads row 0 alone (QP 150 too, by chance), band 4 two rows (151).
+        let map = QpMap { width: 1, height: 4, data: vec![150, 153, 151, 149] };
+        for band in 0..4 {
+            assert_eq!(adaptive_step(&map, band, 0, 0, 0, 8).unwrap(), 12, "band {band}");
+        }
+        assert_eq!(adaptive_step(&map, 4, 0, 0, 0, 8).unwrap(), 14);
+        assert!(adaptive_step(&map, 0, 0, 1, 0, 8).is_err());
+        assert!(adaptive_step(&map, 10, 0, 0, 0, 8).is_err());
+        // A map shorter than four rows repeats its last row (LibRaw clamps the same way).
+        let short = QpMap { width: 1, height: 2, data: vec![150, 158] };
+        // floor((150 + 158 + 158 + 158) / 4) = 156, value 32, step 25.
+        assert_eq!(adaptive_step(&short, 0, 0, 0, 0, 8).unwrap(), 25);
+    }
+
+    #[test]
+    fn qp_cells_follow_the_tile_geometry() {
+        let single = TileEdges::default();
+        // Single tile: level 1 columns step by four, level 2 by two, level 3 by one; rows are the band row.
+        assert_eq!(qp_cell(7, 13, 5, 64, 64, single).unwrap(), (3, 5));
+        assert_eq!(qp_cell(4, 13, 5, 64, 64, single).unwrap(), (6, 5));
+        assert_eq!(qp_cell(0, 7, 7, 64, 64, single).unwrap(), (7, 7));
+        // A left neighbour adds one leading coefficient to high-pass bands only.
+        let left = TileEdges { left: true, ..TileEdges::default() };
+        assert_eq!(qp_cell(7, 0, 0, 64, 64, left).unwrap(), (0, 0));
+        assert_eq!(qp_cell(7, 4, 0, 64, 64, left).unwrap(), (0, 0));
+        assert_eq!(qp_cell(7, 5, 0, 64, 64, left).unwrap(), (1, 0));
+        assert_eq!(qp_cell(8, 4, 0, 64, 64, left).unwrap(), (1, 0));
+        // Coefficients past the core repeat its last cell: level 1 high-pass core of 64 is 32.
+        let right = TileEdges { right: true, ..TileEdges::default() };
+        assert_eq!(qp_cell(7, 33, 0, 64, 64, right).unwrap(), (7, 0));
+        assert_eq!(qp_cell(9, 0, 40, 64, 64, TileEdges { bottom: true, ..TileEdges::default() }).unwrap(), (0, 31));
+        assert!(qp_cell(10, 0, 0, 64, 64, single).is_err());
+    }
+
+    #[test]
+    fn adaptive_v200_tiles_reconstruct_sensor_samples() {
+        // Version 0x200 in single, horizontal, vertical and grid tiles, every band (LL included)
+        // with an adaptive gain, so every coefficient looks up a QP cell of its own tile's map.
+        for (width, height, tw, th) in [(32, 32, 32, 32), (64, 32, 32, 32), (96, 32, 32, 32), (32, 64, 32, 32), (64, 64, 32, 32), (48, 40, 32, 24)] {
+            let (sample, config) = zero_craw_coded(width, height, tw, th, 0x200, false);
+            validate(&sample, &config).unwrap();
+            assert_eq!(decode(&sample, &config).unwrap(), vec![8192; width * height], "{width}x{height} in {tw}x{th}");
+            for end in (0..sample.len()).step_by(5) {
+                assert!(decode(&sample[..end], &config).is_err());
+            }
+        }
+        // A partial flag on a version 0x200 band is unsupported.
+        let (mut sample, config) = zero_craw_coded(64, 32, 32, 32, 0x200, false);
+        // First band header: tile (20) + plane (12) markers, then the band flags at offset 8.
+        sample[20 + 12 + 8] |= 0x08;
+        assert!(matches!(validate(&sample, &config), Err(RawError::Unsupported(_))));
+        assert!(matches!(decode(&sample, &config), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn hostile_crx_variants_never_panic() {
+        // Every single-byte corruption of the new variants' samples is an error or a picture.
+        for (version, partial) in [(0x100, true), (0x200, false)] {
+            let (sample, config) = zero_craw_coded(64, 32, 32, 32, version, partial);
+            for at in 0..sample.len() {
+                // bits 0 and 3 everywhere (the partial flag among them), every bit on every fourth byte
+                for flip in if at % 4 == 0 { [0x09u8, 0xff].as_slice() } else { [0x09u8].as_slice() } {
+                    let mut broken = sample.clone();
+                    broken[at] ^= flip;
+                    let _ = validate(&broken, &config);
+                    let _ = decode(&broken, &config);
+                }
+            }
         }
     }
 

@@ -12,10 +12,9 @@
 //!
 //! The accepted ranges are the ones in `vendor/crx.rs`: uniform quantization values 4..=44 and
 //! adaptive QP values 131..=175. Odd QP-map heights are not a rejected variant any more (the last
-//! QP row is used on its own); the unit tests in `vendor/crx.rs` cover them. The deeper
-//! `"Canon CRX adaptive low-frequency quantization"` dequantization gate is unreachable through
-//! this API: plane validation rejects any gain on the low-frequency bands first. It is defence in
-//! depth, not a contract, and has no test here.
+//! QP row is used on its own); the unit tests in `vendor/crx.rs` cover them. Partial subbands,
+//! version 0x200 tiling and adaptive gains on the low-frequency bands decode since they were ported
+//! from LibRaw (`docs/cr3.md`); the controls below pin that they are no longer rejected.
 
 use lcc_raw::{RawData, RawError, decode, probe_info};
 
@@ -262,22 +261,21 @@ fn unverified_container_and_stream_variants_are_unsupported() {
         coding[24] = 7;
         assert_rejected("7-bit", &cr3_file(&coding, &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)), "Canon CRX 7-bit samples");
     }
-    // v200 requires a single tile 14 bit image
+    // v200 requires a 14 bit image
     {
         let mut coding = adaptive_coding();
         coding[24] = 12;
         assert_rejected(
             "0x200 12-bit",
             &cr3_file(&coding, &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP)),
-            "Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image",
+            "Canon CRX version 0x200 requires a 14-bit Bayer C-RAW image",
         );
+        // Two tile columns are a supported layout now: this single-tile stream no longer fits it,
+        // which is corrupt data, not an unsupported variant.
         let mut coding = adaptive_coding();
-        coding[16..20].copy_from_slice(&8u32.to_be_bytes()); // two tile columns
-        assert_rejected(
-            "0x200 two tiles",
-            &cr3_file(&coding, &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP)),
-            "Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image",
-        );
+        coding[16..20].copy_from_slice(&8u32.to_be_bytes());
+        let file = cr3_file(&coding, &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP));
+        assert!(!matches!(decode(&file), Err(RawError::Unsupported(_))));
     }
     // ff1x marker family inside a 0x100 stream is unsupported
     {
@@ -321,26 +319,20 @@ fn unverified_container_and_stream_variants_are_unsupported() {
     {
         assert_rejected("rounded plane", &cr3_file(&cmp1(), &lossless_stream(0xff01, 0xff02, 0xff03, 1 << 25, 0)), "Canon CRX plane coding flags");
     }
-    // partial subband coding is unsupported
+    // a partial subband flag on a lossless plane is ignored, as LibRaw does
     {
-        assert_rejected(
-            "partial subband",
-            &cr3_file(&cmp1(), &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0x0800_0000)),
-            "Canon CRX partial subband coding",
-        );
+        let file = cr3_file(&cmp1(), &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0x0800_0000));
+        probe_info(&file).unwrap();
+        decode(&file).unwrap();
     }
-    // adaptive gains on low frequency bands are unsupported
+    // adaptive gains on the low-frequency bands decode (LibRaw crxMakeQStep: four QP rows averaged)
     {
-        // Plane validation rejects any gain on bands 0-3 before decoding. The deeper dequantization
-        // gate behind it ("Canon CRX adaptive low-frequency quantization") is therefore unreachable
-        // through the public API; this asserts the reachable gate's exact string.
-        let mut gains = ADAPTIVE_GAINS;
-        gains[0] = 4;
-        assert_rejected(
-            "LL band gain",
-            &cr3_file(&adaptive_coding(), &adaptive_stream(&gains, 0, 0, ADAPTIVE_QP)),
-            "Canon CRX adaptive quantization subband parameters",
-        );
+        let gains = [4, 4, 8, 8, 4, 4, 8, 8, 8, 16];
+        let file = cr3_file(&adaptive_coding(), &adaptive_stream(&gains, 0, 0, ADAPTIVE_QP));
+        probe_info(&file).unwrap();
+        let raw = decode(&file).unwrap();
+        let RawData::U16(samples) = &raw.data else { panic!("integer sensor data expected") };
+        assert!(samples.iter().all(|&v| v == 8192));
     }
 }
 
