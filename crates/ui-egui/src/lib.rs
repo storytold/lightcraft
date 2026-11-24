@@ -2382,7 +2382,7 @@ impl LccApp {
         i18n::set_language(self.ui.language);
         self.frame_log.clear();
         // (a frame that focuses, unfocuses, hides or shows the window says so in its log, and is timed)
-        if let Some(what) = self.focus_watch.observe(focus_watch::WindowState::of(ctx)) {
+        if let Some(what) = self.focus_watch.observe(focus_watch::WindowState::of(ctx), self.perf.host_frame_ms) {
             self.note_ran(what);
         }
         // painting on the loupe (OneSlips, NOTES-1028 note 29): a brush stroke in progress and a moment after it

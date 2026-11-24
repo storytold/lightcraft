@@ -30,6 +30,9 @@ pub struct FocusWatch {
     last: Option<WindowState>,
     /// The change seen at the start of this frame, reported at its end.
     pending: Option<&'static str>,
+    /// The change of the previous frame, whose host time (painting and presenting, where a GPU
+    /// surface reconfigure would show) is only known on the next frame.
+    follow: Option<&'static str>,
     /// Changes seen since start (the first frame is not one).
     pub changes: u64,
     /// The UI-thread time of the last frame with a change.
@@ -52,7 +55,15 @@ pub fn change(before: WindowState, now: WindowState) -> Option<&'static str> {
 
 impl FocusWatch {
     /// Note this frame's state (at the start of the frame's logic); the change it makes, if any.
-    pub fn observe(&mut self, now: WindowState) -> Option<&'static str> {
+    /// `host_prev_ms` is the host's time for the previous frame, painting included (`None`
+    /// headless): logged for the frame of a change, as the time `finish` cannot see.
+    pub fn observe(&mut self, now: WindowState, host_prev_ms: Option<f64>) -> Option<&'static str> {
+        if let (Some(what), Some(ms)) = (self.follow.take(), host_prev_ms.filter(|m| m.is_finite())) {
+            log::debug!("{what}: {ms:.1} ms host frame (painting and presenting included)");
+            if profiling() {
+                eprintln!("[profile] {what}: {ms:.1} ms host frame (painting and presenting included)");
+            }
+        }
         let before = self.last.replace(now);
         self.pending = before.and_then(|b| change(b, now));
         if self.pending.is_some() {
@@ -64,6 +75,7 @@ impl FocusWatch {
     /// The frame ended after `logic_ms` + `layout_ms` on the UI thread: log a change seen in it.
     pub fn finish(&mut self, logic_ms: f64, layout_ms: f64) {
         let Some(what) = self.pending.take() else { return };
+        self.follow = Some(what);
         let ms = if (logic_ms + layout_ms).is_finite() { (logic_ms + layout_ms).max(0.0) } else { 0.0 };
         self.last_ms = Some(ms);
         self.worst_ms = self.worst_ms.max(ms);
@@ -83,6 +95,12 @@ fn profiling() -> bool {
 mod tests {
     use super::*;
 
+    impl FocusWatch {
+        fn observe_t(&mut self, now: WindowState) -> Option<&'static str> {
+            self.observe(now, Some(f64::NAN))
+        }
+    }
+
     const FV: WindowState = WindowState { focused: true, visible: true };
     const BV: WindowState = WindowState { focused: false, visible: true };
     const BH: WindowState = WindowState { focused: false, visible: false };
@@ -90,25 +108,25 @@ mod tests {
     #[test]
     fn changes_are_named_and_counted_once() {
         let mut w = FocusWatch::default();
-        assert_eq!(w.observe(FV), None, "the first frame is no change");
-        assert_eq!(w.observe(FV), None);
-        assert_eq!(w.observe(BV), Some("window focus lost"));
-        assert_eq!(w.observe(BH), Some("window hidden"));
-        assert_eq!(w.observe(BH), None);
-        assert_eq!(w.observe(FV), Some("window focus gained"));
+        assert_eq!(w.observe_t(FV), None, "the first frame is no change");
+        assert_eq!(w.observe_t(FV), None);
+        assert_eq!(w.observe_t(BV), Some("window focus lost"));
+        assert_eq!(w.observe_t(BH), Some("window hidden"));
+        assert_eq!(w.observe_t(BH), None);
+        assert_eq!(w.observe_t(FV), Some("window focus gained"));
         assert_eq!(w.changes, 3);
     }
 
     #[test]
     fn finish_records_only_changed_frames_and_survives_bad_times() {
         let mut w = FocusWatch::default();
-        w.observe(FV);
+        w.observe_t(FV);
         w.finish(5.0, 5.0);
         assert_eq!(w.last_ms, None);
-        w.observe(BV);
+        w.observe_t(BV);
         w.finish(f64::NAN, 1.0);
         assert_eq!(w.last_ms, Some(0.0));
-        w.observe(FV);
+        w.observe_t(FV);
         w.finish(-3.0, 1.0);
         assert_eq!(w.last_ms, Some(0.0));
         assert!(w.worst_ms.is_finite());

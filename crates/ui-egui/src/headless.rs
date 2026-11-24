@@ -5903,10 +5903,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// With no profile chosen, previews follow the profile of the screen showing the window (the
-    /// host's `screen_profile`: macOS doesn't colour-manage the window, issue #787), read again so
-    /// a move to another screen is followed. A chosen profile wins; choosing none goes back to the
-    /// screen's at once; a screen without a profile is sRGB.
     /// Issue #1188 (a spinning cursor on macOS when the app comes back to the front, even idle): a
     /// frame that hides, shows or focuses the window is seen and timed, stays within a frame budget,
     /// and the work a regained focus starts (here the folder poll) runs as an activity row on a
@@ -5944,6 +5940,10 @@ mod tests {
         assert!(r.to_string().contains("windowFocus"), "{r}");
     }
 
+    /// With no profile chosen, previews follow the profile of the screen showing the window (the
+    /// host's `screen_profile`: macOS doesn't colour-manage the window, issue #787), read again so
+    /// a move to another screen is followed. A chosen profile wins; choosing none goes back to the
+    /// screen's at once; a screen without a profile is sRGB.
     #[test]
     fn previews_follow_the_screen_profile_while_none_is_chosen() {
         use lcc_codecs::{NamedSpace, icc::write_named};
