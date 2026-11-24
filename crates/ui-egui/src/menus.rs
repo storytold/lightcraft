@@ -338,9 +338,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // {theme: charcoal | midnight | silver | paper}: pick a theme and fix the mode to its family.
     ("view.theme", "Theme", None, ""),
     // {shade?: theme | black | darkGray | mediumGray | lightGray | white}: the shade behind the photo
-    // in the loupe (cycles when omitted). Window ▸ Appearance ▸ Loupe Background, the loupe's right-click.
+    // in the loupe (cycles when omitted). Window ▸ Appearance (Loupe Background group), the loupe's right-click.
     ("view.loupeBackground", "Next Loupe Background", None, ""),
-    // {shade?}: the same for the filmstrip. Window ▸ Appearance ▸ Filmstrip Background.
+    // {shade?}: the same for the filmstrip. Window ▸ Appearance (Filmstrip Background group).
     ("view.filmstripBackground", "Next Filmstrip Background", None, ""),
     ("dialog.allMetadata", "All Metadata…", None, "Metadata"),
     ("dialog.faceModel", "Add Face Model…", None, ""),
