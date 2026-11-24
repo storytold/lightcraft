@@ -433,7 +433,10 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     let mut fire: Vec<String> = Vec::new();
     // An Escape no framework component took reaches the app as the window's Cancel (the runtime keeps the raw key):
     // the app's own Escape bindings (View ▸ Back and the like) read it there, last in the pass.
-    let window_escape = craft::ui::runtime::keys::with_window_intents(ctx, false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
+    // While a framework popup (a menu, a dropdown) is open the Escape is the popup's: the runtime lends the focused
+    // row's unused Escape to the window, so taking it here, before the popup is drawn, would leave the menu open.
+    let popup_owns_escape = craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Keys);
+    let window_escape = !popup_owns_escape && craft::ui::runtime::keys::with_window_intents(ctx, false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
     // The same for the clipboard events the runtime routed to the window as edit commands.
     let mut window_edits: Vec<egui::Event> = Vec::new();
     craft::ui::runtime::keys::with_window_intents(ctx, false, |w| {
@@ -461,7 +464,9 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     // (the in-window menu bar's menus are the framework's, not egui popups)
-    let popup_open = egui::Popup::is_any_open(ctx) || craft::ui::menu::bar::is_open(ctx);
+    let popup_open = egui::Popup::is_any_open(ctx)
+        || craft::ui::menu::bar::is_open(ctx)
+        || craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Keys);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
     let popup_open = popup_open || app.text_focus;
     ctx.input(|i| {
