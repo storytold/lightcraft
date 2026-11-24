@@ -1,7 +1,10 @@
 use super::{Arc, DcpProfile, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 78;
+/// 84: full-size raw demosaic runs on the white-balanced mosaic with a clip mask (#1328).
+/// 83 is reserved by open #3943.
+/// 85: the conditional-median tone fallback is refused when its pooling spans more than half a stop (#3618).
+pub const RENDER_CACHE_VERSION: u64 = 85;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
