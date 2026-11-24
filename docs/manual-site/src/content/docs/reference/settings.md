@@ -41,6 +41,7 @@ sidebar:
 - **Edit In**: ask which file to edit, or always edit a copy with adjustments, a copy, or the original.
 - **PhotoCraft** and **Other editor**: where each is, and the copy's file type (PSD or TIFF), bit depth and colour space.
   See [Edit In and actions](../../automate/actions/).
+- **More editors**: Photo ▸ Edit In ▸ Edit In Presets… saves them, each with its own items in the Edit In menu. See [Stacks](../../library/stacks/).
 
 ## Import
 

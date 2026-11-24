@@ -792,6 +792,7 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         })),
         open_with: Some(Box::new(editors::open_with)),
         open_all_with: Some(Box::new(editors::open_all_with)),
+        open_preset: Some(Box::new(editors::open_preset)),
         check_editor: Some(Box::new(editors::check)),
         storage_access: None,
         camera_roll: None,

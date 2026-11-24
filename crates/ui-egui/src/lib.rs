@@ -562,6 +562,10 @@ pub type SaveToGalleryFn = Box<dyn FnMut(&[String], bool) -> Result<std::sync::m
 pub type OpenWithFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// Open several files with one start of an application (`app` as for [`OpenWithFn`]).
 pub type OpenAllWithFn = Box<dyn FnMut(&[String], &str) -> Result<(), String>>;
+/// Start an editor once with arguments and several files (an Edit In preset's menu item on a
+/// batch): `args` (one holding `{file}` takes the paths where it stands), then the files, unless
+/// `args` is empty and there is one file, which [`Services::open_with`] opens.
+pub type OpenPresetFn = Box<dyn FnMut(&[String], &str, &[String]) -> Result<(), String>>;
 /// Linux model-folder work: wait for the default opener on a background task.
 #[cfg(target_os = "linux")]
 pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -721,6 +725,10 @@ pub struct Services {
     /// Open several files with one start of the editor (Open Original; desktop only): an editor
     /// that keeps one window takes them all. None = [`Services::open_with`] for each.
     pub open_all_with: Option<OpenAllWithFn>,
+    /// Start a preset's editor with its arguments and every file of a batch (desktop only). None =
+    /// a preset without arguments opens through [`Services::open_all_with`] / [`Services::open_with`];
+    /// one with arguments can't be started.
+    pub open_preset: Option<OpenPresetFn>,
     /// Optional worker-safe model-folder opener alongside `open_with` (Linux desktop only).
     #[cfg(target_os = "linux")]
     pub open_model_folder: Option<OpenModelFolderFn>,

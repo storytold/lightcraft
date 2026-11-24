@@ -753,6 +753,7 @@ fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             "To hand this editor the original file itself instead (the raw, without a copy: DxO PhotoLab, for example), right-click a photo → Edit In → Open Original in Other Editor (RAW, no copy).",
         ),
     );
+    hint(ui, t, crate::i18n::tr("For more editors, each with its own items in Photo → Edit In, use Photo → Edit In → Edit In Presets…."));
 }
 
 /// A language's name as the picker shows it: its own name (`Deutsch`), or, when no loaded font

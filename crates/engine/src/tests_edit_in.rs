@@ -117,6 +117,109 @@ fn editor_presets_save_reload_and_delete() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Open Source File hands the photo's own file over (a raw included) and makes nothing; a
+/// record whose file is not a photo is refused, as for Open Original. A preset's menu style and
+/// its items are saved and read back, and an agent can't set the items' arguments.
+#[test]
+fn open_source_file_and_preset_menu_styles() {
+    let dir = temp_dir("source");
+    let mut s = session(&dir);
+    let recorder = std::sync::Arc::new(crate::desktop::Recorder::default());
+    s.desktop = recorder.clone();
+    let raw = dir.join("DSC_0001.NEF");
+    std::fs::write(&raw, b"not really a raw: only handed over").unwrap();
+    let id = s.catalog.alloc_photo_id();
+    let record = lcc_catalog::Photo::new(
+        id,
+        lcc_catalog::Source::File { path: raw.to_string_lossy().into_owned() },
+        "DSC_0001.NEF",
+        "NEF",
+        60,
+        40,
+        "2026-01-01T10:00:00",
+    );
+    s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(record) }).unwrap();
+    s.selection = crate::Selection::single(id);
+    assert!(s.execute("photo.editIn", &json!({"mode": "original"})).is_err(), "a raw is not a file an editor edits in place");
+    let n = s.catalog.photos().count();
+    let r = s.execute("photo.editIn", &json!({"mode": "sourceFile", "launch": true})).unwrap();
+    assert_eq!((r["path"].as_str(), r["id"].as_u64(), r["mode"].as_str()), (Some(raw.to_string_lossy().as_ref()), Some(id.0), Some("sourceFile")));
+    assert_eq!(s.catalog.photos().count(), n, "nothing is made");
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()).unwrap_or_default()).collect::<Vec<_>>(),
+        vec!["DSC_0001.NEF".to_string()],
+        "nothing is made"
+    );
+    let evil = dir.join("payload.exe");
+    std::fs::write(&evil, b"MZ").unwrap();
+    let bad = s.catalog.alloc_photo_id();
+    let record = lcc_catalog::Photo::new(
+        bad,
+        lcc_catalog::Source::File { path: evil.to_string_lossy().into_owned() },
+        "payload.exe",
+        "EXE",
+        60,
+        40,
+        "2026-01-01T10:00:00",
+    );
+    s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(record) }).unwrap();
+    let e = s.execute("photo.editIn", &json!({"id": bad.0, "mode": "sourceFile"})).unwrap_err().to_string();
+    assert!(e.contains("file types the app reads"), "{e}");
+    assert!(s.execute("photo.editIn", &json!({"mode": "sourceFile", "app": "/bin/sh"})).is_ok(), "the command line may name the program");
+
+    // menu styles and their items
+    let a = s
+        .execute(
+            "editIn.savePreset",
+            &json!({"name": "PureRAW", "app": "/opt/pureraw", "args": ["-quiet"], "mode": "sourceFile", "menu": "actions", "actions": [
+                {"label": "Process with the Latest Settings", "args": ["--last"]},
+                {"label": "Process Immediately"},
+                {"label": "Preview and Process", "args": ["--preview", "{file}"]}
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(a["menu"], "actions");
+    assert_eq!(a["actions"].as_array().map(Vec::len), Some(3));
+    s.execute("editIn.savePreset", &json!({"name": "PhotoLab", "app": "/opt/photolab", "mode": "sourceFile", "menu": "single"})).unwrap();
+    for bad in [
+        json!({"name": "x", "menu": "everything"}),
+        json!({"name": "x", "menu": "actions", "actions": [{"label": ""}]}),
+        json!({"name": "x", "menu": "actions", "actions": vec![json!({"label": "ok"}); 9]}),
+    ] {
+        assert!(s.execute("editIn.savePreset", &bad).is_err(), "{bad}");
+    }
+    let mut again = session(&dir);
+    let l = again.execute("editIn.presets", &json!({})).unwrap();
+    let user = l["user"].as_array().unwrap();
+    assert_eq!(user.len(), 2);
+    assert_eq!(user[0]["actions"][2]["args"], json!(["--preview", "{file}"]));
+    s.execute("photo.editIn", &json!({"id": id.0, "preset": "PureRAW", "mode": "sourceFile", "launch": true})).unwrap();
+    assert!(
+        matches!(recorder.requests().as_slice(), [_, crate::desktop::Request::Launch(line)] if line.contains(&"-quiet".to_string()) && line.contains(&raw.to_string_lossy().to_string())),
+        "{:?}",
+        recorder.requests()
+    );
+    // a preset that names no program can have its file settings saved by an agent, but not what
+    // its items start
+    s.execute("editIn.savePreset", &json!({"name": "Plain", "menu": "actions", "actions": [{"label": "Run"}]})).unwrap();
+    assert!(
+        crate::cmd::edit_in::refuse_program_choice(
+            &mut s,
+            "editIn.savePreset",
+            &json!({"name": "Plain", "bitDepth": 8, "actions": [{"label": "Run"}]})
+        )
+        .is_ok()
+    );
+    let e = crate::cmd::edit_in::refuse_program_choice(
+        &mut again,
+        "editIn.savePreset",
+        &json!({"name": "PureRAW", "actions": [{"label": "Process with the Latest Settings", "args": ["--else"]}]}),
+    )
+    .unwrap_err();
+    assert!(e.contains("preset"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn open_as_layers_builds_one_psd_from_the_selection() {
     let dir = temp_dir("layers");
