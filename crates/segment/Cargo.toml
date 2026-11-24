@@ -8,6 +8,10 @@ description = "LightCraft segmentation: SAM 3 (Segment Anything with Concepts) i
 [lints]
 workspace = true
 
+[features]
+# NVIDIA GPU (needs the CUDA toolkit to build): `cargo build --release --features lightcraft-segment/cuda`
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
