@@ -1,5 +1,5 @@
-//! Cost of the two stages the GPU renderer leaves to the CPU (plan item 4.6): Even Out / Fill spots
-//! (`spots.rs`, the GPU path runs the scene-linear stage on the CPU for such a photo) and soft proofs against an
+//! Cost of the stages the GPU renderer left to the CPU (plan item 4.6): Even Out / Fill spots
+//! (`spots.rs`; Fill still runs the scene-linear stage on the CPU, Even Out has run on the GPU since 2026-11-24) and soft proofs against an
 //! output-device profile (`finish.rs`, a 3D table: the GPU path declines the render). Measured on a loupe-sized
 //! frame (1920×1280) against the 60 ms loupe budget, median of several runs:
 //! `cargo test -p lcc-pipeline --release cpu_only_stage_cost -- --ignored --nocapture`. Numbers: `docs/perf.md`.

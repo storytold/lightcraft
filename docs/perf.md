@@ -200,7 +200,7 @@ lanes (the plain render ranged 1.9–5.6 s, against tens of ms idle), so only th
 
 | Case (1920×1280, GPU render) | Before (fastest) | After (fastest) |
 |---|---|---|
-| no spots | 1947 ms | 4017 ms (load) |
+| no spots | 1947 ms | 4017 ms (load; slower than the spot cases, so absolute numbers here are noise) |
 | 1 Even Out spot, size 0.05 | 2361 ms | 937 ms |
 | 1 Even Out spot, size 0.20 | 2963 ms | 1507 ms |
 | 10 Even Out spots, size 0.05 | 3757 ms | 1982 ms |
