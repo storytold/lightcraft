@@ -37,9 +37,9 @@ L5 depends on egui, eframe, winit or rfd, and that each crate only uses lower la
 
 ## Rendering
 
-1. **Decode** (`raw`, `codecs`): raw files to linear camera RGB (demosaic, black/white levels,
-   opcodes, highlight handling) and a camera-to-XYZ colour model; standard images to linear light
-   through their ICC profile.
+1. **Decode** (`raw`, `codecs`): raw files to linear camera RGB (black/white levels, opcodes,
+   demosaic of the mosaic white balanced as shot and divided back after, highlight handling) and a
+   camera-to-XYZ colour model; standard images to linear light through their ICC profile.
 2. **Develop** (`pipeline`): white balance, profile, exposure and tone (local Laplacian
    highlights/shadows), curves, HSL / colour mixer, point colour, colour grading, texture, clarity,
    dehaze, detail (sharpening, NR, AI denoise result), optics (lens profile, CA, defringe,
