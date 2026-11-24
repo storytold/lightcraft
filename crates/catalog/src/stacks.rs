@@ -260,7 +260,7 @@ impl Catalog {
             .filter(|p| !p.deleted && !merged(p))
             .filter_map(|p| {
                 let t = iso_seconds(p.captured.as_deref()?)?;
-                let s = crate::model::parse_shutter_seconds(&p.meta.shutter)?;
+                let s = p.meta.shutter_seconds()?;
                 let n = p.meta.aperture.filter(|n| n.is_finite() && *n > 0.0).unwrap_or(1.0) as f64;
                 let iso = p.meta.iso.filter(|i| *i > 0).unwrap_or(100) as f64;
                 Some((t, p.file_name.as_str(), p.id, s, (s * iso / (n * n)).log2()))
