@@ -400,10 +400,8 @@ fn protected(file: &[u8], tiff: &Tiff, l: Layout) -> Vec<Span> {
         if depth > 16 {
             return;
         }
-        if !first {
-            if let Some(s) = directory_slot(file, l, ifd.offset) {
-                out.push(s);
-            }
+        if !first && let Some(s) = directory_slot(file, l, ifd.offset) {
+            out.push(s);
         }
         for e in &ifd.entries {
             if first && (e.tag == t::XMP || e.tag == t::SUB_IFDS) {
@@ -480,14 +478,12 @@ impl Out {
                 && end <= self.original
                 && start % 2 == 0
                 && !self.protected.iter().any(|p| overlaps(*p, (start, end)));
-            if fits {
-                if let Some(dst) = self.bytes.get_mut(start..end) {
-                    let (head, tail) = dst.split_at_mut(data.len());
-                    head.copy_from_slice(data);
-                    tail.fill(0);
-                    self.protected.push((start, end));
-                    return Ok(start as u64);
-                }
+            if fits && let Some(dst) = self.bytes.get_mut(start..end) {
+                let (head, tail) = dst.split_at_mut(data.len());
+                head.copy_from_slice(data);
+                tail.fill(0);
+                self.protected.push((start, end));
+                return Ok(start as u64);
             }
         }
         self.block(data)
