@@ -63,6 +63,9 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
             check_bar_clear(&h, "menu-level:1", &what);
             // Hover each submenu row in view, top to bottom: rows low in the menu open upward.
             let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu"));
+            if top == "Photo" {
+                eprintln!("DBGLEVEL {size:?} level={level:?} rows={:?}", widgets_with(&h, "menusub:").into_iter().map(|(id, r)| (id.clone(), r, visible_rect(&h, &id))).collect::<Vec<_>>());
+            }
             let rows: Vec<String> = widgets_with(&h, "menusub:").into_iter().filter(|(_, r)| level.contains_rect(*r)).map(|(id, _)| id).collect();
             for row in rows {
                 let full = widget(&h, &row).unwrap_or_else(|| panic!("{what}: no {row}"));
