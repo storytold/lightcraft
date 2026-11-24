@@ -31,8 +31,8 @@ fine colour charts:
 After the tone map and V4's calibrated Contrast and Blacks, before the curve stage ([curve-stage.md](curve-stage.md)):
 
 1. Convert linear Rec.2020 to OkLCh.
-2. Calibration's primaries first: the lookup below with Calibration's six sliders, from their own model of the same
-   form (each primary a band, two kinds of slider). The mixer then acts on the colour Calibration made.
+2. Calibration's primaries first: their fitted matrix on linear ProPhoto RGB (below), sampled into a table of the
+   same form as the mixer's and looked up the same way. The mixer then acts on the colour Calibration made.
 3. Look up the response of every mixer slider that is set, from the model (below), sampled once per render into a
    table: for the pixel's hue (72 bins of 5°), chroma and lightness, the hue shift, the relative chroma change and
    the lightness change. Hue is interpolated linearly. Chroma and lightness are interpolated bilinearly between three
@@ -65,18 +65,23 @@ and `dl` = (L − 0.75) / 0.15 for the colour's OkLCh chroma and lightness:
   dependence on the colour's chroma and lightness, shared by all eight bands.
 - **Per band, kind and output** (72 constants): an amplitude.
 
+**Calibration.** A primary shifts every colour, not one band, so each of Calibration's six sliders is a 3 × 3 matrix
+on linear ProPhoto RGB, `I + A t + Q t²` (`Q` for positive or negative amounts), every row of `A` and `Q` summing to 0
+so greys stay grey: 18 constants per slider, 108 in all. Predicting Camera Raw's calibration charts with it leaves
+0.48 to 1.24 (OkLab × 100) against effects of 1.85 to 3.67, a quarter to a third of the effect.
+
 ## How it was measured
 
 `tools/lr_mixer_charts.py charts OUT_DIR` writes linear DNG charts of OkLCh patches (72 hues × 3 chroma levels × 3
 lightness levels, patches outside sRGB left out), with the settings in the DNG's XMP. It writes one neutral chart and
 each band's Hue, Saturation and Luminance and Calibration's red, green and blue Hue and Saturation at each measured
-amount (241 charts). The charts are original test data.
-Every chart was rendered through Camera Raw to a 16-bit Adobe RGB (1998) TIFF. Only that output is measured, and
-nothing of Adobe's is copied or shipped. `tools/lr_mixer_charts.py fit RENDER_DIR OUT_RS` reads each render's
-patches as OkLab, takes each setting's response against Camera Raw's own neutral chart, fits the model to it and
-writes only the models' constants (the mixer's and calibration's), `mixer_stage_model.rs`. No measurement is committed. It needs numpy, scipy and
-tifffile (`tools/requirements-lr-tone-charts.txt`). Running the tool again reproduces the committed charts byte for
-byte, and the constants with the pinned packages.
+amount (241 charts). The charts are original test data. Every chart was rendered through Camera Raw to a 16-bit Adobe
+RGB (1998) TIFF. Only that output is measured, and nothing of Adobe's is copied or shipped. `tools/lr_mixer_charts.py
+fit RENDER_DIR OUT_RS` reads each render's patches as OkLab, takes each setting's response against Camera Raw's own
+neutral chart, fits the model to it and writes only the models' constants (the mixer's and calibration's),
+`mixer_stage_model.rs`. No measurement is committed. It needs numpy, scipy and tifffile
+(`tools/requirements-lr-tone-charts.txt`). Running the tool again reproduces the committed charts byte for byte, and
+the constants with the pinned packages.
 
 Camera Raw's neutral render desaturates bright colours: patches of one nominal chroma come out about three times
 less chromatic at the top lightness level than at the bottom. The model therefore takes the colour's chroma and
@@ -96,13 +101,17 @@ and 1.66 with it after. Those check charts are not part of the tool.
 ## Results
 
 Held-out Panasonic Lumix DC-S9 photos (5 raws, 24 edits each plus Neutral, 1,500 px, aligned against Camera Raw's
-renders), with the curve stage of [curve-stage.md](curve-stage.md). Tone is RMS lightness error, colour the mean a/b
-error (OkLab × 100), all edit groups weighted equally. Lower is better.
+renders). Tone is RMS lightness error, colour the mean a/b error (OkLab × 100), all edit groups weighted equally. Lower
+is better.
 
-| Mixer | Tone | Colour |
+| Build | Tone | Colour |
 |---|---|---|
-| Measured table (before) | 7.008 | 1.314 |
-| This model | 7.015 | 1.288 |
+| With the curve stage, mixer table (before) | 7.008 | 1.314 |
+| With the curve stage, this mixer model | 7.015 | 1.288 |
+| Whole V9 series, measured tables | 2.418 | 0.556 |
+| Whole V9 series, every stage's fitted model (this mixer and Calibration included) | 2.424 | 0.557 |
+
+A band-shaped model of Calibration (the mixer's form) cost the whole series 0.06 in colour; the matrix leaves none.
 
 ## Limits
 
@@ -122,4 +131,4 @@ error (OkLab × 100), all edit groups weighted equally. Lower is better.
 | 2026-11-11 | minor | Calibration's primaries measured too, applied before the mixer |
 | 2026-11-11 | patch | Colour Grading under V9 has its own measured stage, not V8's operator |
 | 2026-11-10 | minor | Process V9: the colour mixer measured against Lightroom, before the tone curves |
-| 2026-11-24 | minor | The mixer is a fitted model of 168 constants instead of a measured table |
+| 2026-11-24 | minor | The mixer is a fitted model of 168 constants instead of a measured table; Calibration a fitted matrix |
