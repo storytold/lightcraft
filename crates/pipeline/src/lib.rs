@@ -67,7 +67,7 @@ pub mod visualize;
 
 pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
-pub use visualize::{MaskView, Overlay};
+pub use visualize::{MaskView, Overlay, SharpenView};
 
 use lcc_develop::{DevelopSettings, Treatment};
 use std::any::Any;
@@ -1269,6 +1269,9 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
+    if let Some(b) = prep.sharpen_blur.as_deref() {
+        visualize::sharpen_view(req.overlay, &mut image, &plan.settings, &prep.log_l, b);
+    }
     if req.overlay == Overlay::Infrared
         && let Some(ir) = film_dust::infrared_for(info, frame, w, h)
     {
