@@ -866,6 +866,7 @@
   "Each photo gets its own measurement": "每张照片单独测量",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "每张照片使用其文件名中的日期和时间（IMG_20260921_143000）。",
   "Each photo goes to the card that will finish it sooner.": "每张照片交给能更快完成它的显卡。",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "每张照片只读取一次，并用每个勾选的预设分别导出到各自的文件夹。",
   "Each photo with its own edits, in the order shown. No audio.": "每张照片使用各自的编辑，按显示顺序排列。无音频。",
   "Each plug-in's newest release.": "每个插件的最新版本。",
   "Eboda": "Eboda",
@@ -975,6 +976,7 @@
   "Export Print Template": "导出打印模板",
   "Export Slideshow": "导出幻灯片放映",
   "Export Timelapse Video": "导出延时视频",
+  "Export To": "导出到",
   "Export User Presets…": "导出用户预设…",
   "Export Video Slideshow…": "导出视频幻灯片…",
   "Export Video…": "导出视频…",
@@ -990,6 +992,8 @@
   "Export is not available": "无法导出",
   "Export the original files (copied into the new catalog's Originals folder)": "导出原始文件（复制到新目录的 Originals 文件夹）",
   "Export to": "导出到",
+  "Export with Several Presets": "使用多个预设导出",
+  "Export with Several Presets…": "使用多个预设导出…",
   "Exported Catalog": "导出的目录",
   "Exported files are written to a temp file and then renamed into place, so a full disk or an unplugged drive": "导出的文件先写入临时文件再重命名到位，因此磁盘已满或驱动器被拔出时",
   "Exported the look as a LUT": "已将风格导出为 LUT",
@@ -3753,9 +3757,5 @@
   "↑ This device has changes still to send": "↑ 此设备仍有更改待发送",
   "↓ Another device has changes still to fetch": "↓ 另一台设备仍有更改待获取",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘ 拖动以拉直，⇧G 引导式垂直，变换时显示网格。",
-  "★ Favorites": "★ 收藏",
-  "Export with Several Presets…": "使用多个预设导出…",
-  "Export with Several Presets": "使用多个预设导出",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "每张照片只读取一次，并用每个勾选的预设分别导出到各自的文件夹。",
-  "Export To": "导出到"
+  "★ Favorites": "★ 收藏"
 }

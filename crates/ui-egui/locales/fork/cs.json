@@ -847,6 +847,7 @@
   "Each photo gets its own measurement": "Každá fotografie dostane vlastní měření",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Každá fotografie dostane datum a čas ze svého názvu souboru (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Každá fotka jde na kartu, která ji dokončí dřív.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Každá fotka se načte jednou a exportuje se všemi zaškrtnutými předvolbami, každá do vlastní složky.",
   "Each photo with its own edits, in the order shown. No audio.": "Každá fotografie s vlastními úpravami, v zobrazeném pořadí. Bez zvuku.",
   "Each plug-in's newest release.": "Nejnovější vydání každého zásuvného modulu.",
   "Eboda": "Eboda",
@@ -948,6 +949,7 @@
   "Export Presets as XMP": "Exportovat přednastavení jako XMP",
   "Export Print Template": "Exportovat tiskovou šablonu",
   "Export Timelapse Video": "Exportovat časosběrné video",
+  "Export To": "Exportovat do",
   "Export User Presets…": "Exportovat uživatelské předvolby…",
   "Export Video Slideshow…": "Exportovat prezentaci jako video…",
   "Export Web Gallery": "Exportovat webovou galerii",
@@ -961,6 +963,8 @@
   "Export from the Touch Sheet": "Exportovat z dotykového panelu",
   "Export is not available": "Export není k dispozici",
   "Export the original files (copied into the new catalog's Originals folder)": "Exportovat původní soubory (zkopírují se do složky Originals nového katalogu)",
+  "Export with Several Presets": "Exportovat s více předvolbami",
+  "Export with Several Presets…": "Exportovat s více předvolbami…",
   "Exported Catalog": "Exportovaný katalog",
   "Exported the look as a LUT": "Vzhled byl exportován jako LUT",
   "Exporting…": "Exportování…",
@@ -3584,9 +3588,5 @@
   "© Year Name": "© Rok Jméno",
   "‹ Library": "‹ Knihovna",
   "↑ This device has changes still to send": "↑ Toto zařízení má ještě změny k odeslání",
-  "↓ Another device has changes still to fetch": "↓ Jiné zařízení má ještě změny ke stažení",
-  "Export with Several Presets…": "Exportovat s více předvolbami…",
-  "Export with Several Presets": "Exportovat s více předvolbami",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Každá fotka se načte jednou a exportuje se všemi zaškrtnutými předvolbami, každá do vlastní složky.",
-  "Export To": "Exportovat do"
+  "↓ Another device has changes still to fetch": "↓ Jiné zařízení má ještě změny ke stažení"
 }

@@ -914,6 +914,7 @@
   "Each photo gets its own measurement": "Każde zdjęcie dostaje własny pomiar",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Każde zdjęcie dostaje datę i godzinę z nazwy pliku (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Każde zdjęcie trafia do karty, która skończy je wcześniej.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Każde zdjęcie jest odczytywane raz i eksportowane z każdym zaznaczonym ustawieniem, każde do własnego folderu.",
   "Each photo with its own edits, in the order shown. No audio.": "Każde zdjęcie z własnymi zmianami, w wyświetlanej kolejności. Bez dźwięku.",
   "Each plug-in's newest release.": "Najnowsze wydanie każdej wtyczki.",
   "Eboda": "Eboda",
@@ -1028,6 +1029,7 @@
   "Export Print Template": "Eksportuj szablon wydruku",
   "Export Slideshow: folder for the JPEG files": "Eksport pokazu slajdów: folder na pliki JPEG",
   "Export Timelapse Video": "Eksportuj wideo poklatkowe",
+  "Export To": "Eksportuj do",
   "Export User Presets…": "Eksportuj ustawienia użytkownika…",
   "Export Video Slideshow…": "Eksportuj pokaz slajdów wideo…",
   "Export Video…": "Eksportuj wideo…",
@@ -1043,6 +1045,8 @@
   "Export is not available": "Eksport jest niedostępny",
   "Export the original files (copied into the new catalog's Originals folder)": "Eksportuj pliki oryginalne (kopiowane do folderu Originals nowego katalogu)",
   "Export to": "Eksportuj do",
+  "Export with Several Presets": "Eksportuj z kilkoma ustawieniami",
+  "Export with Several Presets…": "Eksportuj z kilkoma ustawieniami…",
   "Exported Catalog": "Wyeksportowany katalog",
   "Exported the look as a LUT": "Wyeksportowano wygląd jako LUT",
   "Exporting slideshow": "Eksportowanie pokazu slajdów",
@@ -3861,9 +3865,5 @@
   "‹ Library": "‹ Biblioteka",
   "↑ This device has changes still to send": "↑ To urządzenie ma jeszcze zmiany do wysłania",
   "↓ Another device has changes still to fetch": "↓ Inne urządzenie ma jeszcze zmiany do pobrania",
-  "★ Favorites": "★ Ulubione",
-  "Export with Several Presets…": "Eksportuj z kilkoma ustawieniami…",
-  "Export with Several Presets": "Eksportuj z kilkoma ustawieniami",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Każde zdjęcie jest odczytywane raz i eksportowane z każdym zaznaczonym ustawieniem, każde do własnego folderu.",
-  "Export To": "Eksportuj do"
+  "★ Favorites": "★ Ulubione"
 }

@@ -804,6 +804,7 @@
   "Each photo gets its own measurement": "Chaque photo a sa propre mesure",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Chaque photo reçoit la date et l'heure de son nom de fichier (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Chaque photo va à la carte qui la terminera le plus tôt.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Chaque photo est lue une seule fois et exportée avec chaque paramètre coché, chacun dans son propre dossier.",
   "Each photo with its own edits, in the order shown. No audio.": "Chaque photo avec ses propres réglages, dans l’ordre affiché. Sans son.",
   "Each plug-in's newest release.": "La dernière version de chaque module.",
   "Eboda": "Eboda",
@@ -902,6 +903,7 @@
   "Export Print Template": "Exporter le modèle d’impression",
   "Export Slideshow": "Exporter le diaporama",
   "Export Timelapse Video": "Exporter une vidéo timelapse",
+  "Export To": "Exporter vers",
   "Export User Presets…": "Exporter les paramètres utilisateur…",
   "Export Video Slideshow…": "Exporter le diaporama en vidéo…",
   "Export Video…": "Exporter en vidéo…",
@@ -917,6 +919,8 @@
   "Export is not available": "L’exportation n’est pas disponible",
   "Export the original files (copied into the new catalog's Originals folder)": "Exporter les fichiers originaux (copiés dans le dossier Originals du nouveau catalogue)",
   "Export to": "Exporter vers",
+  "Export with Several Presets": "Exporter avec plusieurs paramètres prédéfinis",
+  "Export with Several Presets…": "Exporter avec plusieurs paramètres prédéfinis…",
   "Exported Catalog": "Catalogue exporté",
   "Exported files are written to a temp file and then renamed into place, so a full disk or an unplugged drive": "Les fichiers exportés sont écrits dans un fichier temporaire puis renommés à leur place, de sorte qu’un disque plein ou un disque débranché",
   "Exported the look as a LUT": "Rendu exporté en LUT",
@@ -3471,9 +3475,5 @@
   "‹ Library": "‹ Bibliothèque",
   "↑ This device has changes still to send": "↑ Cet appareil a encore des modifications à envoyer",
   "↓ Another device has changes still to fetch": "↓ Un autre appareil a encore des modifications à récupérer",
-  "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-glisser pour redresser, ⇧G Upright guidé, une grille pendant la transformation.",
-  "Export with Several Presets…": "Exporter avec plusieurs paramètres prédéfinis…",
-  "Export with Several Presets": "Exporter avec plusieurs paramètres prédéfinis",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Chaque photo est lue une seule fois et exportée avec chaque paramètre coché, chacun dans son propre dossier.",
-  "Export To": "Exporter vers"
+  "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-glisser pour redresser, ⇧G Upright guidé, une grille pendant la transformation."
 }

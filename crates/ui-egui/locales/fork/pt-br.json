@@ -890,6 +890,7 @@
   "Each photo gets its own measurement": "Cada foto recebe sua própria medição",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Cada foto recebe a data e a hora do nome do arquivo (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Cada foto vai para a placa que a terminará antes.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Cada foto é lida uma vez e exportada com cada predefinição marcada, cada uma na sua própria pasta.",
   "Each photo with its own edits, in the order shown. No audio.": "Cada foto com suas próprias edições, na ordem exibida. Sem áudio.",
   "Each plug-in's newest release.": "A versão mais recente de cada plug-in.",
   "Eboda": "Eboda",
@@ -1000,6 +1001,7 @@
   "Export Print Template": "Exportar modelo de impressão",
   "Export Slideshow": "Exportar apresentação",
   "Export Timelapse Video": "Exportar vídeo timelapse",
+  "Export To": "Exportar para",
   "Export User Presets…": "Exportar predefinições do usuário…",
   "Export Video Slideshow…": "Exportar apresentação em vídeo…",
   "Export Video…": "Exportar vídeo…",
@@ -1015,6 +1017,8 @@
   "Export is not available": "A exportação não está disponível",
   "Export the original files (copied into the new catalog's Originals folder)": "Exportar os arquivos originais (copiados para a pasta Originals do novo catálogo)",
   "Export to": "Exportar para",
+  "Export with Several Presets": "Exportar com várias predefinições",
+  "Export with Several Presets…": "Exportar com várias predefinições…",
   "Exported Catalog": "Catálogo exportado",
   "Exported files are written to a temp file and then renamed into place, so a full disk or an unplugged drive": "Os arquivos exportados são gravados em um arquivo temporário e depois renomeados no lugar, então um disco cheio ou uma unidade desconectada",
   "Exported the look as a LUT": "O visual foi exportado como LUT",
@@ -3830,9 +3834,5 @@
   "↑ This device has changes still to send": "↑ Este dispositivo ainda tem alterações a enviar",
   "↓ Another device has changes still to fetch": "↓ Outro dispositivo ainda tem alterações a buscar",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-arrastar para endireitar, ⇧G Upright guiado, uma grade ao transformar.",
-  "★ Favorites": "★ Favoritos",
-  "Export with Several Presets…": "Exportar com várias predefinições…",
-  "Export with Several Presets": "Exportar com várias predefinições",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Cada foto é lida uma vez e exportada com cada predefinição marcada, cada uma na sua própria pasta.",
-  "Export To": "Exportar para"
+  "★ Favorites": "★ Favoritos"
 }

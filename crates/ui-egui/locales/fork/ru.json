@@ -888,6 +888,7 @@
   "Each photo gets its own measurement": "Каждое фото получает своё измерение",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Каждому фото присваиваются дата и время из имени файла (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Каждое фото уходит на ту видеокарту, которая закончит его раньше.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Каждое фото читается один раз и экспортируется со всеми отмеченными пресетами, каждый в свою папку.",
   "Each photo with its own edits, in the order shown. No audio.": "Каждое фото со своими правками, в показанном порядке. Без звука.",
   "Each plug-in's newest release.": "Новейший выпуск каждого плагина.",
   "Eboda": "Eboda",
@@ -999,6 +1000,7 @@
   "Export Print Template": "Экспортировать шаблон печати",
   "Export Slideshow": "Экспорт слайд-шоу",
   "Export Timelapse Video": "Экспорт видео таймлапс",
+  "Export To": "Экспортировать в",
   "Export User Presets…": "Экспорт пользовательских наборов…",
   "Export Video Slideshow…": "Экспортировать слайд-шоу в видео…",
   "Export Video…": "Экспорт видео…",
@@ -1015,6 +1017,8 @@
   "Export stopped unexpectedly": "Экспорт неожиданно прервался",
   "Export the original files (copied into the new catalog's Originals folder)": "Экспортировать исходные файлы (копируются в папку Originals нового каталога)",
   "Export to": "Экспортировать в",
+  "Export with Several Presets": "Экспорт с несколькими пресетами",
+  "Export with Several Presets…": "Экспорт с несколькими пресетами…",
   "Exported Catalog": "Экспортированный каталог",
   "Exported files are written to a temp file and then renamed into place, so a full disk or an unplugged drive": "Экспортируемые файлы записываются во временный файл, а затем переименовываются на место, так что заполненный или отключённый диск",
   "Exported the look as a LUT": "Стиль экспортирован как LUT",
@@ -3840,9 +3844,5 @@
   "≥  at least": "≥  не менее",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-перетаскивание для выравнивания, ⇧G Upright по направляющим, сетка во время трансформации.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）",
-  "Export with Several Presets…": "Экспорт с несколькими пресетами…",
-  "Export with Several Presets": "Экспорт с несколькими пресетами",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Каждое фото читается один раз и экспортируется со всеми отмеченными пресетами, каждый в свою папку.",
-  "Export To": "Экспортировать в"
+  "繁體中文（台灣）": "繁體中文（台灣）"
 }

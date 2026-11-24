@@ -965,6 +965,7 @@
   "Each photo gets its own measurement": "Mỗi ảnh được đo riêng",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Mỗi ảnh nhận ngày giờ trong tên tệp của nó (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Mỗi ảnh được giao cho card sẽ xử lý xong sớm hơn.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Mỗi ảnh được đọc một lần và xuất với mọi thiết lập sẵn đã chọn, mỗi cái vào thư mục riêng.",
   "Each photo with its own edits, in the order shown. No audio.": "Mỗi ảnh với chỉnh sửa riêng, theo thứ tự hiển thị. Không có âm thanh.",
   "Each plug-in's newest release.": "Bản phát hành mới nhất của từng plugin.",
   "Eboda": "Eboda",
@@ -1083,6 +1084,7 @@
   "Export Slideshow: folder for the JPEG files": "Xuất trình chiếu: thư mục cho các tệp JPEG",
   "Export Slideshow…": "Xuất trình chiếu…",
   "Export Timelapse Video": "Xuất video timelapse",
+  "Export To": "Xuất tới",
   "Export Video Slideshow…": "Xuất trình chiếu video…",
   "Export Video…": "Xuất video…",
   "Export Web Gallery": "Xuất thư viện ảnh web",
@@ -1097,6 +1099,8 @@
   "Export is not available": "Không thể xuất",
   "Export the original files (copied into the new catalog's Originals folder)": "Xuất các tệp gốc (chép vào thư mục Originals của catalog mới)",
   "Export to": "Xuất đến",
+  "Export with Several Presets": "Xuất với nhiều thiết lập sẵn",
+  "Export with Several Presets…": "Xuất với nhiều thiết lập sẵn…",
   "Exported Catalog": "Catalog đã xuất",
   "Exported the look as a LUT": "Đã xuất giao diện thành LUT",
   "Exporting slideshow": "Đang xuất trình chiếu",
@@ -4079,9 +4083,5 @@
   "‹ Library": "‹ Thư viện",
   "↑ This device has changes still to send": "↑ Thiết bị này còn thay đổi cần gửi",
   "↓ Another device has changes still to fetch": "↓ Một thiết bị khác còn thay đổi cần tải về",
-  "★ Favorites": "★ Yêu thích",
-  "Export with Several Presets…": "Xuất với nhiều thiết lập sẵn…",
-  "Export with Several Presets": "Xuất với nhiều thiết lập sẵn",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Mỗi ảnh được đọc một lần và xuất với mọi thiết lập sẵn đã chọn, mỗi cái vào thư mục riêng.",
-  "Export To": "Xuất tới"
+  "★ Favorites": "★ Yêu thích"
 }

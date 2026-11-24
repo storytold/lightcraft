@@ -917,6 +917,7 @@
   "Each photo gets its own measurement": "Varje foto får sin egen mätning",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Varje foto får datum och tid från sitt filnamn (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Varje foto går till det kort som blir klart med det först.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Varje foto läses en gång och exporteras med varje markerad förinställning, var och en till sin egen mapp.",
   "Each photo with its own edits, in the order shown. No audio.": "Varje foto med sina egna redigeringar, i visad ordning. Inget ljud.",
   "Each plug-in's newest release.": "Den senaste versionen av varje tillägg.",
   "Eboda": "Eboda",
@@ -1024,6 +1025,7 @@
   "Export Presets as XMP": "Exportera förinställningar som XMP",
   "Export Print Template": "Exportera utskriftsmall",
   "Export Timelapse Video": "Exportera timelapse-video",
+  "Export To": "Exportera till",
   "Export Video Slideshow…": "Exportera videobildspel…",
   "Export Web Gallery": "Exportera webbgalleri",
   "Export Web Gallery…": "Exportera webbgalleri…",
@@ -1036,6 +1038,8 @@
   "Export from the Touch Sheet": "Exportera från pekarket",
   "Export is not available": "Export är inte tillgänglig",
   "Export the original files (copied into the new catalog's Originals folder)": "Exportera originalfilerna (kopieras till den nya katalogens mapp Originals)",
+  "Export with Several Presets": "Exportera med flera förinställningar",
+  "Export with Several Presets…": "Exportera med flera förinställningar…",
   "Exported Catalog": "Exporterad katalog",
   "Exported the look as a LUT": "Exporterade looken som en LUT",
   "Exporting…": "Exporterar…",
@@ -3885,9 +3889,5 @@
   "© Year Name": "© År Namn",
   "‹ Library": "‹ Bibliotek",
   "↑ This device has changes still to send": "↑ Den här enheten har ändringar kvar att skicka",
-  "↓ Another device has changes still to fetch": "↓ En annan enhet har ändringar kvar att hämta",
-  "Export with Several Presets…": "Exportera med flera förinställningar…",
-  "Export with Several Presets": "Exportera med flera förinställningar",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Varje foto läses en gång och exporteras med varje markerad förinställning, var och en till sin egen mapp.",
-  "Export To": "Exportera till"
+  "↓ Another device has changes still to fetch": "↓ En annan enhet har ändringar kvar att hämta"
 }

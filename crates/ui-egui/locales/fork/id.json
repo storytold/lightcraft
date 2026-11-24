@@ -894,6 +894,7 @@
   "Each photo gets its own measurement": "Setiap foto mendapat pengukurannya sendiri",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Setiap foto mendapat tanggal dan waktu dari nama filenya (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Setiap foto dikerjakan oleh kartu yang lebih cepat menyelesaikannya.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Setiap foto dibaca sekali dan diekspor dengan setiap preset yang dicentang, masing-masing ke foldernya sendiri.",
   "Each photo with its own edits, in the order shown. No audio.": "Setiap foto dengan suntingannya sendiri, sesuai urutan yang ditampilkan. Tanpa audio.",
   "Each plug-in's newest release.": "Rilis terbaru setiap plug-in.",
   "Eboda": "Eboda",
@@ -997,6 +998,7 @@
   "Export Presets as XMP": "Ekspor preset sebagai XMP",
   "Export Print Template": "Ekspor templat cetak",
   "Export Timelapse Video": "Ekspor video timelapse",
+  "Export To": "Ekspor Ke",
   "Export Video Slideshow…": "Ekspor tayangan slide video…",
   "Export Web Gallery": "Ekspor galeri web",
   "Export Web Gallery…": "Ekspor galeri web…",
@@ -1009,6 +1011,8 @@
   "Export from the Touch Sheet": "Ekspor dari lembar sentuh",
   "Export is not available": "Ekspor tidak tersedia",
   "Export the original files (copied into the new catalog's Originals folder)": "Ekspor file asli (disalin ke folder Originals di katalog baru)",
+  "Export with Several Presets": "Ekspor dengan Beberapa Preset",
+  "Export with Several Presets…": "Ekspor dengan Beberapa Preset…",
   "Exported Catalog": "Katalog yang diekspor",
   "Exported the look as a LUT": "Gaya diekspor sebagai LUT",
   "Exporting…": "Mengekspor…",
@@ -3817,9 +3821,5 @@
   "‹ Library": "‹ Pustaka",
   "↑ This device has changes still to send": "↑ Perangkat ini masih punya perubahan untuk dikirim",
   "↓ Another device has changes still to fetch": "↓ Perangkat lain masih punya perubahan untuk diambil",
-  "★ Favorites": "★ Favorit",
-  "Export with Several Presets…": "Ekspor dengan Beberapa Preset…",
-  "Export with Several Presets": "Ekspor dengan Beberapa Preset",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Setiap foto dibaca sekali dan diekspor dengan setiap preset yang dicentang, masing-masing ke foldernya sendiri.",
-  "Export To": "Ekspor Ke"
+  "★ Favorites": "★ Favorit"
 }

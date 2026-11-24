@@ -816,6 +816,7 @@
   "Each photo gets its own measurement": "Jedes Foto wird einzeln gemessen",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Jedes Foto erhält Datum und Uhrzeit aus seinem Dateinamen (IMG_20260921_143000).",
   "Each photo goes to the card that will finish it sooner.": "Jedes Foto geht an die Karte, die es früher fertigstellt.",
+  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Jedes Foto wird einmal gelesen und mit jeder angehakten Vorgabe exportiert, jeweils in ihren eigenen Ordner.",
   "Each photo with its own edits, in the order shown. No audio.": "Jedes Foto mit seinen eigenen Bearbeitungen, in der angezeigten Reihenfolge. Kein Ton.",
   "Each plug-in's newest release.": "Die neueste Version jedes Zusatzmoduls.",
   "Eboda": "Eboda",
@@ -914,6 +915,7 @@
   "Export Print Template": "Druckvorlage exportieren",
   "Export Slideshow": "Diashow exportieren",
   "Export Timelapse Video": "Zeitraffervideo exportieren",
+  "Export To": "Exportieren nach",
   "Export User Presets…": "Benutzervorgaben exportieren…",
   "Export Video Slideshow…": "Video-Diashow exportieren…",
   "Export Video…": "Video exportieren…",
@@ -928,6 +930,8 @@
   "Export is not available": "Export ist nicht verfügbar",
   "Export the original files (copied into the new catalog's Originals folder)": "Originaldateien exportieren (in den Originals-Ordner des neuen Katalogs kopiert)",
   "Export to": "Exportieren nach",
+  "Export with Several Presets": "Mit mehreren Vorgaben exportieren",
+  "Export with Several Presets…": "Mit mehreren Vorgaben exportieren…",
   "Exported Catalog": "Exportierter Katalog",
   "Exported the look as a LUT": "Look als LUT exportiert",
   "Exporting…": "Wird exportiert…",
@@ -3472,9 +3476,5 @@
   "© Year Name": "© Jahr Name",
   "‹ Library": "‹ Bibliothek",
   "↑ This device has changes still to send": "↑ Dieses Gerät hat noch Änderungen zu senden",
-  "↓ Another device has changes still to fetch": "↓ Ein anderes Gerät hat noch Änderungen zum Abrufen",
-  "Export with Several Presets…": "Mit mehreren Vorgaben exportieren…",
-  "Export with Several Presets": "Mit mehreren Vorgaben exportieren",
-  "Each photo is read once and exported with every preset ticked, each to its own folder.": "Jedes Foto wird einmal gelesen und mit jeder angehakten Vorgabe exportiert, jeweils in ihren eigenen Ordner.",
-  "Export To": "Exportieren nach"
+  "↓ Another device has changes still to fetch": "↓ Ein anderes Gerät hat noch Änderungen zum Abrufen"
 }
