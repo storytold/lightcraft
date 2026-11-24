@@ -109,7 +109,7 @@ fn resizing_the_filmstrip_keeps_the_active_photo_in_place() {
 /// labels, left to right; a click narrows the strip to the matching photos and never flags or rates one.
 #[test]
 fn the_filmstrip_header_filters_by_flag_rating_and_label_in_lightroom_order() {
-    let session = lcc_engine::Session::with_demo();
+    let mut session = lcc_engine::Session::with_demo();
     let ids = session.visible_cloned();
     let app = LccApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1600.0, 900.0], 1.0);
@@ -132,12 +132,14 @@ fn the_filmstrip_header_filters_by_flag_rating_and_label_in_lightroom_order() {
     assert!(xs.windows(2).all(|w| w[0] < w[1]), "flags, then rating, then labels: {xs:?}");
     let ratings_before: Vec<u8> = ids.iter().map(|id| h.app.session.catalog.photo(*id).unwrap().rating).collect();
 
-    // the pick flag filter: only the picked photo stays in the strip
+    // the pick flag filter: only picks stay in the strip
     let r = h.request("ui.clickWidget", json!({"id": "filmfilter:pick"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!(h.app.session.filter.flag, Some(lcc_catalog::Flag::Pick));
-    assert_eq!(h.app.session.visible_cloned(), vec![picked]);
+    let vis = h.app.session.visible_cloned();
+    assert!(vis.contains(&picked) && !vis.contains(&other), "{vis:?}");
+    assert!(vis.iter().all(|id| h.app.session.catalog.photo(*id).unwrap().flag == lcc_catalog::Flag::Pick), "only picks: {vis:?}");
     assert_eq!(h.app.session.catalog.photo(other).unwrap().flag, lcc_catalog::Flag::None, "a filter click flags nothing");
     // a second click lifts it
     let r = h.request("ui.clickWidget", json!({"id": "filmfilter:pick"}), T);

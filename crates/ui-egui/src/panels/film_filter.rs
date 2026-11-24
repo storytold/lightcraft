@@ -46,7 +46,7 @@ pub(crate) fn star_click(current: u8, n: u8) -> u8 {
 pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, head: Rect, t: &Tokens) -> f32 {
     let font = t.font(11.0);
     let caption = crate::i18n::tr("Filter");
-    let caption_w = ui.painter().layout_no_wrap(caption.clone(), font.clone(), t.text_dim).size().x;
+    let caption_w = ui.painter().layout_no_wrap(caption.to_string(), font.clone(), t.text_dim).size().x;
     let width = caption_w + 8.0 + controls_width();
     // only while the source line keeps room for its count
     if head.height() < CELL || head.width() < width + 260.0 {
@@ -59,7 +59,7 @@ pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, head: Rect, t: &Tokens) -> f
     p.text(pos2(left, y), Align2::LEFT_CENTER, &caption, font.clone(), t.text_dim);
     let mut x = left + caption_w + 8.0;
     let mut patch: Option<Value> = None;
-    let mut cell = |x: f32, id: &str, tip: &str, on: bool| -> (Rect, egui::Response) {
+    let cell = |x: f32, id: &str, tip: &str, on: bool| -> (Rect, egui::Response) {
         let r = Rect::from_center_size(pos2(x + STEP / 2.0, y), vec2(CELL, CELL));
         let resp = ui.interact(r, egui::Id::new(("filmfilter", id.to_string())), Sense::click());
         crate::widgets::announce_selected(&resp, crate::i18n::tr(tip), on);
