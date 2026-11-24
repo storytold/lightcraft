@@ -291,6 +291,14 @@ fn tab_between_add_and_painter_preserves_distinct_drafts_and_native_caret_edits(
             // (the keyword chips are real stops too, between the last view choice and the painter's field)
             for _ in 0..8 {
                 ask(h, "ui.key", json!({"key": "Tab", "shift": reverse}));
+                {
+                    let sid = craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id);
+                    let name = h.app.widget_hits.iter().find(|(_, hit)| Some(hit.id) == sid).map(|(n, _)| n.clone());
+                    let egui_focus = h.view.ctx.memory(|m| m.focused());
+                    let rect = egui_focus.and_then(|id| h.view.ctx.read_response(id)).map(|r| (r.rect, r.sense));
+                    let short = |id: Option<egui::Id>| id.map(|i| format!("{i:?}").chars().rev().take(60).collect::<String>().chars().rev().collect::<String>());
+                    eprintln!("DBGTAB want {key} expected={:?} stop={:?} name={name:?} egui_focus={:?} rect={rect:?}", short(Some(expected)), short(sid), short(egui_focus));
+                }
                 if craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|r| r.stop.id) == Some(expected) {
                     break;
                 }
@@ -299,6 +307,7 @@ fn tab_between_add_and_painter_preserves_distinct_drafts_and_native_caret_edits(
             assert_eq!(h.app.ui.keywording_view, crate::state::KeywordingView::Keywords, "focus alone does not select a view");
         }
     };
+    eprintln!("DBGKW right={:?} left={} typing={}", h.app.ui.right, h.app.ui.left_panel, crate::text_field::typing(&h.view.ctx));
     through_views(&mut h, false);
     let painter = crate::text_field::id("field:keywordPainter");
     for _ in 0..8 {
