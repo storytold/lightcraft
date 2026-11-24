@@ -263,24 +263,27 @@ pub fn fit(samples: &[([f32; 3], [f32; 3])]) -> Result<CameraLook, crate::Campro
     Ok(CameraLook { table, error_before, error_after, samples: usable.len() })
 }
 
-/// Colour samples from one pair of same-size 8-bit RGBA images (render, camera JPEG), skipping
-/// clipped pixels and every `step`-th pixel; `None` when the sizes differ or the buffers are short.
-pub fn samples_from_rgba(render: &[u8], jpeg: &[u8], w: usize, h: usize) -> Option<Vec<([f32; 3], [f32; 3])>> {
-    let n = w.checked_mul(h)?;
-    let bytes = n.checked_mul(4)?;
-    if render.len() < bytes || jpeg.len() < bytes || n == 0 {
+/// Colour samples from one pair of 8-bit RGBA images (render `a`, camera JPEG `b`) of the same frame,
+/// matched by position (the sizes may differ, e.g. by a pixel of rounding), skipping clipped pixels;
+/// `None` when a size is zero or a buffer is shorter than its size says.
+pub fn samples_from_images(a: &[[u8; 4]], aw: usize, ah: usize, b: &[[u8; 4]], bw: usize, bh: usize) -> Option<Vec<([f32; 3], [f32; 3])>> {
+    let (na, nb) = (aw.checked_mul(ah)?, bw.checked_mul(bh)?);
+    if na == 0 || nb == 0 || a.len() < na || b.len() < nb {
         return None;
     }
-    let step = n.div_ceil(MAX_SAMPLES).max(1);
-    let f = |p: &[u8]| [f32::from(p[0]) / 255.0, f32::from(p[1]) / 255.0, f32::from(p[2]) / 255.0];
-    let mut out = Vec::with_capacity(n / step + 1);
-    for i in (0..n).step_by(step) {
-        let (Some(a), Some(b)) = (render.get(i * 4..i * 4 + 3), jpeg.get(i * 4..i * 4 + 3)) else { continue };
+    let step = na.div_ceil(MAX_SAMPLES).max(1);
+    let f = |p: &[u8; 4]| [f32::from(p[0]) / 255.0, f32::from(p[1]) / 255.0, f32::from(p[2]) / 255.0];
+    let mut out = Vec::with_capacity(na / step + 1);
+    for i in (0..na).step_by(step) {
+        let (x, y) = (i % aw, i / aw);
+        let bx = ((x as f64 + 0.5) / aw as f64 * bw as f64) as usize;
+        let by = ((y as f64 + 0.5) / ah as f64 * bh as f64) as usize;
+        let (Some(pa), Some(pb)) = (a.get(i), b.get(by.min(bh - 1) * bw + bx.min(bw - 1))) else { continue };
         // clipped pixels say nothing about the curve
-        if b.iter().any(|&v| v == 255) || a.iter().any(|&v| v == 255) {
+        if pa[..3].contains(&255) || pb[..3].contains(&255) {
             continue;
         }
-        out.push((f(a), f(b)));
+        out.push((f(pa), f(pb)));
     }
     Some(out)
 }
@@ -356,9 +359,12 @@ mod tests {
         let look = fit(&mixed).unwrap();
         assert!(look.table.iter().flatten().all(|v| v.is_finite()));
         assert!(look.apply([f32::NAN, f32::INFINITY, -3.0]).iter().all(|v| v.is_finite()));
-        assert!(samples_from_rgba(&[0; 8], &[0; 16], 2, 2).is_none());
-        assert!(samples_from_rgba(&[], &[], 0, 0).is_none());
-        assert!(samples_from_rgba(&[], &[], usize::MAX, 3).is_none());
+        assert!(samples_from_images(&[[0; 4]; 2], 2, 2, &[[0; 4]; 4], 2, 2).is_none());
+        assert!(samples_from_images(&[], 0, 0, &[], 0, 0).is_none());
+        assert!(samples_from_images(&[], usize::MAX, 3, &[[0; 4]], 1, 1).is_none());
+        // a JPEG a pixel off in size still pairs every render pixel
+        let got = samples_from_images(&[[10, 20, 30, 255]; 12], 4, 3, &[[11, 21, 31, 255]; 15], 5, 3).unwrap();
+        assert_eq!(got.len(), 12);
     }
 
     #[test]

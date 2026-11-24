@@ -50,6 +50,7 @@ pub mod keywords;
 mod lens_db;
 pub mod levels;
 pub mod library;
+pub mod camera_looks;
 pub mod lut_profiles;
 pub mod manage;
 pub mod map;
@@ -274,6 +275,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(map::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
+        v.extend(camera_looks::specs());
         v.extend(vignetting_calibration::specs());
         v.extend(lens_db::specs());
         v.extend(source::specs());
