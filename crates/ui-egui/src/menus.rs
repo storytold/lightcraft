@@ -145,6 +145,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.visualizeHdr", "Visualize HDR", None, "View>Loupe Info"),
     // {on?}: HDR edits shown in HDR on an HDR display (off: their SDR rendition everywhere)
     ("view.hdrPreview", "HDR Preview", None, "View>Loupe Info"),
+    // {hdr?: bool}: the Export screen's preview shows an HDR export's HDR rendition on an HDR display
+    // (SDR otherwise; no menu item: the screen's own SDR | HDR choice)
+    ("export.previewMode", "Export preview: HDR mode", None, ""),
     ("view.colorReadout", "Color Readout", None, ""),
     ("view.colorReadoutRgb", "Show RGB Color Values", None, "View>Loupe Info"),
     ("view.colorReadoutHsl", "Show HSL Color Values", None, "View>Loupe Info"),
@@ -1084,6 +1087,12 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             // {on?}; no params toggles. Off, an HDR display shows HDR edits as an SDR one does.
             app.ui.hdr_preview = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.hdr_preview);
             Ok(json!({"on": app.ui.hdr_preview, "hdrDisplay": app.hdr_headroom.is_some()}))
+        }
+        "export.previewMode" => {
+            // {hdr?: bool}; no params toggles. The Export screen's preview shows an HDR export's HDR rendition
+            // on an HDR display (else its SDR rendition, with a line saying why).
+            app.ui.export_preview_hdr = p.get("hdr").and_then(Value::as_bool).unwrap_or(!app.ui.export_preview_hdr);
+            Ok(json!({"hdr": app.ui.export_preview_hdr, "hdrDisplay": app.hdr_headroom.is_some()}))
         }
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);

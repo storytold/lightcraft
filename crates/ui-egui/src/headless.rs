@@ -443,6 +443,8 @@ impl Headless {
             // a swipe's glide moves the grid for a second after the finger lifts: a test that
             // reads a widget's rect meanwhile would tap where it was, not where it is
             || self.app.ui.modern.gesture_busy()
+            // (the Export screen's preview renders on its own thread)
+            || crate::export_preview::busy(&self.view.ctx)
             || marketplace_busy()
     }
 

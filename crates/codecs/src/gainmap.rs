@@ -677,6 +677,86 @@ pub fn read_jpeg(bytes: &[u8]) -> Option<JpegGainMap> {
     None
 }
 
+/// A gain map of a gain-map AVIF or JPEG XL file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileGainMap {
+    pub gain: GainImage,
+    pub meta: GainMapMeta,
+}
+
+/// The ISO 21496-1 metadata of a `tmap` payload or a `jhgm` bundle (`None` when it is unusable):
+/// the versions and fields, with or without the leading URN.
+fn meta_of_file(payload: &[u8]) -> Option<GainMapMeta> {
+    // `from_iso` reads exactly the fields the channel count calls for, so trailing bytes are fine
+    GainMapMeta::from_iso(payload.strip_prefix(ISO_URN).unwrap_or(payload))
+}
+
+/// Find and decode the gain map of a gain-map AVIF (`None` when it has none or it's unusable).
+/// The primary image is decoded as usual ([`crate::decode`]); combine the two with [`apply`].
+pub fn read_avif(bytes: &[u8]) -> Option<FileGainMap> {
+    if crate::sniff(bytes) != Some(Format::Avif) {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (payload, w, h, codes) = crate::avif::gain_map(bytes)?;
+        // version (u8) then the metadata
+        if payload.first() != Some(&0) {
+            return None;
+        }
+        let meta = meta_of_file(payload.get(1..)?)?;
+        let mut meta = meta;
+        if meta.multichannel {
+            // a single-channel map under three-channel metadata: use the first channel's parameters
+            meta.multichannel = false;
+            meta.fill_from_first();
+        }
+        Some(FileGainMap { gain: GainImage { width: w, height: h, channels: 1, data: codes }, meta })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// Find and decode the gain map of a gain-map JPEG XL (`None` when it has none or it's unusable).
+/// The base image is decoded as usual ([`crate::decode`]); combine the two with [`apply`]. The
+/// gain map's codes come back from a lossy codestream approximately, as they were reconstructed.
+pub fn read_jxl(bytes: &[u8]) -> Option<FileGainMap> {
+    #[cfg(feature = "jxl")]
+    {
+        let bundle = crate::jxl::gain_map_bundle(bytes)?;
+        let codestream = crate::jxl::gain_map_codestream(bundle)?;
+        let (w, h, ch, samples) = crate::jxl::gain_map_samples(codestream)?;
+        let meta = meta_of_file(crate::jxl::gain_map_metadata(bundle)?)?;
+        let channels = if meta.multichannel { 3 } else { 1 };
+        // a map stored with another channel count than its metadata says: take what the image has
+        let (channels, meta) = match (ch, channels) {
+            (3, 1) => (1, meta),
+            (1, 3) => {
+                let mut meta = meta;
+                meta.multichannel = false;
+                meta.fill_from_first();
+                (1, meta)
+            }
+            (1, 1) | (3, 3) => (channels, meta),
+            _ => return None,
+        };
+        let code = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let data = if ch == 3 && channels == 1 {
+            // a single-channel map stored as RGB: its first channel
+            samples.as_chunks::<3>().0.iter().filter_map(|c| c.first()).map(|&v| code(v)).collect()
+        } else {
+            samples.iter().map(|&v| code(v)).collect()
+        };
+        Some(FileGainMap { gain: GainImage { width: w, height: h, channels, data }, meta })
+    }
+    #[cfg(not(feature = "jxl"))]
+    {
+        None
+    }
+}
+
 /// Whether `bytes` is a gain map JPEG with a usable gain map (cheap: no pixel decode).
 pub fn is_gain_map_jpeg(bytes: &[u8]) -> bool {
     crate::sniff(bytes) == Some(Format::Jpeg)
@@ -686,6 +766,25 @@ pub fn is_gain_map_jpeg(bytes: &[u8]) -> bool {
                     .iter()
                     .any(|e| bytes.get(e.offset..e.offset.saturating_add(e.len)).and_then(jpeg::parse_markers).is_some_and(|g| g.is_gain_map()))
         })
+}
+
+/// Shared test material for the gain map container writers.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// A base with a highlight the gain map brings back (sRGB codes, `w × h × 3`), the HDR
+    /// rendition it rebuilds (linear, SDR white = 1), and the map between the two: its top
+    /// quarter is clipped to white in the base and at 4 × white in HDR, the rest a grey ramp.
+    #[allow(clippy::type_complexity)]
+    pub fn fixture(w: usize, h: usize) -> std::result::Result<(Vec<u8>, Vec<f32>, super::GainImage, super::GainMapMeta), crate::Error> {
+        let ramp = |i: usize| if i / w < h / 4 { 255 } else { (i % w * 255 / (w - 1)) as u8 };
+        let lin = |i: usize| if i / w < h / 4 { 4.0 } else { lcc_color::transfer::srgb_to_linear(f32::from(ramp(i)) / 255.0) };
+        let base: Vec<u8> = (0..w * h).flat_map(|i| [ramp(i); 3]).collect();
+        let hdr: Vec<f32> = (0..w * h).flat_map(|i| [lin(i); 3]).collect();
+        let sdr: Vec<[f32; 3]> = (0..w * h).map(|i| [lcc_color::transfer::srgb_to_linear(f32::from(ramp(i)) / 255.0); 3]).collect();
+        let want: Vec<[f32; 3]> = (0..w * h).map(|i| [lin(i); 3]).collect();
+        let (gain, meta) = super::compute(&sdr, &want, w, h, [0.2126, 0.7152, 0.0722], &super::GainMapOptions::default())?;
+        Ok((base, hdr, gain, meta))
+    }
 }
 
 #[cfg(test)]

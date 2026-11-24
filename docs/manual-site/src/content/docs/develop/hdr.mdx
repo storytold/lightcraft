@@ -16,7 +16,8 @@ import { Aside } from '@astrojs/starlight/components';
 - **SDR rendition**: its own Brightness, Contrast, Highlights, Shadows, Whites, Clarity and a Blend, for thumbnails and SDR exports. **View ▸ Loupe Info ▸ HDR Preview** shows it.
 - **Visualize HDR** (`⇧H`): grey below SDR white, coloured bands for each stop above it.
 - **HDR display**: on an HDR display the loupe shows above SDR white (macOS EDR, Windows HDR, Wayland compositors with colour management). Partial: SDR displays are unchanged; checked on a few machines.
-- **Export**: HDR JPEG with a gain map (ISO 21496-1, Adobe and Apple XMP), 10-bit AVIF (Rec. 2020 PQ). Partial. See [Export](../../output/export/).
+- **Export**: HDR JPEG with a gain map (ISO 21496-1, Adobe and Apple XMP); AVIF and JPEG XL as one Rec. 2020 PQ / HLG image or, with HDR mode **Gain map**, an SDR image with a gain map (AVIF: HDR where the viewer reads gain maps; JPEG XL: few viewers do yet). Partial.
+- **Export preview**: the Export screen's **SDR | HDR** choice shows an HDR export's HDR rendition on an HDR display, or its SDR rendition with the reason when it can't: [Export](../../output/export/).
 - **Apple gain maps**: a helper reconstructs the HDR picture from Apple's legacy gain map and its SDR base. It is not connected to import yet.
 - **HDR merge** makes a 32-bit DNG: [Photo merge](../merge/).
 
