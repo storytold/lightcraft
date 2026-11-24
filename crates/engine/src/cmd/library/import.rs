@@ -60,6 +60,12 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
     {
         return Err(bad("library.import", format!("unknown metadata preset `{n}`")));
     }
+    // the chosen preset and the import defaults' preset (presets saved earlier are kept in prefs)
+    for n in metadata_preset.iter().chain(s.import_defaults.metadata_preset.iter()) {
+        if let Some(mp) = s.metadata_presets.iter().find(|m| m.name.eq_ignore_ascii_case(n)) {
+            crate::cmd::metadata::check_keywords(s, &mp.fields, "library.import")?;
+        }
+    }
     let on_deleted = match str_param(p, "onDeleted") {
         Some(v) => {
             crate::import::OnDeleted::parse(v).ok_or_else(|| bad("library.import", format!("unknown onDeleted `{v}` (restore|skip|fresh)")))?
@@ -70,11 +76,15 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         Some(n) => usize::try_from(n).map_err(|_| bad("library.import", "renameStart is too large for this platform"))?,
         None => 1,
     };
+    let keywords = strs(p, "keywords");
+    for k in &keywords {
+        s.catalog.check_keyword_name(k).map_err(|e| bad("library.import", e.to_string()))?;
+    }
     let opts = crate::import::ImportOptions {
         on_deleted,
         mode,
         preset,
-        keywords: strs(p, "keywords"),
+        keywords,
         destination: str_param(p, "destination").map(str::to_string),
         organize,
         rename: str_param(p, "rename").map(str::to_string),
