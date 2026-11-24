@@ -214,6 +214,12 @@ pub struct LightcraftApp {
     slideshow_auto_paused: bool,
     /// Files dropped since the last UI pass, consumed exactly once by the UI phase.
     dropped_files: Vec<egui::DroppedFileHandle>,
+    /// Outbound desktop drag, enabled only by the host that can consume it.
+    native_file_drag_enabled: bool,
+    /// Originals for the platform to take after this UI pass.
+    native_file_drag: Option<Vec<std::path::PathBuf>>,
+    /// A physical Ctrl+primary press, not an automation gesture.
+    native_file_drag_press: bool,
     /// Prefix of `dropped_files` that arrived behind a prompt, library window or its picker.
     /// Preserve only this prefix through subsequent dialogs/imports; later arrivals still take
     /// the ordinary refusal path unless they too arrive while the original barrier is up.

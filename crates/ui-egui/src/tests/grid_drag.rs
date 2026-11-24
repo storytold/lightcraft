@@ -61,6 +61,41 @@ fn select(h: &mut Headless, ids: &[u64]) {
 }
 
 #[test]
+fn ctrl_drag_carries_distinct_originals_without_starting_an_internal_drag() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut h = app();
+    let dir = std::env::temp_dir().join(format!("lc-native-drag-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths = [dir.join("first.png"), dir.join("second ü.png")];
+    for path in &paths {
+        let image = lightcraft_raster::Rgba8 { width: 1, height: 1, data: vec![[90, 120, 160, 255]] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(path, png).unwrap();
+    }
+    let ids = [0, 1, 0].map(|i| {
+        let catalog = &mut h.app.session.catalog;
+        let id = catalog.alloc_photo_id();
+        let path = paths[i].to_str().unwrap().to_owned();
+        let photo = Photo::new(id, Source::File { path }, &format!("{id:?}.png"), "PNG", 1, 1, "");
+        catalog.apply_new(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        id.0
+    });
+    select(&mut h, &ids);
+    let from = widget(&h, &format!("thumb:{}", ids[0])).center();
+    h.app.enable_native_file_drag();
+    h.events.push(egui::Event::ModifiersChanged(egui::Modifiers::CTRL));
+    h.events.push(egui::Event::PointerMoved(from));
+    h.events.push(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::CTRL });
+    h.step();
+    h.events.push(egui::Event::PointerMoved(from + egui::vec2(40.0, 45.0)));
+    h.step();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(h.app.take_native_file_drag(), Some(paths.into()));
+    assert!(h.app.ui.dragging_photos.is_none());
+    assert_eq!(h.app.session.selection.ids.len(), ids.len());
+}
+
+#[test]
 fn a_right_button_drag_on_a_grid_cell_starts_no_photo_drag() {
     let mut h = app();
     let [a, b, c] = three(&mut h);

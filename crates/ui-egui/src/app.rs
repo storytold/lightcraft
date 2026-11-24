@@ -62,6 +62,9 @@ impl LightcraftApp {
             dropped_files: vec![],
             deferred_dropped_file_count: 0,
             synthetic_in_flight: false,
+            native_file_drag_enabled: false,
+            native_file_drag: None,
+            native_file_drag_press: false,
             ui_passes: 0,
             #[cfg(test)]
             library_passes: vec![],
@@ -688,6 +691,48 @@ impl LightcraftApp {
         self.perf.frame_ms = monotonic_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+    }
+
+    /// Enable the grid gesture only on hosts that can accept native file drags.
+    pub fn enable_native_file_drag(&mut self) {
+        self.native_file_drag_enabled = true;
+    }
+
+    /// The desktop host consumes this once, after drawing the pass that started the drag.
+    pub fn take_native_file_drag(&mut self) -> Option<Vec<std::path::PathBuf>> {
+        self.native_file_drag.take()
+    }
+
+    /// Route an explicitly modified physical drag to the host instead of the sidebar targets.
+    pub(crate) fn begin_native_file_drag(&mut self, ctx: &egui::Context, id: lightcraft_catalog::PhotoId) -> bool {
+        if !self.native_file_drag_press || self.synthetic_in_flight || ctx.will_discard() {
+            return false;
+        }
+        self.queue_pointer_cleanup();
+        self.native_file_drag_press = false;
+        self.native_file_drag = self.originals_for_drag(id);
+        if self.native_file_drag.is_none() {
+            self.toast_error(ctx, crate::i18n::tr("Some photos have no available original file to drag."));
+        }
+        ctx.request_repaint();
+        true
+    }
+
+    fn originals_for_drag(&self, id: lightcraft_catalog::PhotoId) -> Option<Vec<std::path::PathBuf>> {
+        let ids = if self.session.selection.contains(id) { self.session.selection.ids.as_slice() } else { std::slice::from_ref(&id) };
+        let mut seen = std::collections::HashSet::new();
+        let mut originals = Vec::new();
+        for id in ids {
+            let lightcraft_catalog::Source::File { path } = &self.session.catalog.photo(*id)?.source else { return None };
+            if seen.insert(path.as_str()) {
+                let path = std::path::Path::new(path);
+                if !path.is_absolute() || !path.is_file() {
+                    return None;
+                }
+                originals.push(path.to_path_buf());
+            }
+        }
+        Some(originals)
     }
 
     /// Lay out the whole window: input/setup for the known UI phase, then presentation, then the

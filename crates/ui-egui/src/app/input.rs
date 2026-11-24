@@ -126,6 +126,17 @@ impl LightcraftApp {
     /// keeps that batch in flight until a completed UI pass consumed it. It never injects while
     /// the fonts are not installed (the pass would draw nothing and the events would be lost).
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if self.native_file_drag_enabled {
+            for event in &raw.events {
+                match event {
+                    egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed, modifiers, .. } => {
+                        self.native_file_drag_press = *pressed && modifiers.ctrl && !modifiers.shift && !modifiers.alt && !modifiers.mac_cmd;
+                    }
+                    egui::Event::WindowFocused(false) => self.native_file_drag_press = false,
+                    _ => {}
+                }
+            }
+        }
         let file = |p: &String| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
         if !self.drop_pending.is_empty() {
             raw.dropped_files = std::mem::take(&mut self.drop_pending)
@@ -239,6 +250,9 @@ impl LightcraftApp {
             }
             gesture.started = true;
             gesture.remaining_events = gesture.remaining_events.saturating_sub(n);
+        }
+        if self.synthetic[..n].iter().any(|e| matches!(e, egui::Event::PointerButton { .. })) {
+            self.native_file_drag_press = false;
         }
         raw.events.extend(self.synthetic.drain(..n));
         // The same barrier applies after injection: only the prompt's own keys and targeted
