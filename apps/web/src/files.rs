@@ -417,7 +417,11 @@ mod tests {
             ("future version", "catalog.snap", br#"{"format":"lcc-catalog","version":4294967295,"seq":0,"catalog":{}}"#.to_vec()),
             ("negative version", "catalog.snap", br#"{"format":"lcc-catalog","version":-1,"seq":0,"catalog":{}}"#.to_vec()),
             ("wrong format", "catalog.snap", br#"{"format":"something-else","version":1}"#.to_vec()),
-            ("huge seq", "catalog.snap", format!(r#"{{"format":"lcc-catalog","version":{v},"seq":18446744073709551615,"catalog":{{}}}}"#).into_bytes()),
+            (
+                "huge seq",
+                "catalog.snap",
+                format!(r#"{{"format":"lcc-catalog","version":{v},"seq":18446744073709551615,"catalog":{{}}}}"#).into_bytes(),
+            ),
             ("deep nesting", "catalog.snap", ("[".repeat(100_000) + &"]".repeat(100_000)).into_bytes()),
             ("garbage log", "catalog.log", vec![0x00, 0xff, 0x13, 0x37, b'\n', b'{', b'\n']),
             ("truncated log record", "catalog.log", br#"{"seq":1,"op":{"Rate"#.to_vec()),
@@ -436,7 +440,8 @@ mod tests {
                 }
                 files.preload(name, bytes.clone());
                 let mut s = Session::new();
-                let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+                let stores =
+                    LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.open_library_in(stores, true)));
                 let Ok(r) = r else { panic!("{what}: opening the library panicked") };
                 match r {
