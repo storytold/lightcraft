@@ -20,6 +20,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod avif;
+mod avif_gainmap;
 mod convert;
 pub mod display;
 pub mod encode;
@@ -44,12 +45,13 @@ mod tiff_codec;
 pub mod video;
 mod webp;
 
+pub use avif_gainmap::encode_avif_gain_map;
 pub use encode::{
     ChromaSubsampling, EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, HLG_REFERENCE_PEAK_NITS, HdrTransfer, Samples, TiffCompression,
     encode_avif, encode_avif_hdr, encode_avif_pq, encode_jpeg, encode_png, encode_png_pq, encode_psd, encode_tiff, encode_tiff_associated,
     encode_webp_lossless, hlg_signal,
 };
-pub use jxl_encode::{JxlColour, JxlEffort, JxlOptions, encode_jxl};
+pub use jxl_encode::{JxlColour, JxlEffort, JxlOptions, encode_jxl, encode_jxl_gain_map};
 pub use sniff::{Format, sniff};
 pub use space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};
 

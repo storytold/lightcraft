@@ -247,6 +247,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         log_file: None,
         open_with: None,
         open_all_with: None,
+        open_preset: None,
         check_editor: None,
         storage_access: None,
         camera_roll: None,

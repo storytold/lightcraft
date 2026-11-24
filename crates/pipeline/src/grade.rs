@@ -68,10 +68,7 @@ pub fn video_framing(s: &DevelopSettings) -> DevelopSettings {
 pub fn video_is_framed(s: &DevelopSettings) -> bool {
     let d = DevelopSettings::default();
     let f = video_framing(s);
-    f.crop.geometry != d.crop.geometry
-        || f.crop.flip_h
-        || f.crop.flip_v
-        || crate::geometry::Frame::new(64, 64, &f, false).warp.is_some()
+    f.crop.geometry != d.crop.geometry || f.crop.flip_h || f.crop.flip_v || crate::geometry::Frame::new(64, 64, &f, false).warp.is_some()
 }
 
 /// Draw a decoded `frame` into a `w × h` output under the clip's [`video_framing`].

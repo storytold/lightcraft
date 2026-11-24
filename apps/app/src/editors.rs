@@ -80,6 +80,64 @@ pub fn open_all_with(paths: &[String], app: &str) -> Result<(), String> {
     }
 }
 
+/// Open every file in `paths` with one start of `app`, after `args` (a saved Edit In preset's
+/// menu item on a batch). An argument holding `{file}` takes each file's path where it stands, so
+/// then every file is a start of its own. Without arguments, as [`open_all_with`].
+pub fn open_preset(paths: &[String], app: &str, args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return match all_command(launcher(app)?, paths) {
+            Some(mut c) => c.spawn().map(|_| ()).map_err(|e| e.to_string()),
+            None => paths.iter().try_for_each(|p| open_with(p, app)),
+        };
+    }
+    for mut c in preset_commands(launcher(app)?, paths, args)? {
+        c.spawn().map(|_| ()).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The starts that open all of `paths` in `launcher` with `args`: one, unless an argument holds
+/// `{file}` (then one per file, the path where it stands). The system default application takes
+/// no arguments.
+fn preset_commands(launcher: Launcher, paths: &[String], args: &[String]) -> Result<Vec<Command>, String> {
+    if launcher == Launcher::Default {
+        return Err("the system's default application can't be given arguments: name the editor's program in the preset".into());
+    }
+    if args.iter().any(|a| a.contains("{file}")) {
+        return Ok(paths
+            .iter()
+            .map(|f| {
+                let with: Vec<String> = args.iter().map(|a| a.replace("{file}", f)).collect();
+                start(&launcher, &[], &with)
+            })
+            .collect());
+    }
+    Ok(vec![start(&launcher, paths, args)])
+}
+
+/// One start of `launcher` with its arguments and then `paths` (`open` hands an application what
+/// follows `--args`, so its files go first; a Flatpak's files sit between the `@@` marks).
+fn start(launcher: &Launcher, paths: &[String], args: &[String]) -> Command {
+    match launcher {
+        Launcher::Program(p) => {
+            let mut c = Command::new(p);
+            c.args(args).args(paths);
+            c
+        }
+        Launcher::MacApp(app) => {
+            let mut c = Command::new("open");
+            c.args(["-a", app.as_str()]).args(paths).arg("--args").args(args);
+            c
+        }
+        Launcher::Flatpak => {
+            let mut c = Command::new("flatpak");
+            c.args(["run", "--file-forwarding", PHOTOCRAFT_ID, "@@"]).args(paths).arg("@@").args(args);
+            c
+        }
+        Launcher::Default => Command::new("true"),
+    }
+}
+
 /// The one command that opens all of `paths` in `launcher` (none for the system default).
 fn all_command(launcher: Launcher, paths: &[String]) -> Option<Command> {
     match launcher {
@@ -306,6 +364,28 @@ mod tests {
         let c = all_command(Launcher::Flatpak, &paths).unwrap();
         assert_eq!(args(&c), ["run", "--file-forwarding", PHOTOCRAFT_ID, "@@", &paths[0], &paths[1], "@@"]);
         assert!(all_command(Launcher::Default, &paths).is_none(), "the system default opens them one by one");
+    }
+
+    /// A preset's menu item: one start with the arguments and every file of a batch; an argument
+    /// holding `{file}` is a start per file.
+    #[test]
+    fn preset_items_start_the_editor_once_with_arguments() {
+        let paths = [r"D:\Pictures\a.dng".to_string(), r"D:\Pictures\b c.dng".to_string()];
+        let args = |c: &Command| c.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let cs = preset_commands(Launcher::Program(PathBuf::from(r"C:\DxO\PureRAW.exe")), &paths, &["-last".to_string()]).unwrap();
+        assert_eq!(cs.len(), 1);
+        assert_eq!(
+            (cs[0].get_program().to_string_lossy().into_owned(), args(&cs[0])),
+            (r"C:\DxO\PureRAW.exe".to_string(), vec!["-last".to_string(), paths[0].clone(), paths[1].clone()])
+        );
+        let cs = preset_commands(Launcher::MacApp("PureRAW".into()), &paths, &["-last".to_string()]).unwrap();
+        assert_eq!(args(&cs[0]), ["-a", "PureRAW", &paths[0], &paths[1], "--args", "-last"], "the files go before `open`'s `--args`");
+        let cs = preset_commands(Launcher::Program(PathBuf::from("/opt/denoise")), &paths, &["--shot={file}".to_string()]).unwrap();
+        assert_eq!(cs.len(), 2, "an argument with a path in it: one start per file");
+        assert_eq!(args(&cs[1]), [format!("--shot={}", paths[1])]);
+        assert!(args(&cs[1]).iter().all(|a| !a.contains(paths[0].as_str())), "{:?}", args(&cs[1]));
+        let e = preset_commands(Launcher::Default, &paths, &["-x".to_string()]).unwrap_err();
+        assert!(e.contains("default application"), "{e}");
     }
 
     #[test]
