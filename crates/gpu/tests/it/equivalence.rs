@@ -1763,7 +1763,14 @@ fn even_out_render_time() {
     let src = scene(2, 1920, 1280);
     let info = SourceInfo { raw: true, ..Default::default() };
     let req = RenderRequest::fit(1920, 1920);
-    let spot = |at: (f64, f64), size| Spot { mode: SpotMode::Flat, points: vec![Point::new(at.0, at.1)], size, feather: 50.0, opacity: 100.0, ..Default::default() };
+    let spot = |at: (f64, f64), size| Spot {
+        mode: SpotMode::Flat,
+        points: vec![Point::new(at.0, at.1)],
+        size,
+        feather: 50.0,
+        opacity: 100.0,
+        ..Default::default()
+    };
     let cases: Vec<(&str, Vec<Spot>)> = vec![
         ("no spots", vec![]),
         ("1 Even Out spot, size 0.05", vec![spot((0.5, 0.5), 0.05)]),
