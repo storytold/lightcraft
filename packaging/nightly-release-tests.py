@@ -103,6 +103,21 @@ def caller_pin(name):
                       (ROOT / ".github/workflows" / name).read_text())[0]
 
 
+def secret_declarations(source):
+    """Every uncommented line that declares `environment:` or `secrets:` at any depth.
+
+    YAML keys may be quoted, so `"secrets": inherit` is the same header as `secrets: inherit`;
+    the check rejects both instead of trusting an unquoted spelling.
+    """
+    hits = []
+    for line in source.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if re.match(r"\s*(?:-\s*)?[\"']?(?:environment|secrets)[\"']?\s*:", line, re.IGNORECASE):
+            hits.append(line)
+    return hits
+
+
 class TrustedSourcePreparation(unittest.TestCase):
     def test_one_producer_and_one_signer_job_carry_every_platform(self):
         for name, job in (("nightly.yml", "unsigned"), ("nightly-sign.yml", "release")):
@@ -179,8 +194,19 @@ class TrustedSourcePreparation(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotRegex(executable, r"(?im)^\s*(?:-\s*)?uses:\s*[^\n]*cache")
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
-                self.assertNotRegex(executable, r"(?im)^\s*(?:environment|secrets):")
+                self.assertEqual(secret_declarations(executable), [], "no environment or secrets header")
                 self.assertNotIn("secrets.", executable)
+
+    def test_quoted_secret_headers_are_rejected_like_unquoted_ones(self):
+        source = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
+        for line in ('    secrets: inherit',
+                     '    "secrets": inherit',
+                     "    'secrets': inherit",
+                     '      environment: release',
+                     '    ENVIRONMENT: release'):
+            with self.subTest(line=line):
+                self.assertEqual(secret_declarations(source + "\n" + line + "\n"), [line])
+        self.assertEqual(secret_declarations(source), [])
 
 
 class NightlyTrustAnchors(unittest.TestCase):
@@ -266,6 +292,24 @@ class NightlyEnabledCallers(unittest.TestCase):
                 reviewed_manual_actors(mutated_source, mutated_policy)
 
 
+def push_block(source):
+    """The whole `push:` mapping, blank lines and nested keys included.
+
+    A blank line does not end a YAML mapping, so the block is delimited by indentation rather than
+    by contiguous non-empty lines; a path filter after a blank line stays visible to the check.
+    """
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if re.fullmatch(r"  push:.*", line):
+            block = []
+            for follow in lines[index + 1:]:
+                if follow.strip() and not follow.startswith("    "):
+                    break
+                block.append(follow)
+            return "\n".join(block)
+    return None
+
+
 class NightlyInstalledPolicy(unittest.TestCase):
     """The installed v3 policy matches the callers, the repository and its documented sources."""
 
@@ -328,15 +372,27 @@ class NightlyInstalledPolicy(unittest.TestCase):
                 self.assertIs(type(row["workflow_id"]), int)
                 self.assertNotEqual(row["workflow_path"], self.policy["producer_workflow_path"])
                 source = (ROOT / row["workflow_path"]).read_text()
-                push = re.search(r"(?m)^  push:\n((?:    .*\n)+)", source)
+                push = push_block(source)
                 self.assertIsNotNone(push, "a required workflow must run on main pushes")
-                self.assertIn("    branches: [main]\n", push[1])
-                self.assertNotRegex(push[1], r"paths", "a path filter would leave candidates without a run")
+                self.assertIn("branches: [main]", push)
+                self.assertNotRegex(push, r"(?m)^\s+paths(?:-ignore)?:", "a path filter would leave candidates without a run")
                 names = [job["name"] for job in row["jobs"]]
                 self.assertEqual(len(names), len(set(names)))
                 for job in row["jobs"]:
                     self.assertEqual(set(job), {"name", "app_id", "applicability"})
                     self.assertEqual((job["app_id"], job["applicability"]), (15368, "required"))
+
+    def test_a_path_filter_after_a_blank_line_is_still_rejected(self):
+        workflow = "on:\n  push:\n    branches: [main]\n\n    paths: ['src/**']\n  workflow_dispatch: {}\n"
+        block = push_block(workflow)
+        self.assertIsNotNone(block)
+        self.assertIn("branches: [main]", block)
+        self.assertRegex(block, r"(?m)^\s+paths(?:-ignore)?:")
+        for ignored in ("paths: ['src/**']", "paths-ignore: ['docs/**']"):
+            with self.subTest(ignored=ignored):
+                variant = workflow.replace(ignored.split(":")[0] + ": ['src/**']", ignored)
+                self.assertRegex(push_block(variant), r"(?m)^\s+paths(?:-ignore)?:",
+                                 "a quoted or unquoted filter must not hide behind a blank line")
 
     def test_sonar_identity_and_reviewed_scope(self):
         sonar = self.policy["candidate_policy"]["sonar"]
