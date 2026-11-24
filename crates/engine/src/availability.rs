@@ -121,6 +121,10 @@ impl Availability {
         self.background.is_some()
     }
 
+    pub(crate) fn background_waker(&self) -> Option<Waker> {
+        self.background.clone()
+    }
+
     /// Does `path` exist? Synchronous mode: checked now. Background mode: the cached answer
     /// (`None` while unknown); unknown or stale answers are queued for the worker.
     pub fn exists(&self, path: &str) -> Option<bool> {

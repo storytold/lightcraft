@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The directory itself, so a catalog added or removed reruns this script.
     println!("cargo:rerun-if-changed=locales");
     let out = PathBuf::from(env::var("OUT_DIR")?);
-    fs::write(out.join("tr-formats.rs"), generate()?)?;
+    fs::write(out.join("tr-formats.rs"), generate(std::path::Path::new("locales"))?)?;
     let (json, people) = credits::load();
     fs::write(out.join("credits.rs"), credits::generate(&json, &people))?;
     Ok(())
@@ -52,23 +52,25 @@ fn capitalize(part: &str) -> String {
     }
 }
 
-fn generate() -> Result<String, Box<dyn std::error::Error>> {
-    let mut catalogs: Vec<(String, String, BTreeMap<String, String>)> = Vec::new();
-    for entry in fs::read_dir("locales")? {
+pub(crate) fn generate(locales: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    let mut catalogs: Vec<(String, String, BTreeMap<String, serde_json::Value>)> = Vec::new();
+    for entry in fs::read_dir(locales)? {
         let path = entry?.path();
         let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
         // `en` is the source language: it has no catalog, its formats are the source themselves.
         let Some(code) = name.strip_suffix("-formats.json").filter(|code| *code != "en") else { continue };
         println!("cargo:rerun-if-changed=locales/{name}");
         let variant = variant_for(code)?;
-        let mut messages: BTreeMap<String, String> =
+        let mut messages: BTreeMap<String, serde_json::Value> =
             serde_json::from_str(&fs::read_to_string(&path)?).map_err(|error| format!("locales/{name}: {error}"))?;
-        messages.retain(|_, translated| !translated.is_empty());
+        messages.retain(|_, translated| translated.as_str() != Some(""));
         catalogs.push((code.to_string(), variant, messages));
     }
     catalogs.sort_by(|a, b| a.0.cmp(&b.0));
+    println!("cargo:rerun-if-changed=locales/en-formats.json");
+    let english_plurals: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_str(&fs::read_to_string(locales.join("en-formats.json"))?)?;
 
-    let all: BTreeSet<&String> = catalogs.iter().flat_map(|(_, _, messages)| messages.keys()).collect();
+    let all: BTreeSet<&String> = catalogs.iter().flat_map(|(_, _, messages)| messages.keys()).chain(english_plurals.keys()).collect();
 
     let mut source = String::from(concat!(
         "/// Translate a format string, checked by `format!` in every language.\n",
@@ -77,14 +79,28 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
     ));
     for english in all {
         let en = serde_json::to_string(english)?;
-        source.push_str(&format!("    ({en} $(, $($args:tt)*)?) => {{\n        match $crate::i18n::language() {{\n"));
-        for (_, variant, messages) in &catalogs {
-            if let Some(translated) = messages.get(english) {
+        if let Some(forms) = english_plurals.get(english) {
+            source.push_str(&format!(
+                "    ({en}, count = $count:expr $(, $($args:tt)*)?) => {{{{\n        let count = $count;\n        let language = $crate::i18n::language();\n        let form = $crate::i18n::integer_plural_form(language, count as u64);\n        match (language, form) {{\n"
+            ));
+            for (code, variant, messages) in &catalogs {
+                let Some(value) = messages.get(english) else { continue };
+                let forms: BTreeMap<String, String> =
+                    serde_json::from_value(value.clone()).map_err(|e| format!("{code}: {english:?} needs plural forms: {e}"))?;
+                plural_arms(&mut source, &forms, english, &format!("$crate::i18n::Locale::{variant}"))?;
+            }
+            plural_arms(&mut source, forms, english, "_")?;
+            source.push_str("        }\n    }};\n");
+        } else {
+            source.push_str(&format!("    ({en} $(, $($args:tt)*)?) => {{\n        match $crate::i18n::language() {{\n"));
+            for (_, variant, messages) in &catalogs {
+                let Some(value) = messages.get(english) else { continue };
+                let translated = value.as_str().ok_or_else(|| format!("{english:?}: plural source missing from en-formats.json"))?;
                 let translated = serde_json::to_string(translated)?;
                 source.push_str(&format!("            $crate::i18n::Locale::{variant} => format!({translated} $(, $($args)*)?),\n"));
             }
+            source.push_str(&format!("            _ => format!({en} $(, $($args)*)?),\n        }}\n    }};\n"));
         }
-        source.push_str(&format!("            _ => format!({en} $(, $($args)*)?),\n        }}\n    }};\n"));
     }
     source.push_str(concat!(
         "    ($english:literal $(, $($args:tt)*)?) => {\n",
@@ -97,6 +113,17 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
         "pub(crate) use tr_format;\n",
     ));
     Ok(source)
+}
+
+/// Every form uses the same named count and arguments, checked by Rust's formatter.
+fn plural_arms(source: &mut String, forms: &BTreeMap<String, String>, english: &str, locale: &str) -> Result<(), String> {
+    for form in ["one", "few", "many", "other"] {
+        let translated = forms.get(form).ok_or_else(|| format!("{english:?}: missing {form} plural form"))?;
+        let translated = serde_json::to_string(translated).map_err(|e| e.to_string())?;
+        let pattern = if form == "other" { "_".to_string() } else { format!("{form:?}") };
+        source.push_str(&format!("            ({locale}, {pattern}) => format!({translated}, count = count $(, $($args)*)?),\n"));
+    }
+    Ok(())
 }
 
 /// The About window's credits tables.
