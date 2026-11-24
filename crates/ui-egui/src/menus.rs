@@ -244,6 +244,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("section.retouch", "Retouch", None, "Window>Edit Sections"),
     // {on?}; no params toggles. Opening one Edit section closes the others.
     ("view.soloSections", "Solo Mode", None, "Window>Edit Sections"),
+    // {on?} (no params toggles) or {section}: Light, Color, Color Grading, Effects, Detail in the
+    // Masking panel; opening one folds the others (issue #1305)
+    ("mask.solo", "Solo Mode in Masks", None, "Window>Edit Sections"),
     ("tool.brush", "Brush", Some("B"), "Window>Tools"),
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
@@ -1958,6 +1961,17 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             }
             Ok(json!({"hidden": app.ui.hidden_locations}))
         }
+        "mask.solo" => match p.get("section") {
+            None | Some(Value::Null) => bool_param(id, p, "on").map(|on| {
+                app.ui.set_mask_solo(on.unwrap_or(!app.ui.mask_solo));
+                json!({"maskSolo": app.ui.mask_solo})
+            }),
+            Some(Value::String(k)) if crate::state::MASK_SECTIONS.contains(&k.as_str()) => {
+                app.ui.solo_mask_section(k);
+                Ok(json!({"maskSolo": app.ui.mask_solo, "section": k}))
+            }
+            Some(other) => Err(format!("mask.solo: unknown section {other} (one of {})", crate::state::MASK_SECTIONS.join(", "))),
+        },
         "view.soloSections" => bool_param(id, p, "on").map(|on| {
             app.ui.set_single_panel(on.unwrap_or(!app.ui.single_panel));
             json!({"soloSections": app.ui.single_panel})
