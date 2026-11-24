@@ -31,7 +31,7 @@ sidebar:
 
 ## Platforms and quality
 - **Android and device sync** are tested on an emulator and one machine only.
-- **Accessibility**: screen-reader audit and keyboard-only masking pins are open.
+- **Accessibility**: a screen-reader audit with blind users is open.
 - **Translations**: 17 languages; What's New is mostly English.
 - **HDR** on X11 is a platform limit; video has no sound output yet.
 - **Control surfaces**: Loupedeck Live / CT and Tangent panels are not built; MIDI is Windows and macOS only.
