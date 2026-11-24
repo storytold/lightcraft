@@ -26,6 +26,7 @@ use history::{activity, versions};
 use info::info;
 #[cfg(test)]
 pub(crate) use info::mixed_meta;
+pub(crate) use keywords::forget_stale_enter_keywords;
 use keywords::keywords;
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {

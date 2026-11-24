@@ -1,5 +1,16 @@
 {
   "Bring photos in with File › Import Photos… ({keys}).": "ייבוא תמונות דרך קובץ › ייבוא תמונות… ({keys}).",
   "View › Detail View ({keys}).": "תצוגה › תצוגת פרטים ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "קובץ › ייצוא… · קובץ › הדפסה… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "קובץ › ייצוא… · קובץ › הדפסה… ({keys}).",
+  "Delete “{current}”": "מחיקת „{current}”",
+  "On {have} of {of} selected photos": "ב־{have} מתוך {of} התמונות שנבחרו",
+  "Remove “{name}”": "הסרת „{name}”",
+  "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "מילת המפתח „{name}” הוסרה מ־{n} תמונות. עריכה ▸ ביטול תחזיר אותה.",
+  "Keywords of {n} selected photos": "מילות המפתח של {n} תמונות שנבחרו",
+  "+{n} more": "עוד {n}+",
+  "Create the keyword “{name}”": "יצירת מילת המפתח „{name}”",
+  "new, inside {parent}": "חדשה, בתוך {parent}",
+  "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} מתוך 4 קווי עזר — יש לגרור לאורך קווים שאמורים להיות אנכיים או אופקיים.",
+  "{} spot(s) on this photo": "מספר התיקונים הנקודתיים בתמונה: {}",
+  "{mode} spot {} of {}": "{mode} — תיקון נקודתי {} מתוך {}"
 }

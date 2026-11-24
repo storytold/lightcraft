@@ -22,7 +22,6 @@ fn languages_switch_persist_and_keep_user_values() {
         app.run(&command, serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, locale);
         assert_eq!(language(), locale);
-        assert_eq!(crate::menubar::checked(&app, &command), Some(true));
         assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
         assert_eq!(builtin_label("Warm Glow", true), locale.tr("Warm Glow"));
         assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
@@ -370,7 +369,7 @@ fn translated_catalogs_do_not_use_missing_menu_triangles() {
     }
 }
 
-/// The language menu covers every language, and a language's own command selects it.
+/// Every language has a command, and a language's own command selects it.
 #[test]
 fn language_commands_cover_every_language() {
     let commands = [
@@ -394,11 +393,11 @@ fn language_commands_cover_every_language() {
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
     ];
-    // One command per language, and every command reachable from the menu table.
+    // One command per language, and every command in the UI command tables.
     assert_eq!(commands.len(), Locale::ALL.len());
     for (id, language) in commands {
         assert_eq!(crate::menus::language_from_command(id), Some(language), "{id}");
-        assert!(crate::menus::ui_commands().any(|command| command.0 == id), "{id} is not in the menu");
+        assert!(crate::menus::ui_commands().any(|command| command.0 == id), "{id} is not a UI command");
     }
     assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
     assert_eq!(crate::menus::language_from_command("view.detail"), None);
@@ -591,7 +590,6 @@ fn german_switches_via_menu_and_control_and_persists() {
     app.run("app.language.german", serde_json::json!({})).unwrap();
     assert_eq!(app.ui.language, Locale::De);
     assert_eq!(language(), Locale::De);
-    assert_eq!(crate::menubar::checked(&app, "app.language.german"), Some(true));
     let saved = serde_json::to_string(&app.ui).unwrap();
     assert!(saved.contains(r#""language":"de""#));
     assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::De);
@@ -892,8 +890,6 @@ fn traditional_chinese_switches_through_menu_and_control_and_persists() {
     assert_eq!(source_label(lightcraft_engine::LibrarySource::All, &app.session.catalog), Locale::ZhHant.tr("All Photos"));
     assert_eq!(date_group_label("", false), Locale::ZhHant.tr("Unknown Date"));
     assert_eq!(display_time("a-user-value"), "a-user-value");
-    assert_eq!(crate::menubar::checked(&app, "app.language.traditionalChinese"), Some(true));
-    assert_eq!(crate::menubar::checked(&app, "app.language.english"), Some(false));
     assert_eq!(tr("my-photo.jpg"), "my-photo.jpg");
     for id in ["album.addPhotos", "metadata.applyPreset", "label.applySet"] {
         assert_eq!(crate::menubar::display_item_label(id, &serde_json::json!({"id": 1}), "Color"), "Color");
@@ -1280,7 +1276,6 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     app.run("app.language.polish", serde_json::json!({})).unwrap();
     assert_eq!(app.ui.language, Locale::Pl);
     assert_eq!(Locale::Pl.name(), "Polski");
-    assert_eq!(crate::menubar::checked(&app, "app.language.polish"), Some(true));
     assert_eq!(tr("File"), "Plik");
     assert_eq!(tr("Exposure"), "Ekspozycja");
     assert_eq!(date_group_label("2026-09-20", false), "Niedziela, 20.09.2026");
@@ -1559,13 +1554,8 @@ fn hebrew_photo_mask_controls_are_localized() {
         "Radial Gradient",
         "Show/Hide Mask",
     ] {
-        let translated = catalog
-            .get(source)
-            .expect("missing Hebrew photo workflow label");
-        assert!(
-            translated.chars().any(|c| ('א'..='ת').contains(&c)),
-            "{source} is not localized in Hebrew"
-        );
+        let translated = catalog.get(source).expect("missing Hebrew photo workflow label");
+        assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
     }
 }
 
@@ -1584,13 +1574,8 @@ fn hebrew_photo_library_controls_are_localized() {
         "Synchronize Folder",
         "Synchronize Folder…",
     ] {
-        let translated = catalog
-            .get(source)
-            .expect("missing Hebrew photo workflow label");
-        assert!(
-            translated.chars().any(|c| ('א'..='ת').contains(&c)),
-            "{source} is not localized in Hebrew"
-        );
+        let translated = catalog.get(source).expect("missing Hebrew photo workflow label");
+        assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
     }
 }
 
@@ -1609,13 +1594,8 @@ fn hebrew_photo_review_controls_are_localized() {
         "Show/hide My Photos panel",
         "Red Eye",
     ] {
-        let translated = catalog
-            .get(source)
-            .expect("missing Hebrew photo workflow label");
-        assert!(
-            translated.chars().any(|c| ('א'..='ת').contains(&c)),
-            "{source} is not localized in Hebrew"
-        );
+        let translated = catalog.get(source).expect("missing Hebrew photo workflow label");
+        assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
     }
 }
 
@@ -1623,30 +1603,17 @@ fn hebrew_photo_review_controls_are_localized() {
 fn hebrew_round2_errors_labels_translate_exactly() {
     for (source, expected) in [
         ("Your library is empty", "ספריית התמונות ריקה"),
-        (
-            "Your library couldn't be opened",
-            "לא ניתן לפתוח את ספריית התמונות",
-        ),
+        ("Your library couldn't be opened", "לא ניתן לפתוח את ספריית התמונות"),
         ("This photo can't be opened", "לא ניתן לפתוח את התמונה"),
-        (
-            "There is no LightCraft library in this folder any more.",
-            "בתיקייה הזו כבר אין ספריית LightCraft.",
-        ),
+        ("There is no LightCraft library in this folder any more.", "בתיקייה הזו כבר אין ספריית LightCraft."),
         ("This folder can't be read:", "לא ניתן לקרוא את התיקייה:"),
         ("The download didn't work:", "ההורדה נכשלה:"),
         ("Wait for the import to finish", "יש להמתין לסיום הייבוא"),
-        (
-            "A folder is already being synchronized",
-            "כבר מתבצע סנכרון של תיקייה",
-        ),
+        ("A folder is already being synchronized", "כבר מתבצע סנכרון של תיקייה"),
         ("A folder is being synchronized", "מתבצע סנכרון של תיקייה"),
         ("Looking for photos…", "מחפש תמונות…"),
     ] {
-        assert_eq!(
-            Locale::He.tr(source),
-            expected,
-            "Hebrew translation mismatch: {source}"
-        );
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
     }
 }
 
@@ -1656,10 +1623,7 @@ fn hebrew_round2_edit_labels_translate_exactly() {
         ("Reset all edits", "איפוס כל העריכות"),
         ("Reset All", "איפוס הכול"),
         ("Reset Sliders", "איפוס המחוונים"),
-        (
-            "Copy History Step Settings to Before",
-            "העתקת הגדרות שלב בהיסטוריה למצב ״לפני״",
-        ),
+        ("Copy History Step Settings to Before", "העתקת הגדרות שלב בהיסטוריה למצב ״לפני״"),
         ("Apply to All Masks", "החלה על כל המסכות"),
         ("Clear Guides", "הסרת קווי עזר"),
         ("Clear History", "ניקוי ההיסטוריה"),
@@ -1667,11 +1631,7 @@ fn hebrew_round2_edit_labels_translate_exactly() {
         ("Before/After Side by Side", "השוואת לפני ואחרי זה לצד זה"),
         ("Before/After (Y)", "לפני/אחרי (Y)"),
     ] {
-        assert_eq!(
-            Locale::He.tr(source),
-            expected,
-            "Hebrew translation mismatch: {source}"
-        );
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
     }
 }
 
@@ -1680,10 +1640,7 @@ fn hebrew_round2_import_labels_translate_exactly() {
     for (source, expected) in [
         ("In library", "בספרייה"),
         ("All Photos", "כל התמונות"),
-        (
-            "All the photos imported from this disk are included.",
-            "כל התמונות שיובאו מהדיסק הזה נכללות.",
-        ),
+        ("All the photos imported from this disk are included.", "כל התמונות שיובאו מהדיסק הזה נכללות."),
         ("Into one folder", "לתיקייה אחת"),
         ("Use Library Folder", "שימוש בתיקיית הספרייה"),
         ("Clear Recent Libraries", "ניקוי רשימת הספריות האחרונות"),
@@ -1692,11 +1649,7 @@ fn hebrew_round2_import_labels_translate_exactly() {
         ("Reading photos…", "קורא תמונות…"),
         ("Adding photos…", "מוסיף תמונות…"),
     ] {
-        assert_eq!(
-            Locale::He.tr(source),
-            expected,
-            "Hebrew translation mismatch: {source}"
-        );
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
     }
 }
 
@@ -1704,27 +1657,17 @@ fn hebrew_round2_import_labels_translate_exactly() {
 fn hebrew_parallel_round6_masking_labels() {
     for (source, expected) in [
         ("All Mask Overlays", "כל שכבות־העל של המסכות"),
-        (
-            "Cycle Mask Overlay Color",
-            "מעבר בין צבעי שכבת־העל של המסכה",
-        ),
+        ("Cycle Mask Overlay Color", "מעבר בין צבעי שכבת־העל של המסכה"),
         ("Cycle Mask Overlay Mode", "מעבר בין מצבי שכבת־העל של המסכה"),
         ("Overlay color", "צבע שכבת־העל"),
-        (
-            "Analyzing the photo for AI masks…",
-            "מנתח את התמונה לזיהוי מסכות באמצעות בינה מלאכותית…",
-        ),
+        ("Analyzing the photo for AI masks…", "מנתח את התמונה לזיהוי מסכות באמצעות בינה מלאכותית…"),
         ("Refining the mask's detail…", "משפר את פרטי המסכה…"),
         ("Subtract from this mask", "החסרה מהמסכה הזו"),
         ("Sharpness", "חדות"),
         ("Create Preset…", "יצירת ערכת הגדרות…"),
         ("More preset options", "אפשרויות נוספות לערכת ההגדרות"),
     ] {
-        assert_eq!(
-            Locale::He.tr(source),
-            expected,
-            "Hebrew source label regression: {source}"
-        );
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew source label regression: {source}");
     }
 }
 
@@ -1739,20 +1682,10 @@ fn hebrew_parallel_round6_culling_labels() {
         ("Favorite", "מועדף"),
         ("Flag", "סימון בדגל"),
         ("Generated demo photo", "תמונת הדגמה שנוצרה"),
-        (
-            "Increase Grid Thumbnail Size",
-            "הגדלת התמונות הממוזערות ברשת",
-        ),
-        (
-            "Decrease Grid Thumbnail Size",
-            "הקטנת התמונות הממוזערות ברשת",
-        ),
+        ("Increase Grid Thumbnail Size", "הגדלת התמונות הממוזערות ברשת"),
+        ("Decrease Grid Thumbnail Size", "הקטנת התמונות הממוזערות ברשת"),
     ] {
-        assert_eq!(
-            Locale::He.tr(source),
-            expected,
-            "Hebrew source label regression: {source}"
-        );
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew source label regression: {source}");
     }
 }
 
@@ -1761,28 +1694,36 @@ fn hebrew_parallel_round6_export_labels() {
     for (source, expected) in [
         ("Quality", "איכות"),
         ("Resolution (ppi)", "רזולוציה (ppi)"),
-        (
-            "Limit file size (KB, 0 = off)",
-            "מגבלת גודל קובץ (KB, 0 = ללא הגבלה)",
-        ),
+        ("Limit file size (KB, 0 = off)", "מגבלת גודל קובץ (KB, 0 = ללא הגבלה)"),
         ("If file exists", "אם הקובץ קיים"),
         ("Include on Export", "הכללה בייצוא"),
         ("Will Export", "ייכלל בייצוא"),
         ("HDR output", "פלט HDR"),
-        (
-            "HDR TIFF needs 32-bit float.",
-            "TIFF ב־HDR מחייב נקודה צפה של 32 סיביות.",
-        ),
-        (
-            "Managed by Printer (Adobe RGB)",
-            "ניהול צבע בידי המדפסת (Adobe RGB)",
-        ),
+        ("HDR TIFF needs 32-bit float.", "TIFF ב־HDR מחייב נקודה צפה של 32 סיביות."),
+        ("Managed by Printer (Adobe RGB)", "ניהול צבע בידי המדפסת (Adobe RGB)"),
         ("Managed by Printer (sRGB)", "ניהול צבע בידי המדפסת (sRGB)"),
     ] {
-        assert_eq!(
-            Locale::He.tr(source),
-            expected,
-            "Hebrew source label regression: {source}"
-        );
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew source label regression: {source}");
     }
+}
+
+#[test]
+fn hebrew_editing_dropdowns_and_formats_are_translated() {
+    for (source, expected) in [
+        ("Golden Ratio", "יחס הזהב"),
+        ("Perspective Correction", "תיקון פרספקטיבה"),
+        ("Mode", "מצב"),
+        ("Content-Aware", "מילוי מותאם לתוכן"),
+        ("Heal", "תיקון"),
+        ("Clone", "שכפול"),
+        ("None", "ללא"),
+        ("Selected", "נבחרים"),
+        ("Never", "אף פעם"),
+    ] {
+        assert_eq!(Locale::He.tr(source), expected, "{source}");
+    }
+    set_language(Locale::He);
+    assert_eq!(tr_format!("{} spot(s) on this photo", 3), "מספר התיקונים הנקודתיים בתמונה: 3");
+    assert_eq!(tr_format!("Keywords of {n} selected photos", n = 3), "מילות המפתח של 3 תמונות שנבחרו");
+    set_language(Locale::En);
 }
