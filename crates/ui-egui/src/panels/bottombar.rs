@@ -90,7 +90,9 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     let has_clip = app.session.clipboard.is_some();
     let label = crate::i18n::tr(if has_clip { "Paste Edit Settings" } else { "Copy Edit Settings" });
     let copy_width = (ui.painter().layout_no_wrap(label.to_string(), t.font(13.0), t.text_label).size().x + 24.0).max(136.0);
-    let centre_width = PILL_W + 10.0 + copy_width + 4.0 + 30.0;
+    // a clear button sits between the paste button and the gear while settings are copied (#4511)
+    let clear_width = if has_clip { 4.0 + 30.0 } else { 0.0 };
+    let centre_width = PILL_W + 10.0 + copy_width + clear_width + 4.0 + 30.0;
     let room = to - from;
     if room < PILL_W {
         return;
@@ -157,7 +159,18 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
         let msg = if has_clip { "Settings pasted" } else { "Edit settings copied" };
         app.toast(ui.ctx(), crate::i18n::tr(msg));
     }
-    let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
+    if has_clip {
+        let clear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
+        let xresp = ui.interact(clear_r, egui::Id::unique("copy-clear"), Sense::click());
+        crate::widgets::announce(&xresp, crate::i18n::tr("Clear Copied Settings"));
+        register(ui, "icon:clearCopied", clear_r);
+        ui.painter().rect_filled(clear_r, 15.0, if xresp.hovered() { t.hover } else { t.canvas });
+        paint(ui.painter(), clear_r.shrink(8.0), Icon::Close, if xresp.hovered() { t.text } else { t.icon });
+        if xresp.clicked() && app.run("develop.clearCopied", json!({})).is_ok() {
+            app.toast(ui.ctx(), crate::i18n::tr("Copied settings cleared"));
+        }
+    }
+    let gear_r = Rect::from_min_size(pos2(copy_r.right() + clear_width + 4.0, pill.top()), vec2(30.0, 30.0));
     let gresp = ui.interact(gear_r, egui::Id::unique("copy-gear"), Sense::click());
     crate::widgets::announce(&gresp, crate::i18n::tr("Copy Settings…"));
     register(ui, "icon:copyGear", gear_r);

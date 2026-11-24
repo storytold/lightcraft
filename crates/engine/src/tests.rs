@@ -235,6 +235,24 @@ fn copy_paste_sync_presets() {
     assert!(s.execute("preset.delete", &json!({"id": "lc.moody"})).is_err());
 }
 
+/// #4511: after a copy the photo can't be copied again until the copied settings are cleared.
+#[test]
+fn clear_copied_settings_lets_copy_start_over() {
+    let mut s = demo();
+    assert!(s.execute("develop.clearCopied", &json!({})).is_err(), "nothing copied yet");
+    s.execute("develop.set", &json!({"values": {"light.shadows": 20}})).unwrap();
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.clearCopied", &json!({})).unwrap();
+    assert!(s.clipboard.is_none());
+    assert!(s.execute("develop.paste", &json!({})).is_err(), "paste has nothing left to paste");
+    // the next copy picks up an adjustment made after the first one
+    s.execute("develop.set", &json!({"values": {"light.shadows": 45}})).unwrap();
+    s.execute("develop.copy", &json!({})).unwrap();
+    let vis = s.visible_cloned();
+    s.execute("develop.paste", &json!({"ids": [vis[1].0]})).unwrap();
+    assert_eq!(s.develop_of(vis[1]).unwrap().light.shadows, 45.0);
+}
+
 #[test]
 fn albums_crud() {
     let mut s = demo();

@@ -89,3 +89,25 @@ fn escape_closes_paste_settings_without_pasting() {
     assert!(h.app.ui.dialog.is_none(), "Esc closes the dialog");
     assert_eq!(exposure(&h, ids[1]), 0.0, "Esc pastes nothing");
 }
+
+/// #4511: the bottom bar's clear button forgets the copied settings, so its main button
+/// goes back to Copy Edit Settings and the edited photo can be copied again.
+#[test]
+fn bottom_bar_clear_button_returns_to_copy() {
+    let services = crate::Services { png: None, ..Default::default() };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.ui.view = crate::state::ViewMode::Detail;
+    let mut h = Headless::new(app, [1600.0, 900.0], 1.0);
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 1.0}}));
+    h.settle(SETTLE);
+    assert!(!h.app.widgets.iter().any(|(id, _)| id == "icon:clearCopied"), "nothing to clear before a copy");
+    let r = h.request("ui.clickWidget", json!({"id": "button:copySettings"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.clipboard.is_some());
+    let r = h.request("ui.clickWidget", json!({"id": "icon:clearCopied"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.clipboard.is_none());
+    assert!(!h.app.widgets.iter().any(|(id, _)| id == "icon:clearCopied"), "the clear button leaves with the copied settings");
+}

@@ -1497,6 +1497,9 @@ fn context_menu_stack_and_edits(app: &mut LightcraftApp, ui: &mut egui::Ui, id: 
     if ui.add_enabled(app.session.clipboard.is_some(), egui::Button::new(crate::i18n::tr("Paste Selected Settings…"))).clicked() {
         let _ = app.run("dialog.pasteSettings", json!({}));
     }
+    if ui.add_enabled(app.session.clipboard.is_some(), egui::Button::new(crate::i18n::tr("Clear Copied Settings"))).clicked() {
+        let _ = app.run("develop.clearCopied", json!({}));
+    }
     if ui.button(crate::i18n::tr("Reset Edits")).clicked() {
         let _ = app.run("develop.reset", json!({}));
     }

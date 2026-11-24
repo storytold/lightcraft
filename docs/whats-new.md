@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Clear the copied edit settings
+- Once you copied edit settings, the bottom bar's button stayed on Paste Edit Settings until you pasted. A × beside
+  it, and Edit ▸ Clear Copied Settings (`develop.clearCopied`), now forget the copy, so the button copies again and
+  picks up adjustments made since (issue #4511).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

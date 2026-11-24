@@ -1193,6 +1193,18 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "develop.clearCopied",
+            "Clear Copied Settings",
+            ["Edit"],
+            None,
+            "{} — forget the copied settings, so Copy Edit Settings copies again",
+            |s| if s.clipboard.is_none() { Err("no settings copied".into()) } else { Ok(()) },
+            |s, _| {
+                s.clipboard = None;
+                ok()
+            }
+        ),
+        cmd!(
             "develop.sync",
             "Sync Settings",
             [],

@@ -349,7 +349,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-SYNC-COPY | Copy edit settings | P0 | ✅ | `cmd:develop.copy` | |
+| LR-SYNC-COPY | Copy edit settings | P0 | ✅ | `cmd:develop.copy`, `cmd:develop.clearCopied` | Clear Copied Settings (Edit menu, grid menu, the × beside Paste in the bottom bar) forgets the copy so the button copies again (#4511) |
 | LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings` | groups are coarser than per-slider |
 | LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste` | no separate "paste selected" (choose at copy time instead) |
 | LR-SYNC-SYNCBTN | Sync active → selected | P1 | ✅ | `cmd:develop.sync` | |
