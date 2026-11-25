@@ -177,8 +177,7 @@ fn point_color_swatches(ui: &mut egui::Ui, colors: &[Color32], selected: usize) 
     let child = ui.new_child(
         egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, vec2(width, f32::INFINITY))).sizing_pass().invisible(),
     );
-    let ctx = ui.ctx().clone();
-    let size = craft::ui::runtime::measure::run(&ctx, || group().measure_in(&child, craft::behavior::Proposal::Ideal, body));
+    let size = group().measure_in(&child, craft::behavior::Proposal::Ideal, body);
     let (rect, _) = ui.allocate_exact_size(vec2(size.x.min(width), size.y.max(24.0)), Sense::hover());
     if measuring {
         return None;
