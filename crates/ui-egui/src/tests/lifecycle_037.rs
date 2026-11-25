@@ -648,21 +648,23 @@ fn text_field_inherits_ime_delete_surrounding_bytes_exactly() {
     // `ImeEvent::DeleteSurroundingBytes`; the app's `TextField` wraps the built-in `TextEdit`,
     // so it must apply the range exactly (not extend it to a grapheme cluster).
     let ctx = egui::Context::default();
+    // (the framework's runtime routes the input method's events to the field that has its focus)
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let id = crate::text_field::id("ime-bytes");
     let mut text = String::from("abc");
     let pass = |events: Vec<egui::Event>, text: &mut String| {
         let raw =
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))), events, ..Default::default() };
         frame(&ctx, raw, |ui| {
-            ui.memory_mut(|memory| memory.request_focus(id));
+            crate::text_field::focus(ui.ctx(), "ime-bytes");
             let _ = crate::text_field::TextField::singleline("ime-bytes", text).show(ui);
         });
     };
     pass(vec![], &mut text);
     pass(vec![], &mut text);
-    let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+    let mut state = egui::text_edit::TextEditState::load(&ctx, crate::text_field::text_id(id)).unwrap_or_default();
     state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(3))));
-    state.store(&ctx, id);
+    state.store(&ctx, crate::text_field::text_id(id));
     pass(vec![egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 2, after_bytes: 0 })], &mut text);
     assert_eq!(text, "a", "the reported UTF-8 range is deleted exactly");
 
@@ -670,9 +672,9 @@ fn text_field_inherits_ime_delete_surrounding_bytes_exactly() {
     let mut text = String::from("aé🙂z");
     pass(vec![], &mut text);
     pass(vec![], &mut text);
-    let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+    let mut state = egui::text_edit::TextEditState::load(&ctx, crate::text_field::text_id(id)).unwrap_or_default();
     state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(3)))); // after 🙂
-    state.store(&ctx, id);
+    state.store(&ctx, crate::text_field::text_id(id));
     pass(vec![egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 4, after_bytes: 0 })], &mut text);
     assert_eq!(text, "aéz", "the whole emoji is removed without touching the combining-free neighbours");
 }
@@ -680,21 +682,23 @@ fn text_field_inherits_ime_delete_surrounding_bytes_exactly() {
 #[test]
 fn text_field_ime_commit_replaces_the_selection() {
     let ctx = egui::Context::default();
+    // (the framework's runtime routes the input method's events to the field that has its focus)
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let id = crate::text_field::id("ime-commit");
     let mut text = String::from("abc");
     let pass = |events: Vec<egui::Event>, text: &mut String| {
         let raw =
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))), events, ..Default::default() };
         frame(&ctx, raw, |ui| {
-            ui.memory_mut(|memory| memory.request_focus(id));
+            crate::text_field::focus(ui.ctx(), "ime-commit");
             let _ = crate::text_field::TextField::singleline("ime-commit", text).show(ui);
         });
     };
     pass(vec![], &mut text);
     pass(vec![], &mut text);
-    let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+    let mut state = egui::text_edit::TextEditState::load(&ctx, crate::text_field::text_id(id)).unwrap_or_default();
     state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(2))));
-    state.store(&ctx, id);
+    state.store(&ctx, crate::text_field::text_id(id));
     pass(vec![egui::Event::Ime(egui::ImeEvent::Commit("é".into()))], &mut text);
     assert_eq!(text, "éc", "the committed text replaces the selected range once");
 }
