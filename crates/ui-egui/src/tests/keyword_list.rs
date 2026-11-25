@@ -645,9 +645,7 @@ fn ticking_a_keyword_keeps_the_list_in_place() {
     let picked: Vec<String> = (30..36).map(|i| format!("zz{i}")).collect();
     for (n, k) in picked.iter().chain(picked.iter().rev()).enumerate() {
         let (before, box_top) = (rect(&h, &format!("keywordRow:{k}")), rect(&h, "field:keyword").top());
-        eprintln!("DBGTICK click {k} before={before:?}");
         ask(&mut h, "ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}));
-        eprintln!("DBGTICK done {k} after={:?}", rect(&h, &format!("keywordRow:{k}")));
         assert_eq!(rect(&h, &format!("keywordRow:{k}")), before, "{k} stayed under the pointer");
         // (the click found the row where it is drawn, not where a discarded pass had it)
         assert_eq!(keywords_of(&h, ids[0]).contains(k), n < picked.len(), "{k} was the one ticked: {:?}", keywords_of(&h, ids[0]));

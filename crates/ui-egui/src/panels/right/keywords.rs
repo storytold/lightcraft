@@ -336,9 +336,6 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     ui.data_mut(|d| d.insert_temp(key, (height, pass)));
     let Some(before) = before else { return };
     let grew = height - before;
-    if grew.abs() >= 0.5 {
-        eprintln!("DBGCHANGE pass={pass} grew={grew} top={top} clip_top={} ptr={:?}", ui.clip_rect().top(), ui.input(|i| i.pointer.latest_pos()));
-    }
     if !grew.is_finite() || grew.abs() < 0.5 || top >= ui.clip_rect().top() - 0.5 {
         return;
     }

@@ -77,12 +77,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::unique(AREA)));
         let ended = ui.data(|d| d.get_temp::<f32>(egui::Id::unique(ENDED)));
         let start = held.or(ended).or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.clamped_offset().y));
-        ui.data_mut(|d| match start {
-            Some(o) => {
-                d.insert_temp(egui::Id::unique(OFFSET), o);
-            }
-            None => d.remove::<f32>(egui::Id::unique(OFFSET)),
-        });
+        // (only a real pass says where it started: a sizing or measuring run in the next pass would write the offset
+        // the last pass ended at, which egui has already pulled back as the content shrank, and the hold would count that
+        // change twice)
+        if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
+            ui.data_mut(|d| match start {
+                Some(o) => {
+                    d.insert_temp(egui::Id::unique(OFFSET), o);
+                }
+                None => d.remove::<f32>(egui::Id::unique(OFFSET)),
+            });
+        }
         let scrolled = area.show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             match app.ui.right {
@@ -102,24 +107,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             super::scroll_focus::reveal_focus(ui, egui::Id::unique("right-scroll-focus"));
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
-        {
-            let now = (scrolled.state.offset().y, scrolled.content_size.y);
-            let last = ui.data(|d| d.get_temp::<(f32, f32)>(egui::Id::unique("dbg-last")));
-            ui.data_mut(|d| d.insert_temp(egui::Id::unique("dbg-last"), now));
-            if last != Some(now) {
-                eprintln!(
-                    "DBGSHOW pass={} sizing={} measure={} held={held:?} start={start:?} ended={ended:?} offset {:?} -> {} content {:?} -> {} inner={}",
-                    ui.ctx().cumulative_pass_nr(),
-                    ui.is_sizing_pass(),
-                    craft::ui::runtime::measure::active(ui.ctx()),
-                    last.map(|l| l.0),
-                    now.0,
-                    last.map(|l| l.1),
-                    now.1,
-                    scrolled.inner_rect.height()
-                );
-            }
-        }
         // (the offset this real pass ended at: the next pass holds from it, not from the state a sizing or
         // measuring run in between may already have pulled back as the content shrank)
         if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
