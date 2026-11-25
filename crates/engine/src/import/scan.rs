@@ -1,6 +1,6 @@
 use super::files::{BrowsedFile, Seen, browsed_files_changed, expand, expand_report_knowing, is_supported, probe_all, reusable_probes};
 use super::types::ImportCandidate;
-use super::{HashMap, ListedFolders, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, ListedFolders, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
@@ -51,16 +51,18 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
 }
 
 /// Which photo of the library has each of the contents `hashes` (the later one where several
-/// have it; a copy that was only browsed in Local isn't in the library). One pass over the library, and an entry only for a content that was asked about.
-pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
+/// have it). One pass over the library, and an entry only for a content that was asked about.
+pub(super) fn library_hashes<'a>(
+    photos: impl Iterator<Item = &'a std::sync::Arc<Photo>>,
+    hashes: impl Iterator<Item = &'a str>,
+) -> HashMap<String, PhotoId> {
     let wanted: std::collections::HashSet<&str> = hashes.collect();
     let mut by_hash = HashMap::new();
     if wanted.is_empty() {
         return by_hash;
     }
-    for p in library.photos() {
-        if !p.local
-            && let Some(h) = &p.content_hash
+    for p in photos {
+        if let Some(h) = &p.content_hash
             && wanted.contains(h.as_str())
         {
             by_hash.insert(h.clone(), p.id);
@@ -391,7 +393,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         // (and the browsed files the library has by path: they are offered unless it has the content too)
         .chain(by_path.values().filter(|(_, c, _)| c.local).filter_map(|(_, _, h)| h.as_deref()));
     let mut seen_hash: HashMap<String, Option<u64>> =
-        library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
+        library_hashes(input.library.photos().filter(|p| !p.local), probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     // (a content's browsed first copy: its path, until the first file of its own with that content stands in for it)

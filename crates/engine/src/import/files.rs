@@ -660,12 +660,14 @@ mod prepared_tests {
             path: path.to_string_lossy().into(),
             stored: path.to_string_lossy().into(),
             info: ProbeInfo { format: "JPG".into(), ..ProbeInfo::default() },
+            input_hash: None,
             sidecar: None,
             placed: None,
         };
         let mut prepared = Prepared {
             scanned: 2,
             items: vec![PreparedItem::Ready(Box::new(ready(&existing_path))), PreparedItem::Ready(Box::new(ready(&other_path)))],
+            ..Default::default()
         };
         prepared.revalidate_add(&s);
         assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "path", .. })));

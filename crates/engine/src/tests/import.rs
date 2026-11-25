@@ -5216,3 +5216,263 @@ fn reload_repairs_old_source_classification_without_replacing_edits() {
         assert_eq!(s.catalog.photo(id).unwrap(), &repaired);
     }
 }
+
+#[test]
+fn followup_copy_as_dng_does_not_discard_an_output_matching_only_local() {
+    copy_as_dng_with_local_match(false);
+}
+
+#[test]
+fn followup_copy_as_dng_deduplicates_against_a_pending_local_promotion() {
+    copy_as_dng_with_local_match(true);
+}
+
+fn copy_as_dng_with_local_match(promote: bool) {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::Source;
+    let dir = super::TestDir::new(&format!("copy-dng-local-output-{promote}"));
+    let input = dir.join("sensor.nef");
+    std::fs::write(&input, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    let (generated, _) = crate::cmd::convert::write_dng_with(None, &input.to_string_lossy(), String::new()).unwrap();
+    let browsed = dir.join("browsed.dng");
+    std::fs::rename(generated, &browsed).unwrap();
+    let expected = std::fs::read(&browsed).unwrap();
+    let mut s = Session::new().with_fs();
+    let local =
+        crate::import::import_with(&mut s, &[browsed.to_string_lossy().into()], &ImportOptions { local: true, ..Default::default() }).unwrap();
+    let local_id = PhotoId(local.imported[0]);
+    let destination = dir.join("copies");
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let input_path = input.to_string_lossy().to_string();
+    let paths = if promote { vec![browsed.to_string_lossy().into(), input_path.clone()] } else { vec![input_path.clone()] };
+    let added = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+    assert_eq!(added.imported.len(), 1, "a Local match is not yet a library duplicate: {added:?}");
+    assert!(added.failed.is_empty(), "{added:?}");
+    assert_eq!(added.duplicates.len(), usize::from(promote), "{added:?}");
+    let id = PhotoId(added.imported[0]);
+    assert_eq!(s.catalog.photo(local_id).unwrap().local, !promote);
+    assert_eq!(id == local_id, promote);
+    let photo = s.catalog.photo(id).unwrap();
+    assert!(!photo.local);
+    let Source::File { path } = &photo.source else { panic!("file photo") };
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+    let again = crate::import::import_with(&mut s, &[input_path], &opts).unwrap();
+    assert!(again.imported.is_empty() && again.failed.is_empty(), "{again:?}");
+    assert_eq!(again.duplicates.len(), 1);
+    assert_eq!(again.duplicates[0].existing, Some(id.0), "real library duplicates keep their policy");
+    assert_eq!(copy_dng_output_names(&destination).len(), usize::from(!promote));
+    assert_eq!(std::fs::read(&browsed).unwrap(), expected);
+}
+
+#[test]
+fn convert_to_dng_refreshes_copy_classification_and_undo_redo() {
+    use lightcraft_catalog::{MediaKind, Op, Source};
+    let dir = super::TestDir::new("convert-copy-kind");
+    let raw = dir.join("sensor.dng");
+    let png = dir.join("rendered.png");
+    std::fs::write(&raw, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    write_png(&png, 30);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
+    let parent = s.active().unwrap();
+    // The existing conversion fixture uses a tiny DNG catalogued as NEF to exercise the command.
+    let photo = s.catalog.photo(parent).unwrap();
+    s.catalog
+        .apply(Op::Relink { id: parent, file_name: photo.file_name.clone(), source: photo.source.clone(), format: Some("NEF".into()), kind: None })
+        .unwrap();
+    let copy = s.execute("photo.virtualCopy", &json!({"ids": [parent.0]})).unwrap();
+    let copy = PhotoId(copy["ids"][0].as_u64().unwrap());
+    s.execute("photo.relink", &json!({"id": copy.0, "path": png.to_string_lossy()})).unwrap();
+    s.catalog.apply(Op::SetAsShotWb { id: copy, wb: None }).unwrap();
+    s.execute("develop.set", &json!({"ids": [copy.0], "control": "light.exposure", "value": 0.4})).unwrap();
+    let before = s.catalog.photo(copy).unwrap().clone();
+    let parent_before = s.catalog.photo(parent).unwrap().clone();
+    assert_eq!((before.kind, before.format.as_str()), (MediaKind::Image, "PNG"));
+    let converted = s.execute("photo.convertToDng", &json!({"ids": [parent.0]})).unwrap();
+    assert_eq!(converted["converted"].as_array().unwrap().len(), 1, "{converted}");
+    let output = Source::File { path: converted["converted"][0]["path"].as_str().unwrap().into() };
+    let output_wb =
+        crate::files::probe_bytes("converted.dng", &std::fs::read(converted["converted"][0]["path"].as_str().unwrap()).unwrap()).unwrap().as_shot_wb;
+    assert!(output_wb.is_some());
+    for id in [parent, copy] {
+        let photo = s.catalog.photo(id).unwrap();
+        assert_eq!((photo.kind, photo.format.as_str()), (MediaKind::Raw, "DNG"), "known DNG output is always raw");
+        assert_eq!(photo.source, output);
+        assert_eq!(photo.as_shot_wb, output_wb, "every relinked record uses the generated DNG's As Shot facts");
+    }
+    let after = s.catalog.photo(copy).unwrap().clone();
+    assert_eq!(after.develop, before.develop);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(copy).unwrap(), &before);
+    assert_eq!(s.catalog.photo(parent).unwrap(), &parent_before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(copy).unwrap(), &after);
+}
+
+#[test]
+fn copy_as_dng_keeps_input_metadata_and_deduplicates_across_jobs_and_reopen() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::{MediaKind, Source};
+    let dir = super::TestDir::new("copy-dng-output-facts");
+    let library = dir.join("library");
+    let destination = dir.join("destination");
+    let paths: Vec<_> = ["first.orf", "second.orf"].map(|name| dir.join(name).to_string_lossy().to_string()).into();
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="2" crs:Exposure2012="+0.7"/></rdf:RDF></x:xmpmeta>"#;
+    let input = crate::tests_xmp::synthetic_dng_with(Some(xmp), Default::default());
+    for path in &paths {
+        std::fs::write(path, &input).unwrap();
+    }
+    // Describe a formerly preview-only vendor raw with distinct input metadata; the tiny DNG supplies its pixels.
+    let mut info = crate::files::probe_bytes("sensor.orf", &input).unwrap();
+    info.format = "ORF".into();
+    info.preview_only = Some("old unsupported compression".into());
+    info.meta.camera = "input camera".into();
+    info.captured = Some("2020-02-03T04:05:06".into());
+    info.file_modified = Some("2021-03-04T05:06:07".into());
+    info.as_shot_wb = Some((4300.0, 7.0));
+    let probe: crate::media::FileProbe = std::sync::Arc::new(move |path| {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        Ok(crate::media::ProbeInfo {
+            content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+            file_size: bytes.len() as u64,
+            ..info.clone()
+        })
+    });
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let mut s = Session::new().with_fs();
+    s.open_library(&library, false).unwrap();
+    s.media.file_probe = Some(probe.clone());
+    let report = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert_eq!(report.imported.len(), 1, "{report:?}");
+    let id = PhotoId(report.imported[0]);
+    assert_eq!(report.duplicates.len(), 1, "{report:?}");
+    assert_eq!(report.duplicates[0].existing, Some(id.0));
+    let photo = s.catalog.photo(id).unwrap().clone();
+    let Source::File { path: output } = &photo.source else { panic!("file photo") };
+    let bytes = std::fs::read(output).unwrap();
+    assert_eq!((photo.kind, photo.format.as_str(), &photo.preview_only), (MediaKind::Raw, "DNG", &None));
+    assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+    assert_ne!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&input).to_string()));
+    assert_eq!(photo.file_size, bytes.len() as u64);
+    assert_eq!(photo.meta.camera, "input camera");
+    assert_eq!(photo.captured.as_deref(), Some("2020-02-03T04:05:06"));
+    assert_eq!(photo.as_shot_wb, Some((4300.0, 7.0)));
+    assert_eq!(photo.rating, 2);
+    assert_eq!(photo.develop.light.exposure, 0.7);
+    let inventory = || copy_dng_output_names(&destination);
+    let kept = inventory();
+    assert_eq!(kept.len(), 1, "only the generated DNG remains");
+    for reopen in [false, true] {
+        if reopen {
+            assert!(!s.media.smart_dir.as_ref().unwrap().exists(), "this fixture builds no proxies or opening-refresh writers");
+            s.persist().unwrap();
+            drop(s);
+            s = Session::new().with_fs();
+            s.open_library(&library, false).unwrap();
+            s.media.file_probe = Some(probe.clone());
+        }
+        let again = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+        assert!(again.imported.is_empty() && again.failed.is_empty(), "{again:?}");
+        assert_eq!(again.duplicates.len(), 2, "{again:?}");
+        assert!(again.duplicates.iter().all(|duplicate| duplicate.existing == Some(id.0)), "{again:?}");
+        assert_eq!(inventory(), kept, "a repeated conversion leaves no orphan DNG");
+        assert_eq!(s.catalog.photo(id).unwrap(), &photo);
+    }
+    assert_copy_as_dng_restores(&mut s, id, &paths, &opts, &bytes);
+    assert!(paths.iter().all(|path| std::fs::read(path).unwrap() == input));
+}
+
+fn assert_copy_as_dng_restores(s: &mut Session, id: PhotoId, paths: &[String], opts: &crate::import::ImportOptions, bytes: &[u8]) {
+    use lightcraft_catalog::{MediaKind, Source};
+    let dir = Path::new(&paths[0]).parent().unwrap();
+    let destination = Path::new(opts.destination.as_deref().unwrap());
+    let input = std::fs::read(&paths[0]).unwrap();
+    let inventory = || copy_dng_output_names(destination);
+    // Recreate the same destination (also through a directory alias), then a differently named
+    // DNG. None may be deleted as disposable or relinked to the input raw with stale DNG facts.
+    for (i, path) in [&paths[0], &paths[0], &paths[1]].into_iter().enumerate() {
+        #[cfg(unix)]
+        if i == 1 {
+            let alias = dir.join("destination-alias");
+            std::os::unix::fs::symlink(destination, &alias).unwrap();
+            let photo = s.catalog.photo(id).unwrap();
+            let source = Source::File { path: alias.join(&photo.file_name).to_string_lossy().into() };
+            s.catalog.apply(lightcraft_catalog::Op::Relink { id, file_name: photo.file_name.clone(), source, format: None, kind: None }).unwrap();
+        }
+        #[cfg(not(unix))]
+        if i == 1 {
+            continue;
+        }
+        let Source::File { path: old } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+        std::fs::remove_file(old).unwrap();
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+        let restored = crate::import::import_with(s, std::slice::from_ref(path), opts).unwrap();
+        assert_eq!(restored.restored, [id.0], "{restored:?}");
+        assert!(restored.failed.is_empty() && restored.imported.is_empty(), "{restored:?}");
+        let restored = s.catalog.photo(id).unwrap();
+        let Source::File { path: restored_path } = &restored.source else { panic!("file photo") };
+        assert_eq!(Path::new(restored_path).extension().unwrap(), "dng", "Restore keeps the newly written DNG, not the input raw");
+        assert_eq!(std::fs::read(restored_path).unwrap(), bytes);
+        assert_eq!(restored.content_hash, Some(lightcraft_preview::hash_bytes(bytes).to_string()));
+        assert_eq!((restored.kind, restored.format.as_str(), &restored.preview_only), (MediaKind::Raw, "DNG", &None));
+        assert_eq!(inventory(), [Path::new(restored_path).file_name().unwrap()], "only the restored DNG remains");
+    }
+    // Different input identities can encode to identical DNGs. Both transfers reach commit;
+    // only the first replacement may survive a Restore planned against the still-missing path.
+    let padded_path = dir.join("padded.orf").to_string_lossy().to_string();
+    let mut padded = input.clone();
+    padded.extend_from_slice(&[0; 16]);
+    assert_ne!(lightcraft_preview::hash_bytes(&padded), lightcraft_preview::hash_bytes(&input));
+    std::fs::write(&padded_path, &padded).unwrap();
+    for incoming in [[paths[0].clone(), padded_path.clone()], [padded_path.clone(), paths[0].clone()]] {
+        let Source::File { path: old } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+        std::fs::remove_file(old).unwrap();
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+        let restored = crate::import::import_with(s, &incoming, opts).unwrap();
+        assert_eq!(restored.restored, [id.0], "{restored:?}");
+        assert!(restored.failed.is_empty() && restored.imported.is_empty(), "{restored:?}");
+        let Source::File { path: restored_path } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+        assert_eq!(std::fs::read(restored_path).unwrap(), bytes);
+        assert_eq!(inventory(), [Path::new(restored_path).file_name().unwrap()], "a pending Restore keeps only its live replacement");
+        assert_eq!(std::fs::read(&padded_path).unwrap(), padded);
+    }
+    // Another transfer may fill the missing name with different pixels before commit.
+    let Source::File { path: old } = s.catalog.photo(id).unwrap().source.clone() else { panic!("file photo") };
+    std::fs::remove_file(&old).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+    let different = dir.join("different").join(Path::new(&old).file_name().unwrap()).with_extension("orf");
+    let mut raw = lightcraft_raw::decode(&input).unwrap();
+    let lightcraft_raw::RawData::U16(samples) = &mut raw.data else { panic!("integer fixture") };
+    samples[0] ^= 1;
+    std::fs::create_dir_all(different.parent().unwrap()).unwrap();
+    std::fs::write(&different, lightcraft_raw::write_dng(&raw, &Default::default()).unwrap()).unwrap();
+    let restored = crate::import::import_with(s, &[different.to_string_lossy().into(), paths[1].clone()], opts).unwrap();
+    assert_eq!(restored.restored, [id.0], "{restored:?}");
+    assert_eq!(restored.imported.len(), 1, "the different image remains an independent import: {restored:?}");
+    let Source::File { path } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+    assert_ne!(path, &old, "Restore follows the matching content, not a reused name");
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    assert_ne!(std::fs::read(old).unwrap(), bytes);
+}
+
+fn copy_dng_output_names(destination: &Path) -> Vec<std::ffi::OsString> {
+    let mut files: Vec<_> = std::fs::read_dir(destination).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    files.sort();
+    files
+}

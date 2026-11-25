@@ -1,6 +1,6 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
-use super::job::{Prepared, PreparedItem, ReadyFile};
+use super::job::{Prepared, PreparedItem, ReadyFile, RestoreCheck, RestoreTarget, normalize_import_path, restore_stamp};
 use super::types::{Duplicate, FileFacts, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -140,6 +140,7 @@ pub(super) fn run_transfers(
 /// Copy or move one planned file (and Copy as DNG); its item.
 fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> PreparedItem {
     let Transfer { path, mut info, sidecar, dir, how, dng, .. } = t;
+    let mut input_hash = None;
     let mut placed = None;
     let mut stored = match how {
         How::Place { name } => match crate::import_move::place(Path::new(&path), &dir, &name) {
@@ -160,25 +161,40 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
         let weight = usize::try_from(info.file_size).unwrap_or(usize::MAX).saturating_mul(6);
         let _permit = crate::memory::work_gate().acquire(weight);
         match crate::cmd::convert::write_dng_with(file_bytes, &stored, String::new()) {
-            Ok(dng) => {
+            Ok((dng, output)) => {
                 let _ = std::fs::remove_file(&stored);
                 stored = dng;
-                info.format = "DNG".into();
+                // Keep input metadata and XMP, but describe the bytes actually stored. The alias
+                // keeps duplicate input raws identifiable until this import is committed.
+                input_hash = info.content_hash.clone().filter(|h| Some(h) != output.content_hash.as_ref());
+                info = ProbeInfo {
+                    width: output.width,
+                    height: output.height,
+                    format: output.format,
+                    kind: output.kind,
+                    file_size: output.file_size,
+                    content_hash: output.content_hash,
+                    preview_only: output.preview_only,
+                    ..info
+                };
             }
             Err(e) => log::warn!("import {path}: copy as DNG: {e}"),
         }
     }
-    PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed }))
+    PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, sidecar, placed }))
 }
 
-/// A trashed photo's file is not where the library had it (never on the web, where paths are
-/// storage keys, not files).
-fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool {
-    !cfg!(target_arch = "wasm32")
-        && match cat.photo(id).map(|p| &p.source) {
-            Some(Source::File { path }) => !Path::new(path).exists(),
-            _ => false,
-        }
+/// Restore follows the matching content when the old name is missing or has been reused.
+fn trashed_file_differs(photo: &Photo, hash: Option<&str>, check: Option<&RestoreCheck>) -> bool {
+    let Source::File { path } = &photo.source else { return false };
+    if cfg!(target_arch = "wasm32") || hash.is_none() || photo.content_hash.as_deref() != hash {
+        return false;
+    }
+    match check {
+        Some(check) if check.path == *path && Some(check.hash.as_str()) == hash => check.stamp.is_none() || restore_stamp(path) != check.stamp,
+        // The catalog changed after preparation. Prefer the verified matching input.
+        _ => true,
+    }
 }
 
 /// What a new record takes from its file, as a file import gives it: the file's metadata and
@@ -197,6 +213,66 @@ pub(crate) fn start_from_file(s: &Session, p: &mut Photo, file: FileFacts, now: 
     Some(sc)
 }
 
+// A transfer can reuse its input file; aliases must not turn that original into a disposable copy.
+fn same_import_file(a: &str, b: &str) -> bool {
+    normalize_import_path(a) == normalize_import_path(b)
+        || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
+}
+
+// Reconcile hashes learned after conversion, including ordinary files later in the batch.
+// Only the catalog owner decides whether a redundant output is disposable or restores a missing file.
+fn ready_duplicate(
+    s: &Session,
+    opts: &ImportOptions,
+    added: &mut HashMap<String, PhotoId>,
+    restored: &[u64],
+    checks: &HashMap<PhotoId, RestoreCheck>,
+    ready: ReadyFile,
+) -> PreparedItem {
+    let existing = ready.info.content_hash.as_ref().and_then(|h| added.get(h).copied());
+    let Some(id) = existing else { return PreparedItem::Ready(Box::new(ready)) };
+    let photo = s.catalog.photo(id);
+    // A preceding item may already have planned this photo's replacement in the pending batch.
+    let pending = restored.contains(&id.0);
+    let same_path = photo.is_some_and(|p| match &p.source {
+        Source::File { path } => same_import_file(path, &ready.stored),
+        _ => false,
+    });
+    let relocate = !pending
+        && !same_path
+        && opts.on_deleted == OnDeleted::Restore
+        && photo.is_some_and(|p| p.deleted && trashed_file_differs(p, ready.info.content_hash.as_deref(), checks.get(&id)));
+    if !relocate
+        && !same_path
+        && let Some(placed) = &ready.placed
+    {
+        crate::import_move::rollback(placed);
+    }
+    if ready.placed.is_none()
+        && !same_path
+        && !relocate
+        // Add entries retain their original path, including aliases.
+        && !same_import_file(&ready.path, &ready.stored)
+        && let Err(e) = std::fs::remove_file(&ready.stored)
+    {
+        return PreparedItem::Failed(ready.path, format!("could not remove duplicate output {}: {e}", ready.stored));
+    }
+    added.extend(ready.input_hash.into_iter().map(|h| (h, id)));
+    PreparedItem::Duplicate {
+        path: if relocate { ready.stored } else { ready.path },
+        existing: Some(id),
+        reason: "content",
+        hash: ready.info.content_hash,
+        restore: if relocate { RestoreTarget::Relink } else { RestoreTarget::Keep },
+        file: Some(Box::new(FileFacts {
+            meta: ready.info.meta,
+            captured: ready.info.captured,
+            orientation: ready.info.orientation,
+            sidecar: ready.sidecar,
+        })),
+    }
+}
+
 /// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 /// taken back.
@@ -206,8 +282,25 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut ops = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
-    // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
-    let mut new_hash: HashMap<String, PhotoId> = HashMap::new();
+    // Current converted outputs, then this batch's additions and input aliases. Keep only the
+    // hashes this batch asks about, even for a library of millions of photos.
+    let converted_hashes = prepared.items.iter().filter_map(|it| match it {
+        PreparedItem::Ready(r) if r.input_hash.is_some() && !opts.local => r.info.content_hash.as_deref(),
+        _ => None,
+    });
+    // Local records count only when this same atomic import already promotes them into the library.
+    let promoted: std::collections::HashSet<_> = prepared
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            PreparedItem::Promote(id, _) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let mut new_hash = super::scan::library_hashes(
+        s.catalog.photos().filter(|p| (!p.local || promoted.contains(&p.id)) && !(p.deleted && opts.on_deleted == OnDeleted::Fresh)),
+        converted_hashes,
+    );
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
     let (mut trash_hash, mut trash_path): (HashMap<String, PhotoId>, HashMap<String, PhotoId>) = Default::default();
     if opts.on_deleted == OnDeleted::Fresh {
@@ -223,6 +316,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     for it in prepared.items {
+        let it = match it {
+            PreparedItem::Ready(r) if !opts.local => ready_duplicate(s, opts, &mut new_hash, &report.restored, &prepared.restore_checks, *r),
+            it => it,
+        };
         match it {
             PreparedItem::Promote(id, fresh) => {
                 // the file was replaced since it was browsed: the record takes what it is now before it joins the library
@@ -243,11 +340,11 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
                 report.imported.push(id.0);
             }
-            PreparedItem::Duplicate { path, existing, reason, hash, file } => {
+            PreparedItem::Duplicate { path, existing, reason, hash, restore, file } => {
                 let existing = existing.or_else(|| {
-                    let h = hash?;
+                    let h = hash.as_ref()?;
                     new_hash
-                        .get(&h)
+                        .get(h)
                         .copied()
                         .or_else(|| s.catalog.photos().find(|p| !p.local && p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
                 });
@@ -257,12 +354,18 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     Some(id) if opts.on_deleted == OnDeleted::Restore && !opts.local => {
                         if !report.restored.contains(&id.0) {
                             ops.push(Op::SetDeleted { id, deleted: false });
-                            // matched by content from another path, and the file the record
-                            // points at is gone (moved, renamed): the photo follows the file
-                            // (not onto a path another record holds, a file only browsed in Local)
-                            if reason == "content"
-                                && trashed_file_is_gone(&s.catalog, id)
-                                && !s.catalog.photos().any(|p| matches!(&p.source, Source::File { path: held } if *held == path))
+                            let relink = match restore {
+                                RestoreTarget::Relink => true,
+                                RestoreTarget::Keep => false,
+                                RestoreTarget::Decide => {
+                                    reason == "content"
+                                        && s.catalog
+                                            .photo(id)
+                                            .is_some_and(|p| trashed_file_differs(p, hash.as_deref(), prepared.restore_checks.get(&id)))
+                                }
+                            };
+                            if relink
+                                && !s.catalog.photos().any(|p| p.id != id && matches!(&p.source, Source::File { path: held } if *held == path))
                             {
                                 ops.push(crate::cmd::missing::relink_op(id, &path));
                             }
@@ -277,13 +380,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Failed(path, e) => report.failed.push((path, e)),
             PreparedItem::Kept(k) => report.kept.push(k),
             PreparedItem::Ready(r) => {
-                let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
+                let ReadyFile { path, stored, info, input_hash, sidecar, placed: pl, .. } = *r;
                 placed.extend(pl);
                 let id = s.catalog.alloc_photo_id();
-                if let Some(h) = &info.content_hash {
+                for h in info.content_hash.iter().chain(&input_hash) {
                     new_hash.insert(h.clone(), id);
                 }
-                for old in info.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(trash_path.get(&stored)) {
+                for old in info.content_hash.iter().chain(&input_hash).filter_map(|h| trash_hash.get(h)).chain(trash_path.get(&stored)) {
                     if purged.insert(*old) {
                         purge.push(*old);
                     }
@@ -561,5 +664,67 @@ mod clock_tests {
         assert_eq!(shift % 60, 0, "{local}");
         assert!(shift.abs() <= 18 * 3600, "{local}");
         assert_eq!(lightcraft_catalog::dates::normalize_iso(&local).as_deref(), Some(local.as_str()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_ordinary_dng_deduplicates_after_a_converted_output() {
+        mixed_dng_outputs(true);
+    }
+
+    #[test]
+    fn review_converted_output_deduplicates_after_an_ordinary_dng() {
+        mixed_dng_outputs(false);
+    }
+
+    fn mixed_dng_outputs(converted_first: bool) {
+        for copied in [false, true] {
+            let dir = std::env::temp_dir().join(format!("lc-ready-dng-{converted_first}-{copied}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let raw = dir.join("input.orf");
+            let original = dir.join("ordinary.dng");
+            let converted = dir.join("converted.dng");
+            let stored = if copied { dir.join("copied.dng") } else { original.clone() };
+            std::fs::write(&raw, b"input raw").unwrap();
+            for file in [&original, &converted, &stored] {
+                std::fs::write(file, b"same DNG output").unwrap();
+            }
+            let info = ProbeInfo {
+                kind: lightcraft_catalog::MediaKind::Raw,
+                format: "DNG".into(),
+                width: 2,
+                height: 2,
+                file_size: 15,
+                content_hash: Some(lightcraft_preview::hash_bytes(b"same DNG output").to_string()),
+                ..Default::default()
+            };
+            let ready = |path: PathBuf, stored: PathBuf, input_hash| {
+                PreparedItem::Ready(Box::new(ReadyFile {
+                    path: path.to_string_lossy().into(),
+                    stored: stored.to_string_lossy().into(),
+                    info: info.clone(),
+                    input_hash,
+                    sidecar: None,
+                    placed: None,
+                }))
+            };
+            let mut items = vec![ready(raw.clone(), converted, Some("input raw hash".into())), ready(dir.join("./ordinary.dng"), stored, None)];
+            if !converted_first {
+                items.reverse();
+            }
+            let mut s = Session::new();
+            let opts = ImportOptions { mode: crate::import::ImportMode::Copy, ..Default::default() };
+            let r = commit_prepared(&mut s, &opts, "", Prepared { scanned: 2, items, ..Default::default() }).unwrap();
+            assert!(r.failed.is_empty(), "{r:?}");
+            assert_eq!((r.imported.len(), r.duplicates.len()), (1, 1), "{r:?}");
+            assert_eq!(r.duplicates[0].existing, Some(r.imported[0]));
+            assert_eq!(std::fs::read(&original).unwrap(), b"same DNG output", "an in-place original or alias is never removed");
+            assert_eq!(std::fs::read(&raw).unwrap(), b"input raw");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 }

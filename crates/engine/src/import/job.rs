@@ -44,6 +44,8 @@ pub struct ImportJob {
     local_sizes: HashMap<String, u64>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
+    /// Paths of deleted duplicates, captured before the worker starts.
+    restore_sources: HashMap<PhotoId, (String, String)>,
     pub(super) probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
@@ -68,6 +70,29 @@ pub struct ImportJob {
 pub struct Prepared {
     pub scanned: usize,
     pub(super) items: Vec<PreparedItem>,
+    pub(super) restore_checks: HashMap<PhotoId, RestoreCheck>,
+}
+
+#[derive(Debug)]
+pub(super) struct RestoreCheck {
+    pub(super) path: String,
+    pub(super) hash: String,
+    pub(super) stamp: Option<(u64, std::time::SystemTime)>,
+}
+
+pub(super) fn restore_stamp(path: &str) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+#[derive(Debug)]
+pub(super) enum RestoreTarget {
+    Decide,
+    Keep,
+    Relink,
 }
 
 #[derive(Debug)]
@@ -80,6 +105,7 @@ pub(super) enum PreparedItem {
         existing: Option<PhotoId>,
         reason: &'static str,
         hash: Option<String>,
+        restore: RestoreTarget,
         /// What the file itself says, when it was read ([`Duplicate::file`]).
         file: Option<Box<FileFacts>>,
     },
@@ -93,6 +119,8 @@ pub(super) struct ReadyFile {
     pub(super) path: String,
     pub(super) stored: String,
     pub(super) info: ProbeInfo,
+    /// Copy as DNG's original input identity, only for this job's duplicate lookup.
+    pub(super) input_hash: Option<String>,
     pub(super) sidecar: Option<crate::sidecar::SidecarData>,
     pub(super) placed: Option<crate::import_move::Placed>,
 }
@@ -138,9 +166,9 @@ impl Prepared {
                 items.push(item);
                 continue;
             };
-            let ReadyFile { path, stored, info, sidecar, placed } = *ready;
+            let ReadyFile { path, stored, info, input_hash, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
-            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
+            let existing_hash = info.content_hash.iter().chain(&input_hash).find_map(|hash| hashes.get(hash).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
                 if let Some(placed) = &placed {
                     crate::import_move::rollback(placed);
@@ -150,17 +178,18 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
+                    restore: RestoreTarget::Decide,
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
-                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
+                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, sidecar, placed })));
             }
         }
         self.items = items;
     }
 }
 
-fn normalize_import_path(path: &str) -> String {
+pub(super) fn normalize_import_path(path: &str) -> String {
     let path = path.replace('\\', "/");
     if cfg!(windows) { path.to_lowercase() } else { path }
 }
@@ -201,6 +230,7 @@ impl ImportJob {
             by_path: HashMap::new(),
             local_sizes: HashMap::new(),
             by_hash: HashMap::new(),
+            restore_sources: HashMap::new(),
             probe: s.media.file_probe.clone(),
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
@@ -283,6 +313,12 @@ impl ImportJob {
                 && let Some(h) = &p.content_hash
             {
                 self.by_hash.insert(h.clone(), Some(p.id));
+                if p.deleted
+                    && self.opts.on_deleted == OnDeleted::Restore
+                    && let Source::File { path } = &p.source
+                {
+                    self.restore_sources.insert(p.id, (path.clone(), h.clone()));
+                }
             }
         }
         Some(library)
@@ -315,7 +351,14 @@ impl ImportJob {
                     }
                 },
                 Some((id, _, _)) => {
-                    out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None, file: None });
+                    out.items.push(PreparedItem::Duplicate {
+                        path: f,
+                        existing: Some(id),
+                        reason: "path",
+                        hash: None,
+                        restore: RestoreTarget::Decide,
+                        file: None,
+                    });
                     self.done.fetch_add(1, Relaxed);
                 }
                 None => todo.push(f),
@@ -330,7 +373,7 @@ impl ImportJob {
         // (here or in a previous batch) counts as the library's from then on
         if let Some(h) = &hash {
             if let Some(existing) = self.by_hash.get(h) {
-                return PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, file: None };
+                return PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, restore: RestoreTarget::Decide, file: None };
             }
             self.by_hash.insert(h.clone(), Some(id));
         }
@@ -347,7 +390,7 @@ impl ImportJob {
         self.listed.new_batch();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), items: Vec::new() };
+        let mut out = Prepared { scanned: files.len(), ..Default::default() };
         let mut todo = Vec::new();
         // browsed files replaced since: probed again with `todo`, their records brought up to date as they join the library
         let mut changed: HashMap<String, PhotoId> = HashMap::new();
@@ -499,6 +542,7 @@ impl ImportJob {
                     existing,
                     reason: "content",
                     hash: Some(hash),
+                    restore: RestoreTarget::Decide,
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 }));
                 continue;
@@ -571,10 +615,53 @@ impl ImportJob {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
-            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
+            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash: None, sidecar, placed: None }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
+        // Input hashes are aliases only while this batch can resolve them to a verified
+        // output. A later batch may have to generate that output again to restore it.
+        let outputs: std::collections::HashSet<_> = out
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                PreparedItem::Ready(r) => r.info.content_hash.as_deref(),
+                _ => None,
+            })
+            .collect();
+        for item in &out.items {
+            if let PreparedItem::Ready(r) = item
+                && let Some(alias) = &r.input_hash
+                && !outputs.contains(alias.as_str())
+                && self.by_hash.get(alias) == Some(&None)
+            {
+                self.by_hash.remove(alias);
+            }
+        }
+        self.prepare_restore_checks(&mut out, cancel);
         out
+    }
+
+    /// Verify only the old originals this batch matched, on the preparation worker.
+    fn prepare_restore_checks(&self, out: &mut Prepared, cancel: &std::sync::atomic::AtomicBool) {
+        for item in &out.items {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            let id = match item {
+                PreparedItem::Duplicate { existing, reason: "content", hash: Some(hash), .. } => {
+                    existing.or_else(|| self.by_hash.get(hash).copied().flatten())
+                }
+                PreparedItem::Ready(r) => r.info.content_hash.as_ref().and_then(|hash| self.by_hash.get(hash).copied().flatten()),
+                _ => None,
+            };
+            let Some(id) = id else { continue };
+            let Some((path, hash)) = self.restore_sources.get(&id) else { continue };
+            out.restore_checks.entry(id).or_insert_with(|| {
+                let stamp = restore_stamp(path)
+                    .filter(|stamp| crate::cmd::missing::file_hash(path).as_deref() == Some(hash) && restore_stamp(path) == Some(*stamp));
+                RestoreCheck { path: path.clone(), hash: hash.clone(), stamp }
+            });
+        }
     }
 
     /// Run the transfers `plan` collected (on several threads) and append its items to `out` in
@@ -591,10 +678,10 @@ impl ImportJob {
                     None => continue,
                 },
             };
-            if let PreparedItem::Ready(r) = &item
-                && let Some(h) = &r.info.content_hash
-            {
-                self.by_hash.insert(h.clone(), None);
+            if let PreparedItem::Ready(r) = &item {
+                for h in r.info.content_hash.iter().chain(&r.input_hash) {
+                    self.by_hash.entry(h.clone()).or_insert(None);
+                }
             }
             out.items.push(item);
         }
