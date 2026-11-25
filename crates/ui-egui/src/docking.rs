@@ -582,6 +582,37 @@ thread_local! {
     static SPECS: RefCell<Option<Arc<Tracked<Specs>>>> = const { RefCell::new(None) };
 }
 
+/// `workspace` with its dock columns narrowed to leave the photo [`crate::state::MIN_PHOTO_WIDTH`] of `room`: each
+/// column gives way in proportion to its width above its first panel's minimum. Unchanged when everything fits.
+fn fitted(workspace: &Workspace, room: f32) -> Workspace {
+    let mut docked: Vec<(Panel, f32, f32)> = Vec::new();
+    let mut nodes: Vec<_> = workspace.layout().root.iter().collect();
+    while let Some(node) = nodes.pop() {
+        match node {
+            Node::Split { first, second, .. } => nodes.extend([&**first, &**second]),
+            Node::Dock { columns, .. } => {
+                for column in columns {
+                    if let (Some(width), Some(panel)) = (column.width, column.groups.first().and_then(|group| group.panels.first())) {
+                        docked.push((*panel, width, panel_limits(*panel).min.x));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let excess = docked.iter().map(|(_, width, _)| width).sum::<f32>() + crate::state::MIN_PHOTO_WIDTH - room;
+    let give: f32 = docked.iter().map(|(_, width, min)| (width - min).max(0.0)).sum();
+    if !room.is_finite() || !(excess > 0.0) || !(give > 0.0) {
+        return workspace.clone();
+    }
+    let share = (excess / give).min(1.0);
+    let mut narrowed = workspace.clone();
+    for (panel, width, min) in docked {
+        let _ = apply(&mut narrowed, Action::resize_column(panel, width - (width - min).max(0.0) * share));
+    }
+    narrowed
+}
+
 /// `workspace` as the dock shows it: the kept `Arc` while it is equal.
 fn shown_workspace(workspace: &Workspace) -> Arc<Workspace> {
     SHOWN.with(|shown| {
@@ -719,7 +750,9 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(stale_press_key(), stale_press));
     // Tool/Canvas callbacks dispatch app commands and must see the real workspace.
     app.ui.docking = Some(Docked(workspace.clone()));
-    let shown = shown_workspace(&workspace);
+    // A window too narrow for the docks' widths and the photo's minimum shows the docks narrower, each giving way in
+    // proportion to what it has above its minimum, as the side panels did; the saved widths stay.
+    let shown = shown_workspace(&fitted(&workspace, ui.available_width()));
     let specs = specs();
     let (output, canvas) = {
         let mut content = Content { app: &mut *app, canvas: None };
