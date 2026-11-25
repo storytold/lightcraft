@@ -1,3 +1,5 @@
+use lightcraft_engine::import::browse_folder_string;
+
 use super::task::ImportTask;
 use super::{ImportDialog, LightcraftApp, Ordering, ScanInput, ScanOutput, ScanProgress, Value, json, scan_with};
 
@@ -174,7 +176,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     if app.scan.as_ref().is_some_and(|t| !t.browse) || app.import.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
     }
-    let dir_s = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+    let dir_s = browse_folder_string(&dir);
     let subfolders = subfolders.unwrap_or_else(|| app.session.browse.as_ref().is_some_and(|b| b.subfolders));
     let running = app.scan.as_ref().is_some_and(|t| t.browse) || app.import.as_ref().is_some_and(|t| t.browse);
     // (a path through `..` can name another folder than its spelling, past a link: only the worker can tell, so it
@@ -270,7 +272,7 @@ fn resolve_browse_root(given: &str) -> Result<String, String> {
     if !dir.is_dir() {
         return Err(format!("{given}: not a folder"));
     }
-    Ok(dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string())
+    Ok(browse_folder_string(&dir))
 }
 
 /// Tests: browsed folders whose resolution waits (as on a stalled network mount) while they are listed here.

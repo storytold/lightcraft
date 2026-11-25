@@ -66,6 +66,36 @@ pub use types::{
     OnDeleted, Organize,
 };
 
+/// The string used for an absolute folder in Local browse, preserving filesystem roots.
+pub fn browse_folder_string(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if path.parent().is_none() { text.into_owned() } else { text.trim_end_matches(['/', '\\']).to_string() }
+}
+
 #[cfg(test)]
 #[path = "import/tests_known.rs"]
 mod tests_known;
+
+#[cfg(test)]
+mod browse_folder_tests {
+    use super::{Path, browse_folder_string};
+
+    #[test]
+    fn browse_folder_string_keeps_filesystem_roots() {
+        #[cfg(windows)]
+        {
+            assert_eq!(browse_folder_string(Path::new(r"C:\")), r"C:\");
+            assert_eq!(browse_folder_string(Path::new(r"\\server\share\")), r"\\server\share\");
+        }
+        #[cfg(not(windows))]
+        assert_eq!(browse_folder_string(Path::new("/")), "/");
+    }
+
+    #[test]
+    fn browse_folder_string_removes_trailing_separators_from_other_folders() {
+        #[cfg(windows)]
+        assert_eq!(browse_folder_string(Path::new(r"C:\photos\")), r"C:\photos");
+        #[cfg(not(windows))]
+        assert_eq!(browse_folder_string(Path::new("/photos/")), "/photos");
+    }
+}

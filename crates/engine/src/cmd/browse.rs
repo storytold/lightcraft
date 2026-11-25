@@ -17,7 +17,7 @@ use lightcraft_catalog::{Op, PhotoId, Source};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
-use crate::import::{ImportMode, ImportOptions, import_with, is_supported};
+use crate::import::{ImportMode, ImportOptions, browse_folder_string, import_with, is_supported};
 use crate::{Browse, LibrarySource, Result, Session};
 
 fn browse(s: &mut Session, p: &Value) -> Result<Value> {
@@ -27,7 +27,7 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     if !dir.is_dir() {
         return Err(bad(C, format!("{path}: not a folder")));
     }
-    let dir_s = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+    let dir_s = browse_folder_string(&dir);
     let subfolders = bool_or(p, "subfolders", s.browse.as_ref().is_some_and(|b| b.subfolders));
     let files: Vec<String> = if subfolders {
         crate::import::expand(std::slice::from_ref(&dir_s), None)
@@ -133,8 +133,7 @@ const RESTAMP_SECS: i64 = 3600;
 fn stamp_browsed(s: &mut Session, root: &str, files: &[String]) {
     let now = (s.clock)();
     let now_s = lightcraft_catalog::stacks::iso_seconds(&now);
-    let mut folders: std::collections::BTreeSet<String> =
-        files.iter().filter_map(|f| Path::new(f).parent().map(|d| d.to_string_lossy().trim_end_matches(['/', '\\']).to_string())).collect();
+    let mut folders: std::collections::BTreeSet<String> = files.iter().filter_map(|f| Path::new(f).parent().map(browse_folder_string)).collect();
     folders.insert(root.to_string());
     let ops: Vec<Op> = folders
         .into_iter()
