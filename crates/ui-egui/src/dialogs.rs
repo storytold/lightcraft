@@ -311,6 +311,34 @@ pub(crate) const STACK_DIALOG: usize = 0;
 pub(crate) const STACK_LIBRARY: usize = 1;
 pub(crate) const STACK_PROMPT: usize = 2;
 
+/// Test support: one pass of a dialog harness drawn as `draw_window` draws it while the quit prompt may cover the
+/// dialog. A new prompt's creation pass shows only the prompt and is run again (`shield_pass`); later passes draw the
+/// dialog under the prompt's barrier (`show` gets whether the prompt blocks it) and the prompt above it. The caller
+/// runs `notices::filter_raw_input` on the frame's raw input first, as `raw_input_hook` does.
+#[cfg(test)]
+pub(crate) fn show_under_prompt(app: &mut LightcraftApp, ctx: &egui::Context, show: impl FnOnce(&mut LightcraftApp, bool)) {
+    use crate::panels::notices;
+    notices::begin_draw(app);
+    if ctx.current_pass_index() == 0 {
+        notices::prepare_ui_pass(app, ctx);
+    }
+    if notices::shield_pass(app, ctx) {
+        notices::show(app, ctx);
+        ctx.request_discard("notice: shield the prompt's creation frame");
+        return;
+    }
+    let blocks = notices::blocks_input(app);
+    show(app, blocks);
+    if blocks {
+        notices::restore_prompt_pointer(app, ctx);
+    }
+    notices::show(app, ctx);
+    if blocks {
+        notices::hide_background_pointer(ctx);
+        notices::restore_prompt_pointer(app, ctx);
+    }
+}
+
 /// A framework button in a dialog body, registered as `name` with its real response. True when it was clicked in a
 /// real run.
 fn dialog_button(ui: &mut egui::Ui, name: &str, label: &str) -> bool {

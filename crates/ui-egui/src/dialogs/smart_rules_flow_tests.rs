@@ -24,6 +24,8 @@ struct Review {
     hits: Vec<(String, crate::widgets::WidgetHit)>,
     old_language: crate::i18n::Locale,
     sdk_name_owner: bool,
+    /// The quit prompt covers the dialog (`frame_blocked`).
+    covered: bool,
 }
 impl Review {
     fn new() -> Self {
@@ -35,7 +37,7 @@ impl Review {
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
         app.install_framework(&ctx);
-        Self { app, ctx, tick: 0, rects: vec![], hits: vec![], old_language: crate::i18n::language(), sdk_name_owner: false }
+        Self { app, ctx, tick: 0, rects: vec![], hits: vec![], old_language: crate::i18n::language(), sdk_name_owner: false, covered: false }
     }
     fn open(&mut self, id: Option<AlbumId>) {
         let params = id.map_or_else(|| json!({"name":"Untouched"}), |id| json!({"id":id.0}));
@@ -68,7 +70,14 @@ impl Review {
         self.safety();
         crate::widgets::take_registries(&self.ctx);
         self.tick += 1;
-        let raw = HeadlessView::raw_input(egui::vec2(1600.0, 1200.0), 1.0, f64::from(self.tick) / 60.0, events);
+        // While blocked, the real quit prompt covers the dialog: it appears in the first blocked frame and goes in the
+        // first frame after, and each frame runs through its barrier as the app's window does.
+        if blocked != self.covered {
+            self.covered = blocked;
+            self.app.quit_prompt = blocked.then(|| crate::QuitPrompt::Tasks("1 task is still running: Import. Quitting stops it.".into()));
+        }
+        let mut raw = HeadlessView::raw_input(egui::vec2(1600.0, 1200.0), 1.0, f64::from(self.tick) / 60.0, events);
+        crate::panels::notices::filter_raw_input(&self.app, &mut raw);
         let app = &mut self.app;
         let ctx = self.ctx.clone();
         let mut final_pass = None;
@@ -76,7 +85,7 @@ impl Review {
             // Actual production Name, rules editor, problem/count view and button row.
             // Deliberately no full app.ui/logic/renderer worker tick.
             let (_, recorded) = craft::ui::runtime::inspect::record(root, egui::Id::unique("smart-rules-parent-inspect"), |_| {
-                crate::dialogs::show(app, &ctx, blocked);
+                crate::dialogs::show_under_prompt(app, &ctx, |app, blocks| crate::dialogs::show(app, &ctx, blocks));
             });
             final_pass = Some((crate::widgets::take_registries(&ctx), recorded));
         }));
