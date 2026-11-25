@@ -79,7 +79,8 @@ pub(crate) fn dropdown_menu_sized(
         None => {
             // (measured, then shown at the room it takes: see the bottom bar's dropdown face)
             let mut button = button;
-            let size = button.measure_in(ui, craft::behavior::Proposal::Ideal);
+            let ctx = ui.ctx().clone();
+            let size = craft::ui::runtime::measure::run(&ctx, || button.measure_in(ui, craft::behavior::Proposal::Ideal));
             let (_, room) = ui.allocate_space(size);
             button.show_at(ui, room)
         }
