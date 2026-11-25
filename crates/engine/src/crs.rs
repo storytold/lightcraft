@@ -120,6 +120,29 @@ thread_local! {
     static READ: std::cell::RefCell<Option<std::collections::BTreeSet<String>>> = const { std::cell::RefCell::new(None) };
     /// Adjustments [`to_partial`] read but deliberately left out, for the report.
     static SKIPPED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    /// The develop settings [`to_partial`] can write, while [`mapped_paths`] runs it.
+    static CAN: std::cell::RefCell<Option<std::collections::BTreeSet<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Say that [`to_partial`] can write the develop setting at `path`, whether or not this packet has it.
+fn can(path: &str) {
+    CAN.with(|c| {
+        if let Some(s) = c.borrow_mut().as_mut() {
+            s.insert(path.to_string());
+        }
+    });
+}
+
+/// Every develop setting [`to_partial`] can write (dotted paths of a develop patch: `effects.clarity`,
+/// `wb.temp`, `crop.geometry`), from the mapping itself: what a packet leaves out of these is at its
+/// default where it is the whole of the photo's settings (a Lightroom catalog's develop text).
+pub fn mapped_paths() -> &'static std::collections::BTreeSet<String> {
+    static PATHS: std::sync::OnceLock<std::collections::BTreeSet<String>> = std::sync::OnceLock::new();
+    PATHS.get_or_init(|| {
+        CAN.with(|c| *c.borrow_mut() = Some(Default::default()));
+        to_partial(&Props::new(), Target::Any);
+        CAN.with(|c| c.borrow_mut().take()).unwrap_or_default()
+    })
 }
 
 fn note(k: &str) {
@@ -203,6 +226,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     let mut out = Value::Object(Map::new());
     let o = &mut out;
     let n = |o: &mut Value, crs: &str, path: &str| {
+        can(path);
         if let Some(v) = num(props, &format!("crs:{crs}")) {
             put(o, path, json!(v));
         }
@@ -215,6 +239,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "Whites2012", "light.whites");
     n(o, "Blacks2012", "light.blacks");
     // Lightroom's Light panel "HDR" button
+    can("hdr.enabled");
     if let Some(on) = boolean(props, "crs:HDREditMode") {
         put(o, "hdr.enabled", json!(on));
     }
@@ -224,6 +249,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     // presets written by newer versions keep the old fields at their defaults: ignore them there
     let pv2012 = props.keys().any(|k| k.ends_with("2012"));
     let old = |o: &mut Value, crs: &str, path: &str, f: &dyn Fn(f64) -> f64| {
+        can(path);
         let v = num(props, &format!("crs:{crs}"));
         if !pv2012
             && !has(o, path)
@@ -247,6 +273,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "Saturation", "color.saturation");
 
     // ---- White balance
+    ["wb.mode", "wb.temp", "wb.tint", "wb.scale"].into_iter().for_each(can);
     let mode = first(props, "crs:WhiteBalance").map(|m| match m.to_ascii_lowercase().replace(' ', "").as_str() {
         "asshot" => "asShot",
         "auto" => "auto",
@@ -307,6 +334,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Treatment + B&W mix
+    can("treatment");
     if let Some(bw) = boolean(props, "crs:ConvertToGrayscale") {
         put(o, "treatment", json!(if bw { "bw" } else { "color" }));
     }
@@ -318,6 +346,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Tone curve: parametric regions + point curves
+    ["curve.master", "curve.red", "curve.green", "curve.blue"].into_iter().for_each(can);
     n(o, "ParametricShadows", "curve.shadows");
     n(o, "ParametricDarks", "curve.darks");
     n(o, "ParametricLights", "curve.lights");
@@ -383,6 +412,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "PostCropVignetteRoundness", "vignette.roundness");
     n(o, "PostCropVignetteFeather", "vignette.feather");
     n(o, "PostCropVignetteHighlightContrast", "vignette.highlights");
+    can("vignette.style");
     if let Some(st) = num(props, "crs:PostCropVignetteStyle") {
         let style = match st as i64 {
             2 => "colorPriority",
@@ -399,6 +429,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     // Our profile corrections are the file's own (DNG-embedded) ones, which Lightroom applies
     // whatever its "Enable Profile Corrections" box says [inferred]: so only an enabling switch
     // carries over, and `LensProfileEnable=0` (the default in most presets) leaves ours as it is.
+    ["optics.lens_profile", "optics.remove_ca"].into_iter().for_each(can);
     if boolean(props, "crs:LensProfileEnable") == Some(true) {
         put(o, "optics.lens_profile", json!(true));
     }
@@ -432,6 +463,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "PerspectiveAspect", "geometry.aspect");
     n(o, "PerspectiveX", "geometry.offset_x");
     n(o, "PerspectiveY", "geometry.offset_y");
+    can("geometry.upright");
     if let Some(u) = num(props, "crs:PerspectiveUpright") {
         let mode = match u as i64 {
             1 => "auto",
@@ -445,6 +477,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Crop (normalized edges of the unrotated image + straighten angle)
+    can("crop.geometry");
     match boolean(props, "crs:HasCrop") {
         Some(true) => {
             let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
