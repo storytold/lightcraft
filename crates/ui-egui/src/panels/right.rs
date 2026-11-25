@@ -100,7 +100,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             eprintln!(
                 "DBGSHOW pass={} held={held:?} start={start:?} final_offset={} content={} inner={} measuring={}",
                 ui.ctx().cumulative_pass_nr(),
-                scrolled.state.offset.y,
+                scrolled.state.offset().y,
                 scrolled.content_size.y,
                 scrolled.inner_rect.height(),
                 ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
