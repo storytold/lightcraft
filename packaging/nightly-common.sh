@@ -58,13 +58,16 @@ nightly_build_gui() {
   [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$LIGHTCRAFT_BUILD_SHA" && -z "$(git -C "$ROOT" status --porcelain)" ]] || nightly_die 'source changed during the version query'
 }
 
+# Every signing name release.yml passes, for every platform, and import-cert.sh's outputs. A step that
+# must never run beside signing material (compilation, macOS payload verification) refuses any of them.
+NIGHTLY_SIGNING_ENV=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+  MACOS_SIGN_IDENTITY MACOS_KEYCHAIN WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD AZURE_TENANT_ID AZURE_CLIENT_ID \
+  AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE LINUX_SIGNING_KEY)
+
 # Signing material never reaches compilation (the Windows -CheckBuildEnvironment rule).
 nightly_refuse_signing_env() {
   local name
-  # The signing names release.yml passes, for every platform, and import-cert.sh's outputs.
-  for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
-    MACOS_SIGN_IDENTITY MACOS_KEYCHAIN WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD AZURE_TENANT_ID AZURE_CLIENT_ID \
-    AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE LINUX_SIGNING_KEY; do
+  for name in "${NIGHTLY_SIGNING_ENV[@]}"; do
     [[ -z "${!name:-}" ]] || nightly_die "compilation must not receive signing configuration ($name); sign in the separate trusted step"
   done
 }

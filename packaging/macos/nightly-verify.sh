@@ -17,6 +17,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=nightly-lib.sh
 . "$HERE/nightly-lib.sh"
+# shellcheck source=../nightly-common.sh
+. "$HERE/../nightly-common.sh"
 
 INPUT='' EXPECT='' TEAM="${NIGHTLY_APPLE_TEAM_ID:-}"
 while [[ $# -gt 0 ]]; do
@@ -29,7 +31,9 @@ while [[ $# -gt 0 ]]; do
     *) mac_nightly_die "unsupported argument: $1" ;;
   esac
 done
-for name in "${MAC_NIGHTLY_SECRETS[@]}" MACOS_SIGN_IDENTITY MACOS_KEYCHAIN; do
+# Every platform's credentials, not only this Mac's: a job that carries a Windows, Azure or Linux key is
+# still a signing job, and the payload must not run beside any of them.
+for name in "${NIGHTLY_SIGNING_ENV[@]}"; do
   [[ -z "${!name:-}" ]] || mac_nightly_die "refusing to run the payload with signing material in the environment ($name)"
 done
 [[ "$EXPECT" == signed || "$EXPECT" == unsigned ]] || mac_nightly_die '--expect must be signed or unsigned'

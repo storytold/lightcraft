@@ -400,7 +400,11 @@ class Verify(unittest.TestCase):
 
     def test_refuses_to_run_the_payload_beside_signing_material(self):
         self.f.bundle()
-        for name in ("APPLE_PASSWORD", "APPLE_CERTIFICATE", "MACOS_KEYCHAIN"):
+        # Not only the Mac's own names: a job carrying a Windows, Azure or Linux key is still a signing
+        # job, and no tool or payload may run in it.
+        for name in ("APPLE_PASSWORD", "APPLE_CERTIFICATE", "MACOS_KEYCHAIN", "WINDOWS_CERTIFICATE",
+                     "WINDOWS_CERTIFICATE_PASSWORD", "AZURE_CLIENT_SECRET", "AZURE_SIGNING_ACCOUNT",
+                     "LINUX_SIGNING_KEY"):
             with self.subTest(name=name):
                 result = self.f.run("nightly-verify.sh", "--input", self.f.input, "--expect", "unsigned",
                                     **{**{key: None for key in SECRETS}, name: "generated"})
