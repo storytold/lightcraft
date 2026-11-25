@@ -16,6 +16,32 @@
 - The catalog format is now version 14 (`Photo.lens_checked`, `Op::SetLensChecked`). Once this version has opened a
   library, older versions refuse it, as with every format change. Opening a library in an older format now says so
   once, with the other library notices, and `library.info` → `load.upgradedFrom` names the format it was in.
+### Heal meets its surroundings (process 14)
+- A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
+  longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
+  into it. Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
+  turning blotchy in shadows or flat in highlights, and Heal and Remove scale the patch's grain to the area around it.
+  Heal, Remove and Clone read their source at whole pixels, so the patch is no longer softened by blending between
+  pixels. Very large spots keep the previous heal. This is rendering process 14: new photos (and Reset) get it, photos
+  you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [process versions](process-versions.md).
+
+### Cleaner edges in raw exports
+- Exports of raw photos and the 1:1 view no longer draw thin yellow, green or cyan outlines along sharp white edges
+  (a white boat against the sky, window frames), green and cyan rims around small bright reflections such as
+  sunlit wet rock or water, or magenta and green rims around blown-out lights and sky (issue #1328). The colours
+  were made while the sensor's red, green and blue samples were filled in to full pixels: that happened before
+  white balance, and the pixels next to blown-out samples were not recognised as blown out. Both are fixed.
+- Dark twigs, wires and leaf edges against a blown-out sky keep their brightness.
+- Bright coloured highlights (a setting sun, neon tubes) keep their brightness right up to their blown-out centre.
+- Previews of most cameras never showed it and don't change. Previews of cameras with smaller sensors (Bayer sensors
+  under about 4600 pixels on the long side; Fujifilm X-Trans under about 5760 pixels,
+  such as the 16 megapixel X-E1) were filled in the same way and are fixed too. Smart previews of raws that are out of
+  date are rebuilt from their originals once, in the background, when the library is next opened; ones whose original
+  is offline keep theirs until Build Smart Previews runs with it online. Exports and 1:1 views of photos you have already
+  edited change along such edges and in fine detail. Even areas change by about 0.5 ΔE on average (their noise grain is
+  rendered slightly differently), with no shift in colour.
+
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
@@ -36,6 +62,17 @@
   (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
   See [film grain](grain.md).
 
+### Shadows, Texture and the Global wheel closer to Lightroom (process V13)
+- Global Shadows eases off at large amounts as Lightroom's does (issue #523): +100 acts at 0.43 of what it did, +52 at
+  0.6, and small amounts less so (about 12 % less at +10). Strong Shadows no longer lift the darkest tones about 6 L*
+  above Lightroom's render of the same edit. Highlights keeps its amounts, and masks keep theirs. New photos get it; photos edited before
+  keep their look until Update to Current Process.
+- A negative Texture smooths at two thirds of what it did: at −27 it took about 8 % more fine detail than Lightroom
+  does. The global colour-grading wheel tints at 0.45 of what it did: a Global tint of 16 made a photo visibly pinker
+  and warmer than Lightroom's (+2.8 a*, +2.2 b*). The shadows, midtones and highlights wheels are unchanged.
+- Fitted to 56 Lightroom exports of real portrait edits (Canon EOS R6 and R5 raws): mean ΔE to the exports 9.5 → 9.0,
+  and on the 16 landscape photos the sidecar fixes of #2239 don't touch, 8.4 → 7.8.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
@@ -51,6 +88,45 @@
 - A page can also run LightCraft in its own document, with no iframe: `data-host="page"` on the canvas carries the same
   messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
   when a page asks for both.
+
+### A library is written only to the folder it was opened from
+- LightCraft wrote a library's files to wherever the library's path led at that moment, not to the folder it had opened.
+  When a share was mounted over the library's folder, or the folder was moved away and another put in its place while
+  the library was open, it wrote into that other folder: it could replace another library's catalog (`catalog.snap`
+  and `catalog.log`) with its own, and closing the library removed the note another program had left in
+  `catalog.lock.owner` to say that it has the library open (issue #3240).
+- LightCraft now remembers the folder it opened (its device and inode number) and, before every save, checks that the
+  library's path still leads to it. If it doesn't, nothing is written: not the catalog, its log, the library's
+  settings, the lock note or a thumbnail. The not-saved warning says why, names the path and asks you to put the
+  original folder back; your changes are kept in memory, quitting asks first as it does for any unsaved change, and
+  saving goes on by itself once the original folder is at its path again. That holds for photos, albums and presets; a
+  preference that could not be saved is reported where you changed it, and is written with the next preference you
+  save. Opening the library at that path again takes the lock of the folder that is there now, so it is refused while
+  another program has that library open.
+- Saving keeps working after a drive or share is mounted again. A volume that is mounted again gets a new device
+  number, and some file systems number their folders anew at every mount (FAT and exFAT drives on Linux, sshfs). The
+  folder at the path still counts as the one that was opened when it holds exactly the lock note this session wrote
+  into the folder it opened (the note holds a value no other lock's note has), or when it is the same volume mounted
+  again: the same inode number and the same creation time under another device number (a system that doesn't know
+  when a folder was created can't tell that from another folder). On the same device an inode number is given again
+  to a folder made later, so two creation times that are known and differ are two folders. A copy of the library's
+  folder made while the library was open holds that note too and counts as the library, and so does a clone of its
+  volume; a share mounted over the folder, with another library in it or with nothing, never does. A copy lacks the
+  changes made after it was made: they are written to it by the next snapshot, which holds them all, and until then
+  they are kept in memory and reported as not saved. If neither tells, the folder counts as another one and nothing is
+  written.
+- Dropping the lock removes the lock note only if it is the one this session wrote, with the bytes it wrote, in the
+  folder it locked or one that holds that note; another program's note is left alone.
+- Import ▸ Move removes the originals from the card only after the library's catalog is on disk, not just handed over
+  to be written: when the library can't be saved, the originals stay on the card.
+- On Windows a folder's identity isn't available to the program yet (Rust's standard library offers it only on its
+  nightly builds), so there the check notices a path that no longer leads to a folder, not one that leads to another
+  folder; the lock note is protected there too.
+- On every system, files outside the library's catalog and settings are still written by path, some of them over what
+  is there: originals copied into the library (always under a new name), Smart Previews, profiles, the face-scan
+  record (`focus-scanned.bin`), the Lightroom import's `Interop` folder, and what is done to the photos stored in the
+  library's `Originals` folder (their sidecars, Save Metadata to File, rename, delete from disk, duplicate and
+  conversion to DNG).
 
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
@@ -261,6 +337,9 @@
 
 
 ## 2026-10-27
+
+### The Edit menu loses its Language submenu
+- Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.

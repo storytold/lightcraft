@@ -313,7 +313,7 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>
         Overlay::None | Overlay::HdrRange => {}
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
-                point_color_range(img, &PointK::new(p));
+                point_color_range(img, &PointK::new(&crate::bridge::to_craft_point_color(p)));
             }
         }
         Overlay::Spots(t) => spots(img, t, plan.px_per_long),
