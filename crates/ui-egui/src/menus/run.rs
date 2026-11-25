@@ -19,6 +19,15 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
     let _ = app.session.end_interaction();
 }
 
+/// With the Remove panel open, choose the Remove brush unless one already is, so painting works
+/// straight away; another tool still on (the White Balance eyedropper) gives way. Mode ▸ None is
+/// for choosing in the panel itself.
+fn remove_brush(app: &mut LightcraftApp) {
+    if app.ui.right == RightPanel::Remove && crate::panels::detail::spot_brush(&app.ui.tool).is_none() {
+        app.ui.tool = "remove".into();
+    }
+}
+
 /// `[` / `]` (size ×`k`) and ⇧`[` / ⇧`]` (feather +`df`) for the brush in use: the Remove tool's
 /// (and its selected spot's) or the Masking brush's.
 fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
@@ -224,7 +233,14 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "tool.keywordPainter" => {
             // {keyword?}: paint that keyword onto photos in the grid by clicking them; no keyword stops
-            app.ui.keyword_painter = p.get("keyword").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).map(str::to_string);
+            let keyword = p.get("keyword").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).map(str::to_string);
+            // a new keyword ending in `*` is refused before painting starts, so no click fails unseen
+            if let Some(Err(e)) = keyword.as_deref().map(|k| app.session.catalog.check_keyword_name(k)) {
+                let e = format!("tool.keywordPainter: {e}");
+                app.toast_error(ctx, e.clone());
+                return Some(Err(e));
+            }
+            app.ui.keyword_painter = keyword;
             if app.ui.keyword_painter.is_some() && !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
                 app.ui.view = ViewMode::PhotoGrid;
             }
@@ -619,9 +635,7 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
                     app.ui.view = ViewMode::Detail;
                 }
-                if p == RightPanel::Remove && app.ui.tool.is_empty() {
-                    app.ui.tool = "remove".into();
-                }
+                remove_brush(app);
             }
             // A right panel that is open but not showing (minimized, or behind another tab)
             // keeps its mode; reveal_command brings it to the front.
@@ -859,6 +873,7 @@ fn ui_commands_6(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             } else {
                 app.ui.right = RightPanel::Remove;
                 app.ui.visualize_spots = true;
+                remove_brush(app);
             }
             Ok(Value::Null)
         }
@@ -954,9 +969,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "panel.remove" => {
             panel(app, ctx, RightPanel::Remove, "Remove");
-            if app.ui.right == RightPanel::Remove && app.ui.tool.is_empty() {
-                app.ui.tool = "remove".into();
-            }
+            remove_brush(app);
             Ok(Value::Null)
         }
         "panel.masking" => {
@@ -1681,7 +1694,7 @@ fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, 
     let gpu = (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten();
     let mb = |b: u64| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
     let mut rows = vec![
-        ("Version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+        ("Version".to_string(), crate::channel::display_version()),
         ("System".to_string(), format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)),
         ("CPU threads".to_string(), std::thread::available_parallelism().map(|n| n.get().to_string()).unwrap_or_else(|_| "?".into())),
         (

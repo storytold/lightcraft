@@ -570,12 +570,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(state.json())
 }
 
-/// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
-/// how to load the original at preview size, whether the photo can take a preview-fitted look:
-/// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
-/// the fit changes; an older encoding makes any proxy stale).
+/// One proxy job: the photo, its path, how to load its original, and the versions that apply.
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, Ages);
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
 /// So do preview-only raws: their proxy is the embedded JPEG, read in the colour space the raw
@@ -585,6 +582,31 @@ fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
     photo.fitted_look()
         || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
         || (photo.kind == lightcraft_catalog::MediaKind::Raw && photo.preview_only.is_some())
+}
+
+/// What a photo's proxy can be out of date for: the camera-look fit, when the photo takes the per-file camera look
+/// (`camera_preview::file_local_look`, [`lightcraft_catalog::Photo::fitted_look`]), and the raw decode
+/// ([`crate::smart::SOURCE_VERSION`]), when it is a raw developed from its sensor data
+/// ([`lightcraft_catalog::Photo::develops_raw`]). Every photo can also be stale for Compact encoding.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct Ages {
+    look: bool,
+    source: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Ages {
+    fn of(p: &lightcraft_catalog::Photo) -> Ages {
+        Ages { look: preview_fitted_look(p), source: p.develops_raw() }
+    }
+    /// Whether the complete proxy at `path` is out of date in a way that applies to this photo: for the look (an older
+    /// fit, or an older encoding, [`crate::smart::is_stale_for`]) or for the raw decode. Never when any of
+    /// its versions comes from a newer build: rewriting it would take that one back (a build with all of them is the
+    /// one to bring it up to date).
+    fn stale(self, path: &std::path::Path) -> bool {
+        !crate::smart::from_newer_build(path) && (crate::smart::is_stale_for(path, self.look) || (self.source && crate::smart::source_stale(path)))
+    }
 }
 
 /// Held while one proxy is checked and (re)written, so Build Smart Previews and the opening look
@@ -600,11 +622,14 @@ struct SmartCounts {
     built: usize,
     /// Of those, damaged ones (cut short by a crash or a full drive) that were rebuilt.
     repaired: usize,
-    /// Of those, proxies written by an older camera-look fit that were rebuilt from their online originals.
+    /// Of those, proxies written by an older camera-look fit (or, for raws, raw decode) that were rebuilt from their
+    /// online originals.
     refreshed: usize,
     /// Of those kept as they were: out of date, but the original can't be read now (offline), so
     /// the stored look stays and the next run with the original online rebuilds them.
     stale_kept: usize,
+    /// Of those kept as they were: written by a newer build (a look, encode or raw decode version above this build's).
+    newer_kept: usize,
     removed: usize,
     /// `[[id, why]]`
     failed: Vec<Value>,
@@ -628,17 +653,6 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
     }
 }
 
-/// A fresh original for a smart preview, keeping the photo's mosaic decode options.
-/// Imported colour profiles and display/source caches must not become proxy pixels.
-#[cfg(not(target_arch = "wasm32"))]
-fn original_source(media: &mut crate::media::MediaCache, photo: &lightcraft_catalog::Photo, max_edge: usize) -> crate::media::SourceRef {
-    let mut source = media.origin_ref(&photo.source, max_edge);
-    if let crate::media::SourceRef::File { outliers, .. } = &mut source {
-        *outliers = photo.develop.removes_hot_pixels();
-    }
-    source
-}
-
 /// The file-system half of Build / Discard Smart Previews (runs on a worker thread in the app).
 /// `custom`: the folder was chosen (on another drive, perhaps): it must be there, it is never
 /// recreated. With `state`, progress and cancel.
@@ -659,7 +673,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for (id, path, source, look) in jobs {
+    for (id, path, source, ages) in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -673,13 +687,18 @@ fn smart_run(
             }
         } else {
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
-            // full drive) is (re)built, and so is one written by an older encoding or camera-look
-            // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
-            // original can be read
+            // full drive) is (re)built, and so is one written by an older encoding, camera-look
+            // fit or raw decode (see `smart::ENCODE_VERSION`, `camera_preview::LOOK_VERSION` and
+            // `smart::SOURCE_VERSION`) when its original can be read
             let damaged = path.exists();
-            let stale = damaged && crate::smart::is_stale_for(&path, look);
-            if damaged && !stale && crate::smart::is_valid(&path) {
+            let valid = damaged && crate::smart::is_valid(&path);
+            let newer = valid && crate::smart::from_newer_build(&path);
+            let stale = valid && !newer && ages.stale(&path);
+            if valid && !stale {
                 n.built += 1;
+                if newer {
+                    n.newer_kept += 1;
+                }
             } else {
                 // Capture provenance before decoding. A reload during that decode makes its
                 // pixels ambiguous; a later reload must leave the captured identity on the bytes.
@@ -774,11 +793,9 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
-        // Read the original afresh: cached pixels can predate a lens database replacement
-        // or carry an imported camera profile. Smart previews keep the file's own colour
-        // and smart_run's captured lens provenance must describe the encoded pixels.
-        let source = (!discard).then(|| original_source(&mut s.media, &ph, crate::media::SourceLevel::Preview.max_edge()));
-        jobs.push((id, path, source, preview_fitted_look(&ph)));
+        // Read a fresh original so cached colour or a previous lens database cannot become proxy pixels.
+        let source = (!discard).then(|| s.media.origin_ref_of(&ph, crate::media::SourceLevel::Preview.max_edge()));
+        jobs.push((id, path, source, Ages::of(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -817,30 +834,25 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let r = smart_run(&dir, custom, discard, jobs, None).map_err(|e| bad(C, e))?;
     Ok(
-        json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "removed": r.removed, "failed": r.failed}),
+        json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "newerKept": r.newer_kept, "removed": r.removed, "failed": r.failed}),
     )
 }
 
-/// Bring smart previews up to date, once per fit-and-encoding version: when the smart previews
-/// folder has not been checked at this build's versions (its marker, [`crate::smart::look_checked`]),
-/// a worker thread (the UI never waits on the drives) looks at the proxies of the photos on disk
-/// and rebuilds the stale ones from their originals — one whose stored pixels are an older encoding
-/// (every photo), or, for a raw that takes the per-file camera look or a DNG, one written by an older fit.
-/// One whose original can't be read (offline) is kept as it is, still marked stale in its header:
-/// Build Smart Previews rebuilds it once the original is back. Only existing proxies are touched:
-/// none is built, and a missing folder is never created. Returns the thread, if started.
+/// Refresh existing proxies for the Compact encoding, preview-fitted look, and raw-source versions.
+/// Every file photo can need an encoding refresh. Vendor raws and DNGs can need a look refresh,
+/// and photos developed from sensor data can need a raw-source refresh. A worker checks the
+/// versions and reads available originals. Offline originals keep their existing proxies.
+/// The folder is never created and no missing proxy is built.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::thread::JoinHandle<()>> {
     let dir = s.media.smart_dir.clone()?;
-    if !dir.is_dir() || crate::smart::look_checked(&dir) {
+    if !dir.is_dir() || (crate::smart::look_checked(&dir) && crate::smart::source_checked(&dir)) {
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
-    let jobs: Vec<SmartJob> = photos
-        .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(original_source(&mut s.media, p, max_edge)), preview_fitted_look(p)))
-        .collect();
+    let jobs: Vec<SmartJob> =
+        photos.iter().map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref_of(p, max_edge)), Ages::of(p))).collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
         .spawn(move || refresh_stale(&dir, jobs))
@@ -855,13 +867,17 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let lens_key = crate::lens_profiles::cache_key();
     let stale: Vec<SmartJob> = jobs
         .into_iter()
-        .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
+        .map(|(id, path, source, ages)| (id, crate::smart::existing_file_path(dir, path), source, ages))
+        .filter(|(_, path, _, ages)| ages.stale(path))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
         match smart_run(dir, true, false, stale, None) {
-            Ok(n) => log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept),
+            Ok(n) => log::info!(
+                "smart previews: {} refreshed to the current camera look and raw decode, {} kept (original offline)",
+                n.refreshed,
+                n.stale_kept
+            ),
             Err(e) => {
                 // not marked: the next opening tries again
                 log::warn!("smart previews: look refresh: {e}");
@@ -872,7 +888,7 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     if crate::lens_profiles::generation() != generation {
         return;
     }
-    if let Err(e) = crate::smart::mark_look_checked_with_lens_key(dir, lens_key) {
+    if let Err(e) = crate::smart::mark_look_checked_with_lens_key(dir, lens_key).and_then(|()| crate::smart::mark_source_checked(dir)) {
         log::warn!("smart previews: {e}");
     }
 }
@@ -956,7 +972,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Smart Previews",
             [],
             None,
-            "{ids?, discard?: bool, background?: bool} — build (or discard) the smart previews of the selected photos (when more than one is selected; else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews)",
+            "{ids?, discard?: bool, background?: bool} — build (or discard) the smart previews of the selected photos (when more than one is selected; else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, refreshed, staleKept, newerKept, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews)",
             always,
             smart
         ),
@@ -1090,10 +1106,12 @@ mod tests {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod smart_provenance_tests {
-    use super::smart_run;
+    use super::{Ages, smart_run};
     use crate::media::{SourceLevel, SourceRef};
     use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
     use std::sync::Arc;
+
+    const RAW_AGES: Ages = Ages { look: true, source: true };
 
     fn temp(tag: &str) -> std::io::Result<std::path::PathBuf> {
         let dir = std::env::temp_dir().join(format!("lc-smart-provenance-{tag}-{}", std::process::id()));
@@ -1142,7 +1160,7 @@ mod smart_provenance_tests {
         let source = session.media.source_ref(&photo, SourceLevel::Preview);
         assert!(matches!(&source, SourceRef::File { fallback: Some(p), .. } if p == &legacy));
         assert!(source.load_source().unwrap().from_proxy, "the renderer can still use the offline fallback");
-        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), true)], None).unwrap();
+        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), RAW_AGES)], None).unwrap();
         assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.stale_kept, counts.failed.len()), (0, 0, 0, 0, 1));
         assert_eq!(std::fs::read(&shard).unwrap(), b"broken", "a failed repair leaves its destination untouched");
         assert_eq!(std::fs::read(&legacy).unwrap(), old);
@@ -1150,7 +1168,7 @@ mod smart_provenance_tests {
 
         session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((image.clone(), Default::default()))));
         let source = session.media.source_ref(&photo, SourceLevel::Preview);
-        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), true)], None).unwrap();
+        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), RAW_AGES)], None).unwrap();
         assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.failed.len()), (1, 1, 0, 0));
         assert!(crate::smart::is_valid(&shard));
         assert!(!crate::smart::is_stale_for(&shard, true));
@@ -1177,12 +1195,12 @@ mod smart_provenance_tests {
         ];
         for (i, source) in sources.into_iter().enumerate() {
             let target = dir.join(format!("missing-{i}.lcsp"));
-            let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), true)], None).unwrap();
+            let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), RAW_AGES)], None).unwrap();
             assert_eq!((counts.built, counts.repaired, counts.failed.len()), (0, 0, 1));
             assert!(!target.exists());
         }
         let source = SourceRef::Smart { path: legacy.clone() };
-        let counts = smart_run(&dir, false, false, vec![(PhotoId(1), legacy.clone(), Some(source), true)], None).unwrap();
+        let counts = smart_run(&dir, false, false, vec![(PhotoId(1), legacy.clone(), Some(source), RAW_AGES)], None).unwrap();
         assert_eq!((counts.built, counts.repaired, counts.failed.len()), (1, 0, 0));
         assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1357,7 +1375,7 @@ mod smart_provenance_tests {
                 }));
                 let origin = Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() };
                 let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
-                let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), true)], None).unwrap();
+                let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), RAW_AGES)], None).unwrap();
                 assert_ne!(crate::lens_profiles::cache_key(), before);
                 if let Some(bytes) = &existing {
                     assert_eq!(std::fs::read(&target).unwrap(), *bytes, "a reload never replaces the previous destination");
@@ -1376,7 +1394,7 @@ mod smart_provenance_tests {
                 crate::lens_profiles::reload();
                 std::fs::write(&target, &old).unwrap();
                 let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
-                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), true)]);
+                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), RAW_AGES)]);
                 assert_eq!(std::fs::read(&target).unwrap(), old);
                 assert!(!crate::smart::look_checked(&dir));
 
@@ -1384,7 +1402,7 @@ mod smart_provenance_tests {
                 let pixels = image.clone();
                 session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((pixels.clone(), Default::default()))));
                 let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
-                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), true)]);
+                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), RAW_AGES)]);
                 assert!(!crate::smart::is_stale_for(&target, true));
                 assert!(crate::smart::look_checked(&dir));
                 // Reset the marker before the next race attempt.

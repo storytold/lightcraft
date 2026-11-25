@@ -569,11 +569,10 @@ Humans and agents follow the same rules, so read [AGENTS.md](AGENTS.md) first. T
   image, icon and font in the repo is original, public domain, Creative Commons, OFL or permissively licensed, and has
   an entry in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) added in the same commit. New fonts go to
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), not here.
-- **Pure Rust**, enforced crate layering, everything is a command, and `cargo xtask ci` green before every commit
-  (one task id per commit).
+- The shared rules, including the checks to run for the crates you change, are in [AGENTS.md](AGENTS.md).
 - **Never crash.** Non-test code returns errors instead of panicking: no `unwrap()`, `expect()`, `panic!` or
-  `unsafe`, checked indexing on anything derived from input, and a regression test with every crash fix. Details in
-  [AGENTS.md](AGENTS.md#never-crash-outranks-feature-work).
+  `unsafe` (outside `crates/sysmem` and `crates/wincolor`), checked indexing on anything derived from input, and a
+  regression test with every crash fix. Details in [AGENTS.md](AGENTS.md) (rules 13 and 29).
 
 Questions, ideas or a bug you'd like to talk through first? Bring them to [Discord](https://discord.gg/artcraft).
 

@@ -29,7 +29,7 @@ for merge/DNG conversion. The DNG colour fit uses the external profile for corre
 without its vignette gains: the unchanged sensor samples and the DNG writer do not carry that
 database shading correction. File-local fits retain source-position vignetting. Pooled fits apply the profile’s vignette
 to an accepted warp and keep the original unshaded colour pairs when the warp is absent or rejected.
-Cache versions advance from upstream look 14/render 77 to look 15/render 78.
+Cache versions advance from upstream look 14/render 84 to look 15/render 85.
 The loaded database semantic identity also invalidates camera render/view keys, Smart-preview
 headers and scan markers. Fresh original decodes retain the photo’s hot-pixel setting; offline
 proxies remain readable and cannot be relabelled as freshly fitted pixels.
