@@ -210,6 +210,8 @@ pub struct LoadOptions {
     /// Correct the raw's hot, dead and stuck pixels (`sensor.pixelFix`): the camera body's known ones
     /// and the clear ones this photo shows (`crate::files::repair_pixels`).
     pub pixel_fix: bool,
+    /// How the raw's clipped highlights are rebuilt (`sensor.highlightMode`).
+    pub highlight: lcc_raw::highlight::Mode,
     /// The file being decoded, set by the filesystem loaders: names the camera body when the raw has
     /// no serial number (`crate::sensor_maps::body_key`). Not a setting: [`DecodedSource::serves`]
     /// ignores it.
@@ -218,7 +220,15 @@ pub struct LoadOptions {
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        LoadOptions { colour: Default::default(), outliers: false, camera: String::new(), camera_look: true, pixel_fix: true, path: None }
+        LoadOptions {
+            colour: Default::default(),
+            outliers: false,
+            camera: String::new(),
+            camera_look: true,
+            pixel_fix: true,
+            highlight: Default::default(),
+            path: None,
+        }
     }
 }
 
@@ -230,6 +240,7 @@ impl LoadOptions {
             camera: s.profile.camera.clone(),
             camera_look: s.keeps_camera_look(),
             pixel_fix: s.sensor.fixes_pixels(),
+            highlight: lcc_raw::highlight::Mode::from_control(s.sensor.highlight_mode),
             path: None,
         }
     }
@@ -338,7 +349,8 @@ impl DecodedSource {
             || ((self.options.outliers == options.outliers || !info.is_some_and(|i| i.raw))
                 && (self.options.colour == options.colour || !info.is_some_and(|i| i.colorimetric))
                 && ((self.options.camera == options.camera && self.options.camera_look == options.camera_look) || !info.is_some_and(|i| i.raw))
-                && (self.options.pixel_fix == options.pixel_fix || !info.is_some_and(|i| i.raw)))
+                && (self.options.pixel_fix == options.pixel_fix || !info.is_some_and(|i| i.raw))
+                && (self.options.highlight == options.highlight || !info.is_some_and(|i| i.raw)))
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,

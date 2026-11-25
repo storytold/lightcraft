@@ -154,6 +154,7 @@
   "Picks to unflag: {n}": "Scelte da togliere: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Predefinito {name} su {n} foto",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Predefinito: {name}. Maschere IA saltate che questa versione non può calcolare: {masks}",
   "Print settings not saved: {e}": "Impostazioni di stampa non salvate: {e}",
   "Printed {n} page(s) to file": "{n} pagine stampate su file",
   "Read {name}'s policy": "Leggi l'informativa di {name}",

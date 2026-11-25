@@ -9,7 +9,7 @@ use std::sync::Arc;
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use lcc_develop::{ControlSpec, Preset, Section, Track};
 use lcc_engine::presets::PresetList;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::icons::{Icon, paint};
 use crate::module::PanelId;
@@ -343,6 +343,16 @@ fn collect_all_user_folders(nodes: &[FolderNode], out: &mut Vec<String>) {
     }
 }
 
+/// The toast after a click applied preset `name`: the masks this build couldn't compute are named.
+fn applied_message(name: &str, out: &Value) -> String {
+    let skipped: Vec<&str> = out.get("skipped").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    if skipped.is_empty() {
+        crate::i18n::tr_format!("Preset: {name}", name = name)
+    } else {
+        crate::i18n::tr_format!("Preset: {name}. Skipped AI masks this build can't compute: {masks}", name = name, masks = skipped.join(", "))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn show_folder_node(
     app: &mut LccApp,
@@ -506,6 +516,11 @@ fn show_folder_node(
         if fav {
             paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0)), Icon::StarFilled, t.star);
         }
+        // adaptive: its masks are computed for each photo it is applied to
+        let adaptive = pr.has_ai_masks();
+        if adaptive {
+            ui.painter().text(pos2(r.right() - 34.0, r.center().y), Align2::RIGHT_CENTER, "AI", t.font(10.0), t.text_dim);
+        }
         if resp.hovered()
             && let Some(s) = look
         {
@@ -516,11 +531,14 @@ fn show_folder_node(
             }
         }
         // a click follows Auto Sync, as a slider does; the whole selection on purpose: the menu
-        if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100, "followAutoSync": true})).is_ok() {
+        let resp = if adaptive { resp.on_hover_text(crate::i18n::tr("Adaptive: its masks are computed for each photo")) } else { resp };
+        if resp.clicked()
+            && let Ok(out) = app.run("preset.apply", json!({"id": pid, "amount": 100, "followAutoSync": true}))
+        {
             AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
             ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
             ui.data_mut(|d| d.remove::<(lcc_catalog::PhotoId, Preset, String)>(egui::Id::new("last-preset-hover")));
-            app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = pname));
+            app.toast(ui.ctx(), applied_message(&pname, &out));
         }
         let (p_builtin, p_group) = (pr.builtin, pr.group.clone());
         crate::widgets::context_menu(&resp, |ui| {
