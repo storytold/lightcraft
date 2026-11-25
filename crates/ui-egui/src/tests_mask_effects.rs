@@ -202,3 +202,29 @@ fn manage_window_renames_groups_stars_duplicates_and_deletes() {
     assert_eq!(h.app.session.mask_effects.len(), 3);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::ManageEffects { .. })), "stays open");
 }
+
+/// Style Brush under Create New Mask: choosing an effect makes a Brush mask with it, selected, the
+/// brush armed on it and the effect's brush settings taken.
+#[test]
+fn style_brush_menu_starts_a_brush_mask() {
+    let mut h = setup();
+    exec(&mut h, "mask.adjust", json!({"values": {"highlights": -60}}));
+    exec(
+        &mut h,
+        "mask.saveEffect",
+        json!({"name": "12 Sky", "group": "Detail", "brush": {"size": 40, "feather": 70, "flow": 55, "density": 90, "auto_mask": true}}),
+    );
+    exec(&mut h, "mask.select", json!({"id": null}));
+    let before = h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().masks.len();
+    h.step();
+    click(&mut h, "maskStyleBrush");
+    h.step();
+    click(&mut h, "styleBrush:12 Sky");
+    let m = mask(&h);
+    assert!(matches!(m.components.first().map(|c| &c.shape), Some(lcc_develop::MaskShape::Brush { .. })));
+    assert!(m.adjust.highlights < -1.0);
+    assert_eq!(h.app.ui.tool, "brush");
+    assert!(h.app.ui.brush_auto_mask);
+    assert!((h.app.ui.brush_flow - 55.0).abs() < 1e-3);
+    assert_eq!(h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().masks.len(), before + 1);
+}

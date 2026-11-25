@@ -398,6 +398,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             });
         });
+        ui.vertical_centered(|ui| super::mask_effects::style_brush_row(app, ui));
         super::mask_pickers::people_picker(app, ui, id);
         super::mask_pickers::concept_picker(app, ui);
         describe_field(app, ui, true);
