@@ -34,11 +34,12 @@ text, the shot-info strip with the pixel size included), `G` returns to the grid
 sidebar is there as a panel to show from any panel's menu. Panels: Light, Color, Effects, Detail, Optics, Geometry,
 Calibration (`Cmd+1`…`Cmd+5` jump to sections), plus the tools above them: Crop (`R`), Remove (`Q`), Red Eye,
 Masking (`Shift+W`: brush `K`, linear `M`, radial `Shift+M`, colour and luminance range, AI
-subject/sky/background/object masks). Presets (`Shift+P`), profiles, snapshots, history and versions (`Shift+V`);
+subject/sky/background/object masks). Presets (`Shift+P`; adaptive presets carry masks recomputed per photo), profiles, snapshots, history and versions (`Shift+V`);
 before/after (`Y`, `\`); clipping (`J`); soft proofing (`S`).
 Show Before (`\`) and Original Photo are momentary and never saved. Delete, `X` and the tool keys act only on a tool that
 is on screen. Calibration's primary Saturation is fixed in process V9 (older photos keep their look). From process V10 the Tone Curve works in a fixed wide colour space (ProPhoto primaries) before the export conversion, so channel curves act as in Lightroom and don't depend on the export space. Create Camera
-Profile accepts a ColorChecker 24 or SpyderCHECKR 24 photo.
+Profile accepts a ColorChecker 24 or SpyderCHECKR 24 photo. Create Camera Matching Look from Raw + JPEG (Photo → Develop
+Settings) fits the camera's JPEG rendering from selected raw + JPEG pairs into a profile in the Camera Matching group.
 Copy and paste settings with `Cmd+C`/`Cmd+V` (`Cmd+Shift+C` to choose which). Photo → Photo Merge makes HDR and
 panorama DNGs. Every slider is a develop control: `<cli> controls` lists ids and ranges.
 

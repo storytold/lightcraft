@@ -159,6 +159,7 @@
   "Picks to unflag: {n}": "Liputuksen poistettavat valinnat: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Esiasetus {name} {n} kuvaan",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Esiasetus: {name}. Ohitetut tekoälymaskit, joita tämä versio ei osaa laskea: {masks}",
   "Print settings not saved: {e}": "Tulostusasetuksia ei tallennettu: {e}",
   "Printed {n} page(s) to file": "Tiedostoon tulostettuja sivuja: {n}",
   "Read {name}'s policy": "Lue palvelun {name} käytäntö",

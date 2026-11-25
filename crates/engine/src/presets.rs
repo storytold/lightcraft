@@ -15,6 +15,12 @@ use crate::Session;
 pub const LCPRESET_EXT: &str = lcc_brand::PRESET_EXT;
 /// The `format` tag of a `.lcpreset` file.
 pub const LCPRESET_FORMAT: &str = crate::legacy::PRESET_FORMAT;
+/// The newest `.lcpreset` version this build reads and writes. Version 2 marks files whose presets
+/// carry adaptive mask recipes (AI selections computed again on each photo); a file with only plain
+/// settings is still written as version 1, which every older build reads.
+pub const LCPRESET_VERSION: u32 = 2;
+/// The most masks one preset may bring (a hostile file can't make every apply build thousands).
+pub const MAX_PRESET_MASKS: usize = 64;
 
 /// A `.lcpreset` file: one or more presets with their groups.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -120,8 +126,9 @@ pub fn slug(s: &str) -> String {
 
 /// Serialise presets as a `.lcpreset` file (favourite/built-in flags are not exported).
 pub fn to_lcpreset(presets: &[Preset]) -> String {
-    let presets = presets.iter().map(|p| Preset { favorite: false, builtin: false, ..p.clone() }).collect();
-    serde_json::to_string_pretty(&PresetFile { format: LCPRESET_FORMAT.into(), version: 1, presets }).unwrap_or_default()
+    let presets: Vec<Preset> = presets.iter().map(|p| Preset { favorite: false, builtin: false, ..p.clone() }).collect();
+    let version = if presets.iter().any(|p| p.settings.get("masks").is_some()) { LCPRESET_VERSION } else { 1 };
+    serde_json::to_string_pretty(&PresetFile { format: LCPRESET_FORMAT.into(), version, presets }).unwrap_or_default()
 }
 
 /// Read a preset file by name: `.lcpreset` (a [`PresetFile`], a bare preset object or an array of
@@ -141,6 +148,12 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
             if f.format != LCPRESET_FORMAT {
                 return Err(format!("unknown preset format `{}`", f.format));
             }
+            if f.version == 0 || f.version > LCPRESET_VERSION {
+                return Err(format!(
+                    "preset file version {} is not supported (this build reads 1 to {LCPRESET_VERSION}); a newer version made it",
+                    f.version
+                ));
+            }
             f.presets
         }
         Value::Array(_) => serde_json::from_value(v).map_err(|e| e.to_string())?,
@@ -151,6 +164,7 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
         if !p.settings.is_object() {
             return Err(format!("preset `{}` has no settings object", p.name));
         }
+        checked_masks(&mut p)?;
         p.builtin = false;
         p.favorite = false;
         if p.name.trim().is_empty() {
@@ -162,6 +176,58 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
         out.push(p);
     }
     Ok(out)
+}
+
+/// Check a read preset's masks: an array of at most [`MAX_PRESET_MASKS`] mask recipes, each one a
+/// mask this build understands; what a model computed for the photo it was made on is dropped (the
+/// recipe is computed again on each photo it is applied to).
+fn checked_masks(p: &mut Preset) -> Result<(), String> {
+    let Some(masks) = p.settings.get("masks") else { return Ok(()) };
+    let list = masks.as_array().ok_or_else(|| format!("preset `{}`: `masks` is not a list", p.name))?;
+    if list.len() > MAX_PRESET_MASKS {
+        return Err(format!("preset `{}` has {} masks; at most {MAX_PRESET_MASKS} are read", p.name, list.len()));
+    }
+    for (k, m) in list.iter().enumerate() {
+        serde_json::from_value::<lcc_develop::Mask>(m.clone())
+            .map_err(|e| format!("preset `{}`: mask {} is not a mask recipe: {e}", p.name, k + 1))?;
+    }
+    lcc_develop::presets::to_recipes(&mut p.settings);
+    Ok(())
+}
+
+/// Whether mask `m` needs the AI model (SAM) to be computed: Object, Describe, People and Concept
+/// selections. Subject, Sky, Background and Landscape come from the built-in scene masks.
+fn needs_model(m: &lcc_develop::Mask) -> bool {
+    m.components.iter().any(|c| c.shape.stores_seg())
+}
+
+/// Whether this build computes AI masks that need the model (the `sam` feature).
+pub fn model_masks_in_build() -> bool {
+    cfg!(feature = "sam")
+}
+
+/// `preset` without the masks a build without model masks can't compute (`available` false), and
+/// those masks' names: the preset's other settings and its other masks apply as they are.
+pub fn without_unavailable_masks(preset: &Preset, available: bool) -> (Preset, Vec<String>) {
+    let mut out = preset.clone();
+    let mut skipped = Vec::new();
+    if available {
+        return (out, skipped);
+    }
+    if let Some(list) = out.settings.get_mut("masks").and_then(Value::as_array_mut) {
+        list.retain(|m| match serde_json::from_value::<lcc_develop::Mask>(m.clone()) {
+            Ok(mask) if needs_model(&mask) => {
+                skipped.push(if mask.name.trim().is_empty() { lcc_develop::recipe::content_name(&mask) } else { mask.name.clone() });
+                false
+            }
+            _ => true,
+        });
+        let empty = list.is_empty();
+        if empty && let Some(o) = out.settings.as_object_mut() {
+            o.remove("masks");
+        }
+    }
+    (out, skipped)
 }
 
 /// Expand files/folders (recursively, bounded: see [`crate::walk`]) into preset files
@@ -544,6 +610,8 @@ pub fn builtin() -> Vec<Preset> {
     .into_iter()
     // AI-mask recipes: Sun Kissed, Recover Blue Suit, Bring Sky Down…
     .chain(crate::presets_smart::smart())
+    // adaptive presets: a look plus subject / sky / background masks computed on each photo
+    .chain(crate::presets_smart::adaptive())
     .collect()
 }
 
@@ -675,6 +743,103 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn object_and_sky() -> Preset {
+        let masks = json!([
+            {"id": 1, "name": "Pick", "components": [{"op": "add", "shape": {"kind": "object", "hint": [{"x": 0.4, "y": 0.5}]}}], "adjust": {"exposure": 0.5, "amount": 100.0}},
+            {"id": 2, "name": "Sky", "components": [{"op": "add", "shape": {"kind": "sky"}}], "adjust": {"exposure": -0.5, "amount": 100.0}}
+        ]);
+        Preset {
+            id: "user.a".into(),
+            name: "A".into(),
+            group: "G".into(),
+            settings: json!({"light": {"exposure": 0.3}, "masks": masks}),
+            favorite: false,
+            builtin: false,
+        }
+    }
+
+    #[test]
+    fn adaptive_presets_round_trip_as_version_2_with_their_recipes() {
+        let pr = object_and_sky();
+        let text = to_lcpreset(std::slice::from_ref(&pr));
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["version"], json!(LCPRESET_VERSION));
+        let back = parse_preset_file("a.lcpreset", text.as_bytes()).unwrap();
+        assert_eq!(back.len(), 1);
+        assert!(back[0].has_ai_masks());
+        // the Object pick pointed at the other photo's pixels: picked again on each photo
+        let m: lcc_develop::Mask = serde_json::from_value(back[0].settings["masks"][0].clone()).unwrap();
+        assert!(matches!(&m.components[0].shape, lcc_develop::MaskShape::Object { hint, .. } if hint.is_empty()));
+        // a plain preset is still written as version 1, which older builds read
+        let plain = Preset { settings: json!({"light": {"exposure": 0.3}}), ..pr };
+        let v: Value = serde_json::from_str(&to_lcpreset(&[plain])).unwrap();
+        assert_eq!(v["version"], json!(1));
+    }
+
+    #[test]
+    fn hostile_preset_files_are_errors_not_panics() {
+        let f = |presets: Value, version: Value| json!({"format": LCPRESET_FORMAT, "version": version, "presets": presets}).to_string();
+        let one = |settings: Value| json!([{"id": "x", "name": "X", "group": "G", "settings": settings}]);
+        let many: Vec<Value> = (0..=MAX_PRESET_MASKS).map(|k| json!({"id": k, "components": [], "adjust": {}})).collect();
+        let deep = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+        let cases: Vec<(String, &str)> = vec![
+            (f(one(json!({})), json!(LCPRESET_VERSION + 1)), "newer version"),
+            (f(one(json!({})), json!(0)), "version 0"),
+            (f(one(json!({})), json!(u64::MAX)), "huge version"),
+            (f(one(json!({})), json!(-1)), "negative version"),
+            (f(one(json!({"masks": {"a": 1}})), json!(2)), "masks not a list"),
+            (f(one(json!({"masks": [42]})), json!(2)), "mask not an object"),
+            (f(one(json!({"masks": [{"components": [{"shape": {"kind": "nope"}}]}]})), json!(2)), "unknown shape"),
+            (f(one(json!({"masks": many})), json!(2)), "too many masks"),
+            (f(one(json!({"masks": [{"adjust": {"exposure": "lots"}}]})), json!(2)), "wrong type"),
+            (deep.clone(), "deep nesting"),
+            (format!("{{\"format\": \"{LCPRESET_FORMAT}\", \"version\": 2, \"presets\": {deep}}}"), "deep presets"),
+            ("\u{feff}".to_string(), "BOM only"),
+        ];
+        for (text, why) in cases {
+            assert!(parse_preset_file("x.lcpreset", text.as_bytes()).is_err(), "{why} was accepted");
+        }
+        // version 1 files still read
+        assert!(parse_preset_file("x.lcpreset", f(one(json!({"light": {"exposure": 1.0}})), json!(1)).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn without_model_masks_the_rest_of_an_adaptive_preset_applies() {
+        let pr = object_and_sky();
+        let (same, none) = without_unavailable_masks(&pr, true);
+        assert!(none.is_empty() && same == pr);
+        let (rest, skipped) = without_unavailable_masks(&pr, false);
+        assert_eq!(skipped, ["Pick"]);
+        let out = rest.apply(&lcc_develop::DevelopSettings::default(), 1.0);
+        assert!((out.light.exposure - 0.3).abs() < 1e-9, "the look applies");
+        assert_eq!(out.masks.len(), 1, "the sky mask needs no model");
+        assert!(matches!(out.masks[0].components[0].shape, lcc_develop::MaskShape::Sky));
+        // every mask needing the model: no `masks` left at all
+        let only = Preset { settings: json!({"masks": [pr.settings["masks"][0].clone()]}), ..pr };
+        let (rest, skipped) = without_unavailable_masks(&only, false);
+        assert_eq!(skipped.len(), 1);
+        assert!(rest.settings.get("masks").is_none());
+    }
+
+    #[test]
+    fn applying_an_adaptive_preset_reports_the_masks_this_build_skips() {
+        let mut s = crate::Session::with_demo();
+        let pr = object_and_sky();
+        s.presets.push(pr.clone());
+        let id = s.active().unwrap();
+        let out = s.execute("preset.apply", &json!({"id": pr.id, "ids": [id]})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert!((d.light.exposure - 0.3).abs() < 1e-9);
+        let skipped = out["skipped"].as_array().unwrap();
+        if model_masks_in_build() {
+            assert!(skipped.is_empty());
+            assert_eq!(d.masks.len(), 2);
+        } else {
+            assert_eq!(skipped, &[json!("Pick")]);
+            assert_eq!(d.masks.len(), 1);
+        }
+    }
 
     #[test]
     fn builtin_presets_parse_and_apply() {

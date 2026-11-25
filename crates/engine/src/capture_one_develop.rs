@@ -6,8 +6,10 @@
 //! defaults (every column filled). A setting counts as the variant's when the adjustment layer (else a style)
 //! sets it to something other than the default.
 //!
-//! Imported so far: exposure, the orientation and straighten angle, the crop and its aspect, flips and white
-//! balance. Every other setting a variant uses is named in the import report as not imported. The ICC profile
+//! Imported so far: exposure, contrast, brightness, saturation, High Dynamic Range (highlight, shadow, white and
+//! black recovery), clarity and structure, levels (per channel, input and target), the curves (RGB, red, green,
+//! blue), the orientation and straighten angle, the crop and its aspect, flips and white balance. Every other setting
+//! a variant uses, and any of those whose stored value can't be read, is named in the import report as not imported. The ICC profile
 //! choice is left out on purpose: photos get the app's standard camera colour.
 //!
 //! How Capture One writes the values (observed in catalogs written by Capture One 16.x, own design; no Capture One
@@ -19,6 +21,18 @@
 //! - `ZFLIP` 0 none, 1 horizontal, 2 vertical.
 //! - `ZWHITEBALANCE` `r;g;b`: the gains on the camera's raw channels (green 1).
 //! - `ZEXPOSURE` EV.
+//! - `ZCONTRAST`, `ZBRIGHTNESS`, `ZSATURATION` −50..50 (the app's sliders run −100..100: doubled).
+//! - `ZHIGHLIGHTRECOVERY`, `ZSHADOWRECOVERY`, `ZWHITERECOVERY`, `ZBLACKRECOVERY`: recovery amounts (positive pulls
+//!   highlights and whites down, lifts shadows and blacks), on the app's −100..100 scale.
+//! - `ZCLARITY`, `ZCLARITYSTRUCTURE` −100..100 (structure is the app's Texture); `ZCLARITYMETHOD` has no equivalent.
+//! - `ZGRADATIONCURVE[RED|GREEN|BLUE]` `x,y;x,y;…`: curve points, 0..1 (0..255 accepted); `…Y` (the luma curve) has
+//!   no equivalent.
+//! - `ZLEVELSSHADOW`, `ZLEVELSHIGHLIGHT`, `ZLEVELSTARGETSHADOW`, `ZLEVELSTARGETHIGHLIGHT`, `ZMIDTONE`: one value for
+//!   all channels or four (`rgb;r;g;b`), 0..1 (0..255 accepted); the midtone is where its marker sits between the
+//!   black and white points (0.5 neutral).
+//!
+//! The tool formats below the exposure line follow Capture One's own sidecar (`.cos`) keys of the same names; values
+//! that don't read as described are reported, never guessed.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -59,6 +73,16 @@ pub struct CaptureOneDevelop {
     /// White balance through the camera's matrices, when the variant's differs from as shot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub white: Option<White>,
+    /// Sliders brought across one to one, by the app's name (`light.contrast`, `effects.clarity`, …), on the app's
+    /// scale.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sliders: BTreeMap<String, f64>,
+    /// Point curves (0..1, `[in, out]`) by the app's channel name (`master`, `red`, `green`, `blue`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub curves: BTreeMap<String, Vec<[f64; 2]>>,
+    /// Levels by the app's channel name: black, midtone (−1..1), white, output black, output white (0..255).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub levels: BTreeMap<String, [f64; 5]>,
     /// The settings the variant uses that this import doesn't bring across (names as Capture One shows them).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_imported: Vec<String>,
@@ -86,6 +110,8 @@ const TOOLS: &[(&str, &[&str])] = &[
     ("Curve", &["ZGRADATIONCURVE"]),
     ("Base Characteristics curve", &["ZFILMCURVE"]),
     ("Clarity", &["ZCLARITY"]),
+    ("Clarity method", &["ZCLARITYMETHOD"]),
+    ("Luma curve", &["ZGRADATIONCURVEY"]),
     ("Dehaze", &["ZDEHAZEAMOUNT", "ZDEHAZECOLOR"]),
     ("Sharpening", &["ZUSM"]),
     (
@@ -135,6 +161,26 @@ const TOOLS: &[(&str, &[&str])] = &[
 
 /// Columns this import reads for itself.
 const IMPORTED: &[&str] = &["ZEXPOSURE", "ZROTATION", "ZFLIP", "ZCROP", "ZCROPASPECTRATIONAME", "ZWHITEBALANCE"];
+
+/// Sliders read one to one: column, the app's group and name, factor onto the app's scale.
+const SLIDERS: &[(&str, &str, &str, f64)] = &[
+    ("ZCONTRAST", "light", "contrast", 2.0),
+    ("ZBRIGHTNESS", "light", "brightness", 2.0),
+    ("ZSATURATION", "color", "saturation", 2.0),
+    ("ZHIGHLIGHTRECOVERY", "light", "highlights", -1.0),
+    ("ZSHADOWRECOVERY", "light", "shadows", 1.0),
+    ("ZWHITERECOVERY", "light", "whites", -1.0),
+    ("ZBLACKRECOVERY", "light", "blacks", 1.0),
+    ("ZCLARITY", "effects", "clarity", 1.0),
+    ("ZCLARITYSTRUCTURE", "effects", "texture", 1.0),
+];
+
+/// Curve columns and the app's channel they become.
+const CURVES: &[(&str, &str)] =
+    &[("ZGRADATIONCURVE", "master"), ("ZGRADATIONCURVERED", "red"), ("ZGRADATIONCURVEGREEN", "green"), ("ZGRADATIONCURVEBLUE", "blue")];
+
+/// Levels columns, in the order [`levels_of`] reads them.
+const LEVELS: [&str; 5] = ["ZLEVELSSHADOW", "ZMIDTONE", "ZLEVELSHIGHLIGHT", "ZLEVELSTARGETSHADOW", "ZLEVELSTARGETHIGHLIGHT"];
 
 /// A column's tool in the report, or `None` for a column that is never reported. A longer prefix wins
 /// (`ZLENSLCC…` is LCC, other `ZLENS…` columns lens correction).
@@ -286,6 +332,90 @@ fn kelvin(camera: Option<&lcc_camdb::Entry>, gains: [f32; 3]) -> Option<(f64, f6
     (t.is_finite() && tint.is_finite() && t > 0.0).then_some((t, tint))
 }
 
+/// A stored number: a JSON number, or a string holding one.
+fn number_of(v: &Value) -> Option<f64> {
+    match v {
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => v.as_f64(),
+    }
+    .filter(|x| x.is_finite())
+}
+
+/// A curve's points (`x,y;x,y;…`) in 0..1, sorted by input; `Some(empty)` for a straight line, `None` when the
+/// value isn't a curve (odd count, too many points, outside the scale, two points at one input).
+fn curve_of(v: &Value) -> Option<Vec<[f64; 2]>> {
+    let n = numbers(v.as_str()?)?;
+    if n.len() % 2 != 0 || n.len() < 4 || n.len() / 2 > lcc_develop::MAX_CURVE_POINTS {
+        return None;
+    }
+    let max = n.iter().fold(0.0_f64, |m, x| m.max(*x));
+    let scale = if max <= 1.0 {
+        1.0
+    } else if max <= 255.0 {
+        255.0
+    } else {
+        return None;
+    };
+    let mut points: Vec<[f64; 2]> = n.as_chunks::<2>().0.iter().map(|[x, y]| [x / scale, y / scale]).collect();
+    if points.iter().flatten().any(|x| !(0.0..=1.0).contains(x)) {
+        return None;
+    }
+    points.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    if points.windows(2).any(|w| w[1][0] - w[0][0] < 1e-6) {
+        return None;
+    }
+    Some(if points.iter().all(|p| (p[0] - p[1]).abs() < 1e-9) { Vec::new() } else { points })
+}
+
+/// One levels value: the same for every channel, or four (`rgb;r;g;b`).
+fn channels_of(v: &Value) -> Option<[f64; 4]> {
+    let n = match v {
+        Value::String(s) => numbers(s)?,
+        _ => vec![number_of(v)?],
+    };
+    match n.as_slice() {
+        [a] => Some([*a; 4]),
+        [a, b, c, d] => Some([*a, *b, *c, *d]),
+        _ => None,
+    }
+}
+
+/// The variant's levels by the app's channel; `None` when a set value can't be read. Points given as fractions
+/// (all within 0..1) are scaled to 0..255.
+fn levels_of(layers: &Layers) -> Option<BTreeMap<String, [f64; 5]>> {
+    let mut out = BTreeMap::new();
+    if LEVELS.iter().all(|c| layers.changed(c).is_none()) {
+        return Some(out);
+    }
+    // (a column the variant leaves alone is the default layer's, else neutral)
+    let neutral = [0.0, 0.5, 1.0, 0.0, 1.0];
+    let mut v = [[0.0; 4]; 5];
+    for (i, column) in LEVELS.iter().enumerate() {
+        let raw = match layers.own(column).or_else(|| layers.default(column)) {
+            Some(value) => channels_of(value)?,
+            None => [neutral[i]; 4],
+        };
+        v[i] = if i == 1 {
+            // the midtone marker: strictly between the points
+            raw.iter().all(|m| *m > 0.0 && *m < 1.0).then_some(raw)?
+        } else if raw.iter().all(|x| (0.0..=1.0).contains(x)) {
+            raw.map(|x| x * 255.0)
+        } else if raw.iter().all(|x| (0.0..=255.0).contains(x)) {
+            raw
+        } else {
+            return None;
+        };
+    }
+    for (c, name) in ["master", "red", "green", "blue"].iter().enumerate() {
+        let mut l = lcc_develop::ChannelLevels { black: v[0][c], midtone: 0.0, white: v[2][c], out_black: v[3][c], out_white: v[4][c] }.sanitized();
+        l.set_midtone_position(l.black + (l.white - l.black) * v[1][c]);
+        if !l.is_default() {
+            out.insert((*name).to_string(), [l.black, l.midtone, l.white, l.out_black, l.out_white]);
+        }
+    }
+    Some(out)
+}
+
 /// One variant's develop settings, for an image of `size` pixels shot on `camera` (Exif make and model).
 pub(crate) fn develop_of(layers: &Layers, size: [f64; 2], camera: (&str, &str)) -> CaptureOneDevelop {
     let mut d = CaptureOneDevelop { size, ..Default::default() };
@@ -316,9 +446,30 @@ pub(crate) fn develop_of(layers: &Layers, size: [f64; 2], camera: (&str, &str)) 
             }
         }
     }
+    // the columns brought across: never reported
+    let mut handled: HashSet<&str> = HashSet::new();
+    for (column, group, name, factor) in SLIDERS {
+        if let Some(v) = layers.changed(column).and_then(number_of) {
+            d.sliders.insert(format!("{group}.{name}"), (v * factor).clamp(-100.0, 100.0));
+            handled.insert(column);
+        }
+    }
+    for (column, channel) in CURVES {
+        if let Some(points) = layers.changed(column).and_then(curve_of) {
+            if !points.is_empty() {
+                d.curves.insert((*channel).to_string(), points);
+            }
+            handled.insert(column);
+        }
+    }
+    if let Some(levels) = levels_of(layers) {
+        d.levels = levels;
+        handled.extend(LEVELS);
+    }
     let columns: HashSet<&String> = layers.adjustment.keys().chain(layers.styles.iter().flat_map(|(_, s)| s.keys())).collect();
     for column in columns {
         if let Some(tool) = tool_of(column)
+            && !handled.contains(column.as_str())
             && layers.changed(column).is_some()
         {
             not_imported.insert(tool, ());
@@ -336,6 +487,9 @@ impl CaptureOneDevelop {
     /// the import gives any photo.
     pub fn is_empty(&self) -> bool {
         self.exposure.is_none()
+            && self.sliders.is_empty()
+            && self.curves.is_empty()
+            && self.levels.is_empty()
             && self.flip.is_none()
             && self.crop.is_none()
             && self.white.is_none()
@@ -350,6 +504,30 @@ pub fn partial(d: &CaptureOneDevelop, target: crate::crs::Target, as_shot: Optio
     let mut skipped = d.not_imported.clone();
     if let Some(ev) = d.exposure {
         out.insert("light".into(), json!({"exposure": ev.clamp(-5.0, 5.0)}));
+    }
+    for (key, v) in &d.sliders {
+        let Some((g, name)) = key.split_once('.') else { continue };
+        let v = if v.is_finite() { v.clamp(-100.0, 100.0) } else { continue };
+        if let Some(m) = group(&mut out, g) {
+            m.insert(name.to_string(), json!(v));
+        }
+    }
+    for (channel, points) in &d.curves {
+        if !lcc_develop::PointCurves::CHANNELS.contains(&channel.as_str()) || points.len() > lcc_develop::MAX_CURVE_POINTS {
+            continue;
+        }
+        let points: Vec<Value> = points.iter().map(|[x, y]| json!({"x": x.clamp(0.0, 1.0), "y": y.clamp(0.0, 1.0)})).collect();
+        if let Some(m) = group(&mut out, "curve") {
+            m.insert(channel.clone(), Value::Array(points));
+        }
+    }
+    for (channel, [black, midtone, white, out_black, out_white]) in &d.levels {
+        if !lcc_develop::Levels::CHANNELS.contains(&channel.as_str()) {
+            continue;
+        }
+        if let Some(m) = group(&mut out, "levels") {
+            m.insert(channel.clone(), json!({"black": black, "midtone": midtone, "white": white, "out_black": out_black, "out_white": out_white}));
+        }
     }
     if let Some(w) = d.white {
         use crate::crs::Target;
@@ -381,6 +559,11 @@ pub fn partial(d: &CaptureOneDevelop, target: crate::crs::Target, as_shot: Optio
     skipped.sort();
     skipped.dedup();
     (Value::Object(out), skipped)
+}
+
+/// The settings group `name` in `out`, made when missing.
+fn group<'a>(out: &'a mut serde_json::Map<String, Value>, name: &str) -> Option<&'a mut serde_json::Map<String, Value>> {
+    out.entry(name.to_string()).or_insert_with(|| json!({})).as_object_mut()
 }
 
 /// The aspect `ZCROPASPECTRATIONAME` names (`16x9`, `1x1 (Square)`), turned to the crop's shape; `None` for

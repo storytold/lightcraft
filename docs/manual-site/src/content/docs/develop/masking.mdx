@@ -39,6 +39,10 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 - **Draw**: Brush, Linear, Radial.
   - Resize the brush with `[` / `]`, the mouse wheel, or two-finger trackpad scrolling (scrolling up enlarges the brush, matching Lightroom Classic). To turn the scroll gesture the other way, enable **Invert brush resize direction** under **Settings ▸ Interface**.
   - By keyboard: Tab to the brush handle on the photo, **Return** puts the brush down and the arrow keys paint ([Accessibility](../../platforms/accessibility/)).
+- **Style Brush** (from Capture One): under the Create New Mask tiles, once you have saved an effect preset. Pick an effect and a new Brush mask starts with its sliders (and its brush settings) already set; paint, and the effect goes where you paint. One undo removes the empty mask again. Command: `mask.styleBrush`.
+
+  <NeedsImage what="The Style Brush menu under Create New Mask, listing effect presets by group" />
+
 - **Range**: Luminance, Color, Depth (needs the Depth Anything model; see [AI masks](../../ai/masks-ai/#depth)).
 - **Before any mask exists**: the panel shows the settings the next mask will start from ("Settings for the next mask"), dimmed and inert. Create a mask first; once one exists those sliders work, and with masks present but none selected they again set up the next mask.
 - **Colour tools**: under Colour's sliders are **Color** (paint-bucket icon), **Color Mixer** (palette icon) and **Point Color** (eyedropper icon). **Color Grading** is its own section right under Colour, with the colour-wheels icon. The Targeted Adjustment buttons (Tone Curve, Color Mixer, the mask's Color Mixer) show a reticle.
