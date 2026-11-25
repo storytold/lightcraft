@@ -136,7 +136,10 @@ fn keymap_external155_measuring_does_not_take_capture_or_register_controls() {
         assert!(app.ui.settings.keymap.is_empty());
         let (rects, hits) = crate::widgets::take_registries(&ctx);
         assert!(rects.is_empty() && hits.is_empty(), "SDK measuring registered controls");
-        assert!(ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::F9, pressed: true, .. }))));
+        // (the pass that had the F9 still has it: a rerun of the pass, which egui gives no events, has none to keep)
+        if ctx.current_pass_index() == 0 {
+            assert!(ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::F9, pressed: true, .. }))));
+        }
     });
     output.textures_delta.clear();
 }
