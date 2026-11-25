@@ -262,3 +262,9 @@ Chromaforge contributors (2026); each ported file says so. It carries the CIE 19
 functions and the CIE standard illuminants A, D50, D55, D65, D75 and E (CIE 015:2018 / ISO/CIE 11664
 published tables), and the published reference values (CIELAB D50) of the X-Rite ColorChecker 24 as made
 before November 2014. See assets/ATTRIBUTION.md.
+
+crates/raw/src/demosaic/rcd.rs translates Ratio Corrected Demosaicing (RCD v2.3) by Luis Sanz Rodríguez
+from RawTherapee's rtengine/rcd_demosaic.cc (https://github.com/Beep6581/RawTherapee), Copyright (c) 2017-2018
+Luis Sanz Rodríguez and the RawTherapee developers, licensed under the GNU General Public License version 3
+or later (text: LICENSE-GPL-3.0.txt). Modified by the Chromaforge contributors (2026): no tiling or SIMD,
+mirror-reflected borders, guarded divisions.

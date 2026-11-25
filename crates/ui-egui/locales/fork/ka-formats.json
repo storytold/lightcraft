@@ -186,6 +186,7 @@
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Plugin {version} installed": "დანამატი {version} დაყენებულია",
   "Preset {name} on {n} photos": "პრესეტი {name} {n} ფოტოზე",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "პრესეტი: {name}. გამოტოვებული AI ნიღბები, რომლებსაც ეს ვერსია ვერ ითვლის: {masks}",
   "Print settings not saved: {e}": "ბეჭდვის პარამეტრები არ შეინახა: {e}",
   "Printed {n} page(s) to file": "ფაილში დაიბეჭდა {n} გვერდი",
   "Profile {name}": "პროფილი: {name}",

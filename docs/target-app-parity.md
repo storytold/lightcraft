@@ -12,7 +12,7 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 
 | Number | Value | Kind |
 |---|---:|---|
-| **Feature breadth**, checklist | **90.3%** of 630 in-scope rows (P0 98.0%, P1 94.8%, P2 80.3%; recounted 2026-11-23, same figure as ROADMAP.md) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
+| **Feature breadth**, checklist | **90.5%** of 630 in-scope rows (P0 98.0%, P1 94.8%, P2 80.7%; recounted 2026-11-25, same figure as ROADMAP.md) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~62%** (range 57–67%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
 | **Mainstream practitioner** | **~52%** (range 47–57%) | estimated: weekly areas of a working photographer, depth 75.6% × 0.804 × colour 0.85 |
@@ -102,7 +102,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | Dust detection | ✅ | ✅ |
 | Faces / People | YuNet detection, SFace / AuraFace recognition (opt-in downloads), People view | ✅ (MVP, [faces.md](faces.md)) |
 | Assisted culling | focus, bursts, suggested stars and Pick / Reject flags (issue #489), classical eyes-open / aesthetic scores | 🟡 (classical heuristics only, no learned models) |
-| Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); no adaptive presets | 🟡 |
+| Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); adaptive presets (mask recipes computed per photo, built-in Smart Masks: Adaptive group); no adaptive profiles | 🟡 |
 | Natural-language search | — | ⬜ |
 
 **Blocked on a model strategy** (maintainer decision): licensable weights or our own training;

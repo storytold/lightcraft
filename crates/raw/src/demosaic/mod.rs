@@ -7,6 +7,7 @@
 //!   candidates chosen per pixel by CIELab homogeneity. The quality default for Bayer sensors.
 //! - [`Method::Detail`] — Enhance ▸ Raw Details: Hamilton–Adams green blended by gradient weights (GBTF-style) and
 //!   residual red/blue interpolated along edges (after Kiku et al. 2013); see `detail.rs`.
+//! - [`Method::Rcd`] — Ratio Corrected Demosaicing (Luis Sanz Rodríguez), translated from RawTherapee; see `rcd.rs`.
 //!
 //! X-Trans (and other non-Bayer patterns):
 //! - [`Method::Ahd`] → [`xtrans_ri`]: on the white-balanced mosaic ([`Options::balance`]), a classified linear
@@ -21,6 +22,7 @@ mod ahd;
 mod bilinear;
 mod detail;
 mod ppg;
+mod rcd;
 mod xtrans;
 mod xtrans_ri;
 mod xtrans_taps;
@@ -37,6 +39,9 @@ pub enum Method {
     /// Enhance ▸ Raw Details: gradient-weighted green and edge-aware residual red/blue (`detail.rs`). Slower than
     /// AHD; used for the enhanced DNG, not live previews. Non-Bayer patterns use the directional method.
     Detail,
+    /// Ratio Corrected Demosaicing (`rcd.rs`, translated from RawTherapee). Non-Bayer patterns use the method AHD
+    /// uses for them.
+    Rcd,
 }
 
 /// Mirror-reflected access to a single-plane mosaic (reflection keeps Bayer parity: −k → k, w−1+k → w−1−k).
@@ -128,7 +133,7 @@ pub fn demosaic_with(n: &Normalized, method: Method, opts: Options) -> Rgb32f {
                 return match method {
                     Method::Bilinear => bilinear::bilinear(&m),
                     Method::Ppg => xtrans::directional(&m),
-                    Method::Ahd | Method::Detail => xtrans_ri::demosaic(&m, opts.balance).unwrap_or_else(|| xtrans::directional(&m)),
+                    Method::Ahd | Method::Detail | Method::Rcd => xtrans_ri::demosaic(&m, opts.balance).unwrap_or_else(|| xtrans::directional(&m)),
                 };
             }
             if w < 4 || h < 4 {
@@ -139,6 +144,7 @@ pub fn demosaic_with(n: &Normalized, method: Method, opts: Options) -> Rgb32f {
                 Method::Ppg => ppg::ppg(&m),
                 Method::Ahd => ahd::ahd(&m),
                 Method::Detail => detail::detail(&m),
+                Method::Rcd => rcd::rcd(&m),
             }
         }
     }
@@ -202,7 +208,7 @@ mod tests {
         let img = Rgb32f::filled(17, 13, [0.3, 0.55, 0.8]);
         for pat in ["RGGB", "BGGR", "GRBG", "GBRG"] {
             let cfa = Cfa::bayer(pat).unwrap();
-            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail] {
+            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail, Method::Rcd] {
                 let out = run(&img, &cfa, m);
                 for p in &out.data {
                     for c in 0..3 {
@@ -220,7 +226,7 @@ mod tests {
         let img = edgy_scene(48, 36);
         // Bayer methods ignore it
         let bayer = mosaic_from_rgb(&img, &Cfa::bayer("RGGB").unwrap());
-        for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+        for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Rcd] {
             let with = demosaic_with(&bayer, m, Options { balance: Some([1.9, 1.0, 1.6]) });
             assert_eq!(with.data, demosaic(&bayer, m).data, "{m:?}");
         }
@@ -242,7 +248,7 @@ mod tests {
     fn known_samples_are_preserved() {
         let img = edgy_scene(40, 32);
         let cfa = Cfa::bayer("GRBG").unwrap();
-        for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail] {
+        for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail, Method::Rcd] {
             let out = run(&img, &cfa, m);
             for y in 0..32 {
                 for x in 0..40 {
@@ -258,7 +264,7 @@ mod tests {
         let cfa = Cfa::bayer("RGGB").unwrap();
         for (w, h) in [(1, 1), (2, 2), (3, 5), (5, 3), (1, 7)] {
             let img = Rgb32f::filled(w, h, [0.5; 3]);
-            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail] {
+            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail, Method::Rcd] {
                 let out = run(&img, &cfa, m);
                 assert_eq!((out.width, out.height), (w, h));
                 assert!(out.data.iter().all(|p| p.iter().all(|v| v.is_finite())));
@@ -285,7 +291,7 @@ mod tests {
         }
         let all_nan = Normalized { width: 9, height: 7, cpp: 1, data: vec![f32::NAN; 63], cfa: Some(cfa) };
         for n in [&patchy, &all_nan] {
-            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail] {
+            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Detail, Method::Rcd] {
                 let out = demosaic(n, m);
                 assert_eq!((out.width, out.height), (n.width, n.height), "{m:?}");
             }
@@ -329,6 +335,44 @@ mod tests {
             let pa = psnr(&run(&img, &cfa, Method::Ahd), &img, 3);
             assert!(pd > pa - 0.5, "{pat}: detail {pd:.2} dB vs AHD {pa:.2} dB");
         }
+    }
+
+    #[test]
+    fn rcd_beats_bilinear_and_stays_near_ppg_on_edges() {
+        let img = edgy_scene(96, 80);
+        for pat in ["RGGB", "BGGR", "GRBG", "GBRG"] {
+            let cfa = Cfa::bayer(pat).unwrap();
+            let pb = psnr(&run(&img, &cfa, Method::Bilinear), &img, 3);
+            let pp = psnr(&run(&img, &cfa, Method::Ppg), &img, 3);
+            let rcd = run(&img, &cfa, Method::Rcd);
+            let pr = psnr(&rcd, &img, 3);
+            assert!(pr > pb + 8.0 && pr > pp - 2.0, "{pat}: rcd {pr:.2} dB, bilinear {pb:.2}, ppg {pp:.2}");
+            assert!(false_colour(&rcd, &img) < false_colour(&run(&img, &cfa, Method::Bilinear), &img) * 0.6, "{pat}");
+        }
+    }
+
+    #[test]
+    fn rcd_hostile_sizes_and_values() {
+        let cfa = Cfa::bayer("BGGR").unwrap();
+        // every small size, odd and even, including those below the 4 × 4 guard and thin strips past it
+        for w in 1..12 {
+            for h in [1usize, 2, 3, 4, 5, 7, 9] {
+                let out = run(&edgy_scene(w, h), &cfa, Method::Rcd);
+                assert_eq!((out.width, out.height), (w, h));
+                assert!(out.data.iter().all(|p| p.iter().all(|v| v.is_finite())), "{w}x{h}");
+            }
+        }
+        // zeros, negatives and huge values: the ratio and gradient divisions must not blow up
+        for fill in [0.0f32, -1.0, 1e30, -1e30] {
+            let n = Normalized { width: 16, height: 12, cpp: 1, data: vec![fill; 192], cfa: Some(cfa.clone()) };
+            let out = demosaic(&n, Method::Rcd);
+            assert_eq!(out.data.len(), 192);
+            if fill.abs() < 2.0 {
+                assert!(out.data.iter().all(|p| p.iter().all(|v| (v - fill).abs() < 1e-4)), "{fill}");
+            }
+        }
+        let alt = Normalized { width: 16, height: 12, cpp: 1, data: (0..192).map(|i| if i % 3 == 0 { -0.5 } else { 2.0 }).collect(), cfa: Some(cfa) };
+        assert!(demosaic(&alt, Method::Rcd).data.iter().all(|p| p.iter().all(|v| v.is_finite())));
     }
 
     #[test]

@@ -812,15 +812,16 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let read = read_with_progress(&db, &cancel, &AtomicUsize::new(0), &AtomicUsize::new(0)).unwrap();
         let c1 = read.photos[0].capture_one.as_deref().expect("variant 7 has settings");
-        assert_eq!(c1.not_imported, vec!["Brightness", "LCC", "Local adjustment layers"]);
+        assert_eq!(c1.not_imported, vec!["LCC", "Local adjustment layers"], "Brightness is imported");
         assert!(read.photos[1].capture_one.is_none(), "an untouched variant has nothing to import");
         let warnings = read.warnings.join("\n");
-        assert!(warnings.contains("Capture One Brightness: used on 1 photo(s), not imported yet"), "{warnings}");
+        assert!(warnings.contains("Capture One LCC: used on 1 photo(s), not imported yet"), "{warnings}");
         let mut s = crate::Session::new();
         let report = crate::lightroom_catalog::import(&mut s, &db, false).unwrap();
         let photo = |name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().clone();
         let a = photo("a.NEF");
         assert_eq!(a.develop.light.exposure, 0.75);
+        assert_eq!(a.develop.light.brightness, 25.0, "Capture One's Brightness doubled onto the app's scale");
         assert_eq!(a.develop.orientation, lcc_geom::Orientation::from_parts(false, 1));
         let g = a.develop.crop.geometry.rect;
         // the centre (3000, 2000) of the 6000 × 4000 stored image is the centre shown; 2000 × 3000 of 4000 × 6000
@@ -834,7 +835,7 @@ mod tests {
         let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(warnings.iter().any(|w| w.starts_with("Capture One White Balance: approximate on 1 photo(s)")), "{warnings:?}");
         let unmapped = report["unmapped"]["7"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>());
-        assert_eq!(unmapped, Some(vec!["Brightness", "LCC", "Local adjustment layers"]), "{}", report["unmapped"]);
+        assert_eq!(unmapped, Some(vec!["LCC", "Local adjustment layers"]), "{}", report["unmapped"]);
         let b = photo("b.NEF");
         assert_eq!((b.develop.light.exposure, b.develop.orientation), (0.0, lcc_geom::Orientation::Normal));
         assert!(report["unmapped"].get("8").is_none());
@@ -1251,10 +1252,7 @@ mod tests {
         // all of them fit the result window's eight warnings
         assert!(warnings.len() <= 8, "{warnings:?}");
         for line in [
-            "Capture One Brightness: used on 4 photo(s)",
-            "Capture One High Dynamic Range: used on 3 photo(s)",
             "Capture One LCC: used on 2 photo(s)",
-            "Capture One Levels: used on 1 photo(s)",
             "Capture One Local adjustment layers: used on 1 photo(s)",
             "Capture One White Balance: approximate on 5 photo(s)",
         ] {

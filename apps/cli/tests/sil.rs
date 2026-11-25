@@ -1117,3 +1117,39 @@ fn sil_camera_colour() {
     assert!(compared.len() >= 10, "only {} bodies have both a table and a spectral matrix", compared.len());
     assert!(failures.is_empty(), "camera colour: {failures:#?}");
 }
+
+/// Adaptive presets (plan 7.8): a preset's mask recipes are made again on every photo it is
+/// applied to, a user preset saves masks as recipes, and the edits survive undo and a reopen.
+#[test]
+fn sil_adaptive_presets() {
+    let mut s = Sil::new("adaptivepresets");
+    let (dir, n) = shoot(&s.root, 3, 0);
+    s.start();
+    let ids = import(&mut s, &dir, n);
+    let out = s.ok("preset.apply", json!({"id": "lc.adaptive.subjectAndSky", "ids": ids}));
+    s.check(out["skipped"].as_array().is_some_and(Vec::is_empty), "scene masks were skipped", &out.to_string());
+    for &i in &ids {
+        let d = s.ok("develop.get", json!({"id": i}));
+        let masks = d["masks"].as_array().map_or(0, Vec::len);
+        s.check(masks == 2, "the adaptive preset did not add its two masks", &d["masks"].to_string());
+        s.check(d["color"]["vibrance"].as_f64().is_some_and(|v| v > 0.0), "the preset's look did not apply", &d["color"].to_string());
+    }
+    // the same preset again replaces its own masks
+    s.ok("preset.apply", json!({"id": "lc.adaptive.subjectAndSky", "ids": [ids[0]]}));
+    let d = s.ok("develop.get", json!({"id": ids[0]}));
+    s.check(d["masks"].as_array().map_or(0, Vec::len) == 2, "applying again doubled the masks", &d["masks"].to_string());
+    // a user preset made of a photo's masks brings them to another photo
+    s.ok("library.select", json!({"ids": [ids[1]], "active": ids[1]}));
+    let made = s.ok("preset.create", json!({"name": "SIL adaptive", "groups": ["masks"]}));
+    let out = s.ok("preset.apply", json!({"id": made["id"], "ids": [ids[2]]}));
+    s.check(out["skipped"].is_array(), "preset.apply did not report skipped masks", &out.to_string());
+    let d = s.ok("develop.get", json!({"id": ids[2]}));
+    s.check(d["masks"].as_array().map_or(0, Vec::len) == 4, "the user preset did not add the photo's masks", &d["masks"].to_string());
+    // hostile ids are errors, not crashes
+    s.cmd("preset.apply", json!({"id": "lc.adaptive.nope", "ids": ids}));
+    s.cmd("preset.apply", json!({"id": "lc.adaptive.deepSky", "amount": f64::MAX, "ids": [u64::MAX]}));
+    s.consistent();
+    s.undo_redo_roundtrip();
+    s.reopen_keeps_everything();
+    s.finish();
+}

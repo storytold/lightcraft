@@ -144,6 +144,7 @@
   "Picks to unflag: {n}": "Вибраних, з яких знімається позначка: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Пресет {name} на {n} фото",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Набір налаштувань: {name}. Пропущено маски ШІ, які ця збірка не вміє обчислювати: {masks}",
   "Print settings not saved: {e}": "Параметри друку не збережено: {e}",
   "Printed {n} page(s) to file": "Надруковано сторінок у файл: {n}",
   "Reading pictures {done} of {total}": "Читання зображень: {done} із {total}",

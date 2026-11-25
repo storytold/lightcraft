@@ -30,6 +30,7 @@ pub mod detect;
 pub mod evaluate;
 pub mod frame;
 pub mod illuminants;
+pub mod jpeg_look;
 pub mod linalg;
 pub mod lut;
 pub mod matopt;
