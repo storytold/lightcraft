@@ -130,9 +130,11 @@ impl Review {
             }
             let bottom = if footer { win.bottom() } else { body_bottom };
             let dy = if rect.bottom() > bottom { -300.0 } else { 300.0 };
-            // The dialog's scroll bar, at its right edge: the framework controls fill the body's width, so the old
-            // blank spot 24 points in is a control now.
-            let at = egui::pos2(win.right() - 6.0, win.center().y);
+            // The dialog's scroll bar, at the right edge of its body: the framework controls fill the body's width, so
+            // the old blank spot 24 points in is a control now. The framework dialog insets its body and footer alike,
+            // so the body's right edge is the footer's OK button's (the window's own margin lies outside the body).
+            let edge = self.rects.iter().find(|(name, _)| name == "button:dialogOk").map_or(win.right() - 6.0, |(_, ok)| ok.right() - 3.0);
+            let at = egui::pos2(edge, win.center().y);
             let draft = self.draft().clone();
             // NumberField intentionally owns the wheel anywhere while focused. Commit and blur it with an actual
             // press on the dialog's title, which is blank, before scrolling the window.

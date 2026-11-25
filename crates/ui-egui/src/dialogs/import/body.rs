@@ -64,21 +64,23 @@ pub(crate) fn grid_height(available: f32, below: f32, row: f32) -> f32 {
 const BODY_ROOM: &str = "lc-import-body-room";
 
 /// Note the room the review dialog's body has (`room` points from where `ui` starts), for [`grid_height`].
+///
+/// Noted in every run of the body, measuring ones too: each run places the body elsewhere, and the grid reads where its
+/// own run's body starts.
 pub(crate) fn note_body_room(ui: &egui::Ui, room: f32) {
-    if controls::measuring(ui) {
-        return;
-    }
     let top = ui.cursor().top();
     ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(BODY_ROOM), (top, room)));
 }
 
 /// Remember where the review dialog's content ends this frame (after its buttons), for
 /// [`grid_height`] on the next.
+///
+/// Noted in the framework's measuring run too: the run that lays the body out for the view comes after it in the same
+/// pass, so the grid there leaves room for rows that appeared this pass (a Copy's destination) instead of a frame
+/// later, which moved everything below the grid between two frames.
 pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
-    if !controls::measuring(ui) {
-        let y = ui.min_rect().bottom();
-        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(CONTENT_BOTTOM), y));
-    }
+    let y = ui.min_rect().bottom();
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(CONTENT_BOTTOM), y));
 }
 
 /// Skipped candidates: (already in the library, identical copies within the source, in Recently
@@ -111,11 +113,25 @@ pub(crate) fn scan_note(d: &ImportDialog) -> Option<String> {
 
 /// The dialog body: options, then the candidate grid.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+    // The height the body took in its last real run: a measuring run stands in for a few rows (the album picker, the
+    // source summary) with rows of another height, so it reserves at least that height, or the dialog would measure
+    // its body shorter than it lays out and the last rows of an opened recipe could not be scrolled to.
+    let real_height = egui::Id::unique("lc-import-body-height");
+    let top = ui.cursor().top();
     if controls::measuring(ui) {
         // Keep speculative disabled state on a child, never on the caller's real Ui.
         ui.scope_builder(egui::UiBuilder::new().disabled(), |ui| body_inner(app, ui, &mut d.clone()));
+        let took = ui.min_rect().bottom() - top;
+        if let Some(height) = ui.ctx().data(|m| m.get_temp::<f32>(real_height)).filter(|height| *height > took) {
+            ui.allocate_space(vec2(0.0, height - took));
+        }
     } else {
         body_inner(app, ui, d);
+        let took = ui.min_rect().bottom() - top;
+        if ui.ctx().data(|m| m.get_temp::<f32>(real_height)).is_none_or(|height| (height - took).abs() > 0.5) {
+            ui.ctx().data_mut(|m| m.insert_temp(real_height, took));
+            ui.ctx().request_repaint();
+        }
     }
 }
 
@@ -210,7 +226,9 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
     });
     // the room left in the dialog's body below this point ([`note_body_room`]), else what the ui has
     let room = ui.ctx().data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique(BODY_ROOM))).map(|(top, room)| top + room - ui.cursor().top());
-    let available = room.map_or(ui.available_height(), |room| room.min(ui.available_height()));
+    // (the room alone: a measuring run's ui may offer less height than the real run's, and the grid must be as tall
+    // in both, or the body measures shorter than it lays out and its last rows can't be scrolled to)
+    let available = room.unwrap_or_else(|| ui.available_height());
     let grid_h = grid_height(available, below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
     let mut visible = std::collections::HashSet::new();
     let grid =
@@ -230,8 +248,9 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
         });
     if !controls::measuring(ui) {
         app.renderer.retain_imports(&visible);
-        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(GRID_BOTTOM), grid.inner_rect.bottom()));
     }
+    // (in a measuring run too: see `note_dialog_bottom`)
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(GRID_BOTTOM), grid.inner_rect.bottom()));
     ui.add_space(4.0);
     // options
     if !d.sources.is_empty() {
