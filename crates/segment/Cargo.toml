@@ -19,6 +19,8 @@ log = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 lightcraft-fetch = { workspace = true }
+# the remote worker's handshake (HMAC-SHA256 over a shared token)
+sha2 = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { workspace = true, features = ["metal"] }

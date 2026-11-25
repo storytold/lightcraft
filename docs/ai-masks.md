@@ -88,11 +88,42 @@ stay in the local library, so later adjustments and exports work without the con
 
 The worker requires Metal and accepts one editing connection at a time. It loads weights
 on demand and releases them when the client disconnects or remains idle for ten minutes.
-Both endpoints require loopback addresses: SSH provides authentication and encryption.
-The listener has no independent authentication; do not expose it through a public proxy. Any
+Without a token both endpoints require loopback addresses: SSH provides authentication and
+encryption. Such a listener has no independent authentication; do not expose it through a public
+proxy. Any
 process of any user on the worker Mac can connect to it, and on the editing computer a local
 process listening on the port while the tunnel is down receives the rendered model input, so use
 this only on machines whose local users you trust.
+
+To reach the worker without a tunnel, inside a private network or a cluster, give both ends the
+same secret of at least 16 characters in `LIGHTCRAFT_SAM3_WORKER_TOKEN`:
+
+```sh
+LIGHTCRAFT_SAM3_WORKER_TOKEN=… lightcraft-sam3-worker /models/sam3 0.0.0.0:8793
+LIGHTCRAFT_SAM3_WORKER_TOKEN=… LIGHTCRAFT_SAM3_REMOTE=sam3-worker:8793 lightcraft
+```
+
+The client and worker both reject tokens shorter than 16 Unicode characters before connecting
+or listening. Set the same token on both ends, or unset it on both for loopback-only use.
+Hostname lookup waits at most five seconds; each authentication handshake has one ten-second
+deadline, including partial reads and writes. TCP connection attempts and handshakes across all
+resolved addresses share a fifteen-second budget after lookup.
+
+`LIGHTCRAFT_SAM3_REMOTE` then takes a host name or an address. A worker off loopback refuses to
+start without the token, and a client refuses to send anything off this machine without it. On
+every connection both ends prove they know the token, with an HMAC over fresh nonces, before any
+pixels move; the token itself never crosses the network. This checks possession of the token at
+connection setup only. Subsequent requests and masks are neither encrypted nor authenticated by
+this protocol. An active intermediary can relay the
+handshake and then change inputs or results, including replacing a mask with plausible values.
+Direct connections require a trusted network that excludes active intermediaries and untrusted
+peers. Otherwise use an authenticated, integrity-protected tunnel such as SSH or a VPN; a private
+address alone does not provide that protection.
+
+The worker handles one connection at a time, including authentication. A silent peer can occupy
+it for ten seconds, and repeated connections can deny service. Restrict access to trusted clients
+with network access controls. Concurrent handshake admission is outside this transport's current
+scope; the token is not denial-of-service protection.
 
 No local weights are required in remote mode. An unavailable worker produces an explicit
 error, not a silent CPU fallback. Restore the tunnel and retry. Unset
