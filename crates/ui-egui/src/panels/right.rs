@@ -1652,6 +1652,7 @@ pub(crate) fn group_title(section: Option<&str>, step_label: &str, presets: &[lc
     let name = match section {
         Some("basic") => "Basic",
         Some("levels") => "Levels",
+        Some("toneEq") => "Tone Equalizer",
         Some("curve") => "Tone Curve",
         Some("color") => "Color",
         Some("grading") => "Color Grading",

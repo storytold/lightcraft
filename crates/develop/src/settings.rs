@@ -323,6 +323,11 @@ pub struct DevelopSettings {
     /// `hash64` (and every cached preview stays valid).
     #[serde(default, skip_serializing_if = "Levels::is_default")]
     pub levels: Levels,
+    /// Tone Equalizer (beyond Lightroom): exposure per luminance band through a smoothed mask, on the
+    /// scene-linear image. Not written while it is the default, so settings without it keep their JSON
+    /// and `hash64`.
+    #[serde(default, skip_serializing_if = "crate::ToneEq::is_default", deserialize_with = "lenient")]
+    pub tone_eq: crate::ToneEq,
     /// Resolve-style HSL curves (the Witchcraft mode's Curves): free points over the hue circle,
     /// one curve each for hue, saturation and luminance. Not written while neutral.
     #[serde(default, skip_serializing_if = "HslCurves::is_neutral")]
@@ -449,6 +454,7 @@ impl Default for DevelopSettings {
             grading: ColorGrading::default(),
             primaries: Primaries::default(),
             levels: Levels::default(),
+            tone_eq: crate::ToneEq::default(),
             hsl_curves: HslCurves::default(),
             effects: Effects::default(),
             vignette: Vignette::default(),

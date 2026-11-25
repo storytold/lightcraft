@@ -30,6 +30,7 @@ const SECTIONS: &[(&str, &str)] = &[
     ("grading", "grading"),
     ("primaries", "grading"),
     ("levels", "levels"),
+    ("tone_eq", "toneEq"),
     ("detail", "detail"),
     ("effects", "effects"),
     ("vignette", "effects"),
