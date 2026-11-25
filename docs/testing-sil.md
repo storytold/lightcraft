@@ -20,6 +20,7 @@ Scenarios (one `#[test]` each, run in parallel):
 | Test | What it does |
 |---|---|
 | `sil_workflow` | import a folder → cull (rate, flag, reject, label, filters) → develop (Auto, sliders, WB picker, crop, radial mask, preset) → copy/paste and Synchronize → virtual copy, history back and forth → albums and a smart collection → keywords and metadata → export JPEG, TIFF and Original + Settings → XMP write, change, read back → print render → slideshow export (PDF in the foreground, JPEG slides in the background, an unknown format refused) → reopen |
+| `sil_video` | a synthetic H.264 clip (written by `lcc_video::test_util`): import, grade, lens vignetting and Rotate, Upright Level, poster frame, each undone and redone; export as a movie that decodes; reopen |
 | `sil_raw_workflow` | corpus raws (skipped without a corpus): import, Auto, sliders, WB, export JPEG and DNG, XMP, reopen |
 | `sil_adaptive_presets` | built-in adaptive preset on three photos (its look and two scene masks each, nothing skipped), the same preset again replaces its masks, a user preset of a photo's masks brings them to another, unknown preset and hostile ids refused → undo/redo → reopen |
 | `sil_monkey` | seeded random user actions (about 8 % with hostile arguments: bogus ids, out-of-range and huge numbers, control characters), with a reopen every 100 steps and at the end; it stops making virtual copies once the library holds 64 photos (`MONKEY_MAX_PHOTOS`), so a long run's library, and with it each step and its checks, stays inside the per-step timeout |

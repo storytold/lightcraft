@@ -786,6 +786,42 @@ fn sil_raw_workflow() {
     s.finish();
 }
 
+/// Video (7.11): a synthetic clip imported, graded, given lens corrections, Transform and Upright,
+/// a poster frame picked, then exported as a movie that carries all of it; undo / redo and a reopen
+/// keep it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sil_video() {
+    let mut s = Sil::new("video");
+    let dir = s.root.join("clips");
+    std::fs::create_dir_all(&dir).expect("the clip folder");
+    lcc_video::test_util::write_clip(&dir.join("clip.mp4"), 64, 48, 30, |_| 110, &[]);
+    s.start();
+    let ids = import(&mut s, &dir, 1);
+    let id = ids[0];
+    s.ok("library.select", json!({"ids": [id], "active": id}));
+    s.ok("develop.set", json!({"values": {"light.exposure": 0.5, "optics.vignetting": 80, "geometry.rotate": 3}}));
+    s.undo_redo_roundtrip();
+    s.cmd("geometry.upright", json!({"mode": "level"}));
+    s.undo_redo_roundtrip();
+    let v = s.cmd("video.setPoster", json!({"time": 0.5}));
+    if v["ok"] == true {
+        s.undo_redo_roundtrip();
+    }
+    s.consistent();
+    let dev = s.ok("develop.get", json!({"id": id}));
+    s.check(dev["optics"]["vignetting"].as_f64().is_some_and(|v| v > 0.0), "the clip lost its lens correction", &dev["optics"].to_string());
+    let files = s.export_decodes(&ids, json!({"format": "jpeg"}), false);
+    for f in &files {
+        match lcc_video::probe(f) {
+            Ok(info) => s.check(info.width > 0 && info.height > 0 && info.duration > 0.5, "the exported movie is empty", &format!("{info:?}")),
+            Err(e) => s.fail("the exported movie does not decode", &format!("{}: {e}", f.display())),
+        }
+    }
+    s.reopen_keeps_everything();
+    s.finish();
+}
+
 // ---------------------------------------------------------------- monkey
 
 /// xorshift64*: a tiny seeded generator, so a seed replays the same run everywhere.

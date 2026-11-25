@@ -25,20 +25,46 @@ pub(crate) fn stand_in_shows(app: &LccApp, id: PhotoId, slot: Slot) -> bool {
 
 /// A clip's whole decoded frame drawn into `r` through the loupe's [`Frame`]: the crop, its
 /// straighten angle and the flips pick the part of the texture that shows (the uncropped frame
-/// while the Crop tool is open).
+/// while the Crop tool is open). Lens corrections and perspective (Upright, Transform) bend the
+/// mapping, so a warped frame is drawn as a grid of [`VIDEO_MESH_CELLS`]² cells, each corner
+/// mapped through the warp (green plane; the lens's vignette gain is left to export and stills).
 fn video_frame_mesh(tex: egui::TextureId, r: Rect, frame: &Frame) -> egui::Shape {
     let (w, h) = ((r.width().round() as usize).max(1), (r.height().round() as usize).max(1));
     let to_uv = frame.out_to_norm(w, h);
+    let (ow, oh) = (frame.ow.max(1.0), frame.oh.max(1.0));
+    let uv_of = |x: f64, y: f64| -> Point {
+        let n = to_uv.apply(Point::new(x, y));
+        match &frame.warp {
+            Some(warp) => {
+                let s = warp.to_source(Point::new(n.x * ow, n.y * oh), 1);
+                if s.x.is_finite() && s.y.is_finite() { Point::new(s.x / ow, s.y / oh) } else { n }
+            }
+            None => n,
+        }
+    };
+    let cells = if frame.warp.is_some() { VIDEO_MESH_CELLS } else { 1 };
     let mut mesh = egui::epaint::Mesh::with_texture(tex);
-    for (x, y) in [(0.0, 0.0), (w as f64, 0.0), (w as f64, h as f64), (0.0, h as f64)] {
-        let uv = to_uv.apply(Point::new(x, y));
-        let pos = pos2(r.left() + (x / w as f64) as f32 * r.width(), r.top() + (y / h as f64) as f32 * r.height());
-        mesh.vertices.push(egui::epaint::Vertex { pos, uv: pos2(uv.x as f32, uv.y as f32), color: Color32::WHITE });
+    for j in 0..=cells {
+        for i in 0..=cells {
+            let (fx, fy) = (i as f64 / cells as f64, j as f64 / cells as f64);
+            let uv = uv_of(fx * w as f64, fy * h as f64);
+            let pos = pos2(r.left() + fx as f32 * r.width(), r.top() + fy as f32 * r.height());
+            mesh.vertices.push(egui::epaint::Vertex { pos, uv: pos2(uv.x as f32, uv.y as f32), color: Color32::WHITE });
+        }
     }
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
+    let row = (cells + 1) as u32;
+    for j in 0..cells as u32 {
+        for i in 0..cells as u32 {
+            let a = j * row + i;
+            mesh.add_triangle(a, a + 1, a + row + 1);
+            mesh.add_triangle(a, a + row + 1, a + row);
+        }
+    }
     egui::Shape::mesh(mesh)
 }
+
+/// Cells per side of a warped clip frame's mesh ([`video_frame_mesh`]).
+const VIDEO_MESH_CELLS: usize = 24;
 
 /// How long (s) after a brush stroke the photographer still counts as painting ([`crate::LccApp::paint_hold_until`]):
 /// long enough for the next stroke to start.

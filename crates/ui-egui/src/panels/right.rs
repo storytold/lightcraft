@@ -594,9 +594,8 @@ fn crop(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     });
     divider(ui);
     header(ui, "Geometry");
-    // a clip takes the crop, straighten and flips only: Upright and the transform sliders are photo-only
-    let video = crate::video_ui::photo_is_video(app, id);
-    crate::video_ui::video_gate(ui, video, |ui| {
+    // a clip takes Upright and the transform sliders too (every frame); Guided Upright is photo-only
+    crate::video_ui::video_gate(ui, false, |ui| {
         padded(ui, |ui| {
             classic_crop::upright_controls(app, ui, &d);
             ui.add_space(6.0);

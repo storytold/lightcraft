@@ -392,6 +392,21 @@ fn a_clip_keeps_its_crop() {
     assert_eq!(lcc_pipeline::grade::video_settings(&d).crop, lcc_develop::DevelopSettings::default().crop);
 }
 
+// Feature (7.11): a clip takes lens corrections, Upright and Transform (stored, applied to every frame).
+#[test]
+fn a_clip_keeps_lens_corrections_upright_and_transform() {
+    let dir = tmp("lens");
+    let (mut s, _) = session(&dir);
+    s.execute("develop.set", &json!({"values": {"optics.distortion": 20.0, "geometry.vertical": -15.0}})).unwrap();
+    let d = s.develop_of(PhotoId(900)).unwrap();
+    assert_eq!((d.optics.distortion, d.geometry.vertical), (20.0, -15.0), "kept on the clip");
+    assert!(lcc_pipeline::grade::video_is_framed(&d));
+    // Capture Frame carries the transform: still decodable and the frame's size
+    let r = run(&mut s, "video.captureFrame", json!({"time": 2.0}));
+    let img = lcc_codecs::decode(&std::fs::read(r["path"].as_str().unwrap()).unwrap(), Default::default()).unwrap().to_srgb8();
+    assert!(img.width > 0 && img.height > 0);
+}
+
 #[test]
 fn presets_paste_and_sync_keep_only_video_controls() {
     let dir = tmp("gating-preset");
