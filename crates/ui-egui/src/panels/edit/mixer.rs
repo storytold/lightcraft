@@ -164,11 +164,12 @@ fn point_color_swatches(ui: &mut egui::Ui, colors: &[Color32], selected: usize) 
             }
         });
     };
+    let group_enabled = ui.is_enabled();
     let group = || {
         RadioGroup::new(crate::i18n::tr("Point Color").to_owned(), Bind::given(selected.min(usize::from(u8::MAX)) as u8))
             .id_salt("pointColorSamples")
             .nav(NavShape::Flat)
-            .enabled(ui.is_enabled())
+            .enabled(group_enabled)
     };
     // Measured in an invisible sizing child, then shown at the room it takes in a real run only: the swatches join
     // their group's arena in a real run alone, never in egui's sizing pass or an SDK measure.
