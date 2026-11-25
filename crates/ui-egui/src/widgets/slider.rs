@@ -165,28 +165,12 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
                         if let Some(face) = face {
                             field = field.track_face(face);
                         }
-                        // The row takes the room it measures at the panel's width and is shown there. Shown in the
-                        // flow instead, a framework body that measures the app's window first (the shell's) finds the
-                        // row missing from what it kept and asks for another pass every frame. Measured as a measuring
-                        // run: a measure in a real run is checked against what that body kept, which holds no row.
-                        // The real run takes the height the row was last shown at, so its only measure of the row is
-                        // show_at's own (a measure of its own in the real run left show_at's unasked, and the body the
-                        // measuring run kept found the row's leaf missing).
+                        // The row takes the room it measures at the panel's width and is shown there. Measured in the
+                        // flow of the run it is in, so the body's measuring run and its real run record and check the same
+                        // leaf (a measure wrapped in a measuring run of its own was a leaf the real run never asked).
                         let width = ui.available_width().max(1.0);
-                        let ctx = ui.ctx().clone();
-                        let height_key = id.with("row-height");
-                        let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(&ctx);
-                        let known = ctx.data(|data| data.get_temp::<(f32, f32)>(height_key)).filter(|(at, _)| !measuring && *at == width);
-                        let height = match known {
-                            Some((_, height)) => height,
-                            None => {
-                                let height = craft::ui::runtime::measure::run(&ctx, || field.measure_in(ui, Proposal::Width(width))).y;
-                                // a measuring run (the body's, each time it measures) keeps the height for the real run
-                                ctx.data_mut(|data| data.insert_temp(height_key, (width, height)));
-                                height
-                            }
-                        };
-                        let (_, room) = ui.allocate_space(egui::vec2(width, height));
+                        let size = field.measure_in(ui, Proposal::Width(width));
+                        let (_, room) = ui.allocate_space(egui::vec2(width, size.y));
                         field.show_at(ui, room)
                     })
                     .inner
