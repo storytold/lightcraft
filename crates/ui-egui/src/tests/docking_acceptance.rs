@@ -357,10 +357,13 @@ fn reset_during_held_divider_drag_keeps_replacement_layout_on_later_movement() {
     h.app.synthetic.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.step();
     h.app.synthetic.push(Event::PointerMoved(from + egui::vec2(40.0, 0.0)));
+    // (the dock applies a divider's move in the pass after the one that brought it)
+    h.step();
     h.step();
     assert_ne!(*h.app.ui.docking.as_ref().unwrap().layout(), before, "fixture performs a real divider resize");
     let resized = h.app.ui.docking.as_ref().unwrap().layout().clone();
     h.app.synthetic.push(Event::PointerMoved(from + egui::vec2(55.0, 0.0)));
+    h.step();
     h.step();
     assert_ne!(*h.app.ui.docking.as_ref().unwrap().layout(), resized, "renderer-generated actions preserve continuous dragging");
     let undo = h.app.session.undo.len();
@@ -388,6 +391,8 @@ fn held_divider_replacement_route(route: &str) {
     h.app.synthetic.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.step();
     h.app.synthetic.push(Event::PointerMoved(from + egui::vec2(40.0, 0.0)));
+    // (the dock applies a divider's move in the pass after the one that brought it)
+    h.step();
     h.step();
     assert_ne!(serde_json::to_value(&h.app.ui.docking).unwrap(), before, "fixture performs a real divider resize");
     let undo = h.app.session.undo.len();
