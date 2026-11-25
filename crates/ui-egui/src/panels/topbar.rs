@@ -100,6 +100,7 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
         crate::text_field::focus(ui.ctx(), "field:search");
     }
     let before = app.ui.search.clone();
+    let had_focus = crate::text_field::has_focus_id(ui.ctx(), crate::text_field::id("field:search"));
     let carrying = app.ui.dragging_photos.is_some() && ui.input(|i| i.pointer.primary_down());
     let (shown, record) = craft::ui::runtime::inspect::record(ui, crate::text_field::id("field:search").with("inspect"), |ui| {
         let mut field = craft::ui::text::TextField::search(crate::i18n::tr("Search Photos"), Bind::bound(&mut app.ui.search))
@@ -114,8 +115,12 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
         field.show_at(ui, sr)
     });
     crate::text_field::register_field(ui, "field:search", &shown.response, record.as_deref());
-    // Escape (which clears the text) and Return leave the field, so the next key is a shortcut again.
-    if shown.escaped || shown.submitted {
+    // Escape (which clears the text) and Return leave the field, so the next key is a shortcut again. An Escape in the
+    // empty field is one the field leaves untaken (it goes on to the host): it lets go of the field too, and does
+    // nothing else.
+    let field = crate::text_field::id("field:search");
+    let left_escape = !shown.escaped && crate::shortcuts::take_focused_cancel(ui.ctx(), |rec| rec.stop.id == field || rec.stop.root == field);
+    if shown.escaped || shown.submitted || left_escape {
         crate::text_field::blur(ui.ctx(), "field:search");
     }
     if app.ui.search != before {

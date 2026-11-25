@@ -346,13 +346,22 @@ impl Fixture {
                 record.hits.iter().any(|part| part.owner == hit.id && part.bounds.contains(text.rect.center())),
                 "label belongs to actual sensing owner"
             );
-            if index > 0 && index != 4 {
-                assert!((rect.top() - self.rect(&locator(index - 1)).top()).abs() < 1.0, "preserve four-plus-three order");
+            let columns = self.overlay_columns();
+            if index % columns != 0 {
+                assert!((rect.top() - self.rect(&locator(index - 1)).top()).abs() < 1.0, "preserve reading order in rows of {columns}");
                 assert!(rect.left() > self.rect(&locator(index - 1)).left());
             }
         }
-        let first_bottom = (0..4).map(|index| self.rect(&locator(index)).bottom()).fold(f32::NEG_INFINITY, f32::max);
-        assert!(self.rect(&locator(4)).top() >= first_bottom - 1.0, "second row cannot overlap wrapped first-row labels");
+        let columns = self.overlay_columns();
+        let first_bottom = (0..columns).map(|index| self.rect(&locator(index)).bottom()).fold(f32::NEG_INFINITY, f32::max);
+        assert!(self.rect(&locator(columns)).top() >= first_bottom - 1.0, "second row cannot overlap first-row labels");
+    }
+    /// How many choices the first row holds: as many as fit whole (two to four), the rest following in rows of as many.
+    fn overlay_columns(&self) -> usize {
+        let top = self.rect(&locator(0)).top();
+        let columns = (0..OPTIONS.len()).take_while(|&index| (self.rect(&locator(index)).top() - top).abs() < 1.0).count();
+        assert!((2..=4).contains(&columns), "two to four choices a row, got {columns}");
+        columns
     }
 }
 impl Drop for Fixture {
@@ -412,14 +421,16 @@ fn crop_overlay_actual_parent_one_tab_stop_spatial_arrows_and_real_space_enter_p
     f.key(Key::Space);
     f.expect_choice(untouched, O::Grid);
     let before = f.state();
+    // the rows hold as many choices as fit whole: Down from Grid is the choice below it in the next row
+    let columns = f.overlay_columns();
     f.key(Key::ArrowDown);
-    assert!(f.focused(&locator(5)), "Down moves to Spiral in the same column; trace={:#?}", f.trace);
+    assert!(f.focused(&locator(1 + columns)), "Down moves to the next row in the same column; trace={:#?}", f.trace);
     assert_eq!(f.state(), before);
     f.key(Key::Enter);
-    f.expect_choice(before, O::Spiral);
+    f.expect_choice(before, OPTIONS[1 + columns].0);
     let before = f.state();
     f.key(Key::ArrowLeft);
-    assert!(f.focused(&locator(4)), "Left moves to Triangle; trace={:#?}", f.trace);
+    assert!(f.focused(&locator(columns)), "Left moves to the row's first choice; trace={:#?}", f.trace);
     f.key(Key::ArrowUp);
     assert!(f.focused(&locator(0)), "Up crosses rows to Thirds; trace={:#?}", f.trace);
     assert_eq!(f.state(), before);

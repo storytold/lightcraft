@@ -4,12 +4,13 @@ use std::hash::{Hash as _, Hasher as _};
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, PartKey, Selection, SizeHint};
 use craft::ui::contract::overlay::Anchor;
 use craft::ui::contract::{
-    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger,
+    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::display::Divider;
 use craft::ui::list::{List, ListRow, TreeLeaves};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::IconSpec;
+use craft::ui::style::TypeRole;
 use egui::{Pos2, Rect};
 
 use super::{SidebarSection, Tokens, pos2, register, vec2};
@@ -132,6 +133,8 @@ pub(super) struct SideRow {
     pub open: bool,
     /// The label in the strong weight (a section's title).
     pub strong: bool,
+    /// The type role of the label, when it is not the list's own (the My Photos title).
+    pub role: Option<TypeRole>,
     /// Text for the count's column that is not a count of photos (a folded section's rows).
     pub note: Option<String>,
     /// A second, smaller line under the label.
@@ -162,6 +165,7 @@ impl SideRow {
             group: false,
             open: false,
             strong: false,
+            role: None,
             note: None,
             detail: None,
             mark: None,
@@ -207,6 +211,11 @@ impl SideRow {
 
     pub(super) fn strong(mut self) -> Self {
         self.strong = true;
+        self
+    }
+
+    pub(super) fn role(mut self, role: TypeRole) -> Self {
+        self.role = Some(role);
         self
     }
 
@@ -459,7 +468,7 @@ fn list_row(item: &SideRow, cells: &[(ColumnKey, Rect)], tree: bool, show_counts
         row = row.depth(item.depth);
     }
     if item.strong {
-        row = row.strong(true);
+        row = row.strong(true).role(item.role.unwrap_or(TypeRole::BodyStrong));
     }
     if let Some(detail) = &item.detail {
         row = row.detail(detail.clone());
@@ -475,11 +484,8 @@ fn list_row(item: &SideRow, cells: &[(ColumnKey, Rect)], tree: bool, show_counts
     if let Some(note) = &item.note {
         row = row.cell(COUNT, note.clone());
     } else if show_counts && let Some(n) = item.count {
-        row = row.cell(COUNT, n.to_string());
-        if n == 0 {
-            // a count of nothing is there, but fainter: the rows that hold photos stand out
-            row = row.cell_muted(COUNT);
-        }
+        // counts read quieter than the names
+        row = row.cell(COUNT, n.to_string()).cell_muted(COUNT);
     }
     row
 }
@@ -603,9 +609,13 @@ fn list_shown<E>(ui: &mut egui::Ui, out: &CollectionResponse<String, E>, source:
 /// `count:<id>`, and paints its colour label's dot.
 fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count, gap): (Option<Rect>, Option<Rect>, Option<Rect>), chosen: bool) {
     let id = &item.id;
-    register(ui, format!("source:{id}"), rect);
+    // what is visible of the row: a press on the centre of a row that reaches past the panel's edge
+    // (the sidebar scrolls sideways) must land on the panel
+    let visible = rect.intersect(ui.clip_rect());
+    let visible = if visible.is_positive() { visible } else { rect };
+    register(ui, format!("source:{id}"), visible);
     if chosen {
-        register(ui, format!("highlight:{id}"), rect);
+        register(ui, format!("highlight:{id}"), visible);
     }
     if let Some(label) = label {
         // the name as far as it is drawn: its own width, or the whole column when it is cut short
@@ -686,9 +696,8 @@ pub(super) fn host_menu(
         MenuAt::Rect(rect) => Anchor::Rect(rect),
     };
     let mut open = true;
-    let shown = Menu::new(name.to_owned())
+    let shown = Menu::context(name.to_owned(), response)
         .id_salt(("left-menu", slot))
-        .opened_by(response, Trigger::Manual)
         .anchor(anchor)
         .open(Bind::bound(&mut open))
         .show(ui, |ui, _| body(ui, &key));

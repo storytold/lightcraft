@@ -29,7 +29,7 @@ fn languages_switch_persist_and_keep_user_values() {
         let saved = serde_json::to_string(&app.ui).unwrap();
         assert!(saved.contains(&format!(r#""language":"{}""#, locale.code())), "{saved}");
         assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, locale);
-        let ctx = egui::Context::default();
+        let ctx = app_ctx();
         for tag in tags {
             assert_eq!(Locale::parse_tag(tag), Some(locale), "{tag}");
             let (request, _) = ControlRequest::new("ui.set", serde_json::json!({"language": tag}));
@@ -770,7 +770,10 @@ fn painted_text(ctx: &egui::Context, app: &mut crate::LightcraftApp, language: L
     app.ui.language = language;
     let mut text = String::new();
     for frame in 0..4 {
-        let input = crate::headless::HeadlessView::raw_input(egui::vec2(1600.0, 1000.0), 1.0, frame as f64 / 60.0, vec![]);
+        let mut input = crate::headless::HeadlessView::raw_input(egui::vec2(1600.0, 1000.0), 1.0, frame as f64 / 60.0, vec![]);
+        // as the app's host does before each frame: the framework's frame input (its root values and the language's
+        // words) is set before the pass
+        app.raw_input_hook(ctx, &mut input);
         let mut out = ctx.run_ui(input, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -789,7 +792,7 @@ fn painted_text(ctx: &egui::Context, app: &mut crate::LightcraftApp, language: L
 /// (their CJK fallback order follows the language), and command ids never change with it.
 #[test]
 fn every_language_is_painted_and_menu_ids_stay_the_same() {
-    let ctx = egui::Context::default();
+    let ctx = app_ctx();
     crate::theme::install_fonts(&ctx);
     let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
     app.ui.left_panel = true;
@@ -806,9 +809,16 @@ fn every_language_is_painted_and_menu_ids_stay_the_same() {
     set_language(Locale::En);
 }
 
+/// A context for the real window: the framework runtime installed before its first pass, as the app's host does.
+fn app_ctx() -> egui::Context {
+    let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs on a fresh context");
+    ctx
+}
+
 /// The UI families, after one frame so the font definitions are loaded.
 fn fonts_ctx(craft: &'static [lightcraft_engine::CraftFont]) -> egui::Context {
-    let ctx = egui::Context::default();
+    let ctx = app_ctx();
     ctx.set_fonts(crate::theme::font_definitions(craft));
     let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
     out.textures_delta.clear();
@@ -944,9 +954,11 @@ fn date_headings_in_every_language() {
 /// shares a stock preset's name.
 #[test]
 fn traditional_chinese_presets_and_panel_headers_are_painted() {
-    let ctx = egui::Context::default();
+    let ctx = app_ctx();
     crate::theme::install_fonts(&ctx);
     let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    // The docked Presets panel sends dock commands, which need the framework runtime installed before the first pass.
+    app.install_framework(&ctx);
     app.ui.presets = true;
     let builtin = app.session.presets.iter().find(|p| p.name == "Warm Glow").unwrap().clone();
     app.session.presets.push(lightcraft_develop::Preset { id: "user.test".into(), builtin: false, ..builtin });
@@ -1283,7 +1295,7 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Dodano do „{name}”: 22"));
     let saved = serde_json::to_string(&app.ui).unwrap();
     assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Pl);
-    let ctx = egui::Context::default();
+    let ctx = app_ctx();
     assert_polish_selected_by_tags(&mut app, &ctx);
     let text = painted_text(&ctx, &mut app, Locale::Pl);
     assert!(text.contains("Plik") && text.contains("Ekspozycja"), "{text}");

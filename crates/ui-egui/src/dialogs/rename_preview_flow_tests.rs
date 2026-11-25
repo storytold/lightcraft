@@ -193,8 +193,10 @@ impl Review {
     fn replace(&mut self, id: &str, text: &str) {
         self.click(id);
         if id == TEMPLATE {
-            assert_eq!(self.ctx.memory(|memory| memory.focused()), Some(egui::Id::unique("rename-template")));
-            assert!(!self.sdk.contains_key(TEMPLATE), "the shared tag-help Template boundary stays native");
+            // The Template is the framework's text field since the raw-egui port: egui's focus is on its text part.
+            let template = egui::Id::unique("rename-template");
+            assert!(crate::text_field::has_focus_id(&self.ctx, template), "the Template field has the focus");
+            assert!(self.sdk.contains_key(TEMPLATE), "the Template is the framework's text field");
         }
         self.select_all();
         self.frame(vec![Event::Text(text.into())]);
@@ -307,7 +309,7 @@ fn rename_actual_native_selection_tag_warning_preview_and_cancel_never_apply_a_r
     // Natural Ctrl/Cmd+A selection, not a stored cursor or forced focus. The real shared
     // tag helper owns its existing selection replacement and focus restoration behavior.
     r.click(TEMPLATE);
-    assert_eq!(r.ctx.memory(|memory| memory.focused()), Some(egui::Id::unique("rename-template")));
+    assert!(crate::text_field::has_focus_id(&r.ctx, egui::Id::unique("rename-template")), "the Template field has the focus");
     r.select_all();
     r.click("button:renameTemplateTag-0");
     r.draft("{name}", 5);

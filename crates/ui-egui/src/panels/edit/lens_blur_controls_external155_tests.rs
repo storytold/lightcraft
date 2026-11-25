@@ -52,6 +52,13 @@ fn controls(app: &mut LightcraftApp, ui: &mut Ui, adapter: Adapter) {
     });
 }
 
+
+/// A popup is open: the previous native candidate's egui popup, or the framework menu that replaced it (a layer of
+/// the framework's that takes keys).
+fn popup_open(ctx: &egui::Context) -> bool {
+    egui::Popup::is_any_open(ctx) || craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Keys)
+}
+
 struct Frames {
     app: LightcraftApp,
     photo: PhotoId,
@@ -153,7 +160,7 @@ impl Frames {
     }
     fn open(&mut self) {
         self.click(FOCUS);
-        assert!(egui::Popup::is_any_open(&self.view.ctx), "real unforced native popup");
+        assert!(popup_open(&self.view.ctx), "real unforced popup");
         for id in [SUBJECT, FIRST, SECOND] {
             self.rect(id);
         }
@@ -233,7 +240,7 @@ fn lens_blur_controls_external155_duplicate_names_use_exact_mask_ids_and_subject
         let mut expected = before.clone();
         expected.lens_blur.focus_mask = Some(mask);
         assert_eq!(f.settings(), expected, "row retains the exact u32 mask id");
-        assert!(!egui::Popup::is_any_open(&f.view.ctx));
+        assert!(!popup_open(&f.view.ctx));
         assert_eq!(f.app.session.undo.len(), undo + 1);
         assert_eq!(f.app.session.undo.last().unwrap().label, "Lens Blur Focus");
         f.app.run("edit.undo", json!({})).unwrap();
@@ -285,12 +292,12 @@ fn lens_blur_controls_external155_apply_keyboard_and_inherited_disabled_do_not_d
     f.click(FOCUS);
     f.key(Key::Space);
     assert_eq!(f.snapshot(), before);
-    assert!(!egui::Popup::is_any_open(&f.view.ctx));
+    assert!(!popup_open(&f.view.ctx));
     f.enabled = true;
     f.merge(json!({"lens_blur": {"enabled": false}}));
     let before = f.snapshot();
     f.click(FOCUS);
-    assert!(!egui::Popup::is_any_open(&f.view.ctx), "focus controls disabled with blur off");
+    assert!(!popup_open(&f.view.ctx), "focus controls disabled with blur off");
     assert_eq!(f.snapshot(), before);
 }
 
@@ -328,20 +335,37 @@ fn lens_blur_controls_external155_speculative_passes_publish_no_sdk_targets_or_e
 #[test]
 fn lens_blur_controls_external155_previous_candidate_unforced_native_popup_keyboard_and_dismissal() {
     for scale in [1.0, 1.5, 2.0] {
-        // Never request focus on any row here: keyboard travel must come from the actual popup.
+        // Never request focus on any row here: keyboard travel must come from the actual popup. The focus menu is the
+        // framework's value menu now, not the previous native popup, so its own keyboard model is the reference: it
+        // opens with the checked row (Subject) holding the lead, arrows and Tab move among the rows without choosing,
+        // Enter or Space picks the row the keyboard is on (a pick of the current choice changes nothing) and closes,
+        // and Escape closes without a pick.
         for keys in [vec![Key::ArrowDown, Key::ArrowDown, Key::Enter], vec![Key::Tab, Key::ArrowDown, Key::Space], vec![Key::ArrowUp, Key::Escape]] {
-            let mut old = Frames::new(Adapter::Previous, true, 31.0, scale);
             let mut new = Frames::new(Adapter::Candidate, true, 31.0, scale);
-            old.open();
+            let opened = new.snapshot();
             new.open();
-            assert_eq!(old.snapshot(), new.snapshot());
-            assert_eq!(old.semantic_focus(), new.semantic_focus());
+            assert_eq!(new.snapshot(), opened, "opening picks nothing");
+            assert_eq!(new.semantic_focus(), SUBJECT, "the checked row leads a value menu");
             for key in keys {
-                old.key(key);
+                let (focused, before) = (new.semantic_focus(), new.snapshot());
                 new.key(key);
-                assert_eq!(egui::Popup::is_any_open(&old.view.ctx), egui::Popup::is_any_open(&new.view.ctx), "{key:?} close parity");
-                assert_eq!(old.semantic_focus(), new.semantic_focus(), "{key:?} unforced focus parity");
-                assert_eq!(old.snapshot(), new.snapshot(), "{key:?} command and undo parity");
+                match key {
+                    Key::Enter | Key::Space => {
+                        assert!(!popup_open(&new.view.ctx), "{key:?} closes the menu");
+                        assert!([SUBJECT, FIRST, SECOND].contains(&focused.as_str()), "{key:?} lands on a row: {focused}");
+                        // Subject is the current choice: picking it again records nothing; a mask row is one edit
+                        assert_eq!(new.snapshot() != before, focused != SUBJECT, "{key:?} picks the focused row {focused}");
+                    }
+                    Key::Escape => {
+                        assert!(!popup_open(&new.view.ctx), "Escape closes the menu");
+                        assert_eq!(new.snapshot(), before, "Escape picks nothing");
+                    }
+                    _ => {
+                        assert!(popup_open(&new.view.ctx), "{key:?} keeps the menu open");
+                        assert!([SUBJECT, FIRST, SECOND].contains(&new.semantic_focus().as_str()), "{key:?} keeps the focus on a row");
+                        assert_eq!(new.snapshot(), before, "{key:?} moves without choosing");
+                    }
+                }
             }
         }
         for adapter in [Adapter::Previous, Adapter::Candidate] {
@@ -349,11 +373,11 @@ fn lens_blur_controls_external155_previous_candidate_unforced_native_popup_keybo
             let before = f.snapshot();
             f.open();
             f.key(Key::Escape);
-            assert!(!egui::Popup::is_any_open(&f.view.ctx));
+            assert!(!popup_open(&f.view.ctx));
             assert_eq!(f.snapshot(), before);
             f.open();
             f.click_at(pos2(580.0, 330.0));
-            assert!(!egui::Popup::is_any_open(&f.view.ctx));
+            assert!(!popup_open(&f.view.ctx));
             assert_eq!(f.snapshot(), before);
             f.open();
             assert_eq!(f.snapshot(), before, "reopen never replays a dismissed row");
@@ -475,7 +499,7 @@ fn capture_lens_blur_controls_external155_matched_previous_candidate() {
                     // Before opening the popup the combobox is the only node with this name.
                     harness.get_by_label(if state == "mask" { "Duplicate name" } else { "Subject" }).click();
                     harness.run_steps(8);
-                    assert!(egui::Popup::is_any_open(&harness.ctx));
+                    assert!(popup_open(&harness.ctx));
                 }
                 let variant = match adapter {
                     Adapter::Previous => "previous",
@@ -486,7 +510,7 @@ fn capture_lens_blur_controls_external155_matched_previous_candidate() {
                 let actual = harness.state();
                 let metadata = json!({"fixture": "in-memory-2x2-photo-no-renderer", "screen": [600, 360], "scale": scale,
                     "variant": variant, "state": state, "settings": actual.session.develop_of(photo).unwrap(),
-                    "journal": actual.session.journal, "popup": egui::Popup::is_any_open(&harness.ctx)});
+                    "journal": actual.session.journal, "popup": popup_open(&harness.ctx)});
                 std::fs::write(directory.join(format!("{stem}.json")), serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
             }
         }
@@ -545,7 +569,7 @@ fn lens_blur_panel_apply_shape_duplicate_mask_subject_and_undo_preserve_exact_ta
         assert_eq!(f.app.session.selection, selection);
         if index >= 2 {
             assert!(f.app.ui.tool.is_empty());
-            assert!(!egui::Popup::is_any_open(&f.view.ctx));
+            assert!(!popup_open(&f.view.ctx));
         }
     }
     for _ in 0..4 {
@@ -599,7 +623,7 @@ fn measured_release(pass: Pass) {
         assert!(count > 0);
         f.settle();
         assert_eq!(guarded_state(&f.app), before);
-        if target == SECOND && !egui::Popup::is_any_open(&f.view.ctx) {
+        if target == SECOND && !popup_open(&f.view.ctx) {
             f.open();
         }
         assert_eq!(f.response(target).id, r.id);

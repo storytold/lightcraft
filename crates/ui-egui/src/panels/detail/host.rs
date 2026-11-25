@@ -14,9 +14,7 @@ use craft::ui::runtime::access::Access;
 use craft::ui::menu::Menu;
 use craft::ui::contract::ShowContainer as _;
 use craft::ui::style::{ComponentStyle, FocusLook, StyleCx};
-use egui::{Color32, Rect, Response, Stroke, Ui};
-
-use crate::theme::Tokens;
+use egui::{Color32, Rect, Response, Ui};
 
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 struct TargetStyle {
@@ -27,7 +25,7 @@ struct TargetStyle {
 }
 
 /// How a host-painted target takes part in input.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {
     /// A control: it activates, takes the keyboard focus (a Tab stop) and shows the focus ring.
     Control,
@@ -44,9 +42,8 @@ pub(crate) enum Mode {
 struct HostTarget {
     #[common]
     common: Common,
-    #[style_key]
-    accent: Color32,
     drag: bool,
+    #[style_key]
     mode: Mode,
 }
 
@@ -57,8 +54,9 @@ impl Component for HostTarget {
     type Style = TargetStyle;
     type Output = HostOutput;
 
-    fn style(_: &StyleCx<'_>, key: HostTargetStyleKey) -> TargetStyle {
-        TargetStyle { focus: FocusLook::new(Stroke::new(2.0, key.accent), -2.0), metrics: Metrics::new() }
+    /// The focus ring is the framework's own, as every control's.
+    fn style(cx: &StyleCx<'_>, _: HostTargetStyleKey) -> TargetStyle {
+        TargetStyle { focus: cx.focus_look(), metrics: Metrics::new() }
     }
 
     const ALT_ROLES: &'static [Role] = &[Role::LABEL, Role::CANVAS];
@@ -214,7 +212,7 @@ impl<'a> Target<'a> {
 /// Show a host-painted target over `rect`, named `key` for egui. The caller registers its automation name with
 /// `register_response` when the pass is a live one.
 pub(crate) fn target(ui: &mut Ui, key: impl Hash + std::fmt::Debug, rect: Rect, spec: Target<'_>) -> HostOutput {
-    let mut control = HostTarget { common: Common::new(), accent: Tokens::get(ui.ctx()).accent, drag: spec.drag, mode: spec.mode }
+    let mut control = HostTarget { common: Common::new(), drag: spec.drag, mode: spec.mode }
         .id(egui::Id::unique(key))
         .label(spec.label)
         .selected(spec.selected)

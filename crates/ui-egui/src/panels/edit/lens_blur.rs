@@ -129,7 +129,8 @@ fn lens_blur_focus(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettin
         let mut pick: Option<Option<u32>> = None;
         let enabled = ui.is_enabled();
         let parent_measuring = lens_blur_measuring(ui);
-        {
+        // A speculative pass (egui sizing, an SDK measure) shows no menu: its rows would claim the real run's ids.
+        if !parent_measuring {
             use craft::ui::contract::overlay::Trigger;
             use craft::ui::contract::{Props as _, ShowContainer as _};
             craft::ui::menu::Menu::new(crate::i18n::tr("In Focus").to_owned())

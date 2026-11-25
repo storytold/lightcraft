@@ -76,6 +76,11 @@ fn audit(h: &Harness<'_, LightcraftApp>, place: &str) -> Vec<String> {
             continue;
         }
         count += 1;
+        // a node the framework hides is not presented: its text widget's egui node folds into the field's own node,
+        // which carries the name
+        if n.is_hidden() {
+            continue;
+        }
         let name = n.label().unwrap_or_default();
         let name = if name.trim().is_empty() { n.value().unwrap_or_default() } else { name };
         if name.trim().is_empty() {

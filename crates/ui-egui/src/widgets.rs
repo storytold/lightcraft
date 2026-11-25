@@ -263,6 +263,12 @@ pub fn register_response(id: impl Into<String>, rect: Rect, response: &egui::Res
     });
 }
 
+/// Whether `response` sits on a layer that takes input: a menu body still fading out after it closed does not, and
+/// publishes no automation targets.
+pub(crate) fn on_live_layer(response: &egui::Response) -> bool {
+    egui::AreaState::load(&response.ctx, response.layer_id.id).is_none_or(|state| state.interactable)
+}
+
 /// A click pressed and released within this one pass on `response` (a host that delivers a whole click in one batch).
 /// The framework's own gesture needs to see the press before the release; egui still reports such a click.
 /// An assistive technology's Click on the response's own node counts too.
@@ -897,6 +903,8 @@ pub(crate) fn elide_head(text: &str, max: f32, width: impl Fn(&str) -> f32) -> S
 pub mod album_picker;
 pub mod button;
 pub mod date_picker;
+mod menu_field;
+pub(crate) use menu_field::{menu_field, menu_field_with_id};
 mod hit_area;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]

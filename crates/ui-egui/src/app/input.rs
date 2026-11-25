@@ -126,6 +126,13 @@ impl LightcraftApp {
     /// keeps that batch in flight until a completed UI pass consumed it. It never injects while
     /// the fonts are not installed (the pass would draw nothing and the events would be lost).
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.prepare_raw_input(ctx, raw);
+        // last, on what egui gets: the framework's key stage takes the clipboard events out of egui's input
+        crate::shortcuts::note_clipboard(ctx, raw);
+    }
+
+    /// [`Self::raw_input_hook`] up to the clipboard events the shortcuts keep.
+    fn prepare_raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         super::shell::prepare(self, ctx);
         let file = |p: &String| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
         if !self.drop_pending.is_empty() {

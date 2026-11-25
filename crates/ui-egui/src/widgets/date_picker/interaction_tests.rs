@@ -349,8 +349,9 @@ fn locale_headers_monday_first_grid_and_today_underline_survive_the_port() {
         let next_saturday = frames.rect("datePickerCell:2026-08-08:fixture");
         assert!(first.center().x > monday.center().x && monday.top() > first.top());
         assert!((first.left() - next_saturday.left()).abs() < 0.1, "weeks keep their columns");
-        assert_eq!(frames.nodes.get("2026-08-14").unwrap().is_selected(), Some(true));
-        assert_ne!(frames.nodes.get("2026-08-15").unwrap().is_selected(), Some(true), "SDK omits the selected attribute when off");
+        // the chosen day is a button outside a collection: it reports pressed, the others not
+        assert_eq!(frames.nodes.get("2026-08-14").unwrap().toggled(), Some(egui::accesskit::Toggled::True));
+        assert_ne!(frames.nodes.get("2026-08-15").unwrap().toggled(), Some(egui::accesskit::Toggled::True), "only the chosen day reports pressed");
         assert!(frames.nodes.contains_key(crate::i18n::tr("Month")));
         let mut text = vec![];
         for shape in &frames.shapes {

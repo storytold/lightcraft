@@ -22,6 +22,7 @@ pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap}
 use export::group_checklist;
 pub(crate) use export::preset_lzw_note;
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
+pub(crate) use frame::field_escape_closes;
 use frame::{
     DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_field, escaped_field, field, fit_lists, just_opened, only_shows,
     return_confirms,
@@ -506,7 +507,7 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     // lit: the window buttons the OS draws over it do not dim. It is an area below the dialog's layer.
     if real {
         egui::Area::new(egui::Id::unique("dialog-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(false).show(&ctx, |ui| {
-            ui.painter().rect_filled(below_title_bar(screen, title_bar), 0.0, egui::Color32::from_black_alpha(140));
+            ui.painter().rect_filled(below_title_bar(screen, title_bar), 0.0, egui::Color32::from_black_alpha(crate::theme::SCRIM_ALPHA));
         });
     }
     // What the body leaves the confirm this pass: the footer's state follows the draft the body just wrote.
@@ -549,7 +550,11 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.width().max(1.0)).clamp(0.5, 1.0),
         (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.height().max(1.0)).clamp(0.5, 1.0),
     );
-    dialog = dialog.overlay(|overlay| overlay.fit(craft::ui::contract::overlay::OverlayFit::ContentCapped(share)));
+    // The app dims the window under the dialog itself ("dialog-dim" above), leaving the integrated title bar lit like a
+    // macOS sheet: the framework's own scrim would dim the bar too.
+    dialog = dialog
+        .backdrop(craft::ui::runtime::overlay::Backdrop::None)
+        .overlay(|overlay| overlay.fit(craft::ui::contract::overlay::OverlayFit::ContentCapped(share)));
     // Return presses OK in a dialog without a text field of its own (Lightroom's default button); a dialog with a
     // field confirms from the field.
     dialog = dialog.close_on_enter(return_confirms(&dlg));
@@ -577,12 +582,17 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
             if real {
                 shown_layer.set(Some(ui.layer_id()));
             }
-            ui.set_min_width(width);
-            ui.set_max_width(max_width);
             if import {
-                // The review sizes its photo grid to the height it is given: give it the dialog's, not the endless
-                // height of a scrolling body.
-                ui.set_max_height((crate::import::DIALOG_SIZE[1] - DIALOG_CHROME_GUESS).min(body_max).max(DIALOG_MIN_BODY));
+                // The review is as large as its window (it can be resized): its body takes the width the dialog gives
+                // it, less the scroll bar's gutter while it scrolls; a width of its own would run under the clip.
+                // It sizes its photo grid to the room the window's body has, not to the endless height of a scrolling
+                // body; the body itself still scrolls what goes on below (an opened recipe).
+                let window_h = ctx.data(|d| d.get_temp::<f32>(id.with("window-height"))).unwrap_or(crate::import::DIALOG_SIZE[1]);
+                let room = (window_h - chrome).min(body_max).max(DIALOG_MIN_BODY);
+                crate::import::note_body_room(ui, room);
+            } else {
+                ui.set_min_width(width);
+                ui.set_max_width(max_width);
             }
             ui.spacing_mut().item_spacing.y = 8.0;
             // (the import review and Print size their own lists to the dialog)
@@ -612,6 +622,10 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     window.rect = window_rect;
     window.interact_rect = window_rect;
     crate::widgets::register_response("dialog:window", window.rect, &window);
+    if import && ctx.data(|d| d.get_temp::<f32>(id.with("window-height"))).is_none_or(|h| (h - window_rect.height()).abs() > 0.5) {
+        ctx.data_mut(|d| d.insert_temp(id.with("window-height"), window_rect.height()));
+        ctx.request_repaint();
+    }
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
@@ -1631,13 +1645,18 @@ fn new_album_name_field(ui: &mut egui::Ui, value: &mut String) -> bool {
 fn paste_settings_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::PasteSettings { groups } = dlg else { return };
     let n = app.session.selected().len();
-    ui.label(
-        egui::RichText::new(crate::i18n::tr_format!(
-            "Paste into {n} photo{} — only settings that were copied are pasted",
-            if n == 1 { "" } else { "s" },
-            n = n
-        ))
-        .color(t.text_dim),
+    // (not selectable: a selectable label senses clicks, and the framework's measuring run lays it out once more at
+    // another place in the same pass, which egui reports as the same widget id used twice)
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "Paste into {n} photo{} — only settings that were copied are pasted",
+                if n == 1 { "" } else { "s" },
+                n = n
+            ))
+            .color(t.text_dim),
+        )
+        .selectable(false),
     );
     group_checklist(ui, "pasteGroup", groups);
 }
@@ -1775,12 +1794,17 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     // Only the actual edit target or creation parent identifies the caller; text, flags and selection are drafts.
     let caller = (editing.as_deref(), parent.as_deref());
 
-    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Name")).color(t.text_dim));
+    // (captions, not selectable text: a selectable label senses the pointer, and the dialog's measuring run of the body
+    // gave each one a second use of its id, which egui's debug build painted over the fields)
+    let caption = |ui: &mut egui::Ui, text: &str| {
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(text)).color(t.text_dim)).selectable(false));
+    };
+    caption(ui, "Keyword Name");
     if field(ui, caller, "field:keywordTagName", "Keyword Name", "Keyword Name", name, true) {
         *confirm = true;
     }
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(crate::i18n::tr("Synonyms")).color(t.text_dim));
+    caption(ui, "Synonyms");
     if field(ui, caller, "field:keywordSynonyms", "Synonyms", "Separated by commas", synonyms, false) {
         *confirm = true;
     }
@@ -1800,7 +1824,7 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
         );
         ui.add_space(4.0);
     }
-    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Tag Options")).color(t.text_dim));
+    caption(ui, "Keyword Tag Options");
     for (on, label, alias) in [
         (include_on_export, "Include on Export", "check:keywordIncludeOnExport"),
         (export_containing, "Export Containing Keywords", "check:keywordExportContaining"),

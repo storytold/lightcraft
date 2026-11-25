@@ -198,7 +198,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // mask list
     egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
+            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label)).selectable(false));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let on = app.ui.mask_overlay;
                 if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
@@ -493,16 +493,45 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
     if let Some(face) = mask_local_track::face(spec.track) {
         control = control.track_face(face);
     }
-    let out = with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui));
-    // PaintUi::{child,labelled} document parent.with(key). Read the actual rendered responses:
-    // aliases never stand in for a synthetic hit, layout guess, or the composite's non-slider group.
-    for (prefix, child) in [("slider", "slider"), ("sliderValue", "field"), ("sliderField", "field")] {
-        if let Some(response) = ui.ctx().read_response(id.with(child)) {
-            if prefix == "slider" {
-                note_focused_slider(ui.ctx(), response.id);
+    // (inset like the other rows of the panel, so the label and the value box lie inside it)
+    let (out, record) = craft::ui::runtime::inspect::record(ui, id.with("record"), |ui| {
+        egui::Frame::NONE
+            .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
+            .show(ui, |ui| with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui)))
+            .inner
+    });
+    // Name the row's real parts from what the framework recorded: the owners of the track, the value and the caption,
+    // also for an arena child with no egui response of its own and for a row scrolled out of the panel (which then
+    // keeps its place, with the response of the whole row as its hit).
+    if let Some(record) = record {
+        let focused = craft::ui::runtime::focus::focused_rec(ui.ctx());
+        for (index, element) in record.elements.iter().enumerate() {
+            let Some(facts) = &element.facts else { continue };
+            if element.component == "MenuItem" {
+                continue;
             }
-            crate::widgets::register_response(format!("{prefix}:{}", spec.id), response.rect, &response);
-            crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), response.rect, &response);
+            let prefixes: &[&str] = match facts.role.as_str() {
+                "Slider" => &["slider"],
+                "SpinButton" => &["sliderValue", "sliderField"],
+                _ => continue,
+            };
+            let rect = record.stop_rect(index).unwrap_or(element.rect);
+            let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
+                let mut response = out.response.clone();
+                response.id = element.id;
+                response.rect = rect;
+                response.interact_rect = rect.intersect(ui.clip_rect());
+                response
+            });
+            if prefixes[0] == "slider"
+                && let Some(focus) = focused.as_ref().filter(|focus| focus.stop.id == element.id && !focus.stop.text)
+            {
+                crate::widgets::note_slider_focus(ui.ctx(), focus.stop.root);
+            }
+            for prefix in prefixes {
+                crate::widgets::register_response(format!("{prefix}:{}", spec.id), rect, &response);
+                crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), rect, &response);
+            }
         }
     }
     crate::widgets::register_geometry(ui.ctx(), format!("sliderRow:maskLocal:{}", spec.id), out.response.rect);
@@ -760,11 +789,11 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let parent_enabled = ui.is_enabled();
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim)).selectable(false));
         // Reserve the original dropdown's size and automatic response ID. The SDK owns
         // its list, real focus, proposals and cancellation; only a pick runs the command.
         let g = one_line(ui.painter(), menu_label(view.label()), t.font(12.5), t.text_label, f32::INFINITY);
-        let (id, rect) = ui.allocate_space(vec2(g.size().x + 20.0, g.size().y.max(20.0)));
+        let (id, rect) = ui.allocate_space(vec2(g.size().x + 44.0, g.size().y.max(20.0)));
         let entries: Vec<_> = MaskView::ALL.into_iter().map(|v| Entry::new(v.name().to_owned(), menu_label(v.label()))).collect();
         let out = Select::new(crate::i18n::tr("Overlay"), Bind::given(view.name().to_owned()), &entries).id(id).enabled(real).show_at(ui, rect);
         if real {
@@ -1292,16 +1321,6 @@ fn component_row_popup(
     if row.secondary_clicked() && crate::widgets::carrying(ui.ctx()) {
         return;
     }
-    // A row slot that was not drawn on the frame before (another photo or mask was shown, the panel was
-    // closed) starts with a closed menu of its own: the framework keeps a menu's open state under its id, so
-    // a menu left open when its row went away would otherwise open again, unasked, when the row returns.
-    let frame = ui.ctx().cumulative_frame_nr();
-    let visit_key = ui.scope_id().with(("mask-component-menu-visit", row.id, more.id));
-    let (mut epoch, last) = ui.data(|d| d.get_temp::<(u64, u64)>(visit_key)).unwrap_or((0, frame));
-    if last != frame && last.saturating_add(1) != frame {
-        epoch += 1;
-    }
-    ui.data_mut(|d| d.insert_temp(visit_key, (epoch, frame)));
     let owner_key = ui.scope_id().with(("mask-component-captured-owner", row.id, more.id));
     let mut captured = ui.data(|d| d.get_temp::<ComponentMenuTarget>(owner_key)).unwrap_or(target);
     let interactive = captured == target && captured.live(app);
@@ -1312,7 +1331,7 @@ fn component_row_popup(
     // This id belongs to the opener slot, not the target currently occupying that row.
     let shown = craft::ui::menu::Menu::context(crate::i18n::tr("Component options"), row)
         .opened_by(more, Trigger::Click)
-        .id_salt(("mask-component-menu", row.id, more.id, epoch))
+        .id_salt(("mask-component-menu", row.id, more.id))
         .show(ui, |ui, menu| {
             if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                 body_layer = Some(ui.layer_id());
@@ -1588,14 +1607,46 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
 /// press and the keyboard alike) and closed by Escape, a click away or a pick. `key` tells this opener's
 /// menu from the others'. Nothing is drawn while only measuring.
 fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key: impl std::hash::Hash + std::fmt::Debug, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
-    use craft::ui::contract::Trigger;
+    use craft::ui::contract::{Bind, Trigger};
     if measuring(ui) {
         return;
     }
+    // The open state lives here, a pass at a time: a menu whose opener stops drawing closes.
+    let pass = ui.ctx().cumulative_pass_nr();
+    let open_id = opener.response.id.with("mask-opener-menu-open");
+    let mut open = ui.data(|d| d.get_temp::<(u64, bool)>(open_id)).filter(|(last, _)| *last == pass || last.saturating_add(1) == pass).is_some_and(|(_, open)| open);
+    // Escape closes it while the keyboard is still on the button, outside the menu: a long press opens it there, and
+    // the button has no use for the Escape the runtime hands it.
+    let opener_id = opener.response.id;
+    // The button's own activation (pointer, long release, keyboard) toggles it; Manual, as the presets menu does, so
+    // the menu's pointer trigger does not toggle it a second time.
+    if opener.clicked() {
+        open = !open;
+    }
+    let layer_id = open_id.with("layer");
+    let menu_layer = ui.data(|d| d.get_temp::<egui::LayerId>(layer_id));
     Menu::new(crate::i18n::tr(label).to_owned())
         .id_salt(("mask-opener-menu", key))
-        .opened_by(&opener.response, Trigger::Click)
-        .show(ui, |ui, _| body(ui));
+        .opened_by(&opener.response, Trigger::Manual)
+        .open(Bind::bound(&mut open))
+        .show(ui, |ui, _| {
+            // the rows' layer, so a later Escape on a row is known to be this menu's
+            if !measuring(ui) {
+                ui.data_mut(|d| d.insert_temp(layer_id, ui.layer_id()));
+            }
+            body(ui)
+        });
+    // after the menu, which takes the Escape it handles itself: one left untaken closes it (next pass)
+    if open && crate::shortcuts::opener_menu_escape(ui.ctx(), opener_id, menu_layer) {
+        open = false;
+    }
+    ui.data_mut(|d| {
+        if open {
+            d.insert_temp(open_id, (pass, true));
+        } else {
+            d.remove::<(u64, bool)>(open_id);
+        }
+    });
 }
 
 /// The choices of a component menu: Object, Describe… and the shapes. `scope` tells this menu's
@@ -1607,7 +1658,10 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str, scope: i
         if measuring(ui) {
             return false;
         }
-        crate::widgets::register_response(format!("maskComp:{op}:{kind}"), shown.response.rect, &shown.response);
+        // (a menu fading out after it closed publishes nothing)
+        if crate::widgets::on_live_layer(&shown.response) {
+            crate::widgets::register_response(format!("maskComp:{op}:{kind}"), shown.response.rect, &shown.response);
+        }
         enabled && shown.ran
     };
     if item(ui, "object", crate::i18n::tr("Object")) {

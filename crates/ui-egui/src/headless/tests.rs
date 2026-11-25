@@ -4216,8 +4216,8 @@ fn import_rename_tags_insert_at_the_cursor() {
     }
     // Paint the edited template before locating the Tags button in the resized dialog.
     assert!(h.settle(SETTLE), "Copy dialog layout should settle before locating Tags");
-    // the cursor sits after "Trip-"
-    let id = egui::Id::unique("import-rename");
+    // the cursor sits after "Trip-" (on the framework Rename field's text part, where the field keeps it)
+    let id = crate::text_field::text_id(egui::Id::unique("import-rename"));
     let mut st = egui::text_edit::TextEditState::default();
     st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(5))));
     st.store(&h.view.ctx, id);

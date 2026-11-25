@@ -16,7 +16,9 @@ fn harness(state: Option<UiState>, width: f32, scale: f32) -> Harness<'static, L
         app.ui.left_panel = true;
         app.ui.right = RightPanel::Edit;
     }
-    let mut h = Harness::builder().with_size(vec2(width, 900.0)).with_pixels_per_point(scale).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(width, 900.0)).with_pixels_per_point(scale)
+        // the framework runtime (docking, keys, AccessKit) installs before the first pass, as the app's host does
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx)).build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);

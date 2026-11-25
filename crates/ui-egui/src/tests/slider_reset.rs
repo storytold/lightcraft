@@ -149,3 +149,18 @@ fn a_typed_value_still_applies_after_a_reset() {
     assert_eq!(value(&h, "light.exposure"), 0.5);
     assert_eq!(h.app.session.undo.len() - undo, 1, "one undo step");
 }
+
+/// A settled frame of the Edit panel is laid out once: the slider rows are measured in a measuring run and shown at
+/// the room they take, so the shell's framework body finds nothing it did not keep and asks for no second pass.
+#[test]
+fn a_settled_edit_panel_frame_takes_one_pass() {
+    let mut h = edit_panel();
+    for _ in 0..20 {
+        h.step();
+    }
+    let passes = h.view.ctx.cumulative_pass_nr();
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(h.view.ctx.cumulative_pass_nr() - passes, 10, "one pass a frame with the sliders shown");
+}

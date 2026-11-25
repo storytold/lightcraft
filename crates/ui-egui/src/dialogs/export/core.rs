@@ -47,13 +47,18 @@ pub(super) fn choices<V: PartialEq + Copy + Send + Sync + 'static>(ui: &mut egui
     field(ui, label, |ui| {
         // Native labelled rows have already spent LABEL_W. A flow-mounted SDK container
         // still sees the enclosing Stack column; measure and mount in the actual remainder.
-        let width = ui.available_width().max(1.0);
-        let mut measuring = *value;
-        let child = ui.new_child(
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY))).sizing_pass().invisible(),
-        );
-        let size =
-            RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut measuring)).id_salt(id).measure_in(&child, Proposal::Ideal, body);
+        let measure = |ui: &mut egui::Ui, width: f32| {
+            let mut measuring = *value;
+            let child = ui.new_child(
+                egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY))).sizing_pass().invisible(),
+            );
+            RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut measuring)).id_salt(id).measure_in(&child, Proposal::Ideal, body)
+        };
+        // A short group keeps to one line, as main's chips did (the nine formats, "Original files" too): the dialog
+        // takes the few points more the radios need. A long one (the watermark's positions) wraps in the room.
+        let one_line = measure(&mut *ui, 10_000.0).x.ceil();
+        let width = if one_line <= 560.0 { ui.available_width().max(one_line) } else { ui.available_width() }.max(1.0);
+        let size = measure(&mut *ui, width);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size.y.max(24.0)), egui::Sense::hover());
         RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(value)).id_salt(id).show_at(ui, rect, body);
     });
@@ -85,33 +90,43 @@ pub(super) fn check(ui: &mut egui::Ui, id: &str, label: &str, value: &mut bool) 
     response
 }
 
-/// Keep slider and exact typed entry, including one-pixel sizes and the existing control ids.
+/// A slider row as main's Export had it: the caption and the typed value on one line over a full-width track, with
+/// exact typed entry (one-pixel sizes too) and the existing `slider:` / `sliderValue:` / `sliderField:` ids. Every part
+/// is placed at a rect of the row, so the row is as wide as the dialog's room (a flow-mounted framework row measured to
+/// its content and came out a short track with its caption cut).
 pub(super) fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f64) -> bool {
+    const INDENT: f32 = 24.0;
+    const END: f32 = 22.0;
+    const VALUE_W: f32 = 72.0;
     let before = *value;
-    field(ui, spec.label, |ui| {
-        let (slider_rect, _) = ui.allocate_exact_size(egui::vec2(140.0, 24.0), egui::Sense::hover());
-        let slider = Slider::new(Bind::bound(value), spec.min..=spec.max)
-            .id_salt(("export-slider", spec.id))
-            .label(crate::i18n::tr(spec.label))
-            .step(spec.step)
-            .show_at(ui, slider_rect);
-        register(format!("slider:{}", spec.id), &slider.response);
-        let mut typed = Some(*value);
-        let (number_rect, _) = ui.allocate_exact_size(egui::vec2(72.0, 24.0), egui::Sense::hover());
-        let field = NumberField::new(crate::i18n::tr(spec.label), Bind::bound(&mut typed))
-            .id_salt(("export-number", spec.id))
-            .range(spec.min..=spec.max)
-            .step(spec.step)
-            .snap_typed(true)
-            .commit_decimals(spec.decimals as usize)
-            .fixed_decimals(spec.decimals as usize)
-            .show_at(ui, number_rect);
-        register(format!("sliderValue:{}", spec.id), &field.response);
-        register(format!("sliderField:{}", spec.id), &field.response);
-        if let Some(number) = typed.filter(|v| v.is_finite()) {
-            *value = number;
-        }
-    });
+    let room = ui.available_width();
+    let width = if room.is_finite() { room } else { 400.0 }.max(INDENT + END + VALUE_W + 40.0);
+    let (line, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
+    let number_rect = egui::Rect::from_min_size(egui::pos2(line.right() - END - VALUE_W, line.top()), egui::vec2(VALUE_W, 24.0));
+    let caption = egui::Rect::from_min_max(egui::pos2(line.left() + INDENT, line.top()), egui::pos2(number_rect.left() - 8.0, line.bottom()));
+    Text::new(crate::i18n::tr(spec.label).to_owned()).shade(Shade::Muted).show_at(ui, caption);
+    let mut typed = Some(*value);
+    let field = NumberField::new(crate::i18n::tr(spec.label), Bind::bound(&mut typed))
+        .id_salt(("export-number", spec.id))
+        .range(spec.min..=spec.max)
+        .step(spec.step)
+        .snap_typed(true)
+        .commit_decimals(spec.decimals as usize)
+        .fixed_decimals(spec.decimals as usize)
+        .show_at(ui, number_rect);
+    register(format!("sliderValue:{}", spec.id), &field.response);
+    register(format!("sliderField:{}", spec.id), &field.response);
+    if let Some(number) = typed.filter(|v| v.is_finite()) {
+        *value = number;
+    }
+    let (track, _) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::hover());
+    let slider_rect = egui::Rect::from_min_max(egui::pos2(track.left() + INDENT, track.top()), egui::pos2(track.right() - END, track.bottom()));
+    let slider = Slider::new(Bind::bound(value), spec.min..=spec.max)
+        .id_salt(("export-slider", spec.id))
+        .label(crate::i18n::tr(spec.label))
+        .step(spec.step)
+        .show_at(ui, slider_rect);
+    register(format!("slider:{}", spec.id), &slider.response);
     *value != before
 }
 
@@ -190,7 +205,12 @@ fn export_preset_row(
         }
         let mut chosen = None;
         let presets = app.session.all_export_presets();
-        crate::widgets::dropdown_menu(ui, "combo:exportPreset", crate::i18n::tr("Preset"), crate::i18n::tr("Choose…"), Some(220.0), |ui| {
+        // the closed box of a dropdown (the value at the start, the chevron at the end), as main's preset combo was
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0_f32.min(ui.available_width().max(1.0)), 24.0), egui::Sense::hover());
+        let face = crate::widgets::menu_field(ui, rect, "exportPreset", crate::i18n::tr("Preset"), crate::i18n::tr("Choose…"));
+        register("combo:exportPreset", &face);
+        let menu = craft::ui::menu::Menu::new(crate::i18n::tr("Preset").to_owned()).id_salt(("lc-dropdown-menu", "combo:exportPreset")).values();
+        menu.opened_by(&face, craft::ui::contract::Trigger::Click).show(ui, |ui, _| {
             let mut builtin = true;
             for (at, (p, b)) in presets.iter().enumerate() {
                 if builtin && !*b {
@@ -485,7 +505,10 @@ fn export_naming_rows(ui: &mut egui::Ui, opts: &mut ExportOptions) {
     let naming_id = egui::Id::unique("export-naming");
     let tags_open = field(ui, "File name", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let w = crate::import::tag_field_width(ui);
+        // the room the SDK Tags button actually takes (the old reserve was for a smaller native button, which cut
+        // the SDK one down to an ellipsis)
+        let tags = Button::new(crate::i18n::tr("Tags")).measure_in(ui, Proposal::Ideal).x.ceil();
+        let w = (ui.available_width() - tags - 2.0 * ui.spacing().item_spacing.x).floor().max(80.0);
         if craft::ui::runtime::measure::active(ui.ctx()) {
             // A disabled native TextEdit calls ignore_focus. Measure only its allocation so
             // the real pass keeps the active caret, selection, and multi-frame typing stream.

@@ -29,6 +29,8 @@ pub(crate) fn install_runtime(ctx: &egui::Context) -> Result<(), String> {
         spec.wheel.zoom = options.input_options.zoom_modifier;
         spec.wheel.sideways = options.input_options.horizontal_scroll_modifier;
     });
+    // ahead of the runtime's own input hook, which takes the keys it routes out of egui's input
+    ctx.add_plugin(crate::panels::scroll_focus::FocusWalkKeys);
     match craft::ui::install(ctx, spec) {
         Ok(()) | Err(craft::ui::InstallError::AlreadyInstalled) => Ok(()),
         Err(error) => Err(format!("Cannot install the LightCraft UI runtime: {error}")),
@@ -45,6 +47,8 @@ impl LightcraftApp {
     /// A host must not report successful startup with an unsensed SDK shell or About dialog.
     pub fn try_install_framework(&self, ctx: &egui::Context) -> Result<(), String> {
         install_runtime(ctx)?;
+        // (before LightCraft's own fonts reach the context in its first pass)
+        theme::tell_framework_fonts(ctx);
         completion::install(ctx);
         shell::prepare(self, ctx);
         Ok(())

@@ -166,7 +166,8 @@ fn sizing_and_framework_measurement_publish_no_duplicate_target_or_activation() 
     assert_eq!(frames.hits.len(), 1);
     let node = frames.nodes.get("Show overlay").unwrap();
     assert!(node.is_disabled());
-    assert_eq!(node.is_selected(), Some(true));
+    // a selected button outside a collection reports pressed (the framework's convention)
+    assert_eq!(node.toggled(), Some(egui::accesskit::Toggled::True));
     assert_eq!(node.description(), Some("O"));
 }
 
@@ -264,7 +265,7 @@ fn selected_plate_and_keyboard_focus_remain_visible_in_every_theme() {
         let plate = Rect::from_center_size(frames.rect("icon:selected").center(), vec2(32.0, 32.0));
         assert!(rects.iter().any(|r| r.rect == plate && r.fill == t.tool_active), "selected plate in {kind:?}");
         assert!(rects.iter().any(|r| r.stroke.width == 2.0 && r.stroke.color == t.accent), "keyboard focus in {kind:?}");
-        assert_eq!(frames.nodes.get("Edit").unwrap().is_selected(), Some(true));
+        assert_eq!(frames.nodes.get("Edit").unwrap().toggled(), Some(egui::accesskit::Toggled::True), "the current tool reports pressed");
         assert_eq!(frames.nodes.get("Edit").unwrap().description(), Some("E"));
     }
 }
@@ -288,7 +289,7 @@ fn real_tool_strip_changes_panel_by_pointer_enter_and_space() {
         frames.frame(vec![], &mut draw);
         drop(draw);
         assert_eq!(app.ui.right, crate::state::RightPanel::Crop, "{activation:?}");
-        assert_eq!(frames.nodes.get("Crop & Rotate").unwrap().is_selected(), Some(true));
+        assert_eq!(frames.nodes.get("Crop & Rotate").unwrap().toggled(), Some(egui::accesskit::Toggled::True), "the current tool reports pressed");
     }
 }
 
@@ -330,11 +331,12 @@ fn real_presets_menu_opens_on_long_release_and_keyboard_then_escape_dismisses() 
             frames.frame(vec![pointer(at, PointerButton::Primary, false)], &mut draw);
         }
         frames.frame(vec![], &mut draw);
-        assert!(egui::Popup::is_any_open(&frames.ctx), "{activation:?}");
+        // The options menu is a framework menu layer, not an egui popup.
+        assert!(craft::ui::runtime::overlay::any_open(&frames.ctx, craft::ui::runtime::overlay::OpenFilter::Any), "{activation:?}");
         assert!(frames.rects.iter().any(|(id, _)| id == "presetMenu:thumbnails"));
         frames.frame(key(Key::Escape, false), &mut draw);
         frames.frame(vec![], &mut draw);
-        assert!(!egui::Popup::is_any_open(&frames.ctx));
+        assert!(!craft::ui::runtime::overlay::any_open(&frames.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     }
 }
 

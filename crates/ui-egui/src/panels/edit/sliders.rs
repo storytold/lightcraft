@@ -114,6 +114,7 @@ pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Devel
                 for p in PROFILES.iter().filter(|p| p.group == g) {
                     item(ui, "group", p.id, p.name, &mut pick);
                 }
+                publish_level(ui, 2);
             })
         });
         if real {
@@ -135,6 +136,7 @@ pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Devel
                 for (id, name, _) in imported.iter().filter(|p| &p.2 == g) {
                     item(ui, "group", id, name, &mut pick);
                 }
+                publish_level(ui, 2);
             })
         });
         if real {
@@ -159,6 +161,7 @@ pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Devel
     if !real {
         return;
     }
+    publish_level(ui, 1);
     // resting on a profile previews it in the loupe
     if let Some(hovered_id) = &pick.1
         && hovered_id != cur
@@ -173,6 +176,16 @@ pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Devel
     if let Some(id) = pick.0 {
         let _ = app.run("develop.profile", json!({"id": id}));
     }
+}
+
+/// Publishes the visible rect of a menu level drawn in `ui` as `menu-level:<depth>`, as the menu bar's levels do: its
+/// rows, less what a level taller than the window scrolled out of sight (the scroll strips belong to the level).
+fn publish_level(ui: &egui::Ui, depth: usize) {
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    let strip = vec2(0.0, 16.0);
+    crate::widgets::register(ui, format!("menu-level:{depth}"), ui.min_rect().intersect(ui.clip_rect().expand2(strip)));
 }
 
 pub fn sub_title(ui: &mut egui::Ui, title: &str) {

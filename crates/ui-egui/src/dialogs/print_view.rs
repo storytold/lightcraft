@@ -129,7 +129,14 @@ fn number(
     if measuring(ui) {
         return None;
     }
-    crate::widgets::register_response(format!("drag:{id}"), shown.response.rect, &shown.response);
+    // Return applies the value and gives up the keyboard, as the app's fields do: a focused number field keeps
+    // taking the wheel, so the settings column would not scroll.
+    let returned = ui.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. })));
+    if returned && crate::text_field::has_focus_id(ui.ctx(), shown.response.id) {
+        crate::text_field::blur_id(ui.ctx(), shown.response.id);
+    }
+    // (the rect it was laid out at: below the column's visible part too)
+    crate::widgets::register_response(format!("drag:{id}"), rect, &shown.response);
     typed.filter(|v| ui.is_enabled() && v.is_finite() && *v != value)
 }
 
@@ -373,7 +380,9 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     let ctx = ui.ctx().clone();
     let l = &st.layout;
     let unit = st.guides.units;
-    ui.spacing_mut().item_spacing.y = 5.0;
+    // main's density: the SDK rows are a little taller than the old native ones, so a 5 pt gap pushed the last
+    // margin row (Bottom) out of the column
+    ui.spacing_mut().item_spacing.y = 3.0;
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
 
     let close = templates_section(app, ui, t, pu);

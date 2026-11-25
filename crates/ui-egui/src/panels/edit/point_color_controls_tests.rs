@@ -66,6 +66,16 @@ fn click(ctx: &egui::Context, app: &mut LightcraftApp, reg: &Registries, name: &
     panel(ctx, app, Vec::new());
 }
 
+/// The keyboard's owner: the framework's focus record (a group member's stop), else egui's focus.
+fn focus(ctx: &egui::Context) -> Option<egui::Id> {
+    craft::ui::runtime::focus::focused_rec(ctx).map(|record| record.stop.id).or_else(|| ctx.memory(|m| m.focused()))
+}
+
+/// Asks the framework for the focus of `id` (a swatch is a member of the samples' group, with no egui widget of its own).
+fn request_focus(ctx: &egui::Context, id: egui::Id) {
+    craft::ui::runtime::focus::request(ctx, craft::ui::runtime::focus::FocusTarget::Id(id));
+}
+
 fn key(pressed: bool, key: Key) -> Event {
     Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }
 }
@@ -101,13 +111,16 @@ fn point_controls_equal_colors_have_distinct_sdk_ids_and_real_response_owners() 
         let e = record
             .elements
             .iter()
-            .find(|e| e.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(label.as_str()) && f.role == "ColorWell"))
-            .expect("SDK ColorWell");
+            // a member of the samples' radio group: a radio button that still carries its colour
+            .find(|e| e.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(label.as_str()) && f.role == "RadioButton"))
+            .expect("SDK swatch radio");
         assert_eq!(owner.id, e.id, "not a hover automation probe");
-        let response = ctx.read_response(owner.id).expect("real response");
-        assert!(response.sense.senses_click());
-        assert_eq!(owner.layer_id, response.layer_id);
-        assert_eq!(owner.interact_rect, response.interact_rect);
+        // A group member has no egui widget of its own: its sensing area is the framework's, recorded for it.
+        let facts = e.facts.as_ref().unwrap();
+        assert!(facts.interactive && facts.actions.contains(&"click") && facts.actions.contains(&"focus"), "really clickable and focusable");
+        let areas: Vec<_> = record.hits.iter().filter(|area| area.owner == owner.id && area.part.is_none()).collect();
+        assert_eq!(areas.len(), 1, "one actual SDK sensing area");
+        assert_eq!(areas[0].rect, owner.interact_rect, "the locator is the real sensing area");
         assert_eq!(
             e.facts.as_ref().unwrap().value.as_deref(),
             Some(point_color_srgb(oklch_color(p.lum, p.chroma, if i == 2 { 235.0 } else { p.hue })).to_hex().as_str())
@@ -145,22 +158,41 @@ fn point_controls_pointer_and_keyboard_change_only_ui_state_never_history() {
         assert_eq!(model(&app), before);
         reg = settle(&ctx, &mut app);
     }
-    // Start from the actual focus after the pointer interactions, not a forced focus request.
-    for (name, key_value) in [("pointColor:0", Key::Enter), ("pointColor:1", Key::Space), ("pointColorVisualize", Key::Space)] {
+    // Start from the actual focus after the pointer interactions, not a forced focus request. The samples are one
+    // radio group, one Tab stop (the chosen sample): the arrows move between them.
+    for (name, travel, key_value) in [
+        ("pointColor:0", Some(Key::ArrowLeft), Key::Enter),
+        ("pointColor:1", Some(Key::ArrowRight), Key::Space),
+        ("pointColorVisualize", None, Key::Space),
+    ] {
         let owner = hit(&reg, name);
+        // Tab reaches the control (for a sample: the group's stop)
+        let stops: Vec<egui::Id> =
+            if travel.is_some() { ["pointColor:0", "pointColor:1"].iter().map(|n| hit(&reg, n).id).collect() } else { vec![owner.id] };
         let mut visited = std::collections::HashSet::new();
         for _ in 0..=reg.1.len() + 2 {
+            if focus(&ctx).is_some_and(|id| stops.contains(&id)) {
+                break;
+            }
             for pressed in [true, false] {
                 panel(&ctx, &mut app, vec![key(pressed, Key::Tab)]);
             }
-            if let Some(id) = ctx.memory(|m| m.focused()) {
-                if id == owner.id {
+            if let Some(id) = focus(&ctx) {
+                if stops.contains(&id) {
                     break;
                 }
                 assert!(visited.insert(id), "Tab cycled before reaching {name}");
             }
         }
-        assert_eq!(ctx.memory(|m| m.focused()), Some(owner.id), "actual keyboard owner for {name}");
+        // then the arrow moves to the sample, unless the keyboard is on it already
+        if let Some(arrow) = travel
+            && focus(&ctx) != Some(owner.id)
+        {
+            for pressed in [true, false] {
+                panel(&ctx, &mut app, vec![key(pressed, arrow)]);
+            }
+        }
+        assert_eq!(focus(&ctx), Some(owner.id), "actual keyboard owner for {name}");
         panel(&ctx, &mut app, vec![key(true, key_value)]);
         panel(&ctx, &mut app, vec![key(false, key_value)]);
         assert_eq!(model(&app), before);
@@ -180,18 +212,18 @@ fn point_controls_both_sizing_modes_publish_no_targets_or_actions_even_with_focu
     let mut reg = (Vec::new(), Vec::new());
     for _ in 0..4 {
         reg = frame(&ctx, Vec::new(), |ui| {
-            clicked |= point_color_swatch(ui, 0, Color32::RED, true);
+            clicked |= point_color_swatches(ui, &[Color32::RED], 0).is_some();
             point_color_visualize(ui, &mut visualize);
         });
     }
     for native in [true, false] {
         for name in ["pointColor:0", "pointColorVisualize"] {
-            ctx.memory_mut(|m| m.request_focus(hit(&reg, name).id));
+            request_focus(&ctx, hit(&reg, name).id);
             for pressed in [true, false] {
                 frame(&ctx, vec![key(pressed, Key::Space)], |ui| {
                     take_registries(&ctx);
                     let mut body = |ui: &mut egui::Ui| {
-                        clicked |= point_color_swatch(ui, 0, Color32::RED, true);
+                        clicked |= point_color_swatches(ui, &[Color32::RED], 0).is_some();
                         point_color_visualize(ui, &mut visualize);
                     };
                     if native {
@@ -216,7 +248,7 @@ fn point_controls_disabled_components_ignore_pointer_and_keys() {
     let (mut visualize, mut clicked) = (false, false);
     let mut draw = |ui: &mut egui::Ui| {
         ui.add_enabled_ui(false, |ui| {
-            clicked |= point_color_swatch(ui, 0, Color32::RED, true);
+            clicked |= point_color_swatches(ui, &[Color32::RED], 0).is_some();
             point_color_visualize(ui, &mut visualize);
         });
     };
@@ -231,7 +263,7 @@ fn point_controls_disabled_components_ignore_pointer_and_keys() {
         for pressed in [true, false] {
             frame(&ctx, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }], &mut draw);
         }
-        ctx.memory_mut(|m| m.request_focus(h.id));
+        request_focus(&ctx, h.id);
         for pressed in [true, false] {
             frame(&ctx, vec![key(pressed, Key::Space)], &mut draw);
         }
@@ -296,7 +328,9 @@ fn point_controls_selected_cue_moves_between_equal_color_samples() {
         }
         for i in 0..2 {
             let label = format!("{} {}", crate::i18n::tr("Point Color"), i + 1);
-            assert_eq!(nodes.get(&label).expect("named swatch").is_selected() == Some(true), i == selected);
+            // a radio reports its check as toggled
+            let on = nodes.get(&label).expect("named swatch").toggled() == Some(egui::accesskit::Toggled::True);
+            assert_eq!(on, i == selected);
         }
     }
 }
@@ -395,7 +429,12 @@ fn point_measured_release(native: bool, visual: bool) {
         let reg = take_registries(&ctx);
         let current = hit(&reg, key);
         assert_eq!(current.id, owner.id);
-        assert!(ctx.read_response(current.id).unwrap().is_pointer_button_down_on());
+        if visual {
+            assert!(ctx.read_response(current.id).unwrap().is_pointer_button_down_on());
+        } else {
+            // a group member has no egui widget of its own: the press is down on its real sensing area
+            assert!(ctx.input(|i| i.pointer.primary_down()) && current.interact_rect.contains(at), "pressed on the sample");
+        }
         presses += 1;
         assert_eq!(state(&app), before);
     });

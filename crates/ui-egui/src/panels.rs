@@ -25,6 +25,7 @@ pub mod person;
 pub mod presets;
 pub mod profiles;
 pub mod right;
+pub(crate) mod scroll_focus;
 pub mod second;
 pub mod slideshow;
 pub mod strip;

@@ -53,6 +53,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 return;
             }
             let r = ui.max_rect();
+            // the panel's frame goes round the whole panel, as it does round a photo's tools: with nothing allocated it
+            // drew its border round an empty rect, a stray dot under the tab
+            ui.allocate_rect(r, egui::Sense::hover());
             // every tab (Edit, Info, Versions…) says it: nothing to show until photos come in
             if super::empty_library::shown(&app.session) {
                 super::empty_message(ui, r, "No photos yet", "Import photos to get started");
@@ -95,6 +98,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Activity => activity(app, ui, id),
                 RightPanel::None => {}
             }
+            // Tab and focus requests keep the focused control in view
+            super::scroll_focus::reveal_focus(ui, egui::Id::unique("right-scroll-focus"));
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
         // (the offset this real pass ended at: the next pass holds from it, not from the state a sizing or

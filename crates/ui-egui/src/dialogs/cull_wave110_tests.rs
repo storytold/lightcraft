@@ -99,7 +99,8 @@ fn production_cull_body_mounts_sdk_controls_without_clamping_typed_values() {
         });
         frame_out.textures_delta.clear();
     }
-    assert_eq!(roles.iter().filter(|role| role.as_str() == "Slider").count(), 2, "{roles:?}");
+    // reject, burst gap (a framework log slider since the raw-egui port) and similarity
+    assert_eq!(roles.iter().filter(|role| role.as_str() == "Slider").count(), 3, "{roles:?}");
     assert_eq!(roles.iter().filter(|role| role.as_str() == "SpinButton").count(), 2, "{roles:?}");
     assert_eq!(roles.iter().filter(|role| role.as_str() == "CheckBox").count(), 1, "{roles:?}");
     assert!(matches!(dialog, Dialog::Cull { reject_below: 25.0, pick_best: false, burst_gap: 1800.0, similarity: 1.0 }));
