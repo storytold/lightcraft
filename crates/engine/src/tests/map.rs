@@ -1,5 +1,5 @@
 use crate::Session;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// The Esri layers used to be offered (and fetched) by default; their terms don't allow it, so
 /// they are neither listed nor accepted.
@@ -216,6 +216,35 @@ fn test_map_filter_photos() {
     let untagged_photos = untagged.get("photos").and_then(|v| v.as_array()).unwrap();
     assert!(!untagged_photos.iter().any(|p| p.get("id").and_then(|v| v.as_u64()) == Some(ids[0].0)));
     assert!(untagged_photos.iter().any(|p| p.get("id").and_then(|v| v.as_u64()) == Some(ids[1].0)));
+}
+
+/// A view across the 180° meridian (west edge east of the east edge) holds what is on screen
+/// there, as the Map view's Visible On Map filter reads it; bad bounds or modes are refused, not
+/// read as "everything".
+#[test]
+fn map_filter_photos_reads_a_view_across_the_antimeridian() {
+    let mut s = Session::with_demo();
+    let ids = s.visible().to_vec();
+    let (fiji, montreal) = (ids[0].0, ids[1].0);
+    s.execute("photo.setGps", &json!({"ids": [fiji], "lat": -17.7, "lon": 178.0})).unwrap();
+    s.execute("photo.setGps", &json!({"ids": [montreal], "lat": 45.5, "lon": -73.6})).unwrap();
+    let shown = |s: &mut Session, bounds: Value| -> Vec<u64> {
+        let r = s.execute("map.filterPhotos", &json!({"mode": "visible", "bounds": bounds})).unwrap();
+        r["photos"].as_array().unwrap().iter().filter_map(|p| p["id"].as_u64()).collect()
+    };
+    let across = shown(&mut s, json!({"minLat": -30.0, "maxLat": 0.0, "minLon": 170.0, "maxLon": -170.0}));
+    assert!(across.contains(&fiji), "{across:?}");
+    assert!(!across.contains(&montreal), "{across:?}");
+    let americas = shown(&mut s, json!({"minLat": 0.0, "maxLat": 60.0, "minLon": -130.0, "maxLon": -60.0}));
+    assert!(americas.contains(&montreal) && !americas.contains(&fiji), "{americas:?}");
+    for bad in [
+        json!({"mode": "visible", "bounds": {"minLat": 0.0}}),
+        json!({"mode": "visible", "bounds": {"minLat": 10.0, "maxLat": 0.0, "minLon": 0.0, "maxLon": 10.0}}),
+        json!({"mode": "visibel"}),
+        json!({"mode": 3}),
+    ] {
+        assert!(s.execute("map.filterPhotos", &bad).is_err(), "{bad}");
+    }
 }
 
 fn temp_lib(tag: &str) -> std::path::PathBuf {

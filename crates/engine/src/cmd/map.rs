@@ -4,7 +4,8 @@
 //! the geotag commands from PR #810 (Jason Baldwin).
 
 use lightcraft_catalog::Op;
-use lightcraft_geom::{GeoBounds, LatLon};
+use lightcraft_catalog::rules::GpsArea;
+use lightcraft_geom::LatLon;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, f64_req, has_selection};
@@ -485,15 +486,23 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("map.savedLocations.delete", "Remove Saved Location", [], None, "{id} — the older name of map.location.remove", always, location_remove),
         cmd!(query "map.location.photos", "Photos in Saved Location", [], None, "{id, inView?: bool} → {id, ids, count}: the library's photos inside the location (inView: only the photos in view, in their order)", always, location_photos),
-        cmd!(query "map.filterPhotos", "Filter Photos for Map", [], None, "{bounds?: {minLat, maxLat, minLon, maxLon}, mode?: \"visible\"|\"tagged\"|\"untagged\"|\"none\"} → {photos: [{id, lat, lon, selected}]} — filters photos for map view", always, |s, p| {
-            let mode = p.get("mode").and_then(Value::as_str).and_then(LocationFilter::parse).unwrap_or(LocationFilter::None);
-            let bounds: Option<GeoBounds> = p.get("bounds").and_then(|b| {
-                let min_lat = b.get("minLat")?.as_f64()?;
-                let max_lat = b.get("maxLat")?.as_f64()?;
-                let min_lon = b.get("minLon")?.as_f64()?;
-                let max_lon = b.get("maxLon")?.as_f64()?;
-                Some(GeoBounds::new(min_lat, max_lat, min_lon, max_lon))
-            });
+        cmd!(query "map.filterPhotos", "Filter Photos for Map", [], None, "{bounds?: {minLat, maxLat, minLon, maxLon}, mode?: \"visible\"|\"tagged\"|\"untagged\"|\"none\"} → {photos: [{id, lat, lon, selected}]} — filters photos for map view; minLon greater than maxLon is an area across the 180° meridian, as the Map view's Visible On Map filter reads it", always, |s, p| {
+            const C: &str = "map.filterPhotos";
+            let mode = match p.get("mode") {
+                None | Some(Value::Null) => LocationFilter::None,
+                Some(m) => m.as_str().and_then(LocationFilter::parse).ok_or_else(|| bad(C, format!("`mode` is \"visible\", \"tagged\", \"untagged\" or \"none\", not {m}")))?,
+            };
+            // the Map view's own area type, so this matches its Visible On Map filter (a view across 180° included)
+            let bounds = match p.get("bounds") {
+                None | Some(Value::Null) => None,
+                Some(b) => {
+                    let edge = |k: &str| b.get(k).cloned().unwrap_or(Value::Null);
+                    let area = json!({"south": edge("minLat"), "west": edge("minLon"), "north": edge("maxLat"), "east": edge("maxLon")});
+                    Some(GpsArea::parse(&area).map_err(|_| {
+                        bad(C, format!("`bounds` needs minLat ≤ maxLat (−90…90) and minLon, maxLon (−180…180) in degrees, not {b}"))
+                    })?)
+                }
+            };
 
             let visible_ids = s.visible().to_vec();
             let mut out = Vec::new();
@@ -510,7 +519,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     (LocationFilter::VisibleOnMap, Some((lat, lon))) => {
                         if let Some(bounds) = bounds {
-                            if let Some(coord) = LatLon::new(lat, lon) && bounds.contains(coord) {
+                            if LatLon::new(lat, lon).is_some() && bounds.contains(lat, lon) {
                                 out.push(json!({ "id": id.0, "lat": lat, "lon": lon, "selected": is_selected }));
                             }
                         } else {
