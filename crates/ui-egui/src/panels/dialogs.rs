@@ -3171,7 +3171,8 @@ const EXPORT_TOPS: &str = "export-screen-tops";
 const EXPORT_JUMP: &str = "export-screen-jump";
 
 /// The Export screen's rail: its groups (name, the section keys it covers).
-const EXPORT_GROUPS: [(&str, &[&str]); 7] = [
+const EXPORT_GROUPS: [(&str, &[&str]); 8] = [
+    ("Preview", &["Preview"]),
     ("Where", &["Location", "Naming"]),
     ("Video", &["Video"]),
     ("File", &["FileSettings"]),
@@ -3312,12 +3313,20 @@ pub(crate) fn export_screen(app: &mut LccApp, ctx: &egui::Context) {
             let h = r.available_height();
             export_presets(app, &mut r, f, h);
         }
-        // every setting, one scrolling page
-        let w = content.width().min(860.0);
-        let column = egui::Rect::from_min_size(
-            egui::pos2(content.left() + ((content.width() - w) / 2.0).max(0.0), content.top()),
-            egui::vec2(w, content.height()),
-        );
+        // every setting, one scrolling page; with room to spare, the preview of the first photo
+        // sits beside it (a card of its own); in a narrow window it is the page's last section
+        const MIN_SETTINGS: f32 = 640.0;
+        let gap = crate::export_preview::WIDTH + 24.0;
+        let beside = content.width() >= MIN_SETTINGS + gap;
+        let w = if beside { content.width() - gap } else { content.width().min(860.0) };
+        let column = if beside {
+            egui::Rect::from_min_size(content.min, egui::vec2(w, content.height()))
+        } else {
+            egui::Rect::from_min_size(
+                egui::pos2(content.left() + ((content.width() - w) / 2.0).max(0.0), content.top()),
+                egui::vec2(w, content.height()),
+            )
+        };
         let mut page = ui.new_child(egui::UiBuilder::new().max_rect(column.shrink2(egui::vec2(16.0, 0.0))));
         page.ctx().data_mut(|d| d.insert_temp(egui::Id::new(EXPORT_SCREEN), true));
         egui::ScrollArea::vertical().id_salt("export-page").auto_shrink([false, false]).show(&mut page, |ui| {
@@ -3338,9 +3347,47 @@ pub(crate) fn export_screen(app: &mut LccApp, ctx: &egui::Context) {
             } else {
                 crate::dialog_frame::form(ui, EXPORT_LABEL_W, body);
             }
+            // (a narrow window: the preview closes the page)
+            if !beside && export_section(app, ui, "Preview", "Preview", "") {
+                let cap = (column.height() * 0.45).clamp(160.0, 460.0);
+                crate::export_preview::draw(
+                    app,
+                    ui,
+                    ExportForm {
+                        opts: &mut opts,
+                        full_size: &mut full_size,
+                        resize: &mut resize,
+                        preset_name: &mut preset_name,
+                        limit_kb: &mut limit_kb,
+                        dir: &mut dir,
+                    },
+                    false,
+                    Some(cap - 44.0),
+                );
+            }
             ui.add_space(40.0);
         });
         page.ctx().data_mut(|d| d.remove::<bool>(egui::Id::new(EXPORT_SCREEN)));
+        if beside {
+            let pane = egui::Rect::from_min_max(egui::pos2(column.right() + 16.0, content.top() + 12.0), content.max);
+            let mut card = ui.new_child(egui::UiBuilder::new().max_rect(pane));
+            crate::dialog_frame::card_frame(ctx).show(&mut card, |ui| {
+                crate::export_preview::draw(
+                    app,
+                    ui,
+                    ExportForm {
+                        opts: &mut opts,
+                        full_size: &mut full_size,
+                        resize: &mut resize,
+                        preset_name: &mut preset_name,
+                        limit_kb: &mut limit_kb,
+                        dir: &mut dir,
+                    },
+                    true,
+                    None,
+                );
+            });
+        }
     });
     ctx.memory_mut(|m| m.set_modal_layer(shown.response.layer_id));
     // the rows may have closed Export or opened another dialog (a folder picker, Watermark…)
@@ -3627,8 +3674,13 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         }
         let rendered = opts.format.is_rendered();
         let depths = lcc_engine::export::ExportOptions::bit_depths(opts.format);
+        // HDR AVIF and JPEG XL fix their own depth (10- or 16-bit PQ/HLG, or an 8-bit base with a gain map)
+        if opts.hdr && matches!(opts.format, F::Avif | F::Jxl) {
+            opts.bit_depth = None;
+        }
         if rendered
             && depths.len() > 1
+            && !(opts.hdr && matches!(opts.format, F::Avif | F::Jxl))
             && let Some(first) = depths.first()
         {
             let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(first.0);
@@ -3668,16 +3720,27 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
             let tip = crate::i18n::tr(
                 "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float",
             );
-            crate::dialog_frame::checkbox(ui, &mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
+            let hdr_box = crate::dialog_frame::checkbox(ui, &mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
+            crate::widgets::register(ui.ctx(), "check:exportHdr", hdr_box.rect);
             if opts.hdr && !opts.hdr_output() {
                 crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
             }
-            if opts.hdr && opts.format == F::Avif {
+            // AVIF and JPEG XL can store one HDR image, or an SDR image with a gain map
+            if opts.hdr && opts.hdr_output() && matches!(opts.format, F::Avif | F::Jxl) {
+                use lcc_engine::export::HdrMode as M;
+                choices(ui, "HDR mode", "exportHdrMode", &[(M::GainMap, "Gain map"), (M::SingleLayer, "HDR image")], &mut opts.hdr_mode);
+            }
+            if opts.hdr && opts.format == F::Avif && !opts.gain_map() {
                 use lcc_engine::export::HdrCurve as H;
                 choices(ui, "HDR curve", "exportHdrCurve", &[(H::Pq, "PQ"), (H::Hlg, "HLG")], &mut opts.hdr_transfer);
             }
         }
         if !rendered {
+        } else if opts.hdr && opts.gain_map() && opts.format == F::Avif {
+            crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: sRGB with an HDR gain map (AVIF)")).color(t.text_dim))
+                .on_hover_text(crate::i18n::tr(
+                    "Gain map: looks right everywhere, and shows HDR on viewers that read gain maps. Other viewers show the SDR image.",
+                ));
         } else if opts.format == F::Avif && opts.hdr {
             let label = if opts.hdr_transfer == lcc_engine::export::HdrCurve::Hlg {
                 crate::i18n::tr("Color space: Rec. 2020 HLG (HDR AVIF)")
@@ -3688,7 +3751,7 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         } else if opts.format == F::Png && opts.hdr {
             crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: Rec. 2020 PQ, 16-bit (HDR PNG)")).color(t.text_dim))
                 .on_hover_text(crate::i18n::tr("Viewers that don't read the PNG cICP chunk show PQ values as sRGB: flat and washed out. For a picture that looks right everywhere, use JPEG (gain map)."));
-        } else if opts.format == F::Jxl && opts.hdr {
+        } else if opts.format == F::Jxl && opts.hdr && !opts.gain_map() {
             crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: Rec. 2020 PQ (HDR JPEG XL)")).color(t.text_dim));
         } else if opts.format == F::Avif {
             crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
@@ -3704,6 +3767,15 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
             if opts.effective_space() != opts.color_space {
                 let note = "Lossy JPEG XL writes Adobe RGB and ProPhoto as Rec. 2020; choose Lossless to keep them.";
                 crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+            }
+            if opts.hdr && opts.gain_map() {
+                crate::dialog_frame::note(
+                    ui,
+                    egui::RichText::new(crate::i18n::tr(
+                        "HDR gain map: looks right everywhere; few viewers read JPEG XL gain maps yet, so most show the SDR image.",
+                    ))
+                    .color(t.text_dim),
+                );
             }
         }
         if opts.format == F::Jxl {
@@ -3820,7 +3892,9 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         };
         if export_section(app, ui, "Watermark", "Watermarking", &summary) {
             let mut wm_on = opts.watermark.is_some();
-            if crate::dialog_frame::checkbox(ui, &mut wm_on, crate::i18n::tr("Watermark")).changed() {
+            let wm_box = crate::dialog_frame::checkbox(ui, &mut wm_on, crate::i18n::tr("Watermark"));
+            crate::widgets::register(ui.ctx(), "check:exportWatermark", wm_box.rect);
+            if wm_box.changed() {
                 opts.watermark = wm_on.then(|| lcc_engine::export::Watermark { text: "© ".into(), ..Default::default() });
             }
             let wm_shown = opts.watermark.clone();
@@ -4736,6 +4810,10 @@ mod gap_tests {
 
     #[test]
     fn gap_text_reads_back_what_it_shows() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         for v in [0.0, 1.0, 12.0, 59.0, 60.0, 90.0, 600.0, 3599.0, 3600.0, 3601.0, 3661.0, 3900.0, 7325.0, 86340.0, 86399.0] {
             assert_eq!(parse_gap(&fmt_gap(v)), Some(v), "{}", fmt_gap(v));
         }

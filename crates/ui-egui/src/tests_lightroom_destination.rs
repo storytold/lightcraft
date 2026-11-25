@@ -240,6 +240,10 @@ fn cancel_does_nothing() {
 /// An empty library has nothing to merge with: the window opens on Merge.
 #[test]
 fn an_empty_library_opens_the_window_on_merge() {
+    if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+        lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+        return;
+    }
     let f = Fixture::new("empty");
     let mut h = f.app(true);
     let r = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();

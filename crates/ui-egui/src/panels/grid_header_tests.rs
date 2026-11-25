@@ -105,6 +105,10 @@ fn local_folder_header_text_and_controls_do_not_overlap() {
 /// photos"); with nothing selected the header shows the photo count alone.
 #[test]
 fn the_header_counts_a_single_selected_photo() {
+    if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+        lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+        return;
+    }
     use lcc_catalog::{Op, Photo, Source};
     for selected in [0, 1, 2] {
         let mut session = lcc_engine::Session::new();
