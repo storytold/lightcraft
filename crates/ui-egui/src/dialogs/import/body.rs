@@ -1,15 +1,14 @@
 use craft::ui::contract::{Props as _, Show as _};
 use serde_json::json;
 
-use super::controls::{self, button, register};
+use super::controls::{self, button, choice, register};
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
 use super::{Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Value, Vec2, pos2, vec2};
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
 
-/// Memory keys: where the photo grid ended and where the dialog's content (its buttons) ended, last
-/// frame. Their difference is the room the grid leaves below it.
+/// Memory keys: where the photo grid ended in a run, and the height the dialog's content (its buttons) took below it.
 const GRID_BOTTOM: &str = "import-grid-bottom";
 
 const CONTENT_BOTTOM: &str = "import-content-bottom";
@@ -69,7 +68,7 @@ const BODY_ROOM: &str = "lc-import-body-room";
 /// own run's body starts.
 pub(crate) fn note_body_room(ui: &egui::Ui, room: f32) {
     let top = ui.cursor().top();
-    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(BODY_ROOM), (top, room)));
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique((BODY_ROOM, controls::measuring(ui))), (top, room)));
 }
 
 /// Remember where the review dialog's content ends this frame (after its buttons), for
@@ -78,9 +77,24 @@ pub(crate) fn note_body_room(ui: &egui::Ui, room: f32) {
 /// Noted in the framework's measuring run too: the run that lays the body out for the view comes after it in the same
 /// pass, so the grid there leaves room for rows that appeared this pass (a Copy's destination) instead of a frame
 /// later, which moved everything below the grid between two frames.
+///
+/// What it keeps is the height below the grid, from a real run only: a measuring run stands in for a few rows with rows
+/// of another height and reserves the real body's height (`body`), so its bottom says nothing about the rows. Both
+/// kinds of run then size the grid alike. A height that changed asks for another frame, so the grid follows it before
+/// the review counts as settled.
 pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
+    if controls::measuring(ui) {
+        return;
+    }
     let y = ui.min_rect().bottom();
-    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(CONTENT_BOTTOM), y));
+    let ctx = ui.ctx();
+    let Some(grid) = ctx.data(|m| m.get_temp::<f32>(egui::Id::unique((GRID_BOTTOM, false)))) else { return };
+    let below = y - grid;
+    let key = egui::Id::unique(CONTENT_BOTTOM);
+    if ctx.data(|m| m.get_temp::<f32>(key)).is_none_or(|kept| (kept - below).abs() > 0.5) {
+        ctx.data_mut(|m| m.insert_temp(key, below));
+        ctx.request_repaint();
+    }
 }
 
 /// Skipped candidates: (already in the library, identical copies within the source, in Recently
@@ -220,12 +234,9 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
     let rows = n.div_ceil(cols);
     // as tall as the window leaves after the options and buttons below it (measured last frame),
     // so resizing the dialog resizes the grid
-    let below = ui.ctx().data(|m| {
-        let y = |key: &str| m.get_temp::<f32>(egui::Id::unique(key));
-        y(CONTENT_BOTTOM).zip(y(GRID_BOTTOM)).map(|(content, grid)| content - grid)
-    });
+    let below = ui.ctx().data(|m| m.get_temp::<f32>(egui::Id::unique(CONTENT_BOTTOM)));
     // the room left in the dialog's body below this point ([`note_body_room`]), else what the ui has
-    let room = ui.ctx().data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique(BODY_ROOM))).map(|(top, room)| top + room - ui.cursor().top());
+    let room = ui.ctx().data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique((BODY_ROOM, controls::measuring(ui))))).map(|(top, room)| top + room - ui.cursor().top());
     // (the room alone: a measuring run's ui may offer less height than the real run's, and the grid must be as tall
     // in both, or the body measures shorter than it lays out and its last rows can't be scrolled to)
     let available = room.unwrap_or_else(|| ui.available_height());
@@ -250,7 +261,7 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
         app.renderer.retain_imports(&visible);
     }
     // (in a measuring run too: see `note_dialog_bottom`)
-    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(GRID_BOTTOM), grid.inner_rect.bottom()));
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique((GRID_BOTTOM, controls::measuring(ui))), grid.inner_rect.bottom()));
     ui.add_space(4.0);
     // options
     if !d.sources.is_empty() {
@@ -277,7 +288,7 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
     }
     field(ui, "Transfer", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if button(ui, "importAdd", crate::i18n::tr("Add in place"), !d.copy)
+        if choice(ui, "importAdd", crate::i18n::tr("Add in place"), !d.copy)
             .on_hover_text(crate::i18n::tr("Reference the files where they are"))
             .clicked()
         {
@@ -285,12 +296,12 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
             d.move_files = false;
         }
         let can_copy = app.session.library.as_ref().is_some_and(|l| l.on_disk) || app.services.pick_folder.is_some();
-        let r = ui.add_enabled_ui(can_copy, |ui| button(ui, "importCopy", crate::i18n::tr("Copy"), d.copy && !d.move_files)).inner;
+        let r = ui.add_enabled_ui(can_copy, |ui| choice(ui, "importCopy", crate::i18n::tr("Copy"), d.copy && !d.move_files)).inner;
         if r.on_hover_text(crate::i18n::tr("Copy the files (into the library's Originals/, or a folder you choose)")).clicked() {
             d.copy = true;
             d.move_files = false;
         }
-        let r = ui.add_enabled_ui(can_copy, |ui| button(ui, "importMove", crate::i18n::tr("Move"), d.copy && d.move_files)).inner;
+        let r = ui.add_enabled_ui(can_copy, |ui| choice(ui, "importMove", crate::i18n::tr("Move"), d.copy && d.move_files)).inner;
         if r.on_hover_text(crate::i18n::tr("Move the files (into the library's Originals/, or a folder you choose), removing them from the source"))
             .clicked()
         {
@@ -571,7 +582,7 @@ fn recipe_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     let mut open = ui.ctx().data(|m| m.get_temp::<bool>(open_id)).unwrap_or(false);
     field(ui, "Batch edits", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if button(ui, "importRecipeToggle", if open { "Hide adjustments" } else { "Adjust…" }, open).clicked() {
+        if choice(ui, "importRecipeToggle", if open { "Hide adjustments" } else { "Adjust…" }, open).clicked() {
             open = !open;
         }
         let n = d.recipe.len();
