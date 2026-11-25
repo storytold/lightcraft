@@ -261,7 +261,7 @@ A smart preview keeps the result of the fit twice: the colour matrix is baked in
 
 This independent proposal applies directly to upstream main; it requires no prior merge of the separate CR3 proposal #3138. CR3 retains upstream framing and its existing per-file source-position vignetting. The newly added Pool/DNG profile lookup excludes CR3, including a resolved profile that carries both warp and nonzero vignetting.
 
-The synchronized geometry-gated external-profile correspondence fit uses `LOOK_VERSION = 15` and `RENDER_CACHE_VERSION = 78`, after upstream versions 14 and 77, invalidating both stale smart-preview looks and rendered thumbnails. The private-file observations above predate this synchronization; they have not been repeated on this merged source state.
+The synchronized geometry-gated external-profile correspondence fit uses `LOOK_VERSION = 15` and `RENDER_CACHE_VERSION = 85`, after upstream versions 14 and 84, invalidating both stale smart-preview looks and rendered thumbnails. The private-file observations above predate this synchronization; they have not been repeated on this merged source state.
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
 
@@ -272,6 +272,21 @@ A proxy older than the constant is brought up to date by the existing Build Smar
 - Build Smart Previews does the same for the photos it is run on (`refreshed` in its result), whatever the marker says;
 - when the original can't be read (offline drive), the proxy and its curve are kept exactly as they are (`staleKept`). The old version in its header is the mark: the next Build Smart Previews with the original online rebuilds it. A rebuilt proxy carries the current version, so nothing is rebuilt twice. A proxy is only ever rebuilt from the original, never from another proxy;
 - the two never write the same proxy at once: each proxy is checked and written under one lock.
+
+A raw's proxy also holds the source its decode made, which the fit does not decide: previews of sensors too small to
+bin at preview size are demosaiced like full-size developments. `SOURCE_VERSION` in `crates/engine/src/smart.rs` is
+that decode's version, recorded as `source_version` (missing or malformed: 0). **Bump it in any change that makes a
+raw's decode give different pixels at preview size** (the demosaic, highlight reconstruction, the colour model); the
+render cache version covers renders and in-memory sources, not proxies. Every raw developed from its sensor data goes
+stale for it, with or without the per-file look (DNG proxies too); the opening scan and Build Smart Previews treat it
+as they treat the look version, with a `source-version` marker of its own. Version 1 is #1328's white-balanced
+demosaic. When both versions change in one release the scan runs once, and a rebuilt proxy carries both.
+
+A proxy whose look or source version, or whose encode version (`enc`), is newer than this build's is never rewritten,
+even when another of its versions is older: not by the opening refresh, and not by Build Smart Previews (it counts as
+`newerKept`). A build that knows both versions brings it up to date; Discard Smart Previews removes it. The
+`look-version` and `source-version` markers only move up. `RENDER_CACHE_VERSION` 84 redraws cached full-size renders
+for this decode change (83 is reserved by open #3943).
 
 ## Photo Merge
 

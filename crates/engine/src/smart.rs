@@ -86,6 +86,22 @@ const ENC_FIELD: &str = "enc";
 /// Crate-visible so the look-marker test pins the marker format to it instead of to a literal.
 pub(crate) const ENCODE_VERSION: u64 = 3;
 
+/// The version of how a raw's preview-size source is decoded from its sensor data, apart from the camera-look fit
+/// (`camera_preview::LOOK_VERSION`). A smart preview keeps that source, so a raw's proxy written by an older one is
+/// rebuilt from its original when that is online, like one from an older fit. This version does not stale other photos.
+///
+/// **Bump this whenever a change makes the decode give different pixels at preview size** (the demosaic, highlight
+/// reconstruction, the colour model). `RENDER_CACHE_VERSION` covers renders and in-memory sources; this covers the
+/// persisted ones.
+///
+/// 0: no field (before it existed); 1: raws that don't bin at preview size (`files::bin_factor` is `None`: Bayer
+/// sensors under about 4600 px on the long side, X-Trans under about 5760 px) demosaic the white-balanced mosaic with
+/// the clip mask (#1328).
+pub const SOURCE_VERSION: u32 = 1;
+
+/// The header field that records [`SOURCE_VERSION`].
+const SOURCE_FIELD: &str = "source_version";
+
 /// The decoder facts a render interprets its settings against, stored with the proxy's pixels so
 /// an offline original edits like it did online (the catalog's header facts cannot carry them).
 /// In the proxy's tail, not its header: a real file's gain table map runs far past any header
@@ -184,6 +200,7 @@ pub(crate) fn encode_with_lens_key(img: &Rgb32f, info: Option<&SourceInfo>, lens
         LOOK_FIELD: crate::camera_preview::LOOK_VERSION,
         LENS_FIELD: lens_key,
         ENC_FIELD: ENCODE_VERSION,
+        SOURCE_FIELD: SOURCE_VERSION,
     });
     // The tail: the decoder facts (and the file's semantic mattes) after the JPEG, so the header
     // stays small. `tail` records its byte count from the end of the file, so a header rewritten
@@ -430,16 +447,34 @@ pub fn is_valid(path: &Path) -> bool {
     f.seek(SeekFrom::Start((jpeg_end - 2) as u64)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9]
 }
 
-/// The fit version a header records: a missing, negative, fractional or otherwise malformed value
-/// counts as 0 (older than any real version).
-fn header_look_version(head: &serde_json::Value) -> u64 {
-    head.get(LOOK_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0)
+/// The version a header records in `field`: a missing, negative, fractional or otherwise malformed value counts as 0
+/// (older than any real version).
+fn header_version(head: &serde_json::Value, field: &str) -> u64 {
+    head.get(field).and_then(serde_json::Value::as_u64).unwrap_or(0)
 }
 
-/// The encode version a header records: a missing, negative, fractional or otherwise malformed
-/// value counts as 0 (older than any real version), like [`header_look_version`].
+fn header_look_version(head: &serde_json::Value) -> u64 {
+    header_version(head, LOOK_FIELD)
+}
+
 fn header_encode_version(head: &serde_json::Value) -> u64 {
-    head.get(ENC_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0)
+    header_version(head, ENC_FIELD)
+}
+
+/// The header of the structurally complete proxy at `path` ([`is_valid`]), or `None`.
+fn complete_header(path: &Path) -> Option<serde_json::Value> {
+    use std::io::Read;
+    if !is_valid(path) {
+        return None;
+    }
+    let Ok(f) = std::fs::File::open(path) else { return None };
+    let mut head = Vec::with_capacity(1024);
+    if f.take(HEADER_MAX).read_to_end(&mut head).is_err() {
+        return None;
+    }
+    let rest = head.strip_prefix(MAGIC)?;
+    let nl = rest.iter().position(|b| *b == b'\n')?;
+    serde_json::from_slice(rest.get(..nl)?).ok()
 }
 
 /// Whether the complete proxy at `path` is out of date for a photo and must be rebuilt: written by
@@ -485,49 +520,98 @@ pub fn is_stale(path: &Path) -> bool {
     is_stale_for(path, true)
 }
 
+/// The `(LOOK_VERSION, SOURCE_VERSION)` the complete proxy at `path` was written by (a missing or malformed one: 0), or
+/// `None` when it is incomplete or unreadable ([`is_valid`]). Read together, so a refresh can tell a proxy that is old in
+/// one but from a newer build in the other (which it must leave alone).
+pub fn versions(path: &Path) -> Option<(u64, u64)> {
+    complete_header(path).map(|h| (header_version(&h, LOOK_FIELD), header_version(&h, SOURCE_FIELD)))
+}
+
+/// Whether the complete proxy at `path` was written by a newer build: its camera-look fit or raw decode version, or its
+/// encode version, is above this build's. Such a proxy is never rewritten here, for staleness: this build would put its
+/// own older look, decode or encoding in it and take that version back.
+pub fn from_newer_build(path: &Path) -> bool {
+    complete_header(path).is_some_and(|h| {
+        header_version(&h, LOOK_FIELD) > u64::from(crate::camera_preview::LOOK_VERSION)
+            || header_version(&h, SOURCE_FIELD) > u64::from(SOURCE_VERSION)
+            || header_version(&h, ENC_FIELD) > ENCODE_VERSION
+    })
+}
+
+/// Whether the complete proxy at `path` holds a source decoded by an older raw decode than this build's
+/// ([`SOURCE_VERSION`]); only a raw's proxy is out of date for it, which the caller knows. As [`is_stale`]: a proxy
+/// from a newer build, or one that is incomplete, is not.
+pub fn source_stale(path: &Path) -> bool {
+    complete_header(path).is_some_and(|h| header_version(&h, SOURCE_FIELD) < u64::from(SOURCE_VERSION))
+}
+
 /// The marker file in a smart previews folder: the camera-look fit version and encode version its
 /// proxies were last checked at, plus the loaded lens database identity ([`look_checked`]).
 const LOOK_MARKER: &str = "look-version";
+
+/// The marker file in a smart previews folder: the [`SOURCE_VERSION`] its raws' proxies were last checked at.
+const SOURCE_MARKER: &str = "source-version";
+
+/// The versions the marker `name` in `dir` records, in order: none when it is missing or unreadable, and the list
+/// stops at the first word that is not a number.
+fn marker(dir: &Path, name: &str) -> Vec<u64> {
+    use std::io::Read;
+    let Ok(f) = std::fs::File::open(dir.join(name)) else { return Vec::new() };
+    let mut text = String::new();
+    if f.take(64).read_to_string(&mut text).is_err() {
+        return Vec::new();
+    }
+    text.split_whitespace().map_while(|w| w.parse::<u64>().ok()).collect()
+}
+
+/// Record `versions` in the marker `name` in `dir`, each kept at the one recorded there if that is newer (a newer
+/// build checked the folder: no version in a marker goes back); versions after them that it records stay too.
+fn mark(dir: &Path, name: &str, versions: &[u64], lens_key: Option<u64>) -> Result<(), String> {
+    let old = marker(dir, name);
+    // The lens key identifies the decoder that did the scan; it is not an ordered version.
+    // Keep a newer build's identity with its versions, even when our scan advances one of them.
+    let lens_key = lens_key.filter(|_| !old.iter().zip(versions).any(|(old, current)| old > current));
+    let tail = old.iter().skip(versions.len() + usize::from(lens_key.is_some())).copied();
+    let kept = versions.iter().enumerate().map(|(i, &v)| old.get(i).map_or(v, |&o| o.max(v))).chain(lens_key).chain(tail);
+    let text = kept.map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+    let path = dir.join(name);
+    lightcraft_catalog::safe_file::write_atomic(&path, format!("{text}\n").as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
 
 /// Whether the smart previews folder `dir` has been checked for out-of-date proxies at this build's
 /// camera-look fit version and encode version (or newer ones). A missing or unreadable marker counts
 /// as not, as does one without the loaded lens database identity. Changes to that identity force
 /// another scan, so unchanged fit/encode versions cannot hide stale fitted previews.
 pub fn look_checked(dir: &Path) -> bool {
-    use std::io::Read;
-    let Ok(f) = std::fs::File::open(dir.join(LOOK_MARKER)) else { return false };
-    let mut text = String::new();
-    if f.take(64).read_to_string(&mut text).is_err() {
-        return false;
-    }
-    marker_is_current(&text, crate::lens_profiles::cache_key())
+    marker_is_current(&marker(dir, LOOK_MARKER), crate::lens_profiles::cache_key())
 }
 
-fn marker_is_current(text: &str, lens_key: u64) -> bool {
-    let mut versions = text.split_whitespace();
-    let (Some(look), Some(enc)) = (versions.next(), versions.next()) else { return false };
-    match (look.parse::<u64>(), enc.parse::<u64>()) {
-        (Ok(look), Ok(enc)) => {
-            let current_fit = u64::from(crate::camera_preview::LOOK_VERSION);
-            look >= current_fit
-                && enc >= ENCODE_VERSION
-                && (look > current_fit || enc > ENCODE_VERSION || versions.next().and_then(|v| v.parse::<u64>().ok()) == Some(lens_key))
-        }
-        _ => false,
-    }
+fn marker_is_current(versions: &[u64], lens_key: u64) -> bool {
+    let [look, enc, ..] = *versions else { return false };
+    let current_fit = u64::from(crate::camera_preview::LOOK_VERSION);
+    look >= current_fit && enc >= ENCODE_VERSION && (look > current_fit || enc > ENCODE_VERSION || versions.get(2) == Some(&lens_key))
+}
+
+/// Whether the smart previews folder `dir` has been checked for raws' proxies from an older raw decode at this
+/// build's [`SOURCE_VERSION`] (or a newer one). A missing or unreadable marker counts as not.
+pub fn source_checked(dir: &Path) -> bool {
+    marker(dir, SOURCE_MARKER).first().is_some_and(|&v| v >= u64::from(SOURCE_VERSION))
 }
 
 /// Record that the proxies in `dir` were checked at this build's camera-look fit version and encode
-/// version and loaded lens database identity.
+/// version (newer ones recorded stay).
 pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
     mark_look_checked_with_lens_key(dir, crate::lens_profiles::cache_key())
 }
 
 /// Stamp the identity captured before scanning, so a later database is never marked checked.
 pub(crate) fn mark_look_checked_with_lens_key(dir: &Path, lens_key: u64) -> Result<(), String> {
-    let path = dir.join(LOOK_MARKER);
-    let text = format!("{} {} {}\n", crate::camera_preview::LOOK_VERSION, ENCODE_VERSION, lens_key);
-    lightcraft_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    mark(dir, LOOK_MARKER, &[u64::from(crate::camera_preview::LOOK_VERSION), ENCODE_VERSION], Some(lens_key))
+}
+
+/// Record that the raws' proxies in `dir` were checked at this build's [`SOURCE_VERSION`] (a newer one recorded stays).
+pub fn mark_source_checked(dir: &Path) -> Result<(), String> {
+    mark(dir, SOURCE_MARKER, &[u64::from(SOURCE_VERSION)], None)
 }
 
 /// Load the proxy at `path`.

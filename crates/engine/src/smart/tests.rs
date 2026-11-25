@@ -371,6 +371,7 @@ fn a_proxy_from_an_older_encode_is_stale() {
     let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
     let head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
     assert_eq!(head[ENC_FIELD].as_u64(), Some(ENCODE_VERSION));
+    assert_eq!(head[SOURCE_FIELD].as_u64(), Some(u64::from(SOURCE_VERSION)));
     let mut older = head.as_object().cloned().unwrap_or_default();
     older.remove(ENC_FIELD);
     let mut old = MAGIC.to_vec();
@@ -398,22 +399,22 @@ fn lens_database_changes_rebuild_fitted_smart_previews_and_scan_markers() {
     for next_db in [0, 456] {
         assert!(header_is_stale(&head, true, next_db), "removing or replacing the database rebuilds fitted pixels");
         assert!(!header_is_stale(&head, false, next_db), "non-fitted photos do not depend on lens alignment");
-        assert!(!marker_is_current(&format!("{fit} {ENCODE_VERSION} 123"), next_db), "the folder must be scanned again");
+        assert!(!marker_is_current(&[fit, ENCODE_VERSION, 123], next_db), "the folder must be scanned again");
     }
-    assert!(marker_is_current(&format!("{fit} {ENCODE_VERSION} 123"), 123));
+    assert!(marker_is_current(&[fit, ENCODE_VERSION, 123], 123));
     head.as_object_mut().unwrap().remove(LENS_FIELD);
     assert!(header_is_stale(&head, true, 123), "adding a database rebuilds legacy fits");
     assert!(header_is_stale(&head, true, 0), "a legacy fit may have used a database that is no longer installed");
     head[LENS_FIELD] = serde_json::json!(0);
     assert!(!header_is_stale(&head, true, 0), "an explicit no-database identity remains valid");
-    assert!(!marker_is_current(&format!("{fit} {ENCODE_VERSION}"), 123), "old markers require a new scan");
+    assert!(!marker_is_current(&[fit, ENCODE_VERSION], 123), "old markers require a new scan");
     for field in [LOOK_FIELD, ENC_FIELD] {
         let mut newer = head.clone();
         newer[field] = serde_json::json!(newer[field].as_u64().unwrap() + 1);
         assert!(!header_is_stale(&newer, true, 123), "a different database does not downgrade newer proxies");
     }
-    assert!(marker_is_current(&format!("{} {ENCODE_VERSION} 456", fit + 1), 123));
-    assert!(marker_is_current(&format!("{fit} {} 456", ENCODE_VERSION + 1), 123));
+    assert!(marker_is_current(&[fit + 1, ENCODE_VERSION, 456], 123));
+    assert!(marker_is_current(&[fit, ENCODE_VERSION + 1, 456], 123));
 }
 
 #[test]
@@ -449,8 +450,14 @@ fn explicit_lens_identity_is_kept_by_encoder_and_scan_marker() {
     let head: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
     assert_eq!(head[LENS_FIELD], serde_json::json!(captured), "encoding must not read a later identity");
     mark_look_checked_with_lens_key(&dir, captured).unwrap();
-    let marker = std::fs::read_to_string(dir.join(LOOK_MARKER)).unwrap();
-    assert!(marker_is_current(&marker, captured));
+    assert!(marker_is_current(&marker(&dir, LOOK_MARKER), captured));
     assert!(!look_checked(&dir), "a captured older identity does not mark the current database checked");
+
+    let future_fit = u64::from(crate::camera_preview::LOOK_VERSION) + 1;
+    std::fs::write(dir.join(LOOK_MARKER), format!("{future_fit} {ENCODE_VERSION} 42 99\n")).unwrap();
+    mark_look_checked_with_lens_key(&dir, captured).unwrap();
+    assert_eq!(marker(&dir, LOOK_MARKER), [future_fit, ENCODE_VERSION, 42, 99]);
+    assert!(look_checked(&dir));
+
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -58,9 +58,9 @@ Shippori Mincho, Noto Sans CJK SC, Noto Sans Arabic, Noto Sans Thai, Noto Sans G
 NanumGothic, Noto Sans Symbols, Noto Sans Symbols 2, Noto Sans Hebrew and
 Noto Sans Devanagari), under the SIL Open Font License 1.1. The opt-in LXGW WenKai Lite face
 (fonts/simplified-chinese-manifest.txt in craft-fonts) is not embedded. The web build embeds
-BIZ UDPGothic Regular, Noto Sans Thai Regular and Noto Sans Georgian Regular, and loads Noto Sans
-CJK SC separately. Release packages include each font's licence as OFL-<family>.txt; Windows
-installers include their texts in FONT-LICENCES.txt.
+BIZ UDPGothic Regular, Noto Sans Thai Regular, Noto Sans Georgian Regular and Noto Sans Hebrew
+Regular, and loads Noto Sans CJK SC separately. Release packages include each font's licence as
+OFL-<family>.txt; Windows installers include their texts in FONT-LICENCES.txt.
 
 Place names for reverse geocoding (Photo > Fill Location from GPS) are not part of LightCraft and
 are never distributed with it. On the user's request (Photo > Download Place Names) the app
