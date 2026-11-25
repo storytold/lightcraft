@@ -150,11 +150,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
         let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
         edit.typed |= edit.text != edit.start;
-        if r.editing {
-            ui.data_mut(|d| d.insert_temp(gid, edit.clone()));
-        } else {
-            ui.data_mut(|d| d.remove::<FieldEdit>(gid));
-        }
+        keep_edit(ui, gid, &edit, &r);
         // Return or leaving saves; Esc gives the edit up
         let text = edit.text.trim();
         if r.committed()
@@ -317,12 +313,14 @@ struct FieldEdit {
     mixed: bool,
     /// Something was typed or deleted since.
     typed: bool,
+    /// The pass the edit was last under way in.
+    seen: u64,
 }
 
 impl FieldEdit {
     fn new(value: &str, mixed: bool, targets: &[PhotoId]) -> Self {
         let ids = targets.iter().map(|id| id.0).collect();
-        FieldEdit { text: value.to_string(), start: value.to_string(), ids, mixed, typed: false }
+        FieldEdit { text: value.to_string(), start: value.to_string(), ids, mixed, typed: false, seen: 0 }
     }
 
     /// A Mixed field that was typed in and left empty: it clears the field on every selected photo.
@@ -469,6 +467,18 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     ui.add_space(6.0);
 }
 
+/// Keeps a field's edit in egui memory while it is under way, and forgets it once its end (saved or given up) was
+/// reported. An edit that stops in a pass egui then runs again (`request_discard`) reports its end only in the pass run
+/// again, so it is kept through the pass it was last under way in, and the one after.
+fn keep_edit(ui: &egui::Ui, id: egui::Id, edit: &FieldEdit, r: &crate::text_field::TextFieldResponse) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    if r.editing {
+        ui.data_mut(|d| d.insert_temp(id, FieldEdit { seen: pass, ..edit.clone() }));
+    } else if r.ending.is_some() || edit.seen.saturating_add(1) < pass {
+        ui.data_mut(|d| d.remove::<FieldEdit>(id));
+    }
+}
+
 /// A labeled metadata text field: the typed text lives in egui memory while focused and is
 /// saved (photo.setMeta `key`) when the field loses focus. `mixed`: the selected photos' values
 /// differ, so the field starts empty and says so, and is saved only when it was typed in (left
@@ -490,11 +500,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     let r = field.label(crate::i18n::tr(label)).width(f32::INFINITY).show(ui);
     edit.typed |= edit.text != edit.start;
     // the typed text outlives frames while it is edited (the photo's value is drawn otherwise)
-    if r.editing {
-        ui.data_mut(|d| d.insert_temp(id, edit.clone()));
-    } else {
-        ui.data_mut(|d| d.remove::<FieldEdit>(id));
-    }
+    keep_edit(ui, id, &edit, &r);
     // Return (one line) or leaving saves; Esc gives the edit up
     if r.committed() && (edit.text != edit.start || edit.clears()) {
         let _ = app.run("photo.setMeta", json!({"ids": edit.ids, key: edit.text}));

@@ -55,6 +55,15 @@ impl ButtonHit {
     }
 }
 
+/// A button that stays pressed while `on` (one of the Transfer choices, the recipe's Adjust…): the framework's toggle
+/// button, whose on look shows it chosen (a plain `Button` given `selected` paints no on state). Any press activates it.
+pub(super) fn choice(ui: &mut egui::Ui, id: &str, label: &str, on: bool) -> ButtonHit {
+    use craft::ui::buttons::ToggleButton;
+    let shown = ToggleButton::new(crate::i18n::tr(label).to_owned(), Bind::given(on)).id_salt(id).show(ui);
+    response(ui, format!("button:{id}"), &shown.response);
+    ButtonHit { activated: !measuring(ui) && shown.events.committed().is_some(), response: shown.response }
+}
+
 pub(super) fn button(ui: &mut egui::Ui, id: &str, label: &str, active: bool) -> ButtonHit {
     let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(id).selected(active).show(ui);
     response(ui, format!("button:{id}"), &shown.response);
