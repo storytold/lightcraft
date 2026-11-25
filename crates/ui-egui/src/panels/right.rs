@@ -75,7 +75,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         // (where the pass starts: by its end egui may have pulled a shrunken panel's offset back)
         let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::unique(AREA)));
-        let start = held.or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.clamped_offset().y));
+        let ended = ui.data(|d| d.get_temp::<f32>(egui::Id::unique(ENDED)));
+        let start = held.or(ended).or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.clamped_offset().y));
         ui.data_mut(|d| match start {
             Some(o) => {
                 d.insert_temp(egui::Id::unique(OFFSET), o);
@@ -101,15 +102,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             super::scroll_focus::reveal_focus(ui, egui::Id::unique("right-scroll-focus"));
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
-        if held.is_some() || ui.data(|d| d.get_temp::<bool>(egui::Id::unique("dbg-hold"))).unwrap_or(false) {
-            eprintln!(
-                "DBGSHOW pass={} held={held:?} start={start:?} final_offset={} content={} inner={} measuring={}",
-                ui.ctx().cumulative_pass_nr(),
-                scrolled.state.offset().y,
-                scrolled.content_size.y,
-                scrolled.inner_rect.height(),
-                ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
-            );
+        // (the offset this real pass ended at: the next pass holds from it, not from the state a sizing or
+        // measuring run in between may already have pulled back as the content shrank)
+        if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique(ENDED), scrolled.state.offset().y));
         }
     });
 }
@@ -119,6 +115,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 const AREA: &str = "right-scroll-id";
 const OFFSET: &str = "right-scroll-offset";
 const HOLD: &str = "right-scroll-hold";
+const ENDED: &str = "right-scroll-ended";
 
 /// Where [`hold_list_in_place`] holds the panel: its offset as the pass before started, moved by as much as
 /// the Keywords box grew. Set on the scroll area as it starts, so the pass drawn again shows the list
