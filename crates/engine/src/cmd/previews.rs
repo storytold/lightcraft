@@ -728,6 +728,7 @@ fn smart_run(
                         if !parent.is_dir() {
                             std::fs::create_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
                         }
+                        crate::smart::invalidate_look_check_for_write(dir, lens_key)?;
                         lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display()))
                     });
                 match r {
@@ -863,8 +864,11 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 /// The body of [`refresh_stale_smart_previews`]: rebuild the stale proxies among `jobs`.
 #[cfg(not(target_arch = "wasm32"))]
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
-    let generation = crate::lens_profiles::generation();
-    let lens_key = crate::lens_profiles::cache_key();
+    // Wait for any writer that decoded with the previous database before inspecting the files.
+    let (generation, lens_key) = {
+        let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (crate::lens_profiles::generation(), crate::lens_profiles::cache_key())
+    };
     let stale: Vec<SmartJob> = jobs
         .into_iter()
         .map(|(id, path, source, ages)| (id, crate::smart::existing_file_path(dir, path), source, ages))
@@ -885,6 +889,7 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
             }
         }
     }
+    let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if crate::lens_profiles::generation() != generation {
         return;
     }
@@ -1409,5 +1414,43 @@ mod smart_provenance_tests {
                 crate::smart::mark_look_checked_with_lens_key(&dir, 0).unwrap();
             }
         }
+        // A reload between originals can leave some proxies written by B before the scan returns.
+        // Returning to A must scan those proxies even if A had already checked the folder.
+        std::fs::write(&database, DB).unwrap();
+        crate::lens_profiles::reload();
+        let key_a = crate::lens_profiles::cache_key();
+        crate::smart::mark_look_checked_with_lens_key(&dir, key_a).unwrap();
+        let (first, second) = (dir.join("first.lcsp"), dir.join("second.lcsp"));
+        let older = crate::smart::encode_with_lens_key(&image, None, 0).unwrap();
+        std::fs::write(&first, &older).unwrap();
+        std::fs::write(&second, &older).unwrap();
+        let src = |session: &mut crate::Session| session.media.origin_ref(&Source::File { path: "test.arw".into() }, SourceLevel::Preview.max_edge());
+        let (db_path, pixels) = (database.clone(), image.clone());
+        let mut session = crate::Session::new();
+        session.media.file_loader = Some(Arc::new(move |_, _, _| {
+            std::fs::write(&db_path, DB.replace("-0.03", "-0.05")).map_err(|e| e.to_string())?;
+            crate::lens_profiles::reload();
+            Ok((pixels.clone(), Default::default()))
+        }));
+        let first_source = src(&mut session);
+        session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((image.clone(), Default::default()))));
+        let second_source = src(&mut session);
+        let ages = Ages { look: true, source: true };
+        super::refresh_stale(
+            &dir,
+            vec![(PhotoId(1), first.clone(), Some(first_source), ages), (PhotoId(2), second.clone(), Some(second_source.clone()), ages)],
+        );
+        assert_eq!(std::fs::read(&first).unwrap(), older, "a reload during decode preserves the first proxy");
+        assert_ne!(crate::lens_profiles::cache_key(), key_a);
+        assert!(!crate::smart::is_stale_for(&second, true), "the next original was decoded with the new database");
+
+        std::fs::write(&database, DB).unwrap();
+        crate::lens_profiles::reload();
+        assert_eq!(crate::lens_profiles::cache_key(), key_a);
+        assert!(crate::smart::is_stale_for(&second, true));
+        assert!(!crate::smart::look_checked(&dir), "the aborted scan must invalidate A's old folder marker");
+        super::refresh_stale(&dir, vec![(PhotoId(2), second.clone(), Some(second_source), ages)]);
+        assert!(!crate::smart::is_stale_for(&second, true));
+        assert!(crate::smart::look_checked(&dir), "a stable scan makes the folder current again");
     }
 }
