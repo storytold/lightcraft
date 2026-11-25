@@ -68,6 +68,7 @@
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //! | 13 | Lens Blur | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
 //! | 14 | bursts arranged by hand in Assisted Culling | `Analysis.rank` |
+//! | 15 | probed source classification on Relink and Reload | `Op::Relink.kind` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -112,7 +113,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 14;
+pub const VERSION: u32 = 15;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -653,9 +654,7 @@ impl Journal {
         if report.created {
             // tiny: written directly, not counted as a compaction
             let empty = format!("{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":0,\"catalog\":{}}}\n", catalog.to_snapshot());
-            if let Err(e) = j.store.write_atomic(SNAPSHOT, empty.as_bytes()) {
-                log::warn!("catalog: can't write the new library's snapshot: {e}");
-            }
+            j.store.write_atomic(SNAPSHOT, empty.as_bytes()).map_err(io)?;
         } else if let (Some(from), None) = (older, &report.damaged) {
             // The library may go on as it is when it can't be upgraded now (the next open tries
             // again). Appends are not refused meanwhile: refusing them would leave a library
@@ -854,10 +853,29 @@ impl Journal {
         std::mem::take(&mut self.kept_written)
     }
 
+    /// Older readers ignore the classification field, so these ops require a current snapshot.
+    pub fn needs_snapshot_for(&self, ops: &[Op]) -> bool {
+        if self.behind.is_none() {
+            return false;
+        }
+        let mut pending: Vec<_> = ops.iter().collect();
+        while let Some(op) = pending.pop() {
+            match op {
+                Op::Relink { kind: Some(_), .. } => return true,
+                Op::Batch { ops } => pending.extend(ops),
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Append ops (already applied to the live catalog) durably, in order.
     pub fn append(&mut self, ops: &[Op]) -> Result<()> {
         if ops.is_empty() {
             return Ok(());
+        }
+        if self.needs_snapshot_for(ops) {
+            return Err(CatalogError::Io(format!("save a format v{VERSION} snapshot before journaling source classification")));
         }
         let t0 = web_time::Instant::now();
         let mut buf = String::new();

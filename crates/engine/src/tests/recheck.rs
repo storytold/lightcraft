@@ -562,3 +562,18 @@ fn overlapping_source_checks(older_recheck: bool) {
     assert_eq!(x.s.catalog.photo(x.id).unwrap(), &current);
     assert_eq!(x.s.catalog.photo(x.id).unwrap().content_hash, replacement);
 }
+
+#[test]
+fn review_recheck_does_not_report_a_rendered_image_as_raw_recovery() {
+    let mut x = library("rendered-replacement");
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&[10, 20, 30]));
+    let png = lightcraft_codecs::encode_png(&image, &Default::default()).unwrap();
+    std::fs::write(&x.file, png).unwrap();
+    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(r["updated"], json!([x.id.0]));
+    assert_eq!(r["cleared"], json!([]));
+    let photo = x.s.catalog.photo(x.id).unwrap();
+    assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Image);
+    assert_eq!(photo.format, "PNG", "the rendered replacement keeps its detected container");
+    assert!(photo.preview_only.is_none() && !photo.develops_raw());
+}

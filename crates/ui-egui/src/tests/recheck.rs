@@ -379,3 +379,30 @@ fn a_cancelled_reload_reports_only_what_it_did() {
         }
     }
 }
+
+#[test]
+fn a_rendered_replacement_gets_no_raw_recovery_notice() {
+    for (reload, raw) in [(false, false), (true, false), (false, true), (true, true)] {
+        let dir = Dir(std::env::temp_dir().join(format!("lc-ui-recheck-rendered-{reload}-{raw}-{}", std::process::id())));
+        let (mut app, id) = app_with_stale_file(&dir.0, raw);
+        if raw {
+            let photo = app.session.catalog.photo(id).unwrap();
+            assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Raw);
+            let img = lightcraft_raster::Rgba8::from_fn(16, 12, |_, _| [12, 34, 56, 255]);
+            let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+            let png = lightcraft_engine::export::encode_image(&img, &o).unwrap();
+            std::fs::write(dir.0.join("files/one.dng"), png).unwrap();
+        }
+        let ctx = egui::Context::default();
+        if reload {
+            crate::panels::edit::reload_preview_only(&mut app, &ctx, id);
+        } else {
+            crate::recheck::tick(&mut app);
+        }
+        assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+        let photo = app.session.catalog.photo(id).unwrap();
+        assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Image);
+        assert!(photo.preview_only.is_none() && !photo.develops_raw());
+        assert!(app.ui.toast.is_none(), "{reload}/{raw}: {:?}", app.ui.toast);
+    }
+}

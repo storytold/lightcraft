@@ -1019,7 +1019,7 @@ fn photos_changed_since_names_the_photos_whose_read_aspects_changed() {
     assert_eq!(c.touched_since(start), Some(vec![a, b]), "touched_since says every photo that was touched");
     // a photo that comes in, moves or goes
     let new = add(&mut c, "c.jpg");
-    c.apply(Op::Relink { id: a, file_name: "m.jpg".into(), source: Source::File { path: "/p/m.jpg".into() }, format: None }).unwrap();
+    c.apply(Op::Relink { id: a, file_name: "m.jpg".into(), source: Source::File { path: "/p/m.jpg".into() }, format: None, kind: None }).unwrap();
     c.apply(Op::RemovePhoto { id: b }).unwrap();
     assert_eq!(c.photos_changed_since(start, files), Some(vec![a, b, new]), "each once, in id order");
     // an op that changes no photo of its own is remembered, and is not in the answer (touched_since gives up on it)

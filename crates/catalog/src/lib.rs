@@ -217,9 +217,12 @@ pub enum Op {
         id: PhotoId,
         file_name: String,
         source: Source,
-        /// The file's format when it changes too (Convert to DNG).
+        /// The file's format when it changes too (Convert to DNG or a fresh probe).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         format: Option<String>,
+        /// A fresh probe's media kind; omitted by older journals and path-only moves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<MediaKind>,
     },
     /// What a photo's file is now (after it changed on disk: Reload).
     SetContent {
@@ -951,6 +954,7 @@ impl Catalog {
             Op::SetLabel { .. } => self.changes.now = Aspects::LABEL,
             Op::SetMeta { .. } => self.changes.now = Aspects::META,
             Op::SetCaptured { .. } => self.changes.now = Aspects::CAPTURED,
+            Op::Relink { kind: Some(_), .. } => self.changes.now = Aspects::ALL,
             Op::SetFile { .. } | Op::Relink { .. } => self.changes.now = Aspects::FILE,
             Op::SetAnalysis { .. } => self.changes.now = Aspects::ANALYSIS,
             Op::SetDevelop { .. } | Op::SetVersions { .. } | Op::SetHistory { .. } | Op::PushHistory { .. } | Op::SetHistoryCursor { .. } => {
@@ -1210,14 +1214,16 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
             }
-            Op::Relink { id, file_name, source, format } => {
+            Op::Relink { id, file_name, source, format, kind } => {
                 if let Some(p) = self.photos.get(&id) {
                     self.index.file_changed(id, file_path(&p.source), file_path(&source));
                 }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
-                let old = Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format };
+                let old_kind = kind.map(|k| std::mem::replace(&mut p.kind, k));
+                let old =
+                    Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format, kind: old_kind };
                 self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
                 old
             }

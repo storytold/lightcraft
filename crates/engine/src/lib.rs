@@ -830,8 +830,8 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let applied = self.catalog.apply(op);
-        if applied.is_ok() || matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+        let applied = self.apply_through(op, Catalog::apply, false);
+        if applied.is_ok() || matches!(applied, Err(EngineError::Catalog(CatalogError::PartlyApplied { .. }))) {
             // (a batch only partly taken back changed the catalog all the same: the journal has to say so)
             self.pending_log.push(fwd);
         }

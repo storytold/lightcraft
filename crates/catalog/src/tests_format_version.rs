@@ -265,11 +265,87 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v14: `Analysis.rank` (v13: Lens Blur in develop settings and mask adjustments; v12: `Catalog.grids` and `SegMask.grid`;
+    /// v15: `Op::Relink.kind`; v14: `Analysis.rank` (v13: Lens Blur in develop settings and mask adjustments; v12: `Catalog.grids` and `SegMask.grid`;
     /// v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 14;
+    const NEWEST_FIELDS: u32 = 15;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
+}
+
+#[test]
+fn v14_relink_replays_without_kind_and_new_classification_has_an_exact_inverse() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/old.dng".into() }, "old.dng", "DNG", 4, 3, "");
+    p.kind = MediaKind::Raw;
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let legacy: Op = serde_json::from_value(serde_json::json!({
+        "op": "relink", "id": id.0, "file_name": "moved.dng",
+        "source": {"type": "file", "path": "/moved.dng"}, "format": "DNG"
+    }))
+    .unwrap();
+    let record = encode_record(1, &legacy);
+    assert!(!record.contains("\"kind\""), "old path-only records omit classification");
+    let store = MemStore::new();
+    store.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":14,\"seq\":0,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    store.set(LOG, format!("{record}\n").into_bytes());
+    let (mut journal, mut c, report) = Journal::open(Box::new(store.clone())).unwrap();
+    assert_eq!((report.replayed, report.upgraded_from), (1, Some(14)));
+    assert_eq!(snapshot_version(&store), u64::from(VERSION));
+    assert_eq!(c.photo(id).unwrap().file_name, "moved.dng");
+    assert_eq!(c.photo(id).unwrap().source, Source::File { path: "/moved.dng".into() });
+    let before = c.photo(id).unwrap().clone();
+    assert_eq!(before.kind, MediaKind::Raw);
+    let updated = Op::Relink {
+        id,
+        file_name: "image.png".into(),
+        source: Source::File { path: "/image.png".into() },
+        format: Some("PNG".into()),
+        kind: Some(MediaKind::Image),
+    };
+    let inverse = c.apply(updated.clone()).unwrap();
+    assert_eq!((c.photo(id).unwrap().kind, c.photo(id).unwrap().format.as_str()), (MediaKind::Image, "PNG"));
+    assert!(matches!(&inverse, Op::Relink { kind: Some(MediaKind::Raw), format: Some(format), .. } if format == "DNG"));
+    c.apply(inverse).unwrap();
+    assert_eq!(c.photo(id).unwrap(), &before);
+    c.apply(updated.clone()).unwrap();
+    journal.append(&[updated]).unwrap();
+    drop(journal);
+    let (_, reopened, _) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((reopened.photo(id).unwrap().kind, reopened.photo(id).unwrap().format.as_str()), (MediaKind::Image, "PNG"));
+}
+
+#[test]
+fn a_classifying_relink_is_saved_only_after_the_new_format_is_durable() {
+    let (base, log, _) = legacy_parts();
+    let files = MemStore::new();
+    files.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":14,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    files.set(LOG, log.into_bytes());
+    let blocked = Refusing { files: files.clone(), refuse: |name| name == SNAPSHOT };
+    let (mut journal, catalog, report) = Journal::open(Box::new(blocked)).unwrap();
+    assert!(report.upgraded_from.is_none());
+    let id = catalog.photos().next().unwrap().id;
+    let op = Op::Batch {
+        ops: vec![Op::Relink {
+            id,
+            file_name: "raw.dng".into(),
+            source: Source::File { path: "/raw.dng".into() },
+            format: Some("DNG".into()),
+            kind: Some(MediaKind::Raw),
+        }],
+    };
+    let before = files.get(LOG);
+    assert!(journal.append(std::slice::from_ref(&op)).is_err());
+    assert_eq!(files.get(LOG), before);
+    assert!(journal.append(&[Op::SetRating { id, rating: 5 }]).is_ok(), "older operations remain writable");
+    drop(journal);
+
+    let (mut journal, mut base, _) = Journal::open(Box::new(files.clone())).unwrap();
+    base.apply(op.clone()).unwrap();
+    journal.append(&[op]).unwrap();
+    drop(journal);
+    let (_, reopened, _) = Journal::open(Box::new(files)).unwrap();
+    assert_eq!(reopened.photo(id).unwrap(), base.photo(id).unwrap());
 }
 
 // ---- an upgrade keeps what it replaces

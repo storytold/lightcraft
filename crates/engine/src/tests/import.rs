@@ -5046,6 +5046,75 @@ fn review_reload_keeps_an_implicit_copy_when_its_selected_parent_moves() {
 }
 
 #[test]
+fn review_relink_recognizes_an_extensionless_dng() {
+    use lightcraft_catalog::MediaKind;
+    let dir = super::TestDir::new("relink-extensionless-raw");
+    let image = dir.join("old.png");
+    let raw = dir.join("new-source");
+    write_png(&image, 10);
+    std::fs::write(&raw, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    s.execute("develop.set", &json!({"id": id.0, "control": "light.exposure", "value": 0.4})).unwrap();
+    let develop = s.catalog.photo(id).unwrap().develop.clone();
+    let wb = crate::cmd::reload::file_probe(&s).unwrap()(&raw.to_string_lossy()).unwrap().as_shot_wb;
+    assert!(wb.is_some());
+    s.execute("photo.relink", &json!({"id": id.0, "path": raw.to_string_lossy()})).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!((p.kind, p.format.as_str()), (MediaKind::Raw, "DNG"));
+    assert_eq!(p.as_shot_wb, wb, "the replacement raw supplies its verified As Shot value");
+    assert_eq!(p.develop, develop, "the relink preserves the user's Develop settings");
+}
+
+#[test]
+fn followup_relink_replaces_database_lens_without_changing_develop_settings() {
+    use lightcraft_catalog::Op;
+    let dir = super::TestDir::new("relink-database-lens");
+    let raw = dir.join("sensor.dng");
+    let rendered = dir.join("rendered.png");
+    std::fs::write(&raw, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    write_png(&rendered, 30);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) }).unwrap();
+    let before = s.catalog.photo(id).unwrap().clone();
+    assert!(!before.develop.optics.lens_profile);
+    s.execute("photo.relink", &json!({"id": id.0, "path": rendered.to_string_lossy()})).unwrap();
+    let after = s.catalog.photo(id).unwrap().clone();
+    assert!(after.embedded_lens.is_none(), "the old database profile does not belong to the replacement image");
+    assert_eq!(after.develop, before.develop, "reading lens facts does not enable a correction");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap(), &before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap(), &after);
+}
+
+#[test]
+fn relink_uses_the_replacement_cameras_white_balance_scale() {
+    use lightcraft_catalog::MediaKind;
+    let dir = super::TestDir::new("relink-camera-wb");
+    let original = dir.join("original.png");
+    let replacement = dir.join("replacement.arw");
+    write_png(&original, 10);
+    std::fs::write(&replacement, []).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(|_| {
+        let mut info = crate::media::ProbeInfo { kind: MediaKind::Raw, format: "ARW".into(), as_shot_wb: Some((4300.0, 7.0)), ..Default::default() };
+        info.meta.camera = "SONY ILCA-99M2".into();
+        Ok(info)
+    }));
+    s.execute("photo.relink", &json!({"id": id.0, "path": replacement.to_string_lossy()})).unwrap();
+    let photo = s.catalog.photo(id).unwrap();
+    assert!(photo.develops_raw() && !photo.relative_wb());
+    assert_eq!(photo.as_shot_wb, Some((4300.0, 7.0)));
+}
+
+#[test]
 fn reload_refreshes_a_copy_created_during_the_probe() {
     use crate::cmd::reload;
     let dir = super::TestDir::new("reload-late-copy");
@@ -5063,4 +5132,45 @@ fn reload_refreshes_a_copy_created_during_the_probe() {
     let out = reload::apply(&mut s, items, vec![Ok(info)]).unwrap();
     assert!(out.reloaded.contains(&copy));
     assert_eq!(s.catalog.photo(copy).unwrap().content_hash, hash);
+}
+
+#[test]
+fn reload_repairs_old_source_classification_without_replacing_edits() {
+    use lightcraft_catalog::{MediaKind, Op};
+    for raw in [false, true] {
+        let dir = super::TestDir::new(&format!("reload-kind-{raw}"));
+        let file = dir.join(if raw { "sensor.dng" } else { "rendered.png" });
+        if raw {
+            std::fs::write(&file, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        } else {
+            write_png(&file, 50);
+        }
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.75})).unwrap();
+        let correct = s.catalog.photo(id).unwrap().clone();
+        assert!(correct.is_edited());
+        let mut old = (*correct).clone();
+        old.kind = if raw { MediaKind::Image } else { MediaKind::Raw };
+        old.format = if raw { "JPEG" } else { "ORF" }.into();
+        old.preview_checked = old.preview_stamp(&old.preview_only);
+        if !raw {
+            old.as_shot_wb = Some((4300.0, 7.0));
+        }
+        s.catalog.apply(Op::RemovePhoto { id }).unwrap();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(old) }).unwrap();
+        let before = s.catalog.photo(id).unwrap().clone();
+        assert_eq!(s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap()["reloaded"], json!([id.0]));
+        let repaired = s.catalog.photo(id).unwrap().clone();
+        assert_eq!((repaired.kind, &repaired.format, &repaired.preview_checked), (correct.kind, &correct.format, &correct.preview_checked));
+        assert_eq!((repaired.develop.clone(), repaired.meta.clone()), (before.develop.clone(), before.meta.clone()));
+        if !raw {
+            assert_eq!(repaired.as_shot_wb, None);
+        }
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &before);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &repaired);
+    }
 }

@@ -874,7 +874,21 @@ impl Session {
     pub fn persist(&mut self) -> Result<()> {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if !self.pending_log.is_empty() {
-            if let Err(e) = lib.journal.append(&self.pending_log) {
+            let saved = if self.interaction.is_none() && lib.journal.needs_snapshot_for(&self.pending_log) {
+                let unlogged = self.pending_log.len() as u64;
+                let before = lib.journal.seq();
+                let result = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
+                match result {
+                    Err(e) if lib.journal.seq() > before => {
+                        log::warn!("library: the format upgrade saved the changes, but could not reset the log: {e}");
+                        Ok(())
+                    }
+                    result => result,
+                }
+            } else {
+                lib.journal.append(&self.pending_log)
+            };
+            if let Err(e) = saved {
                 // the ops stay queued (and applied in memory): the next persist retries them
                 let reason = e.to_string();
                 log::error!("library: {} change(s) not written to disk: {reason}", self.pending_log.len());

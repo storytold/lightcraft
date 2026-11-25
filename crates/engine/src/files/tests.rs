@@ -60,6 +60,39 @@ pub(crate) fn sensor_orf() -> Vec<u8> {
 }
 
 #[test]
+fn orf_probes_keep_the_detected_container_when_the_file_is_renamed() {
+    let rgb = vec![128; 48 * 32 * 3];
+    let jpeg = encode_jpeg(&EncodeImage::new(48, 32, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let mut preview = tiff_with_preview_strip(&jpeg, 0, Fixture::default());
+    preview[..4].copy_from_slice(b"IIRO");
+    for (bytes, preview_only) in [(sensor_orf(), false), (preview, true)] {
+        assert_eq!(lightcraft_raw::probe(&bytes), Some(lightcraft_raw::RawFormat::Orf));
+        for name in ["camera.orf", "renamed.dng", "renamed.jpg", "renamed.nef", "renamed"] {
+            let info = probe_bytes(name, &bytes).unwrap();
+            assert_eq!((info.kind, info.format.as_str()), (MediaKind::Raw, "ORF"), "{name}");
+            assert_eq!(info.preview_only.is_some(), preview_only, "{name}");
+            assert_eq!(info.content_hash, Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+        }
+    }
+}
+
+#[test]
+fn followup_dng_named_orf_keeps_its_detected_format() {
+    let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    let info = probe_bytes("sensor.orf", &bytes).unwrap();
+    assert_eq!((info.kind, info.format.as_str()), (MediaKind::Raw, "DNG"));
+    assert_eq!(probe_bytes("sensor.nef", &bytes).unwrap().format, "NEF", "unrelated extension policy is unchanged");
+}
+
+#[test]
+fn followup_rendered_image_named_orf_keeps_its_detected_format() {
+    let image = lightcraft_raster::Rgba8 { width: 2, height: 2, data: vec![[20, 40, 60, 255]; 4] };
+    let bytes = lightcraft_codecs::encode_png(&EncodeImage::rgba8(&image), &EncodeMeta::default()).unwrap();
+    let info = probe_bytes("rendered.orf", &bytes).unwrap();
+    assert_eq!((info.kind, info.format.as_str()), (MediaKind::Image, "PNG"));
+}
+
+#[test]
 fn crw_probes_name_their_camera_from_the_ciff_records() {
     // no Exif in a CRW: the camera and capture time come from the decoder's records, and the catalog's camera
     // string decides the white-balance scale (the D60 has chart-measured matrices, the 10D none)

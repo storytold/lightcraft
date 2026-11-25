@@ -51,7 +51,7 @@ fn the_answers_follow_every_op_that_moves_a_file_and_its_undo() {
     let steps = [
         ("add", Op::AddPhoto { photo: Box::new(added) }),
         ("set file", Op::SetFile { id: x, file_name: "W.jpg".into(), source: Source::File { path: "/e/W.jpg".into() } }),
-        ("relink", Op::Relink { id: x, file_name: "v.jpg".into(), source: Source::File { path: "/c/d/v.jpg".into() }, format: None }),
+        ("relink", Op::Relink { id: x, file_name: "v.jpg".into(), source: Source::File { path: "/c/d/v.jpg".into() }, format: None, kind: None }),
         ("demo", Op::SetFile { id: x, file_name: "x.jpg".into(), source: Source::Demo { scene: 1 } }),
         ("remove", Op::RemovePhoto { id }),
     ];
