@@ -93,6 +93,7 @@ const NON_ADJUSTMENT: &[&str] = &[
     // the file's as-shot white, recorded next to the edit (ours comes from the file itself)
     "crs:AsShotTemperature",
     "crs:AsShotTint",
+    "crs:AutoWhiteVersion",
     // which Lightroom version may read the edit, and checksums of the profiles it names
     "crs:CompatibleVersion",
     "crs:CameraProfileDigest",
@@ -497,12 +498,21 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     // Point Color slots that are all empty (-1)
     let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
     let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
+    let identity_curve = |v: &[String]| match v {
+        [start, end] => [(start, 0.0), (end, 255.0)].into_iter().all(|(point, expected)| {
+            point.split_once(',').is_some_and(|(x, y)| [x, y].into_iter().all(|n| n.trim().parse::<f64>().is_ok_and(|n| n == expected)))
+        }),
+        _ => false,
+    };
     let quiet = |k: &str| {
         k.starts_with("Enable")
             || k.starts_with("ToneCurveName")
             || k == "AutoTone"
             || k == "AutoGrayscaleMix"
             || (k == "PointColors" && value_is(k, &empty_points))
+            || (matches!(k, "ChromaticAberrationB" | "ChromaticAberrationR" | "Defringe")
+                && value_is(k, &|v| v.len() == 1 && v.iter().all(|s| s.trim().parse::<f64>().is_ok_and(|n| n == 0.0))))
+            || (matches!(k, "ToneCurveRed" | "ToneCurveGreen" | "ToneCurveBlue") && value_is(k, &identity_curve))
             // the lens profile's strength, written at its default (100 %) next to every profile
             || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale") && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
     };

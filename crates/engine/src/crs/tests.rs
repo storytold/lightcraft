@@ -359,6 +359,17 @@ fn lightroom_profile_bookkeeping_is_not_reported() {
 }
 
 #[test]
+fn legacy_optics_defaults_and_identity_channel_curves_do_not_warn() {
+    let attrs = r#"crs:AutoWhiteVersion="134348800" crs:ChromaticAberrationR="+0" crs:ChromaticAberrationB="0.0" crs:Defringe="0""#;
+    let curve = r#"<crs:ToneCurveRed><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurveRed>"#;
+    assert!(unmapped(&preset_packet(attrs, curve)).is_empty());
+
+    let attrs = attrs.replace(r#"crs:Defringe="0""#, r#"crs:Defringe="1""#);
+    let curve = curve.replace("255, 255", "255, 220");
+    assert_eq!(unmapped(&preset_packet(&attrs, &curve)), ["Defringe", "ToneCurveRed"]);
+}
+
+#[test]
 fn disabled_lens_profile_switch_keeps_embedded_corrections() {
     // Lightroom applies a file's built-in lens corrections regardless of its profile switch,
     // and ours are only those: a preset's `LensProfileEnable=0` must not turn them off
