@@ -76,8 +76,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub const INPUT: usize = 1008;
 /// Side of the low-resolution masks the model predicts.
 pub const MASK_SIDE: usize = 288;
+/// Most clicks one Object selection may carry (the engine's `MAX_CLICKS`).
+pub const MAX_CLICKS: usize = 64;
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(MASK_SIDE == tracker::LOW_RES && INPUT == vit::IMAGE);
+
+/// What a photo's subject usually is, as concept prompts ([`Sam3::segment_subject`]); anything else
+/// (an object, a landscape's feature) is selected at the focus point instead.
+pub const SUBJECT_CONCEPTS: &[&str] = &["person", "animal"];
 
 /// The files of a model directory.
 pub const WEIGHTS_FILE: &str = "model.safetensors";
@@ -203,6 +209,10 @@ impl Sam3 {
         if clicks.is_empty() {
             return Err(Error::Model("no clicks".into()));
         }
+        // the prompt grows with every click: the editor takes at most this many (the engine's `MAX_CLICKS`)
+        if clicks.len() > MAX_CLICKS {
+            return Err(Error::Model(format!("at most {MAX_CLICKS} clicks, not {}", clicks.len())));
+        }
         let (neck, tracker) = self.tracker_parts()?;
         if enc.tracker.is_none() {
             let levels = neck.forward(&enc.backbone, 3)?;
@@ -239,6 +249,15 @@ impl Sam3 {
         let (ids, valid) = tok.encode(text);
         let out = det.predict(f, &ids, &valid)?;
         Ok(detector::merge(&out, threshold))
+    }
+
+    /// The photo's subject among its people and animals ([`detector::subject`]): the ones the
+    /// camera's focus (`focus`, normalized; `None` when the file doesn't record it) falls on, or
+    /// without it the most prominent, with whoever is about as large. `None` when the subject is
+    /// neither (a focus on something else, or nobody in the photo): select what is at the point.
+    pub fn segment_subject(&mut self, enc: &mut Encoded, focus: Option<(f32, f32)>, threshold: f32) -> Result<Option<Prediction>> {
+        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect(enc, c)).collect::<Result<Vec<_>>>()?;
+        Ok(detector::subject(&outs, threshold, focus))
     }
 
     /// Raw detector outputs for `text` (tests and tools).

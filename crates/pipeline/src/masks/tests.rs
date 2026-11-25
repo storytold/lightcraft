@@ -630,6 +630,51 @@ fn people_and_subject_use_person_mattes() {
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
 }
 
+/// A thousand two-point strokes, each a sweep far past the photo that lays most of a stroke's
+/// own budget: the mask shares one budget across its strokes, so it renders in moments rather
+/// than building and visiting most of a billion dabs.
+#[test]
+fn many_far_flung_strokes_share_one_dab_budget() {
+    let (w, h) = (64, 64);
+    let s = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+    assert!(brush_dabs(&s, &frame(w, h), w, h).dabs.len() > 500_000, "each stroke alone is large");
+    let strokes = vec![s; 1000];
+    let t = std::time::Instant::now();
+    let mut out = Plane::new(w, h);
+    rasterize_brush(&strokes, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), &mut out);
+    assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
+    assert!(out.data.iter().any(|&v| v > 0.0), "the strokes crossing the photo still paint it");
+}
+
+/// Past the shared dab budget a brush mask is an error for the caller, not a mask missing its later (erase) strokes.
+#[test]
+fn an_over_budget_brush_mask_is_reported() {
+    let (w, h) = (64, 64);
+    let far = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+    let near = BrushStroke { points: vec![Point::new(0.1, 0.1), Point::new(0.9, 0.9)], size: 0.05, ..Default::default() };
+    assert!(!brush_over_budget(std::slice::from_ref(&near), &frame(w, h), w, h));
+    assert!(brush_over_budget(&vec![far; 10], &frame(w, h), w, h));
+}
+
+/// Strokes that fill the budget exactly are not over it; one more dab is.
+#[test]
+fn a_brush_mask_that_exactly_fills_the_budget_is_not_over_it() {
+    let (w, h) = (64, 64);
+    let stroke = |x: f64| BrushStroke { points: vec![Point::new(0.0, 0.5), Point::new(x, 0.5)], size: 0.05, ..Default::default() };
+    // a stroke whose dab count divides the budget evenly
+    let (s, m) = (0..14_000)
+        .map(|i| stroke(6.0 + f64::from(i) * 0.001))
+        .map(|s| {
+            let m = brush_dabs(&s, &frame(w, h), w, h).dabs.len();
+            (s, m)
+        })
+        .find(|(_, m)| *m >= 500 && MAX_STROKE_DABS.is_multiple_of(*m))
+        .expect("a stroke whose dabs divide the budget");
+    let k = MAX_STROKE_DABS / m;
+    assert!(!brush_over_budget(&vec![s.clone(); k], &frame(w, h), w, h), "{k} strokes of {m} dabs fill the budget exactly");
+    assert!(brush_over_budget(&vec![s; k + 1], &frame(w, h), w, h), "one more stroke is over it");
+}
+
 #[test]
 fn intersect_first_component_selects_its_shape() {
     let f = frame(100, 100);

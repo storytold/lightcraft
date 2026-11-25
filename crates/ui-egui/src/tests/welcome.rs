@@ -109,6 +109,18 @@ fn the_first_frame_opens_the_tour_for_a_window_host_only() {
     updated.ui.seen_version = Some("0.0.1".to_string());
     logic(&mut updated);
     assert!(matches!(updated.ui.dialog, Some(Dialog::WhatsNew)), "{:?}", updated.ui.dialog);
+
+    // The first logic tick requests the process-wide GPU warm-up. A nextest process can otherwise
+    // exit while the driver is still initializing, racing driver teardown (issue #620).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::enabled() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(lightcraft_engine::gpu::ready() || !lightcraft_engine::gpu::enabled(), "GPU warm-up did not finish");
+        assert!(lightcraft_engine::gpu::wait_idle(std::time::Duration::from_secs(30)), "GPU work did not finish");
+    }
 }
 
 /// The version is recorded when the dialog is presented, not when the logic tick picks it: a
