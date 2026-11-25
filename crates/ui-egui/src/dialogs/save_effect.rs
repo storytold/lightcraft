@@ -3,7 +3,6 @@
 
 use std::cell::Cell;
 
-use craft::ui::buttons::Button;
 use craft::ui::contract::overlay::Outside;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::Dialog as FrameworkDialog;
@@ -33,6 +32,11 @@ pub(super) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: b
     let title_bar = super::title_bar_band(app);
     let popup_was_open = egui::Popup::is_any_open(&ctx) || craft::ui::runtime::overlay::family(&ctx, owner()).len() > 1;
     let close = Cell::new(false);
+    let screen = ctx.content_rect();
+    let share = craft::ui::contract::overlay::ViewportShare::new(
+        (1.0 - 2.0 * super::DIALOG_SCREEN_MARGIN / screen.width().max(1.0)).clamp(0.5, 1.0),
+        (1.0 - 2.0 * super::DIALOG_SCREEN_MARGIN / screen.height().max(1.0)).clamp(0.5, 1.0),
+    );
     let confirm = Cell::new(false);
     let footer_dialog = dialog.clone();
     // The Save body and footer own real SDK leaves. Name alone supplies the body
@@ -45,40 +49,37 @@ pub(super) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: b
         .enabled(!blocked)
         .overlay(|mut overlay| {
             overlay.dismiss = overlay.dismiss.outside(Outside::Keep);
+            // as wide as its content, within the window less its margins, like every other dialog
+            overlay.fit = craft::ui::contract::overlay::OverlayFit::ContentCapped(share);
             overlay
         })
         .footer(|ui, _| {
-            let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
             let sam = super::SamState::of(app);
-            let cancel_label = crate::i18n::tr(super::cancel_label(&footer_dialog, &sam)).to_owned();
-            let ok_label = crate::i18n::tr(&super::ok_label(app, &footer_dialog, false, &sam)).to_owned();
             let can_confirm = super::can_confirm(app, &footer_dialog, false);
             let primary = can_confirm && super::confirm_style(&footer_dialog) == super::ConfirmStyle::Primary;
-            let mut cancel = Button::new(cancel_label).id_salt("button:dialogCancel");
-            let mut accept = Button::new(ok_label).id_salt("button:dialogOk").enabled(can_confirm).variant(if primary {
-                craft::theme::Variant::PRIMARY
-            } else {
-                craft::theme::Variant::SECONDARY
-            });
-            let cancel_size = cancel.measure_in(ui, craft::behavior::Proposal::Ideal).max(egui::vec2(72.0, ui.spacing().interact_size.y));
-            let accept_size = accept.measure_in(ui, craft::behavior::Proposal::Ideal).max(egui::vec2(72.0, ui.spacing().interact_size.y));
-            let width = ui.available_width().max(ui.min_rect().width()).max(1.0);
-            let height = cancel_size.y.max(accept_size.y);
-            ui.allocate_ui_with_layout(egui::vec2(width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let gap = ui.spacing().item_spacing.x;
-                ui.add_space((ui.available_width() - cancel_size.x - gap - accept_size.x).max(0.0));
-                // Display and actual SDK Tab registration stay Cancel then Create.
-                let (rect, _) = ui.allocate_exact_size(cancel_size, egui::Sense::hover());
-                let cancel = cancel.show_at(ui, rect);
-                let (rect, _) = ui.allocate_exact_size(accept_size, egui::Sense::hover());
-                let accept = accept.show_at(ui, rect);
-                if real {
-                    crate::widgets::register_response("button:dialogCancel", cancel.rect, &cancel);
-                    crate::widgets::register_response("button:dialogOk", accept.rect, &accept);
-                    close.set(close.get() || clicked(&cancel));
-                    confirm.set(confirm.get() || clicked(&accept));
+            // Display and actual SDK Tab registration stay Cancel then Create; the framework's footer lays them out
+            // at the dialog's right edge, as every other dialog's.
+            let buttons = [
+                super::FooterSpec {
+                    label: crate::i18n::tr(super::cancel_label(&footer_dialog, &sam)).to_owned(),
+                    name: "button:dialogCancel".into(),
+                    enabled: true,
+                    primary: false,
+                },
+                super::FooterSpec {
+                    label: crate::i18n::tr(&super::ok_label(app, &footer_dialog, false, &sam)).to_owned(),
+                    name: "button:dialogOk".into(),
+                    enabled: can_confirm,
+                    primary,
+                },
+            ];
+            if let Some(at) = super::footer_buttons(ui, owner(), &buttons) {
+                if at == 0 {
+                    close.set(true);
+                } else {
+                    confirm.set(true);
                 }
-            });
+            }
         })
         .show(root, |ui, _| {
             // the dialog is as wide as its body asks: a fixed width, not the whole window

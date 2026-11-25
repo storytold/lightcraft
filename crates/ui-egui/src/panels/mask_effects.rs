@@ -526,7 +526,13 @@ pub fn save_body(
         // Group Return ends its field but must never use Name's Save path.
         save_naming_field(ui, "field:effectGroup", group, "Group (optional)", ui.available_width() - PICKER_WIDTH - ui.spacing().item_spacing.x, false);
         let (rect, _) = ui.allocate_exact_size(vec2(PICKER_WIDTH, ui.spacing().interact_size.y.max(24.0)), Sense::hover());
-        let picker = Button::new("…").id_salt("button:effectGroupPick").tooltip(crate::i18n::tr("Choose a group").to_owned()).show_at(ui, rect);
+        // (LightCraft's own dots: a text "…" sits at the foot of a button this small)
+        let dots = crate::panels::detail::host::IconGlyph(crate::icons::Icon::Dots);
+        let picker = craft::ui::buttons::IconButton::new(craft::ui::primitives::IconSpec::glyph(&dots))
+            .id_salt("button:effectGroupPick")
+            .label(crate::i18n::tr("Choose a group").to_owned())
+            .tooltip(crate::i18n::tr("Choose a group").to_owned())
+            .show_at(ui, rect);
         if real {
             register_response("button:effectGroupPick", picker.rect, &picker);
             if clicked(&picker) {
