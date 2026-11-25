@@ -33,7 +33,7 @@ jobs:
               if not value:
                   raise RuntimeError(message)
 
-          # These filters reduce noise; the protected release validator repeats admission
+          # These filters reduce noise; the protected signer-branch validator repeats admission
           # against authenticated API metadata and required attestation/quality evidence.
           require(os.environ.get('GITHUB_REPOSITORY') == 'storytold/lightcraft', 'wrong repository')
           require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_run', 'wrong event')
@@ -51,7 +51,7 @@ jobs:
           run_id, attempt = producer.get('id'), producer.get('run_attempt')
           require(type(run_id) is int and run_id > 0, 'invalid producer run id')
           require(type(attempt) is int and attempt == 1, 'invalid automatic producer attempt')
-          body = json.dumps({'ref': 'release', 'inputs': {
+          body = json.dumps({'ref': 'refs/heads/nightly-signer', 'inputs': {
               'producer_run_id': str(run_id), 'producer_run_attempt': str(attempt)
           }}).encode('utf-8')
           request = urllib.request.Request(
@@ -69,4 +69,4 @@ jobs:
           # One bounded request, no retry: duplicate transport is not publication authority.
           with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
               require(response.status == 204, 'dispatch was not accepted')
-          print('Dispatched producer run/attempt to the release-ref validator; not a signing result.')
+          print('Dispatched producer run/attempt to the signer-branch validator; not a signing result.')
