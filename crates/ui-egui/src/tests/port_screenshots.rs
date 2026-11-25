@@ -357,8 +357,13 @@ fn port_screenshots() {
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut missing: Vec<String> = Vec::new();
+    // LC_SHOTS_ONLY=<part of a file name> renders only the scenes whose file name contains it
+    let only = std::env::var("LC_SHOTS_ONLY").ok();
     for (n, (name, scene)) in scenes().into_iter().enumerate() {
         let file = format!("{:02}-{name}", n + 1);
+        if only.as_deref().is_some_and(|only| !file.contains(only)) {
+            continue;
+        }
         let done = catch_unwind(AssertUnwindSafe(|| {
             let mut h = fresh();
             let result = scene(&mut h);
