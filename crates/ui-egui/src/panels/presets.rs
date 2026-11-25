@@ -343,7 +343,6 @@ fn collect_all_user_folders(nodes: &[FolderNode], out: &mut Vec<String>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// The toast after a click applied preset `name`: the masks this build couldn't compute are named.
 fn applied_message(name: &str, out: &Value) -> String {
     let skipped: Vec<&str> = out.get("skipped").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
@@ -354,6 +353,7 @@ fn applied_message(name: &str, out: &Value) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_folder_node(
     app: &mut LccApp,
     ui: &mut egui::Ui,
