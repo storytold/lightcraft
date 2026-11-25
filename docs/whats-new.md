@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Background preparation reports its last pass
+- `prefs.backgroundPrep` now keeps `last` after a pass ends: its outcome is `built`, `skipped`,
+  `failed` or `stopped`, with a reason and the pass's counts. Completed, already-built and empty
+  scopes are distinguished, and a build that could not start reports its error instead of looking
+  the same as a pass that never ran (#4721).
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges

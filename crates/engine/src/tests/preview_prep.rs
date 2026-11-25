@@ -283,6 +283,11 @@ fn the_background_preparation_starts_when_culling_and_can_be_stopped() {
     assert_eq!(b.done.load(Ordering::Relaxed), 4);
     s.prep_tick(mode, Some(ids[3]), false);
     assert!(same_build(&s, &b), "not started again for the same view");
+    let report = s.execute("prefs.backgroundPrep", &json!({})).unwrap();
+    assert_eq!(report["building"], json!(null), "the completed build is not still running");
+    assert_eq!(report["last"]["outcome"], "built", "{report}");
+    assert_eq!(report["last"]["reason"], "completed", "{report}");
+    assert_eq!(report["last"]["done"], 4, "{report}");
     // switched off: nothing starts in a new view either
     s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"previews": false}}})).unwrap();
     let off = s.execute("prefs.backgroundPrep", &json!({})).unwrap();
@@ -307,8 +312,49 @@ fn editing_builds_the_view_by_the_library_rows_scope() {
     b.cancel.store(true, Ordering::Relaxed);
     // its workers stop before their library is removed under them
     assert!(wait_finished(&b), "a cancelled build stops");
+    s.prep_tick(mode, Some(ids[0]), false);
+    let last = s.prep_json()["last"].clone();
+    assert_eq!(last["outcome"], "stopped", "{last}");
+    assert_eq!(last["reason"], "cancelled", "{last}");
     drop(s);
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_last_background_preparation_reports_previews_already_built() {
+    let (mut s, root, ids) = library("prep-last-skipped", 2);
+    s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "wait": true})).unwrap();
+    let mode = crate::prep::Mode::Library;
+    for k in 0..3 {
+        s.prep_tick(mode, Some(ids[k % ids.len()]), false);
+    }
+    let b = s.preview_build.clone().expect("the background pass started");
+    assert!(b.background);
+    assert!(wait_finished(&b));
+    s.prep_tick(mode, Some(ids[0]), false);
+    let last = s.prep_json()["last"].clone();
+    assert_eq!(last["outcome"], "skipped", "{last}");
+    assert_eq!(last["reason"], "completed", "{last}");
+    assert_eq!(last["skipped"], ids.len(), "{last}");
+    assert_eq!(last["failed"], 0, "{last}");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_last_background_preparation_reports_an_empty_scope() {
+    let (mut s, root, ids) = library("prep-last-empty", 2);
+    s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"scope": "marked"}}})).unwrap();
+    let mode = crate::prep::Mode::Library;
+    for k in 0..3 {
+        s.prep_tick(mode, Some(ids[k % ids.len()]), false);
+    }
+    assert!(s.preview_build.is_none(), "nothing matches the marked scope");
+    let last = s.prep_json()["last"].clone();
+    assert_eq!(last["outcome"], "skipped", "{last}");
+    assert_eq!(last["reason"], "noPhotos", "{last}");
+    assert_eq!(last["total"], 0, "{last}");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// With "which photos" = marked, marking another photo changes what the view's build prepares: a
@@ -619,6 +665,10 @@ fn a_build_that_cant_start_waits_before_trying_again() {
     }
     assert!(s.preview_build.is_none(), "the start failed");
     assert!(s.prep.retry_at.is_some());
+    let last = s.prep_json()["last"].clone();
+    assert_eq!(last["outcome"], "failed", "{last}");
+    assert_eq!(last["reason"], "startFailed", "{last}");
+    assert!(last["error"].as_str().is_some_and(|e| e.contains("test: the build couldn't start")), "{last}");
     // the app is told when to look again (a frame is asked for then)
     assert!(s.prep_retry_in().is_some_and(|d| d <= crate::prep::RETRY_AFTER && d > crate::prep::RETRY_AFTER / 2));
     s.prep_tick(mode, Some(ids[2]), false);
