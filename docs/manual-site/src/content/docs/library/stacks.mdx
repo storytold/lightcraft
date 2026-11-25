@@ -23,6 +23,13 @@ import Shot from '../../../components/Shot.astro';
 - **Versions** panel (left): *Create Version*, **Named** and **Auto** snapshots of a photo's edits.
 - **Convert to DNG** (**Photo ▸ File**): lossless DNG next to the raw, settings embedded, photo relinked; originals kept.
 - **Edit In…**: render a copy (TIFF or PSD, colour space, bit depth) for an external editor, stacked on the original; **Open as Layers** stacks several into a layered PSD.
+- **Edit In Presets…** (Photo ▸ Edit In): save more editors. Each then has its own items in Photo ▸ Edit In and on a photo's right-click menu.
+  - **Edit In Menu** picks the items:
+    - *Copy, Original…*: Edit a Copy with Adjustments, Edit a Copy, Edit Original (*Open Source File* on a raw).
+    - *Edit in (one item)*: one item, for an editor that takes the photo as it is (a raw developer such as DxO PhotoLab). Set the preset's **Mode** to what it should get.
+    - *Own Items*: up to 8 items with their own names and arguments, for a denoiser or sharpener (for example *Process with the Latest Settings*, *Process Immediately*, *Preview and Process*).
+  - An item takes the whole selection: the copies are made first, then one start of the editor gets every file.
+  - `{file}` in the arguments marks where the file paths go; an item's arguments follow the preset's own.
 - Duplicate files at import are skipped by content; **Find Similar Photos** finds look-alikes.
 
 <Aside type="note" title="Modern layout">

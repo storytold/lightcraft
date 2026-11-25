@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use lcc_plugins::Error;
 use lcc_plugins::{Begun, Limits, Manager, NoHost, Prepared};
 use serde_json::{Value, json};
 
@@ -475,4 +477,81 @@ fn removing_a_plugin_can_keep_its_data_and_settings() {
     // without keeping them, both go
     m.uninstall_with(id, false).unwrap();
     assert!(!settings.exists() && !data.exists());
+}
+
+/// A call begun before its plug-in was removed with its data, and ended after, writes no data file
+/// back; its outcome still reaches the caller, and an install of the same id afterwards finds none
+/// of the earlier data.
+#[test]
+fn a_call_ended_after_removal_writes_no_data_back() {
+    let dir = temp("data-gone");
+    let id = "test.settings";
+    let fields = json!([{"key": "n", "label": "N", "type": "number", "min": 0, "max": 10, "default": 3}]);
+    let set = r#"{"method":"ns.set","params":{"photo":"p1","key":"k","value":1}}"#;
+    let get = r#"{"method":"ns.get","params":{"photo":"p1","key":"k"}}"#;
+    let data = dir.join("data").join(format!("{id}.json"));
+    let mut m = Manager::open(&dir).unwrap();
+    m.install_bytes(&module(&settings_manifest("1.0.0", fields.clone()), Answer::Forward(set)), None, false).unwrap();
+
+    // a call that runs after the removal
+    let Begun::Call(mut call) = m.begin_command(id, "go", &Value::Null, &[], &Value::Null, &mut NoHost).unwrap() else { panic!("a call") };
+    m.uninstall(id).unwrap();
+    let outcome = call.run(&mut NoHost);
+    let back = m.end(*call, Some(outcome));
+    assert!(back.is_ok(), "the outcome still goes back to the caller: {back:?}");
+    assert!(!data.exists(), "the call wrote no data back");
+
+    // installed again: nothing from the earlier install
+    m.install_bytes(&module(&settings_manifest("1.0.0", fields), Answer::Forward(get)), None, false).unwrap();
+    let got = m.run_command(id, "go", &Value::Null, &[], &mut NoHost).unwrap();
+    assert_eq!(got, json!({}), "photo p1 has no data from the earlier install");
+}
+
+/// With its data kept, a call that ends after the removal saves its data as usual, and the next
+/// install of the id finds it.
+#[test]
+fn a_call_ended_after_a_kept_removal_saves_its_data() {
+    let dir = temp("data-kept");
+    let id = "test.settings";
+    let fields = json!([{"key": "n", "label": "N", "type": "number", "min": 0, "max": 10, "default": 3}]);
+    let set = r#"{"method":"ns.set","params":{"photo":"p1","key":"k","value":1}}"#;
+    let get = r#"{"method":"ns.get","params":{"photo":"p1"}}"#;
+    let data = dir.join("data").join(format!("{id}.json"));
+    let mut m = Manager::open(&dir).unwrap();
+    m.install_bytes(&module(&settings_manifest("1.0.0", fields.clone()), Answer::Forward(set)), None, false).unwrap();
+
+    let Begun::Call(mut call) = m.begin_command(id, "go", &Value::Null, &[], &Value::Null, &mut NoHost).unwrap() else { panic!("a call") };
+    m.uninstall_with(id, true).unwrap();
+    let outcome = call.run(&mut NoHost);
+    let back = m.end(*call, Some(outcome));
+    assert!(back.is_ok(), "the outcome goes back to the caller: {back:?}");
+    assert!(data.exists(), "its data was kept, so the call saves it");
+
+    m.install_bytes(&module(&settings_manifest("1.0.0", fields), Answer::Forward(get)), None, false).unwrap();
+    assert_eq!(m.run_command(id, "go", &Value::Null, &[], &mut NoHost).unwrap(), json!({"k": 1}), "the kept data is back");
+}
+
+/// A call whose data can't be written ends with that error, while the plug-in stays installed
+/// and its outcome is still the call's own.
+#[cfg(unix)]
+#[test]
+fn a_call_whose_data_cant_be_saved_reports_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp("data-locked");
+    let id = "test.settings";
+    let fields = json!([{"key": "n", "label": "N", "type": "number", "min": 0, "max": 10, "default": 3}]);
+    let set = r#"{"method":"ns.set","params":{"photo":"p1","key":"k","value":1}}"#;
+    let mut m = Manager::open(&dir).unwrap();
+    m.install_bytes(&module(&settings_manifest("1.0.0", fields), Answer::Forward(set)), None, false).unwrap();
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let Begun::Call(mut call) = m.begin_command(id, "go", &Value::Null, &[], &Value::Null, &mut NoHost).unwrap() else { panic!("a call") };
+    std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let outcome = call.run(&mut NoHost);
+    let back = m.end(*call, Some(outcome));
+    std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(back, Err(Error::Io(_))), "the save error reaches the caller: {back:?}");
+    assert!(m.get(id).is_some(), "still installed");
+    assert!(!data_dir.join(format!("{id}.json")).exists(), "nothing written");
 }

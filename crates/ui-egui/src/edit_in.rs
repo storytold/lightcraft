@@ -36,10 +36,22 @@ use crate::i18n::tr;
 /// The ids [`intercept`] handles.
 pub const PRESETS_DIALOG: &str = "dialog.editInPresets";
 pub const ACTIONS_PANEL: &str = "panel.actions";
+/// One item of a saved preset's menu under Photo ▸ Edit In ([`menu_items`]): `{preset, mode?, action?}`.
+pub const PRESET_COMMAND: &str = "photo.editInPreset";
 
 const FORMATS: &[&str] = &["tiff", "psd"];
 const SPACES: &[&str] = &["adobeRgb", "proPhoto", "displayP3", "srgb"];
-const MODES: &[(&str, &str)] = &[("copyWithAdjustments", "Edit a Copy with Adjustments"), ("copy", "Edit a Copy"), ("original", "Edit Original")];
+const MODES: &[(&str, &str)] = &[
+    ("copyWithAdjustments", "Edit a Copy with Adjustments"),
+    ("copy", "Edit a Copy"),
+    ("original", "Edit Original"),
+    ("sourceFile", "Open Source File"),
+];
+/// What a preset's menu shows ([`lcc_engine::cmd::edit_in::Menu`]).
+const MENUS: &[(&str, &str)] = &[("choices", "Copy, Original…"), ("single", "Edit in (one item)"), ("actions", "Own Items")];
+/// A new `actions` menu starts with a denoiser's three ways (Lightroom's PureRAW items); the
+/// user renames them and gives their arguments.
+const FIRST_ITEMS: &[&str] = &["Process with the Latest Settings", "Process Immediately", "Preview and Process"];
 
 /// The preset being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +66,16 @@ pub struct Draft {
     pub mode: String,
     pub naming: String,
     pub stack: bool,
+    /// The preset's menu style (see [`MENUS`]).
+    pub menu: String,
+    /// The items of an `actions` menu: their labels, and their arguments separated by spaces.
+    pub actions: Vec<ActionDraft>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActionDraft {
+    pub label: String,
+    pub args: String,
 }
 
 impl Default for Draft {
@@ -68,6 +90,8 @@ impl Default for Draft {
             mode: "copyWithAdjustments".into(),
             naming: "{name}-Edit".into(),
             stack: true,
+            menu: "choices".into(),
+            actions: FIRST_ITEMS.iter().map(|l| ActionDraft { label: (*l).into(), args: String::new() }).collect(),
         }
     }
 }
@@ -85,11 +109,24 @@ impl Draft {
             mode: s("mode", "copyWithAdjustments"),
             naming: s("naming", "{name}-Edit"),
             stack: p["stack"].as_bool().unwrap_or(true),
+            menu: s("menu", "choices"),
+            actions: p["actions"]
+                .as_array()
+                .filter(|a| !a.is_empty())
+                .map(|a| {
+                    a.iter()
+                        .map(|x| ActionDraft {
+                            label: x["label"].as_str().unwrap_or_default().to_string(),
+                            args: x["args"].as_array().map(|v| v.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| Draft::default().actions),
         }
     }
 
     pub fn to_params(&self) -> Value {
-        json!({
+        let mut v = json!({
             "name": self.name.trim(),
             "app": self.app.trim(),
             "args": self.args.split_whitespace().collect::<Vec<_>>(),
@@ -99,7 +136,22 @@ impl Draft {
             "mode": self.mode,
             "naming": self.naming,
             "stack": self.stack,
-        })
+            "menu": self.menu,
+        });
+        if self.menu == "actions"
+            && let Some(o) = v.as_object_mut()
+        {
+            o.insert(
+                "actions".into(),
+                json!(
+                    self.actions
+                        .iter()
+                        .map(|a| json!({"label": a.label.trim(), "args": a.args.split_whitespace().collect::<Vec<_>>()}))
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+        v
     }
 }
 
@@ -612,6 +664,33 @@ fn presets_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
                 ui.checkbox(&mut st.draft.stack, tr("Stack With Original"));
                 ui.end_row();
             });
+            egui::Grid::new("edit-in-grid-menu").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| combo(ui, "ei-menu", "Edit In Menu", &mut st.draft.menu, MENUS));
+            if st.draft.menu == "actions" {
+                ui.add_space(4.0);
+                ui.label(tr("Menu Items"));
+                let mut remove = None;
+                for (i, a) in st.draft.actions.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        let w = (ui.available_width() - 34.0).max(100.0);
+                        crate::text_field::TextField::singleline(&format!("field:eiAction{i}"), &mut a.label).hint(tr("Menu item")).width(w).show(ui);
+                        if ui.small_button("✕").on_hover_text(tr("Remove")).clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tr("Arguments")).small().weak());
+                        let w = (ui.available_width() - 8.0).max(100.0);
+                        crate::text_field::TextField::singleline(&format!("field:eiActionArgs{i}"), &mut a.args).hint("{file}").width(w).show(ui);
+                    });
+                }
+                if let Some(i) = remove {
+                    st.draft.actions.remove(i);
+                }
+                if st.draft.actions.len() < lcc_engine::cmd::edit_in::MAX_ACTIONS && ui.button(tr("Add Menu Item")).clicked() {
+                    st.draft.actions.push(ActionDraft { label: String::new(), args: String::new() });
+                }
+                ui.label(egui::RichText::new(tr("Each item opens the selected photos in the editor with one start. {file} in the arguments marks where their paths go; an item's arguments follow the preset's own.")).small().weak());
+            }
             ui.separator();
             ui.horizontal(|ui| {
                 if ui.button(tr("Save Preset")).clicked() {
@@ -711,6 +790,207 @@ fn ask_window(app: &mut LccApp, ctx: &egui::Context, st: &mut WorkflowUi) {
     } else if !cancel {
         st.ask = Some(ask);
     }
+}
+
+// The saved presets as last read, and `editors.json` as it was then (its time and size), so the
+// menu doesn't read the file again for each build.
+thread_local! {
+    static PRESETS: RefCell<Option<(std::time::SystemTime, u64, Vec<lcc_engine::cmd::edit_in::EditorPreset>)>> = const { RefCell::new(None) };
+}
+
+/// The saved presets: those the session has read, else `editors.json` (reread when it changed).
+fn saved_presets(app: &LccApp) -> Vec<lcc_engine::cmd::edit_in::EditorPreset> {
+    let stamp = lcc_engine::cmd::edit_in::presets_file(&app.session)
+        .and_then(|f| std::fs::metadata(f).ok())
+        .map(|m| (m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH), m.len()));
+    let kept = PRESETS.with_borrow(|p| p.as_ref().filter(|(t, n, _)| Some((*t, *n)) == stamp).map(|(_, _, v)| v.clone()));
+    if let Some(v) = kept {
+        return v;
+    }
+    let v = lcc_engine::cmd::edit_in::presets_of(&app.session).unwrap_or_default();
+    if let Some((t, n)) = stamp {
+        PRESETS.with_borrow_mut(|p| *p = Some((t, n, v.clone())));
+    }
+    v
+}
+
+/// Photo ▸ Edit In ▸ the saved presets, after the built-in commands: each with the items its menu
+/// style asks for, all run by [`PRESET_COMMAND`] with the selection. *Edit Original* is *Open
+/// Source File* on a photo no editor opens as it is (a raw), which is also the only one of the
+/// last two offered for it. Labels are final here (the preset's name and its items are the user's).
+pub(crate) fn menu_items(app: &LccApp) -> Vec<crate::menubar::MenuNode> {
+    use crate::menubar::{MenuNode, item};
+    use lcc_engine::cmd::edit_in::{Menu, file_editable};
+    let list = saved_presets(app);
+    let enabled = crate::menus::ui_enabled(app, PRESET_COMMAND);
+    let editable = app.session.active().is_some_and(|id| file_editable(&app.session, id));
+    let mut out = Vec::new();
+    for p in &list {
+        let name = p.name.clone();
+        if name.is_empty() {
+            continue;
+        }
+        let mode = serde_json::to_value(p.mode).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        let entry = |mode: &str, action: Option<u64>, label: String, on: bool| {
+            let mut params = json!({"preset": name.clone(), "mode": mode});
+            if let Some(a) = action
+                && let Some(o) = params.as_object_mut()
+            {
+                o.insert("action".into(), json!(a));
+            }
+            item(PRESET_COMMAND, params, label, None, enabled && on, None)
+        };
+        let items = (!p.actions.is_empty()).then_some(&p.actions);
+        match (Menu::of(&p.menu), items) {
+            (Menu::Actions, Some(items)) => out.push(MenuNode::Submenu {
+                label: name.clone(),
+                children: items.iter().enumerate().map(|(i, a)| entry(&mode, Some(i as u64), a.label.clone(), true)).collect(),
+            }),
+            (Menu::Choices, _) => {
+                let (third, label) =
+                    if editable { ("original", tr("Edit Original").to_string()) } else { ("sourceFile", tr("Open Source File").to_string()) };
+                out.push(MenuNode::Submenu {
+                    label: name.clone(),
+                    children: vec![
+                        entry("copyWithAdjustments", None, tr("Edit a Copy with Adjustments").to_string(), true),
+                        entry("copy", None, tr("Edit a Copy").to_string(), editable),
+                        entry(third, None, label, true),
+                    ],
+                });
+            }
+            // the one item; also a preset with a menu of its own items but none yet
+            _ => out.push(entry(&mode, None, crate::i18n::tr_format!("Edit in {name}", name = name), true)),
+        }
+    }
+    out
+}
+
+/// `photo.editInPreset`: hand every selected photo to the saved preset's editor the way its item
+/// asks (the preset's mode, or the one given; `action` picks one of the preset's own items, whose
+/// arguments follow the preset's). The files are made first, one photo at a time; a photo that
+/// can't be done is reported and the rest go on. Then one start of the editor takes them all (a
+/// batch is where a denoiser shines), and they are watched for saves.
+pub(crate) fn run_preset(app: &mut LccApp, ctx: &egui::Context, p: &Value) -> Result<Value, String> {
+    let r = run_preset_inner(app, p);
+    match &r {
+        Ok(v) => {
+            if let Some(what) = v["message"].as_str().filter(|m| !m.is_empty()) {
+                app.toast(ctx, what.to_string());
+            }
+        }
+        Err(e) => app.toast(ctx, e.clone()),
+    }
+    r
+}
+
+/// → the result, with what to tell the user in `message`
+fn run_preset_inner(app: &mut LccApp, p: &Value) -> Result<Value, String> {
+    let name = p["preset"].as_str().map(str::trim).unwrap_or_default().to_string();
+    let pr = lcc_engine::cmd::edit_in::presets_of(&app.session)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|x| x.name == name)
+        .ok_or_else(|| format!("no Edit In preset `{name}` (Photo ▸ Edit In ▸ Edit In Presets…)"))?;
+    let action = match p["action"].as_u64() {
+        Some(i) => {
+            let i = usize::try_from(i).map_err(|_| "no such menu item")?;
+            Some(pr.actions.get(i).ok_or("no such menu item")?.clone())
+        }
+        None => None,
+    };
+    let mut mode = p["mode"].as_str().unwrap_or_default().to_string();
+    if mode.is_empty() {
+        mode = serde_json::to_value(pr.mode).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    }
+    let mut ids = app.session.targets(&json!({})).map_err(|e| e.to_string())?;
+    ids.dedup();
+    if ids.is_empty() {
+        return Err("no photo selected".into());
+    }
+    if let Some(check) = app.services.check_editor.as_ref() {
+        check(&pr.app)?;
+    }
+    let before = app.session.selection.clone();
+    let mut files: Vec<(String, Vec<u64>)> = Vec::new();
+    let mut edits = Vec::new();
+    let mut failed = None;
+    for id in &ids {
+        let r = app.session.execute("photo.editIn", &json!({"id": id.0, "preset": name, "mode": mode}));
+        match r {
+            Ok(r) => {
+                // only a file the app reads goes to another program (#2135)
+                let path = r.field("path").as_str().unwrap_or_default().to_string();
+                let reload: Vec<u64> = r.field("openWith").field("reload").as_array().into_iter().flatten().filter_map(Value::as_u64).collect();
+                match lcc_engine::open_path::openable(&path, "") {
+                    Ok(absolute) => files.push((absolute, reload)),
+                    Err(e) => failed = Some(e),
+                }
+                edits.push(r);
+            }
+            Err(e) => {
+                let name = app.session.catalog.photo(*id).map(|ph| ph.file_name.clone()).unwrap_or_default();
+                failed = Some(if name.is_empty() { e.to_string() } else { crate::i18n::tr_format!("{name}: {e}", name = name, e = e).to_string() });
+            }
+        }
+    }
+    app.session.selection = before;
+    if let Some(e) = &failed {
+        app.ui.status = e.clone();
+    }
+    let opened = files.len();
+    if opened > 0 {
+        let paths: Vec<String> = files.iter().map(|(p, _)| p.clone()).collect();
+        let mut args: Vec<String> = pr.args.clone();
+        if let Some(a) = &action {
+            args.extend(a.args.iter().cloned());
+        }
+        if let Some(c) = &pr.control {
+            #[cfg(not(target_arch = "wasm32"))]
+            for (path, reload) in &files {
+                watch(app, Path::new(path), reload);
+                start_control(c.clone(), PathBuf::from(path));
+            }
+            let _ = (&paths, &args);
+        } else {
+            launch_preset(app, &paths, &pr.app, &args)?;
+            for (path, reload) in &files {
+                watch(app, Path::new(path), reload);
+            }
+        }
+    }
+    if let Some(e) = &failed {
+        return Err(e.clone());
+    }
+    let who = action.as_ref().map(|a| a.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| name.clone());
+    let what = if opened == 1 {
+        crate::i18n::tr_format!("{file} opened in {name}", file = stem(&files), name = who)
+    } else {
+        crate::i18n::tr_format!("{n} photos opened in {name}", n = opened, name = who)
+    }
+    .to_string();
+    Ok(json!({"preset": name, "mode": mode, "action": action.map(|a| a.label), "edits": edits, "opened": opened, "failed": null, "message": what}))
+}
+
+fn stem(files: &[(String, Vec<u64>)]) -> String {
+    Path::new(files.first().map(|(p, _)| p.as_str()).unwrap_or_default()).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+}
+
+/// One start of the preset's editor with every file; a host without [`crate::Services::open_preset`]
+/// opens a preset without arguments file by file.
+fn launch_preset(app: &mut LccApp, paths: &[String], tool: &str, args: &[String]) -> Result<(), String> {
+    if let Some(open) = app.services.open_preset.as_mut() {
+        return open(paths, tool, args);
+    }
+    if !args.is_empty() {
+        return Err("this host can't start the editor with arguments".into());
+    }
+    if paths.len() > 1
+        && let Some(all) = app.services.open_all_with.as_mut()
+    {
+        return all(paths, tool);
+    }
+    let open = app.services.open_with.as_mut().ok_or("opening another application isn't available here")?;
+    paths.iter().try_for_each(|p| open(p, tool))
 }
 
 /// The Edit Photo window's Edit button (and `editIn.choose` in tests): run the chosen edit, and
@@ -857,7 +1137,9 @@ mod tests {
         let p = json!({"name": "G", "app": "/usr/bin/gimp", "args": ["-n", "{file}"], "format": "psd", "colorSpace": "srgb", "bitDepth": 8, "mode": "copy", "naming": "{name}-G", "stack": false});
         let d = Draft::from_preset(&p);
         assert_eq!(d.args, "-n {file}");
-        assert_eq!(d.to_params(), p);
+        let mut with_menu = p.clone();
+        with_menu["menu"] = json!("choices");
+        assert_eq!(d.to_params(), with_menu, "a preset saved before menu styles reads as the choices");
     }
 
     #[test]
@@ -1158,6 +1440,167 @@ mod tests {
         // Pump to process the message
         h.step();
         assert_eq!(watched_files(), 0, "the exited file is removed from the watch table");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn find_menu<'a>(nodes: &'a [crate::menubar::MenuNode], label: &str) -> Option<&'a [crate::menubar::MenuNode]> {
+        nodes.iter().find_map(|n| match n {
+            crate::menubar::MenuNode::Submenu { label: l, children } if l == label => Some(children.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// Photo ▸ Edit In lists every saved preset with the items its menu style asks for (own items
+    /// with their arguments, one *Edit in*, Lightroom's choices; *Open Source File* and no *Edit a
+    /// Copy* on a raw), and an item hands a whole batch to the preset's editor with one start.
+    #[test]
+    fn saved_presets_are_in_the_edit_in_menu_and_open_a_batch_at_once() {
+        use crate::menubar::MenuNode;
+        let dir = temp("presets-menu");
+        let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+        png(&a, 20, 12, 1);
+        png(&b, 24, 10, 2);
+        let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(Vec<String>, String, Vec<String>)>::new()));
+        let st = started.clone();
+        let singles = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let si = singles.clone();
+        let services = crate::Services {
+            open_with: Some(Box::new(move |path: &str, _: &str| {
+                si.lock().unwrap().push(path.to_string());
+                Ok(())
+            })),
+            open_preset: Some(Box::new(move |paths: &[String], app: &str, args: &[String]| {
+                st.lock().unwrap().push((paths.to_vec(), app.to_string(), args.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut session = lcc_engine::Session::new().with_fs();
+        session.workflow = lcc_engine::cmd::actions::Workflow::in_dir(Some(dir.join("settings")));
+        let mut h = crate::headless::Headless::new(LccApp::new(session, services), [900.0, 600.0], 1.0);
+        for p in [&a, &b] {
+            h.app.session.execute("library.import", &json!({"paths": [p.to_string_lossy()]})).unwrap();
+        }
+        let (a_id, b_id) = (h.app.session.catalog.photos().next().unwrap().id, h.app.session.catalog.photos().last().unwrap().id);
+        h.app.session.selection = lcc_engine::Selection { ids: vec![a_id, b_id], active: Some(a_id) };
+        for p in [
+            json!({"name": "PureRAW", "app": "/opt/pureraw", "args": ["-quiet"], "mode": "sourceFile", "menu": "actions", "actions": [
+                {"label": "Process with the Latest Settings", "args": ["--last"]},
+                {"label": "Process Immediately"},
+                {"label": "Preview and Process", "args": ["--preview"]}
+            ]}),
+            json!({"name": "PhotoLab", "app": "/opt/photolab", "mode": "sourceFile", "menu": "single"}),
+            json!({"name": "Gimp", "app": "/usr/bin/gimp"}),
+        ] {
+            h.app.session.execute("editIn.savePreset", &p).unwrap();
+        }
+
+        // the menu: Photo ▸ Edit In ends with the presets
+        let bar = crate::menubar::menu_bar(&h.app);
+        let photo = bar.iter().find(|(m, _)| m == "Photo").map(|(_, items)| items.clone()).unwrap_or_default();
+        let edit_in = find_menu(&photo, "Edit In").expect("Photo ▸ Edit In").to_vec();
+        let own = |nodes: &[MenuNode], label: &str| find_menu(nodes, label).unwrap_or_default().to_vec();
+        let item = |nodes: &[MenuNode], i: usize| match nodes.get(i) {
+            Some(MenuNode::Item { label, params, enabled, .. }) => (label.clone(), params.clone(), *enabled),
+            other => panic!("{other:?}"),
+        };
+        assert!((edit_in.iter().any(|n| matches!(n, MenuNode::Item { id, .. } if id == "photo.editInExternal"))), "the built-in commands stay");
+        let (l, p, on) = item(&own(&edit_in, "PureRAW"), 0);
+        assert_eq!(
+            (l.as_str(), p["preset"].as_str(), p["action"].as_u64(), p["mode"].as_str(), on),
+            ("Process with the Latest Settings", Some("PureRAW"), Some(0), Some("sourceFile"), true)
+        );
+        assert_eq!(item(&own(&edit_in, "PureRAW"), 2).0, "Preview and Process");
+        let one = edit_in.iter().find_map(|n| match n {
+            MenuNode::Item { id, label, params, .. } if id == PRESET_COMMAND && params["preset"] == "PhotoLab" => {
+                Some((label.clone(), params["mode"].clone()))
+            }
+            _ => None,
+        });
+        assert_eq!(one, Some(("Edit in PhotoLab".into(), json!("sourceFile"))), "{edit_in:?}");
+        let gimp = own(&edit_in, "Gimp");
+        assert_eq!(
+            (item(&gimp, 0).0.as_str(), item(&gimp, 1).0.as_str(), item(&gimp, 2).0.as_str(), item(&gimp, 1).2),
+            ("Edit a Copy with Adjustments", "Edit a Copy", "Edit Original", true)
+        );
+
+        // an own item: both photos' files, one start, the preset's arguments then the item's
+        let r = h.app.run(PRESET_COMMAND, json!({"preset": "PureRAW", "action": 2})).unwrap();
+        assert_eq!((r["opened"].as_u64(), r["action"].as_str()), (Some(2), Some("Preview and Process")), "{r}");
+        assert_eq!(
+            started.lock().unwrap().first().cloned(),
+            Some((
+                vec![a.to_string_lossy().to_string(), b.to_string_lossy().to_string()],
+                "/opt/pureraw".to_string(),
+                vec!["-quiet".to_string(), "--preview".to_string()]
+            ))
+        );
+        assert!(singles.lock().unwrap().is_empty(), "nothing one by one: {:?}", singles.lock().unwrap());
+        assert_eq!(h.app.session.selection.ids.len(), 2, "the selection stays");
+
+        // a choice: a copy with the adjustments of each photo, both in one start
+        let watched_before = watched_files();
+        started.lock().unwrap().clear();
+        let n = h.app.session.catalog.photos().count();
+        let r = h.app.run(PRESET_COMMAND, json!({"preset": "Gimp", "mode": "copyWithAdjustments"})).unwrap();
+        assert_eq!(r["opened"].as_u64(), Some(2));
+        {
+            let started = started.lock().unwrap();
+            let files = &started[0];
+            assert!(files.0.iter().all(|p| p.ends_with(".tif") && std::path::Path::new(p).is_file()), "{files:?}");
+        }
+        assert_eq!(h.app.session.catalog.photos().count(), n + 2, "stacked on their originals");
+        assert_eq!(watched_files() - watched_before, 2, "both copies are watched for saves");
+
+        // on a raw the choices are a copy with the adjustments, or the file itself
+        let raw = dir.join("DSC_0001.NEF");
+        std::fs::write(&raw, b"raw").unwrap();
+        let id = h.app.session.catalog.alloc_photo_id();
+        let record = lcc_catalog::Photo::new(
+            id,
+            lcc_catalog::Source::File { path: raw.to_string_lossy().into_owned() },
+            "DSC_0001.NEF",
+            "NEF",
+            60,
+            40,
+            "2026-01-01T10:00:00",
+        );
+        h.app.session.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(record) }).unwrap();
+        // (the record isn't in a folder, so the grid can't select it)
+        h.app.session.selection = lcc_engine::Selection::single(id);
+        let bar = crate::menubar::menu_bar(&h.app);
+        let edit_in = find_menu(&bar.iter().find(|(m, _)| m == "Photo").map(|(_, items)| items.clone()).unwrap_or_default(), "Edit In")
+            .unwrap_or_default()
+            .to_vec();
+        let gimp = own(&edit_in, "Gimp");
+        assert_eq!(
+            (item(&gimp, 1).2, item(&gimp, 2).0.as_str(), item(&gimp, 2).1["mode"].as_str()),
+            (false, "Open Source File", Some("sourceFile")),
+            "{gimp:?}"
+        );
+        started.lock().unwrap().clear();
+        let r = h.app.run(PRESET_COMMAND, json!({"preset": "Gimp", "mode": "sourceFile"})).unwrap();
+        assert_eq!(r["opened"].as_u64(), Some(1));
+        assert_eq!(started.lock().unwrap().first().map(|f| f.0.clone()), Some(vec![raw.to_string_lossy().to_string()]));
+        assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("Gimp")), "said what opened: {:?}", h.app.ui.toast());
+
+        // Edit a Copy is greyed out for a raw, and running it anyway says why, starting nothing
+        started.lock().unwrap().clear();
+        let e = h.app.run(PRESET_COMMAND, json!({"preset": "Gimp", "mode": "copy"})).unwrap_err();
+        assert!(e.contains("copyWithAdjustments"), "{e}");
+        assert!(started.lock().unwrap().is_empty());
+
+        // a photo that can't be done (Edit Original on a raw) doesn't stop the others, and the
+        // error says which and why
+        h.app.session.selection = lcc_engine::Selection { ids: vec![a_id, id], active: Some(a_id) };
+        started.lock().unwrap().clear();
+        let e = h.app.run(PRESET_COMMAND, json!({"preset": "PhotoLab", "mode": "original"})).unwrap_err();
+        assert!(e.contains("DSC_0001.NEF") && e.contains("an editor can't"), "{e}");
+        assert_eq!(started.lock().unwrap().len(), 1, "the other photo was opened: {:?}", started.lock().unwrap());
+        assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("DSC_0001.NEF")), "{:?}", h.app.ui.toast());
+
+        // nothing saved under that name: a clear error, nothing made or started
+        assert!(h.app.run(PRESET_COMMAND, json!({"preset": "nope"})).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
