@@ -394,7 +394,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         app.caches.faces_epoch += 1;
                     }
                     if !selected && !detector {
-                        let r = ui.button("Use");
+                        let r = ui.button(crate::i18n::tr("Use"));
                         register(ui, format!("faces:use:{id}"), r.rect);
                         if r.clicked() {
                             let _ = app.run("faces.models.select", json!({"id": id}));
