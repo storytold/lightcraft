@@ -338,6 +338,7 @@ database is read-only; the app owns subsequent edits. See `docs/lightroom-catalo
 - 2026-10-12: roadmap refreshed for the fork at 0.6.1: 87.3% of 570 rows, Classic modules ~30% → ~65%, Classic power user ~45% → ~60%, Classic completion and platform CI added to the priorities.
 - 2026-11-25: Camera Matching looks fitted from raw + JPEG pairs (plan 7.13): LR-PROF-CAMERA and LR-PROF-LEGACY 🟡; 90.5%, P2 80.7%.
 - 2026-11-23: Getting Started guide row (Help ▸ Getting Started…): 630 rows, P2 80.3%.
+- 2026-11-25: process recipes row (CF-PROCESS-RECIPES, `export.runPresets`, plan 7.4): 631 rows, P2 80.4%.
 - 2026-11-23: checklist numbers refreshed (90.3% of 629 rows, matching docs/target-app-parity.md); decoder-source policy brought in line with the 2026-11-10 licence policy; status moved to the tracked docs/status.md.
 - 2026-10-12: 0.6.3 numbers: 87.9% of 581 rows after the upstream merge (381 commits) and the fork gap batches.
 - 2026-10-20: M5 Performance ✅: colour NR blurs at half resolution (already landed: 24 MP 670 → 336 ms) and GPU renders bin the histogram, vectorscope and waveform grids on the GPU (CPU oracle, exact agreement test).

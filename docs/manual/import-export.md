@@ -49,6 +49,8 @@ File → Export… opens the export dialog; File → Export with Previous (`Cmd+
   removal, file naming and subfolders, what to do with existing files.
 - Watermarks: text (also vertical, for CJK) or a graphic, with size, opacity, anchor and inset.
 - Save the settings as an export preset (`export.savePreset`); plug-ins can post-process exported files.
+- File → More Exports → Export with Several Presets… exports the selection with several presets in one run, reading
+  each photo once (`export.runPresets {presetIds}`).
 - File → Contact Sheet PDF… writes a quick contact sheet; the Print module does full layouts.
 
 Export never overwrites an original or its sidecar (`export.checkTarget`). A subfolder or destination that escapes with `..`, or uses a Windows-reserved name, is refused. The Export screen previews the first photo as its file will be (SDR, or in HDR on an HDR display with its SDR | HDR choice); entering Export or Print from Develop selects the photo on screen. Print takes the single selected photo; only an empty selection prints the whole filmstrip.

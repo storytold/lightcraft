@@ -53,11 +53,11 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 89 | 0 | 2 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 6 | 1 | 1 | 48/52 (92%) | 24/26 (92%) |
 | Lightroom Classic extras | 106 | 22 | 0 | 0 | — | 36/40 (90%) |
-| BEYOND. Beyond the reference app | 7 | 0 | 0 | 0 | — | — |
+| BEYOND. Beyond the reference app | 8 | 0 | 0 | 0 | — | — |
 | IMM. Immich integration | 11 | 0 | 0 | 0 | — | 7/7 (100%) |
-| **Total** | 528 | 84 | 18 | 25 | 195/203 (96%) | 172/191 (90%) |
+| **Total** | 531 | 84 | 16 | 25 | 195/203 (96%) | 172/191 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.5%** of 630 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 80.7% of 231.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.8%** of 631 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 81.7% of 232.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
