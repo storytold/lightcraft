@@ -1,5 +1,16 @@
 //! One continuous real-file journey. Stage as `tests::real_journey` in lightcraft-ui-egui.
 //! No synthetic catalog, file-probe/loader mock, memory store, host picker, or app process.
+//!
+//! Its executor names the private tmp and a fresh case directory; the server's job runner (`task.py`) binds
+//! no private tmp of its own, so without them the test fails and says how to run it. Make a private
+//! directory (mode 700, not under `/tmp`), then pass both variables to the job, for example:
+//!
+//! ```text
+//! mkdir -m 700 -p $PRIVATE
+//! python3 /home/codex/work/maintenance/task.py run --job-id … --task … --kind build --source <checkout> --evidence … \
+//!   --env TMPDIR=$PRIVATE --env LIGHTCRAFT_REAL_JOURNEY_ROOT=$PRIVATE/lc-real-journey-<unique> \
+//!   -- cargo test -p lightcraft-ui-egui --lib -- tests::real_journey --test-threads=1
+//! ```
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -35,10 +46,16 @@ fn execute(h: &mut Headless, command: &str, params: Value) -> Value {
     )
 }
 
+/// What to do when the executor bound neither variable.
+const HOW_TO_RUN: &str = "bind TMPDIR to a private tmp (mode 700, not /tmp) and LIGHTCRAFT_REAL_JOURNEY_ROOT to a fresh \
+     $TMPDIR/lc-real-journey-<unique>: task.py run ... --env TMPDIR=$PRIVATE --env \
+     LIGHTCRAFT_REAL_JOURNEY_ROOT=$PRIVATE/lc-real-journey-<unique> -- cargo test -p lightcraft-ui-egui --lib -- \
+     tests::real_journey (see the module docs)";
+
 /// The executor must bind TMPDIR to its admitted private tmp and pass a fresh direct child.
 /// No fallback to /tmp or a user library, no reuse, and no recursive deletion on failure.
 fn fresh_root() -> PathBuf {
-    let tmp = std::env::var_os("TMPDIR").expect("bind TMPDIR to the admitted private tmp");
+    let tmp = std::env::var_os("TMPDIR").expect(HOW_TO_RUN);
     let tmp = PathBuf::from(tmp);
     assert!(tmp.is_absolute());
     let tmp = tmp
@@ -47,7 +64,7 @@ fn fresh_root() -> PathBuf {
     assert_ne!(tmp, Path::new("/tmp"), "never use the shared system tmp");
     let root = PathBuf::from(
         std::env::var_os("LIGHTCRAFT_REAL_JOURNEY_ROOT")
-            .expect("explicit private fresh case path required"),
+            .expect(HOW_TO_RUN),
     );
     assert!(root.is_absolute());
     assert_eq!(

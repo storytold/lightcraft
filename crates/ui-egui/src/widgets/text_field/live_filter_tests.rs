@@ -38,8 +38,9 @@ fn focused_on(h: &Headless, widget: &str) -> bool {
     let native = id(widget);
     h.view.ctx.memory(|memory| memory.has_focus(native))
         || craft::ui::runtime::focus::focused_rec(&h.view.ctx).is_some_and(|rec| {
-            // The candidate's component is the genuine hit owner in its registered field.
-            h.app.widget_hits.iter().any(|(name, hit)| name == widget && hit.id == rec.stop.id)
+            // The candidate's component is the genuine hit owner in its registered field: the field registers its
+            // text part (where egui's keyboard focus sits), and the framework's focus names the component.
+            h.app.widget_hits.iter().any(|(name, hit)| name == widget && (hit.id == rec.stop.id || hit.id == text_id(rec.stop.id)))
         })
 }
 
@@ -47,6 +48,13 @@ fn focused_on(h: &Headless, widget: &str) -> bool {
 /// published geometry. Native action aliases are hover probes, not their focus owners.
 fn action_focused(h: &Headless, widget: &str) -> bool {
     let Some((_, rect)) = h.app.widgets.iter().find(|(name, _)| name == widget) else { return false };
+    // the framework's focus record names the stop (egui's focus sits on the stop's arena root, the dock body, for a
+    // member of an arena): the widget's registered response owns it; egui's own focus is the fallback for a stop that
+    // is its own root
+    if let Some(stop) = craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|rec| rec.stop.id) {
+        return h.app.widget_hits.iter().any(|(name, hit)| name == widget && hit.id == stop)
+            && h.view.ctx.read_response(stop).is_none_or(|response| response.rect == *rect && response.sense.senses_click());
+    }
     h.view
         .ctx
         .memory(|memory| memory.focused())

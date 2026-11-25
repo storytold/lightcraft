@@ -320,7 +320,9 @@ impl Review {
             }
         }
         if let Some(record) = craft::ui::runtime::focus::focused_rec(&self.ctx) {
-            if let Some((name, _)) = self.hits.iter().find(|(_, hit)| hit.id == record.stop.id) {
+            // a text field registers its text part, where egui's focus sits; the framework's focus names its component
+            let text = crate::widgets::text_field::text_id(record.stop.id);
+            if let Some((name, _)) = self.hits.iter().find(|(_, hit)| hit.id == record.stop.id || hit.id == text) {
                 return name.clone();
             }
         }
@@ -572,16 +574,36 @@ fn keyword_suggestions_actual_egui_sizing_does_not_dispatch_or_replay() {
     Review::new(false).gates(Pass::Sizing);
 }
 
-// Frozen from 64 actual native forward-Tab observations: two complete 26-stop cycles and
-// twelve more stops. No native suggestion was a stop. Reverse traversal/activation were
-// unreached natively; this candidate must add only its four real suggestion owners.
-const NATIVE_TAB_CYCLE: [&str; 26] = [
+// The candidate must add only its four real suggestion owners to the panel's native cycle.
+// The panel's Tab cycle without suggestions, measured on the framework port: the section header, the keywording
+// view's Enter choice, each chip and its remove button, the keyword set's combo and its nine buttons, and the
+// Keyword List title are framework stops now.
+const NATIVE_TAB_CYCLE: [&str; 45] = [
+    "section:keywording",
     "field:keyword",
+    "keywordView:enter",
     "keywordView:keywords",
     "keywordView:containing",
     "keywordView:willExport",
+    "keywordChip:beach",
+    "keywordChipRemove:beach",
+    "keywordChip:Italy|Rome|Market",
+    "keywordChipRemove:Italy|Rome|Market",
+    "keywordChip:Travel|Lisbon",
+    "keywordChipRemove:Travel|Lisbon",
+    "keywordSetCombo",
+    "kwSet:1",
+    "kwSet:2",
+    "kwSet:3",
+    "kwSet:4",
+    "kwSet:5",
+    "kwSet:6",
+    "kwSet:7",
+    "kwSet:8",
+    "kwSet:9",
     "field:keywordPainter",
     "button:keywordPaint",
+    "keywordList:topLevel",
     "field:keywordFilter",
     "keywordList:create",
     "keywordRow:beach",
@@ -610,15 +632,17 @@ fn keyword_suggestions_actual_frozen_native_order_with_only_suggestion_insertion
     r.frame(vec![Event::PointerGone]);
     assert!(r.ctx.memory(|m| m.focused()).is_none());
     let mut expected = NATIVE_TAB_CYCLE.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
-    expected.splice(6..6, [ROME, "Travel|Lisbon", PARIS, "unrelated"].into_iter().map(Review::alias));
-    assert_eq!(expected.len(), 30);
-    for step in 0..60 {
+    // the suggestions follow the Paint button
+    let at = expected.iter().position(|name| name == "button:keywordPaint").unwrap() + 1;
+    expected.splice(at..at, [ROME, "Travel|Lisbon", PARIS, "unrelated"].into_iter().map(Review::alias));
+    assert_eq!(expected.len(), NATIVE_TAB_CYCLE.len() + 4);
+    for step in 0..2 * expected.len() {
         r.key(Key::Tab, false);
         r.observe(&format!("frozen-forward-{step}"));
         assert_eq!(r.focus_name(), expected[step % expected.len()], "only suggestion stops may be inserted in the measured native cycle");
         assert!(!egui::Popup::is_any_open(&r.ctx));
     }
-    for step in 0..60 {
+    for step in 0..2 * expected.len() {
         r.key(Key::Tab, true);
         r.observe(&format!("frozen-reverse-{step}"));
         let index = expected.len() - 1 - ((step + 1) % expected.len());

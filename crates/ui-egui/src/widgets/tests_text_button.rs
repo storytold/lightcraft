@@ -218,7 +218,7 @@ fn settings_choices_change_by_pointer_enter_and_space_with_a_visible_focus_ring(
         frames.frame(vec![], &mut draw);
         drop(draw);
         assert_eq!(value, 1, "actual Settings choices caller: {activation:?}");
-        assert_eq!(frames.nodes.get("Large").unwrap().is_selected(), Some(true));
+        assert_eq!(frames.nodes.get("Large").unwrap().toggled(), Some(egui::accesskit::Toggled::True), "the chosen button reports pressed");
         let mut rects = vec![];
         for clipped in &frames.shapes {
             rect_shapes(&clipped.shape, &mut rects);
@@ -302,7 +302,7 @@ fn import_dialog_tag_toggle_keeps_its_selected_state_for_pointer_and_keyboard() 
     assert!(open, "actual import-dialog caller opens its help");
     let mut draw = |ui: &mut Ui| open = crate::dialogs::import::tag_toggle(ui, "importRename");
     frames.frame(vec![], &mut draw);
-    assert_eq!(frames.nodes.get("Tags").unwrap().is_selected(), Some(true));
+    assert_eq!(frames.nodes.get("Tags").unwrap().toggled(), Some(egui::accesskit::Toggled::True), "the toggle reports pressed");
     frames.ctx.memory_mut(|m| m.request_focus(target.id));
     frames.frame(vec![], &mut draw);
     frames.frame(key(Key::Space, false), &mut draw);
@@ -327,7 +327,7 @@ fn selected_face_and_raw_user_label_are_preserved_in_each_app_theme() {
         assert!(rects.iter().any(|r| r.rect == rect && r.fill == t.pressed), "selected app face: {kind:?}");
         let node = frames.nodes.get("Auto").unwrap();
         assert_eq!(node.role(), egui::accesskit::Role::Button);
-        assert_eq!(node.is_selected(), Some(true));
+        assert_eq!(node.toggled(), Some(egui::accesskit::Toggled::True), "the selected button reports pressed");
     }
 }
 

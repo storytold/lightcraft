@@ -268,6 +268,15 @@ pub(crate) fn widget_hit(app: &LightcraftApp, id: &str) -> Option<crate::widgets
     app.widget_hits.iter().rev().find(|(w, _)| w == id).map(|(_, hit)| *hit)
 }
 
+/// The part of the registered rect `rect` that egui's clipped interaction area of its widget still shows, in
+/// screen coordinates: `None` when nothing of it shows (or there is no widget to ask).
+fn visible_part(ctx: &egui::Context, hit: Option<crate::widgets::WidgetHit>, rect: egui::Rect) -> Option<egui::Rect> {
+    let hit = hit?;
+    let interact = ctx.layer_transform_to_global(hit.layer_id).map_or(hit.interact_rect, |to_global| to_global * hit.interact_rect);
+    let seen = rect.intersect(interact);
+    (seen.is_finite() && seen.is_positive()).then_some(seen)
+}
+
 /// Whether the registered automation rectangle still owns egui's pointer hit at `at`.
 ///
 /// A registration records the egui id and layer of a hover probe (or of the widget's own
@@ -424,7 +433,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     u.toast = app.ui.toast.clone();
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();
-                    crate::docking::cancel_replaced_gesture(app, u.docking.as_ref());
+                    crate::docking::cancel_replaced_gesture(app, u.docking.as_deref());
                     app.ui = u;
                     crate::i18n::set_language(app.ui.language);
                     ctx.request_repaint();
@@ -725,7 +734,12 @@ pub(crate) fn gesture_events_at(
             let Some(r) = widget_rect(app, id) else { return Err(format!("no widget `{id}` on screen (see ui.widgets)")) };
             let m = modifiers(p);
             let (fx, fy) = (f("fx").unwrap_or(0.5), f("fy").unwrap_or(0.5));
-            let at = egui::pos2(r.left() + r.width() * fx as f32, r.top() + r.height() * fy as f32);
+            let mut at = egui::pos2(r.left() + r.width() * fx as f32, r.top() + r.height() * fy as f32);
+            // With no point asked for, aim at the middle of the part a person can see: a row wider than its
+            // scrolled panel, or a control half under the edge of its pane, still takes a click there.
+            if f("fx").is_none() && f("fy").is_none() && let Some(seen) = visible_part(ctx, widget_hit(app, id), r) && !seen.contains(at) {
+                at = seen.center();
+            }
             if !fx.is_finite() || !fy.is_finite() || !at.is_finite() {
                 return Err(format!("{method}: fx and fy must resolve to a finite point"));
             }

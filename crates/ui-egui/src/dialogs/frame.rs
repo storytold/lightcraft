@@ -168,11 +168,19 @@ pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, h
     }
     // Escape in a dialog's one field cancels the dialog, its draft with it (the framework convention); the field takes
     // the key to give its text back, so the dialog reads it from here (`escaped_field`).
-    if r.cancelled() && ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+    if r.cancelled() {
+        field_escape_closes(ui);
+    }
+    r.ending == Some(crate::text_field::Ending::Return)
+}
+
+/// A field in a dialog's body took this pass's Escape (`TextFieldResponse::cancelled`) and the dialog closes on it,
+/// as it would on an Escape nothing took (read back by `escaped_field`).
+pub(crate) fn field_escape_closes(ui: &egui::Ui) {
+    if ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
         let pass = ui.ctx().cumulative_pass_nr();
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("lightcraft.dialog.field-escaped"), pass));
     }
-    r.ending == Some(crate::text_field::Ending::Return)
 }
 
 /// Whether a dialog's one field (`dialog_field`) took an Escape in this pass.

@@ -93,6 +93,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Activity => activity(app, ui, id),
                 RightPanel::None => {}
             }
+            // Tab and focus requests keep the focused control in view
+            super::scroll_focus::reveal_focus(ui, egui::Id::unique("right-scroll-focus"));
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
     });

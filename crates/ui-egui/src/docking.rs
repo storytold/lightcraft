@@ -103,6 +103,50 @@ fn with_width(rect: egui::Rect, width: f32) -> egui::Rect {
 /// The saved arrangement. Closed panels keep their last group, side, size or floating rect.
 pub type Workspace = craft::behavior::dock::Workspace<Panel>;
 
+/// The arrangement as [`crate::UiState`] keeps it: the [`Workspace`], saved as it is, whose `Debug` shows only what
+/// the arrangement is. The framework's workspace also prints its revision and generation counters, which are
+/// process-wide (a clone is a new revision), so two equal UI states would print differently.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Docked(pub Workspace);
+
+impl Docked {
+    /// The workspace.
+    pub fn into_inner(self) -> Workspace {
+        self.0
+    }
+}
+
+impl From<Workspace> for Docked {
+    fn from(workspace: Workspace) -> Self {
+        Docked(workspace)
+    }
+}
+
+impl std::ops::Deref for Docked {
+    type Target = Workspace;
+    fn deref(&self) -> &Workspace {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Docked {
+    fn deref_mut(&mut self) -> &mut Workspace {
+        &mut self.0
+    }
+}
+
+impl std::fmt::Debug for Docked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Workspace").field("layout", self.layout()).field("hidden", &self.hidden()).field("floated", &self.floated()).finish()
+    }
+}
+
+/// The app's arrangement, or the one its panel settings make when it has none yet.
+fn current(app: &crate::LightcraftApp) -> Workspace {
+    app.ui.docking.clone().map(Docked::into_inner).unwrap_or_else(|| from_ui(app))
+}
+
 fn column(panel: Panel, width: f32) -> Column<Panel> {
     Column::new(vec![Group::new(vec![panel], 0)]).with_width(width)
 }
@@ -442,18 +486,27 @@ pub(crate) fn reveal_command(app: &mut crate::LightcraftApp, id: &str) -> Result
         None
     };
     if let Some(panel) = panel {
-        let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
+        let mut workspace = current(app);
         sync(&mut workspace, app)?;
         reveal(&mut workspace, panel)?;
         cancel_replaced_gesture(app, Some(&workspace));
-        app.ui.docking = Some(workspace);
+        app.ui.docking = Some(Docked(workspace));
     }
     Ok(())
 }
 
 /// Check the target's actual egui layer even while a different widget owns the drag.
 pub(crate) fn drop_target(ui: &egui::Ui, rect: egui::Rect, pointer: Option<egui::Pos2>) -> bool {
-    pointer.is_some_and(|pos| rect.intersect(ui.clip_rect()).contains(pos) && ui.ctx().layer_id_at(pos) == Some(ui.layer_id()))
+    pointer.is_some_and(|pos| {
+        rect.intersect(ui.clip_rect()).contains(pos) && ui.ctx().layer_id_at(pos) == Some(ui.layer_id()) && !under_floating_window(ui.ctx(), rect.intersect(ui.clip_rect()), pos)
+    })
+}
+
+/// Whether a floating dock window the last pass drew covers `pos` over a target at `rect` outside that window. The
+/// framework's floating windows are not egui areas, so egui's layer test does not see them over the dock.
+fn under_floating_window(ctx: &egui::Context, rect: egui::Rect, pos: egui::Pos2) -> bool {
+    let Some(Some(rendered)) = ctx.data(|data| data.get_temp::<Option<Arc<Workspace>>>(rendered_key())) else { return false };
+    rendered.layout().floating.iter().any(|window| window.rect.contains(pos) && !window.rect.contains_rect(rect))
 }
 
 /// Ends the dock's running gestures without a drop: a tab or group drag, and a held divider or
@@ -466,7 +519,7 @@ fn cancel_gestures(ctx: &egui::Context) {
 /// Explicit host commands replace the snapshot before rendering. Cancel only their old
 /// gestures; actions returned by the renderer must keep continuous resizing alive.
 pub(crate) fn cancel_replaced_gesture(app: &crate::LightcraftApp, workspace: Option<&Workspace>) {
-    let replaced = match (app.ui.docking.as_ref(), workspace) {
+    let replaced = match (app.ui.docking.as_deref(), workspace) {
         (Some(old), Some(next)) => old.layout() != next.layout() || old.hidden() != next.hidden(),
         (None, None) => false,
         _ => true,
@@ -481,7 +534,7 @@ pub fn command(app: &mut crate::LightcraftApp, reset: bool, params: &Value) -> R
 }
 
 fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, renderer_action: bool) -> Result<Value, String> {
-    let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
+    let mut workspace = current(app);
     if reset {
         workspace = default_workspace();
         // The usual LightCraft starting workspace shows its current tool beside the photo.
@@ -495,7 +548,7 @@ fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, ren
         cancel_replaced_gesture(app, Some(&workspace));
     }
     publish_visibility(app, &workspace);
-    app.ui.docking = Some(workspace);
+    app.ui.docking = Some(Docked(workspace));
     Ok(json!({"docking": app.ui.docking}))
 }
 
@@ -605,11 +658,27 @@ impl DockPanels<Panel> for Content<'_> {
     }
 }
 
+/// The side panels' automation rects (`panel:left_panel`, `panel:right_panel`) span their dock column, as the old
+/// side panels did: the framework group pads its body, so the body's own rect is narrower than the width the panel
+/// was given. Registered while the body draws, widened here once the area has placed the columns; a panel that is
+/// not first in a docked column (floating, a flyout, a split) keeps its body's rect.
+fn register_column_widths(ctx: &egui::Context, columns: &[(Panel, egui::Rect)]) {
+    ctx.data_mut(|data| {
+        let registry = data.get_temp_mut_or_default::<crate::widgets::Registry>(egui::Id::unique("lc-registry"));
+        for (name, panel) in [("panel:left_panel", Panel::Library), ("panel:right_panel", Panel::Tools)] {
+            let Some(column) = columns.iter().find(|(first, _)| *first == panel).map(|(_, rect)| *rect) else { continue };
+            for (_, rect) in registry.rects.iter_mut().filter(|(id, _)| id == name) {
+                *rect = egui::Rect::from_x_y_ranges(column.x_range(), rect.y_range());
+            }
+        }
+    });
+}
+
 /// Where the last pass placed each dock column, named by a panel of its first group (tests find
 /// the column edges there).
 #[cfg(test)]
 fn columns_key() -> egui::Id {
-    egui::Id::new("lightcraft-dock-columns")
+    egui::Id::unique("lightcraft-dock-columns")
 }
 
 /// The rect the last pass gave the dock column whose first group holds `panel`.
@@ -624,7 +693,7 @@ pub(crate) fn column_rect(ctx: &egui::Context, panel: Panel) -> Option<egui::Rec
 /// the docking actions it produced are not applied.
 pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
+    let mut workspace = current(app);
     if let Err(error) = validate(&workspace).and_then(|()| sync(&mut workspace, app)) {
         app.ui.toast = Some((crate::i18n::tr_format!("Panel layout could not be restored: {error}", error = error), app.tick_now() + 8.0, None));
         workspace = from_ui(app);
@@ -632,8 +701,20 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     }
     // Legacy visibility commands may replace the layout before this render starts.
     cancel_replaced_gesture(app, Some(&workspace));
+    // A command between passes (ui.set, panel.close, ui.dock, a reset) may have replaced the layout the area last
+    // drew: a divider or window move still held from then must not go on editing the replacement. Cancelled here, in
+    // the pass, where the area's gestures see it before they run.
+    // A press held from before the replacement edits nothing until it is let go: its actions were aimed at the old
+    // layout (the area may go on reporting a divider drag the cancel has not reached yet).
+    let held = ui.input(|i| i.pointer.any_down());
+    let mut stale_press = held && ui.data(|d| d.get_temp::<bool>(stale_press_key())).unwrap_or(false);
+    if rendered_differs(ui.ctx(), &workspace) {
+        cancel_gestures(ui.ctx());
+        stale_press |= held;
+    }
+    ui.data_mut(|d| d.insert_temp(stale_press_key(), stale_press));
     // Tool/Canvas callbacks dispatch app commands and must see the real workspace.
-    app.ui.docking = Some(workspace.clone());
+    app.ui.docking = Some(Docked(workspace.clone()));
     let shown = shown_workspace(&workspace);
     let specs = specs();
     let (output, canvas) = {
@@ -646,6 +727,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     }
     #[cfg(test)]
     ui.ctx().data_mut(|data| data.insert_temp(columns_key(), output.columns.clone()));
+    register_column_widths(ui.ctx(), &output.columns);
     if let Some(mut canvas) = canvas {
         let ui = &mut canvas;
         crate::panels::bottombar::show(app, ui);
@@ -669,20 +751,22 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     }
 
     let rendered = workspace;
-    let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
+    let mut workspace = current(app);
     let _ = sync(&mut workspace, app);
     let stale = workspace.layout() != rendered.layout() || workspace.hidden() != rendered.hidden();
     if stale {
         cancel_gestures(ui.ctx());
     }
     publish_visibility(app, &workspace);
-    app.ui.docking = Some(workspace);
+    app.ui.docking = Some(Docked(workspace));
     if stale {
+        remember_rendered(ui.ctx(), app);
         return;
     }
     // The area writes nothing itself: the user's changes come back as actions, applied through
     // `ui.dock` as a command's are, then the panel bodies' requests.
-    for action in output.actions.into_iter().chain(output.requested) {
+    let actions = if stale_press { Vec::new() } else { output.actions };
+    for action in actions.into_iter().chain(output.requested) {
         if let Err(error) = serde_json::to_value(action)
             .map_err(|error| error.to_string())
             .and_then(|action| command_impl(app, false, &json!({"action": action}), true))
@@ -690,6 +774,30 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             app.ui.toast = Some((crate::i18n::tr_format!("Panel move was not applied: {error}", error = error), app.tick_now() + 8.0, None));
         }
     }
+    remember_rendered(ui.ctx(), app);
+}
+
+/// Where [`show`] keeps the workspace as its pass left it, its own actions applied.
+fn rendered_key() -> egui::Id {
+    egui::Id::unique("lightcraft-dock-rendered")
+}
+
+/// Where [`show`] notes that the held press began before the layout was replaced.
+fn stale_press_key() -> egui::Id {
+    egui::Id::unique("lightcraft-dock-stale-press")
+}
+
+/// Keeps the workspace the pass leaves, so the next pass can tell a replacement made between passes.
+fn remember_rendered(ctx: &egui::Context, app: &crate::LightcraftApp) {
+    let rendered = app.ui.docking.clone().map(|docked| Arc::new(docked.into_inner()));
+    ctx.data_mut(|data| data.insert_temp(rendered_key(), rendered));
+}
+
+/// Whether `workspace` lays the panels out otherwise than the last pass left them: something outside the dock
+/// replaced the layout in between. `false` before any pass drew the dock.
+fn rendered_differs(ctx: &egui::Context, workspace: &Workspace) -> bool {
+    let Some(last) = ctx.data(|data| data.get_temp::<Option<Arc<Workspace>>>(rendered_key())) else { return false };
+    last.is_none_or(|last| last.layout() != workspace.layout() || last.hidden() != workspace.hidden())
 }
 
 /// Keep the established ui.set width controls connected to the panel's dock column, floating
@@ -697,7 +805,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
 pub(crate) fn set_widths(state: &mut crate::UiState, params: &Value) -> Result<(), String> {
     state.left_width = crate::state::LEFT_WIDTH.clamp(state.left_width);
     state.right_width = crate::state::RIGHT_WIDTH.clamp(state.right_width);
-    let Some(workspace) = state.docking.as_mut() else {
+    let Some(workspace) = state.docking.as_deref_mut() else {
         return Ok(());
     };
     validate(workspace)?;
@@ -833,10 +941,10 @@ mod tests {
                 entry
             })
             .collect();
-        app.ui.docking = Some(Workspace::new(Layout::new(
+        app.ui.docking = Some(Docked(Workspace::new(Layout::new(
             Some(split(Axis::X, SplitSize::FixedSecond(350.0), tabs(Panel::Canvas), Node::stack(entries))),
             Vec::new(),
-        )));
+        ))));
         let undo = app.session.undo.len();
         app.run("panel.crop", json!({})).unwrap();
         assert_eq!(app.ui.right, crate::state::RightPanel::Crop);
@@ -886,7 +994,7 @@ mod tests {
         apply(&mut workspace, Action::move_beside(Panel::Tools, Panel::Canvas, DockPlacement::Split(DockSide::Top))).unwrap();
         set_visible(&mut workspace, Panel::Tools, false).unwrap();
         let height = workspace.hidden().iter().find(|(panel, _)| *panel == Panel::Tools).unwrap().1.size;
-        let mut state = crate::UiState { docking: Some(workspace), right_width: 410.0, ..Default::default() };
+        let mut state = crate::UiState { docking: Some(Docked(workspace)), right_width: 410.0, ..Default::default() };
         set_widths(&mut state, &json!({"rightWidth":410.0})).unwrap();
         assert_eq!(state.docking.as_ref().unwrap().hidden().iter().find(|(panel, _)| *panel == Panel::Tools).unwrap().1.size, height);
     }
@@ -956,7 +1064,7 @@ mod tests {
         let workspace = docked(300.0, 310.0);
         publish_visibility(&mut app, &workspace);
         assert_eq!((app.ui.left_width, app.ui.right_width), (300.0, 310.0));
-        let mut state = crate::UiState { docking: Some(workspace), left_width: 350.0, right_width: 400.0, ..Default::default() };
+        let mut state = crate::UiState { docking: Some(Docked(workspace)), left_width: 350.0, right_width: 400.0, ..Default::default() };
         set_visible(state.docking.as_mut().unwrap(), Panel::Library, false).unwrap();
         set_widths(&mut state, &json!({"leftWidth":350.0, "rightWidth":400.0})).unwrap();
         let workspace = state.docking.as_mut().unwrap();
@@ -1033,7 +1141,7 @@ mod tests {
         let mut fields = saved_settings(serde_json::to_value(&workspace).unwrap(), Some(DOCKING_VERSION));
         assert!(!drop_outdated(&mut fields));
         let ui: crate::UiState = serde_json::from_value(Value::Object(fields)).unwrap();
-        let loaded = ui.docking.unwrap();
+        let loaded = ui.docking.unwrap().into_inner();
         validate(&loaded).unwrap();
         assert_eq!(loaded, workspace);
         assert_eq!(serde_json::to_value(crate::UiState::default()).unwrap()["dockingVersion"], DOCKING_VERSION, "saves write the version");

@@ -297,7 +297,11 @@ fn escape_pressed(ctx: &egui::Context, control: &str, salt: egui::Id) -> bool {
 /// thumb): the framework's tooltip on that owner, with no probe or second widget over it.
 fn hint(ctx: &egui::Context, response: &egui::Response, area: Rect, text: &str) {
     if area.is_finite() && ctx.pointer_hover_pos().is_some_and(|at| area.contains(at)) {
-        craft::ui::contract::tooltip::attach(response, &text.to_owned().into());
+        // `attach` keeps its timer under the response's id; the part's own component already claimed that id for its
+        // stage this pass, so the hint keeps its timer under an id of its own.
+        let mut tip = response.clone();
+        tip.id = response.id.with("lc-reset-hint");
+        craft::ui::contract::tooltip::attach(&tip, &text.to_owned().into());
     }
 }
 

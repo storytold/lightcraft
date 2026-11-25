@@ -1588,14 +1588,46 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
 /// press and the keyboard alike) and closed by Escape, a click away or a pick. `key` tells this opener's
 /// menu from the others'. Nothing is drawn while only measuring.
 fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key: impl std::hash::Hash + std::fmt::Debug, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
-    use craft::ui::contract::Trigger;
+    use craft::ui::contract::{Bind, Trigger};
     if measuring(ui) {
         return;
     }
+    // The open state lives here, a pass at a time: a menu whose opener stops drawing closes.
+    let pass = ui.ctx().cumulative_pass_nr();
+    let open_id = opener.response.id.with("mask-opener-menu-open");
+    let mut open = ui.data(|d| d.get_temp::<(u64, bool)>(open_id)).filter(|(last, _)| *last == pass || last.saturating_add(1) == pass).is_some_and(|(_, open)| open);
+    // Escape closes it while the keyboard is still on the button, outside the menu: a long press opens it there, and
+    // the button has no use for the Escape the runtime hands it.
+    let opener_id = opener.response.id;
+    // The button's own activation (pointer, long release, keyboard) toggles it; Manual, as the presets menu does, so
+    // the menu's pointer trigger does not toggle it a second time.
+    if opener.clicked() {
+        open = !open;
+    }
+    let layer_id = open_id.with("layer");
+    let menu_layer = ui.data(|d| d.get_temp::<egui::LayerId>(layer_id));
     Menu::new(crate::i18n::tr(label).to_owned())
         .id_salt(("mask-opener-menu", key))
-        .opened_by(&opener.response, Trigger::Click)
-        .show(ui, |ui, _| body(ui));
+        .opened_by(&opener.response, Trigger::Manual)
+        .open(Bind::bound(&mut open))
+        .show(ui, |ui, _| {
+            // the rows' layer, so a later Escape on a row is known to be this menu's
+            if !measuring(ui) {
+                ui.data_mut(|d| d.insert_temp(layer_id, ui.layer_id()));
+            }
+            body(ui)
+        });
+    // after the menu, which takes the Escape it handles itself: one left untaken closes it (next pass)
+    if open && crate::shortcuts::opener_menu_escape(ui.ctx(), opener_id, menu_layer) {
+        open = false;
+    }
+    ui.data_mut(|d| {
+        if open {
+            d.insert_temp(open_id, (pass, true));
+        } else {
+            d.remove::<(u64, bool)>(open_id);
+        }
+    });
 }
 
 /// The choices of a component menu: Object, Describe… and the shapes. `scope` tells this menu's
@@ -1607,7 +1639,10 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str, scope: i
         if measuring(ui) {
             return false;
         }
-        crate::widgets::register_response(format!("maskComp:{op}:{kind}"), shown.response.rect, &shown.response);
+        // (a menu fading out after it closed publishes nothing)
+        if crate::widgets::on_live_layer(&shown.response) {
+            crate::widgets::register_response(format!("maskComp:{op}:{kind}"), shown.response.rect, &shown.response);
+        }
         enabled && shown.ran
     };
     if item(ui, "object", crate::i18n::tr("Object")) {

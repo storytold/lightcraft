@@ -398,6 +398,9 @@ impl<'a> DatePicker<'a> {
                     },
                     |ui| {
                         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                        // a disabled or read-only picker pages and switches nothing either: say so on each control, which
+                        // would otherwise take its own `true` over the popover's scope
+                        let live = enabled && !read_only;
                         // as wide as a month of days, however much room the window has
                         ui.set_min_width(220.0);
                         ui.set_max_width(240.0);
@@ -411,7 +414,7 @@ impl<'a> DatePicker<'a> {
                                         RichText::new(label),
                                         label.to_owned(),
                                         view.precision == *p,
-                                        true,
+                                        live,
                                         0.0,
                                     );
                                     if clicked(&r) {
@@ -428,7 +431,7 @@ impl<'a> DatePicker<'a> {
                                 Icon::ChevronLeft,
                                 vec2(32.0, 22.0),
                                 false,
-                                true,
+                                live,
                                 "Previous page",
                             );
                             if real {
@@ -450,7 +453,7 @@ impl<'a> DatePicker<'a> {
                                     Icon::ChevronRight,
                                     vec2(32.0, 22.0),
                                     false,
-                                    true,
+                                    live,
                                     "Next page",
                                 );
                                 if real {

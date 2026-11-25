@@ -13,7 +13,7 @@ repository = "https://github.com/storytold/lightcraft"
 craft-cms-profile = { package = "craft-cms", git = "https://github.com/storytold/craft-libs", rev = "33be35625e252cc4f06aa375b3b428521faea37d" }
 craft-plist = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "33be35625e252cc4f06aa375b3b428521faea37d" }
 craft-pdf-print = { package = "craft-pdf", git = "https://github.com/storytold/craft-libs", rev = "33be35625e252cc4f06aa375b3b428521faea37d", default-features = false, features = ["write-raster"] }
-craft = { path = "../craft-libs/crates/craft", default-features = false, features = ["ui", "window"] }
+craft = { path = "../craft-libs/crates/craft", default-features = false, features = ["ui", "window", "keymap"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "33be35625e252cc4f06aa375b3b428521faea37d" }
 # Canon CRW decoder shared with the other Craft apps
 craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "33be35625e252cc4f06aa375b3b428521faea37d" }
