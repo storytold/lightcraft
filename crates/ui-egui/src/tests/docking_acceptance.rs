@@ -35,6 +35,16 @@ fn access_rect(h: &Headless, role: egui::accesskit::Role, label: &str) -> egui::
     let bounds = node.bounds().expect("the node has bounds");
     egui::Rect::from_min_max(egui::pos2(bounds.x0 as f32, bounds.y0 as f32), egui::pos2(bounds.x1 as f32, bounds.y1 as f32))
 }
+/// The AccessKit node with `role` and `label` in the last settled tree (AccessKit must be on).
+fn access_node(h: &Headless, role: egui::accesskit::Role, label: &str) -> egui::accesskit::NodeId {
+    let tree = craft::ui::runtime::windows::WindowHost::of(&h.view.ctx).access_tree(egui::ViewportId::ROOT).expect("AccessKit is on");
+    tree.update()
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == role && node.label().is_some_and(|name| name == label))
+        .map(|(id, _)| *id)
+        .unwrap_or_else(|| panic!("no {role:?} named {label}"))
+}
 /// A point on the divider at the inner edge of the Library's dock column.
 fn library_divider(h: &Headless) -> egui::Pos2 {
     let column = crate::docking::column_rect(&h.view.ctx, Panel::Library).expect("the Library's dock column is drawn");
@@ -46,12 +56,12 @@ fn the_gaps_between_dock_panes_show_chrome_not_the_dark_clear_colour() {
     let mut h = app();
     let image = h.snapshot(std::time::Duration::from_secs(5));
     let pixel = |p: egui::Pos2| image.pixels[p.y as usize * image.size[0] + p.x as usize];
-    // each panel's own chrome just inside its edge stroke, and the dock's gap just outside it
+    // each panel's own chrome just inside its edge stroke, and the dock's gap (two points wide) just outside it
     let right = rect(&h, "panel:right_panel");
     let left = rect(&h, "panel:left_panel");
     for (panel, inside, gap) in [
-        ("Tools", egui::pos2(right.left() + 3.0, right.center().y), egui::pos2(right.left() - 2.0, right.center().y)),
-        ("Library", egui::pos2(left.right() - 3.0, left.center().y), egui::pos2(left.right() + 2.0, left.center().y)),
+        ("Tools", egui::pos2(right.left() + 3.0, right.center().y), egui::pos2(right.left() - 1.0, right.center().y)),
+        ("Library", egui::pos2(left.right() - 3.0, left.center().y), egui::pos2(left.right() + 1.0, left.center().y)),
     ] {
         assert_eq!(pixel(gap), pixel(inside), "the gap beside {panel} at {gap:?} is not chrome");
     }
@@ -221,11 +231,23 @@ fn dock_tab_keeps_activation_keys_and_global_command_remains_reachable() {
     h.app.run("panel.crop", json!({})).unwrap();
     h.step();
     h.step();
-    // The renderer's actual Tools tab takes the focus with a click, rather than an arbitrary focus owner.
+    // A click on the renderer's actual Tools tab shows it and leaves the keyboard focus where it was (the framework's
+    // dock tabs keep focus on a press, so the document's keys go on working); the keyboard reaches the tab by focus.
     let tab = access_rect(&h, egui::accesskit::Role::Tab, "Tools").center();
     release(&mut h, tab);
     h.step();
     assert_eq!(h.app.ui.right, RightPanel::Crop, "clicking the shown tab keeps the tool");
+    let node = access_node(&h, egui::accesskit::Role::Tab, "Tools");
+    h.app.synthetic.push(Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+        action: egui::accesskit::Action::Focus,
+        target_tree: egui::accesskit::TreeId::ROOT,
+        target_node: node,
+        data: None,
+    }));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(craft::ui::runtime::focus::focused_rec(&h.view.ctx).is_some(), "the Tools tab has the keyboard focus");
     key(&mut h, egui::Key::Enter);
     assert_eq!(h.app.ui.right, RightPanel::Crop, "Enter activates the tab without tool.done");
     key(&mut h, egui::Key::K);

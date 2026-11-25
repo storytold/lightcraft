@@ -503,6 +503,13 @@ pub(crate) fn drop_target(ui: &egui::Ui, rect: egui::Rect, pointer: Option<egui:
     })
 }
 
+/// Whether a floating dock window the last pass drew lies under `pos`. The framework's floating windows are not egui
+/// areas, so egui's layer test (the title bar's empty area asks it) does not see them.
+pub(crate) fn floating_window_at(ctx: &egui::Context, pos: egui::Pos2) -> bool {
+    let Some(Some(rendered)) = ctx.data(|data| data.get_temp::<Option<Arc<Workspace>>>(rendered_key())) else { return false };
+    rendered.layout().floating.iter().any(|window| window.rect.contains(pos))
+}
+
 /// Whether a floating dock window the last pass drew covers `pos` over a target at `rect` outside that window. The
 /// framework's floating windows are not egui areas, so egui's layer test does not see them over the dock.
 fn under_floating_window(ctx: &egui::Context, rect: egui::Rect, pos: egui::Pos2) -> bool {
