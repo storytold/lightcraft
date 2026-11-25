@@ -171,6 +171,16 @@ pub(crate) fn register_field(ui: &egui::Ui, widget: &str, response: &egui::Respo
     rect
 }
 
+/// Whether the field's own edit menu (its Cut, Copy, Paste and Select All rows) is shown in this pass, open or still
+/// fading out after Esc closed it (the focus comes back to the field once it has gone).
+fn edit_menu_open(_ctx: &egui::Context, record: Option<&craft::ui::runtime::inspect::Recorded>) -> bool {
+    record.is_some_and(|record| {
+        record.elements.iter().any(|element| {
+            element.component == "MenuItem" && element.facts.as_ref().is_some_and(|facts| facts.name.as_deref() == Some(crate::i18n::tr("Copy")))
+        })
+    })
+}
+
 impl<'a> TextField<'a> {
     /// A one-line field (Return ends the edit) registered as `widget`.
     pub fn singleline(widget: &'a str, text: &'a mut String) -> Self {
@@ -276,7 +286,10 @@ impl<'a> TextField<'a> {
         if matches!(ending, Some(Ending::Return | Ending::Escape)) {
             blur_id(ui.ctx(), id);
         }
-        let editing = ending.is_none() && has_focus(ui.ctx(), id);
+        // The field's own Cut / Copy / Paste menu takes the focus while it is open, but the edit goes on under it: the
+        // typing stays, and Esc closes only the menu.
+        let editing = ending.is_none()
+            && (has_focus(ui.ctx(), id) || (real && was_editing(ui.ctx(), widget) && edit_menu_open(ui.ctx(), record.as_deref())));
         if real {
             ui.data_mut(|d| d.insert_temp(id.with("memo"), Memo { editing, pass }));
         }
