@@ -3123,8 +3123,13 @@ mod tests {
         assert!(h.app.export.is_some(), "running in the background");
         let running = h.request("ui.inspect", json!({}), t);
         assert_eq!(running["result"]["export"]["running"]["total"], 3, "{}", running["result"]["export"]);
-        // …and as a row in the activity stack (issue #345)
-        assert_eq!(running["result"]["activity"][0]["kind"], "export", "{}", running["result"]["activity"]);
+        // …and as a row in the activity stack (issue #345). Found by kind, not by position: the dialog's
+        // own preview can still be rendering, and its row is then on top.
+        assert!(
+            running["result"]["activity"].as_array().is_some_and(|rows| rows.iter().any(|row| row["kind"] == "export")),
+            "{}",
+            running["result"]["activity"]
+        );
         let t0 = Instant::now();
         while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
             h.step();
