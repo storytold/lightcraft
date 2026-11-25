@@ -265,8 +265,12 @@ impl LightcraftApp {
             view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |_| {});
         }
         // same scroll offsets, open sections, style… as the window
-        let memory = main.memory(|m| m.clone());
-        view.ctx.memory_mut(|m| *m = memory);
+        // (by value: the shadow keeps a runtime of its own, its pass state, focus and overlays, while it draws the
+        // window's scroll offsets and open sections; a plain Memory copy would share the window's runtime state)
+        if craft::ui::runtime::memory::fork_into(main, &view.ctx).is_err() {
+            self.shadow = Some(view);
+            return None;
+        }
         // The copied memory carries the framework's record of the main window's current pass (the ids it has
         // claimed). An empty pass first moves the shadow context on to a pass of its own, so drawing the window here
         // claims its ids afresh instead of twice in what the runtime takes for the main window's pass.
