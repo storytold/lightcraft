@@ -334,14 +334,8 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     // (the height drawn on the pass before: one from an earlier visit to the panel says nothing)
     let before = ui.data(|d| d.get_temp::<(f32, u64)>(key)).filter(|&(_, drawn)| drawn.checked_add(1) == Some(pass)).map(|(h, _)| h);
     ui.data_mut(|d| d.insert_temp(key, (height, pass)));
-    if before.is_none() {
-        eprintln!("DBGNOBEFORE pass={pass} height={height} stored={:?}", ui.data(|d| d.get_temp::<(f32, u64)>(key)));
-    }
     let Some(before) = before else { return };
     let grew = height - before;
-    if grew.abs() >= 0.5 {
-        eprintln!("DBGCHANGE pass={pass} grew={grew} top={top} clip_top={} typing={} ptr={:?}", ui.clip_rect().top(), crate::panels::keywording::field_focused(ui.ctx()) || crate::text_field::focused(ui.ctx(), ENTER_FIELD), ui.input(|i| i.pointer.latest_pos()));
-    }
     if !grew.is_finite() || grew.abs() < 0.5 || top >= ui.clip_rect().top() - 0.5 {
         return;
     }
@@ -352,7 +346,6 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     if on_box || typing {
         return;
     }
-    eprintln!("DBGGREW pass={pass} grew={grew} height={height} before={before} offset_data={:?}", ui.data(|d| d.get_temp::<f32>(egui::Id::unique("right-scroll-offset"))));
     ui.data_mut(|d| d.insert_temp(egui::Id::unique(HOLD), (grew, pass)));
     // (drawn again at once at the new offset, so the list never shows a frame out of place)
     ui.ctx().request_discard("the Keyword List holds its place");
