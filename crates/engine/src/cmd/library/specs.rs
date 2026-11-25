@@ -451,148 +451,196 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| { step(s, -row_step(p)) }
         ),
         // ---- rating / flags / labels
-        cmd!(
-            "photo.rate",
-            "Set Rating",
-            ["Photo", "Set Rating"],
-            None,
-            "{rating: 0..5, ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| {
-                let r = crate::cmd::index_req(p, "rating", "photo.rate")
-                    .ok()
-                    .filter(|r| *r <= 5)
-                    .ok_or_else(|| bad("photo.rate", "rating must be a whole number 0..5"))?;
-                cull(s, p, |s| for_targets(s, p, "Set Rating", |id| Some(Op::SetRating { id, rating: r as u8 })))
-            }
-        ),
-        cmd!(
-            "photo.decreaseRating",
-            "Decrease Rating",
-            [],
-            None,
-            "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| change_rating(s, p, -1, "Decrease Rating")) }
-        ),
-        cmd!(
-            "photo.increaseRating",
-            "Increase Rating",
-            [],
-            None,
-            "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| change_rating(s, p, 1, "Increase Rating")) }
-        ),
-        cmd!(
-            "photo.flag",
-            "Set Flag",
-            ["Photo", "Set Flag"],
-            None,
-            "{flag: pick|reject|none, ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| {
-                let f = str_param(p, "flag").and_then(Flag::parse).ok_or_else(|| bad("photo.flag", "flag must be pick|reject|none"))?;
-                cull(s, p, |s| for_targets(s, p, "Set Flag", |id| Some(Op::SetFlag { id, flag: f })))
-            }
-        ),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.rate",
+                "Set Rating",
+                ["Photo", "Set Rating"],
+                None,
+                "{rating: 0..5, ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| {
+                    let r = crate::cmd::index_req(p, "rating", "photo.rate")
+                        .ok()
+                        .filter(|r| *r <= 5)
+                        .ok_or_else(|| bad("photo.rate", "rating must be a whole number 0..5"))?;
+                    cull(s, p, |s| for_targets(s, p, "Set Rating", |id| Some(Op::SetRating { id, rating: r as u8 })))
+                }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.decreaseRating",
+                "Decrease Rating",
+                [],
+                None,
+                "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| change_rating(s, p, -1, "Decrease Rating")) }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.increaseRating",
+                "Increase Rating",
+                [],
+                None,
+                "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| change_rating(s, p, 1, "Increase Rating")) }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.flag",
+                "Set Flag",
+                ["Photo", "Set Flag"],
+                None,
+                "{flag: pick|reject|none, ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| {
+                    let f = str_param(p, "flag").and_then(Flag::parse).ok_or_else(|| bad("photo.flag", "flag must be pick|reject|none"))?;
+                    cull(s, p, |s| for_targets(s, p, "Set Flag", |id| Some(Op::SetFlag { id, flag: f })))
+                }
+            )
+        },
         // Classic: ` cycles the flag; Cmd+Up / Cmd+Down raise / lower it (Ctrl on Windows and Linux)
-        cmd!(
-            "photo.cycleFlag",
-            "Cycle Flag",
-            ["Photo", "Set Flag"],
-            Some("`"),
-            "{ids?, advance?: bool} — each photo's own flag: unflagged -> pick -> reject -> unflagged; without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| {
-                cull(s, p, |s| {
-                    change_flag(s, p, "Cycle Flag", |f| match f {
-                        Flag::None => Flag::Pick,
-                        Flag::Pick => Flag::Reject,
-                        Flag::Reject => Flag::None,
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.cycleFlag",
+                "Cycle Flag",
+                ["Photo", "Set Flag"],
+                Some("`"),
+                "{ids?, advance?: bool} — each photo's own flag: unflagged -> pick -> reject -> unflagged; without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| {
+                    cull(s, p, |s| {
+                        change_flag(s, p, "Cycle Flag", |f| match f {
+                            Flag::None => Flag::Pick,
+                            Flag::Pick => Flag::Reject,
+                            Flag::Reject => Flag::None,
+                        })
                     })
-                })
-            }
-        ),
-        cmd!(
-            "photo.increaseFlag",
-            "Increase Flag Status",
-            ["Photo", "Set Flag"],
-            Some("Cmd+Up"),
-            "{ids?, advance?: bool} — reject -> unflagged -> pick (stops at pick); without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| change_flag(s, p, "Increase Flag Status", |f| if f == Flag::Reject { Flag::None } else { Flag::Pick })) }
-        ),
-        cmd!(
-            "photo.decreaseFlag",
-            "Decrease Flag Status",
-            ["Photo", "Set Flag"],
-            Some("Cmd+Down"),
-            "{ids?, advance?: bool} — pick -> unflagged -> reject (stops at reject); without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| change_flag(s, p, "Decrease Flag Status", |f| if f == Flag::Pick { Flag::None } else { Flag::Reject })) }
-        ),
-        cmd!(
-            "photo.pick",
-            "Flag as Pick",
-            ["Photo", "Set Flag"],
-            Some("P"),
-            "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Flag as Pick", |id| Some(Op::SetFlag { id, flag: Flag::Pick }))) }
-        ),
-        cmd!(
-            "photo.reject",
-            "Flag as Reject",
-            ["Photo", "Set Flag"],
-            Some("X"),
-            "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Flag as Reject", |id| Some(Op::SetFlag { id, flag: Flag::Reject }))) }
-        ),
-        cmd!(
-            "photo.unflag",
-            "Unflag",
-            ["Photo", "Set Flag"],
-            Some("U"),
-            "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))) }
-        ),
-        cmd!(
-            "photo.label",
-            "Set Color Label",
-            ["Photo", "Set Color Label"],
-            None,
-            "{label: red|yellow|green|blue|purple|none, ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| {
-                // `none` (or null) clears; a missing label or one that isn't text is an error, not a clear
-                let l = match p.get("label") {
-                    Some(Value::Null) => None,
-                    Some(Value::String(x)) if x == "none" => None,
-                    Some(Value::String(x)) => Some(ColorLabel::parse(x).ok_or_else(|| bad("photo.label", "unknown label"))?),
-                    None => return Err(bad("photo.label", "missing `label` (red|yellow|green|blue|purple|none)")),
-                    Some(_) => return Err(bad("photo.label", "label must be red|yellow|green|blue|purple|none")),
-                };
-                cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l })))
-            }
-        ),
+                }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.increaseFlag",
+                "Increase Flag Status",
+                ["Photo", "Set Flag"],
+                Some("Cmd+Up"),
+                "{ids?, advance?: bool} — reject -> unflagged -> pick (stops at pick); without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| change_flag(s, p, "Increase Flag Status", |f| if f == Flag::Reject { Flag::None } else { Flag::Pick })) }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.decreaseFlag",
+                "Decrease Flag Status",
+                ["Photo", "Set Flag"],
+                Some("Cmd+Down"),
+                "{ids?, advance?: bool} — pick -> unflagged -> reject (stops at reject); without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| change_flag(s, p, "Decrease Flag Status", |f| if f == Flag::Pick { Flag::None } else { Flag::Reject })) }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.pick",
+                "Flag as Pick",
+                ["Photo", "Set Flag"],
+                Some("P"),
+                "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| for_targets(s, p, "Flag as Pick", |id| Some(Op::SetFlag { id, flag: Flag::Pick }))) }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.reject",
+                "Flag as Reject",
+                ["Photo", "Set Flag"],
+                Some("X"),
+                "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| for_targets(s, p, "Flag as Reject", |id| Some(Op::SetFlag { id, flag: Flag::Reject }))) }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.unflag",
+                "Unflag",
+                ["Photo", "Set Flag"],
+                Some("U"),
+                "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| for_targets(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))) }
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.label",
+                "Set Color Label",
+                ["Photo", "Set Color Label"],
+                None,
+                "{label: red|yellow|green|blue|purple|none, ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| {
+                    // `none` (or null) clears; a missing label or one that isn't text is an error, not a clear
+                    let l = match p.get("label") {
+                        Some(Value::Null) => None,
+                        Some(Value::String(x)) if x == "none" => None,
+                        Some(Value::String(x)) => Some(ColorLabel::parse(x).ok_or_else(|| bad("photo.label", "unknown label"))?),
+                        None => return Err(bad("photo.label", "missing `label` (red|yellow|green|blue|purple|none)")),
+                        Some(_) => return Err(bad("photo.label", "label must be red|yellow|green|blue|purple|none")),
+                    };
+                    cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l })))
+                }
+            )
+        },
         // `photo.label` takes the colour as a parameter, so a key can't be given to "none" alone
-        cmd!(
-            "photo.clearLabel",
-            "Clear Color Label",
-            ["Photo", "Set Color Label"],
-            None,
-            "{ids?, advance?: bool} — `photo.label` with `none`; without `ids`, the selection moves on when this takes the active photo out of the view",
-            has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: None }))) }
-        ),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.clearLabel",
+                "Clear Color Label",
+                ["Photo", "Set Color Label"],
+                None,
+                "{ids?, advance?: bool} — `photo.label` with `none`; without `ids`, the selection moves on when this takes the active photo out of the view",
+                has_selection,
+                |s, p| { cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: None }))) }
+            )
+        },
         // ---- orientation
-        cmd!("photo.rotateLeft", "Rotate Left", ["Photo"], Some("Cmd+["), "{ids?}", has_selection, |s, p| rotate(s, p, false)),
-        cmd!("photo.rotateRight", "Rotate Right", ["Photo"], Some("Cmd+]"), "{ids?}", has_selection, |s, p| rotate(s, p, true)),
-        cmd!("photo.flipHorizontal", "Flip Horizontal", ["Photo"], None, "{ids?}", has_selection, |s, p| flip(s, p, true)),
-        cmd!("photo.flipVertical", "Flip Vertical", ["Photo"], None, "{ids?}", has_selection, |s, p| flip(s, p, false)),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.rotateLeft", "Rotate Left", ["Photo"], Some("Cmd+["), "{ids?}", has_selection, |s, p| rotate(s, p, false))
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.rotateRight", "Rotate Right", ["Photo"], Some("Cmd+]"), "{ids?}", has_selection, |s, p| rotate(s, p, true))
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.flipHorizontal", "Flip Horizontal", ["Photo"], None, "{ids?}", has_selection, |s, p| flip(s, p, true))
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.flipVertical", "Flip Vertical", ["Photo"], None, "{ids?}", has_selection, |s, p| flip(s, p, false))
+        },
         // ---- face / pet regions
         cmd!(
             "photo.removeRegion",
@@ -654,19 +702,24 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         // ---- delete / restore
-        cmd!("photo.delete", "Delete Photo", ["Photo"], Some("Delete"), "{ids?} — moves to Recently Deleted", has_selection, |s, p| {
-            let before = s.visible_cloned();
-            let targets = s.targets(p)?;
-            // an open drag ends first, as its own undo step (the selection moves on)
-            s.end_interaction()?;
-            let n = mark_deleted(s, &targets, "Delete")?;
-            select_after_deletion(s, &before);
-            Ok(json!({"changed": n}))
-        }),
-        cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
-            id,
-            deleted: false
-        }))),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.delete", "Delete Photo", ["Photo"], Some("Delete"), "{ids?} — moves to Recently Deleted", has_selection, |s, p| {
+                let before = s.visible_cloned();
+                let targets = s.targets(p)?;
+                // an open drag ends first, as its own undo step (the selection moves on)
+                s.end_interaction()?;
+                let n = mark_deleted(s, &targets, "Delete")?;
+                select_after_deletion(s, &before);
+                Ok(json!({"changed": n}))
+            })
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(
+                Op::SetDeleted { id, deleted: false }
+            )))
+        },
         cmd!(
             "library.emptyRecentlyDeleted",
             "Empty Recently Deleted",
@@ -685,126 +738,134 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"deleted": ids.len()}))
             }
         ),
-        cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
-            let before = s.visible_cloned();
-            let t = s.targets(p)?;
-            // before the inverse ops are taken, so undo brings the photo back with its edit
-            s.end_interaction()?;
-            let op = s.catalog.delete_photos_permanently_ops(&t);
-            s.commit("Delete Permanently", op)?;
-            select_after_deletion(s, &before);
-            Ok(json!({"deleted": t.len()}))
-        }),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
+                let before = s.visible_cloned();
+                let t = s.targets(p)?;
+                // before the inverse ops are taken, so undo brings the photo back with its edit
+                s.end_interaction()?;
+                let op = s.catalog.delete_photos_permanently_ops(&t);
+                s.commit("Delete Permanently", op)?;
+                select_after_deletion(s, &before);
+                Ok(json!({"deleted": t.len()}))
+            })
+        },
         // ---- metadata
-        cmd!(
-            "photo.setMeta",
-            "Edit Info",
-            [],
-            None,
-            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..]}",
-            has_selection,
-            |s, p| {
-                let strs =
-                    |k: &str| p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>());
-                let targets = s.targets(p)?;
-                // GPS: "lat, lon" (decimal or 51°30'26"N 0°7'39"W), [lat, lon], or null / "" to clear
-                let gps: Option<Option<(f64, f64)>> = match p.get("gps") {
-                    None => None,
-                    Some(Value::Null) => Some(None),
-                    Some(Value::String(t)) if t.trim().is_empty() => Some(None),
-                    Some(Value::String(t)) => Some(Some(
-                        parse_gps(t).ok_or_else(|| bad("photo.setMeta", format!("can't read `{t}` as coordinates (e.g. 51.5072, -0.1276)")))?,
-                    )),
-                    Some(Value::Array(a)) if a.len() == 2 => match (a[0].as_f64(), a[1].as_f64()) {
-                        (Some(la), Some(lo)) if la.abs() <= 90.0 && lo.abs() <= 180.0 => Some(Some((la, lo))),
-                        _ => return Err(bad("photo.setMeta", "gps is [latitude, longitude] in degrees")),
-                    },
-                    Some(_) => return Err(bad("photo.setMeta", "gps is \"lat, lon\", [lat, lon] or null")),
-                };
-                let status = match str_param(p, "copyrightStatus") {
-                    Some(t) => Some(
-                        CopyrightStatus::parse(t)
-                            .ok_or_else(|| bad("photo.setMeta", format!("copyrightStatus `{t}`: unknown, copyrighted or publicDomain")))?,
-                    ),
-                    None => None,
-                };
-                // the keywords given that the library refuses as new names, each checked once
-                let refused: Vec<(String, String)> = strs("keywords")
-                    .into_iter()
-                    .flatten()
-                    .chain(strs("addKeywords").unwrap_or_default())
-                    .map(|k| lightcraft_catalog::keywords::clean(&k))
-                    .filter_map(|k| s.catalog.check_keyword_name(&k).err().map(|e| (k, e.to_string())))
-                    .collect();
-                let mut ops = Vec::new();
-                for id in targets {
-                    let Some(ph) = s.catalog.photo(id) else { continue };
-                    let mut m = ph.meta.clone();
-                    if let Some(g) = gps {
-                        m.gps = g;
-                    }
-                    if let Some(st) = status {
-                        m.copyright_status = st;
-                    }
-                    for (k, field) in [
-                        ("title", &mut m.title),
-                        ("caption", &mut m.caption),
-                        ("copyright", &mut m.copyright),
-                        ("usageTerms", &mut m.usage_terms),
-                        ("copyrightUrl", &mut m.copyright_url),
-                        ("creator", &mut m.creator),
-                        ("location", &mut m.location),
-                        ("city", &mut m.city),
-                        ("state", &mut m.state),
-                        ("country", &mut m.country),
-                        ("altText", &mut m.alt_text),
-                        ("extendedDescription", &mut m.extended_description),
-                    ] {
-                        if let Some(v) = str_param(p, k) {
-                            *field = v.to_string();
-                        }
-                    }
-                    // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::{clean, same};
-                    // (a set of the lower-cased keywords keeps this linear however many are supplied)
-                    let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
-                    let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
-                        let k = clean(k);
-                        if !k.is_empty() && seen.insert(k.to_lowercase()) {
-                            m.keywords.push(k);
-                        }
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.setMeta",
+                "Edit Info",
+                [],
+                None,
+                "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..]}",
+                has_selection,
+                |s, p| {
+                    let strs = |k: &str| {
+                        p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
                     };
-                    // a keyword the photo or the library doesn't have yet can't end in `*`
-                    if let Some((_, e)) = refused.iter().find(|(k, _)| !m.keywords.iter().any(|x| same(&clean(x), k))) {
-                        return Err(bad("photo.setMeta", e.clone()));
-                    }
-                    if let Some(k) = strs("keywords") {
-                        m.keywords.clear();
-                        seen.clear();
-                        for k in k {
+                    let targets = s.targets(p)?;
+                    // GPS: "lat, lon" (decimal or 51°30'26"N 0°7'39"W), [lat, lon], or null / "" to clear
+                    let gps: Option<Option<(f64, f64)>> = match p.get("gps") {
+                        None => None,
+                        Some(Value::Null) => Some(None),
+                        Some(Value::String(t)) if t.trim().is_empty() => Some(None),
+                        Some(Value::String(t)) => Some(Some(
+                            parse_gps(t).ok_or_else(|| bad("photo.setMeta", format!("can't read `{t}` as coordinates (e.g. 51.5072, -0.1276)")))?,
+                        )),
+                        Some(Value::Array(a)) if a.len() == 2 => match (a[0].as_f64(), a[1].as_f64()) {
+                            (Some(la), Some(lo)) if la.abs() <= 90.0 && lo.abs() <= 180.0 => Some(Some((la, lo))),
+                            _ => return Err(bad("photo.setMeta", "gps is [latitude, longitude] in degrees")),
+                        },
+                        Some(_) => return Err(bad("photo.setMeta", "gps is \"lat, lon\", [lat, lon] or null")),
+                    };
+                    let status = match str_param(p, "copyrightStatus") {
+                        Some(t) => Some(
+                            CopyrightStatus::parse(t)
+                                .ok_or_else(|| bad("photo.setMeta", format!("copyrightStatus `{t}`: unknown, copyrighted or publicDomain")))?,
+                        ),
+                        None => None,
+                    };
+                    // the keywords given that the library refuses as new names, each checked once
+                    let refused: Vec<(String, String)> = strs("keywords")
+                        .into_iter()
+                        .flatten()
+                        .chain(strs("addKeywords").unwrap_or_default())
+                        .map(|k| lightcraft_catalog::keywords::clean(&k))
+                        .filter_map(|k| s.catalog.check_keyword_name(&k).err().map(|e| (k, e.to_string())))
+                        .collect();
+                    let mut ops = Vec::new();
+                    for id in targets {
+                        let Some(ph) = s.catalog.photo(id) else { continue };
+                        let mut m = ph.meta.clone();
+                        if let Some(g) = gps {
+                            m.gps = g;
+                        }
+                        if let Some(st) = status {
+                            m.copyright_status = st;
+                        }
+                        for (k, field) in [
+                            ("title", &mut m.title),
+                            ("caption", &mut m.caption),
+                            ("copyright", &mut m.copyright),
+                            ("usageTerms", &mut m.usage_terms),
+                            ("copyrightUrl", &mut m.copyright_url),
+                            ("creator", &mut m.creator),
+                            ("location", &mut m.location),
+                            ("city", &mut m.city),
+                            ("state", &mut m.state),
+                            ("country", &mut m.country),
+                            ("altText", &mut m.alt_text),
+                            ("extendedDescription", &mut m.extended_description),
+                        ] {
+                            if let Some(v) = str_param(p, k) {
+                                *field = v.to_string();
+                            }
+                        }
+                        // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
+                        use lightcraft_catalog::keywords::{clean, same};
+                        // (a set of the lower-cased keywords keeps this linear however many are supplied)
+                        let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
+                        let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
+                            let k = clean(k);
+                            if !k.is_empty() && seen.insert(k.to_lowercase()) {
+                                m.keywords.push(k);
+                            }
+                        };
+                        // a keyword the photo or the library doesn't have yet can't end in `*`
+                        if let Some((_, e)) = refused.iter().find(|(k, _)| !m.keywords.iter().any(|x| same(&clean(x), k))) {
+                            return Err(bad("photo.setMeta", e.clone()));
+                        }
+                        if let Some(k) = strs("keywords") {
+                            m.keywords.clear();
+                            seen.clear();
+                            for k in k {
+                                add(&mut m, &mut seen, &k);
+                            }
+                        }
+                        for k in strs("addKeywords").unwrap_or_default() {
                             add(&mut m, &mut seen, &k);
                         }
+                        let removed: std::collections::HashSet<String> =
+                            strs("removeKeywords").unwrap_or_default().iter().map(|k| clean(k).to_lowercase()).collect();
+                        if !removed.is_empty() {
+                            m.keywords.retain(|x| !removed.contains(&clean(x).to_lowercase()));
+                        }
+                        ops.push(Op::SetMeta { id, meta: Box::new(m) });
                     }
-                    for k in strs("addKeywords").unwrap_or_default() {
-                        add(&mut m, &mut seen, &k);
+                    let n = ops.len();
+                    s.commit("Edit Info", Op::Batch { ops })?;
+                    // keywords just added become the Recent Keywords set
+                    let added: Vec<String> =
+                        strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
+                    if n > 0 && !added.is_empty() {
+                        crate::cmd::keywords::note_recent(s, &added);
                     }
-                    let removed: std::collections::HashSet<String> =
-                        strs("removeKeywords").unwrap_or_default().iter().map(|k| clean(k).to_lowercase()).collect();
-                    if !removed.is_empty() {
-                        m.keywords.retain(|x| !removed.contains(&clean(x).to_lowercase()));
-                    }
-                    ops.push(Op::SetMeta { id, meta: Box::new(m) });
+                    Ok(json!({"changed": n}))
                 }
-                let n = ops.len();
-                s.commit("Edit Info", Op::Batch { ops })?;
-                // keywords just added become the Recent Keywords set
-                let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
-                if n > 0 && !added.is_empty() {
-                    crate::cmd::keywords::note_recent(s, &added);
-                }
-                Ok(json!({"changed": n}))
-            }
-        ),
+            )
+        },
         // ---- albums
         cmd!(
             "album.create",
