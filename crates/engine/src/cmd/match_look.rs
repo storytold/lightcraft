@@ -2,7 +2,7 @@
 //! Smart Adjustments / Normalize do: each photo's Exposure, Contrast and global colour-grading tint are solved so
 //! its rendered picture has the reference's mean lightness, lightness spread and mean colour cast.
 //!
-//! Chromaforge's own method: statistics are taken in Oklab (Björn Ottosson's published formulas, public domain /
+//! An original method: statistics are taken in Oklab (Björn Ottosson's published formulas, public domain /
 //! MIT) on small renders through the real pipeline; a finite-difference Jacobian of those statistics against the
 //! sliders is measured once per photo, then a few damped Newton steps move the sliders. Only those three controls
 //! change, so the result stays an ordinary, editable edit.
