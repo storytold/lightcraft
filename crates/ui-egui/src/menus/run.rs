@@ -1694,7 +1694,7 @@ fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, 
     let gpu = (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten();
     let mb = |b: u64| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
     let mut rows = vec![
-        ("Version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+        ("Version".to_string(), crate::channel::display_version()),
         ("System".to_string(), format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)),
         ("CPU threads".to_string(), std::thread::available_parallelism().map(|n| n.get().to_string()).unwrap_or_else(|_| "?".into())),
         (
