@@ -14,10 +14,14 @@ import { Aside } from '@astrojs/starlight/components';
 - JPEG XL lossy files in Adobe RGB / ProPhoto are written as Rec. 2020.
 
 ## HDR output
-- 🟡 **HDR output** checkbox in File Settings: gain-map JPEG, PQ or HLG AVIF, PQ PNG, PQ JPEG XL, float TIFF.
+- 🟡 **HDR output** checkbox in File Settings, for photos edited in HDR: gain-map JPEG, PQ or HLG AVIF, PQ PNG, PQ JPEG XL, float TIFF.
+- **HDR mode** (AVIF and JPEG XL): **Gain map** writes an SDR image with an HDR gain map (ISO 21496-1), like a gain-map JPEG. The file looks right everywhere and shows HDR where the viewer reads gain maps: for AVIF Chrome, Edge, Android and recent Safari; few viewers read JPEG XL gain maps yet. **HDR image** (the default) is one PQ or HLG file.
+- **HDR curve** (AVIF, HDR image): PQ or HLG.
 - No HDR export presets yet.
 
 <Shot name="export-hdr" alt="HDR output checked in File Settings" menu="☰ ▸ Shortcuts ▸ Export…" />
+
+<Shot name="export-hdr-gain-map" alt="HDR output checked for AVIF with HDR mode Gain map" menu="☰ ▸ Shortcuts ▸ Export…" />
 
 ## Image Sizing
 - **Full size**: the cropped native size; never upscaled.

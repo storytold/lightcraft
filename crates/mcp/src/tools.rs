@@ -275,6 +275,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 if let (Some(o), serde_json::Value::Object(v)) = (
                     props.as_object_mut(),
                     json!({
+                        "hdrMode": {"type": "string", "enum": ["hdr", "gainMap"], "description": "How AVIF and JPEG XL store HDR output (default hdr): hdr = one HDR image (10-bit / 16-bit Rec. 2020 PQ or HLG), gainMap = an 8-bit SDR image with an ISO 21496-1 gain map (looks right everywhere, HDR where the viewer reads gain maps). Only JPEG, AVIF and JPEG XL carry a gain map; its base image is 8-bit"},
                         "destinationMode": {"type": "string", "enum": ["specificFolder", "sameAsOriginal", "chooseLater"], "description": "specificFolder (default) = everything into `dir`; sameAsOriginal = each photo into the folder of its original (+ `subfolder`); a photo with no folder on disk or whose folder is gone gets an error; chooseLater = the desktop app asks for the folder when the export starts (here, as specificFolder: pass `dir`)"},
                         "customText": {"type": "string", "description": "Text of the `{custom}` naming token, e.g. naming `{custom}-{seq:1}`"},
                         "fit": {"type": "string", "enum": ["dimensions", "widthHeight"], "description": "With width + height: dimensions (default) fits either orientation (the larger number goes to the long edge); widthHeight limits the width to `width` and the height to `height` as the photo stands"},
@@ -861,6 +862,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                         "colorSpace",
                         "bitDepth",
                         "hdr",
+                        "hdrMode",
                         "hdrTransfer",
                         "pluginDestination",
                         "preset",

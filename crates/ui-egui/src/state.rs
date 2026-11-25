@@ -1563,6 +1563,10 @@ pub struct UiState {
     /// HDR edits are shown in HDR on an HDR display (View ▸ HDR Preview, `view.hdrPreview`);
     /// off, every view shows their SDR rendition, as on an SDR display.
     pub hdr_preview: bool,
+    /// The Export screen's preview shows the HDR rendition of an HDR export (SDR otherwise);
+    /// kept for the session (`export.previewMode`).
+    #[serde(skip)]
+    pub export_preview_hdr: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
     /// The ids of other folded panels (the Classic modules' `panel:<key>` panels), saved here. Settings files
@@ -2779,6 +2783,7 @@ impl Default for UiState {
             face_boxes: false,
             draw_faces: false,
             hdr_preview: true,
+            export_preview_hdr: false,
             sidebar: Default::default(),
             collapsed_sidebar: Vec::new(),
             group_open: Default::default(),
