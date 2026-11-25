@@ -229,7 +229,7 @@ impl Prepared {
 pub fn run_command(s: &mut crate::Session, p: &Value) -> Result<Value, String> {
     let prepared = prepare(s, p)?;
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let row = s.activity.start_batch("export", "Exporting with presets", crate::activity::Cancel::Flag(cancel.clone()));
+    let row = s.activity.start_batch("export", "Exporting", crate::activity::Cancel::Flag(cancel.clone()));
     let total = prepared.len() as u64;
     row.progress(0, total);
     let report = prepared.run(&cancel, &mut |done, name| {
@@ -306,7 +306,7 @@ mod tests {
             }
         }
         let rows = s.activity.finished();
-        assert_eq!(rows.iter().filter(|b| b.label == "Exporting with presets").count(), 1);
+        assert_eq!(rows.iter().filter(|b| b.label == "Exporting").count(), 1);
         assert!(s.activity.list().is_empty(), "the row ends with the run");
         // the photos are marked exported
         assert!(ids.iter().all(|id| s.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().exported.is_some()));

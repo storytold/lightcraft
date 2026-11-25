@@ -92,7 +92,7 @@ pub fn start(app: &mut LccApp, params: &Value) -> Result<Value, String> {
     std::thread::Builder::new().name("run-presets".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    let row = app.session.activity.start("export", "Exporting with presets", lcc_engine::activity::Cancel::Flag(cancel.clone()));
+    let row = app.session.activity.start("export", "Exporting", lcc_engine::activity::Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
     app.export = Some(crate::export_task::ExportTask::new(total, progress, cancel, rx, row));
     Ok(json!({"background": true, "total": total}))
@@ -123,7 +123,7 @@ mod tests {
         app.ui.dialog = None;
         app.run("app.runPresets", params).unwrap();
         let rows = app.session.activity.list();
-        assert_eq!(rows.iter().filter(|r| r.label == "Exporting with presets").count(), 1);
+        assert_eq!(rows.iter().filter(|r| r.label == "Exporting").count(), 1);
         let mut h = crate::headless::Headless::new(app, [1000.0, 800.0], 1.0);
         let deadline = Instant::now() + Duration::from_secs(120);
         while h.app.last_export_result.is_none() {
