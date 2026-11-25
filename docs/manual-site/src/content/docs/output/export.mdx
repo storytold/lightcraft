@@ -10,7 +10,11 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 import { Aside } from '@astrojs/starlight/components';
 
 - Open: **File ▸ Export…** (⇧⌘E), the **Export** button in the module bar. It exports the selected photos (or the open one).
-- The preview of a single photo shows the loupe's own render (the thumbnail stands in until it arrives). Entering Export from Develop selects the photo on screen.
+- **Preview**: the first photo to be exported, as its file will be. The export's own rendering makes it (its size, output sharpening and watermark), with the file's size under it. A wide window shows it beside the settings; a narrow one as the page's last section (the rail's **Preview** jumps there).
+- **SDR | HDR** (in the preview): **SDR** shows the SDR rendition, the base image of a gain map JPEG. **HDR** shows the HDR rendition of an HDR export on an HDR display.
+- Where HDR can't be shown, the preview keeps the SDR rendition and says why and what to turn on: HDR output is off, the format has no HDR, the photo has no HDR edit, the display is SDR, the HDR display setting is off, or View ▸ Loupe Info ▸ HDR Preview is off.
+- The preview renders in the background (a row in the activity stack) and never holds up Export. A new size, sharpening, watermark, format or colour space renders it again; the destination, file naming and metadata do not. A file exported unchanged (Original files, DNG) or a video clip shows the photo as developed and says so.
+- Entering Export from Develop selects the photo on screen.
 - One encoder serves the app, CLI, MCP and the web build; the file matches the preview at any size.
 - Sections, in order, each folds and shows a one-line summary:
   - **Export Location**: [folder, subfolder, conflicts](../export-location/)

@@ -43,15 +43,29 @@ repo — the standard for what goes there lives with it: see the [craft-fonts RE
 
 **Building for one language:** add `CRAFT_FONTS_LANGUAGE=<code>` (a code from `crates/ui-egui/locales/`, e.g. `ja`,
 `zh-hans`, `de`) to embed only the fonts that language's interface needs. Latin, Cyrillic and Greek languages need
-none beyond the built-in Inter; `ja`, `zh-hans`, `zh-hant` and `ka` take their own script's faces. The app then offers
-only that language and English, and a saved setting naming another language falls back to English. Text in other
-scripts — file and folder names, keywords, captions, watermarks — shows boxes. Release builds never use it: it fails
-the build together with `CRAFT_FONTS_REQUIRED` or `CRAFT_FONTS_EMBED=0`, and an unknown code fails with the list of
-valid ones.
+none beyond the built-in Inter; `ja`, `zh-hans` and `ka` take their own script's faces, and `zh-hant` takes the
+Simplified Chinese face, since craft-fonts has no Traditional one yet (its glyph forms are the mainland ones). The app
+then offers only that language and English, and a saved setting naming another language falls back to English. Text in
+other scripts — file and folder names, keywords, captions, watermarks — shows boxes. Release builds never use it: it
+fails the build together with `CRAFT_FONTS_REQUIRED` or `CRAFT_FONTS_EMBED=0`, and an unknown code fails with the list
+of valid ones.
 
 ```sh
 CRAFT_FONTS_DIR=../craft-fonts CRAFT_FONTS_LANGUAGE=ja cargo run --release -p lcc-app
 ```
+
+What a one-language build saves, measured on macOS arm64 (release `app` binary, all craft-fonts faces otherwise
+embedded):
+
+| Build | Size | Saved against the full build |
+|---|---:|---:|
+| all languages (no `CRAFT_FONTS_LANGUAGE`) | 256.1 MiB | — |
+| `en`, `de` and the other Latin, Cyrillic and Greek languages | 207.8 MiB | 48.3 MiB (18.9 %) |
+| `ja` | 231.0 MiB | 25.1 MiB (9.8 %) |
+| `zh-hans` and `zh-hant` | 223.6 MiB | 32.5 MiB (12.7 %) |
+
+Each row is one build on that Mac, and the sizes will drift as the app grows. The saving is what the dropped scripts'
+craft-fonts faces would have added to the binary.
 
 **Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](../localization.md).
