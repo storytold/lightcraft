@@ -428,9 +428,26 @@ fn rotating_the_crop_dims_nothing_inside_the_box() {
         }
     }
     assert!(checked >= 12, "{checked} points inside the box compared");
-    let corner_px = img.left_top() + egui::vec2(6.0, 6.0);
+    // Nearest magnification can put the old single probe on the fixture's black first texel:
+    // black cannot get darker. Compare a patch containing neighbouring texels instead, and
+    // verify every sample is outside the rotated box. The inside-box equality checks above
+    // still guard #731's dimmed wedges; averaging is only for the outside-dimming check.
     let lum = |c: egui::Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
-    assert!(lum(pixel(&rotated, corner_px)) < lum(pixel(&plain, corner_px)), "the photo's corner, outside the box, is dimmed");
+    let (u_axis, v_axis) = (c[1] - c[0], c[3] - c[0]);
+    let (mut plain_lum, mut rotated_lum) = (0, 0);
+    for y in 6..22 {
+        for x in 6..22 {
+            let p = img.left_top() + egui::vec2(x as f32, y as f32);
+            assert!(img.contains(p), "the outside-dimming patch stays on the photo");
+            let d = p - c[0];
+            let (u, v) = (d.dot(u_axis) / u_axis.length_sq(), d.dot(v_axis) / v_axis.length_sq());
+            assert!(!(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v), "the patch stays outside the crop box: {p:?}");
+            plain_lum += lum(pixel(&plain, p));
+            rotated_lum += lum(pixel(&rotated, p));
+        }
+    }
+    assert!(plain_lum > 0, "the outside-dimming patch must contain non-black pixels");
+    assert!(rotated_lum < plain_lum, "the photo's corner, outside the box, is dimmed: {rotated_lum} < {plain_lum}");
 }
 
 fn crop_rect(h: &Headless) -> lightcraft_geom::Rect {

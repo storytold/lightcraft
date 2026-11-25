@@ -80,6 +80,8 @@ fn a_pending_crop_or_rotation_does_not_reuse_the_old_textures_aspect() {
             histogram: None,
             ms: 0.0,
             quick: None,
+            full_res: false,
+            first_pixel: None,
             pixels: None,
         },
     );

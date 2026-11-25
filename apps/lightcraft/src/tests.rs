@@ -1,5 +1,18 @@
 use super::*;
 
+/// #2643: a GPU-resident view is registered with the sampler the renderer chose: nearest
+/// magnification and linear minification for a native-resolution photo past 100 %, linear
+/// otherwise (before, the window used one linear sampler for every view).
+#[test]
+fn gpu_views_use_the_sampler_the_renderer_chose() {
+    let nearest = egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR };
+    let s = view_sampler(nearest);
+    assert_eq!((s.mag_filter, s.min_filter), (eframe::wgpu::FilterMode::Nearest, eframe::wgpu::FilterMode::Linear));
+    let s = view_sampler(egui::TextureOptions::LINEAR);
+    assert_eq!((s.mag_filter, s.min_filter), (eframe::wgpu::FilterMode::Linear, eframe::wgpu::FilterMode::Linear));
+    assert_eq!(s.address_mode_u, eframe::wgpu::AddressMode::ClampToEdge);
+}
+
 #[test]
 fn desktop_clear_color_stays_opaque_with_a_modal_open() {
     let mut app = App(

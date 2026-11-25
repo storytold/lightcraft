@@ -10,9 +10,10 @@ pub(super) fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
     if !app.ui.navigator || !zoomed || app.ui.fullscreen {
         return None;
     }
-    let tex = app.renderer.thumb(id).or_else(|| app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id));
     let aspect = img.width() / img.height().max(1.0);
     let (w, h) = if aspect >= 1.0 { (NAV_W, NAV_W / aspect) } else { (NAV_W * aspect, NAV_W) };
+    let ppp = ui.ctx().pixels_per_point();
+    let tex = app.renderer.thumb(id).or_else(|| app.renderer.main_for_fit(id, [w * ppp, h * ppp]));
     let frame = Rect::from_min_size(pos2(canvas.right() - w - 16.0, canvas.bottom() - h - 16.0), vec2(w, h));
     let p = ui.painter_at(canvas);
     p.rect_filled(frame.expand(5.0), 4.0, Color32::from_black_alpha(190));
