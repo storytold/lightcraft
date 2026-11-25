@@ -241,7 +241,7 @@ const MAX_PREVIEW_PLAN_SHARE: u64 = 6;
 
 /// The largest file the planner path builds its buffer for. The raws it serves are far below this;
 /// a file past it is read whole as before rather than allocating its length up front.
-const MAX_PREVIEW_PLAN_BYTES: u64 = 1 << 30;
+pub(super) const MAX_PREVIEW_PLAN_BYTES: u64 = 1 << 30;
 
 /// The header the quick path is handed on the planner route. The header route grows its prefix to
 /// the preview's declared extent, so `quick_image_srgb` can read the file's own EXIF orientation out
