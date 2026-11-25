@@ -266,6 +266,8 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     .codec(
                         NumberCodec::new(Reader::new(), 2)
                             .fixed()
+                            // a turned angle carries its sign, as the readout writes it ("+2.50")
+                            .explicit_plus()
                             .parse_with(move |text| crate::widgets::typed_value(&number_spec, text.trim().trim_end_matches('°'))),
                     )
                     .show(ui);

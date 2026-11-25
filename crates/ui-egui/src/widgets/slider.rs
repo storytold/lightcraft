@@ -271,22 +271,23 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
     // The readout goes back to showing the value once a typed edit ends (Return, a step): a field kept
     // focused would send the next Undo to its own text history instead of the photo's.
     let ended = out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }));
-    // Escape gives the readout back too, as LightCraft's did: the field has already put its text back. Not on the
-    // pass of the release that opens the edit, whose keys the field has not had yet.
-    let escaped = escape_went_down(ctx, egui::Id::unique(("lc-slider-escape-down", spec.id)).with(row.salt))
-        && !ui.input(|input| input.pointer.any_released());
+    // Return or Escape gives the keyboard back too, as LightCraft's fields did (and the dialogs' number fields do):
+    // the field has applied its commit or put its text back first, so nothing is lost.
+    // (The framework's key stage takes the keys from egui's events; it still says which keys are down.)
+    let keyed = key_went_down(ctx, "Enter", egui::Id::unique(("lc-slider-enter-down", spec.id)).with(row.salt))
+        | key_went_down(ctx, "Escape", egui::Id::unique(("lc-slider-escape-down", spec.id)).with(row.salt));
     if let Some(root) = number_focus
-        && (ended || escaped)
+        && (ended || keyed)
     {
-        ui.memory_mut(|memory| memory.surrender_focus(root));
+        super::text_field::blur_id(ctx, root);
     }
     track
 }
 
-/// Whether Escape went down in this pass for the reader `key` (the framework's key stage takes the key from egui's
-/// events; it still says which keys are down). Each reader keeps its own memory of the key being held.
-fn escape_went_down(ctx: &egui::Context, key: egui::Id) -> bool {
-    let down = craft::ui::runtime::keys::held(ctx).iter().any(|key| key.code_name() == "Escape");
+/// Whether the key named `code` went down in this pass, for the reader `key`, which keeps its own memory of the key
+/// being held.
+fn key_went_down(ctx: &egui::Context, code: &str, key: egui::Id) -> bool {
+    let down = craft::ui::runtime::keys::held(ctx).iter().any(|held| held.code_name() == code);
     let was = ctx.data_mut(|data| {
         let was = data.get_temp::<bool>(key).unwrap_or(false);
         data.insert_temp(key, down);
