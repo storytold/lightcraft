@@ -33,6 +33,13 @@ LibRaw's src/decoders/sony_arw6.cpp (commit 4d9bd21a, Copyright 2026 LibRaw LLC 
 LGPL 2.1 or CDDL 1.0) was read as a reference for accepting the ARW6 12-bit mode in
 crates/raw/src/vendor/arw.rs; no code from it is included.
 
+crates/raw/src/highlight/opposed.rs and crates/raw/src/highlight/laplacian.rs (the Inpaint Opposed and
+Guided Laplacian highlight reconstruction methods) are translated from darktable 4.8.0's
+src/iop/hlreconstruct/opposed.c and laplacian.c and src/common/bspline.h
+(https://github.com/darktable-org/darktable), Copyright (C) 2010-2024 darktable developers, licensed under
+the GNU General Public License v3 or later (LICENSE-GPL-3.0.txt); those modules are used under that licence.
+Each module lists its changes from the source.
+
 The gain map AVIF file layout in crates/codecs/src/avif_gainmap.rs (the `tmap` tone map derived
 item, its `dimg` and `altr` references and the `tmap` brand) was written with libavif v1.2.1
 (https://aomedia.googlesource.com/libavif), Copyright (c) the libavif authors, BSD-2-Clause, read
@@ -45,6 +52,12 @@ quantization tables and multi-tile geometry) are translated from LibRaw's src/de
 (https://github.com/LibRaw/LibRaw), Copyright 2018-2019 Alexey Danilchenko and 2019-2026
 Alex Tutubalin, LibRaw LLC, used under the GNU LGPL 2.1
 (crates/raw/src/vendor/LICENSE-LibRaw-LGPL-2.1.txt; LibRaw also offers CDDL 1.0).
+
+crates/pipeline/src/tone_eq.rs (the Tone Equalizer) is translated from darktable's src/iop/toneequal.c
+(https://github.com/darktable-org/darktable), Copyright 2018-2026 Aurélien Pierre and the darktable developers,
+used under the GNU GPL 3.0 or later (LICENSE-GPL-3.0.txt): the nine-band Gaussian radial-basis correction curve
+solved through the band values and the guided-filter luminance mask. Binaries that include it are distributed
+under the GPL-3.0-or-later option of this project's licence.
 
 vendor/egui-wgpu is egui-wgpu 0.36.2 (https://github.com/emilk/egui), Copyright (c) 2018-2021
 Emil Ernerfeldt and the egui contributors, licensed under the MIT License or the Apache License,
@@ -255,3 +268,9 @@ Chromaforge contributors (2026); each ported file says so. It carries the CIE 19
 functions and the CIE standard illuminants A, D50, D55, D65, D75 and E (CIE 015:2018 / ISO/CIE 11664
 published tables), and the published reference values (CIELAB D50) of the X-Rite ColorChecker 24 as made
 before November 2014. See assets/ATTRIBUTION.md.
+
+crates/raw/src/demosaic/rcd.rs translates Ratio Corrected Demosaicing (RCD v2.3) by Luis Sanz Rodríguez
+from RawTherapee's rtengine/rcd_demosaic.cc (https://github.com/Beep6581/RawTherapee), Copyright (c) 2017-2018
+Luis Sanz Rodríguez and the RawTherapee developers, licensed under the GNU General Public License version 3
+or later (text: LICENSE-GPL-3.0.txt). Modified by the Chromaforge contributors (2026): no tiling or SIMD,
+mirror-reflected borders, guarded divisions.

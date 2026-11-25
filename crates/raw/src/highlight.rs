@@ -11,6 +11,8 @@
 //!   clipping to the last, pale ones from the start.
 //! - [`reconstruct_masked`]: the same for a binned image, whose clipped channels a mask tells (block means with a
 //!   clipped sample among them).
+//! - [`reconstruct_mode`]: the photo's choice of method ([`Mode`]): the above, or one of two ported from darktable,
+//!   inpaint opposed (`opposed`) and guided Laplacian (`laplacian`).
 //!
 //! Why the care: the white-balance gains push clipped channels apart (green clips first, red and blue keep
 //! rising), so whatever colour the rebuilt pixels carry is hidden at Neutral only by the tone map's roll-off to
@@ -23,6 +25,63 @@
 
 use lcc_raster::Rgb32f;
 use rayon::prelude::*;
+
+mod laplacian;
+mod opposed;
+
+/// How clipped highlights are rebuilt (the photo's `sensor.highlightMode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Mode {
+    /// [`reconstruct_with`]: chromaticity of reliable content nearby, diffused coarse to fine; neutral where there
+    /// is none.
+    #[default]
+    Rebuild,
+    /// Inpaint opposed (darktable): a clipped channel from the mean of the two others plus the colour offset of the
+    /// unclipped content around the clipped areas. Fast; good on small and large highlights alike.
+    Opposed,
+    /// Guided Laplacian (darktable): multi-scale wavelet inpainting guided by the channel with the most detail.
+    /// Slowest; carries texture and colour gradients into larger clipped areas.
+    Laplacian,
+}
+
+impl Mode {
+    /// The mode of a `sensor.highlightMode` control value: 0 Rebuild, 1 Opposed, 2 Laplacian (rounded; anything
+    /// else, NaN included, is Rebuild).
+    pub fn from_control(v: f64) -> Mode {
+        let r = v.round();
+        if r == 1.0 {
+            Mode::Opposed
+        } else if r == 2.0 {
+            Mode::Laplacian
+        } else {
+            Mode::Rebuild
+        }
+    }
+}
+
+/// Reconstruct with `mode`: [`reconstruct_with`] (or [`reconstruct_masked`] given a `mask`) for [`Mode::Rebuild`],
+/// the ported methods for the others, with the same arguments and the same count returned.
+pub fn reconstruct_mode(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 3], mode: Mode, mask: Option<&[u8]>) -> usize {
+    let mask = mask.filter(|m| m.len() == img.data.len());
+    let by_mask = |i: usize, p: &[f32; 3]| {
+        let m = mask.and_then(|m| m.get(i)).copied().unwrap_or(0);
+        let v = by_value(p, clip);
+        [v[0] || m & CLIPPED_R != 0, v[1] || m & CLIPPED_G != 0, v[2] || m & CLIPPED_B != 0]
+    };
+    match (mode, mask) {
+        (Mode::Rebuild, Some(m)) => reconstruct_masked(img, wb, clip, white, m),
+        (Mode::Rebuild, None) => reconstruct_with(img, wb, clip, white),
+        (Mode::Opposed, _) => opposed::reconstruct(img, wb, clip, white, &by_mask),
+        (Mode::Laplacian, _) => laplacian::reconstruct(img, wb, clip, white, &by_mask),
+    }
+}
+
+/// `white` when it is a plausible colour model's white (finite, within 1/16..16 of the camera's neutral), else the
+/// camera's neutral.
+fn sane_white(white: [f32; 3]) -> [f32; 3] {
+    let plausible = white.iter().all(|v| v.is_finite() && (1.0 / 16.0..=16.0).contains(v));
+    if plausible { white } else { [1.0; 3] }
+}
 
 /// Clip every channel of `wb ⊙ img` at `min_c(wb_c) · clip` — i.e. at the lowest channel's clip level after WB —
 /// then divide the multipliers back out. `clip` is the sensor clip in normalised units (≈ 1.0).
@@ -387,8 +446,7 @@ fn rebuild_clipped(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 3], c
         return 0;
     }
     // a white far from the camera's neutral (or not a number) is a broken colour model: keep the camera's
-    let plausible = white.iter().all(|v| v.is_finite() && (1.0 / 16.0..=16.0).contains(v));
-    let white = if plausible { white } else { [1.0; 3] };
+    let white = sane_white(white);
     let total = white[0] + white[1] + white[2];
     let neutral = [white[0] / total, white[1] / total, white[2] / total];
     // A clipped pixel is never a source, so its chromaticity is always the bilinear sample of the
@@ -858,5 +916,130 @@ mod tests {
         assert_eq!(reconstruct(&mut plain, [1.0; 3], 0.99), 0);
         assert_eq!(reconstruct_masked(&mut plain, [1.0; 3], 0.99, [1.0; 3], &mask[1..]), 0);
         assert!(plain.data == base.data);
+    }
+
+    const PORTED: [Mode; 2] = [Mode::Opposed, Mode::Laplacian];
+
+    /// Hostile sizes and values: empty, one pixel, one row or column, odd sizes; NaN, infinities, negatives, a
+    /// mask of the wrong length; and broken multipliers or white. No panic, the clipped pixels come out finite and
+    /// not negative, and the count is that of the pixels with a clipped channel.
+    #[test]
+    fn ported_modes_survive_hostile_input() {
+        let vals = [0.2, 1.0, f32::NAN, f32::INFINITY, -3.0, 0.995, f32::NEG_INFINITY, 1e30, 0.0];
+        for mode in PORTED {
+            for (w, h) in [(0, 0), (0, 5), (1, 1), (1, 7), (7, 1), (2, 3), (5, 5), (13, 4), (40, 3)] {
+                for (wb, white) in [(WB, [1.0; 3]), ([0.0, f32::NAN, -1.0], [f32::INFINITY, 0.0, 1.0]), ([1e30, 1.0, 1e-30], [2.0, 1.0, 0.5])] {
+                    let img = Rgb32f::from_fn(w, h, |x, y| std::array::from_fn(|c| vals[(x * 3 + y * 5 + c * 7) % vals.len()]));
+                    let clipped = img.data.iter().filter(|p| p.iter().any(|&v| v >= 0.99)).count();
+                    for mask in [None, Some(vec![CLIPPED_G; img.data.len()]), Some(vec![7u8; 3])] {
+                        let mut out = img.clone();
+                        let n = reconstruct_mode(&mut out, wb, 0.99, white, mode, mask.as_deref());
+                        let marked = mask.as_ref().is_some_and(|m| m.len() == img.data.len());
+                        if !marked {
+                            assert_eq!(n, clipped, "{mode:?} {w}×{h}");
+                        }
+                        for (a, b) in img.data.iter().zip(&out.data) {
+                            if a.iter().any(|&v| v >= 0.99) || marked {
+                                assert!(b.iter().all(|v| v.is_finite() && *v >= 0.0), "{mode:?} {w}×{h}: {a:?} → {b:?}");
+                            }
+                        }
+                    }
+                }
+            }
+            let mut huge = Rgb32f::filled(3000, 1, [1.0; 3]);
+            assert_eq!(reconstruct_mode(&mut huge, WB, 0.99, [1.0; 3], mode, None), 3000);
+        }
+    }
+
+    /// A warm surface lit by a round highlight whose red (then green) channel clips: both ported modes leave the
+    /// unclipped pixels alone (the Laplacian blends over two pixels around the clipped ones) and rebuild red closer
+    /// to the truth than the clipped values, with the surface's hue carried into the rebuilt rim.
+    #[test]
+    fn ported_modes_rebuild_a_clipped_highlight_with_its_hue() {
+        let (w, h) = (160, 120);
+        let colour = [1.0f32, 0.6, 0.35];
+        let truth = Rgb32f::from_fn(w, h, |x, y| {
+            let d = ((x as f32 - 80.0).powi(2) + (y as f32 - 60.0).powi(2)).sqrt();
+            let v = 0.25 + 1.2 * (-d * d / 900.0).exp();
+            colour.map(|c| c * v)
+        });
+        let clipped = truth.map(|p| p.map(|v| v.min(1.0)));
+        let is_clipped = |p: &[f32; 3]| p.iter().any(|&v| v >= 0.999);
+        let near_clip = |x: usize, y: usize| {
+            (y.saturating_sub(2)..=(y + 2).min(h - 1)).any(|yy| (x.saturating_sub(2)..=(x + 2).min(w - 1)).any(|xx| is_clipped(&clipped.get(xx, yy))))
+        };
+        // the rim: pixels with only red clipped
+        let rim: Vec<(usize, usize)> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| clipped.get(x, y)[0] >= 0.999 && clipped.get(x, y)[1] < 0.999)
+            .collect();
+        assert!(rim.len() > 50);
+        let err = |img: &Rgb32f| -> f32 { rim.iter().map(|&(x, y)| (img.get(x, y)[0] - truth.get(x, y)[0]).abs()).sum::<f32>() / rim.len() as f32 };
+        for mode in PORTED {
+            let mut img = clipped.clone();
+            let n = reconstruct_mode(&mut img, [1.0; 3], 0.999, [1.0; 3], mode, None);
+            assert_eq!(n, clipped.data.iter().filter(|p| is_clipped(p)).count());
+            for y in 0..h {
+                for x in 0..w {
+                    let untouched = match mode {
+                        Mode::Laplacian => !near_clip(x, y),
+                        _ => !is_clipped(&clipped.get(x, y)),
+                    };
+                    if untouched {
+                        assert_eq!(img.get(x, y), clipped.get(x, y), "{mode:?} ({x}, {y})");
+                    }
+                }
+            }
+            // the opposed mean rebuilds red's level; the Laplacian keeps each pixel's norm and fixes its hue
+            let (before, after) = (err(&clipped), err(&img));
+            assert!(after < before, "{mode:?}: red error {before} → {after}");
+            // hue continuity: the rebuilt rim's red over green moves towards the surface's (1 / 0.6)
+            let ratio = |img: &Rgb32f| rim.iter().map(|&(x, y)| img.get(x, y)[0] / img.get(x, y)[1]).sum::<f32>() / rim.len() as f32;
+            let (was, now) = (ratio(&clipped), ratio(&img));
+            let want = colour[0] / colour[1];
+            // (both move it only part of the way on a picture this small: one offset for the whole picture, one
+            // wavelet scale)
+            assert!((now - want).abs() < (was - want).abs(), "{mode:?}: rim red/green {was} → {now}, surface {want}");
+            // clipped channels are never lowered below what was recorded
+            for (a, b) in clipped.data.iter().zip(&img.data) {
+                for c in 0..3 {
+                    if a[c] >= 0.999 {
+                        assert!(b[c] >= a[c] - 1e-6, "{mode:?}: {a:?} → {b:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fully clipped pixels become the colour model's white, so a blown area stays neutral when darkened (#523).
+    #[test]
+    fn ported_modes_keep_fully_blown_areas_neutral() {
+        let white = [1.05, 1.0, 0.97];
+        for mode in PORTED {
+            let mut img = Rgb32f::filled(64, 48, [1.0; 3]);
+            reconstruct_mode(&mut img, WB, 0.99, white, mode, None);
+            let p = img.get(32, 24);
+            let q: [f32; 3] = std::array::from_fn(|c| p[c] * WB[c] / white[c]);
+            assert!((q[0] - q[1]).abs() < 1e-3 * q[1] && (q[2] - q[1]).abs() < 1e-3 * q[1], "{mode:?}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn mode_from_control_value() {
+        assert_eq!(Mode::from_control(0.0), Mode::Rebuild);
+        assert_eq!(Mode::from_control(1.2), Mode::Opposed);
+        assert_eq!(Mode::from_control(2.0), Mode::Laplacian);
+        for v in [f64::NAN, -1.0, 3.0, f64::INFINITY] {
+            assert_eq!(Mode::from_control(v), Mode::Rebuild);
+        }
+    }
+
+    /// Rebuild with or without a mask is exactly the original functions.
+    #[test]
+    fn rebuild_mode_is_the_default_reconstruction() {
+        let base = Rgb32f::from_fn(32, 16, |x, _| [0.5 + x as f32 / 20.0, 0.6, 0.4].map(|v| v.min(1.0)));
+        let (mut a, mut b) = (base.clone(), base.clone());
+        assert_eq!(reconstruct_mode(&mut a, WB, 0.99, [1.0; 3], Mode::default(), None), reconstruct_with(&mut b, WB, 0.99, [1.0; 3]));
+        assert!(a.data == b.data);
     }
 }

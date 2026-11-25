@@ -256,6 +256,16 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
     ];
+    // process recipes (Capture One): several export presets in one run, one decode per photo
+    v.push(cmd!(
+        query "export.runPresets",
+        "Export with Several Presets",
+        [],
+        None,
+        "{presetIds: [export preset names, 1..32, distinct], ids?: photo ids (default: the selection), dir?: one folder for every preset (default: each preset's own)} → {presets: [{preset, files}], photos, decodes, written, cancelled}; photo by photo, each decoded once and rendered with every preset; one activity row (✕ stops it between steps, the files written stay); every argument is checked before anything is written; a preset that adds to Apple Photos is refused",
+        always,
+        |s, p| crate::run_presets::run_command(s, p).map_err(|e| bad("export.runPresets", e))
+    ));
     // upstream #497: photos → timelapse movie (native only: the encoders are)
     #[cfg(not(target_arch = "wasm32"))]
     v.push(cmd!(

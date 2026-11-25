@@ -125,6 +125,7 @@ pub mod region;
 pub mod reload;
 pub mod render;
 pub mod render_dng_task;
+pub mod run_presets_ui;
 pub mod settings_screen;
 /// The module shell's frame steps (fork-owned).
 mod shell;

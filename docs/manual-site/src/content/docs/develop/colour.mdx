@@ -7,6 +7,7 @@ description: The colour tools beyond the basic sliders.
 
 import Shot from '../../../components/Shot.astro';
 import { Aside } from '@astrojs/starlight/components';
+import NeedsImage from '../../../components/NeedsImage.astro';
 
 ## Two grading modes
 
@@ -52,6 +53,25 @@ The **Levels** section sits in the Edit panel just before the Tone Curve (the Mo
 - **Presets blend Levels from neutral.** At an Amount below 100 % the levels sit that far from neutral toward the preset's, whatever the photo had before, and a preset without the Levels group leaves them alone. Primaries do not work this way.
 - **An inverted range combined with a midtone** has not been checked against Capture One's Levels. Each alone has.
 
+## Tone Equalizer
+
+The **Tone Equalizer** (beyond Lightroom, after darktable's module of the same name) changes exposure by how bright a part of the photo is: lift the deep shadows a stop, hold the midtones, pull the bright areas down, without the flat look a curve gives. It sits in the Edit panel between Levels and the Tone Curve (the Modern layout puts it on the Tone card); open it with **Window ▸ Edit Sections ▸ Tone Equalizer**.
+
+<NeedsImage what="The Tone Equalizer section with the shadow bands raised, next to the photo" />
+
+- **Exposure by Luminance**: nine sliders, one for each brightness band from **-8 EV** (8 stops below middle grey, the deepest shadows) to **0 EV** (middle grey and brighter). Each moves its band by up to 2 stops either way. The bands are read after Exposure, so a band always means what you see.
+- **Preserve Details** (0–100): how much the bands follow areas rather than single pixels. At 100 a textured shadow is lifted as a whole and keeps its texture; at 0 the tool works as a plain curve, pixel by pixel, which flattens texture when you compress the range.
+- **Mask Size**: how large the areas are (relative to the photo, so a preview and an export match).
+- **Edge Refinement**: higher values keep the change from spilling across edges between a bright and a dark area (fewer halos); lower values blend more softly.
+- **Curve Smoothing**: how smoothly one band passes into the next.
+- The section's eye shows the photo without it, and its header reset returns every slider to its default. The Tone Equalizer copies and pastes as its own group, goes into presets (blending with the Amount) and shows in History.
+- **Scripts and agents**: the sliders are develop controls `toneEq.ev8` to `toneEq.ev0`, `toneEq.detail`, `toneEq.size`, `toneEq.edges` and `toneEq.smoothing` (`develop.set`); `section.toneEq` opens the section.
+
+### Good to know
+
+- **Lightroom does not see it.** It is saved in the app's own settings only, so Lightroom shows the photo without it.
+- It works on the whole photo; masks do not have their own Tone Equalizer, and there is no picker that shows which band a spot belongs to yet.
+
 ## Other colour tools
 - **Tone Curve**: point (RGB or per channel) and parametric, presets, import and export.
 - **Color Mixer**: eight-band HSL and B&W mix.
@@ -68,6 +88,7 @@ The **Levels** section sits in the Edit panel just before the Tone Curve (the Mo
 - **Import** `.cube` LUT profiles; **export** a look as a LUT.
 - **Camera profiles**: import, use, export DCP profiles; per-camera-body defaults.
 - **Create a camera profile** from a colour chart photo: **ColorChecker 24** or **SpyderCHECKR 24**. Uneven light across the chart (falloff, glare) is evened out before fitting by default.
+- **Camera Matching looks** from your own photos: shoot RAW + JPEG, select the raws together with their camera JPEGs (same names, same folder) and choose **Photo ▸ Develop Settings ▸ Create Camera Matching Look from Raw + JPEG**. The camera's tone and colour are fitted to the app's render of each raw and kept as a profile in the Profile Browser's **Camera Matching** group, with an Amount slider. Fit from raws at their import settings; a JPEG cropped or shaped differently from its raw is skipped. Shoot the JPEGs in another picture style (Vivid, Neutral, an older style) to make a look for that style. Only the fitted table is kept, nothing of the photos. More pairs with varied colours fit better.
 - **Camera colour**: Auto or Colorimetric calibration. Some cameras have a built-in calibration fitted to Lightroom's exports; the Pentax K-3 and Sony ILCE-7M5 are the newest. Colour for other models is estimated (partial; see [Raw support](../raw-support/)).
 - **Where a raw's colour starts**, first available first: your own default for the camera, your own `.dcp`, the camera's Lightroom calibration, the file's own colour matrices (DNG), the camera's measured matrices, a look fitted to the raw's camera JPEG, then estimated colour. A calibration that only beats the per-photo JPEG fit on converted DNGs is the default for DNGs only.
 - **Calibrated camera colour** (Profile section) keeps its place while a photo of a camera that offers it is still loading: it shows greyed out until the photo is decoded, so the controls under it don't jump when you move between photos.

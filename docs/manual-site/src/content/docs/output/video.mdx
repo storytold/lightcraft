@@ -14,9 +14,12 @@ import { Aside } from '@astrojs/starlight/components';
 - Search with `video:yes`.
 - **Play** in the loupe: Space plays / pauses, ← / → step a frame, drag the playhead to scrub. Sound plays on Linux, macOS and Windows.
 - **Trim**: drag the start and end handles; **Photo ▸ Video ▸ Reset Trim** restores the whole clip. 🟡
-- **Set Poster Frame** and **Capture Frame** (saves a graded JPEG stacked with the clip): **Photo ▸ Video**.
-- **Edit**: Light, Color, tone curve, Color Mixer, Color Grading and presets that only use those. Masks, spot removal, red eye, lens corrections, denoise and crop are greyed out ("Not available for video").
-- **Export**: the sheet's **Video** section: H.264 (MP4) or ProRes (MOV), quality, long edge. Keeps trim, grade and sound. **Original files** copies the clip.
+- **Poster frame** (the frame the grid and the loupe show for the clip): move the playhead to the frame, then **Set Poster Frame** in the control bar or **Photo ▸ Video**. Undo takes it back; `video.setPoster {time: null}` returns to the default, 10 % in.
+- **Capture Frame** (**Photo ▸ Video**) saves the frame as a JPEG, graded and framed like the clip, stacked with it.
+- **Edit**: Light, Color, tone curve, Color Mixer, Color Grading, and presets that only use those.
+- **Frame**: crop, straighten and flips; **Lens Corrections** (distortion, vignetting, chromatic aberration, a lens profile); **Transform** (Upright Auto, Level, Vertical, Full and the Vertical, Horizontal, Rotate, Aspect, Scale and Offset sliders). Every frame gets the same correction. Upright looks at the poster frame once and keeps the result, so pick the poster before you click Upright. Playback draws the lens and Transform warp live; the lens vignetting shows in paused frames, Capture Frame and export.
+- Not for video ("Not available for video", greyed out): masks, spot removal, red eye, denoise, Guided Upright, Effects and Detail.
+- **Export**: the sheet's **Video** section: H.264 (MP4) or ProRes (MOV), quality, long edge. Every frame keeps the trim, crop, lens corrections, Transform, grade and sound. **Original files** copies the clip.
 - **Timelapse Video…** (**File ▸ More Exports**) makes a movie from stills.
 - 🟡 No audio editing, no cuts or transitions between clips.
 

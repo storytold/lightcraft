@@ -98,11 +98,11 @@ pub(super) fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
 }
 
 /// The Edit panel's Transform section, as Lightroom Classic's Transform panel: Upright, Constrain
-/// Crop and the transform sliders. A clip takes the crop, straighten and flips only.
+/// Crop and the transform sliders. A clip takes them too (applied to every frame); only Guided
+/// Upright stays photo-only (`tool.guidedUpright`).
 pub(crate) fn transform_body(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
-    let video = crate::video_ui::photo_is_video(app, id);
-    crate::video_ui::video_gate(ui, video, |ui| {
+    crate::video_ui::video_gate(ui, false, |ui| {
         padded(ui, |ui| {
             upright_controls(app, ui, &d);
             ui.add_space(6.0);

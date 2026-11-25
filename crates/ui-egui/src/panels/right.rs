@@ -594,9 +594,8 @@ fn crop(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     });
     divider(ui);
     header(ui, "Geometry");
-    // a clip takes the crop, straighten and flips only: Upright and the transform sliders are photo-only
-    let video = crate::video_ui::photo_is_video(app, id);
-    crate::video_ui::video_gate(ui, video, |ui| {
+    // a clip takes Upright and the transform sliders too (every frame); Guided Upright is photo-only
+    crate::video_ui::video_gate(ui, false, |ui| {
         padded(ui, |ui| {
             classic_crop::upright_controls(app, ui, &d);
             ui.add_space(6.0);
@@ -1652,6 +1651,7 @@ pub(crate) fn group_title(section: Option<&str>, step_label: &str, presets: &[lc
     let name = match section {
         Some("basic") => "Basic",
         Some("levels") => "Levels",
+        Some("toneEq") => "Tone Equalizer",
         Some("curve") => "Tone Curve",
         Some("color") => "Color",
         Some("grading") => "Color Grading",

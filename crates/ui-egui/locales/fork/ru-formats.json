@@ -148,6 +148,7 @@
   "Picks to unflag: {n}": "Выбранных, с которых снимется отметка: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Пресет {name} на {n} фото",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Набор настроек: {name}. Пропущены маски ИИ, которые эта сборка не умеет вычислять: {masks}",
   "Print settings not saved: {e}": "Параметры печати не сохранены: {e}",
   "Printed {n} page(s) to file": "Напечатано страниц в файл: {n}",
   "Reading pictures {done} of {total}": "Чтение изображений: {done} из {total}",

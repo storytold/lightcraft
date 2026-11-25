@@ -132,6 +132,49 @@ fn clip_exports_trimmed_graded_and_cropped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// Feature (7.11): the export draws every frame through the clip's lens corrections and Transform.
+#[test]
+fn clip_exports_with_lens_correction_and_transform() {
+    let dir = scratch("lens");
+    let src = dir.join("clip.mp4");
+    make_clip(&src);
+    let mut s = Session::new();
+    let id = add_clip(&mut s, &src, (0.0, None));
+    // Upright analyses the clip's poster frame and stores the mode; one undo step takes it back
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let r = s.execute("geometry.upright", &json!({"mode": "auto"})).unwrap();
+    assert_eq!(r["mode"], "auto");
+    assert_eq!(s.develop_of(id).unwrap().geometry.upright, lcc_develop::Upright::Auto);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().geometry.upright, lcc_develop::Upright::Off);
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.optics.vignetting = 100.0;
+    d.geometry.rotate = 5.0;
+    s.catalog.apply(Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "Lens".into(), edited: None }).unwrap();
+    let o = ExportOptions::from_params(&json!({"videoQuality": 95})).unwrap();
+    let files = export(&mut s, &[id], &o, &dir.join("out"), &VideoHooks::default()).unwrap();
+    let out = PathBuf::from(files[0]["path"].as_str().unwrap());
+    let info = lcc_video::probe(&out).unwrap();
+    assert!((info.duration - 2.0).abs() < 0.1, "{info:?}");
+    for t in [0.2, 1.5] {
+        let f = lcc_video::FrameReader::open(&out).unwrap().frame_at(t, None).unwrap().image;
+        let at = |x0: usize, x1: usize, y0: usize, y1: usize| {
+            let mut v = Vec::new();
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    v.push(f.data[y * f.width + x][1]);
+                }
+            }
+            v.iter().sum::<f32>() / v.len() as f32
+        };
+        let (w, h) = (f.width, f.height);
+        let centre = at(w / 2 - 4, w / 2 + 4, h / 2 - 4, h / 2 + 4);
+        let ring = (at(2, 8, h / 2 - 3, h / 2 + 3) + at(w - 8, w - 2, h / 2 - 3, h / 2 + 3)) / 2.0;
+        assert!(ring > centre * 1.05, "frame at {t} s: the vignetting correction lifts the edges ({centre} → {ring})");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The full-quality linear grade (no 8-bit step): +1 EV doubles a mid-tone exactly.
 #[test]
 fn linear_grade_doubles_on_plus_one_ev() {

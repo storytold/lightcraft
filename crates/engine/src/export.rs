@@ -2779,6 +2779,42 @@ impl PreparedExport {
         std::sync::Arc::ptr_eq(&self.guard, &other.guard)
     }
 
+    /// Decode the source of each rendered export in `items` (one photo's exports with different
+    /// options, [`crate::run_presets`]) once per source level and hand that decode to every render
+    /// of the items that reads the same pixels: several presets then cost one decode of the photo,
+    /// not one each. A source that fails to decode is left alone (each export reports the error
+    /// itself); stops with [`CANCELLED`] once `stop()` says so. Returns how many decodes it made.
+    pub fn share_decodes(items: &mut [PreparedExport], stop: &dyn Fn() -> bool) -> Result<usize, String> {
+        use crate::media::{DecodedSource, SourceLevel, SourceRef};
+        let mut done: Vec<(SourceLevel, Option<lcc_preview::Hash128>, Option<DecodedSource>)> = Vec::new();
+        let mut decodes = 0;
+        for it in items.iter_mut() {
+            let Work::Render(w) = &mut it.work else { continue };
+            let RenderWork { job, hdr_job, .. } = &mut **w;
+            for job in std::iter::once(job).chain(hdr_job.as_mut()) {
+                if matches!(job.source, SourceRef::Loaded(_)) {
+                    continue;
+                }
+                let shared = match done.iter().find(|(l, k, _)| *l == job.level && *k == job.source_key) {
+                    Some((_, _, d)) => d.clone(),
+                    None => {
+                        if stop() {
+                            return Err(CANCELLED.to_string());
+                        }
+                        let d = job.source.load_source_of(job.source_key).ok();
+                        decodes += usize::from(d.is_some());
+                        done.push((job.level, job.source_key, d.clone()));
+                        d
+                    }
+                };
+                if let Some(d) = shared {
+                    job.source = SourceRef::Loaded(Box::new(d));
+                }
+            }
+        }
+        Ok(decodes)
+    }
+
     /// Whether this item is a video clip exported as a movie.
     pub fn is_video(&self) -> bool {
         matches!(self.work, Work::Video(_))

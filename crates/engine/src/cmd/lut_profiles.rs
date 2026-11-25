@@ -242,6 +242,33 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"imported": imported, "camera": camera, "failed": failed}))
 }
 
+/// Add one generated `.cube` look as an imported profile in `group`, named `name` (a fresh `lut:` id),
+/// saved with the library like an imported file. Returns its id.
+pub(crate) fn add_generated(s: &mut Session, cmd: &str, name: &str, group: &str, text: &str) -> Result<String> {
+    let lut = lcc_pipeline::lut::Lut3d::parse_cube(text).map_err(|e| bad(cmd, e))?;
+    let slug = crate::presets::slug(&format!("{group}-{name}"));
+    let mut id = format!("lut:{slug}");
+    let mut n = 2u32;
+    while s.lut_profiles.iter().any(|x| x.id == id) {
+        id = format!("lut:{slug}-{n}");
+        n = n.saturating_add(1);
+    }
+    let file = match profiles_dir(s) {
+        Some(d) => {
+            std::fs::create_dir_all(&d).map_err(|e| bad(cmd, format!("{}: {e}", d.display())))?;
+            let f = d.join(format!("{}.cube", id.trim_start_matches("lut:")));
+            lcc_catalog::safe_file::write_atomic(&f, text.as_bytes()).map_err(|e| bad(cmd, format!("{}: {e}", f.display())))?;
+            f.to_string_lossy().to_string()
+        }
+        None => String::new(),
+    };
+    lcc_pipeline::lut::register(&id, lut);
+    s.lut_profiles.push(LutProfile { id: id.clone(), name: name.to_string(), group: group.to_string(), file });
+    s.save_prefs()?;
+    crate::profile_refs::refresh(s);
+    Ok(id)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(

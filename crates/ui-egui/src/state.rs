@@ -2110,6 +2110,10 @@ pub enum Dialog {
         prores: bool,
         quality: u8,
     },
+    /// File ▸ More Exports ▸ Export with Several Presets… (`crate::run_presets_ui`): the presets ticked.
+    RunPresets {
+        picked: Vec<String>,
+    },
     /// File ▸ Email Photo… (`crate::email_photo`): the long edge (pixels) and JPEG quality of the copies.
     EmailPhoto {
         long_edge: u32,

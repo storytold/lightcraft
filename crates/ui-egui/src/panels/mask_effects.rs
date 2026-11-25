@@ -724,3 +724,54 @@ pub fn import_toast(v: &Value) -> String {
     }
     msg
 }
+
+/// Start a style brush: a new Brush mask with effect `name` already set, selected with the brush
+/// armed on it, and the effect's brush settings taken (`mask.styleBrush`).
+pub fn start_style_brush(app: &mut LccApp, ctx: &egui::Context, name: &str) {
+    app.cancel_brush_gesture();
+    crate::panels::masking::disarm(app);
+    match app.run("mask.styleBrush", json!({"name": name})) {
+        Ok(v) => {
+            take_brush(app, v.get("brush").unwrap_or(&Value::Null));
+            if let Err(e) = app.run("tool.brush", json!({})) {
+                app.toast_error(ctx, e);
+                return;
+            }
+            app.ui.brush_erase = false;
+            app.ui.mask_overlay = true;
+            app.ui.active_mask_component = Some(0);
+        }
+        Err(e) => app.toast_error(ctx, e),
+    }
+}
+
+/// The Style Brush menu under Create New Mask: every effect preset, in menu order; choosing one
+/// starts a Brush mask that paints with it.
+pub fn style_brush_row(app: &mut LccApp, ui: &mut egui::Ui) {
+    if app.session.mask_effects.is_empty() {
+        return;
+    }
+    let mut chosen: Option<String> = None;
+    let r = ui.menu_button(format!("{} ▾", crate::i18n::tr("Style Brush")), |ui| {
+        for (group, ix) in fx::menu_order(&app.session.mask_effects) {
+            if !group.is_empty() {
+                let heading = if group == "★ Favorites" { crate::i18n::tr("★ Favorites").to_string() } else { group.clone() };
+                ui.label(egui::RichText::new(heading).weak());
+            }
+            for i in ix {
+                let Some(e) = app.session.mask_effects.get(i) else { continue };
+                let b = ui.button(display_name(&e.name));
+                register(ui.ctx(), format!("styleBrush:{}", e.name), b.rect);
+                if b.clicked() {
+                    chosen = Some(e.name.clone());
+                    ui.close();
+                }
+            }
+        }
+    });
+    register(ui.ctx(), "maskStyleBrush", r.response.rect);
+    r.response.on_hover_text(crate::i18n::tr("Paint a new Brush mask with an effect preset already set"));
+    if let Some(n) = chosen {
+        start_style_brush(app, ui.ctx(), &n);
+    }
+}

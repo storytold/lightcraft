@@ -19,6 +19,7 @@ import { Aside } from '@astrojs/starlight/components';
   - **Masking**: the mask, white where the photo is sharpened and black where it is left alone. At Masking 0 it is all white.
 - **Noise Reduction**: **Luminance**, **Detail**, **Contrast**; **Color**, **Detail**, **Smoothness**. Same look in grid, loupe, 1:1 and export.
 - **Hot pixel removal**: a box under Noise Reduction (outliers); raw hot, dead and stuck pixels are also fixed on decode. See [Sensor and plug-ins](../sensor-and-plugins/).
+- **Highlights** (under Sensor, raws only): how clipped highlights are rebuilt, Rebuild, Inpaint Opposed or Guided Laplacian. See [Highlight reconstruction](../highlight-reconstruction/).
 - **AI Denoise** and **Super Resolution**, **Raw Details**: [Denoise](../../ai/denoise/), [Super resolution](../../ai/super-resolution/).
 - Local sharpness and noise belong to [masks](../masking/).
 

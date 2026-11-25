@@ -2,8 +2,11 @@
 //!
 //! Frames take the display-referred input path that JPEG/TIFF photos use (linear-light
 //! [`Rgb32f`], a non-raw [`SourceInfo`]): no raw stages, white balance as relative multipliers
-//! around the as-shot look. Only global controls apply to video ([`video_settings`]); masks,
-//! spots, lens corrections, noise reduction, crop and transforms are dropped.
+//! around the as-shot look. Only global controls apply to the grade ([`video_settings`]); masks,
+//! spots and noise reduction are dropped. Each frame is framed before the grade
+//! ([`video_framing`]): the crop and flips, the lens corrections (manual distortion, vignetting,
+//! chromatic aberration, a lens profile) and the perspective (Upright, the Transform sliders),
+//! all resolution-independent, so one setting fits every frame.
 //!
 //! Sources: own design (reuses [`crate::render`]).
 
@@ -38,23 +41,34 @@ pub fn video_settings(s: &DevelopSettings) -> DevelopSettings {
     }
 }
 
-/// What a clip keeps of `s`: [`video_settings`] plus its crop and flips ([`video_framing`]).
+/// What a clip keeps of `s`: [`video_settings`] plus its framing ([`video_framing`]: crop, flips,
+/// lens corrections, Upright and Transform).
 /// Posters, thumbnails and the stored settings use it; frames are graded by `video_settings`
 /// and framed by `video_framing` separately.
 pub fn video_develop(s: &DevelopSettings) -> DevelopSettings {
-    DevelopSettings { crop: s.crop, ..video_settings(s) }
+    DevelopSettings { crop: s.crop, optics: s.optics.clone(), geometry: s.geometry.clone(), ..video_settings(s) }
 }
 
-/// The part of `s` that frames a video clip: the crop (with its straighten angle and aspect) and
-/// the flips. Everything else (orientation, lens, Upright) stays photo-only.
+/// The part of `s` that frames a video clip: the crop (with its straighten angle and aspect), the
+/// flips, the lens corrections (Optics) and the perspective (Upright's stored transform, the
+/// Transform sliders), with the section switches. Orientation stays photo-only. Upright's
+/// correction is analysed once (on the poster frame) and stored, so every frame takes the same one.
 pub fn video_framing(s: &DevelopSettings) -> DevelopSettings {
-    DevelopSettings { crop: s.crop, ..DevelopSettings::default() }
+    DevelopSettings {
+        crop: s.crop,
+        optics: s.optics.clone(),
+        geometry: s.geometry.clone(),
+        disabled_sections: s.disabled_sections.clone(),
+        ..DevelopSettings::default()
+    }
 }
 
-/// Whether [`video_framing`] changes the frame at all (a full-frame, unflipped crop does not).
+/// Whether [`video_framing`] changes the frame at all (a full-frame, unflipped crop with no lens
+/// correction and no perspective does not).
 pub fn video_is_framed(s: &DevelopSettings) -> bool {
     let d = DevelopSettings::default();
-    s.crop.geometry != d.crop.geometry || s.crop.flip_h || s.crop.flip_v
+    let f = video_framing(s);
+    f.crop.geometry != d.crop.geometry || f.crop.flip_h || f.crop.flip_v || crate::geometry::Frame::new(64, 64, &f, false).warp.is_some()
 }
 
 /// Draw a decoded `frame` into a `w × h` output under the clip's [`video_framing`].
@@ -347,5 +361,70 @@ mod tests {
         for c in [[f32::NAN; 3], [f32::INFINITY, -1.0, 1e30], [-0.0, 0.0, 2.0]] {
             assert!(lut.lookup(c).iter().all(|v| v.is_finite()));
         }
+    }
+
+    /// A horizontal ramp frame: brightness rises left to right.
+    fn ramp(w: usize, h: usize) -> Rgb32f {
+        let mut f = Rgb32f::new(w, h);
+        for (i, p) in f.data.iter_mut().enumerate() {
+            let v = (i % w) as f32 / (w - 1) as f32;
+            *p = [v, v, v];
+        }
+        f
+    }
+
+    fn mean(f: &Rgb32f, x0: usize, x1: usize, y0: usize, y1: usize) -> f32 {
+        let (mut sum, mut n) = (0.0, 0.0);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                sum += f.data[y * f.width + x][1];
+                n += 1.0;
+            }
+        }
+        sum / n
+    }
+
+    // Feature (7.11): lens corrections and Transform frame every video frame; the grade never sees them.
+    #[test]
+    fn lens_and_transform_frame_a_clip() {
+        let mut s = DevelopSettings::default();
+        assert!(!video_is_framed(&s));
+        s.optics.vignetting = 100.0;
+        assert!(video_is_framed(&s), "manual vignetting frames the clip");
+        assert_eq!(video_framing(&s).optics, s.optics);
+        assert_eq!(video_develop(&s).optics, s.optics, "posters and stored settings keep it");
+        assert_eq!(video_settings(&s).optics, DevelopSettings::default().optics, "the grade does not");
+        // vignetting correction lifts the corners of a flat frame
+        let flat = Rgb32f::filled(64, 48, [0.2, 0.2, 0.2]);
+        let out = frame_video(&flat, &video_framing(&s), 64, 48);
+        assert!(mean(&out, 0, 4, 0, 4) > mean(&out, 28, 36, 20, 28) * 1.1, "corners brighter than the centre");
+
+        // Transform: a horizontal flip-free perspective / rotate moves pixels of a ramp
+        let mut t = DevelopSettings::default();
+        t.geometry.horizontal = 60.0;
+        assert!(video_is_framed(&t));
+        assert_eq!(video_develop(&t).geometry, t.geometry);
+        let src = ramp(64, 48);
+        let plain = frame_video(&src, &video_framing(&DevelopSettings::default()), 64, 48);
+        let warped = frame_video(&src, &video_framing(&t), 64, 48);
+        let diff: f32 = plain.data.iter().zip(&warped.data).map(|(a, b)| (a[1] - b[1]).abs()).sum::<f32>() / plain.data.len() as f32;
+        assert!(diff > 0.01, "the transform moves the frame's pixels ({diff})");
+        // a disabled geometry section takes it off again
+        t.disabled_sections.push("geometry".into());
+        assert!(!video_is_framed(&t));
+    }
+
+    // Upright's stored correction is applied per frame like the sliders (no analysis per frame).
+    #[test]
+    fn a_stored_upright_correction_frames_a_clip() {
+        let mut s = DevelopSettings::default();
+        s.geometry.upright = lcc_develop::Upright::Vertical;
+        s.geometry.upright_transform = Some(lcc_geom::Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.3, 1.0]));
+        assert!(video_is_framed(&s));
+        let src = ramp(32, 24);
+        let a = frame_video(&src, &video_framing(&s), 32, 24);
+        let b = frame_video(&src, &video_framing(&s), 32, 24);
+        assert_eq!(a.data, b.data, "the same correction on every frame");
+        assert!(a.data.iter().all(|p| p.iter().all(|c| c.is_finite())));
     }
 }
