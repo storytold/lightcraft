@@ -1,4 +1,6 @@
 {
+  "Queued AI mask paste": "Dán mặt nạ AI đang chờ",
+  "Recomputing AI masks": "Đang tính lại mặt nạ AI",
   "  (library default)": "  (mặc định thư viện)",
   " (inverted)": " (đã đảo)",
   " · best of its burst": " · đẹp nhất trong cụm",
@@ -2742,5 +2744,8 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Copy Mask": "Sao chép mặt nạ",
+  "Paste Mask": "Dán mặt nạ",
+  "Mask copied": "Đã sao chép mặt nạ"
 }

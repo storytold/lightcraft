@@ -762,6 +762,24 @@ fn brush_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 
 /// Keys that two bindings share, and that mean something only in one panel: whether `f` was used up (or ignored)
 /// here, so nothing else runs for it.
+/// The settings commands whose key the mask command takes here, as [`context_key_skipped`] routes
+/// it: in Masking, ⌘C copies the selected mask and ⌘V pastes a copied one. The menus show the
+/// key on Copy Mask / Paste Mask instead (`menubar::node`), so the native menu bar delivers it
+/// there whatever the system clipboard holds; a click on Copy / Paste Settings still copies or
+/// pastes the settings.
+pub fn mask_takes_keys(app: &LightcraftApp) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if app.ui.right == crate::state::RightPanel::Masking {
+        if app.session.active_mask.is_some() {
+            out.push("develop.copy");
+        }
+        if app.session.mask_clipboard.is_some() {
+            out.push("develop.paste");
+        }
+    }
+    out
+}
+
 fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> bool {
     use crate::state::RightPanel as R;
     let right = app.ui.right;
@@ -781,6 +799,16 @@ fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> 
         // / refreshes the selected spot's source in the Remove tool (the filmstrip elsewhere)
         "view.filmstrip" if right == R::Remove && app.session.active_spot.is_some() => {
             let _ = app.run("spot.refreshSource", json!({}));
+            true
+        }
+        // in Masking, ⌘C / ⌘V copy and paste the selected mask, as in Lightroom (settings
+        // elsewhere, and ⌘V while no mask is copied)
+        "develop.copy" if right == R::Masking && app.session.active_mask.is_some() => {
+            let _ = app.run("mask.copy", json!({}));
+            true
+        }
+        "develop.paste" if right == R::Masking && app.session.mask_clipboard.is_some() => {
+            let _ = app.run("mask.paste", json!({}));
             true
         }
         // Shift+O cycles the mask overlay colour while masking (the crop overlay elsewhere)

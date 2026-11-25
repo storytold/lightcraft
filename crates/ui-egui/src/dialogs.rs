@@ -712,6 +712,8 @@ pub(crate) fn toast_created_folder(app: &mut LightcraftApp, ctx: &egui::Context,
 fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> bool {
     let mut closed = false;
     match confirm_dialog(app, dlg) {
+        // The command already shows its refusal. Keep the selected groups for correction/retry.
+        Err(_) if matches!(dlg, Dialog::PasteSettings { .. }) => {}
         // the import review stays open on an error (e.g. an unusable folder template), and so
         // does Export (e.g. no folder chosen) so the choices aren't lost, and Edit Capture Time
         // (a time that isn't a date, or a shift it refuses), and the lens database offer (a download that can't

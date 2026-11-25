@@ -1,4 +1,6 @@
 {
+  "Queued AI mask paste": "Wklejanie masek AI w kolejce",
+  "Recomputing AI masks": "Ponowne obliczanie masek AI",
   "  (library default)": "  (domyślne ustawienie biblioteki)",
   " (inverted)": " (odwrócona)",
   " · best of its burst": " · najlepsze zdjęcie z serii",
@@ -2380,5 +2382,8 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Copy Mask": "Kopiuj maskę",
+  "Paste Mask": "Wklej maskę",
+  "Mask copied": "Skopiowano maskę"
 }

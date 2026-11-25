@@ -1,4 +1,6 @@
 {
+  "Queued AI mask paste": "AI ნიღბების ჩასმა რიგშია",
+  "Recomputing AI masks": "AI ნიღბების ხელახლა გამოთვლა",
   "  (library default)": "  (ბიბლიოთეკის ნაგულისხმევი)",
   " (inverted)": " (ინვერსიული)",
   " · best of its burst": " · საუკეთესო თავის სერიაში",
@@ -3723,5 +3725,8 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Copy Mask": "ნიღბის კოპირება",
+  "Paste Mask": "ნიღბის ჩასმა",
+  "Mask copied": "ნიღაბი დაკოპირდა"
 }
