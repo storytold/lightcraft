@@ -57,6 +57,7 @@ pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a s
             | "keyword.toggleFromSet"
             | "keyword.useSet"
             | "map.style"
+            | "photo.editInPreset"
     ) || (id == "map.filter" && params.get("filter").and_then(Value::as_str).is_some_and(|f| f.starts_with("location:")))
         || (id == "app.export" && params.get("preset").is_some())
         || (id == "app.openLibrary" && params.get("path").is_some())
@@ -326,6 +327,10 @@ pub(crate) fn selection_deleted(app: &LccApp) -> bool {
 /// Items only some hosts have are left out of the others' menus (the web build's library backup);
 /// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LccApp, id: &str) -> bool {
+    // a single-language build (`CRAFT_FONTS_LANGUAGE`) has no menu item for the languages it left out
+    if crate::menus::language_left_out(id) {
+        return false;
+    }
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         // the desktop's backup into the library's backup folder; a host with a backup of its own
@@ -478,6 +483,10 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
     // the state-driven choice submenus (`menu_choices`)
     if let Some(v) = crate::menu_choices::expanded(app, name) {
         return Some(v);
+    }
+    // the saved external editors, each with its own items
+    if name == "Edit In" {
+        return Some(crate::edit_in::menu_items(app));
     }
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
@@ -1122,8 +1131,9 @@ impl Build<'_> {
 
     /// The items of a submenu shown as `label` in menu `title`, gathering path `menu>path`.
     fn submenu(&mut self, title: &str, label: &str, menu: &str, path: &str) -> Vec<MenuNode> {
-        // Zoom's generated choices (Space Zooms To) follow its commands
-        let after = path == "Zoom";
+        // Zoom's generated choices (Space Zooms To) and the saved Edit In presets follow their
+        // submenu's commands
+        let after = matches!(path, "Zoom" | "Edit In");
         let generated = expanded(self.app, path).unwrap_or_default();
         let mut children = if after { Vec::new() } else { generated.clone() };
         children.push(MenuNode::Separator);

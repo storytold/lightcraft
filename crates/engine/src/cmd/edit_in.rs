@@ -8,7 +8,10 @@
 //! - **presets** (`editIn.presets` / `editIn.savePreset` / `editIn.deletePreset`): application,
 //!   arguments, file format (TIFF or layered PSD), colour space, bit depth, mode, naming, stacking;
 //!   kept in `editors.json` in the settings folder. Built in: the system's TIFF editor and
-//!   PhotoCraft (layered PSD).
+//!   PhotoCraft (layered PSD). A preset's `menu` says what Photo ▸ Edit In shows for it: one
+//!   *Edit in <name>* (`single`), Lightroom's choices (`choices`), or its own items with their
+//!   launch arguments (`actions`: a denoiser's three ways to process), which also open a batch
+//!   of photos with one start.
 //! - **`photo.editIn`**: *Edit a Copy with Lightroom Adjustments* (`copyWithAdjustments`, rendered
 //!   with the edits), *Edit a Copy* (`copy`, the original file's bytes) or *Edit Original*
 //!   (`original`), the last two for files an editor can open (not raws). The new file is added to
@@ -60,6 +63,59 @@ pub enum Mode {
     Copy,
     /// The original file itself.
     Original,
+    /// The photo's own file, whatever the app reads (a raw included): Lightroom's *Open Source
+    /// File*. Nothing is made and the library is not touched.
+    #[serde(rename = "sourceFile")]
+    Source,
+}
+
+/// What Photo ▸ Edit In shows for a saved preset ([`EditorPreset::menu`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Menu {
+    /// One item, *Edit in <name>*, handing over what the preset's mode says (a raw developer
+    /// such as DxO PhotoLab).
+    Single,
+    /// Lightroom's choices: Edit a Copy with Adjustments, Edit a Copy, Edit Original (Open Source
+    /// File on a raw).
+    Choices,
+    /// The preset's own items, each with its label and launch arguments (a denoiser's *Process
+    /// with the Latest Settings*, *Process Immediately*, *Preview and Process*).
+    Actions,
+}
+
+impl Menu {
+    /// The preset field's value; anything else ([`Menu::Choices`] for an unreadable one) is the
+    /// default, so an older `editors.json` reads as before.
+    pub fn of(field: &str) -> Menu {
+        match field {
+            "single" => Menu::Single,
+            "actions" => Menu::Actions,
+            _ => Menu::Choices,
+        }
+    }
+
+    /// The preset field's value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Menu::Single => "single",
+            Menu::Choices => "choices",
+            Menu::Actions => "actions",
+        }
+    }
+}
+
+/// Most items a preset's menu holds.
+pub const MAX_ACTIONS: usize = 8;
+
+/// One item of a [`Menu::Actions`] preset's menu.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Action {
+    /// What the menu shows.
+    pub label: String,
+    /// Arguments after the preset's own; one containing `{file}` takes the paths instead of
+    /// them going last.
+    pub args: Vec<String>,
 }
 
 /// File format of a rendered copy.
@@ -102,6 +158,10 @@ pub struct EditorPreset {
     pub naming: String,
     /// Stack the new file on the original.
     pub stack: bool,
+    /// What its menu shows: `choices`, `single` or `actions` ([`Menu`]).
+    pub menu: String,
+    /// The items of an `actions` menu.
+    pub actions: Vec<Action>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub control: Option<Control>,
 }
@@ -118,6 +178,8 @@ impl Default for EditorPreset {
             mode: Mode::CopyWithAdjustments,
             naming: "{name}-Edit".into(),
             stack: true,
+            menu: Menu::Choices.as_str().into(),
+            actions: Vec::new(),
             control: None,
         }
     }
@@ -133,11 +195,26 @@ impl EditorPreset {
         if self.naming.trim().is_empty() || self.naming.contains(['/', '\\']) || self.naming.len() > 200 {
             return Err("the file name template must be a plain name".into());
         }
-        if self.args.len() > 32 || self.args.iter().any(|a| a.len() > 1000) {
-            return Err("too many or too long arguments".into());
+        if !matches!(self.menu.as_str(), "single" | "choices" | "actions") {
+            return Err(format!("unknown menu `{}` (single, choices, actions)", self.menu));
+        }
+        check_args(&self.args)?;
+        if self.actions.len() > MAX_ACTIONS {
+            return Err(format!("at most {MAX_ACTIONS} menu items"));
+        }
+        for a in &self.actions {
+            lcc_actions::validate_name(&a.label).map_err(|_| "a menu item's label is empty, too long or holds control characters".to_string())?;
+            check_args(&a.args)?;
         }
         Ok(())
     }
+}
+
+fn check_args(args: &[String]) -> std::result::Result<(), String> {
+    if args.len() > 32 || args.iter().any(|a| a.len() > 1000) {
+        return Err("too many or too long arguments".into());
+    }
+    Ok(())
 }
 
 /// Built-in presets: the system's editor for TIFFs, and PhotoCraft with layered PSDs.
@@ -166,19 +243,39 @@ pub(crate) fn space(s: &str) -> std::result::Result<lcc_pipeline::OutputSpace, S
 
 /// The user's presets (read from `editors.json` on first use; a damaged file is an error and is
 /// not written over).
+/// The user's saved presets, read without changing the session (the menu lists them): those read
+/// for the session already, else `editors.json`.
+pub fn presets_of(s: &Session) -> std::result::Result<Vec<EditorPreset>, String> {
+    match &s.workflow.editors {
+        Some(v) => Ok(v.clone()),
+        None => read_presets(s.workflow.editors_file.as_deref()),
+    }
+}
+
+/// Where the session keeps its saved presets (`None`: in memory only).
+pub fn presets_file(s: &Session) -> Option<&Path> {
+    s.workflow.editors_file.as_deref()
+}
+
+/// `editors.json` in `file` (nothing saved yet when there is none).
+fn read_presets(file: Option<&Path>) -> std::result::Result<Vec<EditorPreset>, String> {
+    let Some(f) = file else { return Ok(Vec::new()) };
+    let b = match std::fs::read(f) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{} can't be read: {e}", f.display())),
+    };
+    if b.len() > 1 << 20 {
+        return Err(format!("{} is too large", f.display()));
+    }
+    serde_json::from_slice::<Vec<EditorPreset>>(&b).map_err(|e| format!("{} can't be read: {e}", f.display()))
+}
+
 fn user_presets(s: &mut Session, cmd: &str) -> Result<Vec<EditorPreset>> {
     if let Some(v) = &s.workflow.editors {
         return Ok(v.clone());
     }
-    let list = match &s.workflow.editors_file {
-        Some(f) => match std::fs::read(f) {
-            Ok(b) if b.len() > 1 << 20 => return Err(bad(cmd, format!("{} is too large", f.display()))),
-            Ok(b) => serde_json::from_slice::<Vec<EditorPreset>>(&b).map_err(|e| bad(cmd, format!("{} can't be read: {e}", f.display())))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(bad(cmd, format!("{} can't be read: {e}", f.display()))),
-        },
-        None => Vec::new(),
-    };
+    let list = read_presets(s.workflow.editors_file.as_deref()).map_err(|e| bad(cmd, e))?;
     s.workflow.editors = Some(list.clone());
     Ok(list)
 }
@@ -207,6 +304,11 @@ const PROGRAM_PARAMS: [(&str, &[&str]); 6] = [
     ("photo.openOriginalInExternal", &["app"]),
 ];
 
+/// What of a preset chooses the program the app starts, and how it is started.
+fn program_of(p: &EditorPreset) -> (String, Vec<String>, Option<Control>, Vec<Vec<String>>) {
+    (p.app.clone(), p.args.clone(), p.control.clone(), p.actions.iter().map(|a| a.args.clone()).collect())
+}
+
 /// `Err` when running `command` with `params` would choose a program for the app to start.
 ///
 /// MCP, the control channel and action playback ask this before they run a command: a request
@@ -220,7 +322,7 @@ pub fn refuse_program_choice(s: &mut Session, command: &str, params: &Value) -> 
         let Ok(new) = serde_json::from_value::<EditorPreset>(params.clone()) else { return Ok(()) }; // the command reports it
         let name = new.name.trim();
         let old = user_presets(s, command).map_err(|e| e.to_string())?.into_iter().find(|x| x.name == name).unwrap_or_default();
-        (new.app, new.args, new.control) != (old.app, old.args, old.control)
+        program_of(&new) != program_of(&old)
     } else {
         keys.iter().any(|k| params.get(*k).is_some_and(|v| !v.is_null()))
     };
@@ -286,7 +388,7 @@ fn resolve(s: &mut Session, p: &Value, cmd: &str) -> Result<EditorPreset> {
         None => builtin_presets().into_iter().next().unwrap_or_default(),
     };
     let mut v = serde_json::to_value(&base).map_err(|e| bad(cmd, e.to_string()))?;
-    for k in ["app", "args", "format", "colorSpace", "bitDepth", "mode", "naming", "stack", "control"] {
+    for k in ["app", "args", "format", "colorSpace", "bitDepth", "mode", "naming", "stack", "control", "menu", "actions"] {
         if let (Some(x), Some(o)) = (p.get(k), v.as_object_mut()) {
             o.insert(k.into(), x.clone());
         }
@@ -344,6 +446,16 @@ fn editable_path(s: &Session, id: PhotoId, cmd: &str) -> Result<String> {
         return Err(bad(cmd, format!("an editor can't open the {} file itself: use mode copyWithAdjustments", ph.format)));
     }
     Ok(path.clone())
+}
+
+/// The photo's own file for Open Source File: whatever the app reads (a raw included), through
+/// the gate every hand-over to another program goes through (#2135).
+fn source_path(s: &Session, id: PhotoId, cmd: &str) -> Result<PathBuf> {
+    let ph = s.catalog.photo(id).ok_or_else(|| bad(cmd, "no photo"))?;
+    let Source::File { path } = &ph.source else {
+        return Err(bad(cmd, "a generated demo photo has no file to open"));
+    };
+    crate::open_path::openable(path, &ph.file_name).map(PathBuf::from).map_err(|e| bad(cmd, e))
 }
 
 /// Stack the edited version `new` like Lightroom: directly above the photo it was made from,
@@ -575,6 +687,7 @@ fn edit_in(s: &mut Session, p: &Value) -> Result<Value> {
     let stem = if stem.trim().is_empty() || stem.contains(['/', '\\']) { format!("{}-Edit", stem_of(&ph.file_name)) } else { stem };
     let (path, new) = match pr.mode {
         Mode::Original => (PathBuf::from(editable_path(s, id, C)?), None),
+        Mode::Source => (source_path(s, id, C)?, None),
         Mode::Copy => {
             let src = editable_path(s, id, C)?;
             let ext = Path::new(&src).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
@@ -799,13 +912,13 @@ pub fn control_open(_: &Control, _: &Path) -> std::result::Result<Value, String>
 
 pub(super) fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "editIn.presets", "Edit In Presets", [], None, "{}: external editor presets → {builtin: [preset], user: [preset]}; a preset is {name, app, args, format: tiff|psd, colorSpace, bitDepth: 8|16, mode: copyWithAdjustments|copy|original, naming, stack, control?: {port, tokenFile, root}}", always, presets),
+        cmd!(query "editIn.presets", "Edit In Presets", [], None, "{}: external editor presets → {builtin: [preset], user: [preset]}; a preset is {name, app, args, format: tiff|psd, colorSpace, bitDepth: 8|16, mode: copyWithAdjustments|copy|original|sourceFile, naming, stack, control?: {port, tokenFile, root}}", always, presets),
         cmd!(
             "editIn.savePreset",
             "Save Edit In Preset",
             [],
             None,
-            "{name, app?, args?: [..., \"{file}\"?], format?: tiff|psd, colorSpace?: srgb|adobeRgb|displayP3|proPhoto, bitDepth?: 8|16, mode?: copyWithAdjustments|copy|original, naming?: \"{name}-Edit\", stack?: true, control?: {port, tokenFile, root}}: add or replace an external editor preset (kept in editors.json in the settings folder); app, args and control choose a program, so over MCP, the control channel or in an action they can't be set or changed → the preset",
+            "{name, app?, args?: [..., \"{file}\"?], format?: tiff|psd, colorSpace?: srgb|adobeRgb|displayP3|proPhoto, bitDepth?: 8|16, mode?: copyWithAdjustments|copy|original|sourceFile, naming?: \"{name}-Edit\", stack?: true, menu?: choices|single|actions, actions?: [{label, args?: [...]}], control?: {port, tokenFile, root}}: add or replace an external editor preset (kept in editors.json in the settings folder); app, args and control choose a program, so over MCP, the control channel or in an action they can't be set or changed → the preset",
             always,
             save_preset
         ),
@@ -825,7 +938,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 "Edit In…",
                 ["Photo", "Edit In"],
                 None,
-                "{id?, preset?: name (default \"External Editor\"), mode?, format?, colorSpace?, bitDepth?, app?, args?, naming?, stack?, dir?, launch?: false, wait?: false}: Edit In with Lightroom's options: copyWithAdjustments renders the photo with its edits (TIFF, or a layered PSD), copy copies the original file, original edits the file itself (copy/original: JPEG, TIFF, PNG, PSD, WebP only). A new file is added to the library, stacked directly above the photo it was made from (inside that photo's stack when it has one) and selected; TIFF and PSD copies carry an xmpMM:DerivedFrom link to it, so a re-import stacks them again. launch opens it in the preset's application (or over PhotoCraft's control channel); app and args (and a preset's control) choose a program, so they're for the command line and the Edit In Presets dialog only: over MCP, the control channel or in an action, name a saved preset instead; wait (with launch) starts the application with --wait, returns when it exits and reloads the photo → {path, id, original, mode, openWith: {path, app, args, reload, preset, control}, opened}",
+                "{id?, preset?: name (default \"External Editor\"), mode?, format?, colorSpace?, bitDepth?, app?, args?, naming?, stack?, dir?, launch?: false, wait?: false}: Edit In with Lightroom's options: copyWithAdjustments renders the photo with its edits (TIFF, or a layered PSD), copy copies the original file, original edits the file itself (copy/original: JPEG, TIFF, PNG, PSD, WebP only), sourceFile opens the photo's own file, a raw included. A new file is added to the library, stacked directly above the photo it was made from (inside that photo's stack when it has one) and selected; TIFF and PSD copies carry an xmpMM:DerivedFrom link to it, so a re-import stacks them again. launch opens it in the preset's application (or over PhotoCraft's control channel); app and args (and a preset's control) choose a program, so they're for the command line and the Edit In Presets dialog only: over MCP, the control channel or in an action, name a saved preset instead; wait (with launch) starts the application with --wait, returns when it exits and reloads the photo → {path, id, original, mode, openWith: {path, app, args, reload, preset, control}, opened}",
                 has_active,
                 edit_in
             )
@@ -868,6 +981,19 @@ mod tests {
         }
     }
 
+    /// A preset's menu style: the three values round-trip, and anything else (an older or
+    /// hand-edited `editors.json`) is Lightroom's choices.
+    #[test]
+    fn a_presets_menu_style_is_read_leniently() {
+        for m in [Menu::Single, Menu::Choices, Menu::Actions] {
+            let p: EditorPreset = serde_json::from_value(json!({"name": "x", "menu": m.as_str()})).unwrap_or_default();
+            assert_eq!((Menu::of(&p.menu), p.menu.as_str()), (m, m.as_str()));
+        }
+        let old: EditorPreset = serde_json::from_value(json!({"name": "x"})).unwrap_or_default();
+        assert_eq!((Menu::of(&old.menu), old.actions.len()), (Menu::Choices, 0));
+        assert_eq!(Menu::of("menu-of-anything"), Menu::Choices);
+    }
+
     #[test]
     fn layered_psd_has_named_layers_and_a_composite() {
         let a = Rendered16 { width: 4, height: 2, rgb: vec![1000; 4 * 2 * 3], icc: None };
@@ -896,13 +1022,23 @@ mod tests {
             assert!(p.validate().is_err());
             let p = EditorPreset { name: "x".into(), color_space: "lab".into(), ..Default::default() };
             assert!(p.validate().is_err());
+            for (menu, actions) in [
+                ("everything", vec![]),
+                ("actions", vec![Action { label: "  ".into(), args: Vec::new() }]),
+                ("actions", vec![Action { label: "a\nb".into(), args: Vec::new() }]),
+                ("actions", vec![Action { label: "ok".into(), args: vec![String::new(); 33] }]),
+                ("actions", vec![Action::default(); MAX_ACTIONS + 1]),
+            ] {
+                let p = EditorPreset { name: "x".into(), menu: menu.into(), actions, ..Default::default() };
+                assert!(p.validate().is_err(), "{menu}");
+            }
             assert!(decode_tiff16(b"II*\0garbage").is_err());
         }
         // P6.2: a hand-edited or damaged `editors.json` never panics: every entry either fails to
         // parse or is checked like a preset saved through `editIn.savePreset`.
         {
             let values = [r#""""#, r#""../x""#, r#""{file}{file}""#, r#""\u0000""#, "1e308", "-1", "null", "[]", "{}", r#""a\nb""#, "255", "65536"];
-            let keys = ["name", "app", "args", "format", "colorSpace", "bitDepth", "mode", "naming", "stack", "control"];
+            let keys = ["name", "app", "args", "format", "colorSpace", "bitDepth", "mode", "naming", "stack", "control", "menu", "actions"];
             let extras = ["", r#","args":["{file}","-x"]"#, r#","control":{"port":99999,"tokenFile":"","root":"/"}"#];
             let mut n = 0;
             for (i, k) in keys.iter().enumerate() {
