@@ -70,7 +70,9 @@ pub(super) fn person_rename_plan(cat: &lightcraft_catalog::Catalog, from: &str, 
     let mut needs_merge = false;
     if !from_key.is_empty() {
         for photo in cat.photos().filter(|p| p.in_library()) {
-            for region in photo.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+            for region in
+                photo.meta.regions.iter().filter(|r| matches!(r.kind, lightcraft_meta::RegionKind::Face | lightcraft_meta::RegionKind::IgnoredFace))
+            {
                 let Some(name) = region.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
                 let key = name.to_lowercase();
                 if key == from_key {

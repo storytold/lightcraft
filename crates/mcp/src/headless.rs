@@ -14,6 +14,7 @@ use crate::backend::{Backend, ProgressHook};
 pub struct Headless {
     pub session: Session,
     progress: Option<ProgressHook>,
+    error_details: Option<Value>,
 }
 
 impl Drop for Headless {
@@ -38,7 +39,7 @@ impl Default for Headless {
 
 impl Headless {
     pub fn new(session: Session) -> Self {
-        Self { session, progress: None }
+        Self { session, progress: None, error_details: None }
     }
 
     /// A headless session with the procedurally generated demo library.
@@ -116,11 +117,16 @@ impl Headless {
 }
 
 impl Backend for Headless {
+    fn take_error_details(&mut self) -> Option<Value> {
+        self.error_details.take()
+    }
+
     fn set_progress(&mut self, hook: Option<ProgressHook>) {
         self.progress = hook;
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.error_details = None;
         let p = if params.is_null() { json!({}) } else { params };
         match method {
             "engine.execute" | "ui.menu.invoke" | "command" => {
@@ -129,7 +135,12 @@ impl Backend for Headless {
                 if id == "app.export" {
                     return self.export(&params);
                 }
-                self.session.execute(id, &params).map_err(|e| e.to_string())
+                self.session.execute(id, &params).map_err(|e| {
+                    if let lightcraft_engine::ErrorKind::FaceRequest(details) = e.kind() {
+                        self.error_details = Some(json!(details));
+                    }
+                    e.to_string()
+                })
             }
             "engine.commands" => {
                 let mut v: Vec<Value> = self.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();

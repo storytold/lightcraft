@@ -45,6 +45,7 @@ pub mod files;
 mod focus_scan;
 pub mod fonts;
 pub mod guard;
+mod ignored_faces_index;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
@@ -93,7 +94,7 @@ pub mod walk;
 use std::sync::Arc;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
-pub use errors::{AiModel, ErrorKind};
+pub use errors::{AiModel, ErrorKind, FaceErrorCode, FaceErrorDetails};
 pub use fonts::{CRAFT_FONTS, CraftFont};
 use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
@@ -110,6 +111,9 @@ pub enum EngineError {
     Disabled(String, String),
     #[error("invalid parameters for `{cmd}`: {msg}")]
     BadParams { cmd: String, msg: String },
+    /// Atomic validation failure in `faces.ignore` or `faces.ignored`.
+    #[error("invalid parameters for `{cmd}`: {msg}")]
+    FaceRequest { cmd: &'static str, details: FaceErrorDetails, msg: String },
     #[error("{0}")]
     Catalog(#[from] lightcraft_catalog::CatalogError),
     /// The command's change is applied (in memory, undoable) but its journal records could not
@@ -142,6 +146,9 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 pub struct UndoEntry {
     pub label: String,
     pub op: Op,
+    /// Automatic XMP targets retained through merged history. None uses the operation's targets;
+    /// Some(empty) is catalog-only, and a mixed step lists only its ordinary-change photos.
+    pub(crate) sidecar_photos: Option<Vec<PhotoId>>,
     /// A folder to rename on disk (`from` → `to`) before `op` is applied: Rename / Move Folder
     /// (whose `op` relinks the photos inside). Never overwrites; refused when `to` exists. An
     /// empty `to` removes the (empty) folder `from`, an empty `from` creates `to` (Create Folder).
@@ -233,6 +240,7 @@ static LIBRARY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 pub struct Session {
     library_generation: u64,
+    pub(crate) ignored_faces_index: ignored_faces_index::Index,
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
@@ -277,9 +285,12 @@ pub struct Session {
     /// Exact filesystem repairs from discarded history; catalog inverses stay discarded.
     pub(crate) pending_sidecar_repairs: Vec<rename::SidecarMove>,
     pub interaction: Option<Interaction>,
-    /// Set by a command whose change must not rewrite the photo's XMP sidecar even with auto-write on
-    /// (a catalog-only edit of data the sidecar writer does not emit); consumed when the command ends.
+    /// Explicit sidecar suppression for imports/background work; consumed when the command ends.
+    /// Face history instead keeps a policy per operation, so mixed commands retain ordinary writes.
     pub(crate) skip_auto_write: bool,
+    /// Overrides for log records emitted in the current outer command, indexed in pending_log.
+    /// Absent records use op_photos; empty targets suppress only that record, not its neighbours.
+    sidecar_policies: std::collections::HashMap<usize, Vec<PhotoId>>,
     /// The order of Reload from Disk runs, so an older one finishing late is dropped ([`cmd::reload`]).
     pub(crate) reload_tickets: cmd::reload::Tickets,
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
@@ -469,6 +480,7 @@ impl Session {
     pub fn new() -> Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ignored_faces_index: Default::default(),
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,
@@ -493,6 +505,7 @@ impl Session {
             pending_sidecar_repairs: Vec::new(),
             interaction: None,
             skip_auto_write: false,
+            sidecar_policies: Default::default(),
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             denoise: Default::default(),
@@ -632,6 +645,7 @@ impl Session {
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
                 self.auto_write_sidecars_since(log_start);
             }
+            self.sidecar_policies.clear();
         }
         if self.depth == 0 && self.library.is_some() {
             // Make the command durable before reporting success (natively: handed to the catalog
@@ -664,7 +678,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            sidecar_photos: None,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -672,6 +693,20 @@ impl Session {
         }
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
+        }
+        Ok(())
+    }
+
+    /// Commit catalog metadata with history that suppresses automatic sidecar writes,
+    /// including subsequent Undo/Redo, independently of other operations in the command. Direct calls
+    /// do not leak command-scoped suppression.
+    pub(crate) fn commit_catalog_only(&mut self, label: &str, op: Op) -> Result<()> {
+        self.commit(label, op)?;
+        if let Some(entry) = self.undo.last_mut() {
+            entry.sidecar_photos = Some(Vec::new());
+        }
+        if self.depth > 0 {
+            self.sidecar_policies.insert(self.pending_log.len().saturating_sub(1), Vec::new());
         }
         Ok(())
     }
@@ -788,10 +823,22 @@ impl Session {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
+        // Keep the positive write targets, not a single all-or-nothing flag: a face-only photo
+        // must stay excluded even when another photo in this batch has an ordinary edit.
+        let mut sidecar_photos = Vec::new();
+        for entry in &tail {
+            match &entry.sidecar_photos {
+                Some(ids) => sidecar_photos.extend(ids),
+                None => sidecar::op_photos(&entry.op, &mut sidecar_photos),
+            }
+        }
+        sidecar_photos.sort_unstable();
+        sidecar_photos.dedup();
         let ops = tail.into_iter().rev().map(|e| e.op).collect();
         self.undo.push(UndoEntry {
             label: label.to_string(),
             op: Op::Batch { ops },
+            sidecar_photos: Some(sidecar_photos),
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
@@ -804,10 +851,12 @@ impl Session {
         Ok(())
     }
 
+    /// Undo the latest step using the real filesystem; retain the step if applying it fails.
     pub fn undo_step(&mut self) -> Result<String> {
         self.undo_step_with(&rename::RealFs)
     }
 
+    /// Undo a catalog/filesystem step while preserving its sidecar-write policy and retry state.
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         let redo = match self.apply_with_files(&mut e, fs) {
@@ -818,10 +867,16 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        if self.depth > 0
+            && let Some(ids) = &e.sidecar_photos
+        {
+            self.sidecar_policies.insert(self.pending_log.len(), ids.clone());
+        }
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry {
             label: e.label.clone(),
             op: redo,
+            sidecar_photos: e.sidecar_photos,
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
@@ -829,10 +884,12 @@ impl Session {
         Ok(e.label)
     }
 
+    /// Redo the latest undone step using the real filesystem without changing its history policy.
     pub fn redo_step(&mut self) -> Result<String> {
         self.redo_step_with(&rename::RealFs)
     }
 
+    /// Redo a catalog/filesystem step with the same sidecar-write policy as the original operation.
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         let undo = match self.apply_with_files(&mut e, fs) {
@@ -843,10 +900,16 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        if self.depth > 0
+            && let Some(ids) = &e.sidecar_photos
+        {
+            self.sidecar_policies.insert(self.pending_log.len(), ids.clone());
+        }
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry {
             label: e.label.clone(),
             op: undo,
+            sidecar_photos: e.sidecar_photos,
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
@@ -939,6 +1002,7 @@ impl Session {
 
     /// Ops applied since the last call, for the op-log store.
     pub fn drain_log(&mut self) -> Vec<Op> {
+        self.sidecar_policies.clear();
         std::mem::take(&mut self.pending_log)
     }
 

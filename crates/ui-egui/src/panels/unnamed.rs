@@ -19,6 +19,8 @@ use crate::widgets::register;
 pub struct UnnamedFace {
     pub photo: u64,
     pub index: usize,
+    /// Catalog geometry identifies the region even when recognition refines its display crop.
+    pub rect: lightcraft_geom::Rect,
     pub view: lightcraft_geom::Rect,
     pub suggestion: Option<String>,
 }
@@ -43,6 +45,7 @@ fn face_of(v: &Value) -> Option<UnnamedFace> {
     Some(UnnamedFace {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
+        rect: rect_of(&v["rect"])?,
         view: rect_of(&v["view"]).or_else(|| rect_of(&v["rect"]))?,
         suggestion: v["suggestion"]["name"].as_str().map(str::to_string),
     })
@@ -70,9 +73,33 @@ pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
     }
     let v = app.session.execute("faces.unnamed", &json!({})).unwrap_or(Value::Null);
     let list = Arc::new(parse(&v));
+    if let Some((_, _, _, old)) = &app.caches.unnamed {
+        // Keep selections across unrelated edits and background detections, but never transfer
+        // one to a different box that reuses its photo/index pair. Validate every refetch, since
+        // recognition can also change display boxes/order without a catalog revision.
+        if !app.ui.unnamed_selected.is_empty() {
+            let before: std::collections::HashMap<_, _> =
+                old.faces.iter().filter(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index))).map(|f| ((f.photo, f.index), f.rect)).collect();
+            let current: std::collections::HashMap<_, _> =
+                list.faces.iter().filter(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index))).map(|f| ((f.photo, f.index), f.rect)).collect();
+            app.ui.unnamed_selected.retain(|key| matches!((before.get(key), current.get(key)), (Some(a), Some(b)) if a == b));
+        }
+        // The anchor refers to a position, not a face key. Rating/suggestion changes keep it;
+        // changed ordering or geometry invalidates it before another Shift-click can use it.
+        if app.ui.unnamed_anchor.is_some()
+            && !old.faces.iter().map(|f| (f.photo, f.index, f.rect)).eq(list.faces.iter().map(|f| (f.photo, f.index, f.rect)))
+        {
+            app.ui.unnamed_anchor = None;
+        }
+        if app.ui.unnamed_selected.is_empty() {
+            app.ui.unnamed_focus = false;
+        }
+    }
     // what was selected and has since been named (or removed) is no longer selected
-    let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
-    app.ui.unnamed_selected.retain(|k| present.contains(k));
+    if app.caches.unnamed.is_none() && !app.ui.unnamed_selected.is_empty() {
+        let present: std::collections::HashSet<_> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
+        app.ui.unnamed_selected.retain(|k| present.contains(k));
+    }
     app.caches.unnamed = Some((rev, indexed, now, list.clone()));
     list
 }
@@ -127,7 +154,8 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let mut submit: Option<String> = None;
     let mut clear = false;
-    ui.horizontal(|ui| {
+    let mut ignore = false;
+    ui.horizontal_wrapped(|ui| {
         ui.add_space(super::people::PAD - 4.0);
         let n = selected.len();
         ui.label(RichText::new(if n == 1 { "1 face selected".to_string() } else { format!("{n} faces selected") }).color(t.text));
@@ -151,6 +179,9 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let c = ui.button(crate::i18n::tr("Clear"));
         register(ui, "unnamed:clear", c.rect);
         clear = c.clicked() || field.cancelled();
+        let b = ui.button(crate::i18n::tr("Ignore selected faces"));
+        register(ui, "unnamed:ignore", b.rect);
+        ignore = b.clicked();
     });
     // the people already named, matching what is typed (a click names the faces)
     let typed = app.ui.unnamed_name.trim().to_lowercase();
@@ -170,7 +201,30 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             });
         }
     }
-    if let Some(who) = submit {
+    if ignore {
+        // Use the reviewed catalog geometry, never re-read it from the mutable catalog.
+        let faces: Vec<_> = app
+            .caches
+            .unnamed
+            .as_ref()
+            .into_iter()
+            .flat_map(|c| c.3.faces.iter())
+            .filter(|face| app.ui.unnamed_selected.contains(&(face.photo, face.index)))
+            .map(|face| json!({"photo": face.photo, "index": face.index, "rect": face.rect}))
+            .collect();
+        // A partial cache must never turn the person's whole selection into a partial commit.
+        if faces.len() != app.ui.unnamed_selected.len() {
+            app.toast(ui.ctx(), crate::i18n::tr("Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again."));
+            return;
+        }
+        match app.run("faces.ignore", json!({"faces": faces})) {
+            Ok(_) => {
+                app.ui.unnamed_selected.clear();
+                app.ui.unnamed_anchor = None;
+            }
+            Err(error) => app.toast(ui.ctx(), error),
+        }
+    } else if let Some(who) = submit {
         name(app, &selected, &who);
         app.ui.unnamed_selected.clear();
         app.ui.unnamed_name.clear();
@@ -283,6 +337,106 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
 mod tests {
     use super::*;
 
+    /// A partial cached selection must not become a successful partial Ignore batch.
+    #[test]
+    fn ignoring_an_incomplete_cached_selection_changes_nothing_and_keeps_the_selection() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let id = app.session.catalog.photos().next().unwrap().id;
+        let mut meta = app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: None,
+            description: None,
+        }];
+        app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = std::time::Duration::from_secs(15);
+        h.step();
+        h.app.run("view.people", json!({})).unwrap();
+        h.settle(timeout);
+        // Inject an inconsistent selection after the normal refresh/pruning has run.
+        h.app.ui.unnamed_selected.extend([(id.0, 0), (id.0, 99)]);
+        h.app.ui.unnamed_anchor = Some(0);
+        h.step();
+        let before = (h.app.session.catalog.revision, h.app.session.undo.len(), h.app.ui.unnamed_selected.clone());
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "unnamed:ignore"}), timeout)["ok"], true);
+        h.step();
+        assert_eq!((h.app.session.catalog.revision, h.app.session.undo.len(), h.app.ui.unnamed_selected.clone()), before);
+        assert_eq!(h.app.ui.unnamed_anchor, Some(0));
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions[0].kind, lightcraft_meta::RegionKind::Face);
+        assert_eq!(
+            h.app.ui.toast.as_ref().unwrap().0,
+            crate::i18n::tr("Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.")
+        );
+        capture_incomplete_selection_if_requested(&mut h, timeout);
+    }
+
+    /// Capture the synthetic app through the same snapshot path as the other face-panel tests.
+    fn capture_incomplete_selection_if_requested(h: &mut crate::headless::Headless, timeout: std::time::Duration) {
+        let Some(path) = std::env::var_os("LIGHTCRAFT_INCOMPLETE_FACE_SELECTION_SCREENSHOT") else { return };
+        let shot = h.snapshot(timeout);
+        let image = lightcraft_raster::Rgba8::from_fn(shot.size[0], shot.size[1], |x, y| shot.pixels[y * shot.size[0] + x].to_array());
+        let png = lightcraft_engine::export::encode_image(
+            &image,
+            &lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() },
+        )
+        .unwrap();
+        std::fs::write(path, png).unwrap();
+        let inspected = h.request("ui.inspect", json!({}), timeout);
+        println!("Incomplete face-selection perf: {}", inspected["result"]["perf"]);
+    }
+
+    #[test]
+    fn selected_unnamed_faces_survive_unrelated_changes_but_not_index_reuse() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let ids: Vec<_> = app.session.catalog.photos().take(2).map(|p| p.id).collect();
+        let regions: Vec<_> = (0..2)
+            .map(|i| lightcraft_meta::Region {
+                rect: lightcraft_geom::Rect { x0: 0.1 + f64::from(i) * 0.3, y0: 0.1, x1: 0.3 + f64::from(i) * 0.3, y1: 0.4 },
+                kind: lightcraft_meta::RegionKind::Face,
+                name: None,
+                description: None,
+            })
+            .collect();
+        let mut meta = app.session.catalog.photo(ids[0]).unwrap().meta.clone();
+        meta.regions = regions.clone();
+        app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id: ids[0], meta: Box::new(meta) }).unwrap();
+        let list = faces(&mut app, 0.0);
+        click(&mut app, &list, 0, false);
+        assert!(app.ui.unnamed_focus);
+        app.session.execute("photo.rate", &json!({"ids": [ids[0].0], "rating": 3})).unwrap();
+        faces(&mut app, 1.0);
+        assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
+        assert_eq!(app.ui.unnamed_anchor, Some(0));
+        assert!(app.ui.unnamed_focus);
+        // A recognition-driven cache refresh changes only the display crop, not the catalog
+        // revision or region. Seed the prior display crop and expire its embedding-count stamp.
+        let revision = app.session.catalog.revision;
+        let (_, indexed, _, cached) = app.caches.unnamed.as_mut().unwrap();
+        *indexed = indexed.saturating_add(1);
+        let old_view = lightcraft_geom::Rect { x0: 0.12, y0: 0.12, x1: 0.28, y1: 0.38 };
+        Arc::make_mut(cached).faces[0].view = old_view;
+        let refreshed = faces(&mut app, 5.0);
+        assert_eq!(app.session.catalog.revision, revision);
+        assert_ne!(refreshed.faces[0].view, old_view, "the display crop was refreshed");
+        assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
+        assert_eq!(app.ui.unnamed_anchor, Some(0));
+        assert!(app.ui.unnamed_focus);
+        let mut meta = app.session.catalog.photo(ids[1]).unwrap().meta.clone();
+        meta.regions = regions;
+        app.session.commit("background detections", lightcraft_catalog::Op::SetMeta { id: ids[1], meta: Box::new(meta) }).unwrap();
+        faces(&mut app, 6.0);
+        assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
+        assert!(app.ui.unnamed_anchor.is_none(), "a positional anchor cannot outlive a changed list");
+        assert!(app.ui.unnamed_focus);
+        app.session.execute("photo.removeRegion", &json!({"id": ids[0].0, "index": 0})).unwrap();
+        faces(&mut app, 7.0);
+        assert!(app.ui.unnamed_selected.is_empty());
+        assert!(app.ui.unnamed_anchor.is_none());
+        assert!(!app.ui.unnamed_focus);
+    }
+
     #[test]
     fn the_engines_answer_becomes_a_list_and_odd_entries_are_left_out() {
         let v = json!({
@@ -298,6 +452,7 @@ mod tests {
         assert_eq!((list.total, list.ordered, list.ready, list.faces.len()), (9, true, true, 2));
         assert_eq!(list.faces[0].suggestion.as_deref(), Some("Jane Doe"));
         assert_eq!(list.faces[0].view.x0, 0.12, "the view box is used when there is one");
+        assert_eq!(list.faces[0].rect.x0, 0.1, "the catalog box identifies the region independently of its display crop");
         assert_eq!((list.faces[1].view.x0, list.faces[1].suggestion.clone()), (0.1, None), "else the face's own box");
         for bad in [Value::Null, json!([]), json!({"faces": 5, "total": -1})] {
             assert_eq!(parse(&bad), Unnamed::default(), "{bad}");

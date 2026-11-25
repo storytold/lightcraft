@@ -136,3 +136,28 @@ fn rename_person_asks_before_merging() {
     assert_eq!(stored(&h, ids[0])[0].as_deref(), Some("Jane Doe"));
     assert_eq!(stored(&h, ids[1])[0].as_deref(), Some("John Roe"));
 }
+
+/// A retained ignored assignment still requires the normal person-merge confirmation.
+#[test]
+fn rename_person_dialog_confirms_a_merge_with_an_ignored_assignment() {
+    let mut h = demo();
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+    name_faces(&mut h, ids[0], vec![face(0.1, "Jane Doe")]);
+    let mut ignored = face(0.3, "John Roe");
+    ignored.kind = lightcraft_meta::RegionKind::IgnoredFace;
+    name_faces(&mut h, ids[1], vec![ignored]);
+    open_people(&mut h);
+    h.app.run("view.person", json!({"name": "Jane Doe"})).unwrap();
+    h.step();
+    click(&mut h, "person:rename");
+    let Some(Dialog::RenamePerson { to, .. }) = &mut h.app.ui.dialog else { panic!("missing rename dialog") };
+    *to = "John Roe".into();
+    h.step();
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_some());
+    click(&mut h, "check:personMerge");
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_none());
+    assert_eq!(stored(&h, ids[0])[0].as_deref(), Some("John Roe"));
+    assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].kind, lightcraft_meta::RegionKind::IgnoredFace);
+}

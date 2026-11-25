@@ -16,7 +16,55 @@ use crate::widgets::register;
 const PAD: f32 = 20.0;
 const SECTION_H: f32 = 56.0;
 
-/// One face: which photo, which of its regions, the box to show it by, and (for the "More" faces) how alike.
+#[derive(Clone, Debug, Default)]
+pub struct Selection {
+    name: String,
+    active: bool,
+    faces: std::collections::HashSet<(u64, usize)>,
+    anchor: Option<(usize, bool)>,
+    before_click: Option<BeforeClick>,
+    confirmed: Vec<Face>,
+    page: Option<Arc<PersonPage>>,
+}
+
+#[derive(Clone, Debug)]
+struct BeforeClick {
+    face: (u64, usize),
+    faces: std::collections::HashSet<(u64, usize)>,
+    anchor: Option<(usize, bool)>,
+}
+
+/// A double-click opens the photo without retaining the first click's range/anchor changes.
+fn click_confirmed(selection: &mut Selection, faces: &[Face], target: &Face, shift: bool, double: bool) {
+    if double {
+        if let Some(before) = selection.before_click.take().filter(|before| before.face == (target.photo, target.index)) {
+            selection.faces = before.faces;
+            selection.anchor = before.anchor;
+        }
+    } else {
+        selection.before_click = Some(BeforeClick { face: (target.photo, target.index), faces: selection.faces.clone(), anchor: selection.anchor });
+        select_confirmed(selection, faces, target, shift);
+    }
+}
+
+/// Repeat the anchor's include/exclude action over a range of confirmed faces.
+fn select_confirmed(selection: &mut Selection, faces: &[Face], target: &Face, shift: bool) {
+    let Some(index) = faces.iter().position(|f| f.photo == target.photo && f.index == target.index) else { return };
+    let key = (target.photo, target.index);
+    let (start, selecting) = selection.anchor.filter(|_| shift).unwrap_or((index, !selection.faces.contains(&key)));
+    for face in faces.get(start.min(index)..=start.max(index)).unwrap_or_default() {
+        if selecting {
+            selection.faces.insert((face.photo, face.index));
+        } else {
+            selection.faces.remove(&(face.photo, face.index));
+        }
+    }
+    if !shift || selection.anchor.is_none() {
+        selection.anchor = Some((index, selecting));
+    }
+}
+
+/// One face: which photo, which of its regions, its catalog box, and (for the "More" faces) how alike.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Face {
     pub photo: u64,
@@ -37,13 +85,13 @@ pub struct PersonPage {
     pub pending: usize,
 }
 
+/// Keep the catalog box for commands; the detector-aligned display box is resolved when drawing.
 fn face_of(v: &Value) -> Option<Face> {
     let rect = |r: &Value| Some(lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
     Some(Face {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
-        // shown by the detector's box when the scan has one: every face equally close
-        rect: rect(&v["view"]).or_else(|| rect(&v["rect"]))?,
+        rect: rect(&v["rect"])?,
         score: v["score"].as_f64().unwrap_or(0.0) as f32,
     })
 }
@@ -82,9 +130,11 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
 enum Hit {
     Nothing,
     Open,
+    OpenDouble,
     Confirm,
     ConfirmAbove,
     Dismiss,
+    Ignore,
 }
 
 /// The current, session-visible candidates at or above the selected score. The score, not the tile position, is the
@@ -140,11 +190,27 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
     true
 }
 
+/// Render confirmed faces and More suggestions with explicit selection and ignore actions.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let page = page_for(app, name, now);
     let shown_name = if page.name.is_empty() { name.to_string() } else { page.name.clone() };
+    if app.ui.person_selection.name != shown_name {
+        app.ui.person_selection = Selection { name: shown_name.clone(), ..Default::default() };
+    }
+    let selection = &mut app.ui.person_selection;
+    // A background scan can change the catalog without changing this person's face identities.
+    // Compare the confirmed list, not the global revision; changed indices/boxes still reset it.
+    if !selection.page.as_ref().is_some_and(|previous| Arc::ptr_eq(previous, &page)) {
+        if selection.confirmed != page.confirmed {
+            selection.faces.clear();
+            selection.anchor = None;
+            selection.before_click = None;
+            selection.confirmed = page.confirmed.clone();
+        }
+        selection.page = Some(page.clone());
+    }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.add_space(PAD - 4.0);
@@ -172,6 +238,55 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         });
     });
     ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.add_space(PAD);
+        let active = app.ui.person_selection.active;
+        let button = ui.button(if active { crate::i18n::tr("Done selecting") } else { crate::i18n::tr("Select faces…") });
+        register(ui, "person:selectFaces", button.rect);
+        if button.clicked() {
+            app.ui.person_selection.active = !active;
+            app.ui.person_selection.faces.clear();
+            app.ui.person_selection.before_click = None;
+            app.ui.person_selection.anchor = None;
+        }
+        if app.ui.person_selection.active {
+            let all = ui.button(crate::i18n::tr("Select all"));
+            register(ui, "person:selectAll", all.rect);
+            if all.clicked() {
+                app.ui.person_selection.before_click = None;
+                app.ui.person_selection.faces.extend(page.confirmed.iter().map(|f| (f.photo, f.index)));
+            }
+            let clear = ui.button(crate::i18n::tr("Clear selection"));
+            register(ui, "person:clearSelection", clear.rect);
+            if clear.clicked() {
+                app.ui.person_selection.faces.clear();
+                app.ui.person_selection.before_click = None;
+                app.ui.person_selection.anchor = None;
+            }
+            let count = app.ui.person_selection.faces.len();
+            let ignore = ui.add_enabled(count > 0, egui::Button::new(crate::i18n::tr("Ignore selected faces")));
+            register(ui, "person:ignoreSelected", ignore.rect);
+            if ignore.clicked() {
+                let faces: Vec<_> = page
+                    .confirmed
+                    .iter()
+                    .filter(|face| app.ui.person_selection.faces.contains(&(face.photo, face.index)))
+                    .map(|face| json!({"photo": face.photo, "index": face.index, "rect": face.rect}))
+                    .collect();
+                match app.run("faces.ignore", json!({"faces": faces})) {
+                    Ok(_) => {
+                        app.ui.person_selection.faces.clear();
+                        app.ui.person_selection.before_click = None;
+                        app.ui.person_selection.anchor = None;
+                    }
+                    Err(error) => app.toast(ui.ctx(), error),
+                }
+            }
+        }
+    });
+    if app.ui.person_selection.active {
+        ui.label(crate::i18n::tr("Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo."));
+    }
     if page.total == 0 {
         super::empty_message(
             ui,
@@ -221,10 +336,27 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 let Some(f) = page.confirmed.get(row * cols + col) else { break };
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), PAD + row as f32 * row_h);
-                if let Hit::Open =
-                    tile(app, ui, &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: false, name: &shown_name, above_count: 0 })
-                {
-                    hit = Some((Hit::Open, f.clone()));
+                let action = tile(
+                    app,
+                    ui,
+                    &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: false, name: &shown_name, above_count: 0 },
+                );
+                if action == Hit::Ignore {
+                    hit = Some((action, f.clone()));
+                } else if matches!(action, Hit::Open | Hit::OpenDouble) {
+                    let double = action == Hit::OpenDouble;
+                    if app.ui.person_selection.active {
+                        click_confirmed(&mut app.ui.person_selection, &page.confirmed, f, ui.input(|i| i.modifiers.shift), double);
+                    }
+                    if !app.ui.person_selection.active || double {
+                        hit = Some((Hit::Open, f.clone()));
+                    }
+                }
+                if app.ui.person_selection.active && app.ui.person_selection.faces.contains(&(f.photo, f.index)) {
+                    let rect = Rect::from_min_size(min, vec2(edge, edge));
+                    ui.painter().rect_stroke(rect.shrink(1.0), 3.0, Stroke::new(3.0, t.accent), StrokeKind::Inside);
+                    ui.painter().rect_filled(Rect::from_min_size(min, vec2(24.0, 24.0)), 3.0, t.accent);
+                    ui.painter().text(min + vec2(12.0, 12.0), Align2::CENTER_CENTER, "✓", t.font(16.0), Color32::WHITE);
                 }
             }
         }
@@ -260,6 +392,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                     Hit::Confirm => hit = Some((Hit::Confirm, (*f).clone())),
                     Hit::ConfirmAbove => hit = Some((Hit::ConfirmAbove, (*f).clone())),
                     Hit::Dismiss => hit = Some((Hit::Dismiss, (*f).clone())),
+                    Hit::Ignore => hit = Some((Hit::Ignore, (*f).clone())),
                     _ => {}
                 }
             }
@@ -269,7 +402,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     });
     if let Some((what, f)) = hit {
         match what {
-            Hit::Open => {
+            Hit::Open | Hit::OpenDouble => {
                 let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
                 let _ = app.run("view.detail", json!({}));
                 // Escape comes back to this page; the People button to everyone, with this person next to its title
@@ -283,6 +416,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             Hit::ConfirmAbove => confirm_above(app, ui.ctx(), &shown_name, &more, f.score),
             Hit::Dismiss => {
                 app.ui.dismissed_faces.insert((f.photo, f.index));
+            }
+            Hit::Ignore => {
+                if let Err(error) = app.run("faces.ignore", json!({"faces": [{"photo": f.photo, "index": f.index, "rect": f.rect}]})) {
+                    app.toast(ui.ctx(), error);
+                }
             }
             Hit::Nothing => {}
         }
@@ -311,7 +449,11 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
     let resp = ui.interact(r, egui::Id::unique((salt, f.photo, f.index)), Sense::click());
-    crate::widgets::announce(&resp, name.to_string());
+    if !more && app.ui.person_selection.active {
+        crate::widgets::announce_selected(&resp, name.to_string(), app.ui.person_selection.faces.contains(&(f.photo, f.index)));
+    } else {
+        crate::widgets::announce(&resp, name.to_string());
+    }
     register(ui, format!("{salt}:{}:{}", f.photo, f.index), r);
     // the × is added after the tile, so it wins where they overlap
     let x_rect = Rect::from_min_size(pos2(r.right() - 24.0, r.top() + 4.0), vec2(20.0, 20.0));
@@ -324,7 +466,8 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
     p.rect_filled(r, 3.0, t.canvas);
-    if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
+    let photo = lightcraft_catalog::PhotoId(f.photo);
+    if let Some(job) = app.session.face_job(photo, app.session.face_view(photo, f.rect), (r.width() * ppp).ceil() as usize)
         && let Some(tex) = app.renderer.variant(job)
     {
         p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -333,6 +476,14 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         p.rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
     }
     let mut hit = Hit::Nothing;
+    crate::widgets::context_menu(&resp, |ui| {
+        let button = ui.button(crate::i18n::tr("Ignore face (blurry / not a face)"));
+        register(ui, "person:ignoreFace", button.rect);
+        if button.clicked() {
+            hit = Hit::Ignore;
+            ui.close();
+        }
+    });
     if more && hovered {
         // a check at the bottom right says a click confirms; × hides and ↑ names all above this score
         let badge = Rect::from_min_size(pos2(r.right() - 28.0, r.bottom() - 28.0), vec2(24.0, 24.0));
@@ -369,7 +520,9 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         }
     } else {
         let _ = resp.clone().on_hover_text(format!("{name} — click to open this photo"));
-        if resp.clicked() {
+        if resp.double_clicked() {
+            hit = Hit::OpenDouble;
+        } else if resp.clicked() {
             hit = Hit::Open;
         }
     }
@@ -379,6 +532,275 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_keep_the_catalog_box_instead_of_the_detector_view() {
+        let catalog = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.8, y1: 0.9 };
+        let view = lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.6, y1: 0.6 };
+        let face = json!({"photo": 1, "index": 0, "rect": catalog, "view": view});
+        let page = parse(&json!({"confirmed": [face.clone()], "more": [face]}));
+        assert_eq!(page.confirmed[0].rect, catalog);
+        assert_eq!(page.more[0].rect, catalog);
+        assert!(face_of(&json!({"photo": 1, "index": 0, "view": view})).is_none(), "a display box cannot identify a catalog region");
+    }
+
+    /// Even a stale page handed to the UI must not let either ignore action target an index's
+    /// replacement. Deliberately retain the old response: normal revision refresh is a separate
+    /// defense, and must not mask a missing rectangle in either command payload.
+    #[test]
+    fn person_ignore_actions_reject_reused_indices_without_an_undo_step() {
+        use lightcraft_catalog::Op;
+        use lightcraft_meta::{Region, RegionKind};
+        let timeout = std::time::Duration::from_secs(15);
+        for action in ["bulk", "confirmed", "more"] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+            let ids: Vec<_> = app.session.catalog.photos().take(2).map(|photo| photo.id).collect();
+            let rect = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 };
+            let replacement = lightcraft_geom::Rect { x0: 0.5, y0: 0.2, x1: 0.8, y1: 0.6 };
+            for (i, id) in ids.iter().enumerate() {
+                let mut meta = app.session.catalog.photo(*id).unwrap().meta.clone();
+                let name = (i != 0 || action != "more").then(|| "Person".into());
+                meta.regions = vec![Region { rect, kind: RegionKind::Face, name, description: None }];
+                if i == 0 {
+                    meta.regions.push(Region { rect: replacement, ..meta.regions[0].clone() });
+                }
+                app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+            }
+            let mut page = parse(&app.session.execute("faces.person", &json!({"name": "Person"})).unwrap());
+            if action == "more" {
+                page.more = vec![Face { photo: ids[0].0, index: 0, rect, score: 0.8 }];
+                page.ready = true;
+            }
+            app.session.execute("photo.removeRegion", &json!({"id": ids[0].0, "index": 0})).unwrap();
+            let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+            h.app.run("view.person", json!({"name": "Person"})).unwrap();
+            // Inject an old rendered response, independent of the normal revision invalidation.
+            h.app.caches.person_page = Some(("Person".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, h.time(), Arc::new(page)));
+            h.settle(timeout);
+            let before: Vec<_> = ids.iter().map(|id| h.app.session.catalog.photo(*id).unwrap().meta.regions.clone()).collect();
+            let undo = h.app.session.undo.len();
+            if action == "bulk" {
+                h.app.ui.person_selection.active = true;
+                h.app.ui.person_selection.faces.extend(ids.iter().map(|id| (id.0, 0)));
+                h.step();
+                assert_eq!(h.request("ui.clickWidget", json!({"id": "person:ignoreSelected"}), timeout)["ok"], true);
+            } else {
+                let prefix = if action == "more" { "more-face" } else { "person-face" };
+                let opened = h.request("ui.clickWidget", json!({"id": format!("{prefix}:{}:0", ids[0].0), "button": "right"}), timeout);
+                assert_eq!(opened["ok"], true, "{opened}");
+                h.step();
+                assert_eq!(h.request("ui.clickWidget", json!({"id": "person:ignoreFace"}), timeout)["ok"], true);
+            }
+            h.step();
+            for (id, regions) in ids.iter().zip(&before) {
+                assert_eq!(&h.app.session.catalog.photo(*id).unwrap().meta.regions, regions, "{action}: no selected face may change");
+            }
+            assert_eq!(h.app.session.undo.len(), undo, "{action}: a refused stale action adds no undo step");
+        }
+    }
+
+    /// The suggested-face context menu must persist ignoring, without confirming the suggestion.
+    #[test]
+    fn more_face_context_menu_ignores_the_suggestion_with_one_undo() {
+        use std::time::Duration;
+        let t = Duration::from_secs(15);
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let ids: Vec<_> = app.session.catalog.photos().map(|p| p.id).take(2).collect();
+        assert_eq!(ids.len(), 2);
+        let rect = lightcraft_geom::Rect { x0: 0.2, y0: 0.2, x1: 0.6, y1: 0.6 };
+        for (i, id) in ids.iter().enumerate() {
+            let mut meta = app.session.catalog.photo(*id).unwrap().meta.clone();
+            meta.regions = vec![lightcraft_meta::Region {
+                rect,
+                kind: lightcraft_meta::RegionKind::Face,
+                name: (i == 0).then(|| "Person".into()),
+                description: None,
+            }];
+            app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+        }
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        h.step();
+        h.app.run("view.person", json!({"name": "Person"})).unwrap();
+        let page = PersonPage {
+            name: "Person".into(),
+            total: 1,
+            confirmed: vec![Face { photo: ids[0].0, index: 0, rect, score: 0.0 }],
+            more: vec![Face { photo: ids[1].0, index: 0, rect, score: 0.8 }],
+            ready: true,
+            pending: 0,
+        };
+        h.app.caches.person_page = Some(("Person".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, h.time(), Arc::new(page)));
+        h.settle(t);
+        let menu = h.request("ui.clickWidget", json!({"id": format!("more-face:{}:0", ids[1].0), "button": "right"}), t);
+        assert_eq!(menu["ok"], true, "{menu}");
+        h.step();
+        if let Some(path) = std::env::var_os("LIGHTCRAFT_MORE_IGNORE_SCREENSHOT") {
+            let shot = h.snapshot(t);
+            let image = lightcraft_raster::Rgba8::from_fn(shot.size[0], shot.size[1], |x, y| shot.pixels[y * shot.size[0] + x].to_array());
+            let png = lightcraft_engine::export::encode_image(
+                &image,
+                &lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() },
+            )
+            .unwrap();
+            std::fs::write(path, png).unwrap();
+        }
+        let undo = h.app.session.undo.len();
+        let ignored = h.request("ui.clickWidget", json!({"id": "person:ignoreFace"}), t);
+        assert_eq!(ignored["ok"], true, "{ignored}");
+        h.step();
+        h.settle(t);
+        let photo = h.app.session.catalog.photo(ids[1]).unwrap();
+        assert_eq!(photo.meta.regions[0].kind, lightcraft_meta::RegionKind::IgnoredFace);
+        assert!(photo.meta.regions[0].name.is_none(), "ignoring must not confirm the suggested name");
+        assert_eq!(photo.meta.regions[0].rect, rect);
+        assert_eq!(h.app.session.undo.len(), undo + 1);
+        assert!(!h.app.widgets.iter().any(|(id, _)| id == &format!("more-face:{}:0", ids[1].0)));
+        assert_eq!(h.app.session.catalog.photo(ids[0]).unwrap().meta.regions[0].name.as_deref(), Some("Person"));
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].kind, lightcraft_meta::RegionKind::Face);
+        h.app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].kind, lightcraft_meta::RegionKind::IgnoredFace);
+    }
+
+    /// Confirmed tiles expose both states to screen readers, not only their names.
+    #[test]
+    fn confirmed_tiles_announce_selection() {
+        use egui_kittest::{Harness, kittest::NodeT};
+        for (active, selected) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+            app.ui.person_selection.active = active;
+            if selected {
+                app.ui.person_selection.faces.insert((99, 0));
+            }
+            let h = Harness::builder().build_ui_state(
+                |ui, app: &mut LightcraftApp| {
+                    let face = Face { photo: 99, index: 0, rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 }, score: 0.0 };
+                    tile(
+                        app,
+                        ui,
+                        &TileSpec {
+                            r: Rect::from_min_size(ui.cursor().min, vec2(100.0, 100.0)),
+                            f: &face,
+                            ppp: 1.0,
+                            more: false,
+                            name: "Person",
+                            above_count: 0,
+                        },
+                    );
+                },
+                app,
+            );
+            let node = h.root().children_recursive().find(|n| n.accesskit_node().label().as_deref() == Some("Person")).unwrap();
+            assert_eq!(
+                node.accesskit_node().toggled(),
+                active.then_some(if selected { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
+            );
+        }
+    }
+
+    /// An unrelated catalog revision keeps selection, but a different face at the same index does not.
+    #[test]
+    fn confirmed_selection_survives_unrelated_changes_but_not_reused_indices() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let id = app.session.catalog.photos().next().unwrap().id;
+        let mut meta = app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = (0..2)
+            .map(|i| lightcraft_meta::Region {
+                rect: lightcraft_geom::Rect { x0: 0.1 + f64::from(i) * 0.3, y0: 0.1, x1: 0.3 + f64::from(i) * 0.3, y1: 0.4 },
+                kind: lightcraft_meta::RegionKind::Face,
+                name: Some("Person".into()),
+                description: None,
+            })
+            .collect();
+        app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = std::time::Duration::from_secs(15);
+        h.app.run("view.person", json!({"name": "Person"})).unwrap();
+        h.settle(timeout);
+        h.app.ui.person_selection.active = true;
+        let faces = h.app.ui.person_selection.confirmed.clone();
+        select_confirmed(&mut h.app.ui.person_selection, &faces, &faces[0], false);
+        h.app.session.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+        h.step();
+        assert_eq!(h.app.ui.person_selection.faces.len(), 1);
+        assert!(h.app.ui.person_selection.anchor.is_some());
+        let other = h.app.session.catalog.photos().find(|p| p.id != id).unwrap().id;
+        let mut meta = h.app.session.catalog.photo(other).unwrap().meta.clone();
+        let mut detected = h.app.session.catalog.photo(id).unwrap().meta.regions[0].clone();
+        detected.name = None;
+        meta.regions.push(detected);
+        h.app.session.commit("background detections", lightcraft_catalog::Op::SetMeta { id: other, meta: Box::new(meta) }).unwrap();
+        h.step();
+        assert_eq!(h.app.ui.person_selection.faces.len(), 1);
+        assert!(h.app.ui.person_selection.anchor.is_some());
+        h.app.session.execute("photo.removeRegion", &json!({"id": id.0, "index": 0})).unwrap();
+        h.step();
+        assert!(h.app.ui.person_selection.faces.is_empty());
+        assert!(h.app.ui.person_selection.anchor.is_none());
+    }
+
+    /// Double-click navigation restores the whole pre-click range and anchor on return.
+    #[test]
+    fn double_clicking_a_confirmed_face_preserves_selection_and_anchor() {
+        let timeout = std::time::Duration::from_secs(15);
+        for case in 0..3 {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+            let ids: Vec<_> = app.session.catalog.photos().take(4).map(|p| p.id).collect();
+            for id in ids {
+                let mut meta = app.session.catalog.photo(id).unwrap().meta.clone();
+                meta.regions = vec![lightcraft_meta::Region {
+                    rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 },
+                    kind: lightcraft_meta::RegionKind::Face,
+                    name: Some("Person".into()),
+                    description: None,
+                }];
+                app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+            }
+            let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+            h.app.run("view.person", json!({"name": "Person"})).unwrap();
+            h.settle(timeout);
+            let faces = parse(&h.app.session.execute("faces.person", &json!({"name": "Person"})).unwrap()).confirmed;
+            assert_eq!(faces.len(), 4);
+            h.app.ui.person_selection.active = true;
+            select_confirmed(&mut h.app.ui.person_selection, &faces, &faces[0], false);
+            if case == 2 {
+                select_confirmed(&mut h.app.ui.person_selection, &faces, &faces[3], true);
+                select_confirmed(&mut h.app.ui.person_selection, &faces, &faces[1], false);
+            }
+            let before = h.app.ui.person_selection.clone();
+            // Keep these two clicks separate from setup/navigation click bursts.
+            for _ in 0..60 {
+                h.step();
+            }
+            let widget = format!("person-face:{}:{}", faces[3].photo, faces[3].index);
+            let params = json!({"id": widget, "shift": case != 0});
+            assert_eq!(h.request("ui.clickWidget", params.clone(), timeout)["ok"], true);
+            h.step();
+            assert_ne!(h.app.ui.person_selection.faces, before.faces);
+            assert_eq!(h.request("ui.clickWidget", params, timeout)["ok"], true);
+            h.step();
+            assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail, "case {case}");
+            h.app.run("view.back", json!({})).unwrap();
+            h.step();
+            assert_eq!(h.app.ui.person_page.as_deref(), Some("Person"));
+            assert_eq!(h.app.ui.person_selection.faces, before.faces, "case {case}");
+            assert_eq!(h.app.ui.person_selection.anchor, before.anchor, "case {case}");
+        }
+    }
+
+    /// Shift ranges repeat the anchor action for both inclusion and exclusion.
+    #[test]
+    fn confirmed_face_selection_extends_include_and_exclude_ranges() {
+        let faces: Vec<_> =
+            (0..4).map(|photo| Face { photo, index: 0, rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }, score: 0.0 }).collect();
+        let mut selected = Selection::default();
+        select_confirmed(&mut selected, &faces, &faces[0], false);
+        select_confirmed(&mut selected, &faces, &faces[3], true);
+        assert_eq!(selected.faces.len(), 4);
+        select_confirmed(&mut selected, &faces, &faces[1], false);
+        select_confirmed(&mut selected, &faces, &faces[3], true);
+        assert_eq!(selected.faces, std::collections::HashSet::from([(0, 0)]));
+    }
 
     #[test]
     fn all_above_uses_score_including_later_ties_and_only_visible_faces() {
