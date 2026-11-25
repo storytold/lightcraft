@@ -1090,10 +1090,6 @@ pub fn menu_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str, hi
     if !hint.is_empty() {
         r = r.on_hover_text(crate::i18n::tr(hint));
     }
-    ui.ctx().accesskit_node_builder(r.id, |node| {
-        node.set_label(crate::i18n::tr(label).to_string());
-        node.set_value(shown.to_string());
-    });
     let mut chosen = None;
     egui::Popup::menu(&r).show(|ui| {
         for (i, (v, l, key)) in items.iter().enumerate() {
@@ -1101,10 +1097,25 @@ pub fn menu_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str, hi
             register(ui, format!("{id}:{key}"), item.rect);
             if item.clicked() {
                 chosen = Some(*v);
+                picked(ui, r.id);
             }
         }
     });
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&r));
+    ui.ctx().accesskit_node_builder(r.id, |node| {
+        node.set_label(crate::i18n::tr(label).to_string());
+        node.set_value(shown.to_string());
+        node.set_expanded(open);
+    });
     chosen
+}
+
+/// After an item of a dropdown's menu is chosen: close the menu and give the focus back to the
+/// dropdown `trigger`. egui closes a menu by itself only on a pointer click, so a choice made with
+/// Enter or Space would otherwise leave it open, with the focus on an item that is going away.
+pub fn picked(ui: &Ui, trigger: egui::Id) {
+    ui.close();
+    ui.memory_mut(|m| m.request_focus(trigger));
 }
 
 #[cfg(test)]
