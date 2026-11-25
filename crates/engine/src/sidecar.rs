@@ -73,7 +73,7 @@ pub fn sidecar_path(original: &str, naming: SidecarNaming) -> PathBuf {
 /// accepting `.XMP` and `.Xmp`, and a full name whose photo extension differs in case, such as
 /// `IMG_1.cr3.xmp` beside `IMG_1.CR3`, which a case-sensitive file system would otherwise miss).
 pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
-    sidecar_candidates(original, naming).find(|p| p.is_file())
+    sidecar_candidates(original, naming).find(|p| crate::doc_path::original_metadata(p).is_ok_and(|m| m.is_file()))
 }
 
 /// Where to look for a catalogued photo's sidecar: how the library names it, and whether the photo
@@ -97,7 +97,7 @@ impl SidecarLookup {
 
     /// [`find_sidecar`], except that a photo that does not own its stem sidecar never reads it.
     pub fn find(self, original: &str) -> Option<PathBuf> {
-        self.candidates(original).find(|p| p.is_file())
+        self.candidates(original).find(|p| crate::doc_path::original_metadata(p).is_ok_and(|m| m.is_file()))
     }
 }
 
@@ -397,7 +397,7 @@ impl SidecarData {
 /// ([`late_orientation`]). A WebP's or PNG's chunks are always walked, since the last Exif chunk is the one that counts
 /// ([`webp_orientation`], [`png_orientation`]).
 fn file_orientation(path: &str) -> Option<lightcraft_meta::Orientation> {
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = crate::doc_path::open_original(path).ok()?;
     let mut head = Vec::new();
     (&mut file).take(ORIENTATION_SPAN).read_to_end(&mut head).ok()?;
     // Import takes a raw's orientation from the decoder, not from Exif IFD0 / XMP alone. Re-read and sync must do the
@@ -851,15 +851,17 @@ fn file_path(p: &Photo) -> Option<&str> {
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
-        return crate::read_file::read_regular(&sc, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
+        // Preserve the sidecar cap on the guarded handle; consent does not lift this limit.
+        let file = crate::doc_path::open_original(&sc).ok()?;
+        return crate::read_file::read_open(file, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
-        let bytes = crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES).ok()?;
+        let bytes = crate::doc_path::read_original(original).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
     }
     if kind == MediaKind::Image {
-        let mut file = std::fs::File::open(original).ok()?;
+        let mut file = crate::doc_path::open_original(original).ok()?;
         let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
         return Some((x, PathBuf::from(original)));
     }
@@ -1297,6 +1299,28 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// A discovered sidecar keeps the upstream byte cap when opened through the UNC guard.
+    #[test]
+    fn guarded_packet_read_keeps_the_sidecar_byte_cap() {
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-cap-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let dir = Fixture(dir);
+        let original = dir.0.join("photo.png").to_string_lossy().into_owned();
+        let sidecar = dir.0.join("photo.xmp");
+        let lookup = super::SidecarLookup { naming: super::SidecarNaming::Stem, owns_stem: true };
+        std::fs::write(&sidecar, "small packet").unwrap();
+        assert_eq!(super::read_packet(&original, lightcraft_catalog::MediaKind::Image, lookup).unwrap().0, "small packet");
+        // Set only the length: the reader must reject it from metadata before allocating a buffer.
+        std::fs::File::create(&sidecar).unwrap().set_len(super::SIDECAR_READ_MAX + 1).unwrap();
+        assert!(super::read_packet(&original, lightcraft_catalog::MediaKind::Image, lookup).is_none());
+    }
+
     /// Issue #2674: a WebP keeps its EXIF and XMP chunks after the image data, a TIFF's first IFD can follow its strips
     /// and a JPEG's Exif other long segments, so the orientation can be past the first [`super::ORIENTATION_SPAN`] of
     /// the file. Every file gives what the import gives reading it whole: Exif over XMP wherever each is, a WebP's last

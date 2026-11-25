@@ -285,6 +285,11 @@ pub enum Dialog {
         location: String,
         /// "Don't ask again (always merge into the open library)".
         dont_ask: bool,
+        /// Distinct UNC shares discovered in the catalog, without probing any originals.
+        #[serde(default)]
+        network_sources: Vec<String>,
+        /// Explicitly selected UNC folders; only their shares are allowed for this import.
+        network_shares: Vec<String>,
         /// `Session::library_generation` when the window opened.
         generation: u64,
     },

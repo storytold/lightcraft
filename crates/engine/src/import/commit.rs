@@ -239,6 +239,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
             }
             PreparedItem::Failed(path, e) => report.failed.push((path, e)),
+            PreparedItem::OriginalUnavailable(path, e) => report.failed.push((path, e.to_string())),
             PreparedItem::Kept(k) => report.kept.push(k),
             PreparedItem::Ready(r) => {
                 let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
