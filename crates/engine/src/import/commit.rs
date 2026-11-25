@@ -188,6 +188,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let now = now.to_string();
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
+    // browsed (Local) photos imported for real: their content hashes are worked out afterwards
+    let mut promoted = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
@@ -211,6 +213,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Promote(id) => {
                 if s.catalog.photo(id).is_some_and(|p| p.local) {
                     ops.push(Op::SetLocal { id, local: false });
+                    promoted.push(id);
                 }
                 report.imported.push(id.0);
             }
@@ -225,6 +228,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     Some(id) if opts.on_deleted == OnDeleted::Restore && !opts.local => {
                         if !report.restored.contains(&id.0) {
                             ops.push(Op::SetDeleted { id, deleted: false });
+                            // back in the library: a hash queued for it was dropped while it was deleted
+                            promoted.push(id);
                             // matched by content from another path, and the file the record
                             // points at is gone (moved, renamed): the photo follows the file
                             if reason == "content" && trashed_file_is_gone(&s.catalog, id) {
@@ -334,6 +339,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    s.hash_joined(promoted);
     Ok(report)
 }
 
