@@ -90,13 +90,6 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     if room < PILL_W {
         return;
     }
-    {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static N: AtomicU32 = AtomicU32::new(0);
-        if N.fetch_add(1, Ordering::Relaxed) % 40 == 0 {
-            eprintln!("DBGBAR full={full:?} from={from} to={to} room={room} centre_width={centre_width} copy_width={copy_width}");
-        }
-    }
     let with_copy = room >= centre_width;
     let w = if with_copy { centre_width } else { PILL_W };
     // where it sits with room to spare (slightly left of centre), kept between the side groups
@@ -375,6 +368,8 @@ fn dropdown_face(ui: &mut egui::Ui, id: &str, text: &str) -> egui::Response {
     let mut button = Button::new(text.to_owned())
         .id_salt(("bottom-dropdown", id))
         .variant(craft::theme::Variant::GHOST)
+        // small, so the zoom group is as narrow as main's and the centre keeps its Copy Edit Settings beside Presets
+        .size(craft::theme::ControlSize::Sm)
         .trailing_icon(DisclosureGlyph::dropdown());
     // The face takes the room it measures and is shown there. Shown in the flow, a framework body that measures the
     // shell's window first does not find it in what it kept, and asks for another pass every frame.
