@@ -582,13 +582,17 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
             if real {
                 shown_layer.set(Some(ui.layer_id()));
             }
-            ui.set_min_width(width);
-            ui.set_max_width(max_width);
             if import {
-                // The review sizes its photo grid to the room the dialog's body has, not to the endless height of a
-                // scrolling body; the body itself still scrolls what goes on below (an opened recipe).
-                let room = (crate::import::DIALOG_SIZE[1] - DIALOG_CHROME_GUESS).min(body_max).max(DIALOG_MIN_BODY);
+                // The review is as large as its window (it can be resized): its body takes the width the dialog gives
+                // it, less the scroll bar's gutter while it scrolls; a width of its own would run under the clip.
+                // It sizes its photo grid to the room the window's body has, not to the endless height of a scrolling
+                // body; the body itself still scrolls what goes on below (an opened recipe).
+                let window_h = ctx.data(|d| d.get_temp::<f32>(id.with("window-height"))).unwrap_or(crate::import::DIALOG_SIZE[1]);
+                let room = (window_h - chrome).min(body_max).max(DIALOG_MIN_BODY);
                 crate::import::note_body_room(ui, room);
+            } else {
+                ui.set_min_width(width);
+                ui.set_max_width(max_width);
             }
             ui.spacing_mut().item_spacing.y = 8.0;
             // (the import review and Print size their own lists to the dialog)
@@ -618,6 +622,10 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     window.rect = window_rect;
     window.interact_rect = window_rect;
     crate::widgets::register_response("dialog:window", window.rect, &window);
+    if import && ctx.data(|d| d.get_temp::<f32>(id.with("window-height"))).is_none_or(|h| (h - window_rect.height()).abs() > 0.5) {
+        ctx.data_mut(|d| d.insert_temp(id.with("window-height"), window_rect.height()));
+        ctx.request_repaint();
+    }
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
