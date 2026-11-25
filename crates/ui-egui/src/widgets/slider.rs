@@ -193,6 +193,17 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
     let reset_hint = crate::i18n::tr_format!("{name} — double-click to reset it", name = name);
     let mut track = None;
     let mut number_focus = None;
+    let ended = out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }));
+    // Return or Escape gives the keyboard back too, as LightCraft's fields did (and the dialogs' number fields do):
+    // the field has applied its commit or put its text back first, so nothing is lost.
+    // (The framework's key stage takes the keys from egui's events; it still says which keys are down.)
+    let keyed = key_went_down(ctx, "Enter", egui::Id::unique(("lc-slider-enter-down", spec.id)).with(row.salt))
+        | key_went_down(ctx, "Escape", egui::Id::unique(("lc-slider-escape-down", spec.id)).with(row.salt));
+    // On the opening release's pass the key arrives before the field has the focus: it gives the keyboard back on
+    // the next pass, once the focus has landed.
+    let pending_key = egui::Id::unique(("lc-slider-blur-pending", spec.id)).with(row.salt);
+    let pending = ctx.data_mut(|data| data.remove_temp::<bool>(pending_key)).unwrap_or(false);
+    let giving_back = ended || keyed || pending;
     for (index, element) in record.elements.iter().enumerate() {
         let Some(facts) = &element.facts else { continue };
         // The field's text menu is recorded inside this row's overlay. Its real row takes the press; this only
@@ -264,29 +275,26 @@ fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOu
         }
         super::register_response(format!("{prefix}:{}", spec.id), target, &response);
         // `sliderField:` is the editor: it is there while a value is being typed, as the old field was
-        if prefix == "sliderValue" && focus.is_some_and(|focus| focus.stop.text) {
+        if prefix == "sliderValue" && focus.is_some_and(|focus| focus.stop.text) && !giving_back {
             super::register_response(format!("sliderField:{}", spec.id), target, &response);
         }
     }
     // The readout goes back to showing the value once a typed edit ends (Return, a step): a field kept
     // focused would send the next Undo to its own text history instead of the photo's.
-    let ended = out.events.iter().any(|event| matches!(event, EditEvent::Set { .. } | EditEvent::Commit { .. } | EditEvent::Cancel { .. }));
-    // Escape gives the readout back too, as LightCraft's did: the field has already put its text back. Not on the
-    // pass of the release that opens the edit, whose keys the field has not had yet.
-    let escaped = escape_went_down(ctx, egui::Id::unique(("lc-slider-escape-down", spec.id)).with(row.salt))
-        && !ui.input(|input| input.pointer.any_released());
     if let Some(root) = number_focus
-        && (ended || escaped)
+        && giving_back
     {
-        ui.memory_mut(|memory| memory.surrender_focus(root));
+        super::text_field::blur_id(ctx, root);
+    } else if keyed && number_focus.is_none() && ui.input(|input| input.pointer.any_released()) {
+        ctx.data_mut(|data| data.insert_temp(pending_key, true));
     }
     track
 }
 
-/// Whether Escape went down in this pass for the reader `key` (the framework's key stage takes the key from egui's
-/// events; it still says which keys are down). Each reader keeps its own memory of the key being held.
-fn escape_went_down(ctx: &egui::Context, key: egui::Id) -> bool {
-    let down = craft::ui::runtime::keys::held(ctx).iter().any(|key| key.code_name() == "Escape");
+/// Whether the key named `code` went down in this pass, for the reader `key`, which keeps its own memory of the key
+/// being held.
+fn key_went_down(ctx: &egui::Context, code: &str, key: egui::Id) -> bool {
+    let down = craft::ui::runtime::keys::held(ctx).iter().any(|held| held.code_name() == code);
     let was = ctx.data_mut(|data| {
         let was = data.get_temp::<bool>(key).unwrap_or(false);
         data.insert_temp(key, down);

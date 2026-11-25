@@ -62,6 +62,9 @@ fn opening_release_honors_return_and_escape_immediately() {
             Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
         ]);
         assert_eq!(out.value, (key == Key::Enter).then_some(2.0));
+        // The key came in the pass that opened the field, before the field had the keyboard; it gives it back on the
+        // next pass (no hand presses another key within that frame).
+        assert_eq!(h.frame(vec![]).value, None, "the empty frame applies nothing");
         assert!(!h.view.ctx.egui_wants_keyboard_input());
         assert!(h.key(Key::Enter).value.is_none(), "no retired draft can commit later");
     }
