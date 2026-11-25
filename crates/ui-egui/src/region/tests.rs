@@ -650,3 +650,26 @@ fn a_window_is_bounded() {
     let w = window_for(100_000, 100_000, (0.0, 0.0, 90_000.0, 90_000.0), MAX_SPAN).unwrap();
     assert!(w.w <= MAX_SPAN && w.h <= MAX_SPAN);
 }
+
+// Given a mask edit on the photo (a gradient's handle or pin dragged), its drafts are full size
+// even on the CPU, after slow drags, and when they are far over budget: the photo stays sharp (#1679)
+#[test]
+fn a_mask_edit_always_drafts_at_full_size() {
+    use lightcraft_catalog::PhotoId;
+    let mut d = DragScale::default();
+    let mask = Some((PhotoId(1), SHARP_DRAG));
+    assert_eq!(d.scale(mask, false, None, 0.0), Some(1.0), "on the CPU too");
+    d.scale(None, false, None, 0.0);
+    for i in 0..3 {
+        assert_eq!(timed_drag(&mut d, mask, 400.0, f64::from(i)), Some(1.0), "drag {i}: slow drags don't shrink the next");
+    }
+    // far over budget within one drag: it doesn't give up on full size
+    assert_eq!(d.scale(mask, true, None, 10.0), Some(1.0));
+    for key in 100..110 {
+        d.observe(key, 400.0, None);
+    }
+    assert_eq!(d.scale(mask, true, None, 10.0), Some(1.0));
+    // a slider drag on the same photo still drafts small on the CPU
+    d.scale(None, true, None, 10.0);
+    assert_eq!(d.scale(Some((PhotoId(1), "Exposure")), false, None, 10.0), Some(CPU_DRAFT_SCALE));
+}
