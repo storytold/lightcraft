@@ -889,8 +889,6 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     .unit("%")
     .snap_typed(true)
     .fixed_decimals(0)
-    // (next shows percent fields with one decimal unless the field's own decimals are asked to win)
-    .exact_decimals(true)
     .commit_decimals(0)
     .enabled(real && enabled)
     .show_at(ui, value_rect);
