@@ -24,7 +24,11 @@ chmod 755 "$stage/bin/lightcraft" "$stage/bin/lightcraft-cli"
 app_id=ai.storyteller.lightcraft
 nightly_id="$app_id.nightly-v1"
 if [ -f "$stage/share/applications/$app_id.desktop" ]; then
-  sed -e "s|^Icon=$app_id$|Icon=$nightly_id|" \
+  # The packager renames the launchers to lightcraft-nightly(-cli) when it installs this tree, so the
+  # menu entry must name the installed command: `Exec=lightcraft` would start stable beside it.
+  sed -e 's#^Exec=lightcraft\([[:space:]]\|$\)#Exec=lightcraft-nightly\1#' \
+      -e 's#^TryExec=lightcraft$#TryExec=lightcraft-nightly#' \
+      -e "s|^Icon=$app_id$|Icon=$nightly_id|" \
       -e "s|^StartupWMClass=.*|StartupWMClass=$nightly_id|" \
       -e "s|^Name=LightCraft$|Name=LightCraft Nightly|" \
       -e '/^MimeType=/d' \
@@ -36,6 +40,7 @@ if [ -f "$stage/share/metainfo/$app_id.metainfo.xml" ]; then
       -e "s|<name>LightCraft</name>|<name>LightCraft Nightly</name>|g" \
       -e "s|<launchable type=\"desktop-id\">$app_id.desktop</launchable>|<launchable type=\"desktop-id\">$nightly_id.desktop</launchable>|g" \
       -e "s|<icon type=\"stock\">$app_id</icon>|<icon type=\"stock\">$nightly_id</icon>|g" \
+      -e "s|<binary>lightcraft</binary>|<binary>lightcraft-nightly</binary>|g" \
       "$stage/share/metainfo/$app_id.metainfo.xml" >"$stage/share/metainfo/$nightly_id.metainfo.xml"
   rm -f "$stage/share/metainfo/$app_id.metainfo.xml"
 fi
