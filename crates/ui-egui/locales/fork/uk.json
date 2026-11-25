@@ -1276,7 +1276,7 @@
   "Hot Pixel Map": "Карта гарячих пікселів",
   "Hot Pixels of Photo": "Гарячі пікселі фото",
   "How": "Як",
-  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Як відновлюються обрізані світла: Відновити бере колір надійних деталей поруч; Заповнення за протилежними каналами та Керований лапласіан — методи darktable",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Як відновлюються обрізані світла: Відновити бере колір надійних деталей поруч; Заповнення за протилежними каналами та Керований лапласіан: методи darktable",
   "Hue High": "Верхня межа тону",
   "Hue Low": "Нижня межа тону",
   "Hue vs Hue": "Відтінок до відтінку",

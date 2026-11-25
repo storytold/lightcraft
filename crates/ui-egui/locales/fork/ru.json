@@ -1355,7 +1355,7 @@
   "Hot Pixels of Photo": "Горячие пиксели фото",
   "Hours": "Часы",
   "How": "Как",
-  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Как восстанавливаются обрезанные света: Восстановить берёт цвет надёжных деталей рядом; Заполнение по противоположным каналам и Управляемый лапласиан — методы darktable",
+  "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods": "Как восстанавливаются обрезанные света: Восстановить берёт цвет надёжных деталей рядом; Заполнение по противоположным каналам и Управляемый лапласиан: методы darktable",
   "Hue High": "Тон (верх)",
   "Hue Low": "Тон (низ)",
   "Hue vs Hue": "Оттенок к оттенку",
