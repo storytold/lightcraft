@@ -422,13 +422,16 @@ fn clipping(img: &mut Rgba8, mode: Option<bool>) {
                 px[3] = 255;
             }
             None => {
-                // Image overlay: pure blue for shadow clip, pure red for highlight clip
+                // Image overlay, as Lightroom shows it: solid red where all three channels clip
+                // at highlights (a blown-out white), a lighter red tint where only some do;
+                // likewise solid blue for an all-channel shadow clip, a lighter blue tint for a
+                // partial one. Highlights win when a pixel clips both ways.
                 let highlight_clip = r == 255 || g == 255 || b == 255;
                 let shadow_clip = r == 0 || g == 0 || b == 0;
                 if highlight_clip {
-                    *px = [255, 0, 0, 255];
+                    *px = if r == 255 && g == 255 && b == 255 { [255, 0, 0, 255] } else { [255, 110, 110, 255] };
                 } else if shadow_clip {
-                    *px = [0, 0, 255, 255];
+                    *px = if r == 0 && g == 0 && b == 0 { [0, 0, 255, 255] } else { [110, 110, 255, 255] };
                 }
             }
         }
@@ -625,14 +628,23 @@ mod tests {
         assert_eq!(sh.data[3], [255, 255, 255, 255], "highlight pixel is white in shadows view");
         assert_eq!(sh.data[4], [255, 255, 255, 255], "highlight pixel is white in shadows view");
 
-        // 3. Direct pixel overlay (J shortcut / histogram triangles)
+        // 3. Direct pixel overlay (J shortcut / histogram triangles): solid red or blue where all
+        // three channels clip, a lighter tint of the same hue where only some do
         let mut j = img.clone();
         clipping(&mut j, None);
-        assert_eq!(j.data[0], [0, 0, 255, 255], "crushed shadow is pure blue");
-        assert_eq!(j.data[1], [0, 0, 255, 255], "partial shadow clip is pure blue");
+        assert_eq!(j.data[0], [0, 0, 255, 255], "crushed shadow is solid blue");
+        assert_eq!(j.data[1], [110, 110, 255, 255], "partial shadow clip is tinted blue");
         assert_eq!(j.data[2], [120, 130, 140, 255], "normal pixel is untouched");
-        assert_eq!(j.data[3], [255, 0, 0, 255], "partial highlight clip is pure red");
-        assert_eq!(j.data[4], [255, 0, 0, 255], "blown highlight is pure red");
+        assert_eq!(j.data[3], [255, 110, 110, 255], "partial highlight clip is tinted red");
+        assert_eq!(j.data[4], [255, 0, 0, 255], "blown highlight is solid red");
+
+        // a pixel that clips both ways reads as a highlight clip
+        let mut both = Rgba8::from_fn(1, 1, |_, _| [255, 255, 0, 255]);
+        clipping(&mut both, None);
+        assert_eq!(both.data[0], [255, 110, 110, 255], "a channel that clips both ways is a partial highlight clip");
+        let mut both_all = Rgba8::from_fn(1, 1, |_, _| [255, 255, 255, 255]);
+        clipping(&mut both_all, None);
+        assert_eq!(both_all.data[0], [255, 0, 0, 255], "full white is a solid highlight clip");
 
         // 4. Parts round trip and keys
         for mode in [Some(true), Some(false), None] {

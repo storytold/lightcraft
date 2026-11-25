@@ -1320,6 +1320,34 @@ fn overlays_match() {
     };
     let req = RenderRequest { overlay: lcc_pipeline::Overlay::PointColorRange(0), ..RenderRequest::fit(640, 640) };
     check("point color range overlay", &src, &raw, &s, &req);
+    // The clipping overlay reads only the finished 8-bit channels at 0 and 255, a hard decision:
+    // a pixel rounding to 255 in one renderer and 254 in the other lands in another category
+    // (solid versus tinted versus untouched), so compare the share of category flips instead of
+    // LSBs, as the gamut-warning case does.
+    let s = DevelopSettings::default();
+    let category = |p: &[u8; 4]| -> u8 {
+        let (r, g, b) = (p[0], p[1], p[2]);
+        if r == 255 || g == 255 || b == 255 {
+            u8::from(!(r == 255 && g == 255 && b == 255)) + 1 // 1 solid, 2 tinted highlight clip
+        } else if r == 0 || g == 0 || b == 0 {
+            u8::from(!(r == 0 && g == 0 && b == 0)) + 3 // 3 solid, 4 tinted shadow clip
+        } else {
+            0
+        }
+    };
+    for (name, mode) in [
+        ("clipping both sides", lcc_pipeline::Overlay::Clipping(None)),
+        ("clipping shadows", lcc_pipeline::Overlay::Clipping(Some(true))),
+        ("clipping highlights", lcc_pipeline::Overlay::Clipping(Some(false))),
+    ] {
+        let req = RenderRequest { overlay: mode, ..RenderRequest::fit(640, 640) };
+        let cpu = render(&src, &raw, &s, &req).image;
+        let gpu = lcc_gpu::render(&src, &raw, &s, &req, None).expect("gpu").image;
+        let flips = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| category(a) != category(b)).count() as f64 / cpu.data.len() as f64;
+        let clipped = cpu.data.iter().filter(|p| category(p) != 0).count() as f64 / cpu.data.len() as f64;
+        eprintln!("{name:<28} clipped {clipped:.3}%  category flips {flips:.4}%");
+        assert!(flips < 0.001, "{name}: {flips}");
+    }
     // Visualize Spots is a binary threshold of a high-pass: a 1-LSB difference near the threshold
     // flips a pixel, so compare the share of differing pixels instead of LSBs.
     let s = DevelopSettings::default();
