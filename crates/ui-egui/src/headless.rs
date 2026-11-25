@@ -3124,7 +3124,9 @@ mod tests {
         let running = h.request("ui.inspect", json!({}), t);
         assert_eq!(running["result"]["export"]["running"]["total"], 3, "{}", running["result"]["export"]);
         // …and as a row in the activity stack (issue #345)
-        assert_eq!(running["result"]["activity"][0]["kind"], "export", "{}", running["result"]["activity"]);
+        // (the Export dialog's preview render may hold a row of its own)
+        let rows = running["result"]["activity"].as_array().cloned().unwrap_or_default();
+        assert!(rows.iter().any(|r| r["kind"] == "export"), "{}", running["result"]["activity"]);
         let t0 = Instant::now();
         while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
             h.step();
