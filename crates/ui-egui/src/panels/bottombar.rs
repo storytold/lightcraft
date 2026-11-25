@@ -90,6 +90,13 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     if room < PILL_W {
         return;
     }
+    {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) % 40 == 0 {
+            eprintln!("DBGBAR full={full:?} from={from} to={to} room={room} centre_width={centre_width} copy_width={copy_width}");
+        }
+    }
     let with_copy = room >= centre_width;
     let w = if with_copy { centre_width } else { PILL_W };
     // where it sits with room to spare (slightly left of centre), kept between the side groups
