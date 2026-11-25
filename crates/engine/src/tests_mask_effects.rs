@@ -290,3 +290,39 @@ fn zips_and_camera_raw_xmp_presets_import() {
     assert!(s.execute("mask.importEffects", &json!({})).is_err());
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// Style brush: one command makes a selected, empty Brush mask that already carries the effect; the
+/// next stroke paints into it, the brush remembers the effect, and one undo removes the mask.
+#[test]
+fn style_brush_starts_a_brush_mask_with_the_effect() {
+    let mut s = Session::with_demo();
+    with_effect(&mut s, "Dodge", json!({"exposure": 0.7, "shadows": 20}));
+    let before = s.develop_of(s.active().unwrap()).unwrap().masks.len();
+    let v = s.execute("mask.styleBrush", &json!({"name": "dodge"})).unwrap();
+    let mid = u32::try_from(v["activeMask"].as_u64().unwrap()).unwrap();
+    assert_eq!(s.active_mask, Some(mid));
+    let a = mask_adjust(&s, mid);
+    assert!((a.exposure - 0.7).abs() < 1e-6 && (a.shadows - 20.0).abs() < 1e-6);
+    let d = s.develop_of(s.active().unwrap()).unwrap();
+    let m = d.masks.iter().find(|m| m.id == mid).unwrap();
+    assert_eq!(super::cmd::mask_effects::mask_tool(m).as_deref(), Some("brush"));
+    assert_eq!(m.name, "Dodge");
+    assert_eq!(s.mask_tool_effects.get("brush").map(String::as_str), Some("Dodge"));
+    // the stroke paints into the style mask (no second mask) and keeps its sliders
+    s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.2]]})).unwrap();
+    let d = s.develop_of(s.active().unwrap()).unwrap();
+    assert_eq!(d.masks.len(), before + 1);
+    assert!((mask_adjust(&s, mid).exposure - 0.7).abs() < 1e-6);
+    // one undo for the stroke, one for the style brush
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(s.active().unwrap()).unwrap().masks.len(), before);
+}
+
+#[test]
+fn style_brush_rejects_bad_arguments() {
+    let mut s = Session::with_demo();
+    for p in [json!({}), json!({"name": "missing"}), json!({"name": 3}), json!({"name": ""}), json!(null)] {
+        assert!(s.execute("mask.styleBrush", &p).is_err(), "{p}");
+    }
+}
