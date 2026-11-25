@@ -437,7 +437,8 @@ fn theme_id() -> egui::Id {
 }
 
 /// The framework theme for `kind`: the suite default with LightCraft's own colours pinned on the framework's
-/// surfaces, text, lines, states and accent, so framework panels, docks, dialogs and controls sit in the same
+/// surfaces, text, lines, hover and pressed fills and accent (selection, focus and text-selection looks stay the
+/// framework's: suite-wide look changes come as a group, UI522), so framework panels, docks, dialogs and controls sit in the same
 /// colours as LightCraft's own chrome (the suite default's lighter grey panels and dialogs looked like a different
 /// app). One definition per theme for the life of the process, so the framework's token cache keeps its identity.
 pub fn framework_theme(kind: ThemeKind) -> Option<Arc<craft::theme::ThemeDef>> {
@@ -462,8 +463,7 @@ fn build_framework_theme(kind: ThemeKind) -> Option<craft::theme::ThemeDef> {
     theme.seeds.accent = Rgba::from(t.accent);
     theme.variants = if kind.is_dark() { Variants::DarkOnly } else { Variants::LightOnly };
     let pins = if kind.is_dark() { &mut theme.pins.dark } else { &mut theme.pins.light };
-    pins.refs.clear();
-    pins.colors.clear();
+    // (the suite default's own pins stay for every token not set here: its selection and focus looks among them)
     for (token, color) in [
         // the dock's tab strip: a shade darker than the panels, so the shown tab reads as part of its panel
         (C::SurfaceBackground, t.inset),
@@ -479,16 +479,12 @@ fn build_framework_theme(kind: ThemeKind) -> Option<craft::theme::ThemeDef> {
         (C::LineDivider, t.divider),
         (C::LineBorder, t.field_border),
         (C::LineControlEdge, t.button_border),
-        (C::LineFocus, t.accent),
         (C::StateHover, t.hover),
         (C::StatePressed, t.pressed),
-        (C::StateSelected, t.canvas),
         (C::AccentSolid, t.accent),
     ] {
         pins.colors.insert(token, Rgba::from(color));
     }
-    // a text selection in the accent, as LightCraft's own fields select (egui's selection at 60%)
-    pins.colors.insert(C::StateTextSelection, Rgba::from(t.accent).with_alpha(153));
     pins.colors.insert(C::SurfaceScrim, Rgba::BLACK.with_alpha(SCRIM_ALPHA));
     Some(theme)
 }
