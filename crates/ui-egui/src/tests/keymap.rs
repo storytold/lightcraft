@@ -297,8 +297,10 @@ fn opening_numeric_release_keeps_keys_in_the_editor() {
             assert_eq!(h.app.session.selection.ids, selection);
             assert_eq!((h.app.ui.view, h.app.ui.right, &h.app.ui.tool), (view, right, &tool));
             assert!(h.app.ui.dialog.is_none());
-            assert!(!h.view.ctx.egui_wants_keyboard_input());
             if next_frame {
+                // The key came in the pass that opened the editor, before the editor had the keyboard; the editor gives it
+                // back on the next pass (no hand presses another key within that frame).
+                assert!(!h.view.ctx.egui_wants_keyboard_input());
                 assert!(h.app.widgets.iter().all(|(id, _)| id != "sliderField:light.exposure"), "the editor is gone");
                 assert!(h.app.widgets.iter().any(|(id, _)| id == "sliderValue:light.exposure"));
             }
