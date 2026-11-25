@@ -373,7 +373,10 @@ fn dropdown_face(ui: &mut egui::Ui, id: &str, text: &str) -> egui::Response {
         .trailing_icon(DisclosureGlyph::dropdown());
     // The face takes the room it measures and is shown there. Shown in the flow, a framework body that measures the
     // shell's window first does not find it in what it kept, and asks for another pass every frame.
-    let size = button.measure_in(ui, craft::behavior::Proposal::Ideal);
+    // (measured as a measuring run: a measure in a real run is checked against the body's kept transcript, which holds
+    // no face of ours)
+    let ctx = ui.ctx().clone();
+    let size = craft::ui::runtime::measure::run(&ctx, || button.measure_in(ui, craft::behavior::Proposal::Ideal));
     let (_, room) = ui.allocate_space(size);
     let shown = button.show_at(ui, room);
     if !measuring(ui) {
