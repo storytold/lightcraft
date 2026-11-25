@@ -10,7 +10,6 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 
 ---
 
-import Shot from '../../../components/Shot.astro';
 
 - **Import from Device** (**File** menu): lists mounted cards and cameras that have a `DCIM` folder; opens the review and copies by default. Copies are verified; a bad copy is removed and reported.
 - **Settings ▸ Import ▸ Cameras and Cards**: open the review when a card is inserted (off by default).
@@ -22,7 +21,7 @@ import Shot from '../../../components/Shot.astro';
 - **Folder polling** (**Settings ▸ Library ▸ Folder Polling**, off by default): on open, look for new, changed or moved files in the library's folders. While it is on, the system also tells the app when something changes in a library folder (macOS, Windows, Linux), and the folder is checked a couple of seconds later; the regular check every few minutes stays, for network shares the system can't watch. Right-click a folder ▸ **Synchronize** does it now.
 - **Import Lightroom or Capture One Catalog…** (**File** menu): reads a `.lrcat` or `.cocatalogdb` read-only. Choose **Merge into the open library** or **Create a new library**. Photos, collections, keywords, captions and edits come across; no Lightroom needed. A Lightroom catalog's photos appear as soon as the catalog is read; the original files are read afterwards in the background (**Reading originals** on the activity stack, which you can stop; the rest resumes when the library next opens). When it finishes, the result window lists every warning and failure (scroll for the rest); **Copy** copies the whole report.
   - Saved prints become **Saved Prints** (page size and margins, Single Image / Contact Sheet / Picture Package / Custom Package layouts with each cell's photo, image settings, page options and print job), not plain collections. Reimporting upgrades earlier plain albums once. The import report lists what did not carry over.
-  - From a Capture One catalog, each photo's exposure, crop, rotation and straighten angle, flips and white balance come across. The result window lists every other Capture One setting your photos use (Brightness, Levels, LCC, local adjustment layers, …) with how many photos use it. White balance is an approximation; for raws the app edits on its relative white balance scale, the result window marks it as approximate, with the photo count.
+  - From a Capture One catalog, each photo's exposure, contrast, brightness, saturation, High Dynamic Range, clarity and structure (as Texture), Levels, curves (RGB, red, green, blue), crop, rotation and straighten angle, flips and white balance come across. The result window lists every other Capture One setting your photos use (Color Editor, the luma curve, LCC, local adjustment layers, …) with how many photos use it. White balance is an approximation; for raws the app edits on its relative white balance scale, the result window marks it as approximate, with the photo count.
   - A failed import takes back the photos it added.
   - A record with a broken reference (no photo, or a file, folder or root that does not resolve) is skipped with a warning instead of landing on another photo. A record that can't be read at all (too large or damaged) is left out alone; the result window counts them per table, and the rest of the table imports. The photo behind such a record keeps only what its files say; a record lost from the photos, files or folders table leaves that photo out, and the result says photos may be missing.
 - **Import from Another Library…** (**File ▸ More Imports**): a preview of new and changed photos, and a rule for changed ones (keep, settings, metadata, replace).
@@ -32,7 +31,7 @@ import Shot from '../../../components/Shot.astro';
 
 <NeedsImage what="The Lightroom catalog import window asking: Merge into the open library, or Create a new library." />
 
-<Shot name="capture-one-import-result" alt="Capture One catalog import result: the settings not imported yet with their photo counts, and the white balance marked approximate" />
+<NeedsImage what="Capture One catalog import result: the settings not imported yet (LCC, local adjustment layers) with their photo counts, and the white balance marked approximate; retake capture-one-import-result now that Brightness, HDR and Levels import" />
 
 <Aside type="note" title="Modern layout">
   **File ▸ Import …** and **File ▸ More Imports** in the ☰ menu.
