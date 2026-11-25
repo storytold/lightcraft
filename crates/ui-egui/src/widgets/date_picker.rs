@@ -387,6 +387,13 @@ impl<'a> DatePicker<'a> {
         Popover::new(crate::i18n::tr("Pick a date").to_owned(), Bind::bound(&mut open))
             .id(state.with("popover"))
             .opened_by(&button.response)
+            // A picker that goes disabled or read-only while its calendar is open keeps the calendar open, its controls
+            // inert (below): the opener going disabled is no anchor gone.
+            .overlay(|overlay| {
+                let mut dismiss = overlay.dismiss;
+                dismiss.anchor_gone = false;
+                overlay.dismiss(dismiss)
+            })
             .initial_focus(Initial::Keep)
             .show(ui, |ui, cx| {
                 craft::ui::runtime::env::with_env(

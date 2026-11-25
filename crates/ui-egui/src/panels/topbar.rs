@@ -13,6 +13,12 @@ use crate::widgets::{icon_button, register};
 fn window_handle(ui: &mut egui::Ui, bar: Rect) {
     register(ui, "region:titlebar", bar);
     let resp = craft_window::title_bar::empty_area(ui, bar);
+    // A floating dock panel lying over the bar takes the press there, so the window may not move from under it (the
+    // empty area asks egui's layers, which do not hold the framework's floating windows).
+    if ui.ctx().pointer_hover_pos().is_some_and(|p| bar.contains(p) && crate::docking::floating_window_at(ui.ctx(), p)) {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("title_bar_window_movable"), (pass, false)));
+    }
     crate::widgets::announce(&resp, crate::i18n::tr("Title bar"));
 }
 
