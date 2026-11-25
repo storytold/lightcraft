@@ -155,7 +155,12 @@ impl Locale {
     /// `self` when this build offers it, else English (a saved setting naming a language a
     /// single-language build left out).
     pub fn or_english(self) -> Self {
-        if self.in_build() { self } else { Self::En }
+        Self::or_english_in(lcc_engine::fonts::BUILD_LANGUAGE, self)
+    }
+
+    /// [`Self::or_english`] for a build made for `build_language`.
+    fn or_english_in(build_language: Option<&str>, language: Self) -> Self {
+        if Self::offered_by(build_language, language) { language } else { Self::En }
     }
 
     /// The languages this build offers, in [`Self::ALL`] order.
@@ -228,19 +233,28 @@ pub fn set_default_language(language: Locale) {
 }
 
 /// The first of `tags` (BCP-47, most preferred first, as `navigator.languages` lists them) that
-/// names a shipped language; None when none does.
+/// names a language this build offers (`CRAFT_FONTS_LANGUAGE`); None when none does.
 pub fn locale_from_tags(tags: &[String]) -> Option<Locale> {
-    tags.iter().find_map(|tag| Locale::parse_tag(tag))
+    first_in_build(lcc_engine::fonts::BUILD_LANGUAGE, tags)
+}
+
+/// [`locale_from_tags`] for a build made for `build_language`.
+fn first_in_build(build_language: Option<&str>, tags: &[String]) -> Option<Locale> {
+    tags.iter().filter_map(|tag| Locale::parse_tag(tag)).find(|language| Locale::offered_by(build_language, *language))
 }
 
 /// The UI language "Auto" resolves to: the environment's (`<ENV_PREFIX>_LANGUAGE=zh-hans`, for
 /// headless runs), or the host-installed default ([`set_default_language`], the browser's languages
-/// on the web), else English.
+/// on the web), else English; in a single-language build, English unless that is the build's language.
 pub fn default_language() -> Locale {
-    lcc_brand::env("LANGUAGE")
-        .and_then(|value| Locale::parse_tag(&value))
-        .or_else(|| DEFAULT_LANGUAGE.with(std::cell::Cell::get))
-        .unwrap_or(Locale::En)
+    let env = lcc_brand::env("LANGUAGE").and_then(|value| Locale::parse_tag(&value));
+    default_in(lcc_engine::fonts::BUILD_LANGUAGE, env, DEFAULT_LANGUAGE.with(std::cell::Cell::get))
+}
+
+/// [`default_language`] for a build made for `build_language`, given the environment's and the host's language.
+fn default_in(build_language: Option<&str>, env: Option<Locale>, host: Option<Locale>) -> Locale {
+    // the first of the two that this build offers: an environment language it left out gives way to the host's
+    [env, host].into_iter().flatten().find(|language| Locale::offered_by(build_language, *language)).unwrap_or(Locale::En)
 }
 
 pub fn set_language(language: Locale) {
@@ -666,14 +680,89 @@ mod tests {
             let only_ja = Locale::offered_by(Some("ja"), *language);
             assert_eq!(only_ja, matches!(language, Locale::En | Locale::Ja), "{language:?} in a ja build");
             assert!(Locale::offered_by(Some("de"), Locale::En));
+            // a saved setting naming a language a ja build left out falls back to English, and
+            // one the build offers is kept (checked for both builds, whatever this test binary is)
+            let saved = Locale::or_english_in(Some("ja"), *language);
+            assert_eq!(saved, if only_ja { *language } else { Locale::En }, "{language:?} saved in a ja build");
+            assert_eq!(Locale::or_english_in(None, *language), *language, "{language:?} saved in a full build");
         }
         // this test binary is a full build unless CRAFT_FONTS_LANGUAGE was set
         if lcc_engine::fonts::BUILD_LANGUAGE.is_none() {
             assert_eq!(Locale::available().count(), Locale::ALL.len());
-            assert_eq!(Locale::De.or_english(), Locale::De);
         }
         assert!(Locale::available().any(|l| l == Locale::En));
     }
+
+    /// Edit ▸ Language lists a language only when this build offers it (its command is left out of the
+    /// menu model otherwise), in a full build and a single-language build alike.
+    #[test]
+    fn the_language_menu_lists_only_the_languages_the_build_offers() {
+        let app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
+        let listed: Vec<String> = crate::menus::menu_entries(&app).into_iter().map(|entry| entry.id).collect();
+        for (id, ..) in crate::menus::LANGUAGE_COMMANDS {
+            let Some(language) = crate::menus::language_from_command(id) else { continue };
+            assert_eq!(listed.iter().any(|listed| listed.as_str() == *id), language.in_build(), "{id} in the Edit ▸ Language menu");
+        }
+    }
+
+    /// The menu bar the window and the native menu draw (not only the command table) leaves out the
+    /// languages the build doesn't offer.
+    #[test]
+    fn the_menu_bar_lists_only_the_languages_the_build_offers() {
+        fn ids(nodes: &[crate::menubar::MenuNode], out: &mut Vec<String>) {
+            for node in nodes {
+                match node {
+                    crate::menubar::MenuNode::Item { id, .. } => out.push(id.clone()),
+                    crate::menubar::MenuNode::Submenu { children, .. } => ids(children, out),
+                    crate::menubar::MenuNode::Separator => {}
+                }
+            }
+        }
+        let app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
+        let mut listed = Vec::new();
+        for (_, nodes) in crate::menubar::menu_bar(&app) {
+            ids(&nodes, &mut listed);
+        }
+        for (id, ..) in crate::menus::LANGUAGE_COMMANDS {
+            let Some(language) = crate::menus::language_from_command(id) else { continue };
+            if !language.in_build() {
+                assert!(!listed.iter().any(|listed| listed == id), "{id} in the menu bar of a build that leaves it out");
+            }
+        }
+    }
+
+    /// A language command for a language the build left out (control channel, MCP) falls back to
+    /// English in the app's setting too, so the picker and the saved setting agree with what is shown.
+    #[test]
+    fn running_a_language_command_the_build_left_out_selects_english() {
+        let Some(built) = lcc_engine::fonts::BUILD_LANGUAGE else {
+            lcc_testkit::skip!(Fonts, "a full build offers every language");
+            return;
+        };
+        let left_out = if built == "de" { "app.language.japanese" } else { "app.language.german" };
+        let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
+        assert!(app.run(left_out, serde_json::json!({})).is_ok());
+        assert_eq!(app.ui.language, Locale::En, "{left_out} in a {built}-only build");
+        set_language(Locale::En);
+    }
+
+    /// In a ja build, Auto never resolves to a language the build left out: the environment's or the
+    /// host's language falls back to English, and a list of browser languages takes the first one the build has.
+    #[test]
+    fn auto_language_and_browser_tags_stay_in_the_build() {
+        assert_eq!(default_in(Some("ja"), Some(Locale::De), None), Locale::En);
+        assert_eq!(default_in(Some("ja"), None, Some(Locale::Ja)), Locale::Ja);
+        assert_eq!(default_in(Some("ja"), None, None), Locale::En);
+        assert_eq!(default_in(Some("ja"), Some(Locale::De), Some(Locale::Ja)), Locale::Ja, "the host's language when the environment's is left out");
+        assert_eq!(default_in(Some("ja"), Some(Locale::Ja), Some(Locale::De)), Locale::Ja);
+        assert_eq!(default_in(None, Some(Locale::De), Some(Locale::Ja)), Locale::De);
+        assert_eq!(default_in(None, Some(Locale::De), None), Locale::De);
+        let tags = ["de-DE".to_string(), "ja-JP".to_string()];
+        assert_eq!(first_in_build(Some("ja"), &tags), Some(Locale::Ja));
+        assert_eq!(first_in_build(Some("ja"), &tags[..1]), None);
+        assert_eq!(first_in_build(None, &tags), Some(Locale::De));
+    }
+
     use super::*;
 
     /// Each language through its menu command and the control channel's locale tags, saved by its
@@ -681,6 +770,10 @@ mod tests {
     /// the bundled fonts have its letters.
     #[test]
     fn languages_switch_persist_and_keep_user_values() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         use crate::control::{ControlRequest, Outcome};
         let languages: [(Locale, &str, &[&str], &str); 8] = [
             (Locale::Cs, "czech", &["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"], "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“"),
@@ -897,13 +990,14 @@ mod tests {
     /// ([`default_language`] fallback).
     #[test]
     fn locale_from_tags_takes_the_first_shipped_language() {
-        assert_eq!(locale_from_tags(&[]), None);
-        assert_eq!(locale_from_tags(&["xx-XX".into()]), None);
-        assert_eq!(locale_from_tags(&["it-IT".into()]), Some(Locale::It));
-        assert_eq!(locale_from_tags(&["xx".into(), "de-DE".into(), "fr".into()]), Some(Locale::De));
-        assert_eq!(locale_from_tags(&["zh-TW".into(), "en".into()]), Some(Locale::ZhHant));
-        assert_eq!(locale_from_tags(&["ja_JP.UTF-8".into(), "en".into()]), Some(Locale::Ja));
-        assert_eq!(locale_from_tags(&["pt".into(), "pt-BR".into()]), Some(Locale::PtBr));
+        // in a full build (the build's own language is checked by auto_language_and_browser_tags_stay_in_the_build)
+        assert_eq!(first_in_build(None, &[]), None);
+        assert_eq!(first_in_build(None, &["xx-XX".into()]), None);
+        assert_eq!(first_in_build(None, &["it-IT".into()]), Some(Locale::It));
+        assert_eq!(first_in_build(None, &["xx".into(), "de-DE".into(), "fr".into()]), Some(Locale::De));
+        assert_eq!(first_in_build(None, &["zh-TW".into(), "en".into()]), Some(Locale::ZhHant));
+        assert_eq!(first_in_build(None, &["ja_JP.UTF-8".into(), "en".into()]), Some(Locale::Ja));
+        assert_eq!(first_in_build(None, &["pt".into(), "pt-BR".into()]), Some(Locale::PtBr));
     }
 
     /// Format strings carry their values in every language, and a language without a translation
@@ -1071,6 +1165,10 @@ mod tests {
     /// (Every place asks with its key: `every_contextual_lookup_is_asked_for_in_the_code`.)
     #[test]
     fn contextual_entries_change_only_their_own_place() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         let tracking_area = lcc_meta::FocusPoint {
             rect: lcc_geom::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
             mode: None,
@@ -1167,6 +1265,10 @@ mod tests {
 
     #[test]
     fn german_switches_via_menu_and_control_and_persists() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         use crate::control::{ControlRequest, Outcome};
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
         app.run("app.language.german", serde_json::json!({})).unwrap();
@@ -1243,6 +1345,10 @@ mod tests {
     /// dialogs paint translated, and the bundled fonts have every accented letter their catalogs use.
     #[test]
     fn latin_and_cyrillic_languages_paint_panels_dialogs_and_letters_with_bundled_fonts() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         // (language, letters it must have, the ranges of its catalog's characters checked as well)
         let languages: [(Locale, &str, &[(char, char)]); 5] = [
             (Locale::De, "ÄÖÜäöüß„“", &[]),
@@ -1287,6 +1393,10 @@ mod tests {
 
     #[test]
     fn german_ukrainian_italian_and_finnish_buttons_fit_the_bottom_bar_and_export_dialog() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         fn collect(shape: &egui::epaint::Shape, bounds: &mut Vec<(String, egui::Rect)>) {
             match shape {
                 egui::epaint::Shape::Text(shape) => {
@@ -1344,6 +1454,10 @@ mod tests {
     /// User-named menu items (presets, albums, label sets) are never translated; built-in labels are.
     #[test]
     fn menu_labels_translate_but_user_names_survive() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         for language in Locale::ALL {
             set_language(*language);
             assert_eq!(crate::menubar::display_item_label("album.addPhotos", &serde_json::json!({"id": 1}), "Color"), "Color");
@@ -1394,6 +1508,10 @@ mod tests {
     /// (their CJK fallback order follows the language), and command ids never change with it.
     #[test]
     fn every_language_is_painted_and_menu_ids_stay_the_same() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
@@ -1483,6 +1601,10 @@ mod tests {
     /// localised headings; ids and user text are untouched.
     #[test]
     fn traditional_chinese_switches_through_menu_and_control_and_persists() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         use crate::control::{ControlRequest, Outcome};
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
         app.run("app.language.traditionalChinese", serde_json::json!({})).unwrap();
@@ -1526,6 +1648,10 @@ mod tests {
     /// is not a date never panics and never shows a raw pattern.
     #[test]
     fn date_headings_in_every_language() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         set_language(Locale::En);
         assert_eq!(date_group_label("2026-09-20", false), "Sunday, 20 September 2026");
         assert_eq!(date_group_label("2026-09-20", true), "Sunday, 20");
@@ -1558,6 +1684,10 @@ mod tests {
     /// normalize is shown as it is in every language.
     #[test]
     fn display_time_shows_whole_seconds_in_every_language() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         set_language(Locale::En);
         assert_eq!(display_time("2026-09-20T16:04:05.123+02:00"), "September 20, 2026 at 4:04:05 PM");
         for language in Locale::ALL {
@@ -1578,6 +1708,10 @@ mod tests {
     /// shares a stock preset's name.
     #[test]
     fn traditional_chinese_presets_and_panel_headers_are_painted() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
@@ -1834,6 +1968,10 @@ mod tests {
     /// counts follow their noun ("Zaimportowane zdjęcia: 22") instead of a form that fits only some.
     #[test]
     fn polish_switches_formats_dates_and_reads_every_count() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         use crate::control::{ControlRequest, Outcome};
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
         app.run("app.language.polish", serde_json::json!({})).unwrap();
@@ -1892,6 +2030,10 @@ mod picker_order_tests {
 
     #[test]
     fn picker_lists_english_first_then_names_alphabetically() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         let order = Locale::for_picker();
         assert_eq!(order.first(), Some(&Locale::En));
         assert_eq!(order.len(), Locale::ALL.len());
@@ -1902,6 +2044,10 @@ mod picker_order_tests {
 
     #[test]
     fn language_menu_lists_the_picker_order() {
+        if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+            lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+            return;
+        }
         let menu: Vec<&str> = crate::menus::LANGUAGE_COMMANDS.iter().map(|c| c.1).collect();
         let picker: Vec<&str> = Locale::for_picker().into_iter().map(Locale::name).collect();
         assert_eq!(menu, picker, "Edit ▸ Language and the Settings row list the languages the same way");

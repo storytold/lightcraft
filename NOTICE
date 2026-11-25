@@ -33,6 +33,13 @@ LibRaw's src/decoders/sony_arw6.cpp (commit 4d9bd21a, Copyright 2026 LibRaw LLC 
 LGPL 2.1 or CDDL 1.0) was read as a reference for accepting the ARW6 12-bit mode in
 crates/raw/src/vendor/arw.rs; no code from it is included.
 
+The gain map AVIF file layout in crates/codecs/src/avif_gainmap.rs (the `tmap` tone map derived
+item, its `dimg` and `altr` references and the `tmap` brand) was written with libavif v1.2.1
+(https://aomedia.googlesource.com/libavif), Copyright (c) the libavif authors, BSD-2-Clause, read
+as a reference; the gain map box of JPEG XL exports follows libjxl's `jhgm` bundle
+(lib/extras/gain_map.cc, https://github.com/libjxl/libjxl), Copyright (c) the JPEG XL Project
+Authors, BSD-3-Clause, and is written by the jixel dependency. No code from either is included.
+
 Parts of crates/raw/src/vendor/crx.rs (Canon CR3 CRX partial subbands, version 0x200 per-level
 quantization tables and multi-tile geometry) are translated from LibRaw's src/decoders/crx.cpp
 (https://github.com/LibRaw/LibRaw), Copyright 2018-2019 Alexey Danilchenko and 2019-2026

@@ -707,6 +707,10 @@ fn the_recent_menu_takes_its_answers_from_a_worker() {
 /// found them has none of its own).
 #[test]
 fn the_reasons_are_in_the_interface_language() {
+    if lcc_engine::fonts::BUILD_LANGUAGE.is_some() {
+        lcc_testkit::skip!(Fonts, "a single-language build offers only its language and English");
+        return;
+    }
     let dir = temp("lang");
     let gone = dir.join("Gone").to_string_lossy().into_owned();
     let mut app = LccApp::new(lcc_engine::Session::new().with_fs(), Services::default());
