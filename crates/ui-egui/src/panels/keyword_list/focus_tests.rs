@@ -39,6 +39,13 @@ fn focused(h: &Headless, widget: &str) -> bool {
 /// Resolve the actual clickable row/button Response, not its automation hover alias.
 fn action_focused(h: &Headless, widget: &str) -> bool {
     let Some((_, rect)) = h.app.widgets.iter().find(|(name, _)| name == widget) else { return false };
+    // the framework's focus record names the stop (egui's focus sits on the stop's arena root, the dock body, for a
+    // member of an arena): the widget's registered response owns it; egui's own focus is the fallback for a stop that
+    // is its own root
+    if let Some(stop) = craft::ui::runtime::focus::focused_rec(&h.view.ctx).map(|rec| rec.stop.id) {
+        return h.app.widget_hits.iter().any(|(name, hit)| name == widget && hit.id == stop)
+            && h.view.ctx.read_response(stop).is_none_or(|response| response.rect == *rect && response.sense.senses_click());
+    }
     h.view
         .ctx
         .memory(|memory| memory.focused())

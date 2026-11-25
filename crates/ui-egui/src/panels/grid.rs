@@ -402,7 +402,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let scroll_rect = ui.available_rect_before_wrap();
     crate::widgets::register(ui, "grid:scroll", scroll_rect);
     let wheel = wheel_step(ui, egui::Id::unique("grid-wheel"), scroll_rect, scroll_rect.height(), false);
-    egui::ScrollArea::vertical().id_salt("grid-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
+    egui::ScrollArea::vertical().id_salt("grid-scroll").auto_shrink([false, false]).scroll_source(WHEEL_OFF).show_viewport(ui, |ui, viewport| {
         if wheel != egui::Vec2::ZERO {
             ui.scroll_with_delta_animation(wheel, egui::style::ScrollAnimation::none());
         }
@@ -487,42 +487,40 @@ pub(crate) fn follow_changed(
     was != active || where_was != source || drawn + 1 < pass
 }
 
-/// How far a mouse wheel scrolls a photo strip this frame (`key`: the grid, the filmstrip; `area`: its
-/// rect on screen; `span`: its visible height, or width when `sideways`), for `Ui::scroll_with_delta_animation`
-/// inside its `ScrollArea`. A notch scrolls [`crate::theme::WHEEL_STRIP_SHARE`] (a third) of `span`, as in
-/// Lightroom (about two rows of a six-row grid), instead of the [`crate::theme::WHEEL_LINE_POINTS`] a side
-/// panel scrolls. Not whole rows: the photos land somewhere else after each notch, so the move shows. It
-/// jumps at once instead of gliding, so the photos stay sharp while scrolling; egui's glide of the notch is
-/// swallowed until it ends. Trackpads report points and scroll as before. A vertical wheel scrolls a
-/// `sideways` strip.
-pub(crate) fn wheel_step(ui: &egui::Ui, key: egui::Id, area: Rect, span: f32, sideways: bool) -> egui::Vec2 {
+/// How far a mouse wheel scrolls a photo strip this frame (`area`: its rect on screen; `span`: its visible height, or
+/// width when `sideways`), for `Ui::scroll_with_delta_animation` inside its `ScrollArea`, which reads no wheel itself
+/// ([`WHEEL_OFF`]). A notch scrolls [`crate::theme::WHEEL_STRIP_SHARE`] (a third) of `span`, as in Lightroom (about two
+/// rows of a six-row grid), instead of the [`crate::theme::WHEEL_LINE_POINTS`] a side panel scrolls. Not whole rows:
+/// the photos land somewhere else after each notch, so the move shows. It jumps at once instead of gliding, so the
+/// photos stay sharp while scrolling. Trackpads report points and scroll those points. A vertical wheel scrolls a
+/// `sideways` strip. A wheel with Cmd, Ctrl or Alt held is no scroll here (it zooms, or is someone else's).
+pub(crate) fn wheel_step(ui: &egui::Ui, _key: egui::Id, area: Rect, span: f32, sideways: bool) -> egui::Vec2 {
     if !ui.rect_contains_pointer(area) || !span.is_finite() {
-        ui.data_mut(|d| d.remove_temp::<bool>(key));
         return egui::Vec2::ZERO;
     }
-    let (notches, gliding) = ui.input(|i| {
-        let notches = i.events.iter().fold(egui::Vec2::ZERO, |sum, e| match e {
-            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, modifiers, .. }
-                if *modifiers == egui::Modifiers::NONE && delta.is_finite() =>
+    let step = span * crate::theme::WHEEL_STRIP_SHARE;
+    let delta = ui.input(|i| {
+        i.events.iter().fold(egui::Vec2::ZERO, |sum, e| match e {
+            egui::Event::MouseWheel { unit, delta, modifiers, .. }
+                if delta.is_finite() && !modifiers.command && !modifiers.ctrl && !modifiers.alt && !modifiers.mac_cmd =>
             {
-                sum + *delta
+                match unit {
+                    egui::MouseWheelUnit::Line if *modifiers == egui::Modifiers::NONE => sum + *delta * step,
+                    egui::MouseWheelUnit::Line => sum,
+                    egui::MouseWheelUnit::Point => sum + *delta,
+                    egui::MouseWheelUnit::Page => sum + *delta * span,
+                }
             }
             _ => sum,
-        });
-        (notches, i.smooth_scroll_delta != egui::Vec2::ZERO)
+        })
     });
-    if notches != egui::Vec2::ZERO {
-        ui.data_mut(|d| d.insert_temp(key, true));
-    } else if !gliding {
-        ui.data_mut(|d| d.remove_temp::<bool>(key));
-    }
-    if !ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false) {
-        return egui::Vec2::ZERO;
-    }
-    ui.ctx().input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
-    let step = span * crate::theme::WHEEL_STRIP_SHARE;
-    if sideways { egui::vec2((notches.x + notches.y) * step, 0.0) } else { egui::vec2(0.0, notches.y * step) }
+    if sideways { egui::vec2(delta.x + delta.y, 0.0) } else { egui::vec2(0.0, delta.y) }
 }
+
+/// The scroll sources of the photo strips' `ScrollArea`s: the bar and touch drags, but not the wheel, which
+/// [`wheel_step`] reads (egui's own glide of a notch would add to the notch's third).
+pub(crate) const WHEEL_OFF: egui::scroll_area::ScrollSource =
+    egui::scroll_area::ScrollSource { scroll_bar: true, drag: egui::scroll_area::DragScroll::OnTouch, mouse_wheel: false };
 
 /// Height of a date header row (points).
 pub const HEADER_H: f32 = 40.0;

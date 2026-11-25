@@ -22,6 +22,7 @@ pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap}
 use export::group_checklist;
 pub(crate) use export::preset_lzw_note;
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
+pub(crate) use frame::field_escape_closes;
 use frame::{
     DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_field, escaped_field, field, fit_lists, just_opened, only_shows,
     return_confirms,

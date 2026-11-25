@@ -79,7 +79,11 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     // a wheel notch scrolls a third of its width; see `grid::wheel_step`
     register(ui, "filmstrip", child.max_rect());
     let wheel = crate::panels::grid::wheel_step(&child, egui::Id::unique("film-wheel"), child.max_rect(), child.max_rect().width(), true);
-    egui::ScrollArea::horizontal().id_salt("filmstrip").auto_shrink([false, false]).show_viewport(&mut child, |ui, vp| {
+    egui::ScrollArea::horizontal()
+        .id_salt("filmstrip")
+        .auto_shrink([false, false])
+        .scroll_source(crate::panels::grid::WHEEL_OFF)
+        .show_viewport(&mut child, |ui, vp| {
         if wheel != egui::Vec2::ZERO {
             ui.scroll_with_delta_animation(wheel, egui::style::ScrollAnimation::none());
         }
@@ -205,6 +209,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
             host::context_menu(ui, &resp, crate::i18n::tr("Photo"), |ui| crate::panels::grid::context_menu(app, ui, *id));
         }
+        // Tab and focus requests keep the focused thumbnail in view
+        crate::panels::scroll_focus::reveal_focus(ui, egui::Id::unique("film-scroll-focus"));
     });
 }
 

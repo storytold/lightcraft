@@ -50,7 +50,7 @@ pub(super) fn prepare(app: &LightcraftApp, ctx: &egui::Context) {
     root.mode = if kind.is_dark() { craft::theme::ModeChoice::Dark } else { craft::theme::ModeChoice::Light };
     root.scale = Scale::new(ctx.zoom_factor());
     root.tab_toggles_chrome = false;
-    let mut input = FrameInput::new(root);
+    let mut input = FrameInput::new(root).commands(crate::shortcuts::framework_commands(&app.ui.settings.keymap));
     // The framework's own words (menus, tooltips, dialog titles, table headers) in LightCraft's language, for the
     // whole window; English keeps the framework's own.
     if let Some(host) = crate::i18n::framework_host(app.ui.language) {

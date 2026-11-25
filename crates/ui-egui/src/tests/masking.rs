@@ -1918,8 +1918,9 @@ fn a_selected_develop_slider_accepts_wheel_nudges() {
     h.request("ui.key", json!({"key": "ArrowUp"}), T);
     assert!(develop(&h).light.exposure > before_leaving, "keyboard adjustment survives leaving the slider");
 
-    // Scroll back to the top, then explicitly select it again to re-enable wheel nudges.
-    h.request("ui.move", json!({"x": panel.right() - 8.0, "y": panel.center().y}), T);
+    // Scroll back to the top, then explicitly select it again to re-enable wheel nudges. (`panel:right_panel` spans the
+    // whole dock column, whose group pads its scrolling body by 8 pt: the wheel goes 16 pt in, over the body's bar.)
+    h.request("ui.move", json!({"x": panel.right() - 16.0, "y": panel.center().y}), T);
     h.request("ui.scroll", json!({"dy": 600.0}), T);
     for _ in 0..40 {
         h.step();

@@ -132,6 +132,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if more.clicked() {
                 open = !open;
             }
+            // Escape closes it from the button or a row even when the menu leaves it untaken (`opener_menu_escape`).
+            let more_id = more.response.id;
+            let layer_id = open_id.with("layer");
+            let menu_layer = ui.data(|d| d.get_temp::<egui::LayerId>(layer_id));
             Menu::new(crate::i18n::tr("More preset options").to_owned())
                 .id_salt("preset-options-menu")
                 .opened_by(&more.response, craft::ui::contract::Trigger::Manual)
@@ -139,13 +143,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .show(ui, |ui, _| {
                     // The SDK measures popup bodies separately; the outer panel guard is not enough.
                     let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+                    // the rows' layer, so a later Escape on a row is known to be this menu's
+                    if !measuring {
+                        ui.data_mut(|d| d.insert_temp(layer_id, ui.layer_id()));
+                    }
                     let thumbs = MenuItem::new(crate::i18n::tr("Show Thumbnails"))
                         .id_salt("preset-options-thumbnails")
                         .check(app.ui.preset_thumbs)
                         .keep_open(true)
                         .show(ui);
                     if !measuring {
-                        crate::widgets::register_response("presetMenu:thumbnails", thumbs.response.rect, &thumbs.response);
+                        if crate::widgets::on_live_layer(&thumbs.response) {
+                            crate::widgets::register_response("presetMenu:thumbnails", thumbs.response.rect, &thumbs.response);
+                        }
                         if thumbs.ran {
                             app.ui.preset_thumbs = !app.ui.preset_thumbs;
                         }
@@ -153,7 +163,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     Divider::horizontal().show(ui);
                     let import = MenuItem::new(crate::i18n::tr("Import Presets…")).id_salt("preset-options-import").show(ui);
                     if !measuring {
-                        crate::widgets::register_response("presetMenu:import", import.response.rect, &import.response);
+                        if crate::widgets::on_live_layer(&import.response) {
+                            crate::widgets::register_response("presetMenu:import", import.response.rect, &import.response);
+                        }
                         if import.ran {
                             let _ = app.run("file.importPresets", json!({}));
                         }
@@ -164,12 +176,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         .enabled(any_user)
                         .show(ui);
                     if !measuring {
-                        crate::widgets::register_response("presetMenu:export", export.response.rect, &export.response);
+                        if crate::widgets::on_live_layer(&export.response) {
+                            crate::widgets::register_response("presetMenu:export", export.response.rect, &export.response);
+                        }
                         if export.ran {
                             let _ = app.run("file.exportPresets", json!({}));
                         }
                     }
                 });
+            // after the menu, which takes the Escape it handles itself: one left untaken closes it (next pass)
+            if open && crate::shortcuts::opener_menu_escape(ui.ctx(), more_id, menu_layer) {
+                open = false;
+            }
             ui.data_mut(|data| {
                 if open {
                     data.insert_temp(open_id, (pass, true));
@@ -300,7 +318,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if !measuring && !crate::widgets::carrying(ui.ctx()) && app.ui.dragging_photos.is_none() && craft::ui::contract::clicked(&resp) && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
+                    // the release that ends carrying a keyword or photos is their drop, not a pick of the preset under it
+                    let carrying = app.ui.dragging_keyword.is_some() || app.ui.dragging_photos.is_some() || crate::widgets::carrying(ui.ctx());
+                    if !measuring
+                        && !carrying
+                        && craft::ui::contract::clicked(&resp)
+                        && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok()
+                    {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));

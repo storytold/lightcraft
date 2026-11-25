@@ -115,11 +115,12 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
         field.show_at(ui, sr)
     });
     crate::text_field::register_field(ui, "field:search", &shown.response, record.as_deref());
-    // Escape (which clears the text) and Return leave the field, so the next key is a shortcut again.
-    // An Escape with no edit under way is not reported as `escaped` and leaves the field focused: it still ends the
-    // field's turn, as egui's did, so the next key is a shortcut again.
-    let escape_pressed = ui.ctx().input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. })));
-    if shown.escaped || shown.submitted || (had_focus && escape_pressed) {
+    // Escape (which clears the text) and Return leave the field, so the next key is a shortcut again. An Escape in the
+    // empty field is one the field leaves untaken (it goes on to the host): it lets go of the field too, and does
+    // nothing else.
+    let field = crate::text_field::id("field:search");
+    let left_escape = !shown.escaped && crate::shortcuts::take_focused_cancel(ui.ctx(), |rec| rec.stop.id == field || rec.stop.root == field);
+    if shown.escaped || shown.submitted || left_escape {
         crate::text_field::blur(ui.ctx(), "field:search");
     }
     if app.ui.search != before {

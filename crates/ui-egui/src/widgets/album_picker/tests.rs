@@ -170,7 +170,8 @@ fn duplicate_names_keep_catalog_identity_through_folder_open_filter_and_reorder(
     f.click("albumPickerItem:5:fixture", PointerButton::Primary);
     assert_eq!(f.value, Some(5));
     f.open();
-    assert!(f.nodes.iter().any(|n| n.is_selected() == Some(true)), "selected SDK row remains accessible");
+    // (a chosen row is a button outside a collection: it reports pressed)
+    assert!(f.nodes.iter().any(|n| n.toggled() == Some(egui::accesskit::Toggled::True)), "selected SDK row remains accessible");
 }
 
 #[test]

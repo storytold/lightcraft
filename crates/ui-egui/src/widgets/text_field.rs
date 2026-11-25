@@ -243,6 +243,10 @@ impl<'a> TextField<'a> {
             if self.select_on_focus {
                 field = field.select_on_focus();
             }
+            // while photos are carried a right-click opens no edit menu: that is not what the person is doing
+            if crate::widgets::carrying(ui.ctx()) {
+                field = field.own_context_menu();
+            }
             match self.width {
                 Some(w) if w.is_finite() => {
                     let lines = if multiline { self.rows.unwrap_or(3).max(1) as f32 } else { 1.0 };

@@ -193,6 +193,9 @@ fn a_click_down_and_up_within_one_frame_is_not_a_tap() {
     for pressed in [true, false] {
         h.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
     }
+    // the framework runtime gives each pass at most one press, as its last pointer event (its
+    // one-press rule): the release that came with it reaches the next frame
+    h.step();
     h.step();
     let zoomed = Zoom::Percent(h.app.ui.click_zoom as f32);
     assert_eq!(h.app.ui.zoom, zoomed, "the click did not zoom");

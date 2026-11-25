@@ -27,7 +27,7 @@ pub struct UiState {
     #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "crate::window_place::WindowPlace::lenient")]
     pub window: Option<crate::window_place::WindowPlace>,
     /// Shared panel arrangement; absent in legacy settings until their first layout.
-    pub docking: Option<crate::docking::Workspace>,
+    pub docking: Option<crate::docking::Docked>,
     /// The arrangement generation `docking` was saved in ([`crate::docking::DOCKING_VERSION`]);
     /// settings files are read through [`crate::docking::drop_outdated`].
     pub docking_version: u32,

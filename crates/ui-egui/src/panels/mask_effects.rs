@@ -723,10 +723,14 @@ pub fn manage_body(
     // effects that went away (deleted, renamed) leave the selection
     selected.retain(|n| app.session.mask_effects.iter().any(|e| &e.name == n));
     ui.horizontal(|ui| {
-        crate::text_field::TextField::singleline("field:effectSearch", search)
+        let field = crate::text_field::TextField::singleline("field:effectSearch", search)
             .hint(crate::i18n::tr("Search effects"))
             .width(ui.available_width() - 120.0)
             .show(ui);
+        // Escape in the search field closes the window, as it did before the field took the key
+        if field.cancelled() {
+            crate::dialogs::field_escape_closes(ui);
+        }
         let n = app.session.mask_effects.len();
         ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} preset{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
     });
