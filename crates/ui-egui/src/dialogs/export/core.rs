@@ -101,8 +101,10 @@ pub(super) fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, val
     let before = *value;
     let room = ui.available_width();
     let width = if room.is_finite() { room } else { 400.0 }.max(INDENT + END + VALUE_W + 40.0);
-    let (line, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
-    let number_rect = egui::Rect::from_min_size(egui::pos2(line.right() - END - VALUE_W, line.top()), egui::vec2(VALUE_W, 24.0));
+    // one allocation for the caption line and the track, as compact as main's rows (about 50 points with the gap)
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 22.0 + 18.0), egui::Sense::hover());
+    let line = egui::Rect::from_min_size(row.min, egui::vec2(width, 22.0));
+    let number_rect = egui::Rect::from_min_size(egui::pos2(line.right() - END - VALUE_W, line.top()), egui::vec2(VALUE_W, 22.0));
     let caption = egui::Rect::from_min_max(egui::pos2(line.left() + INDENT, line.top()), egui::pos2(number_rect.left() - 8.0, line.bottom()));
     Text::new(crate::i18n::tr(spec.label).to_owned()).shade(Shade::Muted).show_at(ui, caption);
     let mut typed = Some(*value);
@@ -119,7 +121,7 @@ pub(super) fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, val
     if let Some(number) = typed.filter(|v| v.is_finite()) {
         *value = number;
     }
-    let (track, _) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::hover());
+    let track = egui::Rect::from_min_max(egui::pos2(row.left(), line.bottom()), row.max);
     let slider_rect = egui::Rect::from_min_max(egui::pos2(track.left() + INDENT, track.top()), egui::pos2(track.right() - END, track.bottom()));
     let slider = Slider::new(Bind::bound(value), spec.min..=spec.max)
         .id_salt(("export-slider", spec.id))
