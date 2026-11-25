@@ -29,6 +29,10 @@ AppStream metadata (`<app_id>.metainfo.xml.in`), the PTP udev rule, which descri
 tethering, Edit In, actions and plug-in features. `packaging-lint.yml` validates the templates
 (`desktop-file-validate`, `appstreamcli`, Flatpak manifest parity). `cargo xtask install` installs locally under
 `~/.local` without a package.
+The AppImage carries the entry and icons inside the image only; started as one (`APPIMAGE` set), the app itself
+writes `<app_id>.desktop` and the icons into `~/.local/share` (`apps/app/src/desktop_entry.rs`; the entry is this
+same template, rendered by `apps/app/build.rs` with `Exec=` pointing at the image), unless an entry for the app id
+is already installed by a package or a launcher tool.
 
 ### One program for the app and the CLI
 

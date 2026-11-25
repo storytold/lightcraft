@@ -161,6 +161,18 @@ mod tests {
         }
     }
 
+    /// Until craft-fonts has a Traditional Chinese face, a Simplified face serves Traditional text
+    /// (`serves`) but doesn't claim it (`covers`), and a Japanese face serves neither.
+    #[test]
+    fn a_simplified_face_serves_traditional_chinese_until_there_is_one() {
+        let hans = CraftFont { family: "Noto Sans CJK SC", style: "Regular", scripts: &["Hans", "Latn"], bytes: &[] };
+        let jpan = CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan", "Latn"], bytes: &[] };
+        assert!(hans.serves("Hant"));
+        assert!(!hans.covers("Hant"));
+        assert!(hans.serves("Hans"));
+        assert!(!jpan.serves("Hant"));
+    }
+
     /// Each language's own faces come first, so shared Han keeps the language's forms, and Latin
     /// text still reaches Inter before any CJK fallback.
     #[test]

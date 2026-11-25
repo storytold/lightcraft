@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,9 @@ pub struct Installed {
     store: Option<NamespaceStore>,
     /// Its settings and remembered dialog values (shared with a call running off the lock).
     settings: Arc<Mutex<SettingsStore>>,
+    /// Set once [`Manager::uninstall`] removes its data (not with `keep_data`): a call that still
+    /// runs off the lock holds its namespace store and its settings, and must not save either back.
+    data_gone: Arc<AtomicBool>,
     /// A call is running off the manager's lock ([`Manager::begin`] … [`Manager::end`]): its store
     /// is lent to it. What it is, for the error other calls get meanwhile.
     busy: Option<String>,
@@ -449,6 +453,8 @@ pub struct PendingCall {
     perms: Arc<Mutex<Permissions>>,
     store: NamespaceStore,
     settings: Arc<Mutex<SettingsStore>>,
+    /// [`Installed::data_gone`] of the install this call began on.
+    data_gone: Arc<AtomicBool>,
     request: Value,
     lent: Vec<PathBuf>,
     /// Folders lent for reading (a program run's folder in `program.end`).
@@ -819,6 +825,7 @@ impl Manager {
                 pin,
                 check_updates,
                 last_check,
+                data_gone: Arc::new(AtomicBool::new(false)),
             };
             installed.share_effective();
             if let Some((version, ..)) = read_previous(dir, &id) {
@@ -1180,6 +1187,7 @@ impl Manager {
             pin,
             check_updates,
             last_check,
+            data_gone: Arc::new(AtomicBool::new(false)),
         };
         installed.share_effective();
         self.plugins.insert(id.clone(), installed);
@@ -1324,7 +1332,7 @@ impl Manager {
 
     /// [`Manager::uninstall`]; `keep_data`: its data (`data/<id>.json`) and settings stay in the
     /// folder, for a later install of the same id to pick up. Its grant and enabled state go either
-    /// way, and a call still running can't write its settings back.
+    /// way, and a call still running can't write its settings or its data back once they're gone.
     pub fn uninstall_with(&mut self, id: &str, keep_data: bool) -> Result<()> {
         let is_failed = |f: &Failed| !id.is_empty() && f.id == id;
         if !self.plugins.contains_key(id) && !self.failed.iter().any(is_failed) {
@@ -1363,6 +1371,10 @@ impl Manager {
             s.forget();
         }
         drop(store);
+        // a call still running holds its namespace store: it must not save it over the removed data
+        if !keep_data && let Some(p) = self.plugins.get(id) {
+            p.data_gone.store(true, Ordering::SeqCst);
+        }
         // a job still running gets nothing more from its next call
         if let Some(p) = self.plugins.remove(id) {
             *p.live.lock().unwrap_or_else(PoisonError::into_inner) = Permissions::default();
@@ -1724,6 +1736,7 @@ impl Manager {
         let plugin = p.plugin.clone();
         let store = p.store.take().unwrap_or_default();
         let settings = p.settings.clone();
+        let data_gone = p.data_gone.clone();
         p.busy = Some(match job {
             Some(label) => format!("its job \"{label}\" is running; wait for it to end, or stop it in the activity stack"),
             None => "an earlier call of it is still running (an export's hooks, or a program's end)".into(),
@@ -1736,6 +1749,7 @@ impl Manager {
             perms,
             store,
             settings,
+            data_gone,
             request,
             lent,
             lent_dirs,
@@ -1769,10 +1783,12 @@ impl Manager {
     /// Hands a call from [`Manager::begin`] back with how it went (`None`: it never ran, e.g.
     /// cancelled): its data is saved and returned to the plug-in, its log lines kept.
     pub fn end(&mut self, call: PendingCall, outcome: Option<crate::Outcome>) -> Result<Value> {
-        let PendingCall { id, mut store, request, .. } = call;
-        let saved = store.save();
+        let PendingCall { id, mut store, request, data_gone, .. } = call;
+        // removed with its data meanwhile (and maybe installed again): its store is not saved or kept
+        let gone = data_gone.load(Ordering::SeqCst);
+        let saved = if gone { Ok(()) } else { store.save() };
         // uninstalled meanwhile: nothing to hand back to
-        let Some(p) = self.plugins.get_mut(&id) else {
+        let Some(p) = self.plugins.get_mut(&id).filter(|_| !gone) else {
             saved?;
             return outcome.map_or_else(|| Err(Error::NotFound(id.clone())), |o| o.value);
         };

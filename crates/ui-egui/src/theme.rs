@@ -953,7 +953,11 @@ mod tests {
             lcc_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        let face = lcc_engine::craft_fonts().iter().find(|f| f.covers(script)).unwrap_or_else(|| panic!("font input includes {script}"));
+        let Some(face) = lcc_engine::craft_fonts().iter().find(|f| f.covers(script)) else {
+            assert!(lcc_engine::fonts::BUILD_LANGUAGE.is_some(), "font input includes {script}");
+            lcc_testkit::skip!(Fonts, "this single-language build embeds no {script} face");
+            return;
+        };
         set_language(Locale::En);
         let definitions = font_definitions(lcc_engine::craft_fonts());
         let face_name = craft_font_name(face);
@@ -1016,6 +1020,11 @@ mod tests {
 
     #[test]
     fn separate_web_chinese_face_is_available_in_every_ui_family() {
+        // it switches to Chinese and then to Japanese, so both must be in the build
+        if !crate::i18n::Locale::ZhHans.in_build() || !crate::i18n::Locale::Ja.in_build() {
+            lcc_testkit::skip!(Fonts, "a single-language build cannot switch between Chinese and Japanese");
+            return;
+        }
         // Simulate the WASM build, which embeds only the Japanese face. The Chinese face arrives
         // as a separate file and must precede that face when the UI uses Chinese.
         static JAPANESE: &[lcc_engine::CraftFont] = &[lcc_engine::CraftFont {
@@ -1156,6 +1165,16 @@ mod tests {
         let (regular, _) = width_and_ink(definitions.clone(), "Library", FontFamily::Proportional);
         let (strong, _) = width_and_ink(definitions, "Library", semibold_family());
         assert!(strong > regular, "strong Latin stays wider than regular: {strong} px, {regular} px");
+    }
+
+    /// A Latin-only build (`CRAFT_FONTS_LANGUAGE=en`, F-F6BC) embeds no craft-fonts. Text in a script
+    /// with no face still lays out and paints Inter's missing-glyph boxes, and never panics.
+    #[test]
+    fn text_in_a_script_without_a_face_paints_boxes_and_never_panics() {
+        for text in ["日本語の文字", "简体中文字", "繁體中文字"] {
+            let (width, ink) = width_and_ink(font_definitions(&[]), text, FontFamily::Proportional);
+            assert!(width > 0.0 && ink > 0, "{text:?} draws boxes without a face: {width} px, ink {ink}");
+        }
     }
 
     /// A face with one fixed weight is registered once: nothing heavier can be asked of it. Without

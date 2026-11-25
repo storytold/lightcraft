@@ -670,6 +670,46 @@ fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
     assert!(!gainmap::is_gain_map_jpeg(&export_photo(&mut s, id, &o, 1).unwrap().bytes));
 }
 
+/// An HDR edit exported with `hdrMode: gainMap`: AVIF and JPEG XL carry the edit's SDR rendition as an
+/// ordinary 8-bit image plus an ISO 21496-1 gain map. Without the HDR edit, or with HDR output off, they
+/// are plain SDR files.
+#[test]
+fn hdr_gain_map_avif_and_jxl_exports() {
+    use lcc_codecs::gainmap;
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    for format in ["avif", "jxl"] {
+        let read = |b: &[u8]| match format {
+            "avif" => gainmap::read_avif(b),
+            _ => gainmap::read_jxl(b),
+        };
+        let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": format, "hdr": true, "hdrMode": "gainMap", "quality": 70}));
+        assert!(o.gain_map(), "{format}");
+        // no HDR edit: an ordinary SDR file even with HDR output asked for
+        let plain = export_photo(&mut s, id, &o, 1).unwrap();
+        assert!(read(&plain.bytes).is_none(), "{format}");
+
+        s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 3})).unwrap();
+        let e = export_photo(&mut s, id, &o, 1).unwrap();
+        let gm = read(&e.bytes).unwrap_or_else(|| panic!("{format}: a gain map file"));
+        assert!(gm.meta.alternate_headroom > 0.5 && gm.meta.alternate_headroom <= 3.05, "{format}: headroom {}", gm.meta.alternate_headroom);
+        // the base is the edit's SDR rendition: the same pixels as an SDR export of the same HDR edit
+        let sdr = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"longEdge": 160, "format": format, "hdr": false})), 1).unwrap();
+        assert!(read(&sdr.bytes).is_none(), "{format}: no HDR output asked for");
+        let a = lcc_codecs::decode(&e.bytes, Default::default()).unwrap();
+        let b = lcc_codecs::decode(&sdr.bytes, Default::default()).unwrap();
+        assert_eq!((a.width, a.height), (b.width, b.height), "{format}");
+        let mean = a.image.data.iter().zip(&b.image.data).map(|(p, q)| (p[1] - q[1]).abs()).sum::<f32>() / a.image.data.len() as f32;
+        // (both are lossy encodes at quality 70: they agree to codec noise, not to the bit)
+        let far = a.image.data.iter().zip(&b.image.data).filter(|(p, q)| (p[1] - q[1]).abs() > 0.05).count();
+        assert!(mean < 0.01 && far * 50 < a.image.data.len(), "{format}: base differs from the SDR export by mean {mean}, {far} pixels over 0.05");
+
+        // HDR off again: the gain map goes away
+        s.execute("develop.hdr", &json!({"enabled": false})).unwrap();
+        assert!(read(&export_photo(&mut s, id, &o, 1).unwrap().bytes).is_none(), "{format}");
+    }
+}
+
 /// An HDR edit exported with HDR output on: AVIF (PQ, or HLG when asked), 16-bit PNG and JPEG XL are Rec. 2020 with
 /// that transfer curve, and a float TIFF keeps the highlights above white. Without the HDR edit, or with HDR output
 /// off, the same photo exports as an ordinary SDR file. A JPEG XL carries its metadata.
