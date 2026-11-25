@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # App-owned GUI-only nightly tar: no FUSE/AppImage, CLI, association or install hooks.
 set -euo pipefail
+# The launcher lives beside this script. The sourced helpers define ROOT, not HERE, and an inherited
+# HERE would install some other script as the launcher.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH=
 while [[ $# -gt 0 ]]; do
   case "$1" in
