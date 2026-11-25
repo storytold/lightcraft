@@ -164,6 +164,7 @@
   "Picks to unflag: {n}": "Val att avflagga: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Förinställning {name} på {n} foton",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Förinställning: {name}. Hoppade över AI-masker som den här versionen inte kan beräkna: {masks}",
   "Print settings not saved: {e}": "Utskriftsinställningarna sparades inte: {e}",
   "Printed {n} page(s) to file": "Skrev ut sidor till fil: {n}",
   "Read {name}'s policy": "Läs {name}s policy",

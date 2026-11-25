@@ -85,6 +85,7 @@
   "Action name": "动作名称",
   "Actions": "动作",
   "Active: CPU": "活动：CPU",
+  "Adaptive: its masks are computed for each photo": "自适应：蒙版会针对每张照片重新计算",
   "Add Blank": "添加空白页",
   "Add Cell": "添加单元格",
   "Add Face Model…": "添加人脸模型…",

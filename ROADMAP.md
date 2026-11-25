@@ -234,6 +234,7 @@ history/snapshots remain source data, and smart collections import current membe
 database is read-only; the app owns subsequent edits. See `docs/lightroom-catalog-import.md`.
 
 ## Log
+- 2026-11-25: adaptive presets (plan 7.8; LR-PRE-ADAPTIVE, LR-MASK-ADAPTIVE): 90.6% of 630 rows, P2 81.2%.
 - 2026-11-24: process-retune gate in CI (LR-BEHAV-RENDER-FIDELITY, gap 3): every frozen process must match a
   committed per-process, per-tool aggregate baseline (`cargo xtask fidelity --baseline`).
 - 2026-11-24: plan 3.8 per-model verification drive (gap 10): Sony SRF and the upright FinePix S200 EXR RAF decode;

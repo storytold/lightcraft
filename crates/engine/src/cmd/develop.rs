@@ -1759,12 +1759,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Preset",
             [],
             None,
-            "{id: presetId, amount?: 0..200 (percent), ids?, followAutoSync?: bool (true, as Develop's Presets panel: the photos a slider changes, the active photo, or every selected photo with Auto Sync on; default: the selection)}",
+            "{id: presetId, amount?: 0..200 (percent), ids?, followAutoSync?: bool (true, as Develop's Presets panel: the photos a slider changes, the active photo, or every selected photo with Auto Sync on; default: the selection)} → {skipped: [mask name]}: an adaptive preset's mask recipes are computed on each photo; in a build without AI model masks (Object, Describe, People) those masks are skipped and named, and the rest of the preset applies",
             has_selection,
             |s, p| {
                 let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
-                let mut preset =
-                    s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                let found = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                // adaptive: masks this build can't compute are left out, and reported
+                let (mut preset, skipped) = crate::presets::without_unavailable_masks(&found, crate::presets::model_masks_in_build());
                 // a preset's flat-field map is stored with the edit that applies it
                 s.absorb_settings(&mut preset.settings);
                 let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
@@ -1793,7 +1794,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     ops.extend(s.develop_op(id, next, &format!("Preset: {}", preset.name)));
                 }
                 s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
-                ok()
+                Ok(json!({"skipped": skipped}))
             }
         ),
         cmd!(
