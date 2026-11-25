@@ -186,7 +186,8 @@ pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) 
 
 /// The selection's keywords as chips: the name (right-click for its menu), and × to take it off
 /// every selected photo. One only some of them have is marked with an asterisk. Whole names, or
-/// grouped by the keyword they are inside (Settings ▸ Interface).
+/// grouped by the keyword they are inside (Settings ▸ Interface). Either way a long list stops
+/// after [`LINES`] lines with "+N more".
 pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     if chips.is_empty() {
@@ -200,12 +201,59 @@ pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId
         chip_groups(app, ui, &groups, crate::key_of(selection));
         return;
     }
-    ui.horizontal_wrapped(|ui| {
-        for c in chips.iter() {
-            let (body, x) = chip(ui, &c.path, &c.path, !c.on_all(), true, ui.max_rect().width());
-            chip_acts(app, ui, c, body, x);
+    chip_paths(app, ui, &chips, crate::key_of(selection));
+}
+
+/// The whole-name box: a chip per keyword, side by side, and "+N more" where a long list stops.
+/// Only the chips a shortened list can show are measured and drawn.
+fn chip_paths(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[Chip], selection: u64) {
+    let avail = ui.available_width();
+    let all = app.ui.keyword_chips_all == Some(selection);
+    let limit = measured(avail);
+    let widths: Vec<f32> =
+        chips.iter().enumerate().map(|(i, c)| if all || i < limit { chip_size(ui, &c.path, !c.on_all(), true, avail).1 } else { avail }).collect();
+    for (i, line) in lines(&[(false, widths)], avail, GAP, all).into_iter().enumerate() {
+        match line {
+            Line::Chips(_, row) => {
+                ui.add_space(if i == 0 { 0.0 } else { 4.0 });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    for c in chips.get(row).into_iter().flatten() {
+                        let (body, x) = chip(ui, &c.path, &c.path, !c.on_all(), true, avail);
+                        chip_acts(app, ui, c, body, x);
+                    }
+                });
+            }
+            Line::Heading(_) => {}
+            other => more_or_fewer(app, ui, &other, selection),
         }
-    });
+    }
+}
+
+/// "+N more" under a shortened list (it shows the whole list, for this selection), or "Show fewer"
+/// under a list shown whole.
+fn more_or_fewer(app: &mut LightcraftApp, ui: &mut egui::Ui, line: &Line, selection: u64) {
+    let t = Tokens::get(ui.ctx());
+    match line {
+        Line::More(n) => {
+            ui.add_space(6.0);
+            let label = crate::i18n::tr_format!("+{n} more", n = n);
+            let r = ui.add(egui::Button::new(egui::RichText::new(label).color(t.text_label)).corner_radius(10.0));
+            register(ui, "keywordChipsMore", r.rect);
+            if r.on_hover_text(crate::i18n::tr("Show every keyword of the selected photos")).clicked() {
+                app.ui.keyword_chips_all = Some(selection);
+            }
+        }
+        Line::Fewer => {
+            ui.add_space(6.0);
+            let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Show fewer")).color(t.text_label)).corner_radius(10.0));
+            register(ui, "keywordChipsFewer", r.rect);
+            if r.clicked() {
+                app.ui.keyword_chips_all = None;
+            }
+        }
+        Line::Heading(_) | Line::Chips(..) => {}
+    }
 }
 
 /// A drawn chip does its work: its × takes the keyword off the selected photos, its name has the
@@ -295,23 +343,7 @@ fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], sel
                     }
                 });
             }
-            Line::More(n) => {
-                ui.add_space(6.0);
-                let label = crate::i18n::tr_format!("+{n} more", n = n);
-                let r = ui.add(egui::Button::new(egui::RichText::new(label).color(t.text_label)).corner_radius(10.0));
-                register(ui, "keywordChipsMore", r.rect);
-                if r.on_hover_text(crate::i18n::tr("Show every keyword of the selected photos")).clicked() {
-                    app.ui.keyword_chips_all = Some(selection);
-                }
-            }
-            Line::Fewer => {
-                ui.add_space(6.0);
-                let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Show fewer")).color(t.text_label)).corner_radius(10.0));
-                register(ui, "keywordChipsFewer", r.rect);
-                if r.clicked() {
-                    app.ui.keyword_chips_all = None;
-                }
-            }
+            other => more_or_fewer(app, ui, &other, selection),
         }
     }
 }
@@ -619,7 +651,7 @@ pub(crate) fn rows_of(widths: &[f32], avail: f32, gap: f32) -> Vec<std::ops::Ran
     rows
 }
 
-/// A line of the grouped box.
+/// A line of the Keywording box (the whole-name box has no headings).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Line {
     /// The name of a group's parent.
@@ -632,7 +664,7 @@ pub(crate) enum Line {
     Fewer,
 }
 
-/// The grouped box shows this many lines of a long list (then "+N more")…
+/// The Keywording box shows this many lines of a long list (then "+N more")…
 pub(crate) const LINES: usize = 8;
 /// …but a list only this many lines longer is shown whole: "+1 more" saves nothing.
 pub(crate) const SLACK: usize = 2;

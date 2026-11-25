@@ -306,7 +306,7 @@ pub struct UiState {
     pub keyword_painter_text: String,
     /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
     pub keywording_view: KeywordingView,
-    /// The Keywording box, grouped: every keyword of this selection (its hash) is shown, however
+    /// The Keywording box: every keyword of this selection (its hash) is shown, however
     /// many lines that takes ("+N more" was clicked). Another selection's list is short again.
     #[serde(skip)]
     pub keyword_chips_all: Option<u64>,

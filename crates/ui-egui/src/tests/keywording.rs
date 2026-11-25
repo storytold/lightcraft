@@ -427,22 +427,45 @@ fn grouped_keywords_share_a_line_naming_their_parent() {
 #[test]
 fn a_long_grouped_list_is_shortened_until_asked_for() {
     let (mut h, ids) = two_selected();
-    give(&mut h, &ids, &sixteen());
-    assert_eq!(count(&h, "keywordChip:"), 16, "whole names: every keyword, as before");
-    assert!(!has(&h, "keywordChipsMore"));
-    let list_before = rect(&h, "field:keywordFilter").top();
-
     h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
-    h.settle(SETTLE);
+    give(&mut h, &ids, &sixteen());
     assert_eq!(count(&h, "keywordChip:"), 7, "a heading and seven chips");
     assert!(has(&h, "keywordChipsMore") && !has(&h, "keywordChipsFewer"));
-    assert!(rect(&h, "field:keywordFilter").top() < list_before - 80.0, "{} from {list_before}", rect(&h, "field:keywordFilter").top());
+    let list_short = rect(&h, "field:keywordFilter").top();
 
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordChipsMore"}));
     assert_eq!(count(&h, "keywordChip:"), 16);
     assert!(has(&h, "keywordChipsFewer") && !has(&h, "keywordChipsMore"));
+    assert!(rect(&h, "field:keywordFilter").top() > list_short + 80.0, "{} from {list_short}", rect(&h, "field:keywordFilter").top());
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordChipsFewer"}));
     assert_eq!(count(&h, "keywordChip:"), 7);
+}
+
+// Given a selection with hundreds of keywords and the whole-name box (the default),
+// when the panel is drawn,
+// then only the chips of its first lines are laid out, with "+N more" for the rest, which shows
+// them all; "Show fewer" brings the short list back (issue #4352).
+#[test]
+fn a_long_whole_name_list_is_shortened_until_asked_for() {
+    let (mut h, ids) = two_selected();
+    let many: Vec<String> = (0..300).map(|i| format!("Subjects|keyword {i:03}")).collect();
+    give(&mut h, &ids, &many);
+    let short = count(&h, "keywordChip:");
+    assert!(short > 0 && short < many.len() / 4, "a few lines of {}: {short}", many.len());
+    assert!(has(&h, "keywordChipsMore") && !has(&h, "keywordChipsFewer"));
+    assert_eq!(count(&h, "keywordGroup:"), 0, "whole names have no headings");
+
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordChipsMore"}));
+    assert_eq!(count(&h, "keywordChip:"), many.len());
+    assert!(has(&h, "keywordChipsFewer") && !has(&h, "keywordChipsMore"));
+    // (the whole list reaches past the window: the panel is scrolled down to its end)
+    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordChip:Subjects|keyword 000"}));
+    let below = rect(&h, "keywordChipsFewer").top() - 400.0;
+    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -below}));
+    // (the scroll eases in over a few frames)
+    h.settle(SETTLE);
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordChipsFewer"}));
+    assert_eq!(count(&h, "keywordChip:"), short);
 }
 
 // Given the grouped box, chips stay inside the panel and never overlap, whatever their length.
