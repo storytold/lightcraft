@@ -438,6 +438,7 @@ pub(crate) struct CameraColourModel<'a> {
 impl CameraColourModel<'_> {
     /// Rebuild sensor-clipped channels; fully clipped highlights become [`clipped_white`] of the matrix, so they
     /// come out of [`Self::apply`] neutral.
+    #[cfg(test)]
     pub fn rebuild_highlights(&self, img: &mut Rgb32f) {
         lcc_raw::highlight::reconstruct_with(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix));
     }
