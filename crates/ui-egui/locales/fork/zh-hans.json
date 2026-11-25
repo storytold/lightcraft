@@ -1755,6 +1755,7 @@
   "Masks keep their sliders. Export presets first to keep a copy.": "蒙版会保留其滑块设置。如需保留副本，请先导出预设。",
   "Masks that find the subject, the sky or an object you click, AI Denoise, face recognition and search by description. They run on this computer once their models are downloaded.": "能找出主体、天空或你点击的物体的蒙版、AI 降噪、人脸识别以及按描述搜索。下载模型后即可在此电脑上运行。",
   "Masks the sky, water and vegetation more precisely. Uses under 1 GB of memory.": "更精确地为天空、水和植被创建蒙版。内存占用不到 1 GB。",
+  "Match Look": "匹配外观",
   "Match all (AND)": "全部匹配 (AND)",
   "Match any (OR)": "任一匹配 (OR)",
   "Matches a little more often, but scanning takes twice as long. Changing it scans the faces again.": "匹配率略有提高,但扫描耗时加倍。更改后会重新扫描人脸。",

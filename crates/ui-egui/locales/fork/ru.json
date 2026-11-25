@@ -1795,6 +1795,7 @@
   "Mask Size": "Размер маски",
   "Masks that find the subject, the sky or an object you click, AI Denoise, face recognition and search by description. They run on this computer once their models are downloaded.": "Маски, которые находят объект съёмки, небо или предмет, по которому вы щёлкнули, шумоподавление ИИ, распознавание лиц и поиск по описанию. Они работают на этом компьютере после загрузки их моделей.",
   "Masks the sky, water and vegetation more precisely. Uses under 1 GB of memory.": "Точнее маскирует небо, воду и растительность. Использует меньше 1 ГБ памяти.",
+  "Match Look": "Согласовать вид",
   "Match all (AND)": "Все условия (И)",
   "Match any (OR)": "Любое условие (ИЛИ)",
   "Matches a little more often, but scanning takes twice as long. Changing it scans the faces again.": "Совпадений чуть больше, но сканирование занимает вдвое больше времени. После изменения лица сканируются заново.",

@@ -429,6 +429,7 @@ const SETTINGS: &[&str] = &[
     "dialog.syncCopies",
     "dialog.syncSnapshots",
     "develop.matchExposure",
+    "develop.matchLook",
     "---",
     "masks.updateAi=Update AI Settings",
     "---",
@@ -676,6 +677,7 @@ const SUB: &[(&str, &str, &[&str])] = &[
             "develop.treatment=Convert to Black & White",
             "develop.hdr=Toggle HDR Edit Mode",
             "develop.matchExposure",
+            "develop.matchLook",
             "---",
             // The app's own
             "develop.copy=Copy All Settings",

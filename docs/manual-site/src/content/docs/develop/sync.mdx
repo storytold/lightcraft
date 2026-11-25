@@ -16,10 +16,11 @@ import { Aside } from '@astrojs/starlight/components';
 - **Sync Settings** copies the settings you changed since the last step to the selection, as one undo step.
 - **Auto Sync** (`⌥⇧⌘A`, the switch at the bottom): every slider drag edits all selected photos live.
 - **Match Total Exposures** (`⌥⇧⌘M`): sets Exposure so each selected photo ends equal, from shutter, ISO and aperture.
+- **Match Look**: the selected photos take the active photo's overall brightness, contrast and colour cast, measured on the rendered pictures (as Capture One's Smart Adjustments). It sets Exposure, Contrast and the global **Color Grading** tint, so each photo stays an ordinary edit you can adjust; one undo takes it back. Photos whose file can't be read are left as they are.
 - **Presets**: **Photo ▸ Develop Settings ▸ Create Preset…** (`⇧⌘P`) with a per-setting checklist; **Amount** 0 to 200. See [Colour, grading and profiles](../colour/).
 - **Per-camera defaults**: **Settings ▸ Import** and the Optics section's save button.
 - **Before / After copy**: copy After to Before or swap: see [Views and zoom](../views/).
 
 <Aside type="note" title="Modern layout">
-  **Photo ▸ Develop Settings** holds Copy, Paste, Sync, Auto Sync and Match Total Exposures.
+  **Photo ▸ Develop Settings** holds Copy, Paste, Sync, Auto Sync, Match Total Exposures and Match Look.
 </Aside>

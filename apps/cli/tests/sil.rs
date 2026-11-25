@@ -633,6 +633,29 @@ fn sil_workflow() {
     s.undo_redo_roundtrip();
     s.consistent();
 
+    // --- Match Total Exposures and Match Look (plan 7.6): both answer with counts that add up to the selection,
+    // never touch the reference photo, and come back as one undo step
+    s.ok("library.select", json!({"ids": [ids[0], ids[5], ids[6]], "active": ids[0]}));
+    let before_ref = s.ok("develop.get", json!({"id": ids[0]}));
+    // the SIL photos carry no shutter / aperture / ISO: a clean refusal is right, a success must count the selection
+    let me = s.cmd("develop.matchExposure", json!({}));
+    let me_n = me["result"]["changed"].as_u64().unwrap_or(0) + me["result"]["skipped"].as_u64().unwrap_or(0);
+    let me_ok = if me["ok"] == true { me_n <= 2 } else { me["error"].as_str().is_some_and(|e| !e.is_empty()) };
+    s.check(me_ok, "Match Total Exposures neither matched the selection nor refused cleanly", &me.to_string());
+    let before_ml = s.ok("develop.get", json!({"id": ids[5]}));
+    let ml = s.ok("develop.matchLook", json!({}));
+    let ml_n = ml["changed"].as_u64().unwrap_or(0) + ml["skipped"].as_u64().unwrap_or(0);
+    s.check(ml_n == 2, "Match Look did not account for every selected photo", &ml.to_string());
+    let after_ref = s.ok("develop.get", json!({"id": ids[0]}));
+    s.check(after_ref["light"] == before_ref["light"], "matching changed the reference photo", &after_ref["light"].to_string());
+    let matched = s.ok("develop.get", json!({"id": ids[5]}));
+    s.undo_redo_roundtrip();
+    s.ok("edit.undo", json!({}));
+    let undone = s.ok("develop.get", json!({"id": ids[5]}));
+    s.check(undone["light"] == before_ml["light"], "one undo did not take Match Look back", &format!("{} vs {}", undone["light"], matched["light"]));
+    s.ok("edit.redo", json!({}));
+    s.consistent();
+
     // --- versions: virtual copy with its own edits, history back and forth
     s.ok("library.select", json!({"ids": [ids[0]], "active": ids[0]}));
     let vc = s.ok("photo.virtualCopy", json!({}));

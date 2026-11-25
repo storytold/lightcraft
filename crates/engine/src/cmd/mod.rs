@@ -57,6 +57,7 @@ pub mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod masks;
+pub(crate) mod match_look;
 mod merge;
 pub mod metadata;
 pub mod metadata_files;
@@ -257,6 +258,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(alternatives::specs());
         v.extend(collections::specs());
         v.extend(develop::specs());
+        v.extend(match_look::specs());
         v.extend(color::specs());
         v.extend(plugin_filters::specs());
         v.extend(curves::specs());
