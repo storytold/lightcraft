@@ -346,6 +346,7 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     if on_box || typing {
         return;
     }
+    eprintln!("DBGGREW pass={pass} grew={grew} height={height} before={before} offset_data={:?}", ui.data(|d| d.get_temp::<f32>(egui::Id::unique("right-scroll-offset"))));
     ui.data_mut(|d| d.insert_temp(egui::Id::unique(HOLD), (grew, pass)));
     // (drawn again at once at the new offset, so the list never shows a frame out of place)
     ui.ctx().request_discard("the Keyword List holds its place");
