@@ -3326,12 +3326,16 @@ pub(crate) fn view_overlay(app: &LccApp, d: &DevelopSettings, alt_held: bool) ->
     }
 
     if app.ui.right != RightPanel::Crop {
-        // Keyed by the dragged control's id, not the interaction label: a mask's "Exposure" slider
-        // must not bring up the global clipping mask.
+        // Keyed by the dragged control's id, not the interaction label: the interaction only says
+        // "Drag", so the id decides. The Edit panel's tone sliders carry the `light.` prefix; a
+        // mask's tone sliders (the Masking panel's local adjustments) share the bare
+        // `LocalAdjustments` field names and ask for the same clipping previews.
         if alt_held && app.session.interaction.is_some() {
             match app.ui.dragging_control.as_deref() {
-                Some("light.exposure" | "light.highlights" | "light.whites") => return Overlay::Clipping(Some(false)),
-                Some("light.shadows" | "light.blacks") => return Overlay::Clipping(Some(true)),
+                Some("light.exposure" | "light.highlights" | "light.whites" | "exposure" | "highlights" | "whites") => {
+                    return Overlay::Clipping(Some(false));
+                }
+                Some("light.shadows" | "light.blacks" | "shadows" | "blacks") => return Overlay::Clipping(Some(true)),
                 // Sharpening's sliders: each its own black-and-white view of the band it sharpens
                 Some("detail.sharpenAmount") => return Overlay::Sharpen(SharpenView::Amount),
                 Some("detail.sharpenRadius") => return Overlay::Sharpen(SharpenView::Radius),

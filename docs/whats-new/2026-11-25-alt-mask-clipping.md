@@ -1,0 +1,2 @@
+### Clipping previews on a mask's tone sliders
+- Hold `Alt` (`Option` on macOS) while dragging a mask's Exposure, Highlights, Whites, Shadows or Blacks slider in Masking and the photo shows what that drag clips, as the Edit panel's sliders do: red where highlights clip, blue where shadows clip. The mask's tint, outlines and pins step aside while the preview shows, and the `J` clipping overlay yields to it.

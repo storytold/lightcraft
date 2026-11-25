@@ -44,6 +44,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
   <NeedsImage what="The Style Brush menu under Create New Mask, listing effect presets by group" />
 
 - **Range**: Luminance, Color, Depth (needs the Depth Anything model; see [AI masks](../../ai/masks-ai/#depth)).
+- **Clipping previews**: hold `Alt` (`Option` on macOS) while dragging a mask's **Exposure**, **Highlights**, **Whites**, **Shadows** or **Blacks** slider and the photo shows what that drag clips, as in the Edit panel: red where highlights clip, blue where shadows clip. While the preview shows, the mask's tint, outlines and pins step aside, and the `J` clipping overlay yields to it; releasing `Alt` or the slider brings everything back.
 - **Before any mask exists**: the panel shows the settings the next mask will start from ("Settings for the next mask"), dimmed and inert. Create a mask first; once one exists those sliders work, and with masks present but none selected they again set up the next mask.
 - **Colour tools**: under Colour's sliders are **Color** (paint-bucket icon), **Color Mixer** (palette icon) and **Point Color** (eyedropper icon). **Color Grading** is its own section right under Colour, with the colour-wheels icon. The Targeted Adjustment buttons (Tone Curve, Color Mixer, the mask's Color Mixer) show a reticle.
 - **Solo Mode**: right-click any mask section title and tick **Solo Mode** (or **Window ▸ Edit Sections ▸ Solo Mode in Masks**). Opening one section then folds the others. Alt-click a section title to open just that one with the mode off.
