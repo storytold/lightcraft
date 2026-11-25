@@ -688,6 +688,8 @@ pub fn name_editor(
 ) -> Editor {
     let t = Tokens::get(ctx);
     let mut outcome = Editor::Open;
+    // The field let go of the keyboard with no ending of its own (see below).
+    let mut let_go = false;
     let opening = edit.fresh;
     let shown = egui::Area::new(egui::Id::unique("face-name-editor")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -709,7 +711,7 @@ pub fn name_editor(
                     // Esc with nothing typed has no edit to cancel: the field just lets go of the keyboard
                     // with no ending (a click or Tab away reports its own ending), so a box that was being
                     // edited a pass ago and is not now has been dismissed.
-                    None if was_editing && !r.editing && !edit.fresh => outcome = Editor::Cancel,
+                    None if was_editing && !r.editing && !edit.fresh => let_go = true,
                     _ => {}
                 }
             }
@@ -748,6 +750,12 @@ pub fn name_editor(
             ui.label(RichText::new(crate::i18n::tr("Enter to confirm, Esc to cancel")).font(t.font(11.0)).color(t.text_dim));
         });
     });
+    // A press on the box's own buttons (the offer to set recognition up, a suggestion) takes the keyboard from the field
+    // first: that is not a dismissal, the button's release follows.
+    let pressed_inside = ctx.input(|i| i.pointer.primary_down() && i.pointer.interact_pos().is_some_and(|p| shown.response.rect.contains(p)));
+    if let_go && !pressed_inside && matches!(outcome, Editor::Open) {
+        outcome = Editor::Cancel;
+    }
     // Esc closes the box wherever the keyboard is, as the native box did: also once a Return has ended the field's edit
     // (the field then reports no ending of its own) and before the field has the keyboard.
     // A frame's later passes (the framework reruns a pass it discards) see no events: the Esc holds for its frame.
