@@ -19,11 +19,14 @@ fn orf_support_checks_keep_a_stamp_even_when_sensor_data_decodes() {
     p.kind = MediaKind::Raw;
     assert!(p.preview_only_stale(), "legacy supported ORF needs the withdrawal recheck");
     p.set_preview_only(None);
-    assert_eq!(p.preview_checked, APP_VERSION);
+    let checked = p.preview_checked.clone();
+    assert_ne!(checked, APP_VERSION, "the shared decoder must invalidate legacy app-only stamps");
     assert!(!p.preview_only_stale());
     assert!(p.develops_raw(), "supported uncompressed ORF remains sensor-decodable");
+    p.preview_checked = APP_VERSION.into();
+    assert!(p.preview_only_stale(), "even a supported ORF needs checking after a same-version decoder change");
     p.set_preview_only(Some("Olympus compressed ORF".into()));
-    assert_eq!(p.preview_checked, APP_VERSION);
+    assert_eq!(p.preview_checked, checked, "both outcomes record the same decoder identity");
     assert!(!p.preview_only_stale());
     assert!(!p.develops_raw());
     p.format = "DNG".into();

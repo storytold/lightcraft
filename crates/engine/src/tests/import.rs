@@ -5824,3 +5824,72 @@ fn relink_updates_source_classification_and_keeps_offline_undo_redo() {
         assert_eq!(reopened.catalog.photo(id).unwrap(), &after);
     }
 }
+
+#[test]
+fn convert_to_dng_replaces_source_facts_without_reusing_old_sensor_proxies() {
+    use lightcraft_catalog::{MediaKind, Op, Source};
+    for preview_only in [None, Some("old unsupported compression".to_string())] {
+        let dir = super::TestDir::new(&format!("convert-output-facts-{}", preview_only.is_some()));
+        let raw = dir.join("sensor.orf");
+        let input = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        std::fs::write(&raw, &input).unwrap();
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        let mut original = (**s.catalog.photo(id).unwrap()).clone();
+        original.format = "ORF".into();
+        original.set_preview_only(preview_only);
+        original.meta.title = "kept title".into();
+        s.catalog.apply(Op::RemovePhoto { id }).unwrap();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(original) }).unwrap();
+        s.execute("develop.set", &json!({"ids": [id.0], "control": "light.exposure", "value": 0.4})).unwrap();
+        let before = s.catalog.photo(id).unwrap().clone();
+        let previews = dir.join("previews");
+        std::fs::create_dir_all(&previews).unwrap();
+        s.media.smart_dir = Some(previews.clone());
+        let name = format!("{:032x}.lcsp", lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&before)).finish().0);
+        let legacy = previews.join(name);
+        let pixels = lightcraft_raster::Rgb32f { width: 2, height: 2, data: vec![[0.2; 3]; 4] };
+        let proxy = crate::smart::encode(&pixels, Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() })).unwrap();
+        std::fs::write(&legacy, &proxy).unwrap();
+        let current = crate::smart::PreviewPath::new(&previews, &before);
+        let matching =
+            crate::smart::encode(&pixels, Some(&lightcraft_pipeline::SourceInfo { raw: before.develops_raw(), ..Default::default() })).unwrap();
+        std::fs::create_dir_all(current.write_path().parent().unwrap()).unwrap();
+        std::fs::write(current.write_path(), matching).unwrap();
+        let offline = dir.join("offline-source");
+        std::fs::rename(&raw, &offline).unwrap();
+        s.media.forget(id);
+        let source = s.media.source_ref(&before, crate::media::SourceLevel::Preview).load_source().unwrap();
+        assert!(source.from_proxy, "the original proxy works before conversion, with the original offline");
+        assert_eq!(source.info.unwrap().raw, before.develops_raw());
+        std::fs::rename(&offline, &raw).unwrap();
+        s.media.forget(id);
+        let converted = s.execute("photo.convertToDng", &json!({"ids": [id.0]})).unwrap();
+        let output = converted["converted"][0]["path"].as_str().unwrap();
+        let bytes = std::fs::read(output).unwrap();
+        let after = s.catalog.photo(id).unwrap().clone();
+        assert_eq!((after.kind, after.format.as_str(), &after.preview_only), (MediaKind::Raw, "DNG", &None));
+        assert_eq!(after.content_hash, Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+        assert_ne!(after.content_hash, before.content_hash, "the generated file has its own identity");
+        assert_eq!(after.file_size, bytes.len() as u64);
+        assert_eq!((&after.meta, &after.develop), (&before.meta, &before.develop));
+        std::fs::remove_file(output).unwrap();
+        s.media.forget(id);
+        assert!(s.media.source_ref(&after, crate::media::SourceLevel::Preview).load_source().is_err(), "old ORF pixels cannot supply a missing DNG");
+        assert_eq!(s.execute("photo.smartPreview", &json!({"id": id.0})).unwrap()["smartPreview"], false);
+        assert_eq!(std::fs::read(&legacy).unwrap(), proxy, "old proxies remain available for recovery");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &before);
+        std::fs::rename(&raw, &offline).unwrap();
+        s.media.forget(id);
+        let source = s.media.source_ref(&before, crate::media::SourceLevel::Preview).load_source().unwrap();
+        assert!(source.from_proxy, "Undo restores usable pixels while the original is offline");
+        assert_eq!(source.info.unwrap().raw, before.develops_raw());
+        std::fs::rename(&offline, &raw).unwrap();
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &after);
+        assert_eq!(after.source, Source::File { path: output.into() });
+        assert_eq!(std::fs::read(&raw).unwrap(), input);
+    }
+}

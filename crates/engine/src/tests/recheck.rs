@@ -1,4 +1,4 @@
-//! Issue #662: preview-only raws are rechecked when a library opens with another app version.
+//! Issue #662: preview-only raws are rechecked when a library opens with another app or decoder version.
 
 use std::path::PathBuf;
 
@@ -347,6 +347,21 @@ fn review_stale_copies_share_one_probe_when_the_parent_is_current() {
 }
 
 #[test]
+fn review_recheck_does_not_report_a_rendered_image_as_raw_recovery() {
+    let mut x = library("rendered-replacement");
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&[10, 20, 30]));
+    let png = lightcraft_codecs::encode_png(&image, &Default::default()).unwrap();
+    std::fs::write(&x.file, png).unwrap();
+    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(r["updated"], json!([x.id.0]));
+    assert_eq!(r["cleared"], json!([]));
+    let photo = x.s.catalog.photo(x.id).unwrap();
+    assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Image);
+    assert_eq!(photo.format, "PNG", "the rendered replacement keeps its detected container");
+    assert!(photo.preview_only.is_none() && !photo.develops_raw());
+}
+
+#[test]
 fn review_recheck_keeps_a_listed_copy_after_its_parent_moves() {
     for relink_copy in [false, true] {
         let mut x = library(&format!("parent-moves-{relink_copy}"));
@@ -434,6 +449,45 @@ fn checked_orf(name: &str) -> Lib {
     let photo = x.s.catalog.photo(x.id).unwrap();
     assert!(photo.preview_only.is_none() && !photo.preview_only_stale() && photo.format == "ORF");
     x
+}
+
+#[test]
+fn orf_decoder_upgrade_rechecks_legacy_library_and_local_records() {
+    for (name, local, stamp) in [("library", false, APP_VERSION), ("local", true, APP_VERSION), ("legacy-local", true, "")] {
+        let mut x = checked_orf(name);
+        x.s.catalog.apply(Op::SetLocal { id: x.id, local }).unwrap();
+        x.s.execute("develop.set", &json!({"id": x.id.0, "control": "light.exposure", "value": 0.5})).unwrap();
+        let copy = PhotoId(x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap()["ids"][0].as_u64().unwrap());
+        for id in [x.id, copy] {
+            let p = x.s.catalog.photo(id).unwrap();
+            x.s.apply_system(Op::SetContent {
+                id,
+                width: p.width,
+                height: p.height,
+                file_size: p.file_size,
+                content_hash: p.content_hash.clone(),
+                preview_only: Some("Olympus compressed ORF".into()),
+                // The withdrawn decoder used the same app version as this build.
+                preview_checked: stamp.into(),
+            })
+            .unwrap();
+        }
+        let before = [x.id, copy].map(|id| x.s.catalog.photo(id).unwrap().clone());
+        let undo = x.s.undo.len();
+        let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+        assert_eq!(r["checked"], 1, "a decoder upgrade must recheck same-version legacy records automatically");
+        assert_eq!(r["cleared"], json!([x.id.0, copy.0]));
+        for original in before {
+            let current = x.s.catalog.photo(original.id).unwrap();
+            assert!(current.develops_raw() && !current.preview_only_stale());
+            assert_eq!(current.develop, original.develop);
+            assert_eq!(current.history, original.history);
+            assert_eq!(current.meta, original.meta);
+            assert_eq!(current.local, original.local, "a compatibility check does not add Local records to the library");
+        }
+        assert_eq!(x.s.undo.len(), undo, "automatic migration adds no undo step");
+        assert_eq!(x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap()["checked"], 0, "the fresh result is not rechecked again");
+    }
 }
 
 #[test]
@@ -663,19 +717,4 @@ fn overlapping_source_checks(older_recheck: bool) {
     assert!(updated.is_empty());
     assert_eq!(x.s.catalog.photo(x.id).unwrap(), &current);
     assert_eq!(x.s.catalog.photo(x.id).unwrap().content_hash, replacement);
-}
-
-#[test]
-fn review_recheck_does_not_report_a_rendered_image_as_raw_recovery() {
-    let mut x = library("rendered-replacement");
-    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&[10, 20, 30]));
-    let png = lightcraft_codecs::encode_png(&image, &Default::default()).unwrap();
-    std::fs::write(&x.file, png).unwrap();
-    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
-    assert_eq!(r["updated"], json!([x.id.0]));
-    assert_eq!(r["cleared"], json!([]));
-    let photo = x.s.catalog.photo(x.id).unwrap();
-    assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Image);
-    assert_eq!(photo.format, "PNG", "the rendered replacement keeps its detected container");
-    assert!(photo.preview_only.is_none() && !photo.develops_raw());
 }

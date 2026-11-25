@@ -53,7 +53,7 @@ impl Availability {
     pub fn exists(&self, dir: &Path, photo: &Photo) -> bool {
         let preview = super::PreviewPath::new(dir, photo);
         let cache = self.cache_for(preview.expected_raw());
-        preview.candidates().iter().any(|path| cache.exists(&path.to_string_lossy()) == Some(true))
+        preview.load_candidates().iter().any(|path| cache.exists(&path.to_string_lossy()) == Some(true))
     }
 
     fn cache_for(&self, expected: Option<bool>) -> &FileAvailability {
@@ -68,7 +68,7 @@ impl Availability {
     pub(crate) fn checked_missing(&self, dir: &Path, photo: &Photo) -> bool {
         let preview = super::PreviewPath::new(dir, photo);
         let cache = self.cache_for(preview.expected_raw());
-        preview.candidates().iter().all(|path| cache.is_gone(&path.to_string_lossy()))
+        preview.load_candidates().iter().all(|path| cache.is_gone(&path.to_string_lossy()))
     }
 }
 

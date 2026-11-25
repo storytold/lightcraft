@@ -1,11 +1,12 @@
 //! Preview-only raws rechecked after an update (issue #662): a raw imported while its format or
 //! variant couldn't be decoded keeps [`lightcraft_catalog::Photo::preview_only`] until something re-reads its file.
-//! Each flag is stamped with the app version that set it ([`lightcraft_catalog::Photo::preview_checked`]);
+//! Each flag is stamped with the app or decoder version that set it ([`lightcraft_catalog::Photo::preview_checked`]);
 //! when a library opens with another version, its stale preview-only photos are probed again and get
 //! exactly what Reload from Disk would give them: a file that decodes now loses the flag, one that
 //! still doesn't gets the new reason and a fresh stamp, so it isn't probed again.
 //! ORF records are rechecked even when previously sensor-decodable: compressed sensor support
-//! was withdrawn after #3775. Supported uncompressed ORFs also keep a stamp to avoid repeat work.
+//! was withdrawn after #3775. Their decoder identity also invalidates app-only stamps when shared
+//! sensor decoding is adopted in a build with the same app version. Supported ORFs keep a stamp too.
 //!
 //! The work is split so the app can probe on a worker thread: [`stale`] lists what to probe (no
 //! file-system calls), [`probe`] reads the files without the session, and [`apply`] applies the
@@ -22,7 +23,7 @@ use crate::{Result, Session};
 /// A grouped source read, with Reload's membership and freshness checks.
 pub use super::reload::Item as Stale;
 
-/// The library's preview-only photos and ORFs whose support another app version checked (or
+/// The library's preview-only photos and ORFs whose support another app or decoder version checked (or
 /// every such photo, with `all`), grouped by family and path under a new source-read ticket. Every
 /// same-file member retains its ticket so a copy can use the result if its representative relinks.
 /// Local browsing records are included. No file-system calls.
@@ -112,7 +113,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Recheck Preview-Only Raws",
         [],
         None,
-        "{all?: bool} — probe again preview-only raws and ORFs whose support another app version checked (the app does this in the background when a library opens; `all` rechecks every preview-only raw and ORF), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
+        "{all?: bool} — probe again preview-only raws and ORFs whose support another app or decoder version checked (the app does this in the background when a library opens; `all` rechecks every preview-only raw and ORF), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
         always,
         recheck
     )]
