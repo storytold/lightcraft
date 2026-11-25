@@ -93,7 +93,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// and keep the retry's holdouts out of chroma training.
 /// 25: dark-scene colour fits scale the threshold by luminance (#865) and preserve luminance when clipping negative colour noise.
 /// 26: learned colour matrices must beat identity on held-out colours, and chroma shares the matrix holdouts.
-pub const LOOK_VERSION: u32 = 26;
+/// 27: scale the required held-out colour gain across all proxy sizes.
+pub const LOOK_VERSION: u32 = 27;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

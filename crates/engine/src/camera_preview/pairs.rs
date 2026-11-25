@@ -322,9 +322,10 @@ fn colour_beats_identity(pairs: &[Pair], matrix: Mat3) -> bool {
             fitted += (corrected[c] - target[c]).powi(2);
         }
     }
-    // Noisy small holdouts need a larger gain to justify a learned transform.
+    // Noise can give a fitted matrix a small lead even on a large holdout. Let the
+    // required gain fall with sample count across the full range of proxy sizes.
     let n = pairs.len().div_ceil(3);
-    let margin = if n < 1000 { 1.0 - 4.0 / (n.max(1) as f64).sqrt() } else { 0.995 };
+    let margin = 1.0 - 4.0 / (n.max(1) as f64).sqrt();
     if lightcraft_pipeline::profiling() {
         eprintln!("[profile] camera colour: held-out chromaticity error {identity:.5} -> {fitted:.5}, needs ratio below {margin:.3}");
     }

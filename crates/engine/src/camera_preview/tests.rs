@@ -2445,10 +2445,11 @@ fn jpeg_noise_in_a_neutral_dark_scene_teaches_no_colour_matrix() {
 }
 
 /// JPEG noise can make a dull scene qualify for a matrix even when its clean colour is unchanged.
+/// Seeds 285 and 778 passed the old fixed margin with a 96×64 proxy.
 #[test]
 fn noisy_identity_camera_colour_is_no_worse_than_identity_with_the_same_tone() {
     for (width, height, noise) in [(96, 64, 0.015), (20, 20, 0.032)] {
-        for mut seed in [4u64, 71, 165] {
+        for mut seed in [4u64, 71, 165, 285, 778] {
             let case = seed;
             let mut next = || {
                 seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
