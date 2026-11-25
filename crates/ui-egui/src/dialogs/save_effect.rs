@@ -83,7 +83,7 @@ pub(super) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: b
         })
         .show(root, |ui, _| {
             // the dialog is as wide as its body asks: a fixed width, not the whole window
-            ui.set_width(425.0);
+            ui.set_width(crate::panels::mask_effects::SAVE_BODY_WIDTH);
             ui.spacing_mut().item_spacing.y = 8.0;
             if let Dialog::SaveEffect { name, group, fields, amount, brush } = &mut dialog {
                 let submitted = crate::panels::mask_effects::save_body(app, ui, name, group, fields, amount, brush);

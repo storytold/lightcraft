@@ -491,6 +491,9 @@ fn save_naming_field(ui: &mut egui::Ui, widget: &str, value: &mut String, hint: 
     eligible && shown.submitted
 }
 
+/// How wide the New Effect Preset dialog's body is.
+pub const SAVE_BODY_WIDTH: f32 = 425.0;
+
 /// How wide the button that picks an existing group is.
 const PICKER_WIDTH: f32 = 28.0;
 
@@ -617,6 +620,9 @@ pub fn save_body(
 
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     Stack::new().id_salt("save-effect-include-block").show(ui, |ui, cx| {
+        // The Stack is measured on its own, with no width given: its two columns would share an endless one and the
+        // dialog would be as wide as the window.
+        ui.set_width(SAVE_BODY_WIDTH);
         // This body also runs in the framework's invisible measuring and sizing passes: only the real one publishes or acts.
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
         ui.columns(2, |cols| {
