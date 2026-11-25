@@ -28,6 +28,7 @@ mod carried_right_click;
 mod carried_text_field_menu;
 mod compare;
 mod copy_paste_dialogs;
+mod covered_escape;
 mod crop_rotate;
 mod crop_tool;
 mod curve;
