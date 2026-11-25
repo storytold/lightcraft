@@ -127,23 +127,16 @@ impl Fixture {
         self.rects.iter().any(|(id, _)| id == name)
     }
     fn menu_open(&self, face: &str) -> bool {
-        if self.native {
-            egui::Popup::is_any_open(&self.ctx)
-        } else {
-            let owner = self.hits.iter().find(|(id, _)| id == face).expect("production face").1.id;
-            self.ctx.data(|data| data.get_temp::<(u64, bool)>(owner.with("menu-open"))).expect("production menu binding").1
-        }
+        // (both runs show the framework menu since the port, no egui popup: its production binding says whether it is
+        // open)
+        let owner = self.hits.iter().find(|(id, _)| id == face).expect("production face").1.id;
+        self.ctx.data(|data| data.get_temp::<(u64, bool)>(owner.with("menu-open"))).expect("production menu binding").1
     }
     fn assert_menu_closed(&self, face: &str) {
         assert!(!self.menu_open(face), "Escape closes actual menu state (native={})", self.native);
-        if !self.native {
-            // Presence is not liveness: the SDK keeps a closed menu body for its exit fade.
-            // any_open excludes exiting layers, unlike locator publication or overlay::is_open.
-            assert!(
-                !crate::dialogs::popup_open(&self.ctx),
-                "no active SDK popup remains above the dialog after cancellation"
-            );
-        }
+        // Presence is not liveness: the SDK keeps a closed menu body for its exit fade.
+        // any_open excludes exiting layers, unlike locator publication or overlay::is_open.
+        assert!(!crate::dialogs::popup_open(&self.ctx), "no active SDK popup remains above the dialog after cancellation");
         assert_eq!(self.app.ui.dialog, Some(crate::state::Dialog::ViewOptions), "child cancellation must not close parent");
     }
     fn click(&mut self, name: &str) {

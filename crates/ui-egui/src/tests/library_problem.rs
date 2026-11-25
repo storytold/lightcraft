@@ -634,6 +634,8 @@ fn closing_the_new_library_dialog_shields_the_launch_lists_first_return_frame() 
     let press = |pressed| egui::Event::PointerButton { pos: cancel, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     h.events.extend([egui::Event::PointerMoved(cancel), press(true), press(false)]);
     h.step();
+    // (the framework holds what follows a press in one batch for the next frame: the release lands then)
+    h.step();
     assert!(h.app.ui.dialog.is_none(), "Cancel closed the New Library name dialog");
     // The dialog-closing frame drew the list but must not settle it.
     let _ = pass_log(&mut h);
@@ -677,6 +679,8 @@ fn the_banner_reopen_shields_the_first_input_frame() {
         .expect("the banner button is on screen");
     let press = |pressed| egui::Event::PointerButton { pos: reopen, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     h.events.extend([egui::Event::PointerMoved(reopen), press(true), press(false)]);
+    h.step();
+    // (the framework holds what follows a press in one batch for the next frame: the release lands then)
     h.step();
     assert!(h.app.library_problem.as_ref().is_some_and(|p| !p.dismissed), "the banner reopened the window");
     assert!(has(&h, "button:libraryRetry"));
