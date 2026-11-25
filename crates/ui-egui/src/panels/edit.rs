@@ -447,6 +447,28 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                         // not decoded yet: keep the count's line laid out so the panels under it do not jump (#1272)
                         ui.label(egui::RichText::new(" ").size(11.0));
                     }
+                    // how sensor-clipped highlights are rebuilt (`sensor.highlightMode`): ours or one of darktable's
+                    let modes = ["Rebuild", "Inpaint Opposed", "Guided Laplacian"];
+                    let current = usize::from(d.sensor.highlight_mode());
+                    ui.horizontal(|ui| {
+                        ui.label(crate::i18n::tr("Highlights"));
+                        let name = |i: usize| crate::i18n::tr(modes.get(i).copied().unwrap_or("Rebuild"));
+                        let r = crate::widgets::combo_box("sensor.highlightMode").selected_text(name(current)).show_ui(ui, |ui| {
+                            let mut chosen = None;
+                            for i in 0..modes.len() {
+                                if ui.selectable_label(i == current, name(i)).clicked() && i != current {
+                                    chosen = Some(i);
+                                }
+                            }
+                            chosen
+                        });
+                        crate::widgets::register(ui.ctx(), "combo:sensor.highlightMode", r.response.rect);
+                        let tip = "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods";
+                        r.response.on_hover_text(crate::i18n::tr(tip));
+                        if let Some(i) = r.inner.flatten() {
+                            let _ = app.run("develop.set", json!({"control": "sensor.highlightMode", "value": i as f64}));
+                        }
+                    });
                 },
             );
         }

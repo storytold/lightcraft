@@ -33,6 +33,13 @@ LibRaw's src/decoders/sony_arw6.cpp (commit 4d9bd21a, Copyright 2026 LibRaw LLC 
 LGPL 2.1 or CDDL 1.0) was read as a reference for accepting the ARW6 12-bit mode in
 crates/raw/src/vendor/arw.rs; no code from it is included.
 
+crates/raw/src/highlight/opposed.rs and crates/raw/src/highlight/laplacian.rs (the Inpaint Opposed and
+Guided Laplacian highlight reconstruction methods) are translated from darktable 4.8.0's
+src/iop/hlreconstruct/opposed.c and laplacian.c and src/common/bspline.h
+(https://github.com/darktable-org/darktable), Copyright (C) 2010-2024 darktable developers, licensed under
+the GNU General Public License v3 or later (LICENSE-GPL-3.0.txt); those modules are used under that licence.
+Each module lists its changes from the source.
+
 The gain map AVIF file layout in crates/codecs/src/avif_gainmap.rs (the `tmap` tone map derived
 item, its `dimg` and `altr` references and the `tmap` brand) was written with libavif v1.2.1
 (https://aomedia.googlesource.com/libavif), Copyright (c) the libavif authors, BSD-2-Clause, read

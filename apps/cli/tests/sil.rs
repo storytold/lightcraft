@@ -604,7 +604,7 @@ fn sil_workflow() {
     let r = s.request("ui.set", json!({"view": "detail"}));
     s.check(r["ok"] == true, "switching to Detail failed", &r.to_string());
     s.ok("develop.auto", json!({}));
-    s.ok("develop.set", json!({"values": {"light.exposure": 0.7, "light.contrast": 20, "color.vibrance": 15}}));
+    s.ok("develop.set", json!({"values": {"light.exposure": 0.7, "light.contrast": 20, "color.vibrance": 15, "sensor.highlightMode": 1}}));
     s.ok("develop.wbPick", json!({"x": 0.5, "y": 0.5}));
     s.ok("crop.set", json!({"rect": [0.1, 0.1, 0.9, 0.85], "angle": 2.0}));
     s.ok("mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.3, "ry": 0.2}));
@@ -769,10 +769,12 @@ fn sil_raw_workflow() {
     let (dir, n) = shoot(&s.root, 0, 3);
     s.start();
     let ids = import(&mut s, &dir, n);
-    for &id in &ids {
+    for (i, &id) in ids.iter().enumerate() {
         s.ok("library.select", json!({"ids": [id], "active": id}));
         s.ok("develop.auto", json!({}));
         s.ok("develop.set", json!({"values": {"light.shadows": 30, "detail.nrLuminance": 20}}));
+        // each highlight reconstruction method (plan 7.2) through preview, export, XMP and reopen
+        s.ok("develop.set", json!({"control": "sensor.highlightMode", "value": i % 3}));
         s.ok("develop.wb", json!({"mode": "custom", "temp": 5200, "tint": 5}));
         s.undo_redo_roundtrip();
     }
