@@ -42,9 +42,6 @@ use crate::LightcraftApp;
 use crate::state::ViewMode;
 use crate::theme::Tokens;
 
-/// Number of screen pixels per tile at standard resolution.
-const TILE_SIZE: f32 = 256.0;
-
 /// Height of the map's bottom toolbar (Map Style, zoom, Lock Markers, credit).
 const TOOLBAR_H: f32 = 36.0;
 
@@ -1297,6 +1294,13 @@ fn render_loupe_popover(app: &mut LightcraftApp, ui: &mut egui::Ui, pin_pos: Pos
     });
 }
 
+/// `center` moved by `delta` screen pixels at `zoom` (longitude wraps, latitude stops at the map's edge).
+fn moved_by(center: LatLon, delta: egui::Vec2, zoom: f64) -> LatLon {
+    use lightcraft_engine::map::mercator::{from_world, to_world};
+    let w = to_world(center, zoom);
+    from_world(Point::new(w.x + f64::from(delta.x), w.y + f64::from(delta.y)), zoom)
+}
+
 fn render_left_navigator(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
@@ -1333,27 +1337,12 @@ fn render_left_navigator(
         let nav_zoom = map_ui.navigator_zoom.clamp(1.0, nav_max);
 
         if nav_resp.dragged() {
-            let delta = nav_resp.drag_delta();
-            let delta_tx = delta.x as f64 / TILE_SIZE as f64;
-            let delta_ty = delta.y as f64 / TILE_SIZE as f64;
-            let n = 2.0_f64.powf(nav_zoom.clamp(0.0, 24.0));
-            let (cur_tx, cur_ty) = center.to_tile_coords(nav_zoom);
-            let new_tx = (cur_tx + delta_tx).rem_euclid(n);
-            let new_ty = (cur_ty + delta_ty).clamp(0.0, n);
-            *center = LatLon::from_tile_coords(new_tx, new_ty, nav_zoom);
+            *center = moved_by(*center, nav_resp.drag_delta(), nav_zoom);
             ui.ctx().request_repaint();
         } else if nav_resp.clicked()
             && let Some(pos) = nav_resp.interact_pointer_pos()
         {
-            let offset_x = pos.x - mini_rect.center().x;
-            let offset_y = pos.y - mini_rect.center().y;
-            let delta_tx = offset_x as f64 / TILE_SIZE as f64;
-            let delta_ty = offset_y as f64 / TILE_SIZE as f64;
-            let n = 2.0_f64.powf(nav_zoom.clamp(0.0, 24.0));
-            let (cur_tx, cur_ty) = center.to_tile_coords(nav_zoom);
-            let new_tx = (cur_tx + delta_tx).rem_euclid(n);
-            let new_ty = (cur_ty + delta_ty).clamp(0.0, n);
-            *center = LatLon::from_tile_coords(new_tx, new_ty, nav_zoom);
+            *center = moved_by(*center, pos - mini_rect.center(), nav_zoom);
             ui.ctx().request_repaint();
         }
 
@@ -1396,6 +1385,20 @@ mod tests {
     use super::*;
     use crate::Services;
     use crate::headless::HeadlessView;
+
+    /// The Navigator moves its centre a tile's worth of pixels per tile: at zoom 1 the world is two
+    /// tiles wide, so half a tile east is a quarter turn; it wraps across 180° and stops at the poles.
+    #[test]
+    fn navigator_moves_the_centre_by_screen_pixels() {
+        let at = |lat, lon| LatLon { lat, lon };
+        let east = moved_by(at(0.0, 0.0), vec2(128.0, 0.0), 1.0);
+        assert!((east.lon - 90.0).abs() < 1e-9 && east.lat.abs() < 1e-9, "{east:?}");
+        // zoom 0: one 256-pixel tile is the whole 360°, so 20° east of 170° is −170°
+        let across = moved_by(at(0.0, 170.0), vec2(256.0 / 18.0, 0.0), 0.0);
+        assert!((across.lon + 170.0).abs() < 1e-6, "{across:?}");
+        let north = moved_by(at(80.0, 0.0), vec2(0.0, -10_000.0), 2.0);
+        assert!(north.lat > 85.0 && north.lat <= 85.06, "{north:?}");
+    }
 
     #[test]
     fn headless_map_view_renders_cleanly() {
