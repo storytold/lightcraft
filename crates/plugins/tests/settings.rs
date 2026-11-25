@@ -4,7 +4,9 @@
 
 use std::path::PathBuf;
 
-use lcc_plugins::{Begun, Error, Limits, Manager, NoHost, Prepared};
+#[cfg(unix)]
+use lcc_plugins::Error;
+use lcc_plugins::{Begun, Limits, Manager, NoHost, Prepared};
 use serde_json::{Value, json};
 
 /// How a test module answers `lcc_handle`.
