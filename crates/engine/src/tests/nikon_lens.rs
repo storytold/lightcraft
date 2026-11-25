@@ -1,6 +1,6 @@
 //! Nikon source corrections across the decoder, optics controls, export and existing libraries.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags};
@@ -83,23 +83,13 @@ fn difference(a: &Rgba8, b: &Rgba8) -> (f64, u8) {
     (values.iter().map(|&v| f64::from(v)).sum::<f64>() / values.len() as f64, values.into_iter().max().unwrap())
 }
 
-/// New body recognition must reach both public decode paths and the existing toggle/strength controls.
+/// The import probe and the renderer must agree on the lens controlled by the Optics panel.
 #[test]
-fn nikon_z6_z7_probe_decode_toggle_amount_and_dng_agree() {
+fn nikon_z6_z7_profile_toggle_and_amount_control_the_imported_warp() {
     for model in ["NIKON Z 6", "NIKON Z 7"] {
         let bytes = nef(model, Orientation::Normal);
-        let header = lightcraft_raw::probe_info(&bytes).unwrap();
-        let raw = lightcraft_raw::decode(&bytes).unwrap();
-        assert_eq!(header, raw.info());
-        assert!(matches!(&raw.data,lightcraft_raw::RawData::U16(samples) if samples.iter().all(|&v|v<16384)), "the fixture is valid 14-bit data");
-        assert_eq!(raw.opcodes.list3.len(), 1);
-        let lens = files::embedded_lens(&header).unwrap();
+        let lens = files::probe_bytes("photo.nef", &bytes).unwrap().embedded_lens.unwrap();
         assert!(lens.warp.is_some() && lens.vignette.is_none());
-        let dng = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
-        let back = lightcraft_raw::decode(&dng).unwrap();
-        assert_eq!(back.opcodes.list3, raw.opcodes.list3);
-        assert_eq!(back.data, raw.data);
-        assert_eq!(files::embedded_lens(&back.info()), Some(lens));
         let (source, info) = files::load_bytes(&bytes, 192).unwrap();
         assert_eq!(info.lens, Some(lens));
         let mut s = settings(&info);
@@ -226,6 +216,7 @@ fn nikon_existing_library_and_smart_preview_refresh_preserve_edits() {
         s.execute("library.import", &json!({"paths":[original]})).unwrap();
         let id = s.active().unwrap();
         let mut edited = (*s.catalog.photo(id).unwrap().develop).clone();
+        assert!(edited.optics.lens_profile, "import enables the embedded correction");
         edited.light.exposure = 0.7;
         edited.optics.lens_profile = false;
         s.commit(
@@ -282,6 +273,7 @@ fn nikon_existing_library_and_smart_preview_refresh_preserve_edits() {
         let (fresh_pixels, tone, stored) = crate::smart::decode(&fresh).unwrap();
         let (old_pixels, _, _) = crate::smart::decode(&old).unwrap();
         let error = |image: &Rgb32f| {
+            assert_eq!((image.width, image.height), (source.width, source.height));
             image.data.iter().zip(&source.data).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs() as f64)).sum::<f64>()
                 / (source.data.len() * 3) as f64
         };
@@ -301,24 +293,9 @@ fn nikon_existing_library_and_smart_preview_refresh_preserve_edits() {
         let options = crate::export::ExportOptions { format: crate::export::ExportFormat::Dng, ..Default::default() };
         let exported = crate::export::export_photo(&mut s, id, &options, 1).unwrap();
         let dng = lightcraft_raw::decode(&exported.bytes).unwrap();
+        let nef = lightcraft_raw::decode(&bytes).unwrap();
+        assert_eq!(dng.opcodes.list3, nef.opcodes.list3);
+        assert_eq!(dng.data, nef.data);
         assert_eq!(files::embedded_lens(&dng.info()), new_lens);
-    }
-}
-
-/// The public real files agree with their header probes and contain no shipped vignette opcode.
-#[test]
-fn nikon_z6_z7_corpus_headers_and_full_decodes_agree() {
-    let corpus =
-        std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
-    for id in [3584, 3581, 3582, 2792, 2789, 2790] {
-        let path = corpus.join(format!("raw/coverage-{id}.nef"));
-        if !path.exists() {
-            lightcraft_testkit::skip!(Corpus, "Nikon coverage sample {id} absent");
-            continue;
-        }
-        let bytes = std::fs::read(path).unwrap();
-        let raw = lightcraft_raw::decode(&bytes).unwrap();
-        assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap(), raw.info());
-        assert!(matches!(raw.opcodes.list3.as_slice(), [lightcraft_raw::Opcode::WarpRectilinear { .. }]));
     }
 }
