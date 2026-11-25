@@ -217,6 +217,15 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
+    ("photo.removeReflections", "Remove Reflections", None, "Photo"),
+    ("reflection.apply", "Apply Reflection Removal", None, ""),
+    ("reflection.reset", "Reset Reflection Removal", None, ""),
+    ("reflection.toggle", "Reflection Visibility", None, ""),
+    ("reflection.panel", "Reflections", None, ""),
+    ("reflection.install", "Install Reflection Model…", None, ""),
+    ("reflection.instructions", "Model download instructions", None, ""),
+    ("reflection.models", "Reflection Models", None, ""),
+    ("reflection.status", "Reflection Status", None, ""),
     // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened
     // in the other editor, e.g. a raw developer
     ("photo.openOriginalInExternal", "Open Original in Other Editor (RAW, no copy)", None, "Photo>Edit In"),

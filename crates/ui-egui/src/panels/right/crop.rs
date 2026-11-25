@@ -396,6 +396,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
     });
+    crate::reflections::panel(app, ui, id);
 }
 
 /// Tool Overlay: when the spot and mask pins show on the photo (Auto / Always / Selected / Never;
