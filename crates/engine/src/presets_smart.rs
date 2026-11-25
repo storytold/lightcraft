@@ -47,7 +47,7 @@ fn suit_blues() -> Value {
 }
 
 /// The group the adaptive presets are listed under.
-pub const ADAPTIVE_GROUP: &str = "Adaptive";
+pub const ADAPTIVE_GROUP: &str = "Smart Masks: Adaptive";
 
 /// An adaptive preset: a global look (`settings`) plus mask recipes computed on each photo.
 fn adaptive_preset(id: &str, name: &str, mut settings: Value, masks: Value) -> Preset {
@@ -55,7 +55,7 @@ fn adaptive_preset(id: &str, name: &str, mut settings: Value, masks: Value) -> P
     Preset { id: format!("lc.adaptive.{id}"), name: name.into(), group: ADAPTIVE_GROUP.into(), settings, favorite: false, builtin: true }
 }
 
-/// Built-in adaptive presets (group "Adaptive"): a look plus Subject, Sky or Background masks, all
+/// Built-in adaptive presets (group "Smart Masks: Adaptive"): a look plus Subject, Sky or Background masks, all
 /// from the built-in scene masks (no model download), so they work in every build. Our own values.
 pub fn adaptive() -> Vec<Preset> {
     vec![

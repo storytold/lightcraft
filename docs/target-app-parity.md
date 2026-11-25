@@ -102,7 +102,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | Dust detection | ✅ | ✅ |
 | Faces / People | YuNet detection, SFace / AuraFace recognition (opt-in downloads), People view | ✅ (MVP, [faces.md](faces.md)) |
 | Assisted culling | focus, bursts, suggested stars and Pick / Reject flags (issue #489), classical eyes-open / aesthetic scores | 🟡 (classical heuristics only, no learned models) |
-| Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); adaptive presets (mask recipes computed per photo, built-in Adaptive group); no adaptive profiles | 🟡 |
+| Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); adaptive presets (mask recipes computed per photo, built-in Smart Masks: Adaptive group); no adaptive profiles | 🟡 |
 | Natural-language search | — | ⬜ |
 
 **Blocked on a model strategy** (maintainer decision): licensable weights or our own training;
