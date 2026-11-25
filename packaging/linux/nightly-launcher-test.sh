@@ -56,8 +56,12 @@ expect "$(printf 'CONFIG=<<unset>>\nLIBRARY=<<unset>>\n<--launch-profile>\n<nigh
 expect "$(printf 'CONFIG=<<unset>>\nLIBRARY=<<unset>>\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<--version>\n' "$profile")" \
   "$("$tar_dir/lightcraft" -V)"
 
+# The ArtCraft Launcher names its own profile and per-install root: the pair goes to the GUI unchanged.
+expect "$(printf 'CONFIG=<<unset>>\nLIBRARY=<<unset>>\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<-->\n<photo.dng>\n' "$work/launcher profile with space")" \
+  "$("$tar_dir/lightcraft" --launch-profile nightly-v1 --profile-root "$work/launcher profile with space" -- photo.dng)"
+
 # The bytes are the shared template rendered for this app, not a local script.
-expected="23d700d9af5ce79e4a319aa8c2a2930592cd21f1f11eb50c241ef802e83cb4ee"
+expected="dbb1dff470eaff5ecfe1cf03cc43459d4d8796a0e8875fc0bea9563e30deba59"
 actual="$(sha256sum "$HERE/nightly-tar-launch.sh" | cut -d' ' -f1)"
 [[ "$actual" == "$expected" ]] || { printf 'nightly-tar-launch.sh is %s, not the rendered template %s\n' "$actual" "$expected" >&2; exit 1; }
 
