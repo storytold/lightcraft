@@ -287,7 +287,7 @@ fn report_launch_profile_error(error: &str) {
 }
 
 /// Select the immutable launch profile and its data root before any startup service or side effect.
-/// Returns the arguments the app itself parses (`None`: the version query answered and we are done).
+/// Returns the arguments the app itself parses (`None`: a version or help query answered; we are done).
 fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     let nightly_build = build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1;
     // The trusted Launcher protocol is decided before logger/crash/update/prefs access, so a
@@ -296,6 +296,13 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     if nightly_build && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
         use std::io::Write as _;
         let _ = writeln!(std::io::stdout(), "LightCraft {}", build_flavor::version(build_flavor::COMPILED, env!("LIGHTCRAFT_BUILT_VERSION")));
+        return None;
+    }
+    // The AppImage's AppRun and the FHS launchers hand `--help` / `-h` through without a profile, so
+    // the help query is answered here: the profile requirement would refuse it before main prints it.
+    // The help text is the same for both channels, and no profile, log file or dialog is created.
+    if build_flavor::help_query(&argv) {
+        print!("{HELP}");
         return None;
     }
     let early = launch_profile::parse(argv)

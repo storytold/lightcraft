@@ -26,6 +26,12 @@ pub fn version_query(args: &[OsString]) -> bool {
     matches!(args, [arg] if arg == "--version" || arg == "-V")
 }
 
+/// The help query only, in the same exact form: the CLI help is the same for both channels, so the
+/// launch-profile requirement must not pre-empt it.
+pub fn help_query(args: &[OsString]) -> bool {
+    matches!(args, [arg] if arg == "--help" || arg == "-h")
+}
+
 pub fn version(flavor: BuildFlavor, stable: &str) -> String {
     match flavor {
         BuildFlavor::Stable => stable.to_owned(),
@@ -58,6 +64,15 @@ mod tests {
         assert!(require_profile(BuildFlavor::Stable, &Profile::Stable).is_ok());
         assert!(require_profile(BuildFlavor::Stable, &nightly).is_err());
         assert!(require_profile(BuildFlavor::NightlyV1, &nightly).is_ok());
+    }
+
+    #[test]
+    fn the_help_query_is_only_the_bare_flag() {
+        assert!(help_query(&["--help".into()]));
+        assert!(help_query(&["-h".into()]));
+        assert!(!help_query(&[]));
+        assert!(!help_query(&["--help".into(), "--library".into()]));
+        assert!(!help_query(&["--".into(), "--help".into()]));
     }
 
     #[test]
