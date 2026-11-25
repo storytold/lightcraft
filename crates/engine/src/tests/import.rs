@@ -3045,7 +3045,8 @@ fn smart_preview_look_marker_is_read_safely() {
         (format!("{cur} {enc}\n"), false),
         (format!("{cur} {enc} {lens}\n"), true),
         (format!("{cur} {enc} {}\n", lens.wrapping_add(1)), false),
-        (format!(" {} {}\n", cur + 1, enc + 1), true),
+        (format!(" {} {}\n", cur + 1, enc + 1), false),
+        (format!(" {} {} {lens}\n", cur + 1, enc + 1), true),
     ] {
         std::fs::write(dir.join("look-version"), &text).unwrap();
         assert_eq!(crate::smart::look_checked(&dir), checked, "{text:?}");

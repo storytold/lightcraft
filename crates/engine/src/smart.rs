@@ -549,6 +549,9 @@ pub fn source_stale(path: &Path) -> bool {
 /// proxies were last checked at, plus the loaded lens database identity ([`look_checked`]).
 const LOOK_MARKER: &str = "look-version";
 
+/// A proxy was written with another LensDB after the recorded folder scan.
+const LOOK_PENDING: &str = "look-scan-pending";
+
 /// The marker file in a smart previews folder: the [`SOURCE_VERSION`] its raws' proxies were last checked at.
 const SOURCE_MARKER: &str = "source-version";
 
@@ -579,17 +582,16 @@ fn mark(dir: &Path, name: &str, versions: &[u64], lens_key: Option<u64>) -> Resu
 }
 
 /// Whether the smart previews folder `dir` has been checked for out-of-date proxies at this build's
-/// camera-look fit version and encode version (or newer ones). A missing or unreadable marker counts
-/// as not, as does one without the loaded lens database identity. Changes to that identity force
-/// another scan, so unchanged fit/encode versions cannot hide stale fitted previews.
+/// camera-look fit version and encode version (or newer ones), and at the loaded lens database
+/// identity. A proxy written with a different database after the scan also forces another scan.
 pub fn look_checked(dir: &Path) -> bool {
-    marker_is_current(&marker(dir, LOOK_MARKER), crate::lens_profiles::cache_key())
+    !dir.join(LOOK_PENDING).try_exists().unwrap_or(true) && marker_is_current(&marker(dir, LOOK_MARKER), crate::lens_profiles::cache_key())
 }
 
 fn marker_is_current(versions: &[u64], lens_key: u64) -> bool {
     let [look, enc, ..] = *versions else { return false };
     let current_fit = u64::from(crate::camera_preview::LOOK_VERSION);
-    look >= current_fit && enc >= ENCODE_VERSION && (look > current_fit || enc > ENCODE_VERSION || versions.get(2) == Some(&lens_key))
+    look >= current_fit && enc >= ENCODE_VERSION && versions.get(2) == Some(&lens_key)
 }
 
 /// Whether the smart previews folder `dir` has been checked for raws' proxies from an older raw decode at this
@@ -606,7 +608,27 @@ pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
 
 /// Stamp the identity captured before scanning, so a later database is never marked checked.
 pub(crate) fn mark_look_checked_with_lens_key(dir: &Path, lens_key: u64) -> Result<(), String> {
-    mark(dir, LOOK_MARKER, &[u64::from(crate::camera_preview::LOOK_VERSION), ENCODE_VERSION], Some(lens_key))
+    mark(dir, LOOK_MARKER, &[u64::from(crate::camera_preview::LOOK_VERSION), ENCODE_VERSION], Some(lens_key))?;
+    if marker_is_current(&marker(dir, LOOK_MARKER), lens_key) {
+        let pending = dir.join(LOOK_PENDING);
+        match std::fs::remove_file(&pending) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", pending.display())),
+        }
+    }
+    Ok(())
+}
+
+/// Invalidate an earlier LensDB scan before replacing a proxy, under the preview writer's lock.
+/// Keep the recorded versions and identity for newer builds. Only a stable scan can clear the flag.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn invalidate_look_check_for_write(dir: &Path, lens_key: u64) -> Result<(), String> {
+    let pending = dir.join(LOOK_PENDING);
+    if !pending.exists() && marker(dir, LOOK_MARKER).get(2) != Some(&lens_key) {
+        lightcraft_catalog::safe_file::write_atomic(&pending, b"").map_err(|e| format!("{}: {e}", pending.display()))?;
+    }
+    Ok(())
 }
 
 /// Record that the raws' proxies in `dir` were checked at this build's [`SOURCE_VERSION`] (a newer one recorded stays).

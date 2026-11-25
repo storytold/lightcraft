@@ -413,8 +413,9 @@ fn lens_database_changes_rebuild_fitted_smart_previews_and_scan_markers() {
         newer[field] = serde_json::json!(newer[field].as_u64().unwrap() + 1);
         assert!(!header_is_stale(&newer, true, 123), "a different database does not downgrade newer proxies");
     }
-    assert!(marker_is_current(&[fit + 1, ENCODE_VERSION, 456], 123));
-    assert!(marker_is_current(&[fit, ENCODE_VERSION + 1, 456], 123));
+    assert!(!marker_is_current(&[fit + 1, ENCODE_VERSION, 456], 123));
+    assert!(marker_is_current(&[fit + 1, ENCODE_VERSION, 456], 456));
+    assert!(!marker_is_current(&[fit, ENCODE_VERSION + 1, 456], 123));
 }
 
 #[test]
@@ -457,7 +458,26 @@ fn explicit_lens_identity_is_kept_by_encoder_and_scan_marker() {
     std::fs::write(dir.join(LOOK_MARKER), format!("{future_fit} {ENCODE_VERSION} 42 99\n")).unwrap();
     mark_look_checked_with_lens_key(&dir, captured).unwrap();
     assert_eq!(marker(&dir, LOOK_MARKER), [future_fit, ENCODE_VERSION, 42, 99]);
+    assert!(!look_checked(&dir), "a newer version cannot cover the current lens identity");
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_scan_cannot_clear_pending_behind_a_newer_marker_for_another_database() {
+    let dir = temp("lens-marker-pending");
+    let fit = u64::from(crate::camera_preview::LOOK_VERSION);
+    let key = crate::lens_profiles::cache_key();
+    let other_key = key.wrapping_add(1);
+    std::fs::write(dir.join(LOOK_MARKER), format!("{} {ENCODE_VERSION} {key} 71", fit + 1)).unwrap();
     assert!(look_checked(&dir));
 
+    invalidate_look_check_for_write(&dir, other_key).unwrap();
+    mark_look_checked_with_lens_key(&dir, other_key).unwrap();
+    assert_eq!(marker(&dir, LOOK_MARKER), [fit + 1, ENCODE_VERSION, key, 71]);
+    assert!(!look_checked(&dir), "newer provenance for this key cannot cover a later write under a different key");
+
+    mark_look_checked_with_lens_key(&dir, key).unwrap();
+    assert!(look_checked(&dir), "a stable scan with the recorded key clears pending");
     std::fs::remove_dir_all(dir).unwrap();
 }
