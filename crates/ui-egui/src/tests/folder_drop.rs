@@ -108,6 +108,10 @@ fn hint(h: &Headless) -> Option<String> {
 /// Click a widget the way a person does (press and release on it).
 fn click(h: &mut Headless, id: &str) {
     let at = widget(h, id).unwrap_or_else(|| panic!("no {id}")).center();
+    // the pointer arrives a frame before it presses, as a person's does: the framework gives a press to the
+    // part the pointer was over in the pass before
+    h.app.synthetic.push(egui::Event::PointerMoved(at));
+    h.step();
     press(h, at);
     release(h, at);
 }
@@ -208,6 +212,8 @@ fn photos_already_in_the_folder_stay_put() {
     let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
     // open the folder holding both
     let toggle = widget(&h, &format!("libraryFolderToggle:{}", folder_key(&root))).unwrap();
+    h.app.synthetic.push(egui::Event::PointerMoved(toggle.center()));
+    h.step();
     h.app.synthetic.push(egui::Event::PointerMoved(toggle.center()));
     h.app.synthetic.push(egui::Event::PointerButton {
         pos: toggle.center(),

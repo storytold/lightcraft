@@ -381,7 +381,9 @@ fn component_parent_stale_popup_release_cannot_retarget_switched_or_deleted_rows
             unchanged(&f, "retirement frame");
             f.pointer(at, PointerButton::Primary, false);
             unchanged(&f, "old pointer release");
+            eprintln!("DBGMC {change} {opener:?} before Enter: open={} obs={:?}", f.has(&f.action(1, "invert")), f.ctx.data(|d| d.get_temp::<String>(egui::Id::unique(("mask-component-opener-diagnostic", f.target, 1usize)))).map(|s| s[..60.min(s.len())].to_owned()));
             f.key(Key::Enter);
+            eprintln!("DBGMC {change} {opener:?} after Enter: open={}", f.has(&f.action(1, "invert")));
             unchanged(&f, "following Enter");
             // Keep the original combined release-plus-Enter regression as well.
             assert_eq!(f.snapshot(), before, "an old captured menu release cannot act after {change}");
@@ -389,6 +391,7 @@ fn component_parent_stale_popup_release_cannot_retarget_switched_or_deleted_rows
             // Invalidation must not leave the row slot permanently inert. Select a real live
             // target through commands and deliberately reopen through the SAME real opener.
             f.key(Key::Escape);
+            eprintln!("DBGMC {change} {opener:?} after Escape: open={}", f.has(&f.action(1, "invert")));
             if f.app.session.active() != Some(f.photos[0]) {
                 f.app.run("library.select", json!({"ids":[f.photos[0].0,f.photos[1].0],"active":f.photos[0].0})).unwrap();
             }
@@ -396,6 +399,7 @@ fn component_parent_stale_popup_release_cannot_retarget_switched_or_deleted_rows
             f.app.run("mask.select", json!({"id":fresh_mask})).unwrap();
             f.target = fresh_mask; // Only the fixture's locator metadata, never the model under test.
             f.frame(vec![]);
+            eprintln!("DBGMC {change} {opener:?} after reselect: open={} obs={:?}", f.has(&f.action(1, "invert")), f.ctx.data(|d| d.get_temp::<String>(egui::Id::unique(("mask-component-opener-diagnostic", f.target, 1usize)))).map(|s| s[s.len().saturating_sub(120)..].to_owned()));
             let mut expected = f.masks();
             let row = expected.iter_mut().find(|m| m.id == fresh_mask).unwrap();
             let k = row.components.len().saturating_sub(1).min(1);
