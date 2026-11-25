@@ -19,6 +19,18 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("people", Icon::Subject, ViewMode::People, "People"),
 ];
 
+/// The bottom bar's zoom dropdown, up to the detail view's 1600 % ceiling (`state::MAX_ZOOM`)
+const ZOOM_MENU: &[(&str, Zoom)] = &[
+    ("Fit", Zoom::Fit),
+    ("Fill", Zoom::Fill),
+    ("50%", Zoom::Percent(50.0)),
+    ("100%", Zoom::Percent(100.0)),
+    ("200%", Zoom::Percent(200.0)),
+    ("400%", Zoom::Percent(400.0)),
+    ("800%", Zoom::Percent(800.0)),
+    ("1600%", Zoom::Percent(1600.0)),
+];
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("bottom_bar")
@@ -215,14 +227,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         };
         let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label);
         egui::Popup::menu(&zr).show(|ui| {
-            for (label, z) in [
-                ("Fit", Zoom::Fit),
-                ("Fill", Zoom::Fill),
-                ("50%", Zoom::Percent(50.0)),
-                ("100%", Zoom::Percent(100.0)),
-                ("200%", Zoom::Percent(200.0)),
-                ("400%", Zoom::Percent(400.0)),
-            ] {
+            for &(label, z) in ZOOM_MENU {
                 if ui.selectable_label(app.ui.zoom == z, crate::i18n::tr(label)).clicked() {
                     app.ui.zoom = z;
                     app.ui.pan = (0.5, 0.5);
@@ -515,6 +520,18 @@ mod tests {
     use super::*;
     use crate::Services;
     use crate::headless::HeadlessView;
+
+    #[test]
+    fn zoom_menu_reaches_the_zoom_ceiling() {
+        let percents: Vec<f32> = ZOOM_MENU.iter().filter_map(|(_, z)| if let Zoom::Percent(p) = z { Some(*p) } else { None }).collect();
+        assert_eq!(percents, [50.0, 100.0, 200.0, 400.0, 800.0, 1600.0]);
+        assert_eq!(percents.last().copied(), Some(crate::state::MAX_ZOOM), "the dropdown tops out at the zoom ceiling");
+        for (label, z) in ZOOM_MENU {
+            if let Zoom::Percent(p) = z {
+                assert_eq!(*label, format!("{p:.0}%"), "the entry's label matches the bar's zoom readout");
+            }
+        }
+    }
 
     #[test]
     fn rating_and_flag_buttons_keep_padding_inside_the_pill() {
