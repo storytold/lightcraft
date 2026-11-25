@@ -8,7 +8,7 @@ ajossa voi käyttää `LIGHTCRAFT_LANGUAGE=fi`.
 
 Luettelot `crates/ui-egui/locales/fi.json` ja `fi-formats.json` on laadittu tekoälyavusteisesti
 (Claude) englanninkielisten lähdemerkkijonojen merkityksestä, kokonaisina fraaseina. Avainlista
-on kaikkien muiden luetteloiden yhdiste. Suomenkielinen äidinkielinen puhuja (@roopeg) tarkistaa
+on kaikkien muiden luetteloiden yhdiste. Suomenkielinen äidinkielinen puhuja (@roopeg) on tarkistanut
 käännöksen; ammattikääntäjä ei ole sitä käynyt läpi.
 
 ## Käytännöt ja laajuus
