@@ -459,7 +459,65 @@ fn explicit_lens_identity_is_kept_by_encoder_and_scan_marker() {
     mark_look_checked_with_lens_key(&dir, captured).unwrap();
     assert_eq!(marker(&dir, LOOK_MARKER), [future_fit, ENCODE_VERSION, 42, 99]);
     assert!(!look_checked(&dir), "a newer version cannot cover the current lens identity");
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
+/// The original bytes stay the same when a decoder's interpretation changes.
+#[test]
+fn raw_proxy_names_distinguish_sensor_and_preview_pixels() {
+    use lightcraft_catalog::{PhotoId, Source};
+    for format in ["DNG", "NEF", "ORF"] {
+        let mut sensor = Photo::new(PhotoId(1), Source::File { path: "photo.raw".into() }, "photo.raw", format, 8, 8, "");
+        sensor.kind = lightcraft_catalog::MediaKind::Raw;
+        let mut preview = sensor.clone();
+        preview.preview_only = Some("old decoder".into());
+        assert_eq!(crate::media::content_key(&sensor), crate::media::content_key(&preview));
+        assert_ne!(file_name(&sensor), file_name(&preview), "{format}: the two interpretations must never overwrite each other");
+    }
+}
+
+#[test]
+fn legacy_raw_proxies_require_matching_recorded_interpretation() {
+    use lightcraft_catalog::{PhotoId, Source};
+    for expected in [false, true] {
+        for recorded in [None, Some(false), Some(true)] {
+            let dir = temp(&format!("raw-legacy-{expected}-{recorded:?}"));
+            let mut photo =
+                Photo::new(PhotoId(1), Source::File { path: dir.join("offline.dng").to_string_lossy().into() }, "offline.dng", "DNG", 8, 8, "");
+            photo.kind = lightcraft_catalog::MediaKind::Raw;
+            photo.preview_only = (!expected).then(|| "old decoder".into());
+            let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+            let old = dir.join(format!("{:032x}.lcsp", hash.0));
+            let info = recorded.map(|raw| SourceInfo { raw, ..Default::default() });
+            let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), info.as_ref()).unwrap();
+            std::fs::write(&old, &bytes).unwrap();
+            assert!(file_path(&dir, &photo).exists(), "retention still sees the legacy file");
+            let mut media = crate::media::MediaCache::default();
+            media.smart_dir = Some(dir.clone());
+            let source = media.source_ref(&photo, crate::media::SourceLevel::Preview).load_source();
+            assert_eq!(source.is_ok(), recorded == Some(expected), "expected={expected}, recorded={recorded:?}");
+            assert_eq!(std::fs::read(&old).unwrap(), bytes, "incompatible legacy data stays on disk");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn ordinary_jpeg_legacy_proxy_without_facts_remains_usable() {
+    use lightcraft_catalog::{PhotoId, Source};
+    let dir = temp("jpeg-legacy-no-facts");
+    let photo = Photo::new(PhotoId(1), Source::File { path: dir.join("offline.jpg").to_string_lossy().into() }, "offline.jpg", "JPEG", 8, 8, "");
+    let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+    let old = dir.join(format!("{:032x}.lcsp", hash.0));
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), None).unwrap();
+    std::fs::write(&old, &bytes).unwrap();
+    assert_eq!(file_name(&photo), old.file_name().unwrap().to_string_lossy());
+    assert_eq!(file_path(&dir, &photo), old);
+    let mut media = crate::media::MediaCache::default();
+    media.smart_dir = Some(dir.clone());
+    let source = media.source_ref(&photo, crate::media::SourceLevel::Preview).load_source().unwrap();
+    assert!(source.from_proxy);
+    assert!(source.info.is_none());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -479,5 +537,60 @@ fn a_scan_cannot_clear_pending_behind_a_newer_marker_for_another_database() {
 
     mark_look_checked_with_lens_key(&dir, key).unwrap();
     assert!(look_checked(&dir), "a stable scan with the recorded key clears pending");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_hostile_facts_length_cannot_establish_raw_compatibility() {
+    use lightcraft_catalog::{MediaKind, PhotoId, Source};
+    let dir = temp("facts-length");
+    let mut photo = Photo::new(PhotoId(1), Source::File { path: dir.join("missing.dng").to_string_lossy().into() }, "missing.dng", "DNG", 8, 8, "");
+    photo.kind = MediaKind::Raw;
+    let path = sharded_file_path(&dir, &photo);
+    let mut bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), Some(&SourceInfo { raw: true, ..Default::default() })).unwrap();
+    let end = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let header: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..end]).unwrap();
+    let tail = bytes.len() - header["tail"].as_u64().unwrap() as usize;
+    bytes[tail..tail + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(is_valid(&path), "the JPEG framing remains complete");
+    assert!(decode(&bytes).is_err());
+    assert!(PreviewPath::new(&dir, &photo).load_with_path().is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn followup_incompatible_dng_proxy_does_not_hide_a_reconnected_original() {
+    reconnected_dng_proxy(false);
+}
+
+#[test]
+fn followup_compatible_dng_proxy_keeps_the_offline_smart_route() {
+    reconnected_dng_proxy(true);
+}
+
+fn reconnected_dng_proxy(compatible: bool) {
+    use lightcraft_catalog::{MediaKind, PhotoId, Source};
+    let dir = temp(&format!("dng-reconnected-compatibility-{compatible}"));
+    let original = dir.join("original.dng");
+    std::fs::write(&original, b"reconnected original").unwrap();
+    let mut photo = Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into() }, "original.dng", "DNG", 8, 8, "");
+    photo.kind = MediaKind::Raw;
+    let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+    let legacy = dir.join(format!("{:032x}.lcsp", hash.0));
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), Some(&SourceInfo { raw: compatible, ..Default::default() })).unwrap();
+    std::fs::write(&legacy, &bytes).unwrap();
+    let mut media = crate::media::MediaCache::default();
+    media.smart_dir = Some(dir.clone());
+    let stale = original.to_string_lossy().to_string();
+    media.availability.set_probe(Arc::new(move |p| p != stale && std::path::Path::new(p).exists()));
+    media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::filled(8, 8, [0.4; 3]), SourceInfo { raw: true, ..Default::default() }))));
+    let route = media.source_ref(&photo, crate::media::SourceLevel::Preview);
+    assert_eq!(matches!(&route, crate::media::SourceRef::Smart { .. }), compatible);
+    let source = route.load_source().unwrap();
+    assert_eq!(source.from_proxy, compatible);
+    assert!(source.info.unwrap().raw);
+    assert_eq!(std::fs::read(&legacy).unwrap(), bytes, "routing does not discard retained data");
     std::fs::remove_dir_all(dir).unwrap();
 }

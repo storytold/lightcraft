@@ -662,9 +662,17 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(state.json())
 }
 
-/// One proxy job: the photo, its path, how to load its original, and the versions that apply.
+/// One proxy job, including its compatible older identity and applicable versions.
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, Ages);
+struct SmartJob {
+    id: lightcraft_catalog::PhotoId,
+    path: crate::smart::PreviewPath,
+    source: Option<crate::media::SourceRef>,
+    ages: Ages,
+    /// Only identities that no unselected photo uses, in either folder layout.
+    discard_paths: Vec<std::path::PathBuf>,
+    availability: crate::smart::Availability,
+}
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
 /// So do preview-only raws: their proxy is the embedded JPEG, read in the colour space the raw
@@ -693,11 +701,9 @@ impl Ages {
         Ages { look: preview_fitted_look(p), source: p.develops_raw() }
     }
     /// Whether the complete proxy at `path` is out of date in a way that applies to this photo: for the look (an older
-    /// fit, or an older encoding, [`crate::smart::is_stale_for`]) or for the raw decode. Never when any of
-    /// its versions comes from a newer build: rewriting it would take that one back (a build with all of them is the
-    /// one to bring it up to date).
+    /// fit, or an older encoding, [`crate::smart::is_stale_for`]) or for the raw decode.
     fn stale(self, path: &std::path::Path) -> bool {
-        !crate::smart::from_newer_build(path) && (crate::smart::is_stale_for(path, self.look) || (self.source && crate::smart::source_stale(path)))
+        crate::smart::is_stale_for(path, self.look) || (self.source && crate::smart::source_stale(path))
     }
 }
 
@@ -765,27 +771,33 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for (id, path, source, ages) in jobs {
+    for SmartJob { id, path, source, ages, discard_paths, availability } in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
         let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let candidates = path.candidates();
         // Read either the new shard or a pre-upgrade flat file, without making new work
         // depend on having the original online.
-        let path = crate::smart::existing_file_path(dir, path);
         if discard {
-            if std::fs::remove_file(&path).is_ok() {
-                n.removed += 1;
+            for path in discard_paths {
+                if std::fs::remove_file(&path).is_ok() {
+                    n.removed += 1;
+                }
             }
         } else {
+            let reusable = path.load_with_path().ok().map(|(path, _)| path);
+            let valid = reusable.is_some();
+            let existing = reusable.unwrap_or_else(|| path.resolve());
+            let expected_raw = path.expected_raw();
+            let path = path.write_path();
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
             // full drive) is (re)built, and so is one written by an older encoding, camera-look
             // fit or raw decode (see `smart::ENCODE_VERSION`, `camera_preview::LOOK_VERSION` and
             // `smart::SOURCE_VERSION`) when its original can be read
-            let damaged = path.exists();
-            let valid = damaged && crate::smart::is_valid(&path);
-            let newer = valid && crate::smart::from_newer_build(&path);
-            let stale = valid && !newer && ages.stale(&path);
+            let damaged = existing.exists();
+            let newer = valid && crate::smart::from_newer_build(&existing);
+            let stale = valid && !newer && ages.stale(&existing);
             if valid && !stale {
                 n.built += 1;
                 if newer {
@@ -801,8 +813,9 @@ fn smart_run(
                 // atomic: a failed write leaves no partial proxy that would pass for a built one;
                 // and synced (issue #134): built so the photo can be edited while its original
                 // is offline, when it is the only copy — the sync is small next to the decode
+                let mut loaded = false;
                 let r = source
-                    .ok_or_else(|| "nothing to build from".to_string())
+                    .ok_or_else(|| "original unavailable; reconnect it and use Build Smart Previews".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
                         if src.from_proxy || src.reduced {
@@ -810,6 +823,14 @@ fn smart_run(
                         }
                         if crate::lens_profiles::generation() != generation {
                             return Err("lens database changed while decoding the smart preview; retry the build".to_string());
+                        }
+                        loaded = true;
+                        // Undo can restore preview-only ORF catalog facts, but not the old
+                        // decoder. Never store new sensor pixels under that JPEG identity.
+                        if let Some(expected) = expected_raw
+                            && src.info.as_ref().is_none_or(|info| info.raw != expected)
+                        {
+                            return Err("source interpretation changed; use Reload from Disk before building smart previews".into());
                         }
                         let info = src.info_or(Default::default());
                         crate::smart::encode_with_lens_key(&src.image, Some(&info), lens_key)
@@ -821,7 +842,7 @@ fn smart_run(
                             std::fs::create_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
                         }
                         crate::smart::invalidate_look_check_for_write(dir, lens_key)?;
-                        lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display()))
+                        lightcraft_catalog::safe_file::write_atomic(path, &b).map_err(|e| format!("{}: {e}", path.display()))
                     });
                 match r {
                     Ok(()) => {
@@ -835,21 +856,23 @@ fn smart_run(
                             }
                         }
                     }
-                    Err(e) if stale => {
+                    Err(e) if valid && stale && !loaded => {
                         // offline (or unreadable) original: the proxy is all there is, keep its look
-                        log::info!("smart preview {} keeps its older look: {e}", path.display());
+                        log::info!("smart preview {} keeps its older look: {e}", existing.display());
                         n.built += 1;
                         n.stale_kept += 1;
                     }
                     Err(e) => {
-                        n.failed.push(json!([id.0, e]));
                         if let Some((st, _)) = state {
                             st.failed.fetch_add(1, Ordering::Relaxed);
+                            *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e.clone());
                         }
+                        n.failed.push(json!([id.0, e]));
                     }
                 }
             }
         }
+        availability.invalidate(&candidates);
         if let Some((st, task)) = state {
             let done = st.done.fetch_add(1, Ordering::Relaxed).saturating_add(1);
             task.progress(done as u64, st.total as u64);
@@ -889,16 +912,29 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         return queued;
     }
     let mut jobs: Vec<SmartJob> = Vec::new();
+    let selected: std::collections::HashSet<_> = ids.iter().copied().collect();
+    let retained: std::collections::HashSet<_> = if discard {
+        s.catalog
+            .photos()
+            .filter(|p| !selected.contains(&p.id) && matches!(p.source, lightcraft_catalog::Source::File { .. }))
+            .flat_map(|p| crate::smart::PreviewPath::new(&dir, p).candidates())
+            .collect()
+    } else {
+        Default::default()
+    };
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
         if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
             continue;
         }
-        let path = crate::smart::sharded_file_path(&dir, &ph);
+        let path = crate::smart::PreviewPath::new(&dir, &ph);
+        // Copies can share the current decoder identity as well as the content-only legacy
+        // identity. Deleting either would strand an unselected photo whose original is offline.
+        let discard_paths = if discard { path.candidates().into_iter().filter(|p| !retained.contains(p)).collect() } else { Vec::new() };
         // Decode the original afresh, with the photo's hot-pixel setting. Cached sources may
         // carry an imported profile or predate the lens database captured by smart_run.
         let source = (!discard).then(|| s.media.origin_ref_of(&ph, crate::media::SourceLevel::Preview.max_edge()));
-        jobs.push((id, path, source, Ages::of(&ph)));
+        jobs.push(SmartJob { id, path, source, ages: Ages::of(&ph), discard_paths, availability: s.media.smart_availability.clone() });
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -954,11 +990,24 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
-    let jobs: Vec<SmartJob> =
-        photos.iter().map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref_of(p, max_edge)), Ages::of(p))).collect();
+    let jobs: Vec<SmartJob> = photos
+        .iter()
+        .map(|p| SmartJob {
+            id: p.id,
+            path: crate::smart::PreviewPath::new(&dir, p),
+            source: Some(s.media.origin_ref_of(p, max_edge)),
+            ages: Ages::of(p),
+            discard_paths: Vec::new(),
+            availability: s.media.smart_availability.clone(),
+        })
+        .collect();
+    let task = s.activity.start("smartPreviews", "Building smart previews", Cancel::No);
     std::thread::Builder::new()
         .name("lc-smart-look".into())
-        .spawn(move || refresh_stale(&dir, jobs))
+        .spawn(move || {
+            let _task = task;
+            refresh_stale(&dir, jobs);
+        })
         .map_err(|e| log::warn!("smart previews: could not start the look refresh: {e}"))
         .ok()
 }
@@ -971,14 +1020,15 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
         let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (crate::lens_profiles::generation(), crate::lens_profiles::cache_key())
     };
-    let stale: Vec<SmartJob> = jobs
-        .into_iter()
-        .map(|(id, path, source, ages)| (id, crate::smart::existing_file_path(dir, path), source, ages))
-        .filter(|(_, path, _, ages)| ages.stale(path))
-        .collect();
+    let stale: Vec<SmartJob> =
+        jobs.into_iter().filter(|job| job.path.needs_refresh(|path| !crate::smart::from_newer_build(path) && job.ages.stale(path))).collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
         match smart_run(dir, true, false, stale, None) {
+            Ok(n) if !n.failed.is_empty() => {
+                log::warn!("smart previews: look refresh needs attention: {:?}", n.failed);
+                return;
+            }
             Ok(n) => log::info!(
                 "smart previews: {} refreshed to the current camera look and raw decode, {} kept (original offline)",
                 n.refreshed,
@@ -1063,12 +1113,22 @@ fn smart_location(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
-/// Whether photo `id` has a smart preview.
-pub fn has_smart_preview(s: &Session, id: lightcraft_catalog::PhotoId) -> bool {
-    match (&s.media.smart_dir, s.catalog.photo(id)) {
-        (Some(dir), Some(p)) => crate::smart::is_valid(&crate::smart::file_path(dir, p)),
-        _ => false,
-    }
+/// Snapshot a status query without filesystem work. The returned job checks both the original
+/// and proxy on its caller's thread, so desktop control requests can run it on a worker.
+pub fn smart_status_job(s: &Session, p: &Value) -> Result<impl FnOnce() -> Value + Send + 'static> {
+    let id = s.targets(p)?.first().copied().ok_or_else(|| bad("photo.smartPreview", "no photo"))?;
+    let photo = s.catalog.photo(id);
+    let original = photo.and_then(|p| match &p.source {
+        lightcraft_catalog::Source::File { path } => Some(path.clone()),
+        _ => None,
+    });
+    let preview = s.media.smart_dir.as_ref().zip(photo).map(|(dir, p)| crate::smart::PreviewPath::new(dir, p));
+    let exists = s.media.availability.probe();
+    Ok(move || {
+        let online = original.as_ref().is_none_or(|path| exists(path));
+        let smart = preview.is_some_and(|path| path.load_with_path().is_ok());
+        json!({"smartPreview": smart, "originalOnline": online})
+    })
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1094,12 +1154,7 @@ pub fn specs() -> Vec<CommandSpec> {
             smart_location
         ),
         cmd!(query "photo.smartPreview", "Smart Preview Status", [], None, "{id?} → {smartPreview: bool, originalOnline: bool}", always, |s, p| {
-            let id = s.targets(p)?.first().copied().ok_or_else(|| bad("photo.smartPreview", "no photo"))?;
-            let online = match s.catalog.photo(id).map(|p| p.source.clone()) {
-                Some(lightcraft_catalog::Source::File { path }) => std::path::Path::new(&path).exists(),
-                _ => true,
-            };
-            Ok(json!({"smartPreview": has_smart_preview(s, id), "originalOnline": online}))
+            Ok(smart_status_job(s, p)?())
         }),
         cmd!(
             "library.buildPreviews",

@@ -1,0 +1,141 @@
+//! Cached, worker-checked proxy availability for UI status. Existence alone cannot establish
+//! that an older ORF proxy contains sensor pixels, or that a JPEG can actually be decoded.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use lightcraft_catalog::Photo;
+
+use crate::availability::{Availability as FileAvailability, Waker};
+
+/// Cached validation is separate for ordinary, preview-derived and sensor-derived proxies.
+#[derive(Clone, Debug)]
+pub struct Availability {
+    any: FileAvailability,
+    preview: FileAvailability,
+    sensor: FileAvailability,
+}
+
+impl Default for Availability {
+    fn default() -> Self {
+        let cache = |expected| {
+            let mut cache = FileAvailability::default();
+            cache.set_probe(Arc::new(move |path| super::load_compatible(Path::new(path), expected).is_ok()));
+            cache
+        };
+        Self { any: cache(None), preview: cache(Some(false)), sensor: cache(Some(true)) }
+    }
+}
+
+impl Availability {
+    /// UI callers only queue requests and read cached answers; workers perform validation.
+    pub fn run_in_background(&mut self, wake: Waker) {
+        for cache in [&mut self.any, &mut self.preview, &mut self.sensor] {
+            cache.run_in_background(wake.clone());
+        }
+    }
+
+    pub fn is_background(&self) -> bool {
+        self.any.is_background() && self.preview.is_background() && self.sensor.is_background()
+    }
+
+    /// Writes and explicit discards invalidate every interpretation, including in-flight probes.
+    pub(crate) fn invalidate(&self, paths: &[std::path::PathBuf]) {
+        for path in paths {
+            let path = path.to_string_lossy();
+            for cache in [&self.any, &self.preview, &self.sensor] {
+                cache.invalidate(&path);
+            }
+        }
+    }
+
+    pub fn exists(&self, dir: &Path, photo: &Photo) -> bool {
+        let preview = super::PreviewPath::new(dir, photo);
+        let cache = self.cache_for(preview.expected_raw());
+        preview.candidates().iter().any(|path| cache.exists(&path.to_string_lossy()) == Some(true))
+    }
+
+    fn cache_for(&self, expected: Option<bool>) -> &FileAvailability {
+        match expected {
+            None => &self.any,
+            Some(false) => &self.preview,
+            Some(true) => &self.sensor,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn checked_missing(&self, dir: &Path, photo: &Photo) -> bool {
+        let preview = super::PreviewPath::new(dir, photo);
+        let cache = self.cache_for(preview.expected_raw());
+        preview.candidates().iter().all(|path| cache.is_gone(&path.to_string_lossy()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    /// Every interpretation is validated off the caller's thread.
+    #[test]
+    fn every_proxy_interpretation_is_checked_on_a_worker() {
+        let mut availability = Availability::default();
+        let dir = crate::tests::TestDir::new("smart-proxy-worker");
+        let caller = std::thread::current().id();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        for (cache, expected) in [(&mut availability.any, None), (&mut availability.preview, Some(false)), (&mut availability.sensor, Some(true))] {
+            let calls = calls.clone();
+            let probe = cache.probe();
+            cache.set_probe(Arc::new(move |path| {
+                calls.lock().unwrap().push((expected, std::thread::current().id()));
+                probe(path)
+            }));
+        }
+        let (wake, receive) = mpsc::channel();
+        availability.run_in_background(Arc::new(move || {
+            let _ = wake.send(());
+        }));
+        for (format, preview_only) in [("JPEG", false), ("DNG", true), ("DNG", false)] {
+            let mut p =
+                Photo::new(lightcraft_catalog::PhotoId(1), lightcraft_catalog::Source::File { path: "offline".into() }, "offline", format, 8, 8, "");
+            p.kind = if format == "JPEG" { lightcraft_catalog::MediaKind::Image } else { lightcraft_catalog::MediaKind::Raw };
+            p.preview_only = preview_only.then(|| "old decoder".into());
+            let preview = crate::smart::PreviewPath::new(&dir, &p);
+            let path = preview.write_path();
+            let image = lightcraft_raster::Rgb32f::filled(8, 8, [0.2; 3]);
+            let info = preview.expected_raw().map(|raw| lightcraft_pipeline::SourceInfo { raw, ..Default::default() });
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let valid = crate::smart::encode(&image, info.as_ref()).unwrap();
+            let invalid = if let Some(info) = &info {
+                crate::smart::encode(&image, Some(&lightcraft_pipeline::SourceInfo { raw: !info.raw, ..Default::default() })).unwrap()
+            } else {
+                let mut bytes = valid.clone();
+                let jpeg = bytes.iter().enumerate().filter(|&(_, byte)| *byte == b'\n').nth(1).unwrap().0 + 1;
+                let end = bytes.len() - 2;
+                bytes[jpeg + 2..end].fill(0);
+                bytes
+            };
+            std::fs::write(path, invalid).unwrap();
+            assert!(crate::smart::is_valid(path), "the proxy has valid framing");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !availability.checked_missing(&dir, &p) {
+                assert!(!availability.exists(&dir, &p), "the worker rejects incompatible facts or damaged JPEG pixels");
+                let remaining = deadline.checked_duration_since(Instant::now()).expect("the worker rejects the invalid proxy");
+                receive.recv_timeout(remaining).unwrap();
+            }
+            std::fs::write(path, valid).unwrap();
+            availability.invalidate(&[path.to_path_buf()]);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !availability.exists(&dir, &p) {
+                let remaining = deadline.checked_duration_since(Instant::now()).expect("the real proxy is validated on a worker");
+                receive.recv_timeout(remaining).unwrap();
+            }
+        }
+        let calls = calls.lock().unwrap();
+        for expected in [None, Some(false), Some(true)] {
+            assert!(calls.iter().any(|(kind, _)| *kind == expected));
+        }
+        assert!(calls.iter().all(|(_, thread)| *thread != caller));
+    }
+}

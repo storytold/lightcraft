@@ -3089,13 +3089,13 @@ impl SmartLookCase {
     fn new(format: &str) -> Self {
         let src = temp_dir(&format!("smartlook-src-{format}"));
         let lib = temp_dir(&format!("smartlook-lib-{format}"));
-        write_png(&src.join("a.png"), 3);
+        std::fs::write(src.join("a.dng"), crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
         write_png(&src.join("b.png"), 9);
         let mut session = Session::new().with_fs();
         session.open_library(&lib, false).unwrap();
-        session.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
+        session.execute("library.import", &json!({"paths": [src.join("a.dng").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
         let find = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
-        let (id, png_id) = (find(&session, "a.png"), find(&session, "b.png"));
+        let (id, png_id) = (find(&session, "a.dng"), find(&session, "b.png"));
         // `a` stands for a raw that takes the per-file camera look (the test loader decodes its pixels)
         let mut raw = (**session.catalog.photo(id).unwrap()).clone();
         raw.format = format.into();
@@ -3304,50 +3304,30 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
 #[test]
 fn smart_previews_of_raws_from_an_older_decode_are_refreshed() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let src = temp_dir("smartsource-src");
-    let lib = temp_dir("smartsource-lib");
-    for (name, seed) in [("a.png", 3), ("b.png", 9), ("c.png", 5)] {
-        write_png(&src.join(name), seed);
-    }
-    let mut s = Session::new().with_fs();
-    s.open_library(&lib, false).unwrap();
-    let paths: Vec<String> = ["a.png", "b.png", "c.png"].iter().map(|n| src.join(n).to_string_lossy().to_string()).collect();
-    s.execute("library.import", &json!({ "paths": paths })).unwrap();
-    let find = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
-    let (arw, dng, png) = (find(&s, "a.png"), find(&s, "b.png"), find(&s, "c.png"));
-    // `a` and `b` stand for raws (the test loader decodes their pixels): an ARW (fitted look) and a DNG (none)
-    for (id, format) in [(arw, "ARW"), (dng, "DNG")] {
-        let mut raw = (**s.catalog.photo(id).unwrap()).clone();
-        raw.format = format.into();
-        raw.kind = lightcraft_catalog::MediaKind::Raw;
-        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
-        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
-    }
-    let photo = |s: &Session, id| s.catalog.photo(id).unwrap().clone();
-    assert!(photo(&s, arw).fitted_look() && !photo(&s, dng).fitted_look() && photo(&s, dng).develops_raw() && !photo(&s, png).develops_raw());
-    s.execute("library.select", &json!({"ids": [arw.0, dng.0, png.0], "active": arw.0})).unwrap();
-    let dir = s.media.smart_dir.clone().unwrap();
-    let file = |s: &Session, id| crate::smart::sharded_file_path(&dir, &photo(s, id));
-    let (arw_file, dng_file, png_file) = (file(&s, arw), file(&s, dng), file(&s, png));
+    let mut fixture = SmartFixture::new("smartsource");
+    let s = &mut fixture.s;
+    let dir = &fixture.dir;
+    let [arw, dng, png] = fixture.ids;
+    let [arw_file, dng_file, png_file] = &fixture.files;
+    let photo = |id| s.catalog.photo(id).unwrap();
+    assert!(photo(arw).fitted_look() && !photo(dng).fitted_look() && photo(dng).develops_raw() && !photo(png).develops_raw());
     let calls = std::sync::Arc::new(AtomicUsize::new(0));
     let plain = s.media.file_loader.clone().unwrap();
     s.media.file_loader = Some(look_loader(plain, test_tone(1.5), calls.clone()));
-    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
-    assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(3), Some(0)), "{r}");
-    for f in [&arw_file, &dng_file, &png_file] {
+    for f in [arw_file, dng_file, png_file] {
         assert_eq!(smart_header(f)["source_version"], json!(crate::smart::SOURCE_VERSION), "the writer stamps the decode version");
         assert!(!crate::smart::source_stale(f));
     }
 
     // proxies from before the field: the raws' are rebuilt from their originals, the PNG's is left as it is
-    for f in [&arw_file, &dng_file, &png_file] {
+    for f in [arw_file, dng_file, png_file] {
         edit_smart_header(f, |h| {
             h.as_object_mut().unwrap().remove("source_version");
         });
         assert!(crate::smart::source_stale(f), "no field = version 0");
         assert!(!crate::smart::is_stale(f), "the look is current");
     }
-    let png_bytes = std::fs::read(&png_file).unwrap();
+    let png_bytes = std::fs::read(png_file).unwrap();
     for id in [arw, dng, png] {
         s.media.forget(id);
     }
@@ -3355,28 +3335,26 @@ fn smart_previews_of_raws_from_an_older_decode_are_refreshed() {
     let r = s.execute("library.smartPreviews", &json!({})).unwrap();
     assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(3), Some(2)), "{r}");
     assert_eq!(calls.load(Ordering::SeqCst), 2, "only the raws' originals are read");
-    assert!(!crate::smart::source_stale(&arw_file) && !crate::smart::source_stale(&dng_file));
-    assert!(std::fs::read(&png_file).unwrap() == png_bytes, "a PNG's proxy is never rebuilt for the raw decode");
+    assert!(!crate::smart::source_stale(arw_file) && !crate::smart::source_stale(dng_file));
+    assert!(std::fs::read(png_file).unwrap() == png_bytes, "a PNG's proxy is never rebuilt for the raw decode");
 
     // the opening scan: a folder not checked at this decode version looks at the raws once, whatever their look
-    for f in [&arw_file, &dng_file] {
+    for f in [arw_file, dng_file] {
         edit_smart_header(f, |h| h["source_version"] = json!(0));
     }
-    crate::smart::mark_look_checked(&dir).unwrap();
+    crate::smart::mark_look_checked(dir).unwrap();
     std::fs::write(dir.join("source-version"), b"0\n").unwrap();
-    assert!(crate::smart::look_checked(&dir) && !crate::smart::source_checked(&dir));
+    assert!(crate::smart::look_checked(dir) && !crate::smart::source_checked(dir));
     for id in [arw, dng, png] {
         s.media.forget(id);
     }
     calls.store(0, Ordering::SeqCst);
-    crate::cmd::previews::refresh_stale_smart_previews(&mut s).unwrap().join().unwrap();
+    crate::cmd::previews::refresh_stale_smart_previews(s).unwrap().join().unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 2, "the two raws");
-    assert!(!crate::smart::source_stale(&arw_file) && !crate::smart::source_stale(&dng_file));
-    assert!(std::fs::read(&png_file).unwrap() == png_bytes);
-    assert!(crate::smart::source_checked(&dir) && crate::smart::look_checked(&dir));
-    assert!(crate::cmd::previews::refresh_stale_smart_previews(&mut s).is_none(), "once per version");
-    let _ = std::fs::remove_dir_all(&src);
-    let _ = std::fs::remove_dir_all(&lib);
+    assert!(!crate::smart::source_stale(arw_file) && !crate::smart::source_stale(dng_file));
+    assert!(std::fs::read(png_file).unwrap() == png_bytes);
+    assert!(crate::smart::source_checked(dir) && crate::smart::look_checked(dir));
+    assert!(crate::cmd::previews::refresh_stale_smart_previews(s).is_none(), "once per version");
 }
 
 /// Opening refresh used `origin_ref`, which hard-codes `outliers: false`. A raw with Remove Hot
@@ -3385,16 +3363,14 @@ fn smart_previews_of_raws_from_an_older_decode_are_refreshed() {
 #[test]
 fn refresh_of_a_raw_with_remove_hot_pixels_on_keeps_the_correction() {
     use std::sync::{Arc, Mutex};
-    let src = temp_dir("smarthot-src");
-    let lib = temp_dir("smarthot-lib");
-    write_png(&src.join("a.png"), 3);
+    let storage = super::TestDir::new("smarthot");
+    let raw_path = storage.join("a.dng");
+    std::fs::write(&raw_path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
     let mut s = Session::new().with_fs();
-    s.open_library(&lib, false).unwrap();
-    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    s.open_library(storage.join("lib"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [raw_path.to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     let mut raw = (**s.catalog.photo(id).unwrap()).clone();
-    raw.format = "ARW".into();
-    raw.kind = lightcraft_catalog::MediaKind::Raw;
     let mut develop = (*raw.develop).clone();
     develop.detail.nr_outliers = true;
     raw.develop = std::sync::Arc::new(develop);
@@ -3422,8 +3398,6 @@ fn refresh_of_a_raw_with_remove_hot_pixels_on_keeps_the_correction() {
     assert!(!seen.is_empty(), "the original was read");
     assert!(seen.iter().all(|&o| o), "refresh decoded with Remove Hot Pixels on: {seen:?}");
     assert!(!crate::smart::source_stale(&file));
-    let _ = std::fs::remove_dir_all(&src);
-    let _ = std::fs::remove_dir_all(&lib);
 }
 
 /// Build Smart Previews used to take a cached proxy source (no camera profile) as a profile match
@@ -3471,49 +3445,43 @@ fn build_smart_previews_refreshes_a_stale_proxy_once_the_original_is_back() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
-/// A library with an ARW (fitted look), a DNG (none) and a PNG (the test loader decodes PNG pixels for the raws),
-/// all three with current smart previews; the loader counts the originals it reads.
+/// Two synthetic raws (one with a fitted look) and a PNG with current smart previews.
 struct SmartFixture {
     s: Session,
-    src: std::path::PathBuf,
-    lib: std::path::PathBuf,
-    dir: std::path::PathBuf,
-    files: [std::path::PathBuf; 3],
+    _storage: super::TestDir,
+    dir: PathBuf,
+    files: [PathBuf; 3],
+    ids: [PhotoId; 3],
 }
 
 impl SmartFixture {
     fn new(tag: &str) -> SmartFixture {
-        let src = temp_dir(&format!("{tag}-src"));
-        let lib = temp_dir(&format!("{tag}-lib"));
-        for (name, seed) in [("a.png", 3), ("b.png", 9), ("c.png", 5)] {
-            write_png(&src.join(name), seed);
+        let storage = super::TestDir::new(tag);
+        let src = storage.join("src");
+        std::fs::create_dir(&src).unwrap();
+        for name in ["a.dng", "b.dng"] {
+            let metadata = lightcraft_meta::Metadata { model: Some(name.into()), ..Default::default() };
+            std::fs::write(src.join(name), crate::tests_xmp::synthetic_dng_with(None, metadata)).unwrap();
         }
+        write_png(&src.join("c.png"), 5);
         let mut s = Session::new().with_fs();
-        s.open_library(&lib, false).unwrap();
-        let paths: Vec<String> = ["a.png", "b.png", "c.png"].iter().map(|n| src.join(n).to_string_lossy().to_string()).collect();
+        s.open_library(storage.join("lib"), false).unwrap();
+        let names = ["a.dng", "b.dng", "c.png"];
+        let paths = names.map(|name| src.join(name).to_string_lossy().into_owned());
         s.execute("library.import", &json!({ "paths": paths })).unwrap();
-        let find = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
-        let ids = [find(&s, "a.png"), find(&s, "b.png"), find(&s, "c.png")];
-        for (id, format) in [(ids[0], "ARW"), (ids[1], "DNG")] {
-            let mut raw = (**s.catalog.photo(id).unwrap()).clone();
-            raw.format = format.into();
-            raw.kind = lightcraft_catalog::MediaKind::Raw;
-            s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
-            s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
-        }
+        let ids = names.map(|name| s.catalog.photos().find(|p| p.file_name == name).unwrap().id);
+        // Treat the first raw as a fitted-look format while decoding real sensor pixels from its DNG.
+        let id = ids[0];
+        let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+        raw.format = "ARW".into();
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
         s.execute("library.select", &json!({"ids": [ids[0].0, ids[1].0, ids[2].0], "active": ids[0].0})).unwrap();
         let dir = s.media.smart_dir.clone().unwrap();
         let files = ids.map(|id| crate::smart::sharded_file_path(&dir, s.catalog.photo(id).unwrap()));
         let r = s.execute("library.smartPreviews", &json!({})).unwrap();
         assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(3), Some(0)), "{r}");
-        SmartFixture { s, src, lib, dir, files }
-    }
-}
-
-impl Drop for SmartFixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.src);
-        let _ = std::fs::remove_dir_all(&self.lib);
+        SmartFixture { s, _storage: storage, dir, files, ids }
     }
 }
 
@@ -5800,4 +5768,59 @@ fn copy_dng_output_names(destination: &Path) -> Vec<std::ffi::OsString> {
     let mut files: Vec<_> = std::fs::read_dir(destination).unwrap().map(|entry| entry.unwrap().file_name()).collect();
     files.sort();
     files
+}
+
+#[test]
+fn relink_updates_source_classification_and_keeps_offline_undo_redo() {
+    use crate::media::SourceLevel;
+    use lightcraft_catalog::MediaKind;
+    for raw_first in [false, true] {
+        let dir = super::TestDir::new(&format!("relink-kind-{raw_first}"));
+        let png = dir.join("rendered.png");
+        let dng = dir.join("sensor.dng");
+        write_png(&png, 30);
+        std::fs::write(&dng, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let (original, target) = if raw_first { (&dng, &png) } else { (&png, &dng) };
+        let library = dir.join("library");
+        let mut s = Session::new().with_fs();
+        s.open_library(&library, false).unwrap();
+        s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        s.execute("develop.set", &json!({"ids": [id.0], "control": "light.exposure", "value": 0.4})).unwrap();
+        let before = s.catalog.photo(id).unwrap().clone();
+        assert_eq!(s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap()["built"], 1);
+        s.execute("photo.relink", &json!({"id": id.0, "path": target.to_string_lossy()})).unwrap();
+        let after = s.catalog.photo(id).unwrap().clone();
+        assert_eq!(after.kind, if raw_first { MediaKind::Image } else { MediaKind::Raw });
+        assert_eq!(after.format, if raw_first { "PNG" } else { "DNG" });
+        assert_eq!(after.develop, before.develop, "relink preserves edits");
+        assert_eq!(s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap()["built"], 1);
+        std::fs::rename(original, original.with_extension("offline")).unwrap();
+        std::fs::rename(target, target.with_extension("offline")).unwrap();
+        s.media.forget(id);
+        let p = s.catalog.photo(id).unwrap();
+        let source = s.media.source_ref(p, SourceLevel::Preview).load_source().unwrap();
+        assert!(source.from_proxy);
+        assert_eq!(source.info_or(crate::media::source_info(p)).raw, !raw_first);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &before);
+        let p = s.catalog.photo(id).unwrap();
+        let source = s.media.source_ref(p, SourceLevel::Preview).load_source().unwrap();
+        assert_eq!(source.info_or(crate::media::source_info(p)).raw, raw_first);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &after);
+        let p = s.catalog.photo(id).unwrap();
+        let source = s.media.source_ref(p, SourceLevel::Preview).load_source().unwrap();
+        assert_eq!(source.info_or(crate::media::source_info(p)).raw, !raw_first);
+        // Finish the opening refresh before reopening can start an unowned marker writer.
+        if let Some(refresh) = crate::cmd::previews::refresh_stale_smart_previews(&mut s) {
+            refresh.join().unwrap();
+        }
+        assert!(crate::smart::look_checked(s.media.smart_dir.as_ref().unwrap()));
+        s.persist().unwrap();
+        drop(s);
+        let mut reopened = Session::new().with_fs();
+        reopened.open_library(&library, false).unwrap();
+        assert_eq!(reopened.catalog.photo(id).unwrap(), &after);
+    }
 }
