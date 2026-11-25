@@ -202,7 +202,10 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
             }))
         }
         _ => {
-            ui.data_mut(|m| m.remove::<WheelGrab>(grab_id));
+            // (a measuring run of the wheel senses nothing: it leaves the grab of a drag under way alone)
+            if target.is_some() {
+                ui.data_mut(|m| m.remove::<WheelGrab>(grab_id));
+            }
             None
         }
     };

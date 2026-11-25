@@ -65,14 +65,20 @@ fn start_field(ui: &mut egui::Ui, start: &mut u32) {
 /// Same single-field dialog contract as frame::dialog_field, with an SDK-owned editor.
 fn name_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
-    let shown = TextField::new(crate::i18n::tr(hint).to_owned(), Bind::bound(value))
-        .id_salt(id)
-        .placeholder(crate::i18n::tr(hint).to_owned())
-        .limit(None)
-        .select_on_focus()
-        .submits()
-        .show_at(ui, rect);
+    // recorded, so the field's edit menu items (`{id}:paste` …) are registered while that menu is open
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::new(("name-field-inspect", id)), |ui| {
+        TextField::new(crate::i18n::tr(hint).to_owned(), Bind::bound(value))
+            .id_salt(id)
+            .placeholder(crate::i18n::tr(hint).to_owned())
+            .limit(None)
+            .select_on_focus()
+            .submits()
+            .show_at(ui, rect)
+    });
     register(ui, id, &shown.response);
+    if !measuring(ui) {
+        crate::text_field::register_field(ui, id, &shown.response, record.as_deref());
+    }
     if !measuring(ui)
         && ui.is_enabled()
         && (just_opened(ui, id)
