@@ -77,12 +77,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::unique(AREA)));
         let ended = ui.data(|d| d.get_temp::<f32>(egui::Id::unique(ENDED)));
         let start = held.or(ended).or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.clamped_offset().y));
-        ui.data_mut(|d| match start {
-            Some(o) => {
-                d.insert_temp(egui::Id::unique(OFFSET), o);
-            }
-            None => d.remove::<f32>(egui::Id::unique(OFFSET)),
-        });
+        // (only a real pass says where it started: a sizing or measuring run in the next pass would write the offset
+        // the last pass ended at, which egui has already pulled back as the content shrank, and the hold would count that
+        // change twice)
+        if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
+            ui.data_mut(|d| match start {
+                Some(o) => {
+                    d.insert_temp(egui::Id::unique(OFFSET), o);
+                }
+                None => d.remove::<f32>(egui::Id::unique(OFFSET)),
+            });
+        }
         let scrolled = area.show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             match app.ui.right {
