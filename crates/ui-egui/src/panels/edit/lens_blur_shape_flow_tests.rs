@@ -640,6 +640,8 @@ fn actual_parent_localized_accessible_buttons_keep_original_glyphs_inside_narrow
                 oracle.choose(OPTIONS[index].0);
                 f.same_as(&oracle);
                 assert_ne!(f.document(), before);
+                // A press hides a framework tooltip until the pointer leaves its control: leave, then rest on it.
+                f.frame(vec![Event::PointerMoved(Pos2::new(900.0, 1500.0))]);
                 f.frame(vec![Event::PointerMoved(rect.center())]);
                 f.tick += 60;
                 f.frame(vec![]);
