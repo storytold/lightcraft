@@ -49,12 +49,16 @@ try {
   $fontRepo = Join-Path $testRoot 'craft-fonts'
   $family = Join-Path $fontRepo 'fonts\ExampleFamily'
   $stage = Join-Path $testRoot 'stage'
-  New-Item -ItemType Directory -Force -Path $repo, $family, $stage | Out-Null
+  $interDir = Join-Path $repo 'assets\fonts'
+  New-Item -ItemType Directory -Force -Path $repo, $family, $stage, $interDir | Out-Null
   $rootNames = @('README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUTION.md')
   foreach ($name in $rootNames) { Set-Content -LiteralPath (Join-Path $repo $name) -Value "root-notice-$name" }
+  # Inter is embedded in every build, so its OFL must reach the stage and the ZIP.
+  Set-Content -LiteralPath (Join-Path $interDir 'OFL-Inter.txt') -Value 'inter-notice-example'
   Set-Content -LiteralPath (Join-Path $family 'OFL.txt') -Value 'font-notice-example'
+  $notices = @($rootNames) + @('OFL-Inter.txt', 'OFL-ExampleFamily.txt')
   Copy-NightlyNotices $repo $fontRepo $stage
-  foreach ($name in @($rootNames) + @('OFL-ExampleFamily.txt')) {
+  foreach ($name in $notices) {
     Assert (Test-Path -LiteralPath (Join-Path $stage $name)) "missing staged notice $name"
   }
   $zip = Join-Path $testRoot 'notices.zip'
@@ -62,8 +66,11 @@ try {
   $archive = [IO.Compression.ZipFile]::OpenRead($zip)
   try {
     $names = @($archive.Entries | ForEach-Object { $_.FullName })
-    foreach ($name in @($rootNames) + @('OFL-ExampleFamily.txt')) { Assert ($name -in $names) "missing archived notice $name" }
+    foreach ($name in $notices) { Assert ($name -in $names) "missing archived notice $name" }
     foreach ($forbidden in @('portable.txt', 'lightcraft-cli.exe')) { Assert ($forbidden -notin $names) "unexpected payload $forbidden" }
+    $interEntry = $archive.GetEntry('OFL-Inter.txt')
+    $interReader = [IO.StreamReader]::new($interEntry.Open())
+    try { Assert ($interReader.ReadToEnd().Contains('inter-notice-example')) 'wrong Inter license bytes in ZIP' } finally { $interReader.Dispose() }
     $entry = $archive.GetEntry('OFL-ExampleFamily.txt')
     $reader = [IO.StreamReader]::new($entry.Open())
     try { Assert ($reader.ReadToEnd().Contains('font-notice-example')) 'wrong font license bytes in ZIP' } finally { $reader.Dispose() }

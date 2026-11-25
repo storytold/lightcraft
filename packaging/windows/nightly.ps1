@@ -56,6 +56,12 @@ function Copy-NightlyNotices([string] $RepositoryRoot, [string] $FontRepository,
     $source = Join-Path $RepositoryRoot $name
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $Destination }
   }
+  # Inter is embedded in every GUI build (crates/ui-egui/src/theme.rs), so its OFL ships with the
+  # executable as OFL-Inter.txt beside the craft-fonts OFLs - the same set the stable FONT-LICENCES.txt
+  # collects. NOTICE names it, so a ZIP without it distributes the font unlicensed.
+  $inter = Join-Path $RepositoryRoot 'assets\fonts\OFL-Inter.txt'
+  if (-not (Test-Path -LiteralPath $inter -PathType Leaf)) { throw 'the app has no assets/fonts/OFL-Inter.txt to ship with the embedded Inter font' }
+  Copy-Item -LiteralPath $inter -Destination (Join-Path $Destination 'OFL-Inter.txt')
   if ($FontRepository) {
     $fonts = Join-Path $FontRepository 'fonts'
     if (-not (Test-Path -LiteralPath $fonts -PathType Container)) { throw 'CRAFT_FONTS_DIR has no fonts directory for the bundled notices' }
