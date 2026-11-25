@@ -1738,7 +1738,7 @@ dependencies = [
  "epaint_default_fonts",
  "log",
  "serde",
- "skrifa 0.44.0",
+ "skrifa 0.47.0",
 ]
 
 [[package]]
@@ -1759,6 +1759,7 @@ dependencies = [
  "thiserror 2.0.21",
  "toml",
  "ureq",
+ "wuff",
 ]
 
 [[package]]
@@ -2797,7 +2798,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2963,7 +2964,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "bytemuck",
  "emath",
@@ -2996,7 +2997,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3032,7 +3033,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "accesskit",
  "ahash",
@@ -3051,7 +3052,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3070,7 +3071,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -3095,7 +3096,7 @@ dependencies = [
 [[package]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "ahash",
  "egui",
@@ -3108,7 +3109,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "bytemuck",
  "egui",
@@ -3121,7 +3122,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "dify",
  "eframe",
@@ -3168,7 +3169,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "bytemuck",
 ]
@@ -3261,7 +3262,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3287,7 +3288,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 
 [[package]]
 name = "equator"
@@ -3342,7 +3343,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7159,7 +7160,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7840,7 +7841,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8394,7 +8395,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8463,7 +8464,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9402,7 +9403,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10583,7 +10584,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10952,6 +10953,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 dependencies = [
  "either",
+]
+
+[[package]]
+name = "wuff"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "200a7b806377b65f1ff9a985874332f15357c87e5dd7855f35f06dade95b8b3d"
+dependencies = [
+ "brotli-decompressor 5.0.3",
+ "bytes",
 ]
 
 [[package]]
@@ -11506,14 +11517,14 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
