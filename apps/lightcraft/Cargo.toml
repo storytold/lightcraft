@@ -29,6 +29,7 @@ eframe = { workspace = true, features = ["default_fonts", "clipboard", "wgpu", "
 egui = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+thiserror = { workspace = true }
 # probing the window's renderer before it opens (`window_gpu`)
 pollster = { workspace = true }
 log = { workspace = true }
@@ -58,6 +59,8 @@ lightcraft-testkit = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
+# the explicit Nightly AppUserModelID, before any window exists (`process_identity`)
+winsafe = { version = "0.0.29", features = ["shell"] }
 # the colour profile of the monitor showing the window (`win_screen_profile`)
 lightcraft-wincolor = { workspace = true }
 raw-window-handle = "0.6"
