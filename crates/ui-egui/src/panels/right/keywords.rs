@@ -323,13 +323,17 @@ fn suggestion_button(ui: &mut egui::Ui, owner: egui::Id, keyword: &str, name: &s
 /// the box's top is scrolled out of sight (at the top of the panel the box is watched growing) and
 /// while the change does not come from the box itself (the pointer on it, or typing in its field).
 fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
+    // A sizing or measuring run draws the box at another width and height than the real pass: its numbers are not
+    // the box's, and would make the real pass look like it had grown.
+    if kw_measuring(ui) {
+        return;
+    }
     let height = ui.cursor().top() - top;
     let key = egui::Id::unique("kw-box-height");
     let pass = ui.ctx().cumulative_pass_nr();
     // (the height drawn on the pass before: one from an earlier visit to the panel says nothing)
     let before = ui.data(|d| d.get_temp::<(f32, u64)>(key)).filter(|&(_, drawn)| drawn.checked_add(1) == Some(pass)).map(|(h, _)| h);
     ui.data_mut(|d| d.insert_temp(key, (height, pass)));
-    eprintln!("DBGHOLD pass={pass} height={height} before={before:?} top={top} clip_top={}", ui.clip_rect().top());
     let Some(before) = before else { return };
     let grew = height - before;
     if !grew.is_finite() || grew.abs() < 0.5 || top >= ui.clip_rect().top() - 0.5 {

@@ -34,7 +34,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
         // (taken on every pass the panel is drawn; one from earlier than the pass before is forgotten)
-        let held = held_offset(ui.ctx());
+        // (a sizing or measuring run in the pass leaves it for the real draw, which would else find it gone)
+        let held = if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { None } else { held_offset(ui.ctx()) };
         let Some(id) = app.session.active() else {
             // the Keyword List is the library's, not a photo's: it is there without a selection
             if app.ui.right == RightPanel::Keywords {
@@ -112,7 +113,6 @@ const HOLD: &str = "right-scroll-hold";
 /// in place (a scroll asked for during a pass only lands a frame later).
 fn held_offset(ctx: &egui::Context) -> Option<f32> {
     let (grew, asked) = ctx.data_mut(|d| d.remove_temp::<(f32, u64)>(egui::Id::unique(HOLD)))?;
-    eprintln!("DBGHELD grew={grew} asked={asked} now={}", ctx.cumulative_pass_nr());
     if asked.checked_add(1) != Some(ctx.cumulative_pass_nr()) {
         return None;
     }
