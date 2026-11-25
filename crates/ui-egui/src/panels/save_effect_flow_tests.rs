@@ -37,7 +37,8 @@ const NATIVE_FOCUS: &[(&str, &str, bool, bool)] = &[
     ("actual-create-exact-subset", "none", false, false),
     ("name-return-exact-all-fields", "none", false, false),
     ("empty-name-refused", "field:effectName", false, true),
-    ("whitespace-name-refused", "none", false, true),
+    // a refused Create leaves the focus where it was: in the name being corrected (as for the empty name above)
+    ("whitespace-name-refused", "field:effectName", false, true),
     ("no-fields-refused", "none", false, true),
     ("group-return-with-invalid-fields-does-not-confirm", "none", false, true),
     ("actual-cancel-typed-unsaved", "none", false, false),
