@@ -148,6 +148,7 @@
   "Picks to unflag: {n}": "将取消标记的选用照片：{n}",
   "Pixel Shift: {reason}": "像素偏移：{reason}",
   "Preset {name} on {n} photos": "预设 {name} 应用到 {n} 张照片",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "预设：{name}。已跳过此版本无法计算的 AI 蒙版：{masks}",
   "Print settings not saved: {e}": "打印设置未保存：{e}",
   "Printed {n} page(s) to file": "已打印 {n} 页到文件",
   "Reading pictures {done} of {total}": "正在读取图像:{done} / {total}",

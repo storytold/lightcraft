@@ -9,6 +9,7 @@ mod activity;
 pub mod alternatives;
 mod before;
 pub(crate) mod browse;
+pub mod camera_looks;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod catalog;
 pub mod chart_profile;
@@ -274,6 +275,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(map::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
+        v.extend(camera_looks::specs());
         v.extend(vignetting_calibration::specs());
         v.extend(lens_db::specs());
         v.extend(source::specs());

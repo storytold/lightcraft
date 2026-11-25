@@ -638,6 +638,40 @@ fn tool_effect(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"toolEffects": s.mask_tool_effects}))
 }
 
+/// Style brush (Capture One): a new, empty Brush mask that already carries effect `name` (its
+/// sliders, point colours), selected so the next stroke paints it; one undo step. The brush tool
+/// remembers the effect, and the effect's brush settings come back for the UI to take.
+fn style_brush(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "mask.styleBrush";
+    let name = name_param(p, C)?;
+    let effect = s.mask_effects.get(effect_index(s, &name, C)?).cloned().ok_or_else(|| bad(C, format!("no effect `{name}`")))?;
+    let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+    let next = d.next_mask_id();
+    let mask_name = str_param(p, "maskName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| effect.name.clone());
+    d.masks.push(Mask {
+        id: next,
+        name: mask_name,
+        components: vec![lcc_develop::MaskComponent {
+            anchor: None,
+            name: None,
+            op: lcc_develop::MaskOp::Add,
+            invert: false,
+            shape: lcc_develop::MaskShape::Brush { strokes: vec![] },
+        }],
+        adjust: super::masks::clamp_local(effect.apply(&LocalAdjustments::default())),
+        point_colors: effect.point_colors.clone(),
+        ..Default::default()
+    });
+    s.set_develop(id, d, &format!("Style Brush: {}", effect.name))?;
+    s.active_mask = Some(next);
+    if p.get("remember").and_then(Value::as_bool).unwrap_or(true) {
+        s.mask_tool_effects.insert("brush".into(), effect.name.clone());
+        s.save_prefs()?;
+    }
+    Ok(json!({"name": effect.name, "activeMask": next, "brush": effect.brush}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -697,6 +731,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{group, to} (\"\" ungroups; an existing name merges)",
             always,
             rename_group
+        ),
+        cmd!(
+            "mask.styleBrush",
+            "Style Brush",
+            [],
+            None,
+            "{name, maskName?, remember?: bool (true: the brush remembers the effect)}: a new Brush mask with the effect's sliders already set, selected so the next stroke paints with it (Capture One's style brushes; one undo step) → {name, activeMask, brush}",
+            has_active,
+            style_brush
         ),
         cmd!(
             "mask.toolEffect",

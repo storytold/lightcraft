@@ -19,6 +19,7 @@ pub(super) fn commands() -> impl Iterator<Item = &'static UiCommand> {
         .chain(crate::creations_ui::COMMANDS)
         .chain(PLUGIN_COMMANDS)
         .chain(crate::timelapse_ui::COMMANDS)
+        .chain(crate::run_presets_ui::COMMANDS)
         .chain(crate::email_photo::COMMANDS)
         .chain(crate::panels::filterbar::COMMANDS)
         .chain(crate::import_report::COMMANDS)
@@ -52,6 +53,7 @@ const WINDOW_COMMANDS: &[UiCommand] = &[("app.backgroundClicks", "Click Through"
 /// closed like the others (`section.*`).
 const EDIT_SECTIONS: &[UiCommand] = &[
     ("section.levels", "Levels", None, "Window>Edit Sections"),
+    ("section.toneEq", "Tone Equalizer", None, "Window>Edit Sections"),
     ("section.curve", "Tone Curve", Some("Cmd+2"), "Window>Edit Sections"),
     ("section.mixer", "Color Mixer", Some("Cmd+3"), "Window>Edit Sections"),
     ("section.grading", "Color Grading", Some("Cmd+4"), "Window>Edit Sections"),
@@ -116,6 +118,9 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
     if let Some(r) = crate::timelapse_ui::run(app, id, p) {
         return Some(r);
     }
+    if let Some(r) = crate::run_presets_ui::run(app, id, p) {
+        return Some(r);
+    }
     if let Some(r) = crate::email_photo::run(app, id, p) {
         return Some(r);
     }
@@ -153,6 +158,7 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
     Some(match id {
         // the fork's Edit sections, opened and closed as upstream's are (⌥-click: just this one)
         "section.levels"
+        | "section.toneEq"
         | "section.curve"
         | "section.mixer"
         | "section.grading"
@@ -321,6 +327,7 @@ pub(super) fn enabled(app: &LccApp, id: &str) -> Option<bool> {
     crate::module::enabled(app, id)
         .or_else(|| crate::catalog_ui::enabled(app, id))
         .or_else(|| crate::timelapse_ui::enabled(app, id))
+        .or_else(|| crate::run_presets_ui::enabled(app, id))
         .or_else(|| crate::email_photo::enabled(app, id))
         .or_else(|| crate::import_report::enabled(app, id))
         .or_else(|| crate::duplicates_ui::enabled(app, id))

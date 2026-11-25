@@ -1,0 +1,29 @@
+---
+title: Highlight reconstruction
+description: How a raw's clipped highlights are rebuilt, and the three methods to choose from.
+sidebar:
+  order: 19
+---
+
+import NeedsImage from '../../../components/NeedsImage.astro';
+
+<NeedsImage what="Detail ▸ Sensor with the Highlights menu open on Guided Laplacian, beside a blown sky rebuilt each way" />
+
+Where a raw's sensor clipped one or more colours, the missing values are rebuilt before white balance, so bright
+areas do not turn magenta or cyan when you darken them with **Highlights**, **Whites** or **Exposure**. Fully blown
+areas always come out neutral.
+
+Choose the method in the Edit panel: **Detail ▸ Sensor ▸ Highlights** (raws only).
+
+- **Rebuild** (the default): the colour of reliable, unclipped detail nearby, carried into the clipped area; white
+  where there is none.
+- **Inpaint Opposed**: a clipped colour is rebuilt from the two others, corrected by the colour of the unclipped
+  surroundings of all clipped areas. Fast; good for small specular highlights and evenly lit skies. Ported from
+  darktable.
+- **Guided Laplacian**: the clipped area is painted in from its edges over many passes, following the texture of the
+  colour that kept the most detail. Slower; keeps texture and colour gradients in larger clipped areas (clouds, lit
+  skin). Ported from darktable.
+
+The choice is saved with the photo (`sensor.highlightMode`: 0 Rebuild, 1 Inpaint Opposed, 2 Guided Laplacian), so it
+syncs, copies, pastes and goes into presets like any other setting, and the CLI and MCP set it with `develop.set`.
+Previews, 1:1 and exports use the same method.

@@ -158,6 +158,7 @@
   "Picks to unflag: {n}": "Pilihan yang tandanya dihapus: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Preset {name} pada {n} foto",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Preset: {name}. Mask AI yang dilewati karena build ini tidak dapat menghitungnya: {masks}",
   "Print settings not saved: {e}": "Pengaturan cetak tidak tersimpan: {e}",
   "Printed {n} page(s) to file": "{n} halaman dicetak ke file",
   "Read {name}'s policy": "Baca kebijakan {name}",

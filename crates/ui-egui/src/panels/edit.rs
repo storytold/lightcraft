@@ -341,6 +341,19 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "levels", "Levels", |app, ui, d| {
         super::levels::levels(app, ui, id, d);
     });
+    // the Tone Equalizer works on the scene-linear image, before Exposure is applied and before Levels
+    section(app, ui, &d, "toneEq", "Tone Equalizer", |app, ui, d| {
+        sub_title(ui, crate::i18n::tr("Exposure by Luminance"));
+        for c in lcc_develop::controls::in_section(lcc_develop::Section::ToneEq).take(lcc_develop::tone_eq::BANDS) {
+            control(app, ui, d, c.id, true);
+        }
+        ui.add_space(6.0);
+        sub_title(ui, crate::i18n::tr("Mask"));
+        for c in ["toneEq.detail", "toneEq.size", "toneEq.edges", "toneEq.smoothing"] {
+            control(app, ui, d, c, true);
+        }
+        ui.add_space(8.0);
+    });
     section(app, ui, &d, "curve", "Tone Curve", |app, ui, d| {
         curve_editor(app, ui, id, d, CurveTarget::Photo);
         ui.add_space(8.0);
@@ -434,6 +447,28 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                         // not decoded yet: keep the count's line laid out so the panels under it do not jump (#1272)
                         ui.label(egui::RichText::new(" ").size(11.0));
                     }
+                    // how sensor-clipped highlights are rebuilt (`sensor.highlightMode`): ours or one of darktable's
+                    let modes = ["Rebuild", "Inpaint Opposed", "Guided Laplacian"];
+                    let current = usize::from(d.sensor.highlight_mode());
+                    ui.horizontal(|ui| {
+                        ui.label(crate::i18n::tr("Highlights"));
+                        let name = |i: usize| crate::i18n::tr(modes.get(i).copied().unwrap_or("Rebuild"));
+                        let r = crate::widgets::combo_box("sensor.highlightMode").selected_text(name(current)).show_ui(ui, |ui| {
+                            let mut chosen = None;
+                            for i in 0..modes.len() {
+                                if ui.selectable_label(i == current, name(i)).clicked() && i != current {
+                                    chosen = Some(i);
+                                }
+                            }
+                            chosen
+                        });
+                        crate::widgets::register(ui.ctx(), "combo:sensor.highlightMode", r.response.rect);
+                        let tip = "How clipped highlights are rebuilt: Rebuild uses the colour of reliable detail nearby; Inpaint Opposed and Guided Laplacian are darktable's methods";
+                        r.response.on_hover_text(crate::i18n::tr(tip));
+                        if let Some(i) = r.inner.flatten() {
+                            let _ = app.run("develop.set", json!({"control": "sensor.highlightMode", "value": i as f64}));
+                        }
+                    });
                 },
             );
         }

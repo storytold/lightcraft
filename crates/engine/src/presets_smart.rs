@@ -46,6 +46,65 @@ fn suit_blues() -> Value {
     ])
 }
 
+/// The group the adaptive presets are listed under.
+pub const ADAPTIVE_GROUP: &str = "Smart Masks: Adaptive";
+
+/// An adaptive preset: a global look (`settings`) plus mask recipes computed on each photo.
+fn adaptive_preset(id: &str, name: &str, mut settings: Value, masks: Value) -> Preset {
+    settings["masks"] = masks;
+    Preset { id: format!("lc.adaptive.{id}"), name: name.into(), group: ADAPTIVE_GROUP.into(), settings, favorite: false, builtin: true }
+}
+
+/// Built-in adaptive presets (group "Smart Masks: Adaptive"): a look plus Subject, Sky or Background masks, all
+/// from the built-in scene masks (no model download), so they work in every build. Our own values.
+pub fn adaptive() -> Vec<Preset> {
+    vec![
+        adaptive_preset(
+            "subjectPop",
+            "Subject Pop",
+            json!({"treatment": "color", "color": {"vibrance": 8.0}}),
+            json!([mask(
+                "Subject Pop",
+                json!([{"op": "add", "shape": {"kind": "subject"}}]),
+                json!({"exposure": 0.25, "texture": 12.0, "clarity": 8.0, "amount": 100.0})
+            )]),
+        ),
+        adaptive_preset(
+            "deepSky",
+            "Deep Sky",
+            json!({"treatment": "color", "effects": {"dehaze": 4.0}}),
+            json!([mask(
+                "Deep Sky",
+                json!([{"op": "add", "shape": {"kind": "sky"}}]),
+                json!({"exposure": -0.4, "highlights": -25.0, "saturation": 12.0, "temp": -6.0, "amount": 100.0})
+            )]),
+        ),
+        adaptive_preset(
+            "quietBackground",
+            "Quiet Background",
+            json!({"treatment": "color", "light": {"contrast": 6.0}}),
+            json!([mask(
+                "Quiet Background",
+                json!([{"op": "add", "shape": {"kind": "background"}}]),
+                json!({"exposure": -0.3, "clarity": -15.0, "saturation": -15.0, "amount": 100.0})
+            )]),
+        ),
+        adaptive_preset(
+            "subjectAndSky",
+            "Subject and Sky",
+            json!({"treatment": "color", "color": {"vibrance": 6.0}}),
+            json!([
+                mask("", json!([{"op": "add", "shape": {"kind": "subject"}}]), json!({"exposure": 0.2, "shadows": 15.0, "amount": 100.0})),
+                mask(
+                    "",
+                    json!([{"op": "add", "shape": {"kind": "sky"}}]),
+                    json!({"exposure": -0.35, "highlights": -20.0, "saturation": 8.0, "amount": 100.0})
+                )
+            ]),
+        ),
+    ]
+}
+
 pub fn smart() -> Vec<Preset> {
     vec![
         // the background behind the couple, minus a gradient up from their feet: warm light from
@@ -137,5 +196,21 @@ mod tests {
         // they stack: a look, then two smart presets
         let both = all[2].apply(&suit, 1.0);
         assert_eq!(both.masks.len(), 2);
+    }
+
+    #[test]
+    fn adaptive_presets_set_a_look_and_add_masks_every_build_computes() {
+        for pr in adaptive() {
+            assert!(pr.has_ai_masks() && !pr.mask_only(), "{}: a look plus masks", pr.name);
+            let (same, skipped) = crate::presets::without_unavailable_masks(&pr, false);
+            assert!(skipped.is_empty() && same == pr, "{}: no model needed", pr.name);
+            let base = DevelopSettings::default();
+            let out = pr.apply(&base, 1.0);
+            assert!(!out.masks.is_empty() && out.masks.iter().all(|m| m.uses_ai()), "{}", pr.name);
+            assert!(out.masks.iter().all(|m| !m.name.trim().is_empty()), "{}: masks named", pr.name);
+            // applied again: its own masks are replaced, not doubled
+            let again = pr.apply(&out, 1.0);
+            assert_eq!(again.masks.len(), out.masks.len(), "{}", pr.name);
+        }
     }
 }

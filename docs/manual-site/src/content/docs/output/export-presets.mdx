@@ -1,19 +1,23 @@
 ---
 title: Export presets
-description: Built-in and saved presets, Export with Preset, Previous Export.
+description: Built-in and saved presets, Export with Preset, several presets at once, Previous Export.
 sidebar:
   order: 6
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import NeedsImage from '../../../components/NeedsImage.astro';
 
 - **Preset column** (left of the Export sheet): built-ins plus your own; **Add**, **Remove**, **Rename**, **Import…**, **Export…**.
 - Built-ins: JPEG (Small) 2048 px, JPEG (Large) full size, Original + Settings, DNG, Instagram Feed 1080 px, Instagram Story / Reel 1920 px, Web / Portfolio 2048 px (copyright-only metadata), Full Resolution Master (P3).
 - A preset keeps format, quality, size limit, sizing, sharpening, naming, folder and subfolder, metadata and watermark.
 - Share presets as `.lcexport` files; Lightroom Classic export `.lrtemplate` files import too (settings without a counterpart are listed in a report).
 - **File ▸ Export with Preset ▸ …**: exports at once with a saved preset, no sheet.
+- **File ▸ More Exports ▸ Export with Several Presets…**: tick several presets and export the selection with all of them in one run, each to its own folder (if a ticked preset names no folder you are asked for one). Each photo is read once for every preset; the run is one row in the activity stack, and ✕ stops it between photos (files already written stay). Presets that add to Apple Photos run on their own. Scripts: `export.runPresets {presetIds}`.
 - **File ▸ Export with Previous** (⌥⇧⌘E): repeats the last export; the sheet is also prefilled with those options.
 - 🟡 No HDR presets yet.
+
+<NeedsImage what="Export with Several Presets dialog with two presets ticked over a selection of photos" />
 
 <Aside type="note" title="Modern layout">
   **File ▸ Export with Preset** and **Export with Previous** are in the ☰ menu.

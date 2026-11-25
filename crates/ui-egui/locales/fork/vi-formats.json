@@ -180,6 +180,7 @@
   "Picks to unflag: {n}": "Ảnh chọn sẽ bỏ cờ: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Preset {name} trên {n} ảnh",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Thiết lập sẵn: {name}. Đã bỏ qua mặt nạ AI mà bản dựng này không tính được: {masks}",
   "Print settings not saved: {e}": "Không lưu được cài đặt in: {e}",
   "Printed {n} page(s) to file": "Đã in {n} trang ra tệp",
   "Read {name}'s policy": "Đọc chính sách của {name}",

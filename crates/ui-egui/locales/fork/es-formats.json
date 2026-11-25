@@ -148,6 +148,7 @@
   "Picks to unflag: {n}": "Elegidas a desmarcar: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Ajuste {name} en {n} fotos",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Ajuste preestablecido: {name}. Máscaras de IA omitidas que esta versión no puede calcular: {masks}",
   "Print settings not saved: {e}": "Ajustes de impresión no guardados: {e}",
   "Printed {n} page(s) to file": "{n} página(s) impresa(s) en archivo",
   "Reading pictures {done} of {total}": "Leyendo imágenes: {done} de {total}",

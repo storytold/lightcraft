@@ -153,6 +153,7 @@
   "Picks to unflag: {n}": "Vybrané k odznačení: {n}",
   "Pixel Shift: {reason}": "Pixel Shift: {reason}",
   "Preset {name} on {n} photos": "Předvolba {name} na fotkách: {n}",
+  "Preset: {name}. Skipped AI masks this build can't compute: {masks}": "Přednastavení: {name}. Přeskočené masky AI, které toto sestavení neumí vypočítat: {masks}",
   "Print settings not saved: {e}": "Nastavení tisku nebylo uloženo: {e}",
   "Printed {n} page(s) to file": "Vytištěno do souboru, stran: {n}",
   "Read {name}'s policy": "Přečíst zásady {name}",

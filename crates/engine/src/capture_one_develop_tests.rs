@@ -21,7 +21,8 @@ fn rect(p: &Value) -> [f64; 4] {
 fn columns_belong_to_the_tool_with_the_longest_prefix() {
     assert_eq!(tool_of("ZLENSLCCLIGHTFALLOFFAMOUNT"), Some("LCC"));
     assert_eq!(tool_of("ZLENSLIGHTFALLOFF"), Some("Lens Correction"));
-    assert_eq!(tool_of("ZGRADATIONCURVEY"), Some("Curve"));
+    assert_eq!(tool_of("ZGRADATIONCURVEY"), Some("Luma curve"));
+    assert_eq!(tool_of("ZGRADATIONCURVERED"), Some("Curve"));
     assert_eq!(tool_of("ZBWLIGHTTONEHUE"), Some("Black & White"));
     assert_eq!(tool_of("ZCLARITYSTRUCTURE"), Some("Clarity"));
     // imported, computed by Capture One, bookkeeping, the ICC profile: never reported
@@ -47,16 +48,17 @@ fn stored_values_compare_as_numbers() {
 #[test]
 fn only_what_differs_from_the_default_is_the_variants() {
     let l = layers(
-        json!({"ZEXPOSURE": 0.5, "ZBRIGHTNESS": 0, "ZCONTRAST": 10, "ZFLIP": 0, "ZROTATION": null}),
-        json!({"ZEXPOSURE": 0, "ZBRIGHTNESS": 0, "ZCONTRAST": 0, "ZFLIP": 0, "ZROTATION": 90}),
+        json!({"ZEXPOSURE": 0.5, "ZBRIGHTNESS": 0, "ZDEHAZEAMOUNT": 10, "ZFLIP": 0, "ZROTATION": null}),
+        json!({"ZEXPOSURE": 0, "ZBRIGHTNESS": 0, "ZDEHAZEAMOUNT": 0, "ZFLIP": 0, "ZROTATION": 90}),
     );
     let d = develop_of(&l, [6000.0, 4000.0], ("", ""));
     assert_eq!(d.exposure, Some(0.5));
     assert_eq!(d.flip, None);
     // a portrait the user didn't turn: the camera's orientation, nothing to do
     assert_eq!((d.rotation, d.camera_rotation), (90.0, 90.0));
-    // Brightness set back to its default is not used; Contrast is
-    assert_eq!(d.not_imported, vec!["Contrast"]);
+    // Brightness set back to its default is not used; Dehaze is (and isn't imported)
+    assert_eq!(d.not_imported, vec!["Dehaze"]);
+    assert!(d.sliders.is_empty());
     assert!(!d.is_empty());
     let untouched = develop_of(&layers(json!({"ZEXPOSURE": 0}), json!({"ZEXPOSURE": 0, "ZROTATION": 90})), [6000.0, 4000.0], ("", ""));
     assert!(untouched.is_empty() && untouched.not_imported.is_empty());
@@ -216,4 +218,102 @@ fn white_balance_reads_as_the_app_reads_a_raws_gains() {
     for bad in ["0;1;1", "-1;1;1", "1;1", "1e9;1;1", "x;y;z"] {
         assert_eq!(gains(&json!(bad)), None, "{bad}");
     }
+}
+
+/// The settings `d` gives a photo, through the same merge the catalog import uses.
+fn applied(d: &CaptureOneDevelop) -> (lcc_develop::DevelopSettings, Vec<String>) {
+    let (p, skipped) = partial(d, crate::crs::Target::RawAbsolute, None);
+    (lcc_develop::apply_partial(&lcc_develop::DevelopSettings::default(), &p, 1.0), skipped)
+}
+
+#[test]
+fn tone_sliders_and_clarity_come_across_on_the_apps_scale() {
+    let l = layers(
+        json!({"ZCONTRAST": 20, "ZBRIGHTNESS": "-10", "ZSATURATION": 15, "ZHIGHLIGHTRECOVERY": 60, "ZSHADOWRECOVERY": 40,
+               "ZCLARITY": 30, "ZCLARITYSTRUCTURE": -25, "ZCLARITYMETHOD": 2}),
+        json!({"ZCONTRAST": 0, "ZBRIGHTNESS": 0, "ZSATURATION": 0, "ZHIGHLIGHTRECOVERY": 0, "ZSHADOWRECOVERY": 0,
+               "ZCLARITY": 0, "ZCLARITYSTRUCTURE": 0, "ZCLARITYMETHOD": 1}),
+    );
+    let d = develop_of(&l, [6000.0, 4000.0], ("", ""));
+    assert_eq!(d.not_imported, vec!["Clarity method"], "only the method has no equivalent");
+    assert!(!d.is_empty());
+    let (s, skipped) = applied(&d);
+    assert_eq!(skipped, vec!["Clarity method"]);
+    assert_eq!((s.light.contrast, s.light.brightness), (40.0, -20.0), "Capture One's ±50 doubled");
+    assert_eq!(s.color.saturation, 30.0);
+    assert!(s.light.highlights < 0.0 && s.light.shadows > 0.0, "recovery pulls highlights down and lifts shadows");
+    assert_eq!((s.effects.clarity, s.effects.texture), (30.0, -25.0));
+}
+
+#[test]
+fn curves_become_point_curves() {
+    let l = layers(
+        json!({"ZGRADATIONCURVE": "0,0;0.25,0.18;0.75,0.82;1,1", "ZGRADATIONCURVERED": "0,0;128,140;255,255",
+               "ZGRADATIONCURVEBLUE": "0,0;1,1", "ZGRADATIONCURVEY": "0,0;0.5,0.6;1,1"}),
+        json!({"ZGRADATIONCURVE": "0,0;1,1", "ZGRADATIONCURVERED": "0,0;1,1", "ZGRADATIONCURVEBLUE": "0,0;0.5,0.5", "ZGRADATIONCURVEY": "0,0;1,1"}),
+    );
+    let d = develop_of(&l, [6000.0, 4000.0], ("", ""));
+    assert_eq!(d.not_imported, vec!["Luma curve"]);
+    let (s, _) = applied(&d);
+    assert_eq!(s.curve.master.len(), 4);
+    let mid = s.curve.master.iter().find(|p| (p.x - 0.25).abs() < 1e-9).unwrap();
+    assert!(mid.y < 0.25, "an S curve darkens the quarter tones");
+    assert!(s.curve.red.iter().any(|p| p.y > p.x), "a 0..255 curve is read on its scale");
+    assert!(lcc_develop::ToneCurve::point_curve_is_identity(&s.curve.blue), "a straight line changes nothing");
+}
+
+#[test]
+fn levels_per_channel() {
+    let l = layers(
+        json!({"ZLEVELSSHADOW": "0.1;0;0.2;0", "ZLEVELSHIGHLIGHT": "0.9", "ZMIDTONE": "0.4;0.5;0.5;0.5", "ZLEVELSTARGETHIGHLIGHT": 250}),
+        json!({"ZLEVELSSHADOW": "0;0;0;0", "ZLEVELSHIGHLIGHT": "1;1;1;1", "ZMIDTONE": "0.5;0.5;0.5;0.5", "ZLEVELSTARGETSHADOW": "0", "ZLEVELSTARGETHIGHLIGHT": 255}),
+    );
+    let d = develop_of(&l, [6000.0, 4000.0], ("", ""));
+    assert!(d.not_imported.is_empty(), "{:?}", d.not_imported);
+    let (s, _) = applied(&d);
+    let m = s.levels.master;
+    assert!((m.black - 25.5).abs() < 1e-6 && (m.white - 229.5).abs() < 1e-6 && (m.out_white - 250.0).abs() < 1e-6, "{m:?}");
+    assert!(m.midtone > 0.0, "a marker nearer black brightens the midtones");
+    assert!((s.levels.green.black - 51.0).abs() < 1e-6);
+    assert_eq!(s.levels.red.black, 0.0);
+    assert_eq!(s.levels.red.midtone, 0.0);
+}
+
+/// Hostile stored values: never a panic, never a guessed setting; the tool is reported instead.
+#[test]
+fn unreadable_tool_values_are_reported() {
+    let cases: &[(&str, Value, &str)] = &[
+        ("ZGRADATIONCURVE", json!("0,0;1"), "Curve"),
+        ("ZGRADATIONCURVE", json!("0,0;0.5,0.2;0.5,0.8;1,1"), "Curve"),
+        ("ZGRADATIONCURVE", json!("0,0;900,3"), "Curve"),
+        ("ZGRADATIONCURVE", json!("-1,0;1,1"), "Curve"),
+        ("ZGRADATIONCURVE", json!("nan,0;1,1"), "Curve"),
+        ("ZGRADATIONCURVE", json!(format!("0,0;{}1,1", "0.5,0.5;".repeat(400))), "Curve"),
+        ("ZGRADATIONCURVE", json!(12), "Curve"),
+        ("ZLEVELSSHADOW", json!("0.1;0.2"), "Levels"),
+        ("ZLEVELSSHADOW", json!("300"), "Levels"),
+        ("ZLEVELSSHADOW", json!("-0.5"), "Levels"),
+        ("ZMIDTONE", json!("1.5"), "Levels"),
+        ("ZMIDTONE", json!("0"), "Levels"),
+        ("ZLEVELSHIGHLIGHT", json!({"a": 1}), "Levels"),
+        ("ZCONTRAST", json!("lots"), "Contrast"),
+        ("ZCLARITY", json!("1e999"), "Clarity"),
+    ];
+    for (column, value, tool) in cases {
+        let l = layers(json!({ *column: value }), json!({ *column: "0.25" }));
+        let d = develop_of(&l, [6000.0, 4000.0], ("", ""));
+        assert!(d.not_imported.iter().any(|t| t == tool), "{column} = {value}: {:?}", d.not_imported);
+        assert!(d.curves.is_empty() && d.levels.is_empty() && d.sliders.is_empty(), "{column} = {value}");
+        let _ = applied(&d);
+    }
+    // an archive with values out of range still applies within range
+    let d = CaptureOneDevelop {
+        sliders: [("light.contrast".to_string(), 1e9), ("nogroup".to_string(), 1.0)].into_iter().collect(),
+        curves: [("master".to_string(), vec![[-3.0, 9.0], [1.0, 1.0]]), ("alpha".to_string(), vec![[0.0, 1.0]])].into_iter().collect(),
+        levels: [("master".to_string(), [-9.0, 7.0, 1e9, 0.0, 255.0]), ("cyan".to_string(), [0.0; 5])].into_iter().collect(),
+        ..Default::default()
+    };
+    let (s, _) = applied(&d);
+    assert_eq!(s.light.contrast, 100.0);
+    assert!(s.levels.master.white <= 255.0 && s.levels.master.midtone <= 1.0);
 }

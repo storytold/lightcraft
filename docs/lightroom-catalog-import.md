@@ -332,10 +332,19 @@ Capture One 16.9.0 on Windows (catalog format 160906).
     relative scale (no matrices for its camera) gets the same change through that scale, which on those cameras
     only approximates Capture One's (the result window says so, with the photo count); a rendered file's white
     balance is not imported.
+  - **Tone and clarity**: `ZCONTRAST`, `ZBRIGHTNESS`, `ZSATURATION` (Capture One's ±50, doubled onto the app's
+    sliders), High Dynamic Range (`ZHIGHLIGHTRECOVERY` / `ZWHITERECOVERY` pull Highlights / Whites down,
+    `ZSHADOWRECOVERY` / `ZBLACKRECOVERY` lift Shadows / Blacks), `ZCLARITY` → Clarity, `ZCLARITYSTRUCTURE` → Texture
+    (the clarity method has no equivalent and is reported).
+  - **Curves** (`ZGRADATIONCURVE`, `…RED`, `…GREEN`, `…BLUE`, `x,y;x,y;…` in 0..1 or 0..255) → the Tone Curve's
+    point curves; the luma curve (`…Y`) is reported.
+  - **Levels** (`ZLEVELSSHADOW`, `ZLEVELSHIGHLIGHT`, `ZLEVELSTARGETSHADOW`, `ZLEVELSTARGETHIGHLIGHT`, `ZMIDTONE`; one
+    value or `rgb;r;g;b`, 0..1 or 0..255, the midtone as the marker's place between the points) → Levels per channel.
+  - A value that doesn't read as described (wrong count, out of range, not a number) is reported, never guessed.
   - The ICC profile choice is left out on purpose: photos get the app's camera colour.
 
-  Every other setting a photo uses is named in the result window, by Capture One tool (Brightness, Levels, High
-  Dynamic Range, LCC, Local adjustment layers, …, with how many photos use it), and per photo in the report's
+  Every other setting a photo uses is named in the result window, by Capture One tool (Color Editor, Dehaze, Luma
+  curve, LCC, Local adjustment layers, …, with how many photos use it), and per photo in the report's
   `unmapped`. A photo is dated at Capture One's last settings change (`ZSETTINGSMODIFICATIONDATE`).
 
   Checked against Capture One's own exports of the same raws (`<cli> compare`, aligned, 1000 px renders; 12 photos

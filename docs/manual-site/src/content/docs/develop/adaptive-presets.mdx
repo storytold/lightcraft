@@ -1,0 +1,18 @@
+---
+title: Adaptive presets
+description: Presets whose masks select the subject, sky or background again on every photo.
+sidebar:
+  order: 14
+---
+
+import NeedsImage from '../../../components/NeedsImage.astro';
+
+<NeedsImage what="Develop Presets panel with the Smart Masks: Adaptive group open, the AI marker beside Subject Pop and its hover note" />
+
+- **What**: an adaptive preset carries a look **and** masks saved as recipes ("the sky", "the subject", "the groom's clothes"), not as pixels. Applying it selects them again on each photo, so one preset fits every frame of a shoot.
+- **Where**: **Develop ▸ Presets**. Presets with such masks show a small **AI** marker; hover one for the note. The built-in **Smart Masks: Adaptive** group has **Subject Pop**, **Deep Sky**, **Quiet Background** and **Subject and Sky**; **Smart Masks** has the wedding recipes.
+- **Make your own**: add masks to a photo (Subject, Sky, Background, People, Object, Describe…), then **New Preset** with **Masking** ticked. The preset keeps what each mask selects and its adjustments; what was computed for that one photo is dropped. Object masks keep no clicks: pick the object again on each photo.
+- **Apply**: click the preset. Its masks are added to the photo's own; clicking the same preset again replaces them rather than doubling them. On several photos at once the masks are linked.
+- **Builds without AI models**: Subject, Sky, Background and Landscape come from the built-in scene masks and work everywhere. Object, Describe and People need the AI model; a build without it (the web and command-line builds) applies the rest of the preset and names the skipped masks in a message (`preset.apply` returns them as `skipped`).
+- **Files**: **Export** writes a version 2 preset file when a preset has masks (version 1 otherwise, which older versions read). A file from a newer version, or one with broken or more than 64 masks, is refused with a message.
+- **Commands**: `preset.apply {"id": …}` → `{"skipped": […]}`; `preset.create {"name": …, "groups": ["masks", …]}`.
