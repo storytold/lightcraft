@@ -339,9 +339,12 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
         return ctx.input(|input| input.key_pressed(Key::Escape))
             && app.widgets.iter().any(|(widget, _)| widget.starts_with("sliderField:") && crate::text_field::was_editing(ctx, widget));
     }
-    // a selected slider keeps its arrow keys; everything else is a shortcut
+    // a selected slider keeps its arrow keys and Return (it types a value); everything else is a shortcut
     if crate::widgets::slider_has_focus(ctx) {
-        return ctx.input(|input| [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown].iter().any(|key| input.key_pressed(*key)));
+        return ctx.input(|input| {
+            [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown].iter().any(|key| input.key_pressed(*key))
+                || (input.key_pressed(Key::Enter) && input.modifiers.is_none())
+        });
     }
     // a handle on the photo keeps the arrows (it moves) and Return / Space (it acts)
     if crate::canvas_keys::has_focus(ctx) {
