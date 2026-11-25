@@ -918,6 +918,13 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
     resp
 }
 
+/// The border of a text button or a segment: what `ui` draws a plain button's border in (the theme's `button_border`
+/// unless a window made it more legible, as Settings does), or the theme's where the ui draws plain buttons without one.
+fn button_border(ui: &Ui, t: &Tokens) -> egui::Color32 {
+    let drawn = ui.visuals().widgets.inactive.bg_stroke.color;
+    if drawn.a() == 0 { t.button_border } else { drawn }
+}
+
 /// A small bordered text button (Auto, B&W, HDR…).
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
@@ -935,8 +942,9 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     } else {
         t.button
     };
+    let border = button_border(ui, &t);
     let p = ui.painter();
-    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
 }
@@ -978,8 +986,9 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 } else {
                     t.button
                 };
+                let border = button_border(ui, &t);
                 let p = ui.painter();
-                p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+                p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, border), StrokeKind::Inside);
                 p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
                 if resp.clicked() {
                     clicked = Some(i);
