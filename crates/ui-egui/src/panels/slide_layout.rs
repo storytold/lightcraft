@@ -101,7 +101,7 @@ pub fn sections(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     toggle(app, ui, "slideshowGuides", "showGuides", s.show_guides, "Show guides");
     row(ui, t, "Aspect preview", |ui| {
         let mut a = s.aspect;
-        let opts = [(Aspect::Screen, "Screen"), (Aspect::Wide, "16:9"), (Aspect::Standard, "4:3")];
+        let opts = [(Aspect::Screen, crate::i18n::tr("Screen")), (Aspect::Wide, "16:9"), (Aspect::Standard, "4:3")];
         if choices(ui, "settingsSlideshowAspect", &opts, &mut a) {
             set(app, json!({"aspect": a.id()}));
         }
