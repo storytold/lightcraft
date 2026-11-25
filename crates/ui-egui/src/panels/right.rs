@@ -96,15 +96,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
-        if held.is_some() || ui.data(|d| d.get_temp::<bool>(egui::Id::unique("dbg-hold"))).unwrap_or(false) {
-            eprintln!(
-                "DBGSHOW pass={} held={held:?} start={start:?} final_offset={} content={} inner={} measuring={}",
-                ui.ctx().cumulative_pass_nr(),
-                scrolled.state.offset().y,
-                scrolled.content_size.y,
-                scrolled.inner_rect.height(),
-                ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
-            );
+        {
+            let now = (scrolled.state.offset().y, scrolled.content_size.y);
+            let last = ui.data(|d| d.get_temp::<(f32, f32)>(egui::Id::unique("dbg-last")));
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique("dbg-last"), now));
+            if last != Some(now) && !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
+                eprintln!(
+                    "DBGSHOW pass={} held={held:?} start={start:?} offset {:?} -> {} content {:?} -> {} inner={}",
+                    ui.ctx().cumulative_pass_nr(),
+                    last.map(|l| l.0),
+                    now.0,
+                    last.map(|l| l.1),
+                    now.1,
+                    scrolled.inner_rect.height()
+                );
+            }
         }
     });
 }
