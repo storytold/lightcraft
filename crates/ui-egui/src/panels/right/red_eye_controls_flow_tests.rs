@@ -744,11 +744,22 @@ fn red_eye_actual_parent_post_selection_immediate_enter_belongs_to_observed_catc
     assert_eq!(f.app.session.active(), Some(f.photos[1]));
     assert_eq!(f.app.ui.eye, 1);
     let owner = f.actual_owner(CATCH);
-    assert_eq!(
-        craft::ui::runtime::focus::focused_rec(&f.ctx).map(|record| record.stop.id),
-        Some(owner),
-        "observe the real owner; never request focus"
-    );
+    // The focused slider went with the old photo. The framework leaves the focus nowhere when a focused stop goes away
+    // after the pass that focused it (next 8206a076a); a fallback may also land on the surviving Catchlight owner.
+    // Either way the promise holds: the Enter after the switch belongs to nothing stale.
+    let focused = craft::ui::runtime::focus::focused_rec(&f.ctx).map(|record| record.stop.id);
+    if focused.is_none() {
+        assert_eq!(f.ctx.memory(|memory| memory.focused()), None, "observe the real owner; never request focus");
+        let (document, preferences, undo, journal) = (f.document(), f.preferences(), f.app.session.undo.len(), f.app.session.journal.len());
+        f.key(Key::Enter);
+        assert_eq!(f.app.session.journal.len(), journal, "no stale numeric or other-domain replay");
+        assert_eq!(f.app.session.undo.len(), undo, "no undo step");
+        assert_eq!(f.document(), document, "document and selection unchanged");
+        assert_eq!(f.preferences(), preferences);
+        f.idle();
+        return;
+    }
+    assert_eq!(focused, Some(owner), "observe the real owner; never request focus");
     assert_eq!(f.ctx.memory(|memory| memory.focused()), Some(owner));
     let before = f.document();
     let preferences = f.preferences();

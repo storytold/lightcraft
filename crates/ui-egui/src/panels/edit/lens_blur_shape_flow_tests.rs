@@ -640,6 +640,8 @@ fn actual_parent_localized_accessible_buttons_keep_original_glyphs_inside_narrow
                 oracle.choose(OPTIONS[index].0);
                 f.same_as(&oracle);
                 assert_ne!(f.document(), before);
+                // A press hides a framework tooltip until the pointer leaves its control: leave, then rest on it.
+                f.frame(vec![Event::PointerMoved(Pos2::new(900.0, 1500.0))]);
                 f.frame(vec![Event::PointerMoved(rect.center())]);
                 f.tick += 60;
                 f.frame(vec![]);
@@ -823,7 +825,16 @@ fn actual_parent_stale_photo_mask_collapse_hidden_and_empty_context_cannot_repla
         f.frame(vec![]);
         f.same_as(&oracle);
         assert_eq!(f.state(), before, "stale key release must not change any new/hidden owner, document, UI or history field");
-        if which == 0 {
+        // The focused shape button went with the old photo. The framework leaves the focus nowhere when a focused stop
+        // goes away after the pass that focused it (next 8206a076a); a fallback may also land on the surviving neighbour.
+        let nowhere = craft::ui::runtime::focus::focused_rec(&f.ctx).is_none() && f.ctx.memory(|memory| memory.focused()).is_none();
+        if which == 0 && nowhere {
+            // a new key-down then belongs to nothing: no edit, no tool, no history
+            let (before, tool) = (f.state(), f.app.ui.tool.clone());
+            f.key(Key::Space);
+            assert_eq!(f.state(), before, "a key with no owner changes no document, UI or history field");
+            assert_eq!(f.app.ui.tool, tool);
+        } else if which == 0 {
             // A NEW key-down after focus fallback is a legitimate activation of the actual native neighbor.
             assert!(f.focused("button:lensBlurEditShape"));
             let document = f.document();
