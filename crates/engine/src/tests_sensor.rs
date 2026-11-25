@@ -658,3 +658,66 @@ fn remove_film_dust_fills_the_marks_in_the_render() {
     s.execute("develop.set", &json!({"control": "filmDust.remove", "value": 1})).unwrap();
     assert_eq!(s.render_now(pid, 80, 60).unwrap().image.data, before.data);
 }
+
+/// The highlight method (plan 7.2) is a develop control kept out of the settings at its default (older settings
+/// keep their hash), carried into the decode options; a raw decoded with one method is decoded again for another,
+/// and a raw with a clipped patch (green and red at the white level) decodes with every method into finite pixels,
+/// the clipped patch still the brightest part and far from it the picture the same.
+#[test]
+fn highlight_method_is_a_control_and_each_decodes_a_clipped_raw() {
+    use lcc_develop::DevelopSettings;
+    use lcc_raw::highlight::Mode;
+    let d = DevelopSettings::default();
+    assert_eq!(lcc_develop::controls::get(&d, "sensor.highlightMode"), Some(0.0));
+    let mut s = d.clone();
+    s.sensor.pixel_fix = 0.0;
+    assert!(!s.to_json().to_string().contains("highlight_mode"), "kept out at its default");
+    assert!(lcc_develop::controls::set(&mut s, "sensor.highlightMode", 2.0));
+    assert_eq!(s.to_json()["sensor"]["highlight_mode"], json!(2.0));
+    assert_eq!(DevelopSettings::from_json(&s.to_json()).unwrap(), s);
+    assert_ne!(s.hash64(), {
+        s.sensor.highlight_mode = 0.0;
+        s.hash64()
+    });
+    s.sensor.highlight_mode = 1.0;
+    let opts = crate::media::LoadOptions::of(&s);
+    assert_eq!(opts.highlight, Mode::Opposed);
+    assert_eq!(crate::media::LoadOptions::of(&d).highlight, Mode::Rebuild);
+    // hostile control values fall back to the default method
+    for v in [f64::NAN, -4.0, 9.0] {
+        s.sensor.highlight_mode = v;
+        assert_eq!(crate::media::LoadOptions::of(&s).highlight, Mode::Rebuild);
+    }
+
+    let (w, h) = (96usize, 64usize);
+    let mut data = mosaic(w, h, 3, &[]);
+    for y in 20..40 {
+        for x in 30..60 {
+            // red (even row, even column) and green photosites clip; blue keeps its value
+            let blue = y % 2 == 1 && x % 2 == 1;
+            if !blue {
+                data[y * w + x] = 16000;
+            } else {
+                data[y * w + x] = 9000;
+            }
+        }
+    }
+    let dng = synthetic_dng_of(w, h, "RGGB", data, None, meta(5, None));
+    let mut decoded = Vec::new();
+    for mode in [Mode::Rebuild, Mode::Opposed, Mode::Laplacian] {
+        let o = crate::media::LoadOptions { highlight: mode, pixel_fix: false, ..Default::default() };
+        let (img, info) = crate::files::load_bytes_with(&dng, 4096, o.clone()).unwrap();
+        assert!(img.data.iter().all(|p| p.iter().all(|v| v.is_finite())), "{mode:?}");
+        let mean = |x0: usize, y0: usize| (0..3).map(|c| img.get(x0, y0)[c]).sum::<f32>();
+        assert!(mean(45, 30) > mean(10, 55), "{mode:?}: the clipped patch stays bright");
+        let source = crate::media::DecodedSource { options: o, ..crate::media::DecodedSource::new(std::sync::Arc::new(img.clone()), Some(info)) };
+        for other in [Mode::Rebuild, Mode::Opposed, Mode::Laplacian] {
+            let want = crate::media::LoadOptions { highlight: other, pixel_fix: false, ..Default::default() };
+            assert_eq!(source.serves(&want), other == mode, "{mode:?} serves {other:?}");
+        }
+        decoded.push(img);
+    }
+    for img in &decoded[1..] {
+        assert_eq!(img.get(5, 5), decoded[0].get(5, 5), "far from the clipped patch nothing changes");
+    }
+}

@@ -403,6 +403,7 @@ controls! {
     "calibration.blueSat" => calibration.blue_sat, "Blue Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#3a60e0" };
     "crop.angle" => crop.geometry.angle, "Straighten", Geometry, -45, 45, 0, 0.01, 2, Centered;
     "sensor.pixelFix" => sensor.pixel_fix, "Fix Hot and Dead Pixels", Sensor, 0, 1, 1, 1, 0, Plain;
+    "sensor.highlightMode" => sensor.highlight_mode, "Highlight Reconstruction", Sensor, 0, 2, 0, 1, 0, Plain;
     "filmDust.remove" => film_dust.remove, "Remove Film Dust", Sensor, 0, 1, 0, 1, 0, Plain;
     "filmDust.sensitivity" => film_dust.sensitivity, "Film Dust Sensitivity", Sensor, 0, 100, 50, 1, 0, Plain;
     "filmDust.expand" => film_dust.expand, "Film Dust Expand", Sensor, -8, 40, 1, 1, 0, Centered;

@@ -438,14 +438,15 @@ pub(crate) struct CameraColourModel<'a> {
 impl CameraColourModel<'_> {
     /// Rebuild sensor-clipped channels; fully clipped highlights become [`clipped_white`] of the matrix, so they
     /// come out of [`Self::apply`] neutral.
+    #[cfg(test)]
     pub fn rebuild_highlights(&self, img: &mut Rgb32f) {
         lcc_raw::highlight::reconstruct_with(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix));
     }
 
-    /// [`Self::rebuild_highlights`] for a binned image whose clipped channels `mask` tells
+    /// [`Self::rebuild_highlights`] with the photo's method; `mask` tells the clipped channels of a binned image
     /// ([`lcc_raw::RawImage::develop_binned_masked`]).
-    pub fn rebuild_highlights_masked(&self, img: &mut Rgb32f, mask: &[u8]) {
-        lcc_raw::highlight::reconstruct_masked(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix), mask);
+    pub fn rebuild_highlights_with(&self, img: &mut Rgb32f, mode: lcc_raw::highlight::Mode, mask: Option<&[u8]>) {
+        lcc_raw::highlight::reconstruct_mode(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix), mode, mask);
     }
 
     /// White balance, matrix, tables and baseline exposure, in place.
@@ -871,10 +872,7 @@ fn load_bytes_now(
         let finish = |mut img: Rgb32f| {
             let mut stages = vec![("develop", t0.elapsed())];
             stages.push(("transform", t0.elapsed()));
-            match &clip_mask {
-                Some(mask) => colour.rebuild_highlights_masked(&mut img, mask),
-                None => colour.rebuild_highlights(&mut img),
-            }
+            colour.rebuild_highlights_with(&mut img, options.highlight, clip_mask.as_deref());
             stages.push(("highlights", t0.elapsed()));
             colour.apply(&mut img);
             stages.push(("colour", t0.elapsed()));
