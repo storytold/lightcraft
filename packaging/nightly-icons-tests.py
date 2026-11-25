@@ -21,6 +21,21 @@ def pixels(path):
     return ICONS.read_png(path.read_bytes())
 
 
+class Downsample(unittest.TestCase):
+    def test_transparent_padding_never_darkens_a_blocks_colour(self):
+        # A 2x2 block of one amber pixel and three transparent ones: the visible colour stays the amber
+        # it was (PNG RGB is straight, not premultiplied) and only the coverage drops to a quarter.
+        master = bytearray([154, 102, 16, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(tuple(ICONS.downsample(2, 2, master, 1)), (154, 102, 16, 64))
+
+    def test_a_fully_transparent_block_stays_transparent(self):
+        self.assertEqual(tuple(ICONS.downsample(2, 2, bytearray(16), 1)), (0, 0, 0, 0))
+
+    def test_two_colours_mix_by_coverage(self):
+        master = bytearray([0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(tuple(ICONS.downsample(2, 2, master, 1)), (128, 128, 128, 128))
+
+
 class Recolour(unittest.TestCase):
     def test_the_field_moves_and_the_figure_does_not(self):
         for colour, expected in (

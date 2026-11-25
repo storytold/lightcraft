@@ -193,22 +193,24 @@ def downsample(width: int, height: int, pixels: bytearray, size: int) -> bytearr
     area = factor * factor
     for y in range(size):
         for x in range(size):
-            total = [0, 0, 0, 0]
+            weighted = [0, 0, 0]
+            alpha = 0
             for dy in range(factor):
                 row = ((y * factor + dy) * width + x * factor) * 4
                 for dx in range(factor):
                     at = row + dx * 4
-                    total[0] += pixels[at]
-                    total[1] += pixels[at + 1]
-                    total[2] += pixels[at + 2]
-                    total[3] += pixels[at + 3]
+                    # PNG stores straight alpha, so the colour is its alpha-weighted share of the
+                    # block: averaging RGB by area would let transparent padding darken the edge.
+                    coverage = pixels[at + 3]
+                    for channel in range(3):
+                        weighted[channel] += pixels[at + channel] * coverage
+                    alpha += coverage
             at = (y * size + x) * 4
-            alpha = total[3]
             if alpha == 0:
                 continue
-            out[at] = round(total[0] / area)
-            out[at + 1] = round(total[1] / area)
-            out[at + 2] = round(total[2] / area)
+            out[at] = round(weighted[0] / alpha)
+            out[at + 1] = round(weighted[1] / alpha)
+            out[at + 2] = round(weighted[2] / alpha)
             out[at + 3] = round(alpha / area)
     return out
 

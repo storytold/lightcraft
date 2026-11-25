@@ -32,16 +32,16 @@
       "background": "#f2a516"
     },
     "nightly_background": "#9a6610",
-    "transform": "Project every pixel onto the nearest two-colour segment of the drawing's exact palette (ink/paper, ink/background, paper/background), then move only the background share from the stable amber to the Nightly amber. Ink, paper, alpha and the macOS padding are unchanged; frames are packed at their own size and never upscaled. No crescent, letter or badge.",
+    "transform": "Project every pixel onto the nearest two-colour segment of the drawing's exact palette (ink/paper, ink/background, paper/background), then move only the background share from the stable amber to the Nightly amber. Ink, paper, alpha and the macOS padding are unchanged; frames are packed at their own size and never upscaled. A frame downsampled from the padded master weights each channel by its pixel's alpha, so the transparent margin cannot darken the edge it borders. No crescent, letter or badge.",
     "why_two_colours": "Solving ink, paper and background weights at once is numerically unstable for this palette: ink and paper are nearly collinear with the neutral axis, so a half-unit of rounding moves the ink/paper split by more than one. A real edge pixel is a blend of exactly two of the three colours.",
     "generator": "packaging/nightly-icons.py",
-    "generator_sha256": "31060866a1cca8ec6bd2c34b488a234145618c10c6341c88b81f243f4366634a"
+    "generator_sha256": "dff74f2a243d205c1babb8ebfa2d528bb8696b13839215f5f824447b09bf89f8"
   },
   "outputs": {
     "assets/app-icon/lightcraft-nightly.png": "b92530460f2fc49cb768fd8b12be957b5d1cbaf2f82e89b335bc64193283d4c3",
     "assets/app-icon/lightcraft-nightly.ico": "69a0c3f003dbf74d7ecb29252c1fbae4ca594a2744ee67cdbb2f3a8c85db0304",
     "assets/app-icon/lightcraft-nightly-1024.png": "caa27ef797c22e6a2a95928341a717c6c5784acd5c09ce5547cefcf482617ddb",
-    "assets/app-icon/lightcraft-nightly.icns": "498ae16c517b0b3c0367f844a58fa4f63517ecf3bea15ccafb1cb00cef433fcb"
+    "assets/app-icon/lightcraft-nightly.icns": "e738bbb001f347459c7ef1994c2c38f42570992238ad4bcf6d041ec7335a3767"
   },
   "ico_frame_sizes": [
     16,
@@ -67,5 +67,5 @@
     "ic14": 512,
     "ic10": 1024
   },
-  "validation": "packaging/nightly-icons-tests.py re-derives the committed bytes (--check) and pins that only the field share changes, that alpha and the padded margin are preserved, and that every container frame has its own size. Visual comparison reviewed. Native Explorer/Finder qualification remains unrun."
+  "validation": "packaging/nightly-icons-tests.py re-derives the committed bytes (--check) and pins that only the field share changes, that alpha and the padded margin are preserved, that a transparent block never darkens its visible colour, and that every container frame has its own size. The 16/32/64 px padded slots were regenerated with the alpha-weighted filter: only their anti-aliased edge colour moved (52/100/197 pixels, no alpha change); the other frames are byte-identical. Native Explorer/Finder qualification remains unrun."
 }
