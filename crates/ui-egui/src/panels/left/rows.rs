@@ -4,7 +4,8 @@ use std::hash::{Hash as _, Hasher as _};
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, PartKey, Selection, SizeHint};
 use craft::ui::contract::overlay::Anchor;
 use craft::ui::contract::{
-    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnAlign, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _,
+    ShowContainer as _,
 };
 use craft::ui::display::Divider;
 use craft::ui::list::{List, ListRow, TreeLeaves};
@@ -85,6 +86,29 @@ const LABEL_LEAD: f32 = 42.0;
 
 /// What a row needs besides its levels: the icon and triangle, a name's share, the count.
 const ROW_ROOM: f32 = 42.0 + 140.0 + 40.0;
+
+/// The room a count keeps at the right of the visible edge it is pinned to.
+const COUNT_EDGE_ROOM: f32 = 18.0;
+
+/// The least of its name a row shows before its count gives way (about three letters and an
+/// ellipsis), and the room between the name and the count's slot.
+const MIN_COUNT_NAME_ROOM: f32 = 36.0;
+const NAME_GAP: f32 = 8.0;
+
+/// The room a count's cell keeps around its text: the framework insets a cell's text at each side
+/// (`control.pad_x`), and a cell narrower than its text would cut a digit off.
+const COUNT_CELL_PAD: f32 = 14.0;
+
+/// How wide `text` lays out in `font`: how a row's name and its count are measured.
+fn text_width(ctx: &egui::Context, text: &str, font: egui::FontId) -> f32 {
+    ctx.fonts_mut(|fonts| fonts.layout(text.to_owned(), font, egui::Color32::PLACEHOLDER, f32::INFINITY).size().x)
+}
+
+/// Where a row's name starts, from the row's start: the triangle's column and the icon, then one
+/// step for each level.
+fn labels_start(item: &SideRow) -> f32 {
+    LABEL_LEAD + item.depth as f32 * LEVEL_WIDTH
+}
 
 /// How wide the sidebar's content needs to be, from the deepest row of the last frame: the panel's
 /// width, or more when the levels leave too little room for the names. One frame behind, which
@@ -244,6 +268,118 @@ impl SideRow {
         self
     }
 
+}
+
+/// What a row's count column shows: whether photo counts are on, and whether the list has a count
+/// column at all (counts shown, or a row with a note of its own).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Counts {
+    shown: bool,
+    column: bool,
+}
+
+impl Counts {
+    /// The text a row puts in its count column: its note, or its count of photos.
+    fn text(self, item: &SideRow) -> Option<String> {
+        item.note.clone().or_else(|| item.count.filter(|_| self.shown).map(|n| n.to_string()))
+    }
+}
+
+/// A row's cells and what it shows in them, with its count pinned at the sidebar's visible right
+/// edge as the old sidebar drew it: the counts keep one column at the edge while the content
+/// scrolls sideways under it, and the name is cut just before it, so a count never covers a name.
+/// A row too deep to hold both keeps its count (and its colour label's dot) wholly past the edge,
+/// where a sideways scroll reaches it, rather than being cut in two by the edge. A list that fits
+/// the panel needs no pinning: its rows end at the edge, and the count's own column already cuts
+/// the name before it.
+struct Pinned {
+    /// The row's cells, with [`COUNT`] and [`GAP`] moved to where the pin keeps them.
+    cells: Vec<(ColumnKey, Rect)>,
+    /// The name as drawn: cut with an ellipsis where it does not fit before the count.
+    label: String,
+    /// Whether the name had to be cut.
+    cut: bool,
+    /// The name as far as it is drawn, from the row's start.
+    label_rect: Rect,
+    /// The count's text where it sits (only for a row that shows one).
+    count: Option<Rect>,
+    /// A colour label's dot where it sits.
+    dot: Option<Rect>,
+}
+
+impl Pinned {
+    /// The row `item` in `rect` with the cells `cells` the list laid out for it, and what its
+    /// count column shows (`counts`).
+    fn of(ctx: &egui::Context, rect: Rect, cells: &[(ColumnKey, Rect)], item: &SideRow, counts: Counts) -> Self {
+        let font = Tokens::get(ctx).font(13.5);
+        let measure = |text: &str| text_width(ctx, text, font.clone());
+        let lead = labels_start(item);
+        let count_text = counts.text(item);
+        let name_at = cells.iter().position(|(column, _)| *column == NAME);
+        let count_at = cells.iter().position(|(column, _)| *column == COUNT);
+        let gap_at = cells.iter().position(|(column, _)| *column == GAP);
+        let Some(name_cell) = name_at.and_then(|at| cells.get(at)).map(|(_, rect)| *rect) else {
+            // a list without columns: the row is all label
+            return Pinned { cells: cells.to_vec(), label: item.label.clone(), cut: false, label_rect: rect, count: None, dot: None };
+        };
+        let name_w = measure(&item.label);
+        let mark_w = if item.mark.is_some() { GAP_MARK } else { 0.0 };
+        let label_left = name_cell.left() + lead;
+        let visible = super::sections::visible_right_of(ctx);
+        // The count's text starts here: `COUNT_EDGE_ROOM` before the visible edge while the row
+        // reaches past it, and right after the name instead when there is no room for both.
+        let pinned = (counts.column && rect.right() > visible + 0.5).then(|| {
+            let text = count_text.as_deref().map_or(0.0, &measure);
+            let after_name = label_left + name_w.min(MIN_COUNT_NAME_ROOM) + NAME_GAP + mark_w + text + COUNT_EDGE_ROOM;
+            if after_name > visible && (count_text.is_some() || mark_w > 0.0) {
+                // The count gives way: wholly past the edge, with the name's least room before it.
+                (after_name - COUNT_EDGE_ROOM - text).max(visible + 4.0 + mark_w)
+            } else {
+                visible - COUNT_EDGE_ROOM - text
+            }
+        });
+        let mut cells = cells.to_vec();
+        let mut label = item.label.clone();
+        let mut cut = false;
+        let mut drawn = name_w;
+        if let Some(count_left) = pinned {
+            let room = (count_left - mark_w - NAME_GAP - label_left).max(0.0);
+            if name_w > room {
+                label = crate::widgets::elide_head(&item.label, room, &measure);
+                cut = true;
+            }
+            drawn = measure(&label).min(room);
+            // (the name's column stays as the list laid it out: its room decides the indent the
+            // row draws, and the name is already cut where the count's slot begins)
+            // a colour label's dot sits in its slot before the count
+            if let Some(at) = gap_at {
+                let width = cells[at].1.width();
+                cells[at].1 = Rect::from_center_size(pos2(count_left - mark_w / 2.0, rect.center().y), vec2(width, rect.height()));
+            }
+            // the count's cell is as wide as its text and the room its text keeps at each side
+            if let (Some(at), Some(text)) = (count_at, count_text.as_deref()) {
+                let width = measure(text);
+                let (left, right) = (count_left - COUNT_CELL_PAD, count_left + width + COUNT_CELL_PAD);
+                cells[at].1 = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
+            }
+        }
+        let count = count_at.and_then(|at| match pinned {
+            Some(count_left) => {
+                let width = count_text.as_deref().map_or(0.0, &measure);
+                count_text.as_ref().map(|_| Rect::from_x_y_ranges(count_left..=(count_left + width), rect.y_range()))
+            }
+            None => Some(cells[at].1),
+        });
+        let dot = item.mark.map(|_| {
+            let x = pinned.map_or_else(
+                || gap_at.map_or_else(|| count.map_or(rect.right() - 18.0, |count| count.left() - 6.0), |at| cells[at].1.center().x),
+                |count_left| count_left - mark_w / 2.0,
+            );
+            Rect::from_center_size(pos2(x, rect.center().y), vec2(8.0, 8.0))
+        });
+        let label_rect = Rect::from_min_size(name_cell.min, vec2((lead + drawn).min(name_cell.width()), name_cell.height()));
+        Pinned { cells, label, cut, label_rect, count, dot }
+    }
 }
 
 /// The rows a sidebar list shows, as the framework's item source.
@@ -458,9 +594,10 @@ fn built_rows(ui: &egui::Ui, rows: Vec<SideRow>, salt: &str, want: Option<&Strin
     (shown, above, below)
 }
 
-/// The list row of `item`: its icon, label, count and the rest, in the columns `cells`.
-fn list_row(item: &SideRow, cells: &[(ColumnKey, Rect)], tree: bool, show_counts: bool) -> ListRow<'static> {
-    let mut row = ListRow::new(item.label.clone()).cells(cells);
+/// The list row of `item`: its icon, label, count and the rest, in the columns `pinned` places
+/// (the name already cut where the pin keeps the count).
+fn list_row(item: &SideRow, pinned: &Pinned, tree: bool, show_counts: bool) -> ListRow<'static> {
+    let mut row = ListRow::new(pinned.label.clone()).cells(&pinned.cells);
     if let Some(icon) = item.icon {
         row = row.icon(IconSpec::svg(IconId::new(icon)));
     }
@@ -505,9 +642,12 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     let source = SideRows::new(rows);
     const DISCLOSURE: PartKey = PartKey::new("disclosure");
     let mut columns = vec![ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
-    if show_counts || has_notes {
+    // (the pin moves both cells row by row: the column's own rect only decides what a row that
+    // fits the panel shows, and right-aligned counts keep one end where the pin holds them)
+    let counts = Counts { shown: show_counts, column: show_counts || has_notes };
+    if counts.column {
         columns.push(ColumnSpec::new(GAP, "", ColumnWidth::Fixed(if has_marks { GAP_MARK } else { GAP_PLAIN })));
-        columns.push(ColumnSpec::new(COUNT, "", ColumnWidth::Fixed(40.0)));
+        columns.push(ColumnSpec::new(COUNT, "", ColumnWidth::Fixed(40.0)).align(ColumnAlign::End));
     }
     // The collection's lead is transient navigation, not the sidebar's choice: only its real
     // Activate event runs the row's command.
@@ -534,23 +674,31 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if above > 0.0 {
         ui.add_space(above);
     }
+    let ctx = ui.ctx().clone();
     let out = list.show_items(ui, &source, &mut |key, icx| {
         let item = &source.rows[source.index[key]];
         if item.fill.is_some() {
             return ListRow::spacer();
         }
+        let pinned = Pinned::of(&ctx, icx.rect, icx.cells(), item, counts);
         if item.group {
             // Public ItemCx/CollectionResponse opener API returns the real
             // declared disclosure-part response; no invented hit geometry.
             icx.part_opener(DISCLOSURE);
         }
-        if let Some(tip) = &item.tip {
-            let tip = tip.clone();
+        if pinned.cut || item.tip.is_some() {
+            // the whole name where the pin cut it short, then what resting on the row says
+            let (full, cut, tip) = (item.label.clone(), pinned.cut, item.tip.clone());
             icx.tip(move |ui| {
-                ui.label(tip);
+                if cut {
+                    ui.label(full);
+                }
+                if let Some(tip) = &tip {
+                    ui.label(tip.as_str());
+                }
             });
         }
-        list_row(item, icx.cells(), tree, show_counts)
+        list_row(item, &pinned, tree, show_counts)
     });
     if below > 0.0 {
         ui.add_space(below);
@@ -563,7 +711,7 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
         let height_id = egui::Id::unique(("side-row-height", salt.to_owned()));
         ui.data_mut(|d| d.insert_temp(height_id, first.rect.height()));
     }
-    let shown = list_shown(ui, &out, &source, selected, want.as_ref());
+    let shown = list_shown(ui, &out, &source, selected, want.as_ref(), counts);
     let mut events = list_events(&out, &source);
     // the menu opens from a row's triangle too (the list reports a request for the row itself only)
     let secondary = ui.input(|i| if i.pointer.button_clicked(egui::PointerButton::Secondary) { i.pointer.interact_pos() } else { None });
@@ -579,18 +727,25 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
 
 /// The rows the list showed, listed under the names the control channel knows them by (and the
 /// colour label's dot painted); a row the sidebar was asked to scroll to is scrolled to.
-fn list_shown<E>(ui: &mut egui::Ui, out: &CollectionResponse<String, E>, source: &SideRows, selected: Option<&str>, want: Option<&String>) -> Vec<SideShown> {
+fn list_shown<E>(
+    ui: &mut egui::Ui,
+    out: &CollectionResponse<String, E>,
+    source: &SideRows,
+    selected: Option<&str>,
+    want: Option<&String>,
+    counts: Counts,
+) -> Vec<SideShown> {
+    let ctx = ui.ctx().clone();
     let mut shown = Vec::new();
     for row in &out.shown {
         let item = &source.rows[source.index[&row.key]];
         if item.fill.is_some() {
             continue;
         }
-        let label = row.cells.iter().find(|(column, _)| *column == NAME).map(|(_, rect)| *rect);
-        let count = row.cells.iter().find(|(column, _)| *column == COUNT).map(|(_, rect)| *rect);
+        // the row's cells as the item closure placed them: the same pin, from the same numbers
+        let pinned = Pinned::of(&ctx, row.rect, &row.cells, item, counts);
         if item.register {
-            let gap = row.cells.iter().find(|(column, _)| *column == GAP).map(|(_, rect)| *rect);
-            register_row(ui, item, row.rect, (label, count, gap), selected == Some(item.key.as_str()));
+            register_row(ui, item, row.rect, &pinned, selected == Some(item.key.as_str()));
         }
         if let Some(toggle) = &item.toggle {
             for (_, response) in &row.openers {
@@ -600,14 +755,14 @@ fn list_shown<E>(ui: &mut egui::Ui, out: &CollectionResponse<String, E>, source:
         if want.is_some_and(|want| item.id.to_lowercase() == *want) {
             ui.scroll_to_rect_animation(row.rect, None, egui::style::ScrollAnimation::none());
         }
-        shown.push(SideShown { key: row.key.clone(), rect: row.rect, label, count });
+        shown.push(SideShown { key: row.key.clone(), rect: row.rect, label: Some(pinned.label_rect), count: pinned.count });
     }
     shown
 }
 
 /// Lists a row under `source:<id>`, `highlight:<id>` (the chosen one), `label:<id>` and
 /// `count:<id>`, and paints its colour label's dot.
-fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count, gap): (Option<Rect>, Option<Rect>, Option<Rect>), chosen: bool) {
+fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, pinned: &Pinned, chosen: bool) {
     let id = &item.id;
     // what is visible of the row: a press on the centre of a row that reaches past the panel's edge
     // (the sidebar scrolls sideways) must land on the panel
@@ -617,23 +772,14 @@ fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count, gap): 
     if chosen {
         register(ui, format!("highlight:{id}"), visible);
     }
-    if let Some(label) = label {
-        // the name as far as it is drawn: its own width, or the whole column when it is cut short
-        let font = Tokens::get(ui.ctx());
-        let text = ui.painter().layout_no_wrap(item.label.clone(), font.font(13.5), font.text_label).size().x;
-        let lead = LABEL_LEAD + item.depth as f32 * LEVEL_WIDTH;
-        let width = (lead + text).min(label.width());
-        register(ui, format!("label:{id}"), Rect::from_min_size(label.min, vec2(width, label.height())));
-    }
+    // the name as far as it is drawn, and the count where the pin keeps it
+    register(ui, format!("label:{id}"), pinned.label_rect);
     if item.count.is_some()
-        && let Some(count) = count
+        && let Some(count) = pinned.count
     {
         register(ui, format!("count:{id}"), count);
     }
-    if let Some(color) = item.mark {
-        // a label's dot sits in the gap before the count, or at the row's end without one
-        let x = gap.map_or_else(|| count.map_or(rect.right() - 18.0, |count| count.left() - 6.0), |gap| gap.center().x);
-        let dot = Rect::from_center_size(pos2(x, rect.center().y), vec2(8.0, 8.0));
+    if let (Some(color), Some(dot)) = (item.mark, pinned.dot) {
         ui.painter().circle_filled(dot.center(), 4.0, color);
         register(ui, format!("labelMark:{id}"), dot);
     }

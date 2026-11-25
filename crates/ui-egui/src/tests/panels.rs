@@ -1646,8 +1646,40 @@ fn folders_app_with_deep_labeled_chain() -> (Headless, String) {
     (h, dir)
 }
 
-/// In a panel too narrow for a deep row, the count gives way: it is drawn after the name, never
-/// over it or over the folder's icon.
+/// Where the sidebar's visible part ends: the edge its counts are pinned to while the content
+/// scrolls sideways under them.
+fn sidebar_edge(h: &Headless) -> f32 {
+    crate::panels::left::sidebar_visible_right(&h.view.ctx)
+}
+
+/// Whether `r` is whole at the edge `edge`: inside it, or wholly past it, never cut in two by it.
+fn whole_at_edge(r: egui::Rect, edge: f32) -> bool {
+    r.right() <= edge || r.left() >= edge
+}
+
+/// Every count and colour label's dot the Folders list drew, by widget name.
+fn folder_counts(h: &Headless) -> Vec<(String, egui::Rect)> {
+    h.app
+        .widgets
+        .iter()
+        .filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:"))
+        .map(|(w, r)| (w.clone(), *r))
+        .collect()
+}
+
+/// Every count and dot of the Folders list is whole at the sidebar's visible edge; `when` says
+/// which frame this is.
+fn assert_counts_whole(h: &Headless, when: &str) {
+    let edge = sidebar_edge(h);
+    for (id, rect) in folder_counts(h) {
+        assert!(whole_at_edge(rect, edge), "{when}: {id} straddles the edge: {rect:?} / {edge}");
+    }
+}
+
+/// A row with room for both keeps its count at the sidebar's visible edge, where it stays while
+/// the content scrolls sideways under it. In a panel too narrow for a deep row the count gives
+/// way: it is drawn after the name, never over it or over the folder's icon, and wholly past the
+/// edge rather than cut in two by it.
 #[test]
 fn a_count_never_covers_the_name_of_a_deep_row() {
     let (mut h, deep) = folders_app_with_deep_labeled_chain();
@@ -1660,6 +1692,17 @@ fn a_count_never_covers_the_name_of_a_deep_row() {
         mark.left() >= label.right() && mark.right() <= count.left(),
         "the color dot sits between the name and the count: {label:?} {mark:?} {count:?}"
     );
+    // a shallow row keeps its count at the visible edge, a count's width short of it
+    let edge = sidebar_edge(&h);
+    let all = widget(&h, "count:all");
+    assert!(all.right() <= edge && all.right() > edge - 40.0, "the count of All Photos is pinned at the edge: {all:?} / {edge}");
+    // and no count is cut in two by that edge (five digits wide here): it is whole, inside or past it
+    let mut past = 0;
+    for (id, rect) in folder_counts(&h) {
+        assert!(whole_at_edge(rect, edge), "{id} straddles the edge: {rect:?} / {edge}");
+        past += usize::from(rect.left() >= edge);
+    }
+    assert!(past > 0, "the deepest rows' counts are past the edge");
     // at every width
     for width in (200..=330).step_by(2) {
         let r = h.request("ui.set", json!({"leftWidth": width}), T);
@@ -1672,6 +1715,89 @@ fn a_count_never_covers_the_name_of_a_deep_row() {
             mark.left() >= label.right() && mark.right() <= count.left(),
             "at {width} pt the dot and count come after the name: {label:?} {mark:?} {count:?}"
         );
+        assert_counts_whole(&h, &format!("at {width} pt"));
+    }
+}
+
+/// A count or dot that gives way is whole at the sidebar's visible edge in every frame, also the
+/// one right after the panel's width changes, before the content has grown to the room the row
+/// asked for; the counts move with the edge in that same frame rather than a frame later.
+#[test]
+fn a_count_that_gives_way_is_whole_in_the_frame_the_panel_changes() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    let up: Vec<i32> = (200..=330).step_by(6).collect();
+    // (the visible edge and the right edge of the count of All Photos, as the frame before saw them)
+    let mut was: Option<(f32, f32)> = None;
+    for width in up.iter().chain(up.iter().rev()) {
+        let r = h.request("ui.set", json!({"leftWidth": width}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        // (one frame, not settled)
+        h.step();
+        assert_counts_whole(&h, &format!("one frame after {width} pt"));
+        let (edge, all) = (sidebar_edge(&h), widget(&h, "count:all").right());
+        if let Some((was_edge, was_all)) = was {
+            assert!(
+                (all - was_all - (edge - was_edge)).abs() < 1.5,
+                "one frame after {width} pt the count is where the edge was before: {was_all} -> {all} for {was_edge} -> {edge}"
+            );
+        }
+        was = Some((edge, all));
+    }
+}
+
+/// A sideways scroll of many points in one frame (a flick) does not leave a count or dot cut in
+/// two by the sidebar's visible edge in the frame it lands.
+#[test]
+fn a_count_that_gives_way_is_whole_after_a_sideways_flick() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    h.request("ui.move", json!({"x": 120.0, "y": 400.0}), T);
+    for dx in [-10.0, -20.0, -30.0, -40.0, -60.0, -90.0, 20.0, 40.0, 90.0] {
+        for width in [210, 230, 250, 290] {
+            h.request("ui.set", json!({"leftWidth": width}), T);
+            h.settle(SETTLE);
+            h.request("ui.scroll", json!({"dx": dx}), T);
+            h.step();
+            assert_counts_whole(&h, &format!("a flick of {dx} at {width} pt"));
+        }
+    }
+}
+
+/// The same when the panel grows by more than a few points in one frame (a window resize, or a
+/// drag that was held up): the content is still as wide as the last frame asked for.
+#[test]
+fn a_count_that_gives_way_is_whole_when_the_panel_grows_in_one_frame() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    for from in (200..=260).step_by(10) {
+        for by in [8, 16, 24, 32, 48, 64] {
+            for width in [from, from + by] {
+                let r = h.request("ui.set", json!({"leftWidth": width}), T);
+                assert_eq!(r["ok"], true, "{r}");
+                if width == from {
+                    h.settle(SETTLE);
+                } else {
+                    h.step();
+                }
+            }
+            let panel = widget(&h, "panel:left_panel");
+            assert!(panel.width() + 1.0 >= (from + by) as f32, "the panel is already {} pt wide in that frame: {panel:?}", from + by);
+            assert_counts_whole(&h, &format!("one frame after {from} -> {} pt", from + by));
+        }
+    }
+}
+
+/// Scrolling the sidebar sideways, a frame at a time, never leaves a count or dot cut in two by
+/// its visible edge, also where the scroll reaches the end of the content.
+#[test]
+fn a_count_that_gives_way_is_whole_while_the_sidebar_scrolls_sideways() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    h.request("ui.move", json!({"x": 120.0, "y": 400.0}), T);
+    for (dx, frames) in [(-6.0, 60), (6.0, 60)] {
+        for frame in 0..frames {
+            let r = h.request("ui.scroll", json!({"dx": dx}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.step();
+            assert_counts_whole(&h, &format!("frame {frame} of {dx}"));
+        }
     }
 }
 
@@ -2111,8 +2237,12 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     let step = xs[1] - xs[0];
     assert!(xs.len() == 26 && step > 0.0 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
     let panel = widget(&h, "panel:left_panel");
-    // (the rows are as wide as the widest one, so there is something to scroll to: a row's count, at its end, lies past the panel)
-    assert!(widget(&h, "count:all").left() >= panel.right(), "the rows reach past the panel: the count of All Photos is {:?}", widget(&h, "count:all"));
+    // (the rows are as wide as the widest one, so there is something to scroll to: the deepest
+    // chevron lies past the panel) while every count stays at the visible edge, whole
+    assert!(xs.last().is_some_and(|x| *x > panel.right()), "the rows reach past the panel: the deepest chevron is {xs:?}");
+    let edge = sidebar_edge(&h);
+    let all = widget(&h, "count:all");
+    assert!(all.right() <= edge && all.right() > edge - 40.0, "the count of All Photos stays at the visible edge: {all:?} / {edge}");
     // what a row needs is known before it is drawn off screen, so the plus stays reachable
     assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
     // a click in the middle of a deep row chooses it; only the little chevron folds it
