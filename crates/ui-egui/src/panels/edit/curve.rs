@@ -165,6 +165,7 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
 pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     // channel selector
+    let hidden = app.ui.curve_hidden_for(id);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 4 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             for (ch, c) in [
@@ -178,8 +179,22 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
                 crate::widgets::announce(&resp, format!("{} {ch}", crate::i18n::tr("Curve channel")));
                 register(ui, format!("curveChannel:{ch}"), r);
                 let sel = app.ui.curve_channel == ch;
+                // a channel hidden by the curve's eye is drawn dimmed
+                let off = crate::state::CURVE_CHANNELS.iter().position(|x| *x == ch).and_then(|i| hidden.get(i)).copied().unwrap_or(false);
+                let c = if off { c.gamma_multiply(0.35) } else { c };
                 if ch == "parametric" {
-                    paint(ui.painter(), r.shrink(4.0), Icon::Curve, if sel { t.text } else { t.icon });
+                    paint(
+                        ui.painter(),
+                        r.shrink(4.0),
+                        Icon::Curve,
+                        if off {
+                            t.text_disabled
+                        } else if sel {
+                            t.text
+                        } else {
+                            t.icon
+                        },
+                    );
                 } else {
                     ui.painter().circle_stroke(r.center(), 7.0, Stroke::new(2.0, c));
                     if sel {
@@ -189,13 +204,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
                 if sel {
                     ui.painter().line_segment([r.left_bottom() + vec2(4.0, 1.0), r.right_bottom() + vec2(-4.0, 1.0)], Stroke::new(2.0, t.text));
                 }
-                let name = match ch {
-                    "parametric" => "Parametric curve",
-                    "master" => "Point curve",
-                    "red" => "Red channel",
-                    "green" => "Green channel",
-                    _ => "Blue channel",
-                };
+                let name = channel_name(ch);
                 let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = name));
                 if resp.double_clicked() {
                     app.ui.curve_channel = ch.into();
@@ -235,6 +244,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         );
     }
     p.line_segment([r.left_bottom(), r.right_top()], Stroke::new(1.0, Color32::from_gray(70)));
+    curve_eye(app, ui, id, r, &ch);
     let to_screen = |x: f64, y: f64| pos2(r.left() + x as f32 * r.width(), r.bottom() - y as f32 * r.height());
     let from_screen = |q: Pos2| (((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64, ((r.bottom() - q.y) / r.height()).clamp(0.0, 1.0) as f64);
     if ch == "parametric" {
@@ -393,6 +403,38 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
 }
 
 /// The row under the curve graph: point-curve presets and reset every curve.
+/// The eye in the top-left corner of the curve graph `r`, where a curve seldom goes and away from
+/// its end points: hides channel `ch`'s effect for viewing (not an edit), as a colour grading
+/// wheel's eye does. Shown while the graph is hovered, the channel is hidden or the eye has the
+/// keyboard focus. Hidden, it only takes the focus (Tab), so a click there still reaches the graph.
+fn curve_eye(app: &mut LightcraftApp, ui: &egui::Ui, id: PhotoId, r: Rect, ch: &str) {
+    let t = Tokens::get(ui.ctx());
+    let hidden =
+        crate::state::CURVE_CHANNELS.iter().position(|x| *x == ch).and_then(|i| app.ui.curve_hidden_for(id).get(i).copied()).unwrap_or(false);
+    let eye_id = curve_eye_id(ch);
+    let shown = hidden || ui.rect_contains_pointer(r) || ui.memory(|m| m.has_focus(eye_id));
+    let eye = Rect::from_center_size(r.left_top() + vec2(12.0, 12.0), vec2(16.0, 16.0));
+    // shown, it takes drags too: a drag that starts on the eye must not reach the graph under it
+    // and add a curve point (a viewing aid never edits)
+    let er = ui.interact(eye, eye_id, if shown { Sense::click_and_drag() } else { Sense::focusable_noninteractive() });
+    // (which channel, and whether it is hidden now)
+    crate::widgets::announce_selected(&er, format!("{} — {}", crate::i18n::tr(channel_name(ch)), crate::i18n::tr("Show / hide")), hidden);
+    register(ui, format!("curveEye:{ch}"), eye);
+    if !shown {
+        return;
+    }
+    paint(ui.painter(), eye, if hidden { Icon::EyeOff } else { Icon::Eye }, if hidden { t.text_disabled } else { t.icon });
+    let er = er.on_hover_text(crate::i18n::tr(if hidden { "Show this curve's effect" } else { "Hide this curve's effect" }));
+    if er.clicked() {
+        app.ui.set_curve_hidden(id, ch, !hidden);
+    }
+}
+
+/// The id of channel `ch`'s [`curve_eye`].
+pub(crate) fn curve_eye_id(ch: &str) -> egui::Id {
+    egui::Id::unique(("curveEye", ch))
+}
+
 fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     use lightcraft_engine::cmd::curves::{all_presets, matching_preset};
     let t = Tokens::get(ui.ctx());
@@ -478,6 +520,17 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": "all"}));
         ui.close();
+    }
+}
+
+/// A curve channel's name in the selector's tooltip and to a screen reader.
+fn channel_name(ch: &str) -> &'static str {
+    match ch {
+        "parametric" => "Parametric curve",
+        "master" => "Point curve",
+        "red" => "Red channel",
+        "green" => "Green channel",
+        _ => "Blue channel",
     }
 }
 

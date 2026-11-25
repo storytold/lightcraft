@@ -17,7 +17,7 @@ use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register, section_header, slider, text_button};
 
-mod curve;
+pub(crate) mod curve;
 mod grading;
 mod hdr_flow;
 mod histogram;

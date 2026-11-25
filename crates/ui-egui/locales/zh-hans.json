@@ -2456,5 +2456,7 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "先以 --control 7980 (或 LIGHTCRAFT_CONTROL_PORT) 启动应用，lightcraft-cli mcp --connect 即可将一个智能体接入其中。",
   "Welcome": "欢迎",
   "Next": "下一步",
-  "Get Started": "开始使用"
+  "Get Started": "开始使用",
+  "Show this curve's effect": "显示此曲线的效果",
+  "Hide this curve's effect": "隐藏此曲线的效果"
 }

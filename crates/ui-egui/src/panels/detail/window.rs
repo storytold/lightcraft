@@ -89,7 +89,7 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     // plain; the After tile carries the same mask overlay as the whole-frame render.
     let job = if c.interacting { job.draft() } else { job };
     let overlay = if v.before { lightcraft_pipeline::Overlay::None } else { c.overlay };
-    let job = if v.before { job } else { job.with_hidden_grading(app.ui.grading_hidden_for(c.id)) };
+    let job = if v.before { job } else { job.with_hidden_grading(app.ui.grading_hidden_for(c.id)).with_hidden_curves(app.ui.curve_hidden_for(c.id)) };
     // the After window is proofed like the whole-frame render under it; the Before side is
     // never proofed (its whole-frame render isn't either)
     let proof = app.ui.soft_proof.then_some(app.ui.proof);
