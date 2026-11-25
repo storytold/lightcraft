@@ -115,17 +115,17 @@ fn the_headless_host_has_a_clipboard() {
         (ViewportCommand::RequestCopy, egui::Event::Copy),
         (ViewportCommand::RequestCut, egui::Event::Cut),
     ] {
+        // (the event is the next frame's input; the framework's key stage then takes clipboard events out of egui's
+        // input as edit commands, so the host's side is what is checked)
         view.run(raw(), |ui| ui.ctx().send_viewport_cmd(command.clone()));
-        let mut seen = vec![];
-        view.run(raw(), |ui| seen = ui.input(|i| i.events.clone()));
-        assert!(seen.contains(&event), "{command:?}: {seen:?}");
+        assert!(view.owed.contains(&event), "{command:?}: {:?}", view.owed);
+        view.run(raw(), |_| {});
+        assert!(view.owed.is_empty(), "delivered once");
     }
     // an empty clipboard pastes nothing, as a desktop host does
     view.clipboard.clear();
     view.run(raw(), |ui| ui.ctx().send_viewport_cmd(ViewportCommand::RequestPaste));
-    let mut seen = vec![];
-    view.run(raw(), |ui| seen = ui.input(|i| i.events.clone()));
-    assert!(!seen.iter().any(|e| matches!(e, egui::Event::Paste(_))), "{seen:?}");
+    assert!(!view.owed.iter().any(|e| matches!(e, egui::Event::Paste(_))), "{:?}", view.owed);
 }
 
 #[test]

@@ -279,7 +279,7 @@ fn rename_actual_sdk_preset_start_preview_and_cancel_leave_catalog_sources_and_h
     let mut r = Review::new();
     let initial = r.preview(&r.expected(None), "initial-name");
     r.quiet_reuses(&initial);
-    r.sdk("button:renamePreset-3", "Button");
+    r.sdk("button:renamePreset-3", "ToggleButton");
     r.click("button:renamePreset-3");
     r.draft("Photo-{seq:3}", 5);
     let preset = r.preview(&r.expected(Some(["Photo-005", "Photo-006"])), "custom-preset");

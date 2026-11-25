@@ -571,6 +571,10 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     ctx.set_visuals_of(egui::Theme::Light, v);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.all_styles_mut(|s| {
+        // Plain labels sense nothing (as framework text doesn't): a selectable label is an egui widget with an id of
+        // its own, which the framework's measuring run lays out a second time in the same pass. Labels that should be
+        // copyable say so with `Label::selectable(true)`.
+        s.interaction.selectable_labels = false;
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
         s.spacing.interact_size.y = 22.0;

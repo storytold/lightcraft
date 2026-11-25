@@ -368,6 +368,8 @@ fn dropdown_face(ui: &mut egui::Ui, id: &str, text: &str) -> egui::Response {
     let mut button = Button::new(text.to_owned())
         .id_salt(("bottom-dropdown", id))
         .variant(craft::theme::Variant::GHOST)
+        // small, so the zoom group is as narrow as main's and the centre keeps its Copy Edit Settings beside Presets
+        .size(craft::theme::ControlSize::Sm)
         .trailing_icon(DisclosureGlyph::dropdown());
     // The face takes the room it measures and is shown there. Shown in the flow, a framework body that measures the
     // shell's window first does not find it in what it kept, and asks for another pass every frame.

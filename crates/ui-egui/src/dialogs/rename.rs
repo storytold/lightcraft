@@ -19,14 +19,17 @@ fn register(ui: &egui::Ui, id: &str, response: &egui::Response) {
 }
 
 /// A preset button at its whole width (the dialog widens to the row rather than cutting the last one to an
-/// ellipsis); the active preset is the framework's selected button.
+/// ellipsis). The active preset shows as the framework's toggle button pressed on (its own selected look: a plain
+/// `Button` given `selected` reports it to assistive technology but paints no on state). Any press applies the preset,
+/// the active one's too.
 fn button(ui: &mut egui::Ui, id: &str, label: &str, selected: bool) -> bool {
-    let make = || Button::new(crate::i18n::tr(label).to_owned()).id_salt(id).selected(selected);
+    use craft::ui::buttons::ToggleButton;
+    let make = || ToggleButton::new(crate::i18n::tr(label).to_owned(), Bind::given(selected)).id_salt(id);
     let size = make().measure_in(ui, craft::behavior::Proposal::Ideal);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size.x.ceil(), size.y.max(24.0)), egui::Sense::hover());
     let shown = make().show_at(ui, rect);
     register(ui, &format!("button:{id}"), &shown.response);
-    !measuring(ui) && shown.clicked()
+    !measuring(ui) && shown.events.committed().is_some()
 }
 
 fn tags_toggle(ui: &mut egui::Ui) -> bool {
@@ -65,14 +68,20 @@ fn start_field(ui: &mut egui::Ui, start: &mut u32) {
 /// Same single-field dialog contract as frame::dialog_field, with an SDK-owned editor.
 fn name_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
-    let shown = TextField::new(crate::i18n::tr(hint).to_owned(), Bind::bound(value))
-        .id_salt(id)
-        .placeholder(crate::i18n::tr(hint).to_owned())
-        .limit(None)
-        .select_on_focus()
-        .submits()
-        .show_at(ui, rect);
+    // recorded, so the field's edit menu items (`{id}:paste` …) are registered while that menu is open
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::new(("name-field-inspect", id)), |ui| {
+        TextField::new(crate::i18n::tr(hint).to_owned(), Bind::bound(value))
+            .id_salt(id)
+            .placeholder(crate::i18n::tr(hint).to_owned())
+            .limit(None)
+            .select_on_focus()
+            .submits()
+            .show_at(ui, rect)
+    });
     register(ui, id, &shown.response);
+    if !measuring(ui) {
+        crate::text_field::register_field(ui, id, &shown.response, record.as_deref());
+    }
     if !measuring(ui)
         && ui.is_enabled()
         && (just_opened(ui, id)

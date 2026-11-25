@@ -36,16 +36,14 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ]
         {
             let key = format!("keywordView:{id}");
-            // (the chosen view shows the framework's own selected look: no LightCraft-only lit state)
-            let shown = Button::new(crate::i18n::tr(label).to_owned())
+            // (a toggle button: the chosen view stays pressed, in the framework's own on look)
+            let shown = craft::ui::buttons::ToggleButton::new(crate::i18n::tr(label).to_owned(), craft::ui::contract::Bind::given(app.ui.keywording_view == view))
                 .id_salt(&key)
                 .size(craft::theme::ControlSize::Sm)
-                .variant(craft::theme::Variant::GHOST)
-                .selected(app.ui.keywording_view == view)
                 .show(ui);
             if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { continue; }
             crate::widgets::register_response(key, shown.response.rect, &shown.response);
-            if ui.is_enabled() && shown.clicked() {
+            if ui.is_enabled() && shown.events.committed().is_some() {
                 app.ui.keywording_view = view;
             }
         }
@@ -147,10 +145,14 @@ fn chip(ui: &mut egui::Ui, path: &str, name: &str, partial: bool, cross: bool, r
         let body = Badge::new(shown).id(id).variant(craft::theme::Variant::SECONDARY).tooltip(tip).show_at(ui, rect);
         return Drawn { body, cross: None, removed: false };
     }
-    // the ×: the whole end of the chip, so that it is hard to miss and easy to tell from the name
+    // the ×: the whole end of the chip, so that it is hard to miss and easy to tell from the name. The name's button
+    // spans the whole chip so that its outline holds the ×, which sits over its end (the later widget takes the press).
     let body = Rect::from_min_max(rect.min, pos2(rect.right() - CROSS_W, rect.bottom()));
     let end = Rect::from_min_max(pos2(rect.right() - CROSS_W, rect.top()), rect.max);
-    let name = Button::new(full.clone()).painted(shown).id(id).size(craft::theme::ControlSize::Sm).tooltip(tip).show_at(ui, body);
+    let mut name = Button::new(full.clone()).painted(shown).id(id).size(craft::theme::ControlSize::Sm).align(HAlign::Start).tooltip(tip).show_at(ui, rect);
+    // (the name answers as the part of the chip that is not the ×)
+    name.response.rect = body;
+    name.response.interact_rect = name.response.interact_rect.intersect(body);
     let said = crate::i18n::tr_format!("Remove “{name}”", name = full);
     let x = IconButton::new(IconSpec::svg(craft::behavior::IconId::new("close")))
         .id(id.with("remove"))
