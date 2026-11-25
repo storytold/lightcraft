@@ -66,9 +66,25 @@ const BODY_ROOM: &str = "lc-import-body-room";
 ///
 /// Noted in every run of the body, measuring ones too: each run places the body elsewhere, and the grid reads where its
 /// own run's body starts.
+///
+/// A real run measures the room itself: the height of the body's visible part (its clip), which the dialog's own
+/// chrome and the window's size decide; `room` stands in until a real run has measured it. A measuring run uses the
+/// real run's room, so both size the grid alike. A room that changed asks for another frame.
 pub(crate) fn note_body_room(ui: &egui::Ui, room: f32) {
+    let measuring = controls::measuring(ui);
     let top = ui.cursor().top();
-    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique((BODY_ROOM, controls::measuring(ui))), (top, room)));
+    let seen = egui::Id::unique((BODY_ROOM, "seen"));
+    let ctx = ui.ctx();
+    if !measuring {
+        let clip = ui.clip_rect();
+        let visible = (clip.bottom() - top.max(clip.top())).floor();
+        if visible.is_finite() && visible > 0.0 && ctx.data(|m| m.get_temp::<f32>(seen)).is_none_or(|kept| (kept - visible).abs() > 0.5) {
+            ctx.data_mut(|m| m.insert_temp(seen, visible));
+            ctx.request_repaint();
+        }
+    }
+    let room = ctx.data(|m| m.get_temp::<f32>(seen)).unwrap_or(room);
+    ctx.data_mut(|m| m.insert_temp(egui::Id::unique((BODY_ROOM, measuring)), (top, room)));
 }
 
 /// Remember where the review dialog's content ends this frame (after its buttons), for
@@ -239,7 +255,8 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
     let room = ui.ctx().data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique((BODY_ROOM, controls::measuring(ui))))).map(|(top, room)| top + room - ui.cursor().top());
     // (the room alone: a measuring run's ui may offer less height than the real run's, and the grid must be as tall
     // in both, or the body measures shorter than it lays out and its last rows can't be scrolled to)
-    let available = room.unwrap_or_else(|| ui.available_height());
+    // (less one row gap: the body's content counts the gap after its last row, and a body a gap too tall scrolls)
+    let available = room.map_or_else(|| ui.available_height(), |room| room - ui.spacing().item_spacing.y);
     let grid_h = grid_height(available, below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
     let mut visible = std::collections::HashSet::new();
     let grid =
