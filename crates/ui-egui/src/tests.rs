@@ -13,7 +13,6 @@ fn settle_budget_only_expands_for_llvm_coverage_runs() {
 }
 
 mod activity;
-mod port_screenshots;
 mod dialog_settings_popup_contract;
 mod album_picker;
 mod album_remove;
