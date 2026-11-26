@@ -409,7 +409,7 @@ fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("{path} already exists: choose another name")));
     }
     folder_on_disk("", &path).map_err(|e| bad(C, e))?;
-    let undo = crate::FolderMove { from: path.clone(), to: String::new() };
+    let undo = crate::FolderMove { from: path.clone(), to: String::new(), on_disk: true };
     if let Err(e) = s.commit_with_folder(&format!("Create Folder “{name}”"), Op::Batch { ops: vec![] }, undo) {
         let _ = remove_empty_folder(&path);
         return Err(e);
@@ -433,6 +433,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut plans: Vec<crate::rename::RenamePlan> = Vec::new();
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut moving: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut clashes: Vec<String> = Vec::new();
     for id in ids {
         let ph = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
@@ -442,7 +443,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
         let lightcraft_catalog::Source::File { path } = &ph.source else {
             return Err(bad(C, format!("{} has no file on disk", ph.file_name)));
         };
-        if plans.iter().any(|pl| pl.from_path.as_deref() == Some(path.as_str())) {
+        if !moving.insert(path.as_str()) {
             continue; // a virtual copy of a photo already moving
         }
         let src = Path::new(path);
@@ -521,8 +522,28 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if !src.is_dir() {
         return Err(format!("{from} is not a folder"));
     }
-    if s.library.as_ref().is_some_and(|l| l.dir.starts_with(src) || src.starts_with(&l.dir)) {
+    // `a/../b` names a folder without spelling it, which the checks below and the relink can't see
+    if src.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("{from}: give the folder's path without '..'"));
+    }
+    // the library folder itself (and its parents), and its own top-level folders (`Originals`, `thumbs`), stay
+    // where the library expects them; folders below those (an import's date folders) can be renamed. Compared as
+    // the folders are on disk (a differently spelled or linked path to the library names the same folder), with
+    // the spelling as a fallback where that can't be told
+    let same_folder = |l: &Path| {
+        let (lib, chosen) = (l.canonicalize().unwrap_or_else(|_| l.to_path_buf()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
+        lib.starts_with(&chosen) || chosen.parent() == Some(lib.as_path()) || l.starts_with(src) || src.parent() == Some(l)
+    };
+    if s.library.as_ref().is_some_and(|l| same_folder(&l.dir)) {
         return Err("the library's own folders can't be moved here".into());
+    }
+    // a folder inside the library reached through a link (or another spelling of the library's path) would move on
+    // disk, but its photos are stored under the library's own spelling, so the relink below couldn't find them
+    if let Some(l) = s.library.as_ref() {
+        let (lib, chosen) = (l.dir.canonicalize().unwrap_or_else(|_| l.dir.clone()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
+        if chosen.starts_with(&lib) && !src.starts_with(&l.dir) {
+            return Err(format!("{from}: give the folder's path inside the library as {}", l.dir.display()));
+        }
     }
     // Repairs retain their exact old paths, including those on surviving history entries.
     // Complete them before the directory moves; an unavailable repair leaves it in place.
@@ -548,7 +569,7 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     let name = Path::new(to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let renamed = src.parent() == dst.parent();
     let label = if renamed { format!("Rename Folder to “{name}”") } else { format!("Move Folder “{name}”") };
-    let folder = crate::FolderMove { from: to.to_string(), to: from.to_string() };
+    let folder = crate::FolderMove { from: to.to_string(), to: from.to_string(), on_disk: true };
     if let Err(e) = s.commit_with_folder(&label, Op::Batch { ops }, folder) {
         // the catalog didn't take it: put the folder back where the photos still point
         let back = rename_folder_on_disk(to, from).err().map(|b| format!("; moving it back failed too: {b}")).unwrap_or_default();

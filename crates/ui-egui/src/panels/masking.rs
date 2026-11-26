@@ -35,6 +35,7 @@ pub const LOCAL: &[ControlSpec] = &[
     spec("noise", "Noise", -100.0, 100.0, 1.0, 0, Track::Centered),
     spec("moire", "Moiré", -100.0, 100.0, 1.0, 0, Track::Centered),
     spec("defringe", "Defringe", -100.0, 100.0, 1.0, 0, Track::Centered),
+    spec("lens_blur", "Lens Blur", 0.0, 100.0, 1.0, 0, Track::Plain),
 ];
 
 pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
@@ -323,7 +324,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let op = match c.op {
                     lightcraft_develop::MaskOp::Add => "",
                     lightcraft_develop::MaskOp::Subtract => "− ",
-                    lightcraft_develop::MaskOp::Intersect => "∩ ",
+                    lightcraft_develop::MaskOp::Intersect => {
+                        // drawn: Inter has no ∩, only the CJK faces do (issue #1950)
+                        let (r, _) = ui.allocate_exact_size(vec2(8.0, 16.0), Sense::hover());
+                        intersect_mark(ui.painter(), r, ui.visuals().text_color());
+                        ""
+                    }
                 };
                 if let Some((_, _, name)) = app.ui.renaming_component.as_mut().filter(|(mid, k, _)| *mid == m.id && *k == i) {
                     // inline rename: Enter (or leaving the field) commits, Escape cancels
@@ -348,9 +354,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let room = (ui.available_width() - 30.0).max(0.0);
                 let resp = ui.scope(|ui| {
                     ui.set_max_width(room);
-                    ui.add(egui::Label::new(text).truncate().sense(Sense::click()))
+                    ui.add(egui::Label::new(text.clone()).truncate().sense(Sense::click()))
                 });
                 let resp = resp.inner;
+                if matches!(c.op, lightcraft_develop::MaskOp::Intersect) {
+                    // the drawn ∩ has no text: the row still names its mode to screen readers
+                    let spoken = format!("{}: {text}", crate::i18n::tr("Intersect"));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken.clone()));
+                }
                 register(ui, format!("component:{i}"), resp.rect);
                 if resp.double_clicked() {
                     app.ui.renaming_component = Some((m.id, i, label.clone()));
@@ -392,7 +403,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     divider(ui);
     super::mask_effects::effect_row(app, ui, &m);
-    for s in LOCAL {
+    // (Lens Blur has its own block below)
+    for s in LOCAL.iter().filter(|s| s.id != "lens_blur") {
         let v = local_get(&m.adjust, s.id);
         let out = slider(ui, s, v, true, None);
         apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
@@ -423,9 +435,62 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     };
     let out = slider(ui, &refine, m.refine, true, None);
     apply_slider_out(app, &refine, out, |app, v| app.run("mask.refine", json!({"value": v})));
+    divider(ui);
+    lens_blur_block(app, ui, &m);
     ui.add_space(30.0);
     let _ = Stroke::NONE;
 }
+
+/// The mask's Lens Blur block (`section:maskLensBlur`): a header that folds it and whose eye
+/// switches it off (the values kept), which side of the mask it blurs (`button:maskLensBlurSide-*`),
+/// then its Amount, Boost and Transition (`lens_blur*` local adjustments, `mask.adjust`).
+fn lens_blur_block(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::Mask) {
+    let a = &m.adjust;
+    let open = !app.ui.section_folded("maskLensBlur");
+    let (resp, toggled) = crate::widgets::section_header(ui, "maskLensBlur", "Lens Blur", open, Some(!a.lens_blur_off));
+    if let Some(on) = toggled {
+        // switched on with nothing to blur: a visible amount, as the Edit section's Apply does
+        let mut v = json!({"lens_blur_off": !on});
+        if on && a.lens_blur <= 0.0 {
+            v["lens_blur"] = json!(50.0);
+        }
+        let _ = app.run("mask.adjust", json!({"values": v}));
+    } else if resp.clicked() {
+        app.ui.toggle_folded("maskLensBlur");
+    }
+    if !open {
+        return;
+    }
+    ui.add_enabled_ui(!a.lens_blur_off, |ui| {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 6 }).show(ui, |ui| {
+            let t = Tokens::get(ui.ctx());
+            ui.label(egui::RichText::new(crate::i18n::tr("Blur")).color(t.text_dim).size(11.5));
+            let items = [("Selection", "inside"), ("Outside", "outside")];
+            let side = if a.lens_blur_outside { 1 } else { 0 };
+            if let Some(i) = crate::widgets::segmented(ui, "maskLensBlurSide", &items, Some(side), 2)
+                && i != side
+            {
+                let mut v = json!({"lens_blur_outside": i == 1});
+                if a.lens_blur <= 0.0 {
+                    v["lens_blur"] = json!(50.0);
+                }
+                let _ = app.run("mask.adjust", json!({"values": v}));
+            }
+        });
+        for s in LENS_BLUR {
+            let v = local_get(a, s.id);
+            let out = slider(ui, s, v, true, None);
+            apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
+        }
+    });
+}
+
+/// The sliders of a mask's Lens Blur block (key = `LocalAdjustments` field name).
+const LENS_BLUR: &[ControlSpec] = &[
+    spec("lens_blur", "Amount", 0.0, 100.0, 1.0, 0, Track::Plain),
+    spec("lens_blur_boost", "Boost", 0.0, 100.0, 1.0, 0, Track::Plain),
+    spec("lens_blur_transition", "Transition", 0.0, 100.0, 1.0, 0, Track::Plain),
+];
 
 /// Translate fixed action labels, but never mutate or translate user-entered mask names.
 fn menu_label(source: &str) -> &str {
@@ -945,6 +1010,19 @@ pub(crate) fn delete_mask(app: &mut LightcraftApp, id: Option<u32>) {
 pub(crate) fn forget_missing_overlays(app: &mut LightcraftApp) {
     let session = &app.session;
     app.ui.mask_overlay_hidden.retain(|(photo, id)| session.develop_of(*photo).is_some_and(|d| d.masks.iter().any(|m| m.id == *id)));
+}
+
+/// The ∩ in front of an intersecting mask component: two legs joined by a half circle, as tall as
+/// a lowercase letter.
+fn intersect_mark(painter: &egui::Painter, rect: Rect, color: egui::Color32) {
+    let (c, r) = (rect.center(), 3.0);
+    let mut points = vec![pos2(c.x - r, c.y + 4.0)];
+    points.extend((0..=8).map(|i| {
+        let a = std::f32::consts::PI * (1.0 + i as f32 / 8.0);
+        pos2(c.x + r * a.cos(), c.y - 0.5 + r * a.sin())
+    }));
+    points.push(pos2(c.x + r, c.y + 4.0));
+    painter.add(egui::Shape::line(points, Stroke::new(1.2, color)));
 }
 
 #[cfg(test)]

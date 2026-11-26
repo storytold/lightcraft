@@ -77,7 +77,7 @@ pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, 
             Some(LaunchPath::Refused { path, why }) => {
                 log::warn!("not importing {path} given at launch: {why}");
                 notices
-                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File ▸ Import Photos…"));
+                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File → Import Photos…"));
             }
             None => {}
         }
@@ -105,9 +105,18 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
     port
 }
 
-/// An isolated profile keeps the emergency crash log with its other app data. With no
-/// override (or an empty override), retain the historical system-temp location.
-pub(crate) fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, temp: std::path::PathBuf) -> std::path::PathBuf {
+/// An isolated profile keeps the emergency crash log with its other app data: the Nightly profile's
+/// settings folder, else `LIGHTCRAFT_CONFIG_DIR`, else (no override, or an empty one) the historical
+/// system-temp location. The profile wins because Nightly refuses `LIGHTCRAFT_CONFIG_DIR`, and a
+/// shared temp file would put a Nightly crash in Stable's log.
+pub(crate) fn panic_log_path_with(
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    temp: std::path::PathBuf,
+    profile: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    if let Some(root) = profile.filter(|root| !root.as_os_str().is_empty()) {
+        return root.join("Settings").join("lightcraft-panics.log");
+    }
     env("LIGHTCRAFT_CONFIG_DIR").filter(|value| !value.is_empty()).map(std::path::PathBuf::from).unwrap_or(temp).join("lightcraft-panics.log")
 }
 
@@ -117,7 +126,7 @@ pub(crate) fn stopped_text(error: &str, lost: Option<&str>) -> String {
     match lost {
         Some(reason) => format!(
             "{error}. The graphics driver reset the GPU ({reason}). LightCraft renders on the CPU from its next start; \
-             Settings ▸ Performance ▸ Use the GPU for rendering turns the GPU back on"
+             Settings → Performance → Use the GPU for rendering turns the GPU back on"
         ),
         None => error.to_string(),
     }
@@ -163,8 +172,22 @@ mod config_path_tests {
     #[test]
     fn config_override_keeps_panic_log_in_isolated_profile() {
         let temp = std::path::PathBuf::from("temp");
-        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone()), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| None, temp.clone()), temp.join("lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone()), temp.join("lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone(), None), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| None, temp.clone(), None), temp.join("lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone(), None), temp.join("lightcraft-panics.log"));
+    }
+
+    /// Nightly's crash log lives in its own profile's settings folder, never in Stable's temp file,
+    /// and an inherited LIGHTCRAFT_CONFIG_DIR cannot move it out again.
+    #[test]
+    fn nightly_profile_owns_the_panic_log() {
+        let temp = std::path::PathBuf::from("temp");
+        let profile = std::path::PathBuf::from("/launcher/profiles/lightcraft");
+        assert_eq!(
+            panic_log_path_with(|_| Some("stable settings".into()), temp.clone(), Some(profile.clone())),
+            profile.join("Settings/lightcraft-panics.log")
+        );
+        assert_eq!(panic_log_path_with(|_| None, temp.clone(), Some(profile.clone())), profile.join("Settings/lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| None, temp.clone(), Some("".into())), temp.join("lightcraft-panics.log"));
     }
 }
