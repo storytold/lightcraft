@@ -328,5 +328,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "Importez des photos avec Fichier › Importer des photos… ({keys}).",
   "View › Detail View ({keys}).": "Affichage › Vue de détail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys}).",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Règle {n} sur {m} : {what}. Déplacer avec les flèches",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Groupe {n} sur {m} : correspondre à {mode}, {count} à l’intérieur. Déplacer avec les flèches",
   ", rating {} of 5": ", note : {} sur 5"
 }
