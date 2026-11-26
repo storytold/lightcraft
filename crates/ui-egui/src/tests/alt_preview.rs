@@ -69,3 +69,38 @@ fn alt_during_a_blacks_drag_shows_shadow_clipping_until_released() {
     let after = h.app.session.develop_of(h.app.session.active().expect("photo")).expect("develop").light.blacks;
     assert!(after < before, "the drag itself still moved Blacks: {before} → {after}");
 }
+
+/// Share of the loupe render's pixels painted exactly `c`.
+fn share_of(h: &Headless, c: [u8; 3]) -> f64 {
+    let t = h.app.renderer.textures.get(&crate::render::Slot::Main).expect("loupe render");
+    let px = &t.pixels.as_ref().expect("pixels kept").pixels;
+    let n = px.iter().filter(|p| [p.r(), p.g(), p.b()] == c).count();
+    n as f64 / px.len().max(1) as f64
+}
+
+/// Issue #3620: J (clipping warnings) paints the clipped pixels themselves, red where a channel
+/// is blown to white and blue where one is crushed to black, not just a frame around the photo.
+#[test]
+fn j_paints_clipped_highlights_red_and_clipped_shadows_blue() {
+    let mut h = detail();
+    let set = |h: &mut Headless, ev: f64| {
+        let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": ev}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    set(&mut h, 5.0);
+    let (red, blue) = ([255, 0, 0], [0, 0, 255]);
+    assert!(share_of(&h, red) < 0.1, "without J the blown photo is not painted red: {}", share_of(&h, red));
+    let r = h.request("ui.key", json!({"key": "J"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.show_clipping);
+    assert!(share_of(&h, red) > 0.5, "blown highlights shown in red: {}", share_of(&h, red));
+    set(&mut h, -5.0);
+    // the demo photo's shadows don't reach black on Exposure alone: Blacks crushes them
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.blacks", "value": -100.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(share_of(&h, blue) > 0.01, "crushed shadows shown in blue: {}", share_of(&h, blue));
+    assert!(share_of(&h, red) < 0.01, "nothing blown at -5 EV: {}", share_of(&h, red));
+}

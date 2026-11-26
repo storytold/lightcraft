@@ -2,13 +2,14 @@
 """Regenerate cargo-sources.json for the from-source Flatpak manifest.
 
 The upstream flatpak-cargo-generator is downloaded from a pinned commit and
-verified before use; the full script is intentionally not vendored here. Two
-small, reviewed patches are applied in memory:
+verified before use; the full script is intentionally not vendored here. The following
+small patches are applied in memory:
 
 1. Key cargo source replacements by the full source URL (including ?rev=...)
    instead of only the repository URL, so two different revisions of the same
    repository stay distinct.
-2. Include Cargo.lock's [patch.unused] entries, so crates such as egui_demo_lib
+2. Isolate Git package directories and replacement sources by locked identity.
+3. Include Cargo.lock's [patch.unused] entries, so crates such as egui_demo_lib
    are vendored even though they are not in the resolved package graph.
 
 This only produces and validates the source inventory; a full Flatpak SDK
@@ -42,7 +43,7 @@ UPSTREAM_URL = (
     f"{UPSTREAM_COMMIT}/cargo/flatpak-cargo-generator.py"
 )
 UPSTREAM_SHA256 = "0a2db6be87d75910facef28ab46d4d6460802e8419ab850d0caa6a364d26b380"
-PATCHED_SHA256 = "1e7c61d98d18e88156fb8cd4b91f526e04a6c504b185ae7b12f775ec1dd48512"
+PATCHED_SHA256 = "56e06136037ca106a690c3c6d50d5b385462f6567ca63afdd7efb257049efe86"
 
 # Allow cold git caches while bounding stalled inventory regeneration.
 GENERATOR_TIMEOUT_SECONDS = 30 * 60
@@ -82,6 +83,48 @@ PATCHES = (
         for p in cargo_lock["package"] + cargo_lock.get("patch", {}).get("unused", [])
     ]
 ''',
+    ),
+)
+
+# Isolate same-name/version Git packages by complete locked source identity.
+PATCHES += (
+    (
+        'isolate Git directory sources',
+        """    logging.info("Adding package %s from %s", name, repo_url)
+    git_pkg = git_repo["commits"][commit][name]
+""",
+        """    # Directory sources cannot distinguish equal name/version packages from
+    # different Git revisions. Isolate both the files and replacement source.
+    identity = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    vendor_name = f"git-vendor-{identity}"
+    vendor_root = f"{CARGO_HOME}/vendor-git/{identity}"
+    for entry in cargo_vendored_entry.values():
+        entry["replace-with"] = vendor_name
+    cargo_vendored_entry[vendor_name] = {"directory": vendor_root}
+
+    logging.info("Adding package %s from %s", name, repo_url)
+    git_pkg = git_repo["commits"][commit][name]
+""",
+    ),
+    (
+        'create isolated Git package directory',
+        """                f'cp -r --reflink=auto "{pkg_repo_dir}" "{CARGO_CRATES}/{name}"'""",
+        """                f'mkdir -p "{vendor_root}" && '
+                f'cp -r --reflink=auto "{pkg_repo_dir}" "{vendor_root}/{name}"'""",
+    ),
+    (
+        'isolate Git Cargo.toml destination',
+        """            "dest": f"{CARGO_CRATES}/{name}",  # -{version}',
+            "dest-filename": "Cargo.toml",""",
+        """            "dest": f"{vendor_root}/{name}",
+            "dest-filename": "Cargo.toml",""",
+    ),
+    (
+        'isolate Git .cargo-checksum.json destination',
+        """            "dest": f"{CARGO_CRATES}/{name}",  # -{version}',
+            "dest-filename": ".cargo-checksum.json",""",
+        """            "dest": f"{vendor_root}/{name}",
+            "dest-filename": ".cargo-checksum.json",""",
     ),
 )
 
