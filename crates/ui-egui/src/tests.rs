@@ -98,6 +98,7 @@ mod recheck;
 mod reduce_motion;
 mod rename_person;
 mod rules_editor;
+mod rules_reorder;
 mod sam_setup;
 mod scan_probes;
 mod scroll;
