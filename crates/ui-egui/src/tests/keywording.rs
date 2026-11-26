@@ -14,7 +14,12 @@ const SETTLE: Duration = Duration::from_secs(120);
 /// The Library grid with the Keywords panel open and two photos selected: the first with beach and
 /// Weddings, the second with beach.
 fn two_selected() -> (Headless, Vec<u64>) {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    two_selected_in(lightcraft_engine::Session::with_demo())
+}
+
+/// [`two_selected`] in `session`'s library.
+fn two_selected_in(session: lightcraft_engine::Session) -> (Headless, Vec<u64>) {
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
     for (method, params) in [
@@ -948,4 +953,355 @@ fn open_dialogs_count_once_per_library_change() {
         h.step();
     }
     assert_eq!(h.app.caches.dialog_count_scans, before + 3, "another dialog counts its own photos, once");
+}
+
+/// Enter Keywords, with everything in its box replaced by `text`.
+fn enter(h: &mut Headless, text: &str) {
+    ask(h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
+    ask(h, "ui.clickWidget", json!({"id": "field:enterKeywords"}));
+    ask(h, "ui.key", json!({"key": "A", "cmd": true}));
+    ask(h, "ui.key", json!({"key": "Backspace"}));
+    if !text.is_empty() {
+        ask(h, "ui.text", json!({"text": text}));
+    }
+}
+
+fn enter_focused(h: &Headless) -> bool {
+    h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:enterKeywords")))
+}
+
+/// Given two selected photos, when Enter Keywords is chosen, then the box shows their keywords as
+/// text in place of the chips; Return applies an edit to both photos as one undo step, and gives up
+/// the cursor.
+#[test]
+fn enter_keywords_edits_the_selections_keywords_as_text() {
+    let (mut h, ids) = two_selected();
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
+    assert!(has(&h, "field:enterKeywords") && !has(&h, "keywordChip:beach"), "the text gives the chips way");
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings", "harbor"]);
+    assert_eq!(keywords_of(&h, ids[1]), ["beach", "harbor"], "Weddings stays on the photo that had it");
+    assert!(!enter_focused(&h), "Return gave up the cursor");
+    ask(&mut h, "engine.execute", json!({"command": "edit.undo", "params": {}}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"], "one undo takes the edit back");
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"]);
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:keywords"}));
+    assert!(has(&h, "keywordChip:beach") && !has(&h, "field:enterKeywords"), "Keywords brings the chips back");
+}
+
+/// A keyword left out of the text is taken off every selected photo, a partial one keeps its photos
+/// while its asterisk stays, and without its asterisk it goes to all of them.
+#[test]
+fn enter_keywords_removes_and_makes_a_partial_keyword_common() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "Weddings*");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["Weddings"]);
+    assert!(keywords_of(&h, ids[1]).is_empty(), "beach went from both");
+    enter(&mut h, "Weddings");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[1]), ["Weddings"], "without its asterisk it goes to both");
+    enter(&mut h, "");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(ids.iter().all(|id| keywords_of(&h, *id).is_empty()), "an empty box takes every keyword off");
+}
+
+/// Esc gives the edit up; leaving the box applies it, as Return does.
+#[test]
+fn enter_keywords_escape_gives_up_and_leaving_applies() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "sea");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"], "Esc changed nothing");
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"]);
+    enter(&mut h, "beach, Weddings*, sea");
+    ask(&mut h, "ui.key", json!({"key": "Tab"}));
+    assert!(all_have(&h, &ids, "sea"), "leaving the box applied it");
+}
+
+/// Choosing another view while typing applies the edit, as leaving the box does; Enter Keywords
+/// chosen again shows the photos' keywords, not the old text. A refused edit comes back with it.
+#[test]
+fn enter_keywords_applies_an_edit_when_another_view_is_chosen() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, sea");
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:containing"}));
+    assert!(all_have(&h, &ids, "sea"), "choosing another view applied it");
+    assert!(!enter_focused(&h));
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [ids[1]], "removeKeywords": ["sea"]}}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:enterKeywords"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"], "the old text did not come back to give sea again");
+    enter(&mut h, "beach, harbor*");
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:keywords"}));
+    assert!(h.app.ui.toast.as_ref().is_some_and(|(t, ..)| t.contains("harbor*")), "{:?}", h.app.ui.toast);
+    assert!(none_has(&h, &ids, "harbor"));
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:enterKeywords"}));
+    ask(&mut h, "ui.key", json!({"key": "End", "cmd": true}));
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "harbor"), "the refused text came back to be put right");
+}
+
+/// Folding the Keywords box while typing applies the edit, as leaving the box does; so does hiding
+/// its panel, once the box is shown again for the same photos.
+#[test]
+fn enter_keywords_applies_an_edit_when_the_box_is_folded_or_hidden() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, sea");
+    ask(&mut h, "ui.clickWidget", json!({"id": "section:keywording"}));
+    assert!(!has(&h, "field:enterKeywords"), "the box is folded");
+    assert!(all_have(&h, &ids, "sea"), "folding the box applied it");
+    ask(&mut h, "ui.clickWidget", json!({"id": "section:keywording"}));
+    enter(&mut h, "beach, Weddings*, sea, harbor");
+    h.app.ui.toggle_folded("keywording");
+    h.step();
+    assert!(all_have(&h, &ids, "harbor"), "folded without a click, it applied it");
+    h.app.ui.toggle_folded("keywording");
+    h.step();
+    enter(&mut h, "beach, Weddings*, sea, harbor, pier");
+    ask(&mut h, "ui.set", json!({"right": "info"}));
+    h.step();
+    ask(&mut h, "ui.set", json!({"right": "keywords"}));
+    h.step();
+    assert!(all_have(&h, &ids, "pier"), "hiding the box with its panel applied it when it came back");
+}
+
+/// An edit kept while its box was hidden with its panel is given up when another library is open
+/// by the time the box is drawn or folded again: that library's photos with the same ids keep their
+/// keywords.
+#[test]
+fn enter_keywords_gives_up_an_edit_when_another_library_opens() {
+    for folded in [false, true] {
+        let (mut h, ids) = two_selected();
+        enter(&mut h, "beach, Weddings*, pier");
+        ask(&mut h, "ui.set", json!({"right": "info"}));
+        h.step();
+        h.app.session = lightcraft_engine::Session::with_demo();
+        ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
+        let before: Vec<Vec<String>> = ids.iter().map(|id| keywords_of(&h, *id)).collect();
+        if folded {
+            h.app.ui.toggle_folded("keywording");
+        }
+        ask(&mut h, "ui.set", json!({"right": "keywords"}));
+        h.step();
+        let after: Vec<Vec<String>> = ids.iter().map(|id| keywords_of(&h, *id)).collect();
+        assert_eq!(after, before, "the other library's photos keep their keywords (box folded: {folded})");
+    }
+}
+
+/// An asterisk after a name that is not a keyword only some photos have is refused: the photos keep
+/// their keywords, the box keeps the cursor and its text, and the refusal is said.
+#[test]
+fn enter_keywords_refuses_a_name_ending_in_an_asterisk() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, sea*");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"]);
+    assert!(enter_focused(&h), "the box keeps the cursor to put it right");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|(t, ..)| t.contains("asterisk") && t.contains("sea*")), "{:?}", h.app.ui.toast);
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "sea"), "the text was kept and put right");
+}
+
+/// An edit the library could not write to disk is still applied in memory: the box gives it up as
+/// applied. Retyping the photos' earlier keywords then takes it back, and another Return adds no
+/// second undo step, so one Undo takes it back.
+#[test]
+fn enter_keywords_treats_an_edit_saved_only_in_memory_as_applied() {
+    use std::sync::atomic::Ordering;
+    let store = super::unsaved::Flaky::default();
+    let mut session = lightcraft_engine::Session::new();
+    let stores = lightcraft_engine::library::LibraryStores {
+        dir: "flaky".into(),
+        catalog: Box::new(store.clone()),
+        files: Box::new(lightcraft_catalog::MemStore::new()),
+        on_disk: false,
+    };
+    session.open_library_in(stores, true).unwrap();
+    let (mut h, ids) = two_selected_in(session);
+    let undo = h.app.session.undo.len();
+
+    store.fail.store(true, Ordering::SeqCst);
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "harbor"), "the edit is applied in memory");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|(t, ..)| t.contains("not written to disk")), "{:?}", h.app.ui.toast);
+    assert!(!enter_focused(&h), "Return gave up the cursor, as for an applied edit");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "another Return added no undo step");
+    store.fail.store(false, Ordering::SeqCst);
+    ask(&mut h, "engine.execute", json!({"command": "edit.undo", "params": {}}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"], "one undo takes the edit back");
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"]);
+
+    store.fail.store(true, Ordering::SeqCst);
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "harbor"));
+    enter(&mut h, "beach, Weddings*");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(none_has(&h, &ids, "harbor"), "retyping the earlier keywords took the edit back");
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"]);
+    store.fail.store(false, Ordering::SeqCst);
+}
+
+/// What the Enter Keywords box shows, read by copying all of it.
+fn enter_text(h: &mut Headless) -> String {
+    ask(h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
+    ask(h, "ui.clickWidget", json!({"id": "field:enterKeywords"}));
+    ask(h, "ui.key", json!({"key": "A", "cmd": true}));
+    ask(h, "ui.clipboard", json!({"action": "copy"}));
+    let r = h.request("ui.inspect", json!({}), T);
+    r["result"]["copied"].as_str().unwrap_or_default().to_string()
+}
+
+/// A plain list of names typed in the box goes to every selected photo as written; the names left
+/// out come off every one of them.
+#[test]
+fn enter_keywords_gives_a_plain_list_to_every_photo() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "harbor, sea, pier");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    for id in &ids {
+        assert_eq!(keywords_of(&h, *id), ["harbor", "sea", "pier"], "photo {id}");
+    }
+}
+
+/// `>` and `<` in a typed name mark a hierarchy, as `|` does: `animal > dog` and `cat < animal`
+/// give both photos `animal|dog` and `animal|cat`.
+#[test]
+fn enter_keywords_reads_a_hierarchy_typed_with_greater_or_less_than() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, animal > dog, cat < animal");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "animal|dog") && all_have(&h, &ids, "animal|cat"), "{:?}", keywords_of(&h, ids[1]));
+    assert!(none_has(&h, &ids, "animal > dog") && none_has(&h, &ids, "cat < animal"));
+    assert_eq!(enter_text(&mut h), "animal|cat, animal|dog, beach, Weddings*", "the box shows them as paths");
+}
+
+/// The Add keyword box reads `>` and `<` as Enter Keywords does: `animal > dog, cat < animal`
+/// gives both photos `animal|dog` and `animal|cat`, and so does an offer taken after them.
+#[test]
+fn the_add_keyword_box_reads_a_hierarchy_typed_with_greater_or_less_than() {
+    let (mut h, ids) = with_places();
+    typed(&mut h, "animal > dog, cat < animal");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "animal|dog") && all_have(&h, &ids, "animal|cat"), "{:?}", keywords_of(&h, ids[1]));
+    assert!(none_has(&h, &ids, "animal > dog") && none_has(&h, &ids, "cat < animal"));
+    typed(&mut h, "bird < animal, lis");
+    ask(&mut h, "ui.key", json!({"key": "ArrowDown"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "animal|bird") && all_have(&h, &ids, "Places|Portugal|Lisbon"), "{:?}", keywords_of(&h, ids[1]));
+}
+
+/// A mixed selection shows each keyword only some photos have with an asterisk after it. Left
+/// marked, it stays on those photos only while the rest of the edit applies; it comes off only
+/// when its name is deleted from the text.
+#[test]
+fn enter_keywords_shows_and_keeps_a_mixed_selections_keywords() {
+    let (mut h, ids) = two_selected();
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "a keyword only some photos have is marked");
+    ask(&mut h, "ui.key", json!({"key": "End", "cmd": true}));
+    ask(&mut h, "ui.text", json!({"text": ", sea"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings", "sea"]);
+    assert_eq!(keywords_of(&h, ids[1]), ["beach", "sea"], "Weddings did not go to the photo without it");
+    enter(&mut h, "Weddings*, sea");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["Weddings", "sea"], "beach, deleted from the text, came off");
+    assert_eq!(keywords_of(&h, ids[1]), ["sea"]);
+}
+
+/// One edit that adds and removes keywords on three photos is one undo step for all of them, and
+/// one redo gives it back to all of them.
+#[test]
+fn enter_keywords_undoes_an_edit_of_every_photo_in_one_step() {
+    let (mut h, mut ids) = two_selected();
+    let third = h.app.session.visible_cloned().get(2).map(|p| p.0).unwrap();
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [third], "keywords": ["pier"]}}));
+    ids.push(third);
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
+    let before: Vec<Vec<String>> = ids.iter().map(|id| keywords_of(&h, *id)).collect();
+    let undo = h.app.session.undo.len();
+    enter(&mut h, "Weddings*, sea, animal > dog");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    let after: Vec<Vec<String>> = ids.iter().map(|id| keywords_of(&h, *id)).collect();
+    assert_eq!(after, [vec!["Weddings", "sea", "animal|dog"], vec!["sea", "animal|dog"], vec!["sea", "animal|dog"]]);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    ask(&mut h, "engine.execute", json!({"command": "edit.undo", "params": {}}));
+    assert_eq!(ids.iter().map(|id| keywords_of(&h, *id)).collect::<Vec<_>>(), before, "one undo puts every photo back");
+    ask(&mut h, "engine.execute", json!({"command": "edit.redo", "params": {}}));
+    assert_eq!(ids.iter().map(|id| keywords_of(&h, *id)).collect::<Vec<_>>(), after, "one redo gives it back");
+}
+
+/// Another selection while the box is being edited gives the edit up: what was typed goes neither to
+/// the photos it was typed for nor to the new selection.
+#[test]
+fn enter_keywords_gives_up_an_edit_when_the_selection_changes() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [ids[1]]}}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    let every: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    assert!(every.iter().all(|id| !keywords_of(&h, *id).contains(&"harbor".to_string())), "nobody got harbor");
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
+}
+
+/// A selection cleared while the box is being edited gives the edit up too: the same photos
+/// selected again keep their keywords.
+#[test]
+fn enter_keywords_gives_up_an_edit_when_the_selection_is_cleared() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": []}}));
+    h.step();
+    assert!(h.app.session.active().is_none(), "nothing selected");
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
+    h.step();
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "the box shows the photos' keywords, not the old text");
+    ask(&mut h, "ui.key", json!({"key": "Tab"}));
+    assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the photos came back");
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
+}
+
+/// An edit kept while its box was hidden with its panel is given up when other photos are selected
+/// meanwhile, even when the first photos are selected again before the box comes back.
+#[test]
+fn enter_keywords_gives_up_a_hidden_edit_when_the_selection_changes_meanwhile() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.set", json!({"right": "info"}));
+    h.step();
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [ids[1]]}}));
+    h.step();
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
+    h.step();
+    ask(&mut h, "ui.set", json!({"right": "keywords"}));
+    h.step();
+    assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the box came back");
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "the box shows the photos' keywords");
+}
+
+/// Two selection changes between UI passes give the hidden edit up too, even when the first photos
+/// are selected again before the next pass.
+#[test]
+fn enter_keywords_gives_up_a_hidden_edit_when_the_selection_round_trips_between_passes() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.set", json!({"right": "info"}));
+    h.step();
+    h.app.run("library.select", json!({"ids": [ids[1]]})).unwrap();
+    h.app.run("library.select", json!({"ids": ids})).unwrap();
+    h.step();
+    ask(&mut h, "ui.set", json!({"right": "keywords"}));
+    h.step();
+    assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the box came back");
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "the box shows the photos' keywords");
 }
