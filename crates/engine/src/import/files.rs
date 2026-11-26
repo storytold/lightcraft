@@ -114,14 +114,42 @@ pub fn expand_report(paths: &[String], skip: Option<&Path>, limits: crate::walk:
 
 /// ([`expand_report`], handing the listing of every folder that is walked to `note`, as
 /// [`expand_noting`] does.)
-fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, mut note: Option<crate::walk::NoteFolder>) -> Expansion {
+fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, note: Option<crate::walk::NoteFolder>) -> Expansion {
+    expand_report_knowing(paths, skip, limits, note, false, &|_| false)
+}
+
+/// [`expand_noting`], taking the paths `known_file` says are files as files without asking the
+/// disk (a review hands over thousands of them, and telling a file from a folder is a round trip
+/// each on a network share). With `timed`, each folder's modification time goes to `note` too
+/// ([`crate::walk::files_in_noting_timed`]).
+pub(super) fn expand_knowing(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    note: Option<crate::walk::NoteFolder>,
+    timed: bool,
+    known_file: &dyn Fn(&Path) -> bool,
+) -> (Vec<String>, bool) {
+    let e = expand_report_knowing(paths, skip, limits, note, timed, known_file);
+    (e.files, e.truncated)
+}
+
+/// [`expand_knowing`] keeping the walks' diagnostics ([`Expansion`]).
+pub(super) fn expand_report_knowing(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    mut note: Option<crate::walk::NoteFolder>,
+    timed: bool,
+    known_file: &dyn Fn(&Path) -> bool,
+) -> Expansion {
     let mut out = Expansion::default();
     for p in paths {
         let p = Path::new(p);
         if skip.is_some_and(|s| p == s) {
             continue;
         }
-        if p.is_dir() {
+        if !known_file(p) && p.is_dir() {
             // XMP sidecars are read with their photos, not skipped: they are left out of the count
             let mut sidecars = 0usize;
             let keep = |f: &Path| {
@@ -132,6 +160,7 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
                 keep
             };
             let w = match note.as_mut() {
+                Some(note) if timed => crate::walk::files_in_noting_timed(p, skip, limits, keep, &mut **note),
                 Some(note) => crate::walk::files_in_noting(p, skip, limits, keep, &mut **note),
                 None => crate::walk::files_in(p, skip, limits, keep),
             };
@@ -458,6 +487,44 @@ pub(super) fn reusable_probes(
     held.into_iter().map(|h| h.filter(|info| seen.next().is_some_and(|s| s != Seen::Unchecked && ok(s, info)))).collect()
 }
 
+/// What looking at the file of a browsed (Local) record found ([`browsed_files_changed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BrowsedFile {
+    /// As it was browsed, or not to be told: a record without a size, and a file that can't be read (one that is
+    /// gone is the record's own business) count as unchanged.
+    Unchanged,
+    /// Its size on disk is not the recorded one: another application replaced it since it was browsed (the check the
+    /// probes kept from a scan go by).
+    Changed,
+    /// Not looked at: `cancel` was set first.
+    Unchecked,
+}
+
+/// Look at the file of each of `files` (path, the size its browsed record has), several at once ([`stat_all`]: one
+/// at a time, each is a round trip to a network share, and thousands of browsed photos waited minutes for them).
+/// The answers come in the order of `files`; a record with no size is not asked about.
+pub(super) fn browsed_files_changed(files: &[(&str, u64)], cancel: &std::sync::atomic::AtomicBool) -> Vec<BrowsedFile> {
+    // (the web's files are not std::fs files)
+    if cfg!(target_arch = "wasm32") {
+        return vec![BrowsedFile::Unchanged; files.len()];
+    }
+    let asked: Vec<&str> = files.iter().filter(|(_, recorded)| *recorded > 0).map(|(path, _)| *path).collect();
+    let mut seen = stat_all(&asked, cancel, stat_file).into_iter();
+    files
+        .iter()
+        .map(|(_, recorded)| {
+            if *recorded == 0 {
+                return BrowsedFile::Unchanged;
+            }
+            match seen.next() {
+                Some(Seen::At { is_file: true, len }) if len != *recorded => BrowsedFile::Changed,
+                Some(Seen::Unchecked) | None => BrowsedFile::Unchecked,
+                Some(_) => BrowsedFile::Unchanged,
+            }
+        })
+        .collect()
+}
+
 /// Copy `src` into `dir` as `name` (default: its own name), made unique with -1, -2…; returns the
 /// new path. The copy is verified ([`crate::import_move::copy_new`]: a new file, synced and
 /// checked against `probe_hash`, the content hash the probe computed — or compared byte for byte
@@ -694,6 +761,32 @@ mod prepared_tests {
         assert!(asked.load(Relaxed) <= 16, "asked about {} files after cancel", asked.load(Relaxed));
         assert_eq!(seen.iter().filter(|s| **s == Seen::Gone).count(), asked.load(Relaxed));
         assert!(seen.iter().all(|s| matches!(s, Seen::Gone | Seen::Unchecked)));
+    }
+
+    /// The files of browsed records are looked at together, and only a file of another size than its record has is changed:
+    /// a record with no size, a file that is gone and a folder in its place count as unchanged, and ✕ leaves them all unchecked.
+    #[test]
+    fn browsed_files_are_told_changed_by_their_size() {
+        let dir = temp_dir("browsed-sizes");
+        let name = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        std::fs::write(dir.join("same.jpg"), [0u8; 10]).unwrap();
+        std::fs::write(dir.join("bigger.jpg"), [0u8; 20]).unwrap();
+        std::fs::write(dir.join("unsized.jpg"), [0u8; 5]).unwrap();
+        std::fs::create_dir(dir.join("folder.jpg")).unwrap();
+        let names = ["same.jpg", "bigger.jpg", "unsized.jpg", "gone.jpg", "folder.jpg"].map(name);
+        let files: Vec<(&str, u64)> = names.iter().map(String::as_str).zip([10, 10, 0, 10, 10]).collect();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let found = browsed_files_changed(&files, &cancel);
+        use BrowsedFile::{Changed, Unchanged, Unchecked};
+        assert_eq!(found, [Unchanged, Changed, Unchanged, Unchanged, Unchanged]);
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let found = browsed_files_changed(&files, &cancel);
+        assert_eq!(
+            found,
+            [Unchecked, Unchecked, Unchanged, Unchecked, Unchecked],
+            "a record with no size isn't asked about, so ✕ doesn't matter to it"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A probe a scan left is used again for a file that is as it was, and only for it: a file that

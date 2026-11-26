@@ -93,10 +93,11 @@ impl LightcraftApp {
         // after the poll: a lookup that just finished is cleared, so photos queued meanwhile are looked up now
         crate::lens_db::tick(self);
         updates_ui::tick(self, ctx);
-        self.preview_build_status(ctx);
+        self.tick_preview_builds(ctx);
         self.save_status(ctx);
         self.ai_mask_detail(ctx, now);
         self.place_names_outcome(ctx);
+        panels::detail::settle_wheel_edit(self, ctx);
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
@@ -436,8 +437,13 @@ impl LightcraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.library_changed(&ctx);
+        // (a tool panel opened some other way still remembers the panel it took the place of)
+        self.ui.note_right();
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
+        // (and the mask pin or component row under the pointer: the overlay shows that mask)
+        self.ui.mask_hover_prev = self.ui.mask_hover.take();
+        self.end_drags(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
@@ -461,6 +467,7 @@ impl LightcraftApp {
                 // host frames, and resetting it above must only hide it from this pass's dialogs.
                 panels::notices::restore_prompt_pointer(self, &ctx);
             }
+            self.repaint_on_mask_hover_change(&ctx);
             (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
             self.end_frame(&ctx, t0);
             return;
@@ -490,10 +497,13 @@ impl LightcraftApp {
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
-        panels::grid::drag_feedback(self, &ctx);
-        panels::left::album_drag_feedback(self, &ctx);
-        panels::left::section_drag_feedback(self, &ctx);
-        panels::keyword_list::drag_feedback(self, &ctx);
+        // (each ends its drag when the button is up, which an offscreen frame's pointer never is)
+        if !self.drawing_offscreen {
+            panels::grid::drag_feedback(self, &ctx);
+            panels::left::album_drag_feedback(self, &ctx);
+            panels::left::section_drag_feedback(self, &ctx);
+            panels::keyword_list::drag_feedback(self, &ctx);
+        }
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         // AppKit moves the window on a drag anywhere in the title-bar band unless the window isn't
@@ -505,9 +515,19 @@ impl LightcraftApp {
             // frames, and resetting it above must only hide it from this pass's dialogs.
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
+        self.repaint_on_mask_hover_change(&ctx);
         (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         self.end_frame(&ctx, t0);
+    }
+
+    /// The pointer moved onto another mask pin or component row, or off them, this frame: the overlay drawn earlier in the
+    /// frame still showed the last one (it falls back to it while panels set the new one), so one more frame shows
+    /// the new one at once rather than at the next input (CodeRabbit on #2920).
+    pub(crate) fn repaint_on_mask_hover_change(&self, ctx: &egui::Context) {
+        if self.ui.mask_hover != self.ui.mask_hover_prev {
+            ctx.request_repaint();
+        }
     }
 }
 

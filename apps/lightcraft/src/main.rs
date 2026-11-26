@@ -26,6 +26,8 @@
 
 mod alloc_release;
 mod appearance;
+#[cfg(target_os = "macos")]
+mod appkit_defaults;
 #[cfg(test)]
 mod build_channel;
 mod build_flavor;
@@ -40,6 +42,8 @@ mod logging;
 mod native_menu;
 #[cfg(any(target_os = "linux", windows))]
 mod profile_file;
+#[cfg(target_os = "macos")]
+mod reduce_motion;
 #[cfg(target_os = "macos")]
 mod screen_profile;
 #[cfg(windows)]
@@ -72,7 +76,7 @@ use launch::{
 };
 #[cfg(test)]
 use platform::{explorer_select_arg, explorer_select_command, windows_open_url_command};
-use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
+use prefs::{MAXIMIZE_LATER, PrefsWriter, as_remembered, load_prefs, prefs_path};
 #[cfg(test)]
 use prefs::{load_prefs_at, write_atomic};
 use session::{open_session, services};
@@ -258,6 +262,20 @@ impl eframe::App for App {
 /// a second; anything slower gives way to quitting.
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Import files passed on the command line once the library is open. Preserve an explicit Detail
+/// startup view; Grid and Last keep the existing Photo Grid launch behavior.
+fn start_launch_files(app: &mut LightcraftApp, files: Vec<String>) {
+    if files.is_empty() {
+        return;
+    }
+    if let Err(e) = lightcraft_ui_egui::import::start_paths(app, files) {
+        log::warn!("import at launch: {e}");
+    }
+    if app.ui.settings.startup_view != lightcraft_ui_egui::state::StartupView::Detail {
+        app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+    }
+}
+
 /// The nightly Windows taskbar/Start identity, before any window or COM service exists.
 fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
     process_identity::initialize(
@@ -266,13 +284,22 @@ fn initialize_nightly_process_identity() -> Result<(), process_identity::Identit
     )
 }
 
-/// A launcher script has no terminal: say why it refused, in a native dialog on a desktop session.
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// A launcher script has no terminal: say why it refused, in a native dialog on a Windows or
+/// X11/Wayland desktop session. macOS gets the console line only (`refusal_dialog`).
 fn report_launch_profile_error(error: &str) {
     eprintln!("LightCraft launch profile: {error}");
     let desktop_session = cfg!(windows)
         || cfg!(target_os = "macos")
         || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
         if let Err(error) = initialize_nightly_process_identity() {
             eprintln!("LightCraft launch profile: {error}");
             return;
@@ -462,6 +489,12 @@ fn main() -> eframe::Result {
             None => logger.no_file(),
         }
     }
+    // before the menu bar exists, after the arguments: AppKit reads these defaults when it builds
+    // its menus, and `--version` / `--help` / a --memory session (issue #164) write nothing
+    #[cfg(target_os = "macos")]
+    if !in_memory {
+        appkit_defaults::install();
+    }
     // what the arguments name, resolved now: an empty or relative argument never becomes a drive
     // root, and a whole drive or home folder is not walked (issue #374)
     let LaunchArgs { files, library: launch_library, notices: launch_notices } = launch_imports(&files);
@@ -522,7 +555,7 @@ fn main() -> eframe::Result {
     let opens_as = prefs.as_ref().and_then(|ui| ui.window).and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
     let options = eframe::NativeOptions {
         renderer,
-        viewport: as_remembered(egui::ViewportBuilder::default().with_title(lightcraft_ui_egui::channel::name()), opens_as)
+        viewport: as_remembered(egui::ViewportBuilder::default().with_title(lightcraft_ui_egui::channel::name()), opens_as, MAXIMIZE_LATER)
             .with_min_inner_size(lightcraft_ui_egui::window_place::MIN_SIZE)
             .with_drag_and_drop(true)
             .with_transparent(window_gpu::composes_window(compose_window, window_renderer))
@@ -607,6 +640,10 @@ fn main() -> eframe::Result {
                     written: serde_json::to_vec_pretty(&app.ui).unwrap_or_default(),
                     library: app.ui.settings.library_path.clone(),
                     keep_file: keep_prefs_file,
+                    start: Some(
+                        lightcraft_ui_egui::window_place::StartPlace::new(MAXIMIZE_LATER && opens_as.is_some_and(|w| w.zoomed))
+                            .remembered(opens_as.map(|w| w.size)),
+                    ),
                     ..Default::default()
                 };
                 // a library opened from its catalog file is the one in use from now on, as Open Library makes it
@@ -640,10 +677,7 @@ fn main() -> eframe::Result {
                     // listed and read on the import worker once the window shows (issue #374: never
                     // here, before the first frame, where a large folder kept the window from
                     // appearing)
-                    if let Err(e) = lightcraft_ui_egui::import::start_paths(&mut app, files) {
-                        log::warn!("import at launch: {e}");
-                    }
-                    app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+                    start_launch_files(&mut app, files);
                 }
                 // native menu bar generated from the command registry (macOS; elsewhere the menus are
                 // drawn in the window's top bar). LIGHTCRAFT_NO_NATIVE_MENU=1 keeps the in-window menus.
@@ -714,3 +748,17 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests;
+
+#[cfg(test)]
+mod refusal_dialog_tests {
+    use super::refusal_dialog;
+    use crate::build_flavor::BuildFlavor;
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
+    }
+}

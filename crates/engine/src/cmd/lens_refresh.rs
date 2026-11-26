@@ -33,7 +33,7 @@ pub struct Missing {
 pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[PhotoId]>, again: bool) -> Vec<Missing> {
     // a photo and its virtual copies list the photo once, in library order
     let mut seen = std::collections::HashSet::new();
-    let from_database = |p: &Photo| p.embedded_lens.is_some_and(|l| l.source == LensSource::Database);
+    let from_database = |p: &Photo| p.embedded_lens.as_deref().is_some_and(|l| l.source == LensSource::Database);
     cat.photos()
         .filter(|p| ids.is_none_or(|ids| ids.contains(&p.id) || p.copy_of.is_some_and(|c| ids.contains(&c))))
         .map(|p| p.copy_of.and_then(|c| cat.photo(c)).map_or(&**p, |orig| &**orig))
@@ -46,7 +46,7 @@ pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[Phot
                 Some(_) => again && from_database(p),
             }
         })
-        .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Missing { id: p.id, path: path.to_string() }))
+        .filter_map(|p| p.library_file().map(|path| Missing { id: p.id, path: path.to_string() }))
         .filter(|m| seen.insert(m.id))
         .collect()
 }
@@ -75,14 +75,14 @@ pub fn apply(s: &mut Session, results: Vec<(Missing, std::result::Result<ProbeIn
     for (item, info) in results {
         let Ok(info) = info else { continue };
         // the photo moved or left the library while its file was read: the result is stale, for its copies too
-        if s.catalog.photo(item.id).and_then(|p| crate::cmd::missing::checked_path(p)) != Some(item.path.as_str()) {
+        if s.catalog.photo(item.id).and_then(|p| p.library_file()) != Some(item.path.as_str()) {
             continue;
         }
         let family = std::iter::once(item.id).chain(copies.get(&item.id).into_iter().flatten().copied());
         for id in family {
             let Some(p) = s.catalog.photo(id) else { continue };
             // nothing found for a photo without a database profile: a file's own correction is Reload's business
-            let from_database = p.embedded_lens.is_some_and(|l| l.source == LensSource::Database);
+            let from_database = p.embedded_lens.as_deref().is_some_and(|l| l.source == LensSource::Database);
             if info.embedded_lens.is_some() || from_database {
                 let mine = crate::cmd::convert::lens_ops(id, p, &info);
                 if !mine.is_empty() {
