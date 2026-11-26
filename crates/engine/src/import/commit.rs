@@ -410,15 +410,17 @@ pub fn civil(secs: i64) -> String {
 /// in UTC, which put an evening photo on the next day).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn local_civil(secs: i64) -> String {
-    civil_in(secs, system_zone())
+    civil_in(secs, &system_zone())
 }
 
-/// The host's zone, read once: it holds the whole rule set, so each instant still gets the offset
-/// that was in force then, and an import does not re-read the system database per file.
+/// The host's zone. It holds the whole rule set, so each instant still gets the offset that was in
+/// force then. jiff keeps the zone it read for five minutes (a cheap shared handle, so an import
+/// does not re-read the system database per file) and reads it again after that, so a host whose
+/// zone is changed while LightCraft runs dates its files in the new zone from then on, not in the
+/// one it started in.
 #[cfg(not(target_arch = "wasm32"))]
-fn system_zone() -> &'static jiff::tz::TimeZone {
-    static ZONE: std::sync::OnceLock<jiff::tz::TimeZone> = std::sync::OnceLock::new();
-    ZONE.get_or_init(jiff::tz::TimeZone::system)
+fn system_zone() -> jiff::tz::TimeZone {
+    jiff::tz::TimeZone::system()
 }
 
 /// [`local_civil`] in a given zone. `jiff::TimeZone::system` falls back to a zone that behaves
@@ -440,7 +442,7 @@ pub fn local_civil(secs: i64) -> String {
 /// the local date they mean whatever zone the machine is in.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn local_instant(civil: &str) -> Option<i64> {
-    instant_in(civil, system_zone())
+    instant_in(civil, &system_zone())
 }
 
 /// [`local_instant`] in a given zone. `None` when the text is not a civil date-time, or when the
@@ -463,7 +465,8 @@ pub fn local_instant(civil: &str) -> Option<i64> {
     lightcraft_catalog::dates::iso_seconds(civil)
 }
 
-#[cfg(test)]
+// (the clock is the host's only natively: the web build's is UTC, and has no jiff)
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod clock_tests {
     use super::*;
 
