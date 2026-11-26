@@ -171,6 +171,12 @@
 - Importing a backup of a catalog you already imported no longer adds every collection a second time: collections
   are matched by the catalog's own id, which its backups keep, instead of by the catalog file's path.
 
+## 2026-11-04
+### Remote SAM worker recovers from accept errors
+- A transient connection-accept error is logged and retried after a short pause, so one failed accept no longer
+  stops the remote Metal worker (#2574). Startup validation and bind failures still report an error.
+### Reference View's empty state paints on every platform
+- Its instruction now uses the supported menu arrow symbol, avoiding a missing-glyph panic while the view is drawn.
 ## 2026-10-30
 
 ### Lightroom catalogs with a print inside a collection import their collections
@@ -400,6 +406,14 @@
   on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
 
 
+## 2026-10-26
+
+### Panels come back as they were
+- Close Masking, Crop, Remove or Red Eye and the panel you came from is there again, at the same width and scroll
+  position, and the photo doesn't move; if the panel was hidden, it stays hidden. Pressing a panel key a second time
+  (I for Info, M for Masking, C for Crop, H for Remove) or its tool-strip button puts back exactly what the right
+  column showed before: Edit → I → I is Edit again, Masks → I → I is Masks, and a closed panel stays closed.
+
 ## 2026-10-25
 
 ### Import from Folder… offers the photos you browsed in Local
@@ -518,6 +532,18 @@
 - Folders that could not be listed completely or whose time can't be read, and files you add one by one, are checked
   as before.
 
+### Drag and drop says what a drop will do
+- Photos dragged over an album now say how many a drop adds ("Add 2 photos to “Garden”"), or "Already in “Garden”"
+  when it holds them all, in which case letting go does nothing at all (no undo step, no message). When some are there
+  already, the message after the drop says how many. Over the Keyword List, the label says how many photos get the
+  keyword, or that they all have it.
+- Rows that can't take photos now show it instead of staying silent: a smart album, an album folder and the Keywords
+  in the sidebar show the not-allowed cursor while photos are over them, and letting go says why and where to drop
+  instead (Edit Smart Album…, an album inside the folder, the Keyword List).
+- A keyword dragged over itself or over a keyword inside it shows the not-allowed cursor and says "Can't go inside
+  itself".
+- Esc gives up a drag of photos, as it already did for albums, sidebar sections and keywords: that press ends the drag and does nothing else
+  (it does not also close a dialog, leave full screen or light back on). A drag started before entering full screen or a slideshow now ends with the mouse button, so Esc works there again.
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -561,7 +587,6 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
-
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
@@ -608,6 +633,14 @@
   of its group. The focus stays on the moved row's grip, and a screen reader says where the row is: "Rule 2 of 4:
   Rating is ≥ 3. Move with the arrow keys".
 - OK saves the rules in the order shown, in one undo step like any other change to the rules.
+
+### Lightroom catalog import keeps the settings of each history step
+- Importing a Lightroom Classic catalog saves its history steps and snapshots in a recovery archive in the library.
+  For catalogs from Lightroom Classic 13 and later, the archive kept each step's name and date but not its
+  settings, because those versions store them compressed. They are now decoded and kept. A step whose settings
+  can't be read is kept without them, with a warning, and the import goes on.
+- When an archive with the history settings would be too big (over 32 MiB), it is now saved without them, with a
+  warning, instead of not at all.
 
 ## 2026-10-23
 
@@ -918,6 +951,16 @@
   Before, every rated photo wore the badge bar, which in a mostly rated library made it look like Always. Pick and
   reject flags and colour labels stay on every thumbnail. Always and Never work as before.
 
+### Searching a big library keeps up with your typing
+- Typing in the library search stalls less on a library of hundreds of thousands of photos. The search used to
+  lower-case a photo's file name, title, caption, camera, lens, location, format, every keyword and the names of the
+  people on its faces again for each photo and each letter you typed. It now keeps that text, makes it the first time
+  you search, and keeps it up to date as you edit titles, captions, keywords, people and file names. Smart albums with
+  a Text rule keep their own text the same
+  way, made the first time such an album is counted or shown. Which photos match is unchanged. On a test library of
+  312 000 photos, finding the photos for a word took about 50 ms where it took 120 to 160 ms. The first search makes
+  the text, which takes a fraction of a second and about 32 MB of memory at that size; a Text rule's text is another
+  33 MB. Searches with `camera:`, `lens:` or `name:` gain less (about 70 ms became about 60 ms).
 ### Selection rings you can see in the light themes
 - The active photo's white outline vanished on Silver and Paper's light grid, and told the active photo from the other
   selected ones by lightness alone. Now the active photo has a heavier ring (3 pt, with a thin line against the photo so
@@ -1108,6 +1151,17 @@
   could make it allocate gigabytes.
 
 ## 2026-10-16
+
+### Dark raws keep their camera's colour and tone
+- A raw whose camera JPEG is too dark (or too colourless) to fit a look to no longer drops its camera profile's
+  colour for the dull neutral fallback: it keeps the profile's colour, with the JPEG's tone curve when one fits, else
+  the default tone curve. Photos of profiled cameras that were underexposed and pushed back up keep their colour: on
+  NIKON D780 frames 3.7 EV under with a local profile, from about 40% of the properly exposed frame's colourfulness
+  to about 95%.
+- `lightcraft-cli calibrate` now also learns the camera's tone curve from all the photos it reads, and a profile
+  made with it carries the curve. A photo of that camera follows its own JPEG's curve as far as that JPEG shows it
+  and the camera's curve beyond, so an underexposed shot pushed back up matches a properly exposed one in
+  brightness instead of coming out 4–7 L* darker. Profiles made before keep working; refit them to get the curve.
 
 ### Synchronize Folder shows that it is listing the folder
 - A folder with tens of thousands of photos, above all on a network share, can take minutes to list before

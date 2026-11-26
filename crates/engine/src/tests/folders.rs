@@ -16,6 +16,7 @@
 
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
+use std::path::Path;
 
 use crate::{LibrarySource, Session, filter_chips};
 
@@ -700,6 +701,78 @@ fn a_destination_without_write_permission_reports_an_error_and_keeps_everything(
         assert!(s.execute("folder.create", &json!({"parent": dir.path("ro"), "name": "x"})).is_err());
     }
     std::fs::set_permissions(dir.0.join("ro"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn a_date_folder_inside_the_library_can_be_renamed_but_the_librarys_own_folders_cannot() {
+    let dir = Scratch::new("in-library");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    let photo = day.join("a.jpg");
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo.to_string_lossy());
+    let paths = |s: &Session| -> Vec<String> {
+        s.catalog
+            .photos()
+            .filter_map(|p| match &p.source {
+                Source::File { path } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let day = day.to_string_lossy().to_string();
+    let r = s.execute("folder.rename", &json!({"path": day, "name": "Beach"})).unwrap();
+    assert_eq!(r["relinked"], 1, "the photo inside is relinked");
+    assert!(lib.join("Originals/Beach").is_dir(), "the imported date folder is renamed");
+    assert!(!Path::new(&day).exists());
+    let moved = lib.join("Originals").join("Beach").join("a.jpg");
+    assert_eq!(paths(&s), [moved.to_string_lossy().to_string()], "the catalog follows the photo");
+    assert!(moved.is_file());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(Path::new(&day).is_dir(), "undo names it back");
+    assert_eq!(paths(&s), [photo.to_string_lossy().to_string()], "and points the photo back, in one step");
+    assert!(photo.is_file());
+    for own in ["Originals", "thumbs"] {
+        std::fs::create_dir_all(lib.join(own)).unwrap();
+        let path = lib.join(own).to_string_lossy().to_string();
+        assert!(s.execute("folder.rename", &json!({"path": path, "name": "x"})).is_err(), "{own} stays put");
+    }
+    assert!(s.execute("folder.rename", &json!({"path": lib.to_string_lossy(), "name": "x"})).is_err(), "and so does the library");
+    let alias = lib.join("Originals").join("..").join("Originals").to_string_lossy().to_string();
+    assert!(s.execute("folder.rename", &json!({"path": alias, "name": "x"})).is_err(), "even named through '..'");
+    assert!(lib.join("Originals").is_dir());
+}
+
+/// A date folder inside the library named through a link to the library would move on disk while its photos,
+/// stored under the library's own path, kept pointing at the old folder: it is refused and nothing moves.
+#[cfg(unix)]
+#[test]
+fn a_folder_inside_the_library_named_through_a_link_is_refused_and_its_photos_keep_their_paths() {
+    let dir = Scratch::new("in-library-link");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    let photo = day.join("a.jpg").to_string_lossy().to_string();
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo);
+    std::os::unix::fs::symlink(&lib, dir.0.join("lib-link")).unwrap();
+    let linked = dir.0.join("lib-link").join("Originals").join("2026-10-16").to_string_lossy().to_string();
+    assert!(s.execute("folder.rename", &json!({"path": linked, "name": "Beach"})).is_err(), "a linked spelling is refused");
+    assert!(day.is_dir() && !lib.join("Originals/Beach").exists(), "nothing moved on disk");
+    let paths: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(paths.iter().all(|p| Path::new(p).exists()), "every photo still points at a file: {paths:?}");
 }
 
 #[cfg(unix)]

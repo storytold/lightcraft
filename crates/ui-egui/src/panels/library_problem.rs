@@ -1108,9 +1108,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't find where to keep your library.")).color(t.text));
             } else {
                 ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't open the library at")).color(t.text_label));
-                ui.label(RichText::new(&problem.path).font(t.semibold(12.5)).color(t.text));
+                ui.add(egui::Label::new(RichText::new(&problem.path).font(t.semibold(12.5)).color(t.text)).selectable(true));
             }
-            ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
+            ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap().selectable(true));
             ui.label(RichText::new(EXPLANATION).color(t.text_dim));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -1227,7 +1227,7 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
                 }
             });
             if !problem.error.is_empty() {
-                ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
+                ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap().selectable(true));
             }
             let selected = chooser.selected.and_then(|i| chooser.libraries.get(i));
             let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
