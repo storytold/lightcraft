@@ -7,9 +7,10 @@ convention; that page's *Two conventions* section has the comparison and what wo
 
 Sony ARWs record three lens corrections per shot in the raw image IFD: shading (vignetting), lateral chromatic
 aberration (CA) and distortion, each as a camera setting and a radial table, with copies in the encrypted
-`SR2SubIFD`. LightCraft **decodes all three** wherever a file carries them and applies distortion here on two validated
-bodies: **ILCE-7RM4A (A7R IVA)** and **ILCE-7CR (A7CR)**. The A7R IVA keeps its existing Bayer 3:2 conversion,
-validated with the FE 24-105mm F4 G OSS and FE 200-600mm F5.6-6.3 G OSS. The A7CR uses a separate conversion,
+`SR2SubIFD`. LightCraft **decodes all three** wherever a file carries them and applies distortion here on three validated
+bodies: **ILCE-7RM4A (A7R IVA)**, **ILCE-7M3 (A7 III)** and **ILCE-7CR (A7CR)**. The A7R IVA keeps its existing Bayer 3:2 conversion,
+validated with the FE 24-105mm F4 G OSS and FE 200-600mm F5.6-6.3 G OSS; the A7 III uses the same conversion, validated
+with the FE 16-35mm F4 ZA OSS, FE 28-70mm F3.5-5.6 OSS and FE 50mm F1.8 ([ILCE-7M3 validation](#ilce-7m3-validation)). The A7CR uses a separate conversion,
 limited to full-frame Bayer 3:2 files with distortion Auto or forced Auto. Apart from the separate ILCE-7RM6 converter, other models and shading and CA on every model are
 decoded only: no warp, vignetting or CA correction is added for them. The decoded record stays with the image
 (`RawInfo::lens_metadata` / `RawImage::lens_metadata`, types in `crates/raw/src/lens_metadata.rs`, decoder in
@@ -289,9 +290,50 @@ decode or fail without a panic. `tests/sr2_heap.rs` measures the peak heap of de
 `SR2Private` directory holds eight fields aliasing the whole file: 37 kB, against 134 MB when those fields were
 decoded. No private photographs or reference TIFFs are committed.
 
+## ILCE-7M3 validation
+
+Checked on 2026-10-12 against the camera's own JPEG of the same exposure, which is an independent renderer
+that applied the correction (RAW+JPEG, Lens Comp. ▸ Distortion Comp.: Auto). RAW+JPEG pairs from one
+ILCE-7M3 (26 in the table below, plus two left out as explained under it): a checkerboard filling the frame on a TV (handheld) and on a desktop monitor (tripod), compressed and
+uncompressed raws, apertures from wide open to f/8, plus one textured wall. Tables covered strong barrel (16 mm,
+−690 at the corner), strong pincushion (70 mm, +1161) and the sign change between them.
+
+Method (`tools/sony_distortion_check.py`): LightCraft renders each ARW at full size with the profile correction
+on and off; sub-pixel board corners (Hessian saddle points refined with `cornerSubPix`, kept only where the four
+quadrants alternate, labelled into rows and columns) are matched with the JPEG's by grid position, with the
+match fixed by the central corners before any fit, because a board is periodic. A similarity (zoom, rotation,
+shift) is fitted, as the camera fills its frame with its own zoom; no lens coefficient is fitted. The textured wall
+uses SIFT matches instead. The script was checked on synthetic boards with a known radial distortion.
+
+| Lens / focal length | Shots | Corrected vs JPEG: median / p95 (px at 6000) | Uncorrected median | Corner (r > 0.9) | Camera / LightCraft correction |
+|---|---:|---|---:|---:|---:|
+| FE 16–35 F4 ZA / 16 mm | 10 | 0.33–0.38 / 1.01–1.15 | 16.7–17.0 | 1.40–1.56 px | 1.02 |
+| FE 16–35 F4 ZA / 20 mm | 4 | 0.16–0.24 / 0.34–0.50 | 3.9–4.4 | 0.15–0.24 px | 0.98 |
+| FE 16–35 F4 ZA / 35 mm | 2 | 0.18–0.21 / 0.39–0.44 | 11.0–11.1 | 0.18–0.26 px | 1.01–1.02 |
+| FE 28–70 / 28 mm | 2 | 0.24–0.25 / 0.59–0.64 | 13.2–13.4 | 0.92 px | 1.02 |
+| FE 28–70 / 33 mm | 1 | 0.07 / 0.16 | 0.8 | 0.07 px | 1.00 |
+| FE 28–70 / 50 mm | 1 | 0.30 / 0.69 | 20.8 | 1.24 px | 1.01 |
+| FE 28–70 / 70 mm | 1 | 0.44 / 0.93 | 26.4 | 1.49 px | 1.01 |
+| FE 50 F1.8 / 50 mm | 4 | 0.06–0.12 / 0.15–0.31 | 2.8–3.0 | 0.08–0.14 px | 1.00–1.01 |
+| Wall, 16 mm (SIFT) | 1 | 0.37 / 1.06 | 5.6 | 1.22 px | — |
+
+Residuals are in pixels of the 6000×4000 JPEG; at the 2376 px exports used above for the ILCE-7RM4A, the
+board medians are 0.02–0.17 px and the p95 at most 0.46 px. The last column fits JPEG ≈ uncorrected +
+α·(corrected − uncorrected) radially: LightCraft applies the camera's amount of correction within 2 %, slightly
+less for strong barrel and slightly more at 20 mm, which is what remains at the 16 mm corners (about 1.5 px of a
+35 px correction). Rows and columns of corrected boards are as straight as in the JPEG in every shot (largest
+bow 0.8–7.8 px in both, from the screens), against 7–55 px uncorrected. Compressed and uncompressed raws,
+the TV and the monitor, and wide open and f/8 agree. Two 16 mm board shots whose board stopped short of the
+corners (reach 0.8 of the half diagonal) gave 0.85 px medians and are left out of the table.
+
+On this body Sony's crop tags and the default crop agree (origin 12, 12, 6000×4000 of 6048×4024), so the
+warp sits on the image centre; fitted against the camera, the centre is within 0.3 px. Unit tests keep the warp from
+three of these tables within 0.0008 of the half diagonal (2.9 px at 6000 px) of the camera's fitted geometry.
+The photographs stay with their owner; none is committed.
+
 ## Camera coverage and regression boundary
 
-The model check is exact: `ILCE-7RM4` (A7R IV without the A suffix), `ILCE-7M3`, unknown/missing
+The model check is exact: `ILCE-7RM4` (A7R IV without the A suffix), unknown/missing
 model names, and every other model remain unsupported by this distortion decoder. Matching tag
 numbers and table lengths do not establish the scale, interpolation or crop normalization on another
 body. Support can expand after independent geometry validation; do not add model-name prefix matching.
@@ -309,7 +351,7 @@ fail on any absent pinned file instead.
 |---|---|---|---|
 | ILCE-7RM4A | Compressed (4822) | All three tables; 257 / 1 / 17 | One distortion warp |
 | ILCE-9M2 | Compressed (3989) | All three; 257 / 1 / 0 | None |
-| ILCE-7M3 | Compressed, uncompressed | All three; 257 / 1 / 0 | None |
+| ILCE-7M3 | Compressed, uncompressed | All three; 257 / 1 / 0 | One distortion warp |
 | ILCE-7M4 | 14-bit, lossless L/M/S | L/M/S: all three, 272 / 1 / 17; the 14-bit file (APS-C framing, 4608 × 3072): settings only, its 11-sample tables are not interpreted | None |
 | ILCE-7RM2 | 12-bit uncompressed | All three; 256 / 0 / 1 | None |
 | DSC-RX100 | One | Shading, from the `SR2SubIFD` (the raw IFD has no tables); CA and distortion in the 11-sample layout | None |
@@ -324,8 +366,8 @@ fail on any absent pinned file instead.
 These are **model-boundary regression checks, not new geometric validation of those models**.
 `sony_lens_records_of_the_public_samples` also checks the exact tables, settings, provenance and framing evidence of
 the three A7CR codings and the A7R IVA sample, and that across the Sony corpus only the A7R IVA's distortion is ever
-applied. In particular,
-refusing the A7 III tables resolves the unverified corner warp identified in review. The lossless M/S
+applied, besides the A7 III's. The A7 III tables were refused at first because their corner warp was unverified;
+the [ILCE-7M3 validation](#ilce-7m3-validation) measured it against the camera's own JPEGs and enabled the body. The lossless M/S
 files are linear YCbCr and remain excluded independently of the model check. Header and full decode
 must agree for every sample. Synthetic tests also verify both TIFF byte orders, exact model matching,
 that the warp is centred on the standard default crop while the image keeps Sony's crop, and that DNG export preserves an accepted warp without adding one to rejected

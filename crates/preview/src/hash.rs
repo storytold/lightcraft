@@ -18,7 +18,8 @@ impl fmt::Display for Hash128 {
 
 impl Hash128 {
     pub fn parse(s: &str) -> Option<Hash128> {
-        (s.len() == 32).then(|| u128::from_str_radix(s, 16).ok().map(Hash128)).flatten()
+        // `from_str_radix` also accepts a leading '+', so check the digits explicitly.
+        (s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())).then(|| u128::from_str_radix(s, 16).ok().map(Hash128)).flatten()
     }
 }
 
@@ -58,4 +59,17 @@ impl Hasher128 {
 /// Hash of a whole byte string.
 pub fn hash_bytes(bytes: &[u8]) -> Hash128 {
     Hasher128::new().update(bytes).finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_rejects_signed_and_non_hex() {
+        assert_eq!(Hash128::parse(&format!("+{}", "1".repeat(31))), None);
+        assert_eq!(Hash128::parse(&format!("-{}", "1".repeat(31))), None);
+        let h = "0123456789abcdefABCDEF0123456789";
+        assert_eq!(Hash128::parse(h).map(|x| x.to_string()), Some(h.to_lowercase()));
+    }
 }

@@ -616,7 +616,7 @@ admission and completion (neither destination receives a screenshot).
 
 ### 4.7 Panels, IDs and docking
 
-Anchors: `crates/ui-egui/src/panels/mod.rs:52-77` (`resizable_side`),
+Anchors: `crates/ui-egui/src/panels.rs:52-77` (`resizable_side`),
 `panels/bottombar.rs:24,371`, `panels/strip.rs:19`, `panels/topbar.rs:57`,
 `panels/library_problem.rs:169`, `crates/ui-egui/src/docking.rs:430`, `shortcuts.rs:339`.
 
@@ -1389,7 +1389,7 @@ exactly (the pinned fork's winit byte-range event).
 
 ### Tests added (source only)
 
-`crates/ui-egui/src/tests_lifecycle_037.rs`:
+`crates/ui-egui/src/tests/lifecycle_037.rs`:
 
 - bundled monochrome emoji + explicit font-feature gate;
 - parent-salted panel state (and no legacy exact-`Id` state);
