@@ -273,10 +273,12 @@ pub(super) fn duration_slider(
                 // began with, so only the duration let go of changes, and the other one is clamped
                 // by that final value alone (the command merges, saves and records).
                 let start = held(ui).unwrap_or_else(|| app.session.slideshow.clone());
-                ui.data_mut(|d| d.remove::<lightcraft_engine::slideshow::PlaybackSettings>(start_key));
                 app.session.slideshow = start;
                 let _ = app.run("slideshow.playback", json!({ key: v }));
             }
+            // The gesture is over, saved or given back: nothing of it waits for the next change, so
+            // a later one-pass change can't write its old settings back over what was changed since.
+            Step::End => ui.data_mut(|d| d.remove::<lightcraft_engine::slideshow::PlaybackSettings>(start_key)),
         }
     }
 }

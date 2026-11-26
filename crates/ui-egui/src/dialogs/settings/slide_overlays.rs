@@ -46,7 +46,7 @@ fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, val
     let shape = Shape { label, lo: range.lo * k, hi: range.hi * k, unit: suffix, step: 0.1, log: false };
     for step in controls::slider(ui, controls::owner(id), id, &shape, value * k) {
         match step {
-            Step::Begin(_) => {}
+            Step::Begin(_) | Step::End => {}
             Step::Preview(v) => text_row_preview(app, &wrap(v / k)),
             Step::Save(v) => set(app, wrap(v / k)),
         }
@@ -399,7 +399,7 @@ fn text_row_slider(
     let patch = |value: f64| wrap(json!({key: value / k}));
     for step in controls::slider(ui, owner, name, &shape, value * k) {
         match step {
-            Step::Begin(_) => {}
+            Step::Begin(_) | Step::End => {}
             Step::Preview(v) => text_row_preview(app, &patch(v)),
             Step::Save(v) => set(app, patch(v)),
         }

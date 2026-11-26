@@ -65,7 +65,7 @@ fn slider(
     let shape = Shape { label, lo: range.start() * k, hi: range.end() * k, unit: suffix.trim(), step: 0.1, log: false };
     for step in controls::slider(ui, controls::owner(id), id, &shape, value * k) {
         match step {
-            Step::Begin(_) => {}
+            Step::Begin(_) | Step::End => {}
             Step::Preview(v) => {
                 if let Ok(next) = app.session.slide_titles.merged(&json!({ t.id(): { key: v / k } })) {
                     app.session.slide_titles = next;

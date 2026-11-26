@@ -49,7 +49,7 @@ fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, key
     let shape = Shape { label, lo, hi, unit: suffix, step: 0.1, log: false };
     for step in controls::slider(ui, controls::owner(id), id, &shape, value * k) {
         match step {
-            Step::Begin(_) => {}
+            Step::Begin(_) | Step::End => {}
             Step::Preview(v) => {
                 if let Ok(next) = app.session.slide_layout.merged(&json!({ key: v / k })) {
                     app.session.slide_layout = next;

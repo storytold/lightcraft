@@ -121,6 +121,14 @@ impl Fixture {
         self.frame(vec![]);
     }
 
+    /// A press and its release at `id`'s centre: one pass, no drag.
+    fn click(&mut self, id: &str) {
+        let at = self.rect(id).center();
+        self.pointer(at, true);
+        self.pointer(at, false);
+        self.frame(vec![]);
+    }
+
     fn pointer(&mut self, at: egui::Pos2, pressed: bool) {
         self.frame(vec![
             Event::PointerMoved(at),
@@ -213,4 +221,39 @@ fn slideshow_fade_duration_is_clamped_by_the_slide_alone() {
     assert_eq!(f.app.session.journal.len(), journal + 1, "one save for the fade");
     assert_eq!(f.app.session.journal[journal].1, json!({"fadeDuration": fade}));
     f.saved_matches();
+}
+
+/// The review's follow-up: a gesture that ends without a save (Escape, or a press let go of where it
+/// began) leaves nothing behind, so a one-pass change afterwards does not write its old settings
+/// back over what was changed in between.
+#[test]
+fn slideshow_duration_a_one_pass_change_keeps_what_changed_since_a_cancelled_drag() {
+    let mut f = Fixture::new();
+    // a slide drag cancelled with Escape: undone, and nothing of it stays for the next change
+    let press = f.at(SLIDE, 0.5);
+    let short = f.at(SLIDE, 0.0);
+    f.pointer(press, true);
+    f.frame(vec![Event::PointerMoved(f.at(SLIDE, 0.25))]);
+    f.frame(vec![Event::PointerMoved(short)]);
+    f.key(Key::Escape);
+    f.pointer(short, false);
+    f.frame(vec![]);
+    assert_eq!(f.playback(), (4.0, 3.0), "the cancelled drag is undone");
+    // another playback setting, saved on its own
+    f.click("check:settings.slideshowManual");
+    assert!(f.app.session.slideshow.manual, "the checkbox saves through slideshow.playback");
+    // a one-pass change: a press on the track sets the slide and saves it, with no gesture around it
+    let journal = f.app.session.journal.len();
+    let at = f.at(SLIDE, 0.5);
+    f.pointer(at, true);
+    f.pointer(at, false);
+    f.frame(vec![]);
+    let (slide, fade) = f.playback();
+    assert!(slide > 3.0, "the press set a longer slide: {slide}");
+    assert_eq!(fade, 3.0, "the fade that nothing edited is kept");
+    assert!(f.app.session.slideshow.manual, "Manual, changed since the cancelled drag, is kept rather than written back over");
+    assert_eq!(f.app.session.journal.len(), journal + 1, "the press saves once");
+    assert_eq!(f.app.session.journal[journal].1, json!({"slideDuration": slide}));
+    f.saved_matches();
+    assert_eq!(f.saved()["slideshow"]["manual"], json!(true), "and the preferences keep Manual");
 }
