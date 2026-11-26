@@ -209,7 +209,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} 张相似照片{0:.0} · 选择“视图 → 清除过滤器”可查看全部",
   "Moved; {} photo(s) relinked": "已移动；已重新链接 {0} 张照片",
   "{} label (click more labels to show any of them)": "{0}标签（单击更多标签可显示符合其中任一标签的照片）",
-  ", {} star{}": "，{0} 星{1:.0}",
   ", {} label": "，{0}标签",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "从 {host} 下载。下载完成并通过校验后，LightCraft 会进行安装，{after}。",
   "{:.1} MB": "{:.1} MB",
@@ -329,5 +328,6 @@
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "规则 {n}/{m}：{what}。用方向键移动",
-  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "组 {n}/{m}：匹配{mode}，内含 {count} 项。用方向键移动"
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "组 {n}/{m}：匹配{mode}，内含 {count} 项。用方向键移动",
+  ", rating {} of 5": "，评分：{}/5"
 }

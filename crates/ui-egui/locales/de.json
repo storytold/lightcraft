@@ -1652,7 +1652,8 @@
   "Watermark": "Wasserzeichen",
   "Wednesday": "Mittwoch",
   "What's New": "Neuigkeiten",
-  "When rated or hovered": "Bei Bewertung oder unter dem Mauszeiger",
+  "Stars on hover": "Sterne beim Überfahren",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Sterne beim Überfahren: Flaggen und Farbmarkierungen sind immer sichtbar; die Sterne und das Bearbeitet-Zeichen erscheinen, solange ein Foto überfahren oder ausgewählt ist.",
   "White Balance": "Weißabgleich",
   "White Balance Selector": "Weißabgleich-Pipette",
   "White Balance Selector (W)": "Weißabgleich-Pipette (W)",
@@ -3541,5 +3542,10 @@
   "Get Started": "Loslegen",
   "Drag to move, or use the arrow keys": "Zum Verschieben ziehen oder die Pfeiltasten verwenden",
   "A group can't go inside itself": "Eine Gruppe kann nicht in sich selbst liegen",
-  "Groups can't nest any deeper": "Gruppen lassen sich nicht tiefer verschachteln"
+  "Groups can't nest any deeper": "Gruppen lassen sich nicht tiefer verschachteln",
+  "Stack — click to expand (S)": "Stapel — Klicken zum Aufklappen (S)",
+  "Stack — click to collapse (S)": "Stapel — Klicken zum Zuklappen (S)",
+  "Virtual copy": "Virtuelle Kopie",
+  "Right-click ▸ Locate Missing File… to find it again.": "Rechtsklick → Fehlende Datei suchen…, um sie wiederzufinden.",
+  "Right-click ▸ Reload from Disk to try again.": "Rechtsklick → Vom Datenträger neu laden, um es erneut zu versuchen."
 }

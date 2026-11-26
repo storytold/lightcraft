@@ -205,7 +205,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Подібних фото: {n}{:.0} · Вигляд → Скинути фільтри, щоб побачити всі",
   "Moved; {} photo(s) relinked": "Переміщено; повторно пов’язано фото: {}",
   "{} label (click more labels to show any of them)": "Мітка «{}» (клацніть інші мітки, щоб показати фото з будь-якою з них)",
-  ", {} star{}": ", зірок: {}{:.0}",
   ", {} label": ", мітка: {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Завантажується з {host}. Після отримання й перевірки LightCraft установлює модель, {after}.",
   "{:.1} MB": "{:.1} МБ",
@@ -329,5 +328,6 @@
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Правило {n} з {m}: {what}. Переміщення стрілками",
-  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Група {n} з {m}: збіг {mode}, усередині {count}. Переміщення стрілками"
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Група {n} з {m}: збіг {mode}, усередині {count}. Переміщення стрілками",
+  ", rating {} of 5": ", оцінка: {} з 5"
 }

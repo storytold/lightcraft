@@ -206,7 +206,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} foto serupa{:.0} · Tampilan → Hapus filter untuk melihat semua",
   "Moved; {} photo(s) relinked": "Dipindahkan; {} foto ditautkan ulang",
   "{} label (click more labels to show any of them)": "Label {} (klik label lain untuk ikut menampilkan foto berlabel tersebut)",
-  ", {} star{}": ", {} bintang{:.0}",
   ", {} label": ", label {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Diunduh dari {host}. Setelah selesai diunduh dan lolos pemeriksaan, LightCraft akan menginstalnya, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -328,5 +327,6 @@
   "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Aturan {n} dari {m}: {what}. Pindahkan dengan tombol panah",
-  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grup {n} dari {m}: cocokkan {mode}, isi: {count}. Pindahkan dengan tombol panah"
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grup {n} dari {m}: cocokkan {mode}, isi: {count}. Pindahkan dengan tombol panah",
+  ", rating {} of 5": ", rating: {} dari 5"
 }

@@ -22,7 +22,6 @@
   "+{} more": "+{} nữa",
   ", {failed} file{} not readable": ", {failed} tệp{:.0} không đọc được",
   ", {} label": ", nhãn {}",
-  ", {} star{}": ", {} sao{:.0}",
   "1 task is still running: {names}. Quitting stops it.": "Còn 1 tác vụ đang chạy: {names}. Thoát sẽ dừng tác vụ.",
   "; {kept} already had a location": "; {kept} đã có vị trí",
   "; {n} gained synonyms": "; {n} có thêm từ đồng nghĩa",
@@ -325,5 +324,6 @@
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Quy tắc {n}/{m}: {what}. Di chuyển bằng phím mũi tên",
-  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Nhóm {n}/{m}: khớp {mode}, bên trong: {count}. Di chuyển bằng phím mũi tên"
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Nhóm {n}/{m}: khớp {mode}, bên trong: {count}. Di chuyển bằng phím mũi tên",
+  ", rating {} of 5": ", xếp hạng: {} trên 5"
 }
