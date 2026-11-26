@@ -283,6 +283,7 @@
   "Exported to {path}": "Exportováno do {path}",
   "Saved template {name}": "Uložena šablona {name}",
   "Imported {name}": "Importováno: {name}",
+  "Moved {name} to {folder}": "{name} přesunuto do složky {folder}",
   "Skipped {problem}": "Přeskočeno: {problem}",
   "…and {more} more": "…a další: {more}",
   "Template preview: {name}": "Náhled šablony: {name}",
