@@ -136,7 +136,7 @@ impl Reader {
     /// The catalog's `Adobe_storeProviderID` (a UUID), kept by Lightroom in its backups; `None`
     /// when the table or the value is missing or doesn't look like an id.
     fn catalog_id(&self) -> Option<String> {
-        let rows = self.table("Adobe_variablesTable", false).ok()?;
+        let rows = self.table("Adobe_variablesTable", false, &mut Vec::new()).ok()?;
         let row = rows.iter().find(|r| text(r, "name") == "Adobe_storeProviderID")?;
         let id = text(row, "value").trim();
         (!id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| id.to_string())
