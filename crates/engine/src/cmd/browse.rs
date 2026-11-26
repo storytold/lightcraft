@@ -653,8 +653,10 @@ fn same_dir_entry(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Whether the prefix of `src` that names the library walks through a link that is not the library's own path
-/// (a differently-cased spelling of the same folder is not a different path).
+/// Whether `src` walks through a link that is not the library's own path. The check covers every
+/// component, including those below the library root, so a distinct `LIB` folder whose `Originals`
+/// is a link into the library is refused. A differently-cased spelling of the same folder is not a
+/// different path.
 fn foreign_link_in_library_prefix(src: &Path, lib: &Path) -> bool {
     let lib_comps: Vec<_> = lib.components().collect();
     let src_comps: Vec<_> = src.components().collect();
@@ -663,9 +665,13 @@ fn foreign_link_in_library_prefix(src: &Path, lib: &Path) -> bool {
     }
     let mut src_p = PathBuf::new();
     let mut lib_p = PathBuf::new();
-    for (s, l) in src_comps.iter().zip(lib_comps.iter()) {
+    for (i, s) in src_comps.iter().enumerate() {
         src_p.push(*s);
-        lib_p.push(*l);
+        if i < lib_comps.len() {
+            lib_p.push(lib_comps[i]);
+        } else {
+            lib_p.push(*s);
+        }
         if is_link(&src_p) && !same_dir_entry(&src_p, &lib_p) {
             return true;
         }

@@ -902,6 +902,42 @@ fn a_photo_stored_under_a_differently_cased_library_path_is_relinked() {
     );
 }
 
+/// A distinct folder whose name only differs in letter case, with a link below it into the library,
+/// must not be rewritten as the library's own path. Otherwise renaming it would move the real folder.
+#[cfg(unix)]
+#[test]
+fn a_folder_reached_through_a_link_below_a_case_distinct_prefix_is_still_refused() {
+    let dir = Scratch::new("link-below-case-prefix");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    let photo = day.join("a.jpg");
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo.to_string_lossy());
+    let other = dir.0.join("LIB");
+    if other.exists() {
+        // the volume treats lib and LIB as one folder: the distinct-directory case does not arise
+        return;
+    }
+    std::fs::create_dir_all(&other).unwrap();
+    std::os::unix::fs::symlink(lib.join("Originals"), other.join("Originals")).unwrap();
+    let linked = other.join("Originals").join("2026-10-16").to_string_lossy().to_string();
+    let err = s.execute("folder.rename", &json!({"path": linked, "name": "Beach"})).unwrap_err().to_string();
+    assert!(err.contains("give the folder's path inside the library"), "{err}");
+    assert!(day.is_dir() && !lib.join("Originals").join("Beach").exists(), "the library folder was not renamed");
+    let paths: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, [photo.to_string_lossy().to_string()], "the catalog path is unchanged");
+}
+
 /// On a case-sensitive volume, `trip` and `Trip` are different folders. Renaming one outside the
 /// library must not relink a photo in the other, or follow a browse of it.
 #[test]
