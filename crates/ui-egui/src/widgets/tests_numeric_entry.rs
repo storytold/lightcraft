@@ -341,3 +341,72 @@ fn leaving_and_returning_within_one_frame_still_disarms_the_wheel() {
         assert_eq!(h.value, selected, "the pointer left the row between two frames ({away:?})");
     }
 }
+
+/// Two sliders between buttons on either side, as the develop panel sits between the photo and the window edge.
+struct Panel {
+    view: HeadlessView,
+    specs: [ControlSpec; 2],
+    time: f64,
+}
+impl Panel {
+    fn new() -> Self {
+        let specs = [*controls::find("light.exposure").unwrap(), *controls::find("light.contrast").unwrap()];
+        let mut p = Self { view: HeadlessView::new(), specs, time: 0.0 };
+        for _ in 0..3 {
+            p.frame(vec![]);
+        }
+        p
+    }
+    fn frame(&mut self, events: Vec<Event>) {
+        self.time += 0.02;
+        let specs = &self.specs;
+        self.view.run(HeadlessView::raw_input(vec2(400.0, 200.0), 1.0, self.time, events), |ui| {
+            let full = ui.max_rect();
+            ui.put(Rect::from_min_size(egui::pos2(full.left(), full.top() + 20.0), vec2(40.0, 20.0)), egui::Button::new("left"));
+            ui.put(Rect::from_min_size(egui::pos2(full.right() - 40.0, full.top() + 20.0), vec2(40.0, 20.0)), egui::Button::new("right"));
+            let column = Rect::from_min_max(egui::pos2(full.left() + 60.0, full.top()), egui::pos2(full.right() - 60.0, full.bottom()));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(column));
+            for spec in specs {
+                slider(&mut child, spec, spec.default, true, None);
+            }
+        });
+    }
+    fn tab(&mut self) {
+        self.frame(vec![Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        self.frame(vec![]);
+    }
+    /// Whether a focus ring is painted around each slider's track, in order.
+    fn outlined(&self) -> Vec<bool> {
+        let registry = take_registry(&self.view.ctx);
+        let stroke = crate::widgets::focus_stroke(&crate::theme::Tokens::get(&self.view.ctx));
+        let shapes = self.view.painted_shapes();
+        self.specs
+            .iter()
+            .map(|spec| {
+                let track = registry.iter().find(|(id, _)| id == &format!("slider:{}", spec.id)).map(|(_, r)| *r);
+                track.is_some_and(|track| {
+                    shapes.iter().any(|s| matches!(s, egui::epaint::Shape::Rect(r) if r.stroke == stroke && r.rect.contains_rect(track)))
+                })
+            })
+            .collect()
+    }
+}
+
+/// The slider Tab selects is outlined, so a keyboard user sees which one ↑ and ↓ will move; the outline follows
+/// the focus to the next slider and goes when the focus leaves.
+#[test]
+fn a_tab_selected_slider_is_outlined() {
+    let mut p = Panel::new();
+    assert_eq!(p.outlined(), [false, false], "nothing is outlined before Tab");
+    let mut walk = Vec::new();
+    for _ in 0..12 {
+        p.tab();
+        let outlined = p.outlined();
+        walk.push((super::slider_has_focus(&p.view.ctx), outlined[0], outlined[1]));
+    }
+    let exposure = walk.iter().position(|(slider, ..)| *slider).expect("Tab reaches a slider");
+    assert_eq!(walk[exposure], (true, true, false), "the first slider Tab reaches is outlined, and only it: {walk:?}");
+    let contrast = exposure + 1 + walk[exposure + 1..].iter().position(|(slider, ..)| *slider).expect("Tab reaches the second slider");
+    assert_eq!(walk[contrast], (true, false, true), "the outline moves to the next slider: {walk:?}");
+    assert!(walk[exposure + 1..contrast].iter().all(|(_, e, c)| !e && !c), "and nothing is outlined between them: {walk:?}");
+}

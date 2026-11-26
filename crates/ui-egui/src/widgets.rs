@@ -417,7 +417,7 @@ const THUMB_RING: f32 = 7.0;
 /// Double-click the label or thumb to reset (hovering either says so). Shift-drag = fine adjustment.
 /// Scroll sideways over it to nudge it. Click the value to type one: Return or clicking away applies it,
 /// Esc keeps the old one. Drag the value sideways to scrub it, as if dragging the thumb (Shift: a tenth
-/// as far).
+/// as far). Tab, a click or a drag selects it, and the selected slider is outlined.
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -508,6 +508,12 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     p.circle_stroke(pos2(tx, track_rect.center().y), ring, Stroke::new(2.0, ring_c));
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    // the selected slider (by Tab, a click or a drag) is outlined, name, value and track, so the
+    // keyboard focus shows where ↑ and ↓ act
+    if enabled && resp.has_focus() {
+        let outline = Rect::from_min_max(pos2(label_rect.left() - 10.0, row.top() + 1.0), pos2(label_rect.right() + 10.0, row.bottom() - 1.0));
+        focus_ring(ui.painter(), outline, &t);
     }
     out
 }

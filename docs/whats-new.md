@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### The selected slider is outlined
+- A Develop slider selected with Tab, a click or a drag now has an outline around its name, value and track, so you
+  can see which slider the Up and Down arrow keys will change.
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
