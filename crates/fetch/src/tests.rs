@@ -522,6 +522,21 @@ fn a_hard_linked_part_never_empties_the_local_source() {
     }
 }
 
+/// A local source whose length on reading differs from the one its metadata gave (here a /proc file, whose size
+/// reads as 0: as a file rewritten after its size was checked) is not kept as a partial for the next mirror to
+/// resume (CodeRabbit on #3010).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_local_copy_that_comes_out_another_length_leaves_no_partial() {
+    let dst = tmp("local-changed-dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    let part = dst.join("status.part");
+    let r = copy_local(Path::new("/proc/self/status"), &part, 1 << 20, None, &AtomicBool::new(false), &mut |_, _| {});
+    assert!(matches!(r, Err(Fail::NextMirror(_))), "the next mirror is tried");
+    assert!(!part.exists(), "the partial is removed");
+    let _ = std::fs::remove_dir_all(&dst);
+}
+
 #[test]
 fn file_urls_are_percent_decoded_but_bare_paths_keep_their_percent_signs() {
     // (absolute on every platform: `/models/…` has no drive on Windows, where it is not an absolute path)

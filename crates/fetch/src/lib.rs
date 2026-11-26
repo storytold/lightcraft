@@ -554,6 +554,13 @@ fn copy_local(src: &Path, part: &Path, limit: u64, size: Option<u64>, cancel: &A
         have = have.saturating_add(n as u64);
         report(have, announced);
     }
+    // a source rewritten (or cut short) after its size was read: what was copied is not that file, and a partial
+    // left behind would be resumed by the next mirror, failing its hash; so it goes, and the next mirror starts over
+    if have != announced {
+        drop(out);
+        let _ = std::fs::remove_file(part);
+        return Err(Fail::NextMirror(format!("{} changed while it was copied ({have} of {announced} bytes)", src.display())));
+    }
     out.sync_all().map_err(disk)
 }
 
