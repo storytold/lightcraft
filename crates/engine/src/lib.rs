@@ -152,6 +152,9 @@ pub struct UndoEntry {
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
     pub(crate) retry_sidecars: Vec<rename::SidecarMove>,
+    /// How the step's file moves treated each stem sidecar ([`rename::StemShares`]), reused by
+    /// its undo and redo (issue #4713).
+    pub(crate) stem_shares: rename::StemShares,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -670,7 +673,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+            stem_shares: rename::StemShares::new(),
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -794,6 +804,7 @@ impl Session {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
+        let stem_shares = self.merged_stem_shares(&tail);
         let ops = tail.into_iter().rev().map(|e| e.op).collect();
         self.undo.push(UndoEntry {
             label: label.to_string(),
@@ -801,7 +812,43 @@ impl Session {
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            stem_shares,
         });
+    }
+
+    /// The stem shares of the undo steps `steps` (oldest first) merged into one (issue #4713).
+    /// The merged step moves each photo once, between its path now and its path before the
+    /// first of the steps that moved it, and that move takes the decision that first step took
+    /// for that photo, read from that step alone: another photo's step can have moved between
+    /// the same two paths.
+    fn merged_stem_shares(&self, steps: &[UndoEntry]) -> rename::StemShares {
+        // per photo: its path before each step that sets it, in order
+        let mut paths: std::collections::HashMap<PhotoId, Vec<(usize, String)>> = std::collections::HashMap::new();
+        for (i, step) in steps.iter().enumerate() {
+            for (id, before) in rename::file_sources(&step.op) {
+                paths.entry(id).or_default().push((i, before));
+            }
+        }
+        let mut shares = rename::StemShares::new();
+        for (id, befores) in paths {
+            let Some(lightcraft_catalog::Source::File { path: now }) = self.catalog.photo(id).map(|p| p.source.clone()) else { continue };
+            let Some((_, start)) = befores.first() else { continue };
+            if *start == now {
+                continue;
+            }
+            // the first step that moved the photo: a step that brought it back where it was (a
+            // merged a → b → a) moved nothing and decided nothing
+            let afters = befores.iter().skip(1).map(|(_, path)| path).chain(std::iter::once(&now));
+            let decided = befores
+                .iter()
+                .zip(afters)
+                .find(|((_, before), after)| before != *after)
+                .and_then(|((i, before), after)| steps.get(*i)?.stem_shares.get(&rename::share_key(before, after)));
+            if let Some(share) = decided {
+                shares.insert(rename::share_key(&now, start), *share);
+            }
+        }
+        shares
     }
 
     /// Apply without recording undo (interactive previews).
@@ -831,6 +878,7 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            stem_shares: std::mem::take(&mut e.stem_shares),
         });
         Ok(e.label)
     }
@@ -856,6 +904,7 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            stem_shares: std::mem::take(&mut e.stem_shares),
         });
         Ok(e.label)
     }
@@ -905,7 +954,11 @@ impl Session {
             }
         };
         let moves = self.file_moves(op);
-        if let Err(mut e) = rename::move_all(fs, &moves) {
+        // The step's own decisions first; a move it has none for (an older step, or one merged
+        // from several renames of a photo) is decided by the library as it is now.
+        let mut shares = self.stem_shares(&moves);
+        shares.extend(entry.stem_shares.iter().map(|(key, share)| (key.clone(), *share)));
+        if let Err(mut e) = rename::move_all_shared(fs, &moves, &shares) {
             entry.retry_sidecars.append(&mut e.pending_sidecars);
             if e.stuck.is_empty() {
                 undo_folder();
@@ -937,7 +990,7 @@ impl Session {
             }
             Err(e) => {
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-                if let Err(mut be) = rename::move_all(fs, &back) {
+                if let Err(mut be) = rename::move_all_shared(fs, &back, &shares) {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
                     return Err(EngineError::Other(format!("{e}; the files could not all be moved back: {}", be.message)));
                 }

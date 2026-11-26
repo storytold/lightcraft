@@ -183,6 +183,7 @@ fn folder_moves_repair_retained_sidecars_before_changing_paths() {
                     from: old_sidecar.clone(),
                     to: sidecar.clone(),
                     copied,
+                    owned_stem: false,
                     companions: vec![RetainedPacket { path: old_sidecar.clone(), version: Some(RealFs.packet_version(&old_sidecar).unwrap()) }],
                 };
                 match queue {
@@ -457,6 +458,342 @@ fn shared_stem_sidecar_is_copied_not_taken() {
     assert!(move_file_with(&fs, "/p/A.CR3", "/p/B.CR3").is_err());
     assert_eq!(fs.listing().len(), 4);
     assert!(fs.listing().contains(&("/p/A.xmp".into(), "shared".into())) && !fs.exists(Path::new("/p/B.xmp")));
+}
+
+/// Issue #4713 on the file-system level: a stem sidecar the library gives the moving file stays
+/// its own through a failure and a retry (moved, never copied beside the file of the same stem
+/// left behind), and a stem sidecar the other file owns is neither moved nor tracked.
+#[test]
+fn shared_stem_owner_moves_its_sidecar_even_on_retry() {
+    let files = [("/p/a.jpg", "Jpeg"), ("/p/a.tif", "Tiff"), ("/p/a.xmp", "Jpeg edits"), ("/p/a.tif.xmp", "Tiff edits")];
+    let fs = FakeFs::new(false, &files);
+    // the stem sidecar fails, and so does moving the photo back: the sidecar is left to a retry
+    fs.fail.borrow_mut().extend(["/p/a.xmp".into(), "/p/b.jpg".into()]);
+    let mut error = move_file_shared(&fs, "/p/a.jpg", "/p/b.jpg", StemShare::Owner).unwrap_err();
+    assert!(error.moved);
+    assert_eq!(error.pending_sidecars.len(), 1);
+    assert!(!error.pending_sidecars[0].copied);
+    fs.fail.borrow_mut().clear();
+    retry_sidecars(&fs, &mut error.pending_sidecars).unwrap();
+    assert_eq!(
+        fs.listing(),
+        vec![
+            ("/p/a.tif".into(), "Tiff".into()),
+            ("/p/a.tif.xmp".into(), "Tiff edits".into()),
+            ("/p/b.jpg".into(), "Jpeg".into()),
+            ("/p/b.xmp".into(), "Jpeg edits".into()),
+        ]
+    );
+    let fs = FakeFs::new(false, &files);
+    move_file_shared(&fs, "/p/a.tif", "/p/b.tif", StemShare::Sibling).unwrap();
+    assert_eq!(
+        fs.listing(),
+        vec![
+            ("/p/a.jpg".into(), "Jpeg".into()),
+            ("/p/a.xmp".into(), "Jpeg edits".into()),
+            ("/p/b.tif".into(), "Tiff".into()),
+            ("/p/b.tif.xmp".into(), "Tiff edits".into()),
+        ]
+    );
+}
+
+/// Every file under `root` with its contents, by path relative to `root`.
+fn files_under(root: &Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                out.push((rel, String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Issue #4713: of two catalogued files sharing a stem, the stem sidecar (`IMG_1.xmp`) goes only
+/// with the file that owns it (a raw first, then the file name). Renaming or moving the other file
+/// takes only its own `<file>.xmp` and no copy of the owner's packet; renaming the owner takes the
+/// stem sidecar along instead of leaving a copy for the other file to read. Undo and redo too.
+#[test]
+fn shared_stem_sidecar_follows_only_its_owner() {
+    let f = |a: &str, b: &str| (a.to_string(), b.to_string());
+    // (owner, other, owner is a raw): in the raw pair the owner is not the first by file name
+    for (owner, other, raw) in [("IMG_1.jpg", "IMG_1.tif", false), ("IMG_1.NEF", "IMG_1.JPG", true)] {
+        let (owner_ext, other_ext) = (owner.rsplit_once('.').unwrap().1, other.rsplit_once('.').unwrap().1);
+        for case in ["rename other", "rename owner", "rename both", "move other", "move owner"] {
+            let root = crate::tests_xmp::temp_dir("shared-stem-owner");
+            let (src, dst) = (root.join("src"), root.join("dst"));
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::create_dir_all(&dst).unwrap();
+            std::fs::write(src.join(owner), b"owner photo").unwrap();
+            std::fs::write(src.join(other), b"other photo").unwrap();
+            std::fs::write(src.join("IMG_1.xmp"), b"owner edits").unwrap();
+            std::fs::write(src.join(format!("{other}.xmp")), b"other edits").unwrap();
+            let mut s = Session::new();
+            let mut owner_photo = file_photo(1, &src.join(owner).to_string_lossy());
+            if raw {
+                owner_photo.kind = lightcraft_catalog::MediaKind::Raw;
+            }
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(owner_photo) }).unwrap();
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(2, &src.join(other).to_string_lossy())) }).unwrap();
+            // the sidecars as Save Metadata to File names them: the stem one is the owner's
+            assert_eq!(s.sidecar_naming(PhotoId(1)), SidecarNaming::Stem);
+            assert_eq!(s.sidecar_naming(PhotoId(2)), SidecarNaming::Full);
+            let before = files_under(&root);
+            let (id, command, params) = match case {
+                "rename other" => (2, "photo.rename", serde_json::json!({"ids": [2], "template": "Keeper"})),
+                "rename owner" => (1, "photo.rename", serde_json::json!({"ids": [1], "template": "Keeper"})),
+                "rename both" => (1, "photo.rename", serde_json::json!({"ids": [1, 2], "template": "Keeper"})),
+                "move other" => (2, "photo.moveToFolder", serde_json::json!({"ids": [2], "folder": dst})),
+                _ => (1, "photo.moveToFolder", serde_json::json!({"ids": [1], "folder": dst})),
+            };
+            let mut after = match case {
+                "rename other" => vec![
+                    f(&format!("src/{owner}"), "owner photo"),
+                    f("src/IMG_1.xmp", "owner edits"),
+                    f(&format!("src/Keeper.{other_ext}"), "other photo"),
+                    f(&format!("src/Keeper.{other_ext}.xmp"), "other edits"),
+                ],
+                "rename owner" => vec![
+                    f(&format!("src/{other}"), "other photo"),
+                    f(&format!("src/{other}.xmp"), "other edits"),
+                    f(&format!("src/Keeper.{owner_ext}"), "owner photo"),
+                    f("src/Keeper.xmp", "owner edits"),
+                ],
+                "rename both" => vec![
+                    f(&format!("src/Keeper.{other_ext}"), "other photo"),
+                    f(&format!("src/Keeper.{other_ext}.xmp"), "other edits"),
+                    f(&format!("src/Keeper.{owner_ext}"), "owner photo"),
+                    f("src/Keeper.xmp", "owner edits"),
+                ],
+                "move other" => vec![
+                    f(&format!("dst/{other}"), "other photo"),
+                    f(&format!("dst/{other}.xmp"), "other edits"),
+                    f(&format!("src/{owner}"), "owner photo"),
+                    f("src/IMG_1.xmp", "owner edits"),
+                ],
+                _ => vec![
+                    f(&format!("dst/{owner}"), "owner photo"),
+                    f("dst/IMG_1.xmp", "owner edits"),
+                    f(&format!("src/{other}"), "other photo"),
+                    f(&format!("src/{other}.xmp"), "other edits"),
+                ],
+            };
+            after.sort();
+            s.execute("library.select", &serde_json::json!({"ids": params["ids"], "active": id})).unwrap();
+            s.execute(command, &params).unwrap();
+            assert_eq!(files_under(&root), after, "{case} of {owner} + {other}");
+            s.execute("edit.undo", &serde_json::json!({})).unwrap();
+            assert_eq!(files_under(&root), before, "undo {case} of {owner} + {other}");
+            s.execute("edit.redo", &serde_json::json!({})).unwrap();
+            assert_eq!(files_under(&root), after, "redo {case} of {owner} + {other}");
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+    }
+}
+
+/// Issue #4713: undo and redo move a stem sidecar as the rename did, even when the library ranks
+/// the new name's stem differently. `a.jpg` owns `a.xmp` beside `a.tif` and is renamed to `b.jpg`
+/// beside the raw `b.dng`, which would own `b.xmp`: undo still takes the packet back to `a.xmp`.
+#[test]
+fn undo_moves_the_stem_sidecar_as_the_rename_did() {
+    let root = crate::tests_xmp::temp_dir("stem-share-undo");
+    for (name, bytes) in [("a.jpg", "jpeg"), ("a.tif", "tiff"), ("a.xmp", "jpeg edits"), ("a.tif.xmp", "tiff edits"), ("b.dng", "raw")] {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(1, &root.join("a.jpg").to_string_lossy())) }).unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(2, &root.join("a.tif").to_string_lossy())) }).unwrap();
+    let mut raw = file_photo(3, &root.join("b.dng").to_string_lossy());
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let before = files_under(&root);
+    s.execute("library.select", &serde_json::json!({"ids": [1], "active": 1})).unwrap();
+    s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": "b"})).unwrap();
+    let after = files_under(&root);
+    assert!(after.contains(&("b.xmp".to_string(), "jpeg edits".to_string())), "{after:?}");
+    assert!(!after.iter().any(|(name, _)| name == "a.xmp"), "{after:?}");
+    for _ in 0..2 {
+        s.execute("edit.undo", &serde_json::json!({})).unwrap();
+        assert_eq!(files_under(&root), before);
+        s.execute("edit.redo", &serde_json::json!({})).unwrap();
+        assert_eq!(files_under(&root), after);
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Issue #4713: a photo alone with its stem, renamed beside a raw of the new name, gets its stem
+/// sidecar back on undo, although the library now ranks it below that raw.
+#[test]
+fn undo_returns_a_lone_photos_stem_sidecar_from_beside_a_raw() {
+    let root = crate::tests_xmp::temp_dir("stem-share-undo-alone");
+    for (name, bytes) in [("a.jpg", "jpeg"), ("a.xmp", "jpeg edits"), ("b.dng", "raw")] {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(1, &root.join("a.jpg").to_string_lossy())) }).unwrap();
+    let mut raw = file_photo(2, &root.join("b.dng").to_string_lossy());
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    s.execute("library.select", &serde_json::json!({"ids": [1], "active": 1})).unwrap();
+    s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": "b"})).unwrap();
+    assert_eq!(std::fs::read_to_string(root.join("b.xmp")).unwrap(), "jpeg edits");
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert!(root.join("a.jpg").is_file());
+    assert_eq!(std::fs::read_to_string(root.join("a.xmp")).unwrap(), "jpeg edits");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Issue #4713: two renames of one photo merged into one undo step move it once, from its last
+/// name to its first; that move treats the stem sidecar as the first rename did, also when a raw
+/// of the last name now ranks above it.
+#[test]
+fn a_merged_undo_step_moves_the_stem_sidecar_as_the_first_rename_did() {
+    let root = crate::tests_xmp::temp_dir("stem-share-merged");
+    for (name, bytes) in [("a.jpg", "jpeg"), ("a.tif", "tiff"), ("a.xmp", "jpeg edits"), ("a.tif.xmp", "tiff edits"), ("c.dng", "raw")] {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(1, &root.join("a.jpg").to_string_lossy())) }).unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(2, &root.join("a.tif").to_string_lossy())) }).unwrap();
+    let mut raw = file_photo(3, &root.join("c.dng").to_string_lossy());
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let before = files_under(&root);
+    s.execute("library.select", &serde_json::json!({"ids": [1], "active": 1})).unwrap();
+    s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": "b"})).unwrap();
+    s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": "c"})).unwrap();
+    s.merge_undo(2, "Rename Photo");
+    let after = files_under(&root);
+    assert!(after.contains(&("c.xmp".to_string(), "jpeg edits".to_string())), "{after:?}");
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(files_under(&root), before);
+    s.execute("edit.redo", &serde_json::json!({})).unwrap();
+    assert_eq!(files_under(&root), after);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Issue #4713: in a merged undo step, each photo's single move takes the decision of its own
+/// first rename, also when another photo's rename in the merged steps used the same two paths.
+#[test]
+fn a_merged_undo_step_takes_each_photos_own_first_decision() {
+    let root = crate::tests_xmp::temp_dir("stem-share-merged-two-photos");
+    for (name, bytes) in
+        [("a.jpg", "a jpeg"), ("a.tif", "tiff"), ("a.xmp", "a edits"), ("a.tif.xmp", "tiff edits"), ("b.jpg", "b jpeg"), ("b.dng", "raw")]
+    {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+    let mut s = Session::new();
+    for (id, name) in [(1, "a.jpg"), (2, "a.tif"), (3, "b.jpg"), (4, "b.dng")] {
+        let mut p = file_photo(id, &root.join(name).to_string_lossy());
+        if name.ends_with(".dng") {
+            p.kind = lightcraft_catalog::MediaKind::Raw;
+        }
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let before = files_under(&root);
+    // photo 1: a.jpg → c.jpg (owner of a.xmp); photo 3: b.jpg → a.jpg (b.dng owns b's stem);
+    // photo 3: a.jpg → e.jpg; photo 1: c.jpg → b.jpg (alone)
+    for (id, template) in [(1, "c"), (3, "a"), (3, "e"), (1, "b")] {
+        s.execute("library.select", &serde_json::json!({"ids": [id], "active": id})).unwrap();
+        s.execute("photo.rename", &serde_json::json!({"ids": [id], "template": template})).unwrap();
+    }
+    s.merge_undo(4, "Rename Photos");
+    assert!(files_under(&root).contains(&("b.xmp".to_string(), "a edits".to_string())));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(files_under(&root), before);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Issue #4713: a merged undo step merged again (three renames of one photo) still moves the
+/// stem sidecar as the first rename did.
+#[test]
+fn a_twice_merged_undo_step_moves_the_stem_sidecar_as_the_first_rename_did() {
+    let root = crate::tests_xmp::temp_dir("stem-share-merged-twice");
+    for (name, bytes) in [("a.jpg", "jpeg"), ("a.tif", "tiff"), ("a.xmp", "jpeg edits"), ("a.tif.xmp", "tiff edits"), ("d.dng", "raw")] {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+    let mut s = Session::new();
+    for (id, name) in [(1, "a.jpg"), (2, "a.tif"), (3, "d.dng")] {
+        let mut p = file_photo(id, &root.join(name).to_string_lossy());
+        if name.ends_with(".dng") {
+            p.kind = lightcraft_catalog::MediaKind::Raw;
+        }
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let before = files_under(&root);
+    s.execute("library.select", &serde_json::json!({"ids": [1], "active": 1})).unwrap();
+    for template in ["b", "c"] {
+        s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": template})).unwrap();
+    }
+    s.merge_undo(2, "Rename Photo");
+    s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": "d"})).unwrap();
+    s.merge_undo(2, "Rename Photo");
+    assert!(files_under(&root).contains(&("d.xmp".to_string(), "jpeg edits".to_string())));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(files_under(&root), before);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Issue #4713: a merged step that brought the photo back where it was (a → b → a) decided
+/// nothing; merged again with a real move, the real move's decision is the one undo uses.
+#[test]
+fn a_round_trip_merged_step_does_not_hide_the_later_decision() {
+    let root = crate::tests_xmp::temp_dir("stem-share-merged-round-trip");
+    for (name, bytes) in [("a.jpg", "jpeg"), ("a.tif", "tiff"), ("a.xmp", "jpeg edits"), ("a.tif.xmp", "tiff edits"), ("c.dng", "raw")] {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+    let mut s = Session::new();
+    for (id, name) in [(1, "a.jpg"), (2, "a.tif"), (3, "c.dng")] {
+        let mut p = file_photo(id, &root.join(name).to_string_lossy());
+        if name.ends_with(".dng") {
+            p.kind = lightcraft_catalog::MediaKind::Raw;
+        }
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let before = files_under(&root);
+    s.execute("library.select", &serde_json::json!({"ids": [1], "active": 1})).unwrap();
+    for template in ["b", "a"] {
+        s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": template})).unwrap();
+    }
+    s.merge_undo(2, "Rename Photo");
+    assert_eq!(files_under(&root), before);
+    s.execute("photo.rename", &serde_json::json!({"ids": [1], "template": "c"})).unwrap();
+    s.merge_undo(2, "Rename Photo");
+    assert!(files_under(&root).contains(&("c.xmp".to_string(), "jpeg edits".to_string())));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(files_under(&root), before);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Issue #4713: each move of a batch keeps its own stem share, also when its destination is the
+/// source of another move (`a.jpg` → `c.jpg`, then `b.jpg` → `a.jpg`).
+#[test]
+fn a_move_into_another_moves_source_keeps_its_own_stem_share() {
+    let fs = FakeFs::new(
+        false,
+        &[("/p/a.jpg", "A"), ("/p/a.tif", "T"), ("/p/a.xmp", "A edits"), ("/p/b.jpg", "B"), ("/p/b.dng", "R"), ("/p/b.xmp", "R edits")],
+    );
+    let moves = vec![("/p/a.jpg".to_string(), "/p/c.jpg".to_string()), ("/p/b.jpg".to_string(), "/p/a.jpg".to_string())];
+    let shares: StemShares = [(share_key("/p/a.jpg", "/p/c.jpg"), StemShare::Owner), (share_key("/p/b.jpg", "/p/a.jpg"), StemShare::Sibling)].into();
+    move_all_shared(&fs, &moves, &shares).unwrap();
+    assert_eq!(
+        fs.listing(),
+        vec![
+            ("/p/a.jpg".into(), "B".into()),
+            ("/p/a.tif".into(), "T".into()),
+            ("/p/b.dng".into(), "R".into()),
+            ("/p/b.xmp".into(), "R edits".into()),
+            ("/p/c.jpg".into(), "A".into()),
+            ("/p/c.xmp".into(), "A edits".into()),
+        ]
+    );
 }
 
 /// Issue #95 on the real disk, whichever kind of volume the temp folder is on.

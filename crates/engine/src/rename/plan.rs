@@ -1,5 +1,5 @@
 use super::fs::{MoveFs, RealFs, folded_path};
-use super::moves::{BatchMoveError, move_all, set_file_ops_to};
+use super::moves::{BatchMoveError, StemShare, StemShares, move_all_shared, set_file_ops_to, share_key};
 use super::sidecar::{PacketVersion, retry_sidecars, retry_sidecars_for_paths};
 use super::tokens::{expand, split_ext};
 use super::{EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
@@ -213,19 +213,35 @@ impl Session {
                 _ => None,
             })
             .collect();
-        if let Err(e) = move_all(fs, &moves) {
-            return Err(EngineError::Other(self.follow_stuck(&op, e, true).0));
+        let shares = self.stem_shares(&moves);
+        let steps = self.commits();
+        if let Err(e) = move_all_shared(fs, &moves, &shares) {
+            let message = self.follow_stuck(&op, e, true).0;
+            self.keep_stem_shares(steps, shares);
+            return Err(EngineError::Other(message));
         }
         if n > 0
             && let Err(err) = self.commit(&label(n), op)
         {
             let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-            if let Err(e) = move_all(fs, &back) {
+            if let Err(e) = move_all_shared(fs, &back, &shares) {
                 return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
             }
             return Err(err);
         }
+        self.keep_stem_shares(steps, shares);
         Ok(n)
+    }
+
+    /// Keep `shares` with the undo step committed since `steps` commits, if one was, so its undo
+    /// and redo move each stem sidecar as these moves did: the library at the destination can
+    /// rank the stem differently (a raw of the new name), and must not decide it again.
+    fn keep_stem_shares(&mut self, steps: u64, shares: StemShares) {
+        if self.commits() != steps
+            && let Some(entry) = self.undo.last_mut()
+        {
+            entry.stem_shares = shares;
+        }
     }
 
     /// After a failed batch of moves for `op`: point the photos whose files stayed moved at
@@ -280,6 +296,44 @@ impl Session {
 
     /// Physical moves to the final `SetFile` destination of each photo. A merged history
     /// batch can rename the same photo repeatedly; intermediate catalog paths need no file.
+    /// How each file `moves` takes from the library stands to the stem sidecar of its stem
+    /// ([`StemShare`]), worked out while the library still has the files at their old paths.
+    pub(crate) fn stem_shares(&self, moves: &[(String, String)]) -> StemShares {
+        if moves.is_empty() {
+            return StemShares::new();
+        }
+        let from: HashSet<&str> = moves.iter().map(|(a, _)| a.as_str()).collect();
+        let moving: Vec<&std::sync::Arc<Photo>> = self
+            .catalog
+            .photos()
+            .filter(|p| p.copy_of.is_none() && matches!(&p.source, Source::File { path } if from.contains(path.as_str())))
+            .collect();
+        let ids: Vec<PhotoId> = moving.iter().map(|p| p.id).collect();
+        let owners = crate::sidecar::StemOwners::among(&self.catalog, &ids);
+        let mut by_path: HashMap<&str, StemShare> = HashMap::new();
+        for p in moving {
+            let Source::File { path } = &p.source else { continue };
+            let share = match owners.owns_shared(p) {
+                None => StemShare::Alone,
+                Some(true) => StemShare::Owner,
+                Some(false) => StemShare::Sibling,
+            };
+            // Two records of one file (virtual copies) rank as two files of the stem: the file
+            // owns the stem sidecar when either of them does.
+            let entry = by_path.entry(path.as_str()).or_insert(share);
+            if share == StemShare::Owner {
+                *entry = StemShare::Owner;
+            }
+        }
+        let mut shares = StemShares::new();
+        for (a, b) in moves {
+            if let Some(share) = by_path.get(a.as_str()).copied() {
+                shares.insert(share_key(a, b), share);
+            }
+        }
+        shares
+    }
+
     pub(crate) fn file_moves(&self, op: &Op) -> Vec<(String, String)> {
         let mut pending = vec![op];
         let mut order = Vec::new();
@@ -304,4 +358,27 @@ impl Session {
             })
             .collect()
     }
+}
+
+/// The file path each photo ends at after `op` (nested batches included: the last `SetFile` of a
+/// photo), in the order photos first appear: what [`Session::file_moves`] moves them to.
+pub(crate) fn file_sources(op: &Op) -> Vec<(PhotoId, String)> {
+    let mut pending = vec![op];
+    let mut order = Vec::new();
+    let mut last: HashMap<PhotoId, &Source> = HashMap::new();
+    while let Some(op) = pending.pop() {
+        match op {
+            Op::Batch { ops } => pending.extend(ops.iter().rev()),
+            // (the insert runs for every `SetFile`: the last one stays)
+            Op::SetFile { id, source, .. } if last.insert(*id, source).is_none() => order.push(*id),
+            _ => {}
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|id| match last.get(&id) {
+            Some(Source::File { path }) => Some((id, path.clone())),
+            _ => None,
+        })
+        .collect()
 }

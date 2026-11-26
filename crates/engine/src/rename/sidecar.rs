@@ -8,6 +8,9 @@ pub(crate) struct SidecarMove {
     pub from: PathBuf,
     pub to: PathBuf,
     pub(super) copied: bool,
+    /// A stem sidecar the library says belongs to the moving file: a retry moves it even when a
+    /// file of the same stem stays behind, instead of copying it (issue #4713).
+    pub(super) owned_stem: bool,
     /// Observed packets in the partial move, including the separated source. Absent planned
     /// destinations are never owned; a completed repair advances these observations.
     pub(super) companions: Vec<RetainedPacket>,
@@ -79,7 +82,7 @@ impl SidecarMove {
         self.validate_packets(fs)?;
         let respelling = is_respelling(fs, &self.from, &self.to);
         // Batch rollback may have restored another photo using this source packet.
-        let copied = self.copied || (!respelling && fs.stem_sibling(&self.from).is_some());
+        let copied = self.copied || (!self.owned_stem && !respelling && fs.stem_sibling(&self.from).is_some());
         if fs.exists(&self.to) && (copied || !respelling) {
             return Err(format!("{} already exists while repairing {} → {}", self.to.display(), self.from.display(), self.to.display()));
         }

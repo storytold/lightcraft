@@ -41,10 +41,11 @@ mod tokens;
 pub(crate) use fs::{MoveFs, RealFs};
 #[cfg(test)]
 use fs::{folded_path, same_contents};
-pub(crate) use moves::move_all;
-#[cfg(test)]
-pub(crate) use moves::move_file_with;
 pub use moves::{MoveError, move_file};
+#[cfg(test)]
+pub(crate) use moves::{StemShare, move_all, move_file_shared, move_file_with};
+pub(crate) use moves::{StemShares, move_all_shared, share_key};
+pub(crate) use plan::file_sources;
 pub use plan::{plan_rename_photos, rename_photos};
 #[cfg(test)]
 pub(crate) use sidecar::PacketVersion;
