@@ -183,7 +183,11 @@ impl ImportDialog {
         self.move_files = copy && move_files;
         for i in (0..self.candidates.len()).filter(|_| switched) {
             if self.candidates[i].browsed_twin.is_some() && !self.candidates[i].local {
-                self.checked[i] = self.is_copy_twin(i);
+                // (a dialog read back may hold fewer check marks than candidates)
+                let twin = self.is_copy_twin(i);
+                if let Some(checked) = self.checked.get_mut(i) {
+                    *checked = twin;
+                }
             }
         }
     }
