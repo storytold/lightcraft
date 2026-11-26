@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Heal meets its surroundings (process 14)
+- A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
+  longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
+  into it. Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
+  turning blotchy in shadows or flat in highlights, and Heal and Remove scale the patch's grain to the area around it.
+  Heal, Remove and Clone read their source at whole pixels, so the patch is no longer softened by blending between
+  pixels. Very large spots keep the previous heal. This is rendering process 14: new photos (and Reset) get it, photos
+  you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [process versions](process-versions.md).
+
+### Cleaner edges in raw exports
+- Exports of raw photos and the 1:1 view no longer draw thin yellow, green or cyan outlines along sharp white edges
+  (a white boat against the sky, window frames), green and cyan rims around small bright reflections such as
+  sunlit wet rock or water, or magenta and green rims around blown-out lights and sky (issue #1328). The colours
+  were made while the sensor's red, green and blue samples were filled in to full pixels: that happened before
+  white balance, and the pixels next to blown-out samples were not recognised as blown out. Both are fixed.
+- Dark twigs, wires and leaf edges against a blown-out sky keep their brightness.
+- Bright coloured highlights (a setting sun, neon tubes) keep their brightness right up to their blown-out centre.
+- Previews of most cameras never showed it and don't change. Previews of cameras with smaller sensors (Bayer sensors
+  under about 4600 pixels on the long side; Fujifilm X-Trans under about 5760 pixels,
+  such as the 16 megapixel X-E1) were filled in the same way and are fixed too. Smart previews of raws that are out of
+  date are rebuilt from their originals once, in the background, when the library is next opened; ones whose original
+  is offline keep theirs until Build Smart Previews runs with it online. Exports and 1:1 views of photos you have already
+  edited change along such edges and in fine detail. Even areas change by about 0.5 ΔE on average (their noise grain is
+  rendered slightly differently), with no shift in colour.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
@@ -20,6 +46,17 @@
   Roughness keep their meaning and Lightroom Classic's strength and grain size. This is rendering process 7: new photos
   (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
   See [film grain](grain.md).
+
+### Shadows, Texture and the Global wheel closer to Lightroom (process V13)
+- Global Shadows eases off at large amounts as Lightroom's does (issue #523): +100 acts at 0.43 of what it did, +52 at
+  0.6, and small amounts less so (about 12 % less at +10). Strong Shadows no longer lift the darkest tones about 6 L*
+  above Lightroom's render of the same edit. Highlights keeps its amounts, and masks keep theirs. New photos get it; photos edited before
+  keep their look until Update to Current Process.
+- A negative Texture smooths at two thirds of what it did: at −27 it took about 8 % more fine detail than Lightroom
+  does. The global colour-grading wheel tints at 0.45 of what it did: a Global tint of 16 made a photo visibly pinker
+  and warmer than Lightroom's (+2.8 a*, +2.2 b*). The shadows, midtones and highlights wheels are unchanged.
+- Fitted to 56 Lightroom exports of real portrait edits (Canon EOS R6 and R5 raws): mean ΔE to the exports 9.5 → 9.0,
+  and on the 16 landscape photos the sidecar fixes of #2239 don't touch, 8.4 → 7.8.
 
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
@@ -261,12 +298,6 @@
   selected Object mask, and a click on the selected mask's own pin adds nothing. Subject, Sky, Background and the
   range masks still have no pin.
 
-### A dialog no longer dims the macOS title bar
-- On macOS the top bar is the window's title bar, and the window buttons drawn over it stayed bright while a dialog dimmed
-  the bar under them. As under a macOS sheet, the dialog's backdrop now leaves the bar alone: its buttons are inactive, a
-  click on it does not close the dialog, and dragging its empty space still moves the window. Windows, Linux and full
-  screen are unchanged.
-
 ## 2026-10-28
 
 ### The empty photo grid names Import Photos' shortcut as it is bound
@@ -274,7 +305,7 @@
 
 ### The photo in Detail is named with its file for screen readers
 - With VoiceOver, the photo in Detail view is now announced with its file name, rating, flag and colour label ("Photo:
-  IMG_0042.JPG, 4 stars, picked") instead of only "Photo", as the grid names the same photo.
+  IMG_0042.JPG, rating 4 of 5, picked") instead of only "Photo", as the grid names the same photo.
 
 ### The grid's thumbnail size slider is a slider to screen readers
 - With VoiceOver, the Thumbnail size control at the right of the grid's bottom bar is now announced as a slider with its
@@ -289,26 +320,6 @@
   `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
   so a script or an agent can't do it either.
 
-### The window's parts are named for screen readers
-- The top bar, the tool strip and the bottom bar are now announced as toolbars (Top bar, Tool strip, Bottom bar), and the
-  sidebar (Library), the photos, the Tools panel (or Presets) and the filmstrip as landmarks, so a screen reader can list
-  them and jump to one instead of walking every control. Nothing on screen changes. Not yet tried with a real VoiceOver session.
-
-### Dialogs are exposed to screen readers as dialogs
-- Export, Settings and the other dialogs, the library chooser and the prompts that stop the window (the quit question, a
-  library that could not be opened, a settings file problem) are now exposed to screen readers as dialogs: modal ones, so the
-  rest of the window is marked as blocked while one is open, and an alert dialog for the prompts. The answer to Check for
-  Updates is a dialog too, but not a modal one. Before, each was a plain group that only carried the dialog's title.
-- An alert dialog also carries what it says as its description: a screen reader can read the library problem's path, error and
-  explanation, or a prompt's text, together with the dialog.
-
-### Screen readers no longer read the shortcut with every button name
-- Icon-only buttons (the tool strip, the view buttons and Before/After and Filmstrip in the bottom bar, the top bar's
-  Import Photos…, the mask overlay and White Balance Selector buttons, the slideshow controls) are now announced by
-  their label alone ("Edit", "Presets", "Photo Grid"), and the shortcut is the button's description ("E", "Shift+P",
-  "G"), which VoiceOver reads after a pause or on request. Before, it read "Edit (E)" every time it landed on the
-  button. This holds in every language, including Japanese and Traditional Chinese, which write the shortcut in
-  full-width brackets. The tooltip you see on hover is unchanged.
 
 ## 2026-10-27
 
@@ -361,6 +372,43 @@
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
 
+### The Window menu lists the open windows
+- On macOS the Window menu now shows a row for each open window (the main window, and the second one from
+  Window ▸ Second Window while it is open), below Bring All to Front. Before, the menu ended at Bring All to Front
+  and listed no window. macOS also adds its own window items there: Fill, Center, Move & Resize and Full Screen Tile
+  on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
+
+## 2026-10-29
+
+### A dialog no longer dims the macOS title bar
+- On macOS the top bar is the window's title bar, and the window buttons drawn over it stayed bright while a dialog dimmed
+  the bar under them. As under a macOS sheet, the dialog's backdrop now leaves the bar alone: its buttons are inactive, a
+  click on it does not close the dialog, and dragging its empty space still moves the window. Windows, Linux and full
+  screen are unchanged.
+
+## 2026-10-28
+
+### The window's parts are named for screen readers
+- The top bar, the tool strip and the bottom bar are now announced as toolbars (Top bar, Tool strip, Bottom bar), and the
+  sidebar (Library), the photos, the Tools panel (or Presets) and the filmstrip as landmarks, so a screen reader can list
+  them and jump to one instead of walking every control. Nothing on screen changes. Not yet tried with a real VoiceOver session.
+
+### Dialogs are exposed to screen readers as dialogs
+- Export, Settings and the other dialogs, the library chooser and the prompts that stop the window (the quit question, a
+  library that could not be opened, a settings file problem) are now exposed to screen readers as dialogs: modal ones, so the
+  rest of the window is marked as blocked while one is open, and an alert dialog for the prompts. The answer to Check for
+  Updates is a dialog too, but not a modal one. Before, each was a plain group that only carried the dialog's title.
+- An alert dialog also carries what it says as its description: a screen reader can read the library problem's path, error and
+  explanation, or a prompt's text, together with the dialog.
+
+### Screen readers no longer read the shortcut with every button name
+- Icon-only buttons (the tool strip, the view buttons and Before/After and Filmstrip in the bottom bar, the top bar's
+  Import Photos…, the mask overlay and White Balance Selector buttons, the slideshow controls) are now announced by
+  their label alone ("Edit", "Presets", "Photo Grid"), and the shortcut is the button's description ("E", "Shift+P",
+  "G"), which VoiceOver reads after a pause or on request. Before, it read "Edit (E)" every time it landed on the
+  button. This holds in every language, including Japanese and Traditional Chinese, which write the shortcut in
+  full-width brackets. The tooltip you see on hover is unchanged.
+
 ## 2026-10-25
 
 ### A one-field white balance edit no longer shifts the other one
@@ -383,6 +431,9 @@
 - JPEG ICC profiles are assembled only when every chunk is present exactly once, the sequence numbers and
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
+
+
+## 2026-10-25
 
 ### `>=` and `<=` work in the search box
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
@@ -411,7 +462,18 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
+
 ## 2026-10-24
+
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
 
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
@@ -430,6 +492,19 @@
   it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
+### Imports and moves on a network share ask it less
+- Import no longer asks a network share about each photo's `.xmp` sidecar (up to nine names, each a round trip) when
+  the folder's listing, which the import or the Add Photos review has already read, shows there is none. A sidecar in
+  any letter case (`.xmp`, `.XMP`, `.Xmp`, or `<file name>.xmp`) is still found and read. A folder that changed since
+  it was listed, or was too recently changed to tell, is asked about photo by photo. For the folders that have not
+  changed since the review listed them, importing the photos picked in the review also stops asking the share
+  whether each one is a file or a folder before the first one is handled.
+- Renaming photos, moving them to another folder, and undoing either look for their sidecars in one listing of each
+  folder that eight or more photos leave, instead of asking for four names per photo. Sidecars the listing shows
+  still move with their photos (`.xmp` or `.XMP`, as before).
+- Folders that could not be listed completely or whose time can't be read, and files you add one by one, are checked
+  as before.
 
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
@@ -510,6 +585,18 @@
   left out of a new album made from the selection, out of Add to Album, and out of the target album (B), which does
   nothing and says nothing when none of them is left, and counts only the photos it changed.
 
+### Reorder rules and groups in the smart album editor
+- Every rule and every group in the New / Edit Smart Album window has a grip (six dots) at the start of its row. Drag it
+  to move the row: a line shows where it will land, the row's name follows the pointer, and Esc gives the drag up. Drop
+  on a rule inside a group to put it in that group, beside the group's frame to take it out; drag a whole group to
+  nest it in another. A group can't go inside itself or deeper than three levels: the pointer shows a not-allowed
+  cursor and says why, and nothing moves. A group a move leaves empty goes away.
+- With the keyboard, Tab to a grip and press ↑ or ↓ to move the row one place (at the end of a group it moves out of
+  the group), → to move it into the group above it (or below it, if that is the one next to it) and ← to move it out
+  of its group. The focus stays on the moved row's grip, and a screen reader says where the row is: "Rule 2 of 4:
+  Rating is ≥ 3. Move with the arrow keys".
+- OK saves the rules in the order shown, in one undo step like any other change to the rules.
+
 ## 2026-10-23
 
 ### AI Denoise works out of the box
@@ -534,6 +621,19 @@
   #2575). An agent or script driving LightCraft could name another folder and another server, and have that
   server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
   is in its place instead of writing through a link to somewhere else.
+
+### Open or fold a whole branch of the sidebar
+- Hold Option (Alt on Windows and Linux) and click a row's triangle in the left sidebar to open or fold that row
+  and all the rows inside it, however many: a folder of albums with the folders in it, a folder of the library
+  down to its last folder, a keyword with the keywords inside it, a year with its months. A plain click still
+  opens or folds the one row.
+- What you open or fold inside it afterwards holds for that row. A folder that appears inside it later is as
+  the last Option-click on a row above it left the rest.
+- In Local, Option-click folds everything inside the folder; opening opens the one folder (opening them all
+  would read every folder inside from the disk).
+- The sidebar's rows are not remembered between sessions, so a branch opened or folded this way starts again as
+  the sidebar starts.
+- For scripts: `ui.clickWidget` takes `alt: true` for this click.
 
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
@@ -800,6 +900,12 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Cleaner thumbnails in the grid
+- With Settings ▸ Interface ▸ Grid ▸ Ratings & flags set to Stars on hover (the default, which used to read "When rated
+  or hovered"), a photo now shows its stars and its edited mark only while the pointer is on it or it is selected.
+  Before, every rated photo wore the badge bar, which in a mostly rated library made it look like Always. Pick and
+  reject flags and colour labels stay on every thumbnail. Always and Never work as before.
+
 ### Selection rings you can see in the light themes
 - The active photo's white outline vanished on Silver and Paper's light grid, and told the active photo from the other
   selected ones by lightness alone. Now the active photo has a heavier ring (3 pt, with a thin line against the photo so
@@ -828,6 +934,22 @@
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
 
+### The same marks on every thumbnail
+- The filmstrip's thumbnails now carry what the grid's do: a virtual copy has its "Copy N" tag, so a copy and its
+  master tell apart; the stack badge can be clicked to expand or collapse the stack, with the same tooltip (now
+  translated); the colour label is a dot, and the grid's photo-shaped placeholder stands in until the picture is drawn.
+- A thumbnail that can't be drawn shows a warning icon instead of a bare "!". Hover it to read why, and where to go:
+  right-click ▸ Locate Missing File… when the original is gone, Reload from Disk otherwise.
+- In the Photo Grid a colour label is no longer a tinted band over the bottom of the picture; it is the dot in the
+  row of marks, as in the Square Grid and the filmstrip.
+- On a narrow thumbnail (a portrait photo at the smallest size) the marks no longer run over the photo's edge: the
+  copy tag drops its name, the edited mark goes, five stars become one star and the number, and what still doesn't fit is left out;
+  the stack badge sheds its icon and then the "1/" of "1/12". Nothing is painted outside the photo. The Preview pill sits
+  above the marks on the filmstrip too, and steps aside for the stack badge. In the Photo Grid, which has no tinted
+  surround, the label dot is kept before the stars on a narrow photo and stays when ratings and flags are turned off.
+- The filmstrip now dims rejected photos as the grid does, and in the grid the dim sits under the marks, so the red
+  reject flag stays clear. Right-clicking the stack badge opens the photo's menu.
+- Screen readers say "rating 3 of 5" in every language, instead of building "stars" from an English plural.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
@@ -977,6 +1099,12 @@
 - While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
   every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
   for as long as the import ran. Changing one photo's capture time or crop is quicker too.
+
+### Menu paths without boxes
+- Messages that name a menu path, such as "View → Clear Filters to see all" or the External Editing help in
+  Settings, showed a box between the menu names: the interface font has no glyph for the small triangle used
+  there (issue #1950). They use → now, as the translations already did, and so do these notes. The remove
+  mark of each filter under "+N more" was a box too; it is an × now.
 
 ## 2026-10-15
 
