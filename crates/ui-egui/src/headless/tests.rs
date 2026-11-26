@@ -255,6 +255,28 @@ fn control_resize_rounds_in_native_points_after_a_fractional_zoom_out() {
     assert_eq!(h.app.headless_screenshot(&main, true).unwrap().size, [122, 122]);
 }
 
+/// The offscreen capture draws the window as it is: with its theme, its sizes and its language. `fork_into` copies
+/// the memory the controls are laid out from, but not the frame input the window sets each pass, so the shadow
+/// installs the window's own input instead of drawing the framework's fallback root (light, default sizes, English).
+#[test]
+fn a_headless_capture_draws_with_the_windows_own_theme_and_language() {
+    let mut h = demo([1200.0, 800.0]);
+    h.app.ui.settings.gpu = false;
+    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Dark;
+    h.app.ui.language = crate::i18n::Locale::Fr;
+    h.settle(SETTLE);
+    let main = h.view.ctx.clone();
+    assert!(crate::theme::current(&main).is_some_and(|kind| kind.is_dark()), "the window draws dark, so its framework controls must too");
+    assert!(h.app.headless_screenshot(&main, true).is_some(), "the capture renders");
+    let shadow = h.app.shadow.as_ref().expect("the capture keeps its shadow");
+    let window = craft::ui::runtime::env::Env::of_root(&main);
+    let capture = craft::ui::runtime::env::Env::of_root(&shadow.ctx);
+    assert_eq!(capture.view().mode(), window.view().mode(), "the capture draws the framework's controls in the window's mode");
+    let french = crate::i18n::framework_host(crate::i18n::Locale::Fr).expect("French has the framework's words");
+    let host = capture.view().host().expect("the capture gives the framework the window's words");
+    assert!(std::sync::Arc::ptr_eq(host, &french), "the capture draws the framework's words in the window's language");
+}
+
 #[test]
 fn invalid_control_resize_preserves_the_headless_viewport() {
     let app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
