@@ -7,11 +7,12 @@ convention; that page's *Two conventions* section has the comparison and what wo
 
 Sony ARWs record three lens corrections per shot in the raw image IFD: shading (vignetting), lateral chromatic
 aberration (CA) and distortion, each as a camera setting and a radial table, with copies in the encrypted
-`SR2SubIFD`. LightCraft **decodes all three** wherever a file carries them and **applies one**: the distortion table
-of the **ILCE-7RM4A (A7R IVA)** in Bayer ARWs with native 3:2 framing, independently validated with the
-FE 24–105mm F4 G OSS and FE 200–600mm F5.6–6.3 G OSS (the ILCE-7RM6's distortion is applied too, by its own
-conversion above). Every other model,
-and shading and CA on every model, are decoded only: no warp, vignetting or CA correction is added for them. The decoded record stays with the image
+`SR2SubIFD`. LightCraft **decodes all three** wherever a file carries them and applies distortion here on three validated
+bodies: **ILCE-7RM4A (A7R IVA)**, **ILCE-7M3 (A7 III)** and **ILCE-7CR (A7CR)**. The A7R IVA keeps its existing Bayer 3:2 conversion,
+validated with the FE 24-105mm F4 G OSS and FE 200-600mm F5.6-6.3 G OSS; the A7 III uses the same conversion, validated
+with the FE 16-35mm F4 ZA OSS, FE 28-70mm F3.5-5.6 OSS and FE 50mm F1.8 ([ILCE-7M3 validation](#ilce-7m3-validation)). The A7CR uses a separate conversion,
+limited to full-frame Bayer 3:2 files with distortion Auto or forced Auto. Apart from the separate ILCE-7RM6 converter, other models and shading and CA on every model are
+decoded only: no warp, vignetting or CA correction is added for them. The decoded record stays with the image
 (`RawInfo::lens_metadata` / `RawImage::lens_metadata`, types in `crates/raw/src/lens_metadata.rs`, decoder in
 `crates/raw/src/vendor/arw_lens.rs`) for diagnostics and for the validation work described below.
 
@@ -20,7 +21,8 @@ control, CPU/GPU optics path, EXIF orientation handling, and DNG export use the 
 and non-3:2 camera crops are excluded pending validation. An aspect crop may retain the full-frame radial
 normalization; the decoder does not guess that relationship. Tables of other lengths and rejected tables remain
 uncorrected, and a table found only in the encrypted `SR2SubIFD` is never applied. The camera's distortion Off
-setting does not erase its table. Newly imported photos use LightCraft's existing embedded-profile default
+setting does not erase its table. A7CR Off, missing, unavailable and unknown settings produce no warp. The A7R IVA's
+existing behavior is unchanged. Newly imported photos use LightCraft's existing embedded-profile default
 (enabled); the profile correction control can disable or adjust it.
 
 ## What is decoded
@@ -67,7 +69,10 @@ setting does not erase its table. Newly imported photos use LightCraft's existin
   conversion refused the table). A readable table never implies a usable correction; only `Applied` components
   become opcodes.
 
-The applied path is unchanged: the validated conversion still receives the raw IFD's `0x7037` table exactly as the
+For the A7CR, `CameraCorrectionDisabled` records an Off, missing, unavailable or unknown setting. APS-C,
+aspect crops and lossless M/S remain `NotValidatedMode`. The raw IFD's correction table is required.
+
+The A7R IVA's applied path is unchanged: its conversion still receives the raw IFD's `0x7037` table exactly as the
 TIFF reader parsed it, with the same model, framing and fit checks, and produces the same warp. A repeated tag keeps
 the reader's choice and is only flagged, and a table the reader never reads (past its entry limit) is reported but
 never applied, so already-catalogued photos, their previews and their stored lens data stay consistent with a fresh
@@ -85,17 +90,8 @@ part of this repository.
   (Auto) everywhere; distortion is 17 (Auto, fixed by the lens) on the nine FE 24–50 files and 0 (Off) on the rest.
   Every image crop is 9504 × 6336 at (32, 20), in uncompressed, compressed and lossless-L (padded to 9728 × 6656)
   storage. The decoder reproduces this inventory exactly (see *Local inventory check*).
-- **Distortion.** The table layout and crop tags match the A7R IVA's, but its interpretation applied unchanged does
-  not reproduce the A7CR camera JPEG at 24 mm: at 2376 px wide, median / 95th-percentile feature residuals were
-  1.61 / 6.17 px (12.98 / 51.19 px uncorrected, 6,539 matches), with a signed radial pattern (about +1.7 px at
-  radii 0.25–0.5, −7.4 px at 0.8–1) that no translation removes. At 50 mm it agrees (0.23 / 1.05 px, from
-  2.21 / 12.25 px). Scaling the raw table by about 10/9, or using the MakerNote's distortion array instead, brings
-  24 mm to about 0.37 / 1.10 and 0.33 / 0.97 px. Those are exploratory comparisons on two files against the camera
-  JPEG, not a model: the MakerNote values are roughly 1.11 times the raw table without one exact ratio, and the
-  A7R IVA was validated against a different reference renderer (Imaging Edge exports). Needed: A7CR Imaging Edge
-  On/Off exports at 24 and 50 mm and with another lens, compared with the raw table at its fixed scale; a decision on
-  the reference (camera JPEG or Imaging Edge); then ILCE-7CR added to the validated models for the full-frame Bayer
-  3:2 mode only. Neither a 10/9 multiplier nor the MakerNote table is used.
+- **Distortion.** The A7R IVA interpretation misses the A7CR camera JPEG at the wide end. The A7CR now uses the
+  separately measured corrected-radius convention below. It uses the raw IFD table, not the MakerNote array.
 - **Shading.** The layout decodes, but no public specification gives the sample-to-gain function, its radius
   convention on the A7CR, or whether the raw samples already contain part of the correction. Brightness ratios on six
   natural scenes show no consistent missing peripheral brightening. Needed: evenly lit flat fields with shading
@@ -112,9 +108,81 @@ part of this repository.
 - **Other modes.** APS-C, aspect crops and lossless M/S (linear YCbCr) captures were not measured and stay
   excluded.
 
+## A7CR camera-JPEG validation
+
+The A7CR conversion substantially reduces the corrected camera JPEG's geometry mismatch. Its empirical table unit is
+`15559.300457825264`, fixed by the earlier four-file FE 24-50mm fit before checking other files and lenses.
+This is a measured approximation for the tested scope, not a Sony specification or a universal Sony constant.
+
+For output radius `rho` in native crop pixels:
+
+```
+spacing = hypot(9504, 6336) / 30
+S(r) = r * (1 + interpolate(table, r / spacing) / 15559.300457825264)
+source_radius(rho) = S(rho / zoom)
+```
+
+Interpolation is linear. The final segment extends beyond the last knot. Positive samples increase the source
+radius before the fill zoom; negative samples reduce it.
+
+The fill zoom makes the maximum of
+`S(rho / zoom) / rho` on the rectangular crop border equal to one. The optical center is the default crop's
+pixel-center midpoint. The measured crop is 9504 by 6336 at (32, 20).
+
+Storage padding affects DNG normalization
+only, so 9600 by 6376 and 9728 by 6656 storage produce the same physical warp.
+
+A four-term odd polynomial represents the map as `WarpRectilinear`. A dense 32769-point check rejects a polynomial
+that folds or differs from the table by more than 0.25 px at a 1440 px long edge. This approximation check is
+separate from agreement with the camera JPEG. The converter applies no shading or lateral CA.
+
+Validation uses all 131 owner files numerically, nine public raw.pixls.us codings, one independent public FE 50mm
+file and the public issue #1300 FE 16-25mm file. Private pixels stay in memory. No private images, names or source
+identities are saved in the new measurement artifacts.
+
+The nine private correction-on files cover the FE 24-50mm
+at 24, 49 and 50 mm. The other 122 private files have correction Off and cover the Tamron 35-150mm and the
+Voigtlander APO-LANTHAR 28mm and 50mm. Off references validate preservation, not correction-on optics for those lenses.
+
+Green-channel SIFT (Scale-Invariant Feature Transform) matches at 2376 px are filtered by an independent radial fit. Residuals remove median translation
+only. They fit no scale, center or lens coefficient to the candidate.
+
+High-pass correlation uses held-out pixels
+at 1200 px. File checks hold out the second file and then every fifth file in each lens/focal/setting group, and
+both public correction-on files. The private checks were also examined in the earlier study, so they are file
+checks rather than a fresh independent capture campaign.
+
+The public second-lens checks do not tune the unit.
+
+The A7R VI study uses a 0.75 px camera validation budget at 1440 px. The reporter has support to 0.933 half
+diagonals. Its direct table's largest radial-bin residual is 0.590 px at 1200 px (0.708 px at 1440 px).
+
+The implemented polynomial reaches 0.638 px in a radial bin and 0.692 px in a supported edge region at 1200 px
+in source coordinates. Actual corrected-raster matches give 0.173/0.605 px median/p95, a 0.763 px radial-bin
+maximum and a 0.969 px edge-region maximum at 1200 px. That edge region is 1.162 px at 1440 px, so this does not
+pass a strict 0.75 px budget everywhere measured.
+
+The unit test against the independently fitted smooth feature curve uses the combined 1.0 px table and
+polynomial approximation budget; its observed maximum is 0.895 px at 1440 px. These are different metrics.
+
+The held-out private 24 mm file has weak outer-radius support. No unsupported ideal corner is counted as measured.
+
+APS-C, aspect crops and lossless M/S are excluded. Portrait captures use the same sensor-coordinate map and the
+existing EXIF orientation conversion. Other lenses and the 16-25mm's tele end need more correction-on references.
+
+No Imaging Edge On/Off pairs were measured for this body. Camera JPEGs are the reference for this change.
+
+This branch supplies the warp for camera-look pairing in PR #1586. It does not duplicate that pairing code.
+
+`LOOK_VERSION` 12 refreshes smart previews that stored no A7CR lens data; `RENDER_CACHE_VERSION` 69 redraws cached
+renders.
+
+Existing edits are preserved. Reload from Disk reads the new lens data for old imports. Enable the
+profile correction control when an existing edit has it disabled.
+
 ## Local inventory check
 
-`crates/raw/tests/sony_lens_inventory.rs` is opt-in and does nothing in CI. With `LIGHTCRAFT_SONY_LENS_DIR` naming a
+`crates/raw/tests/it/sony_lens_inventory.rs` is opt-in and does nothing in CI. With `LIGHTCRAFT_SONY_LENS_DIR` naming a
 directory of ARWs it decodes each from its headers and prints its record (settings, sources, copies' agreement,
 sample ranges, statuses); `LIGHTCRAFT_SONY_LENS_FULL=1` also compares header and full decode. With
 `LIGHTCRAFT_SONY_LENS_INVENTORY` naming a CSV inventory it checks every file's table counts, sizes, sample counts,
@@ -222,9 +290,50 @@ decode or fail without a panic. `tests/sr2_heap.rs` measures the peak heap of de
 `SR2Private` directory holds eight fields aliasing the whole file: 37 kB, against 134 MB when those fields were
 decoded. No private photographs or reference TIFFs are committed.
 
+## ILCE-7M3 validation
+
+Checked on 2026-10-12 against the camera's own JPEG of the same exposure, which is an independent renderer
+that applied the correction (RAW+JPEG, Lens Comp. ▸ Distortion Comp.: Auto). RAW+JPEG pairs from one
+ILCE-7M3 (26 in the table below, plus two left out as explained under it): a checkerboard filling the frame on a TV (handheld) and on a desktop monitor (tripod), compressed and
+uncompressed raws, apertures from wide open to f/8, plus one textured wall. Tables covered strong barrel (16 mm,
+−690 at the corner), strong pincushion (70 mm, +1161) and the sign change between them.
+
+Method (`tools/sony_distortion_check.py`): LightCraft renders each ARW at full size with the profile correction
+on and off; sub-pixel board corners (Hessian saddle points refined with `cornerSubPix`, kept only where the four
+quadrants alternate, labelled into rows and columns) are matched with the JPEG's by grid position, with the
+match fixed by the central corners before any fit, because a board is periodic. A similarity (zoom, rotation,
+shift) is fitted, as the camera fills its frame with its own zoom; no lens coefficient is fitted. The textured wall
+uses SIFT matches instead. The script was checked on synthetic boards with a known radial distortion.
+
+| Lens / focal length | Shots | Corrected vs JPEG: median / p95 (px at 6000) | Uncorrected median | Corner (r > 0.9) | Camera / LightCraft correction |
+|---|---:|---|---:|---:|---:|
+| FE 16–35 F4 ZA / 16 mm | 10 | 0.33–0.38 / 1.01–1.15 | 16.7–17.0 | 1.40–1.56 px | 1.02 |
+| FE 16–35 F4 ZA / 20 mm | 4 | 0.16–0.24 / 0.34–0.50 | 3.9–4.4 | 0.15–0.24 px | 0.98 |
+| FE 16–35 F4 ZA / 35 mm | 2 | 0.18–0.21 / 0.39–0.44 | 11.0–11.1 | 0.18–0.26 px | 1.01–1.02 |
+| FE 28–70 / 28 mm | 2 | 0.24–0.25 / 0.59–0.64 | 13.2–13.4 | 0.92 px | 1.02 |
+| FE 28–70 / 33 mm | 1 | 0.07 / 0.16 | 0.8 | 0.07 px | 1.00 |
+| FE 28–70 / 50 mm | 1 | 0.30 / 0.69 | 20.8 | 1.24 px | 1.01 |
+| FE 28–70 / 70 mm | 1 | 0.44 / 0.93 | 26.4 | 1.49 px | 1.01 |
+| FE 50 F1.8 / 50 mm | 4 | 0.06–0.12 / 0.15–0.31 | 2.8–3.0 | 0.08–0.14 px | 1.00–1.01 |
+| Wall, 16 mm (SIFT) | 1 | 0.37 / 1.06 | 5.6 | 1.22 px | — |
+
+Residuals are in pixels of the 6000×4000 JPEG; at the 2376 px exports used above for the ILCE-7RM4A, the
+board medians are 0.02–0.17 px and the p95 at most 0.46 px. The last column fits JPEG ≈ uncorrected +
+α·(corrected − uncorrected) radially: LightCraft applies the camera's amount of correction within 2 %, slightly
+less for strong barrel and slightly more at 20 mm, which is what remains at the 16 mm corners (about 1.5 px of a
+35 px correction). Rows and columns of corrected boards are as straight as in the JPEG in every shot (largest
+bow 0.8–7.8 px in both, from the screens), against 7–55 px uncorrected. Compressed and uncompressed raws,
+the TV and the monitor, and wide open and f/8 agree. Two 16 mm board shots whose board stopped short of the
+corners (reach 0.8 of the half diagonal) gave 0.85 px medians and are left out of the table.
+
+On this body Sony's crop tags and the default crop agree (origin 12, 12, 6000×4000 of 6048×4024), so the
+warp sits on the image centre; fitted against the camera, the centre is within 0.3 px. Unit tests keep the warp from
+three of these tables within 0.0008 of the half diagonal (2.9 px at 6000 px) of the camera's fitted geometry.
+The photographs stay with their owner; none is committed.
+
 ## Camera coverage and regression boundary
 
-The model check is exact: `ILCE-7RM4` (A7R IV without the A suffix), `ILCE-7M3`, unknown/missing
+The model check is exact: `ILCE-7RM4` (A7R IV without the A suffix), unknown/missing
 model names, and every other model remain unsupported by this distortion decoder. Matching tag
 numbers and table lengths do not establish the scale, interpolation or crop normalization on another
 body. Support can expand after independent geometry validation; do not add model-name prefix matching.
@@ -233,7 +342,7 @@ The current `cargo xtask corpus --download` manifest contains 25 Sony CC0 sample
 including samples 4822 (A7R IVA / 24–105 mm) and 3989 (A9 II / 200–600 mm), each with a pinned SHA-256 that the
 download checks. `sony_embedded_distortion_is_limited_to_validated_models` checks 23 of them (the two ILCE-7CM2
 codings have their own test), and `sony_lens_records_of_the_public_samples` verifies all 25 against their pins
-(`SONY_SAMPLES` in `crates/raw/tests/corpus.rs`, itself anchored by a pinned digest and compared with the manifest)
+(`SONY_SAMPLES` in `crates/raw/tests/it/corpus.rs`, itself anchored by a pinned digest and compared with the manifest)
 before decoding. **No CI job fetches the corpus**: these fixture tests run only where it has been downloaded, and
 otherwise skip each absent file. `LIGHTCRAFT_CORPUS_REQUIRED=1` makes `sony_lens_records_of_the_public_samples`
 fail on any absent pinned file instead.
@@ -242,7 +351,7 @@ fail on any absent pinned file instead.
 |---|---|---|---|
 | ILCE-7RM4A | Compressed (4822) | All three tables; 257 / 1 / 17 | One distortion warp |
 | ILCE-9M2 | Compressed (3989) | All three; 257 / 1 / 0 | None |
-| ILCE-7M3 | Compressed, uncompressed | All three; 257 / 1 / 0 | None |
+| ILCE-7M3 | Compressed, uncompressed | All three; 257 / 1 / 0 | One distortion warp |
 | ILCE-7M4 | 14-bit, lossless L/M/S | L/M/S: all three, 272 / 1 / 17; the 14-bit file (APS-C framing, 4608 × 3072): settings only, its 11-sample tables are not interpreted | None |
 | ILCE-7RM2 | 12-bit uncompressed | All three; 256 / 0 / 1 | None |
 | DSC-RX100 | One | Shading, from the `SR2SubIFD` (the raw IFD has no tables); CA and distortion in the 11-sample layout | None |
@@ -257,8 +366,8 @@ fail on any absent pinned file instead.
 These are **model-boundary regression checks, not new geometric validation of those models**.
 `sony_lens_records_of_the_public_samples` also checks the exact tables, settings, provenance and framing evidence of
 the three A7CR codings and the A7R IVA sample, and that across the Sony corpus only the A7R IVA's distortion is ever
-applied. In particular,
-refusing the A7 III tables resolves the unverified corner warp identified in review. The lossless M/S
+applied, besides the A7 III's. The A7 III tables were refused at first because their corner warp was unverified;
+the [ILCE-7M3 validation](#ilce-7m3-validation) measured it against the camera's own JPEGs and enabled the body. The lossless M/S
 files are linear YCbCr and remain excluded independently of the model check. Header and full decode
 must agree for every sample. Synthetic tests also verify both TIFF byte orders, exact model matching,
 that the warp is centred on the standard default crop while the image keeps Sony's crop, and that DNG export preserves an accepted warp without adding one to rejected

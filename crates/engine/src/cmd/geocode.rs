@@ -47,6 +47,10 @@ pub struct PlaceNames {
     shared: Arc<Mutex<DownloadShared>>,
     /// (cities file, its size, its modification time, the parsed names).
     cache: Option<(PathBuf, u64, Option<SystemTime>, Arc<GeoNames>)>,
+    /// (folder, server) a download goes to instead of `<settings>/geonames` and GeoNames. Only
+    /// tests set it: no command can, so a client never chooses where the files land (#2575).
+    #[cfg(not(target_arch = "wasm32"))]
+    download_to: Option<(PathBuf, String)>,
 }
 
 impl PlaceNames {
@@ -61,6 +65,13 @@ impl PlaceNames {
 
     pub fn downloading(&self) -> bool {
         self.lock().running
+    }
+
+    /// Whether a place names download has been started in this session (running, or ended).
+    #[cfg(test)]
+    pub(crate) fn download_started(&self) -> bool {
+        let sh = self.lock();
+        sh.running || sh.last.is_some()
     }
 
     /// The gazetteer in `dir`, parsed once and re-read only when the cities file's size or time changes.
@@ -115,6 +126,12 @@ fn fill(meta: &mut lightcraft_catalog::Meta, place: &lightcraft_geocode::Place, 
 fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "metadata.reverseGeocode";
     let overwrite = bool_or(p, "overwrite", false);
+    // the place list holds towns of 15 000 people or more: a photo in a smaller one finds the nearest
+    // larger town, which may be another municipality; past this many metres City is left empty (#2242)
+    let max_distance = match p.get("maxDistance") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().filter(|m| m.is_finite() && *m > 0.0).ok_or_else(|| bad(C, "`maxDistance` must be a positive number of metres"))?),
+    };
     let ids = s.targets(p)?;
     let todo: Vec<(PhotoId, LatLon)> = ids
         .iter()
@@ -140,14 +157,24 @@ fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
             }
             t.progress(n as u64, todo.len() as u64);
         }
-        let Some(place) = names.reverse(*at) else { continue };
+        let Some(mut place) = names.reverse(*at) else { continue };
+        // too far from the town found: State and Country still hold, City (and below) doesn't
+        let too_far = max_distance.is_some_and(|m| place.distance > m);
+        let nearest_city = too_far.then(|| std::mem::take(&mut place.city));
+        if too_far {
+            place.sublocation.clear();
+        }
         let Some(ph) = s.catalog.photo(*id) else { continue };
         let mut meta = ph.meta.clone();
         fill(&mut meta, &place, overwrite);
         if meta != ph.meta {
             ops.push(Op::SetMeta { id: *id, meta: Box::new(meta) });
         }
-        found.push(json!({"id": id.0, "place": place}));
+        let mut entry = json!({"id": id.0, "place": place});
+        if let Some(city) = nearest_city {
+            entry["nearestCity"] = json!(city);
+        }
+        found.push(entry);
     }
     drop(task);
     let changed = ops.len();
@@ -165,7 +192,7 @@ mod download {
 
     use lightcraft_geocode::{GEONAMES_BASE, GEONAMES_ZIP};
 
-    use super::*;
+    use super::{Cancel, DownloadOutcome, GEONAMES_ATTRIBUTION, GEONAMES_FILES, GeoNames, PoisonError, Result, Session, Value, bad, json};
     use crate::activity::Unit;
 
     const MAX_ZIP: u64 = 64 * 1024 * 1024;
@@ -192,7 +219,11 @@ mod download {
             return Err("the downloaded place list is empty".into());
         }
         let _ = std::fs::remove_file(staging.join(GEONAMES_ZIP));
-        let write = |name: &str, data: &[u8]| std::fs::write(dir.join(name), data).map_err(|e| format!("could not save {name}: {e}"));
+        // a temp file renamed over the old one: never half-written, and a link in its place is
+        // replaced, not written through (#2575); not synced, as a download can always be repeated
+        let write = |name: &str, data: &[u8]| {
+            lightcraft_catalog::safe_file::write_atomic_nosync(&dir.join(name), data).map_err(|e| format!("could not save {name}: {e}"))
+        };
         for name in &GEONAMES_FILES[1..] {
             // optional: without them states stay blank and countries are ISO codes
             match get(name, base, &staging, cancel, task).and_then(|()| std::fs::read(staging.join(name)).map_err(|e| e.to_string())) {
@@ -215,10 +246,21 @@ mod download {
     }
 
     /// `metadata.downloadPlaceNames`: starts a background download (shown in the activity stack, cancellable).
+    /// The files always go to `<settings>/geonames`, from GeoNames: a control or MCP client naming a
+    /// folder (`dataset`) or a server (`base`) could have written a server's bytes into any folder (#2575).
     pub(super) fn start(s: &mut Session, p: &Value) -> Result<Value> {
         const C: &str = "metadata.downloadPlaceNames";
-        let dir = dataset_dir(p).ok_or_else(|| bad(C, "no settings folder: give `dataset`"))?;
-        let base = str_param(p, "base").unwrap_or(GEONAMES_BASE).to_string();
+        if p.get("dataset").is_some() || p.get("base").is_some() {
+            return Err(bad(C, "the place names always download from GeoNames into the settings folder: `dataset` and `base` are not accepted"));
+        }
+        let target = s.place_names.download_to.clone();
+        let (dir, base) = match target {
+            Some(t) => t,
+            None => (
+                crate::config::config_dir().ok_or_else(|| bad(C, "no settings folder to save the place names in"))?.join("geonames"),
+                GEONAMES_BASE.to_string(),
+            ),
+        };
         if !base_allowed(&base) {
             return Err(bad(C, "`base` must be an https:// address"));
         }
@@ -271,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fill Location from GPS",
             ["Photo"],
             None,
-            "{ids?, overwrite?: bool (also replace place fields that already have text; default false: only empty ones are filled), dryRun?, dataset?: folder} → {looked, found, changed, photos: [{id, place: {sublocation, city, state, country, iso, distance}}], attribution} — fills City / State / Country (and Sublocation when known) from GPS with the offline GeoNames place names (download them first); one undo step",
+            "{ids?, overwrite?: bool (also replace place fields that already have text; default false: only empty ones are filled), dryRun?, dataset?: folder, maxDistance?: metres (past this distance from the town found, City is left empty and the town is given as nearestCity)} → {looked, found, changed, photos: [{id, place: {sublocation, city, state, country, iso, distance}, nearestCity?}], attribution} — fills City / State / Country (and Sublocation when known) from GPS with the offline GeoNames place names (download them first); one undo step. The place names list towns of 15 000 people or more (GeoNames cities15000): a photo taken in a smaller town gets the nearest larger one, up to 50 km away (`distance` says how far); `maxDistance` keeps such a town out of City",
             has_selection,
             reverse
         ),
@@ -283,7 +325,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Download Place Names (GeoNames)",
         ["Photo"],
         None,
-        "{dataset?: folder} → {started, path, attribution} — downloads the GeoNames cities list (CC-BY 4.0, ~3 MB, from download.geonames.org) in the background for Fill Location from GPS; no photo data is sent",
+        "{} → {started, path, attribution} — downloads the GeoNames cities list (CC-BY 4.0, ~3 MB, from download.geonames.org) in the background for Fill Location from GPS, always into `geonames` in the settings folder (a folder or server named by the caller is refused); no photo data is sent",
         always,
         download::start
     ));
@@ -340,6 +382,36 @@ mod tests {
         // overwrite replaces typed text
         s.execute("metadata.reverseGeocode", &json!({"ids": [ids[1].0], "dataset": dir, "overwrite": true})).unwrap();
         assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "London");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue #2242: the place names hold only towns of 15 000 people or more, so a photo in a
+    /// village finds the nearest larger town. `maxDistance` leaves City empty past that distance
+    /// (State and Country still fill) and says which town it was.
+    #[test]
+    fn max_distance_leaves_a_far_town_out_of_city() {
+        let mut s = Session::with_demo();
+        let ids = s.visible_cloned();
+        let dir = dataset("maxdist");
+        // about 5 km north of Paris (like Portofino and Rapallo in the issue), and right in Paris
+        set_gps(&mut s, ids[0], Some((48.90, 2.35)), "");
+        set_gps(&mut s, ids[1], Some((48.855, 2.35)), "");
+        let r = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0, ids[1].0], "dataset": dir, "maxDistance": 2000})).unwrap();
+        let m0 = s.catalog.photo(ids[0]).unwrap().meta.clone();
+        assert_eq!((m0.city.as_str(), m0.state.as_str(), m0.country.as_str()), ("", "Île-de-France", "France"));
+        assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "Paris", "close enough");
+        let far = r["photos"].as_array().unwrap().iter().find(|p| p["id"] == json!(ids[0].0)).unwrap();
+        assert_eq!((far["place"]["city"].as_str(), far["nearestCity"].as_str()), (Some(""), Some("Paris")), "{far}");
+        assert!(far["place"]["distance"].as_f64().unwrap() > 2000.0);
+        // without it, the nearest town fills City as before
+        s.undo_step().unwrap();
+        s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir})).unwrap();
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().meta.city, "Paris");
+        // hostile values are refused, not taken as "no limit"
+        for bad in [json!(-1), json!(0), json!("far"), json!(true)] {
+            let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir, "maxDistance": bad})).unwrap_err();
+            assert!(e.to_string().contains("maxDistance"), "{e}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -412,7 +484,8 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn download(s: &mut Session, base: &str, dir: &Path) -> DownloadOutcome {
-        s.execute("metadata.downloadPlaceNames", &json!({"dataset": dir, "base": base})).unwrap();
+        s.place_names.download_to = Some((dir.to_path_buf(), base.to_string()));
+        s.execute("metadata.downloadPlaceNames", &json!({})).unwrap();
         assert!(s.place_names.downloading() || s.place_names.lock().unreported.is_some());
         let started = std::time::Instant::now();
         loop {
@@ -437,7 +510,8 @@ mod tests {
         let base = serve();
         let dir = std::env::temp_dir().join(format!("lightcraft-geocode-dl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(s.execute("metadata.downloadPlaceNames", &json!({"dataset": dir, "base": "http://example.com/"})).is_err());
+        s.place_names.download_to = Some((dir.clone(), "http://example.com/".into()));
+        assert!(s.execute("metadata.downloadPlaceNames", &json!({})).is_err(), "plain http to another machine");
 
         for bad in ["missing", "garbage", "short"] {
             let o = download(&mut s, &format!("{base}/{bad}/"), &dir);
@@ -458,6 +532,53 @@ mod tests {
         // admin1 was a 404 (optional): the state stays blank, the rest is filled
         assert_eq!((m.city.as_str(), m.state.as_str(), m.country.as_str()), ("Paris", "", "France"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue #2575: a control or MCP client named the folder (`dataset`) and the server (`base`),
+    /// so it could have a server's bytes written as `cities15000.txt`, `admin1CodesASCII.txt` and
+    /// `countryInfo.txt` into any folder. Both are refused now, before anything starts.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_client_cannot_choose_where_the_place_names_download_to() {
+        let mut s = Session::with_demo();
+        let dir = std::env::temp_dir().join(format!("lightcraft-geocode-elsewhere-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for p in [json!({"dataset": dir}), json!({"base": "https://example.com/"}), json!({"dataset": dir, "base": "https://example.com/"})] {
+            let e = s.execute("metadata.downloadPlaceNames", &p).unwrap_err().to_string();
+            assert!(e.contains("not accepted"), "{p}: {e}");
+        }
+        assert!(!s.place_names.downloading() && s.activity.list().is_empty(), "nothing started");
+        assert!(!dir.exists(), "nothing written");
+    }
+
+    /// The downloaded files replace what is there by renaming a complete temp file over it, so a
+    /// link planted under one of their names is replaced, not followed to the file it points at.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_download_replaces_a_planted_link_instead_of_writing_through_it() {
+        let mut s = Session::with_demo();
+        let base = serve();
+        let root = std::env::temp_dir().join(format!("lightcraft-geocode-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("geonames");
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = root.join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let link = dir.join("countryInfo.txt");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&victim, &link);
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&victim, &link);
+        if let Err(e) = linked {
+            lightcraft_testkit::skip!(System, "can't create a symbolic link here: {e}");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        assert_eq!(download(&mut s, &format!("{base}/good/"), &dir), DownloadOutcome::Done(2));
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me", "the link's target is untouched");
+        assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link is now the downloaded file");
+        assert!(std::fs::read_to_string(&link).unwrap().contains("France"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

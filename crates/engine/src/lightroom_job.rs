@@ -241,8 +241,14 @@ impl LightroomJob {
             return Err(cancelled());
         }
         // (reading stops with a message when `cancel` is set: the flag says it was cancelled)
-        let mut data = lightroom_catalog::read_with_progress(&self.path, cancel, &self.progress.catalog_total, &self.progress.catalog_done)
-            .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
+        let mut data = lightroom_catalog::read_source(
+            &self.path,
+            self.archive_dir.as_deref(),
+            cancel,
+            &self.progress.catalog_total,
+            &self.progress.catalog_done,
+        )
+        .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
         lightroom_catalog::validate_for_job(&data).map_err(error)?;
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
@@ -329,7 +335,7 @@ fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(V
         if !seen.insert(key.clone()) {
             continue;
         }
-        if Path::new(&photo.path).is_file() {
+        if photo.original_is_file() {
             paths.push(photo.path.clone());
         } else {
             missing.insert(key);
@@ -350,11 +356,14 @@ mod tests {
     fn empty_data() -> CatalogImport {
         CatalogImport {
             source: "fixture.lrcat".into(),
+            catalog_id: None,
+            catalog_path: None,
             photos: Vec::new(),
             collections: Vec::new(),
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
@@ -383,6 +392,8 @@ mod tests {
         PreparedLightroom {
             data: CatalogImport {
                 source: "fixture.lrcat".into(),
+                catalog_id: None,
+                catalog_path: None,
                 photos: vec![lightroom_catalog::CatalogPhoto {
                     source_id: 1,
                     uuid: "fixture-photo".into(),
@@ -393,11 +404,13 @@ mod tests {
                     keywords: Vec::new(),
                     history: Vec::new(),
                     snapshots: Vec::new(),
+                    original: lightroom_catalog::Original::Local,
                 }],
                 collections: Vec::new(),
                 members: Vec::new(),
                 collection_content: Vec::new(),
                 warnings: Vec::new(),
+                skipped: Vec::new(),
             },
             normal: Prepared::default(),
             index: ImportIndex::default(),
@@ -531,6 +544,7 @@ mod tests {
                         serde_json::json!(format!("history-{source_id}-{}", "x".repeat(8 * 1024))),
                     )])],
                     snapshots: Vec::new(),
+                    original: lightroom_catalog::Original::Local,
                 }
             })
             .collect();

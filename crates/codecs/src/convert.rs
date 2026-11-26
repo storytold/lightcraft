@@ -44,8 +44,20 @@ impl Buf {
         match self {
             Buf::U8(v) => v[i] as f32 / 255.0,
             Buf::U16(v) => v[i] as f32 / 65535.0,
-            Buf::F32(v) => v[i],
+            Buf::F32(v) => normalize_float(v[i]),
         }
+    }
+}
+
+/// Clip non-finite device samples before colour conversion, preserving finite extended range.
+#[inline]
+fn normalize_float(value: f32) -> f32 {
+    if value == f32::INFINITY {
+        1.0
+    } else if value.is_finite() {
+        value
+    } else {
+        0.0
     }
 }
 
@@ -66,6 +78,8 @@ pub(crate) struct Raw {
 #[derive(Default)]
 pub(crate) struct Meta {
     pub icc: Option<Vec<u8>>,
+    /// An ICC profile was declared by the container but its sequence was invalid.
+    pub icc_invalid: bool,
     pub exif: Option<Vec<u8>>,
     pub xmp: Option<String>,
     /// Orientation from the container itself (e.g. TIFF tag); EXIF blob is consulted otherwise.
@@ -87,9 +101,10 @@ pub(crate) fn check_size(format: Format, w: u64, h: u64, opts: &DecodeOptions) -
 }
 
 pub(crate) fn finish(format: Format, raw: Raw, meta: Meta, source_dims: (u32, u32), opts: &DecodeOptions) -> Result<Decoded> {
-    let n = raw.width * raw.height;
     let ch = raw.model.channels() + raw.alpha as usize;
-    if n == 0 || raw.buf.len() < n * ch {
+    let buf_len =
+        crate::checked_sample_buf_len(raw.width, raw.height, ch).ok_or_else(|| Error::Malformed(format, "sample buffer too short".into()))?;
+    if (raw.buf.len() as u64) < buf_len {
         return Err(Error::Malformed(format, "sample buffer too short".into()));
     }
     let float = matches!(raw.buf, Buf::F32(_));
@@ -107,7 +122,7 @@ pub(crate) fn finish(format: Format, raw: Raw, meta: Meta, source_dims: (u32, u3
     let (image, space) = if let Some(space) = meta.already_linear.clone() {
         (to_rgb_passthrough(&raw, ch), space)
     } else if raw.model == Model::Cmyk {
-        cmyk(&raw, ch, meta.icc.as_deref(), parsed_icc.as_ref())
+        cmyk(&raw, ch, meta.icc.as_deref(), parsed_icc.as_ref(), meta.icc_invalid)
     } else {
         rgb_or_gray(&raw, ch, &meta, parsed_icc.as_ref(), float)
     };
@@ -129,7 +144,9 @@ pub(crate) fn finish(format: Format, raw: Raw, meta: Meta, source_dims: (u32, u3
     let (image, alpha) = match opts.max_size {
         Some((mw, mh)) if (image.width as u32 > mw || image.height as u32 > mh) && mw > 0 && mh > 0 => {
             let factor = (image.width as f64 / mw as f64).max(image.height as f64 / mh as f64);
-            let f = if factor >= 2.0 { Filter::Box } else { Filter::Mitchell };
+            // (Lanczos at 2:1 and more as well: a box average there halves the contrast of
+            // detail near the output's resolution limit and aliases what is finer)
+            let f = if factor >= 2.0 { Filter::Lanczos3 } else { Filter::Mitchell };
             let img = fit(&image, mw as usize, mh as usize, f);
             let alpha = alpha.map(|a| fit(&a, mw as usize, mh as usize, f));
             (img, alpha)
@@ -218,10 +235,7 @@ fn linearize(raw: &Raw, ch: usize, trc: &[Trc; 3]) -> Rgb32f {
             par_rows(&mut img.data, w, |y, row| {
                 for (x, o) in row.iter_mut().enumerate() {
                     let i = (y * w + x) * ch;
-                    let s = |c: usize| {
-                        let val = v[i + c];
-                        if val.is_finite() { val } else { 0.0 }
-                    };
+                    let s = |c: usize| normalize_float(v[i + c]);
                     *o = if gray {
                         let l = if lin { s(0) } else { trc[1].to_linear(s(0)) };
                         [l, l, l]
@@ -287,7 +301,7 @@ fn rgb_or_gray(raw: &Raw, ch: usize, meta: &Meta, info: Option<&icc::IccInfo>, f
             _ => {}
         }
     }
-    if meta.icc.is_some() {
+    if meta.icc.is_some() || meta.icc_invalid {
         // Present but unusable (malformed, mismatched model, CMS failure): assume sRGB.
         let s = SourceSpace::named(NamedSpace::Srgb, SpaceOrigin::IccUnsupported);
         let t = NamedSpace::Srgb.trc();
@@ -311,7 +325,7 @@ fn rgb_or_gray(raw: &Raw, ch: usize, meta: &Meta, info: Option<&icc::IccInfo>, f
     (linearize(raw, ch, &t), s)
 }
 
-fn cmyk(raw: &Raw, ch: usize, icc_bytes: Option<&[u8]>, info: Option<&icc::IccInfo>) -> (Rgb32f, SourceSpace) {
+fn cmyk(raw: &Raw, ch: usize, icc_bytes: Option<&[u8]>, info: Option<&icc::IccInfo>, icc_invalid: bool) -> (Rgb32f, SourceSpace) {
     let samples = device_samples(raw, ch, 4);
     if let (Some(bytes), Some(info)) = (icc_bytes, info)
         && info.model == IccColorModel::Cmyk
@@ -331,6 +345,6 @@ fn cmyk(raw: &Raw, ch: usize, icc_bytes: Option<&[u8]>, info: Option<&icc::IccIn
             [(1.0 - c[0]) * k, (1.0 - c[1]) * k, (1.0 - c[2]) * k].map(lightcraft_color::transfer::srgb_to_linear)
         })
         .collect();
-    let origin = if icc_bytes.is_some() { SpaceOrigin::IccUnsupported } else { SpaceOrigin::Naive };
+    let origin = if icc_bytes.is_some() || icc_invalid { SpaceOrigin::IccUnsupported } else { SpaceOrigin::Naive };
     (from_vec(raw.width, raw.height, px), SourceSpace::named(NamedSpace::Srgb, origin))
 }

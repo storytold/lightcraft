@@ -3,26 +3,20 @@
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Encode bytes as padded standard base64.
-pub fn base64_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
-        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
+pub use craft_mime::transfer::base64 as base64_encode;
 
 /// Decode padded or unpadded standard base64 (whitespace ignored). `None` on invalid input.
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
     let (mut acc, mut bits) = (0u32, 0u32);
+    let mut padded = false;
     for c in text.bytes().filter(|c| !c.is_ascii_whitespace()) {
         if c == b'=' {
-            break;
+            padded = true;
+            continue;
+        }
+        if padded {
+            return None;
         }
         let v = ALPHABET.iter().position(|&a| a == c)? as u32;
         acc = (acc << 6) | v;
@@ -32,6 +26,9 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
             out.push((acc >> bits) as u8);
             acc &= (1 << bits) - 1;
         }
+    }
+    if bits == 6 {
+        return None;
     }
     Some(out)
 }
@@ -56,5 +53,13 @@ mod tests {
             assert_eq!(base64_decode(&base64_encode(&data[..n])).unwrap(), &data[..n]);
         }
         assert!(base64_decode("not base64!").is_none());
+    }
+
+    #[test]
+    fn rejects_malformed() {
+        assert!(base64_decode("Z").is_none());
+        assert!(base64_decode("Zm9vY").is_none());
+        assert!(base64_decode("Zg==!!!not-base64").is_none());
+        assert_eq!(base64_decode("Zg==\n").unwrap(), b"f");
     }
 }
