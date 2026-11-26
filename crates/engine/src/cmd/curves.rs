@@ -1,8 +1,12 @@
 //! Tone-curve commands: reset a channel or the whole curve; point-curve presets (built-in Linear /
 //! Medium / Strong Contrast plus the user's, saved with the library preferences, imported and
 //! exported as small JSON files).
+//!
+//! With `mask: id` the point-curve commands (`develop.curve`, `curve.reset`, `curve.presets`,
+//! `curve.applyPreset`, `curve.savePreset`) work on that mask's local Curve instead of the photo's
+//! Tone Curve: the same channels without the parametric curve, and the same presets.
 
-use lightcraft_develop::ToneCurve;
+use lightcraft_develop::{DevelopSettings, PointCurves, ToneCurve};
 use lightcraft_geom::Point;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -38,13 +42,59 @@ pub fn reset_channel(c: &mut ToneCurve, channel: &str) -> std::result::Result<()
     Ok(())
 }
 
+/// Channels `curve.reset` accepts for a mask's local Curve.
+pub const MASK_RESET_CHANNELS: [&str; 5] = ["all", "master", "red", "green", "blue"];
+
+/// A mask's local Curve `c` with `channel` linear again: `all` (also `point`) or one channel.
+pub fn reset_points(c: &mut PointCurves, channel: &str) -> std::result::Result<(), String> {
+    if matches!(channel, "all" | "point") {
+        *c = PointCurves::default();
+        return Ok(());
+    }
+    c.channel_mut(channel)
+        .map(Vec::clear)
+        .ok_or_else(|| format!("unknown channel `{channel}` for a mask's curve (one of {})", MASK_RESET_CHANNELS.join(", ")))
+}
+
+/// The `mask` parameter of the point-curve commands: the id of the mask whose local Curve they work
+/// on, `None` (the photo's Tone Curve) when absent or null.
+pub(crate) fn mask_param(p: &Value, c: &str) -> Result<Option<u32>> {
+    match p.get("mask") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_u64().and_then(|v| u32::try_from(v).ok()).map(Some).ok_or_else(|| bad(c, "`mask` must be a mask id")),
+    }
+}
+
+/// Mask `mask`'s local Curve in `d`.
+pub(crate) fn mask_curve_mut<'a>(d: &'a mut DevelopSettings, mask: u32, c: &str) -> Result<&'a mut PointCurves> {
+    d.masks.iter_mut().find(|m| m.id == mask).map(|m| &mut m.curve).ok_or_else(|| bad(c, format!("no mask {mask} on this photo")))
+}
+
+/// The point curves a command with `mask` reads: the mask's local Curve, or the photo's Tone Curve's.
+fn points_of(d: &DevelopSettings, mask: Option<u32>, c: &str) -> Result<PointCurves> {
+    match mask {
+        Some(m) => d.masks.iter().find(|x| x.id == m).map(|x| x.curve.clone()).ok_or_else(|| bad(c, format!("no mask {m} on this photo"))),
+        None => Ok(d.curve.points()),
+    }
+}
+
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "curve.reset";
     let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
     let channel = str_param(p, "channel").unwrap_or("all");
+    let mask = mask_param(p, C)?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
-    reset_channel(&mut d.curve, channel).map_err(|e| bad(C, e))?;
-    let label = if channel == "all" { "Reset Tone Curve".to_string() } else { format!("Reset Tone Curve ({channel})") };
+    let what = match mask {
+        Some(m) => {
+            reset_points(mask_curve_mut(&mut d, m, C)?, channel).map_err(|e| bad(C, e))?;
+            "Mask Curve"
+        }
+        None => {
+            reset_channel(&mut d.curve, channel).map_err(|e| bad(C, e))?;
+            "Tone Curve"
+        }
+    };
+    let label = if channel == "all" { format!("Reset {what}") } else { format!("Reset {what} ({channel})") };
     s.set_develop(id, d, &label)?;
     Ok(json!({"channel": channel}))
 }
@@ -56,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reset Tone Curve",
             [],
             None,
-            "{channel?: all|point|parametric|master|red|green|blue (default all)} — the active photo's tone curve (or one channel) back to linear",
+            "{channel?: all|point|parametric|master|red|green|blue (default all), mask?: id} — the active photo's tone curve (or one channel) back to linear; with `mask`, that mask's local Curve (no parametric part)",
             has_active,
             reset
         ),
@@ -65,16 +115,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "Point Curve Presets",
             [],
             None,
-            "{} → {presets: [{name, master, red, green, blue: [[x,y],...], builtin?}], current: name of the preset the active photo's point curves match, or null}",
+            "{mask?: id} → {presets: [{name, master, red, green, blue: [[x,y],...], builtin?}], current: name of the preset the active photo's point curves (or that mask's local Curve) match, or null}",
             always,
-            |s, _| Ok(list(s))
+            list_cmd
         ),
         cmd!(
             "curve.applyPreset",
             "Apply Point Curve Preset",
             [],
             None,
-            "{name} — sets the active photo's point curves (all four channels; the parametric curve stays)",
+            "{name, mask?: id} — sets the active photo's point curves (all four channels; the parametric curve stays), or with `mask` that mask's local Curve",
             has_active,
             apply_preset
         ),
@@ -83,7 +133,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save Point Curve Preset",
             [],
             None,
-            "{name} — the active photo's point curves under a name (replaces a user preset of that name; built-in names are reserved), saved with the library",
+            "{name, mask?: id} — the active photo's point curves (or that mask's local Curve) under a name (replaces a user preset of that name; built-in names are reserved), saved with the library",
             has_active,
             save_preset
         ),
@@ -161,6 +211,10 @@ fn to_points(v: &[[f64; 2]]) -> Vec<Point> {
 impl CurvePreset {
     /// The point curves of `c` under `name`.
     pub fn from_curve(name: &str, c: &ToneCurve) -> CurvePreset {
+        CurvePreset::from_points(name, &c.points())
+    }
+    /// The point curves `c` (a mask's local Curve) under `name`.
+    pub fn from_points(name: &str, c: &PointCurves) -> CurvePreset {
         CurvePreset {
             name: name.into(),
             master: from_points(&c.master),
@@ -172,6 +226,12 @@ impl CurvePreset {
     }
     /// Set the four point curves of `c` (the parametric curve and Refine Saturation stay).
     pub fn apply(&self, c: &mut ToneCurve) {
+        let mut p = c.points();
+        self.apply_points(&mut p);
+        c.set_points(p);
+    }
+    /// Set the four point curves `c` (a mask's local Curve).
+    pub fn apply_points(&self, c: &mut PointCurves) {
         c.master = to_points(&self.master);
         c.red = to_points(&self.red);
         c.green = to_points(&self.green);
@@ -179,6 +239,10 @@ impl CurvePreset {
     }
     /// Does `c` carry exactly this preset's point curves?
     pub fn matches(&self, c: &ToneCurve) -> bool {
+        self.matches_points(&c.points())
+    }
+    /// Do the point curves `c` (a mask's local Curve) match this preset's?
+    pub fn matches_points(&self, c: &PointCurves) -> bool {
         let same = |a: &[[f64; 2]], b: &[Point]| {
             let (a, b) = (normalize(a), from_points(b));
             a.len() == b.len() && a.iter().zip(&b).all(|(p, q)| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6)
@@ -210,7 +274,12 @@ pub fn all_presets(s: &Session) -> Vec<CurvePreset> {
 
 /// Name of the preset whose point curves `c` carries (built-ins first), if any.
 pub fn matching_preset(s: &Session, c: &ToneCurve) -> Option<String> {
-    all_presets(s).into_iter().find(|p| p.matches(c)).map(|p| p.name)
+    matching_points_preset(s, &c.points())
+}
+
+/// Name of the preset the point curves `c` (a mask's local Curve) match (built-ins first), if any.
+pub fn matching_points_preset(s: &Session, c: &PointCurves) -> Option<String> {
+    all_presets(s).into_iter().find(|p| p.matches_points(c)).map(|p| p.name)
 }
 
 fn is_builtin_name(name: &str) -> bool {
@@ -234,15 +303,33 @@ fn list(s: &Session) -> Value {
     json!({"presets": all_presets(s), "current": current})
 }
 
+fn list_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "curve.presets";
+    let Some(mask) = mask_param(p, C)? else { return Ok(list(s)) };
+    let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let curve = points_of(&s.develop_of(id).unwrap_or_default(), Some(mask), C)?;
+    Ok(json!({"presets": all_presets(s), "current": matching_points_preset(s, &curve)}))
+}
+
 fn apply_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "curve.applyPreset";
     let name = name_param(p, C)?;
+    let mask = mask_param(p, C)?;
     let preset =
         all_presets(s).into_iter().find(|x| x.name.eq_ignore_ascii_case(&name)).ok_or_else(|| bad(C, format!("no curve preset `{name}`")))?;
     let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
-    preset.apply(&mut d.curve);
-    s.set_develop(id, d, &format!("Point Curve: {}", preset.name))?;
+    let label = match mask {
+        Some(m) => {
+            preset.apply_points(mask_curve_mut(&mut d, m, C)?);
+            format!("Mask Curve: {}", preset.name)
+        }
+        None => {
+            preset.apply(&mut d.curve);
+            format!("Point Curve: {}", preset.name)
+        }
+    };
+    s.set_develop(id, d, &label)?;
     Ok(json!({"name": preset.name}))
 }
 
@@ -252,8 +339,9 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
     if is_builtin_name(&name) {
         return Err(bad(C, format!("`{name}` is a built-in preset: choose another name")));
     }
+    let mask = mask_param(p, C)?;
     let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
-    let preset = CurvePreset::from_curve(&name, &s.develop_of(id).unwrap_or_default().curve);
+    let preset = CurvePreset::from_points(&name, &points_of(&s.develop_of(id).unwrap_or_default(), mask, C)?);
     if preset.is_linear() {
         return Err(bad(C, "the point curve is linear: shape it first"));
     }
