@@ -1,4 +1,5 @@
 {
+  "{used} of {total} photos included": "Включено {used} из {total} фотографий",
   " ({unsure} with several look-alike files: use Locate)": " (из них с несколькими похожими файлами: {unsure} — используйте «Найти фото»)",
   " ({} in Recently Deleted)": " ({} в «Недавно удалённых»)",
   " · {:.0}% clipped": " · обрезано: {:.0}%",

@@ -410,6 +410,78 @@ fn final_merge_shows_a_row_and_cancels() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Merging other photos while the dialog is open ("with Last Settings", or the next set of an HDR batch) drops the
+/// dialog's preview of the photos it had: the preview is kept while its options match, and the dialog went on
+/// describing the old photos (their count and omitted files) for the new ones.
+#[test]
+fn merging_other_photos_drops_the_dialogs_preview() {
+    let (mut h, dir) = bracket("merge-ids");
+    let all = h.app.session.selected();
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.preview.is_some()), "the dialog previews the three photos");
+    let ev = |h: &Headless| h.app.merge.preview.as_ref().and_then(|p| p.3["ev"].as_array().map(Vec::len));
+    assert_eq!(ev(&h), Some(3));
+    h.app.session.execute("library.select", &json!({"ids": &all[..2]})).unwrap();
+    crate::merge::start_last(&mut h.app, "merge.hdr").unwrap();
+    assert_eq!(h.app.merge.ids, all[..2].to_vec());
+    assert!(h.app.merge.preview.is_none() && h.app.merge.preview_pixels.is_none(), "no preview of the three photos left");
+    let rows = h.app.session.activity.list();
+    let merging = rows.iter().find(|r| r.kind == "merge").map(|r| r.id).unwrap();
+    h.app.session.activity.cancel(merging).unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none() && h.app.merge.preview.is_some()));
+    assert_eq!(ev(&h), Some(2), "the dialog previews the photos it now merges");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// PR #2492 review: the final merge registers the full-size photos again, so it can leave out other photos than the
+/// preview did. The completion names the final result's omitted files (to a screen reader too, announced where the
+/// user is), waits for a dialog the user has open, and a panorama that left nothing out shows no list.
+#[test]
+fn a_finished_panorama_names_the_photos_it_left_out() {
+    let mut h = demo();
+    let ctx = h.view.ctx.clone();
+    // the preview left out another photo than the final merge does
+    let tex = ctx.load_texture("t", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
+    let preview_info = json!({"used": [1, 3], "omitted": [{"id": 2, "path": "/photos/Preview-only.png"}]});
+    h.app.merge.preview = Some((tex, [1, 1], crate::merge::MergeDialog::for_command("merge.panorama"), preview_info));
+    // a dialog the user has open is not replaced
+    h.app.ui.dialog = Some(crate::state::Dialog::About);
+    let final_info = json!({"id": 9, "used": [1, 2], "omitted": [{"id": 3, "path": "/photos/Final-only.png"}]});
+    crate::merge::finished(&mut h.app, &ctx, "Panorama", final_info);
+    h.step();
+    assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About));
+    h.app.ui.dialog = None;
+    h.step();
+    h.step();
+    let painted = h.painted_text().join("\n");
+    assert!(painted.contains("Final-only.png"), "the final omitted name is listed");
+    assert!(!painted.contains("Preview-only.png"), "not the preview's");
+    // what a screen reader gets: a dialog, the name, a polite live region, and a button to close it
+    ctx.enable_accesskit();
+    let raw = crate::headless::HeadlessView::raw_input(h.size, h.pixels_per_point, h.time, Vec::new());
+    let app = &mut h.app;
+    let mut out = ctx.run_ui(raw, |ui| {
+        app.logic(ui.ctx());
+        app.ui(ui);
+    });
+    let tree = out.platform_output.accesskit_update.take().expect("an accessibility tree");
+    let nodes: Vec<_> = tree.nodes.iter().map(|(_, n)| n).collect();
+    let named =
+        |role: egui::accesskit::Role, text: &str| nodes.iter().any(|n| n.role() == role && n.label().or(n.value()).is_some_and(|l| l.contains(text)));
+    let title = nodes.iter().find(|n| n.role() == egui::accesskit::Role::Dialog).and_then(|n| n.label()).expect("a dialog node");
+    assert!(painted.contains(title), "the dialog is named by its visible title");
+    assert!(named(egui::accesskit::Role::Label, "Final-only.png"));
+    assert!(nodes.iter().any(|n| n.live() == Some(egui::accesskit::Live::Polite)), "the result is announced");
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "button:dialogOk"), "it closes from a button");
+    // a panorama that left nothing out: the message only
+    h.app.ui.dialog = None;
+    crate::merge::finished(&mut h.app, &ctx, "Panorama", json!({"id": 10, "used": [1, 2], "omitted": []}));
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.dialog, None);
+    assert!(!h.painted_text().iter().any(|t| t.contains("Final-only.png")));
+}
+
 /// The merge dialog opens with the options of the last merge of its kind (per kind), and "with Last
 /// Settings" uses them; a kind never merged opens with the defaults.
 #[test]

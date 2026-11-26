@@ -116,6 +116,8 @@ pub struct MergeState {
     pub ids: Vec<PhotoId>,
     /// HDR for Each Bracket Set: the sets still to merge after the running one.
     pub batch: std::collections::VecDeque<Vec<PhotoId>>,
+    /// A finished panorama's list of omitted photos, waiting for the dialog open when it finished to close.
+    pub pending_result: Option<crate::state::Dialog>,
 }
 
 impl MergeState {
@@ -160,22 +162,28 @@ pub fn last_options(app: &LightcraftApp, command: &str) -> MergeDialog {
     MergeDialog { command: command.into(), ..saved.unwrap_or_default() }
 }
 
-/// Open the merge dialog for the selection, with the options of the last merge of this kind.
-pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
-    let ids = app.session.selected();
-    if ids.len() < 2 {
-        return Err("select at least 2 photos to merge".into());
-    }
+/// Set the photos the dialog merges. A preview of other photos is dropped and its task cancelled: the dialog compares
+/// a preview's options only, so it would go on describing the photos it was made from.
+fn set_ids(app: &mut LightcraftApp, ids: Vec<PhotoId>) {
     app.merge.ids = ids;
-    app.merge.error = None;
-    // a preview that failed before is tried again, or the dialog would show neither a preview nor its error (#2708)
-    app.merge.failed_options = None;
     app.merge.preview = None;
     app.merge.preview_pixels = None;
     app.merge.zoom = None;
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
+}
+
+/// Open the merge dialog for the selection, with the options of the last merge of this kind.
+pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
+    let ids = app.session.selected();
+    if ids.len() < 2 {
+        return Err("select at least 2 photos to merge".into());
+    }
+    set_ids(app, ids);
+    app.merge.error = None;
+    // a preview that failed before is tried again, or the dialog would show neither a preview nor its error (#2708)
+    app.merge.failed_options = None;
     app.ui.dialog = Some(crate::state::Dialog::Merge { opts: last_options(app, command) });
     Ok(json!({"photos": app.merge.ids.len()}))
 }
@@ -209,7 +217,7 @@ pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, Strin
     if ids.len() < 2 {
         return Err("select at least 2 photos to merge".into());
     }
-    app.merge.ids = ids;
+    set_ids(app, ids);
     let opts = last_options(app, command);
     start_final(app, &opts)
 }
@@ -234,7 +242,7 @@ pub fn start_batch(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
 /// Start the next bracket set of a batch, if any.
 fn next_in_batch(app: &mut LightcraftApp) -> Result<(), String> {
     let Some(ids) = app.merge.batch.pop_front() else { return Ok(()) };
-    app.merge.ids = ids;
+    set_ids(app, ids);
     let opts = last_options(app, "merge.hdr");
     start_final(app, &opts).map(|_| ())
 }
@@ -313,11 +321,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     "HDR"
                 });
                 match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
-                    Ok(v) => {
-                        let message = added_message(what, &v);
-                        app.merge.last_result = Some(v);
-                        app.toast(ctx, message);
-                    }
+                    Ok(v) => finished(app, ctx, what, v),
                     Err(_) if t.cancel.load(Ordering::Relaxed) => {
                         // cancelling one merge of a batch stops the batch
                         app.merge.batch.clear();
@@ -347,13 +351,47 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
         }
     }
+    // (never over a dialog the user has open: it waits until that one closes)
+    if app.ui.dialog.is_none()
+        && let Some(dialog) = app.merge.pending_result.take()
+    {
+        app.ui.dialog = Some(dialog);
+    }
+}
+
+/// A merge finished and was added (`what`: "Panorama", …; `info`: its result): say so, and when it left photos out,
+/// name them in a dialog that stays until closed (shown by [`poll`] once no other dialog is open).
+pub(crate) fn finished(app: &mut LightcraftApp, ctx: &egui::Context, what: &str, info: Value) {
+    let message = added_message(what, &info);
+    if let Some(dialog) = result_dialog(&message, &info) {
+        app.merge.pending_result = Some(dialog);
+    }
+    app.merge.last_result = Some(info);
+    app.toast(ctx, message);
+}
+
+/// The dialog that names the photos a finished panorama left out, from that result's own source paths (the
+/// preview registered smaller copies, so it can leave out other photos). `None` when it left none out.
+fn result_dialog(message: &str, info: &Value) -> Option<crate::state::Dialog> {
+    let omitted: Vec<String> = info["omitted"].as_array()?.iter().filter_map(|p| p["path"].as_str().map(str::to_string)).collect();
+    (!omitted.is_empty()).then(|| crate::state::Dialog::MergeResult { summary: message.to_string(), omitted })
+}
+
+/// The body of the result dialog: the completion message (a live region: the dialog opens when a background merge
+/// finishes, away from where the user is) and the omitted files' names.
+pub fn result_body(ui: &mut egui::Ui, summary: &str, omitted: &[String]) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let r = ui.add(egui::Label::new(egui::RichText::new(summary).strong().color(t.caution)).wrap());
+    ui.ctx().accesskit_node_builder(r.id, |node| node.set_live(egui::accesskit::Live::Polite));
+    ui.label(crate::i18n::tr("LightCraft could not align these photos with the included set, so the panorama leaves them out."));
+    omitted_names(ui, omitted.iter().map(String::as_str));
 }
 
 /// The message for a finished merge (`what`: "Panorama", …; `info`: its result): a panorama
 /// smaller than its photos' resolution says why (issue #1455).
 fn added_message(what: &str, info: &Value) -> String {
     let size = |k: &str| info[k].as_f64().map(|mp| format!("{mp:.0} MP"));
-    match (info["limit"].as_str(), size("megapixels"), size("nativeMegapixels")) {
+    let message = match (info["limit"].as_str(), size("megapixels"), size("nativeMegapixels")) {
         (Some("memory"), Some(mp), Some(full)) => crate::i18n::tr_format!(
             "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has",
             what = what,
@@ -367,7 +405,33 @@ fn added_message(what: &str, info: &Value) -> String {
             full = full
         ),
         _ => crate::i18n::tr_format!("{what} merge added", what = what),
-    }
+    };
+    if info["used"].is_array() && info["omitted"].is_array() { format!("{message}\n{}", inclusion_summary(info)) } else { message }
+}
+
+fn inclusion_summary(info: &Value) -> String {
+    let used = info["used"].as_array().map_or(0, Vec::len);
+    let omitted = info["omitted"].as_array().map_or(0, Vec::len);
+    crate::i18n::tr_format!("{used} of {total} photos included", used = used, total = used.saturating_add(omitted))
+}
+
+/// Names come from this result's source paths, not the current selection or an older preview.
+fn omitted_photos(ui: &mut egui::Ui, info: &Value) {
+    let Some(omitted) = info["omitted"].as_array().filter(|v| !v.is_empty()) else { return };
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(inclusion_summary(info)).strong().color(t.caution));
+    ui.label(crate::i18n::tr("LightCraft could not align these photos with the included set. Review the preview before merging."));
+    omitted_names(ui, omitted.iter().filter_map(|photo| photo["path"].as_str()));
+}
+
+/// The omitted photos' file names, scrolling past a few; each one's full path on hover.
+fn omitted_names<'a>(ui: &mut egui::Ui, paths: impl Iterator<Item = &'a str>) {
+    egui::ScrollArea::vertical().id_salt("merge-omitted").max_height(76.0).show(ui, |ui| {
+        for path in paths {
+            let name = std::path::Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path);
+            ui.add(egui::Label::new(name).wrap()).on_hover_text(path);
+        }
+    });
 }
 
 fn last_failed_matches(app: &LightcraftApp, opts: &MergeDialog) -> bool {
@@ -430,6 +494,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
     ui.horizontal_top(|ui| {
         // preview
         ui.vertical(|ui| {
+            ui.set_width(520.0);
             let box_size = egui::vec2(520.0, 360.0);
             let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::click_and_drag());
             ui.painter().rect_filled(rect, 4.0, t.canvas);
@@ -454,7 +519,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if let Some(e) = &app.merge.error {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, e, t.font(13.0), t.text);
             }
-            let info = app.merge.preview.as_ref().map(|p| p.3.clone());
+            // A previous preview may stay visible while the options change. Only describe
+            // inclusions once this preview is current and its replacement has finished.
+            let info = app.merge.preview.as_ref().filter(|p| p.2 == *opts && app.merge.preview_task.is_none()).map(|p| &p.3);
             if let Some(info) = info {
                 let txt = if opts.is_pano() {
                     crate::i18n::tr_format!(
@@ -470,6 +537,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     crate::i18n::tr_format!("{} photos · exposures {} EV", ev.len(), ev.join(" / "))
                 };
                 ui.label(egui::RichText::new(txt).color(t.text_dim));
+                if opts.is_pano() {
+                    omitted_photos(ui, info);
+                }
             }
         });
         ui.add_space(12.0);
@@ -596,6 +666,21 @@ mod tests {
         // a wide panorama is shorter than the box: centred up and down
         let (r, _) = preview_rect(area(), [1024, 120], 1.0, Some((0.9, 0.0)));
         assert!((r.center().y - area().center().y).abs() < 0.5 && r.left() < area().left() && r.right() >= area().right(), "{r:?}");
+    }
+
+    #[test]
+    fn completed_panorama_reports_its_actual_inclusion_count() {
+        for (what, used, omitted) in
+            [("Panorama", vec![71, 9], vec![401]), ("HDR panorama", vec![71, 9, 401, 3], vec![6, 12]), ("Panorama", vec![1, 2], vec![])]
+        {
+            let info = json!({"used": used, "omitted": omitted.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()});
+            let message = added_message(what, &info);
+            let mut lines = message.lines();
+            assert_eq!(lines.next(), Some(added_message(what, &Value::Null).as_str()));
+            let count = lines.next().expect("the completion message reports inclusion");
+            let numbers = count.split_whitespace().filter_map(|word| word.parse::<usize>().ok());
+            assert!(numbers.eq([used.len(), used.len() + omitted.len()]), "{count}");
+        }
     }
 
     /// Issue #1455: a panorama held to the computer's memory, or to the largest size, says so.

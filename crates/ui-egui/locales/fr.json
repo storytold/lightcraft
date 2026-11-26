@@ -1,4 +1,7 @@
 {
+  "Photo Merge Result": "Résultat de la fusion de photos",
+  "LightCraft could not align these photos with the included set, so the panorama leaves them out.": "LightCraft n'a pas pu aligner ces photos sur celles incluses : le panorama les laisse de côté.",
+  "LightCraft could not align these photos with the included set. Review the preview before merging.": "LightCraft n'a pas pu aligner ces photos avec les photos incluses. Vérifiez l'aperçu avant de fusionner.",
   "  (library default)": "  (valeur par défaut de la bibliothèque)",
   " (inverted)": " (inversée)",
   " · best of its burst": " · la meilleure de sa rafale",

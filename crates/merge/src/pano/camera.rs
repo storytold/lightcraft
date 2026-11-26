@@ -58,37 +58,104 @@ pub struct PairMatch {
     pub levels: Vec<u8>,
 }
 
+/// Why a pair did or did not pass registration verification. This is not a scene diagnosis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PairStatus {
+    InsufficientMatches,
+    NoModel,
+    Rejected,
+    Accepted,
+}
+
+/// Verification measurements at the working resolution (long edge at most 1000 pixels).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PairDiagnostic {
+    pub i: usize,
+    pub j: usize,
+    pub matches: usize,
+    /// Unknown when RANSAC could not return a model with at least 12 inliers.
+    pub inliers: Option<usize>,
+    pub status: PairStatus,
+}
+
+/// Maximum pair records returned with a stitch. Full measurements are available in debug logs.
+pub const MAX_PAIR_DIAGNOSTICS: usize = 1024;
+
+/// Generate pairs lazily so comparing frames with no usable features needs no quadratic storage.
+fn input_pairs(n: usize) -> impl ParallelIterator<Item = (usize, usize)> {
+    (0..n).into_par_iter().flat_map_iter(move |i| ((i + 1)..n).map(move |j| (i, j)))
+}
+
 /// Match every pair of images. `feats[k]` are in work coordinates scaled by `scales[k]`.
 pub fn match_pairs(feats: &[Features], scales: &[f64]) -> Vec<PairMatch> {
+    let mut pairs: Vec<_> = input_pairs(feats.len()).filter_map(|(i, j)| match_pair(feats, scales, i, j, |_, _, _| {})).collect();
+    pairs.sort_unstable_by_key(|p| (p.i, p.j));
+    pairs
+}
+
+/// As [`match_pairs`], with measurements for the first [`MAX_PAIR_DIAGNOSTICS`] pairs in input
+/// order. All comparisons still run and any additional outcomes appear only in the debug log.
+pub fn match_pairs_with_diagnostics(feats: &[Features], scales: &[f64]) -> (Vec<PairMatch>, Vec<PairDiagnostic>) {
     let n = feats.len();
-    // the pairs are generated lazily: materialising all n(n−1)/2 up front is quadratic memory, including
-    // when every comparison comes up empty (no usable features)
-    let mut out: Vec<PairMatch> = (0..n)
-        .into_par_iter()
-        .flat_map_iter(|i| ((i + 1)..n).map(move |j| (i, j)))
-        .filter_map(|(i, j)| {
-            let m = features::match_features(&feats[i], &feats[j], 0.8);
-            if m.len() < 12 {
-                return None;
-            }
-            let a: Vec<Point> = m.iter().map(|(p, _)| Point::new(feats[i].points[*p].x as f64, feats[i].points[*p].y as f64)).collect();
-            let b: Vec<Point> = m.iter().map(|(_, q)| Point::new(feats[j].points[*q].x as f64, feats[j].points[*q].y as f64)).collect();
-            let fit = ransac::ransac(Model::Homography, &a, &b, 3.0, 12, (i * 1000 + j) as u64)?;
-            // Brown & Lowe's probabilistic verification
-            if (fit.inliers.len() as f64) <= 8.0 + 0.3 * m.len() as f64 {
-                return None;
-            }
-            let (si, sj) = (scales[i], scales[j]);
-            let pts = fit.inliers.iter().map(|&k| (Point::new(a[k].x / si, a[k].y / si), Point::new(b[k].x / sj, b[k].y / sj))).collect();
-            let levels = fit.inliers.iter().map(|&k| feats[i].points[m[k].0].level.max(feats[j].points[m[k].1].level)).collect();
-            // conjugate to full resolution: H_full = S_j⁻¹ · H · S_i
-            let s_i = Homography([si, 0.0, 0.0, 0.0, si, 0.0, 0.0, 0.0, 1.0]);
-            let s_j_inv = Homography([1.0 / sj, 0.0, 0.0, 0.0, 1.0 / sj, 0.0, 0.0, 0.0, 1.0]);
-            Some(PairMatch { i, j, h: s_j_inv.mul(&fit.h).mul(&s_i), pts, levels })
-        })
-        .collect();
-    out.sort_by_key(|p| (p.i, p.j));
-    out
+    let (mut pairs, mut diagnostics) = input_pairs(n)
+        .fold(
+            || (Vec::new(), Vec::new()),
+            |(mut pairs, mut diagnostics), (i, j)| {
+                pairs.extend(match_pair(feats, scales, i, j, |matches, inliers, status| {
+                    log::debug!("panorama pair {i}-{j}: matches={matches}, inliers={inliers:?}, status={status:?}");
+                    // The preceding rows have n-1, n-2, …, n-i pairs. A row with
+                    // i >= the cap cannot contribute because each preceding row has a pair.
+                    if i < MAX_PAIR_DIAGNOSTICS {
+                        let preceding = i.saturating_mul(n - 1).saturating_sub(i * i.saturating_sub(1) / 2);
+                        if preceding.saturating_add(j - i - 1) < MAX_PAIR_DIAGNOSTICS {
+                            diagnostics.push(PairDiagnostic { i, j, matches, inliers, status });
+                        }
+                    }
+                }));
+                (pairs, diagnostics)
+            },
+        )
+        .reduce(
+            || (Vec::new(), Vec::new()),
+            |(mut pairs, mut diagnostics), (right_pairs, right_diagnostics)| {
+                pairs.extend(right_pairs);
+                diagnostics.extend(right_diagnostics);
+                (pairs, diagnostics)
+            },
+        );
+    pairs.sort_unstable_by_key(|p| (p.i, p.j));
+    diagnostics.sort_unstable_by_key(|d| (d.i, d.j));
+    (pairs, diagnostics)
+}
+
+fn match_pair(feats: &[Features], scales: &[f64], i: usize, j: usize, report: impl FnOnce(usize, Option<usize>, PairStatus)) -> Option<PairMatch> {
+    let m = features::match_features(&feats[i], &feats[j], 0.8);
+    if m.len() < 12 {
+        report(m.len(), None, PairStatus::InsufficientMatches);
+        return None;
+    }
+    let a: Vec<Point> = m.iter().map(|(p, _)| Point::new(feats[i].points[*p].x as f64, feats[i].points[*p].y as f64)).collect();
+    let b: Vec<Point> = m.iter().map(|(_, q)| Point::new(feats[j].points[*q].x as f64, feats[j].points[*q].y as f64)).collect();
+    let Some(fit) = ransac::ransac(Model::Homography, &a, &b, 3.0, 12, (i * 1000 + j) as u64) else {
+        report(m.len(), None, PairStatus::NoModel);
+        return None;
+    };
+    let inliers = fit.inliers.len();
+    // Brown & Lowe's probabilistic verification. Issue #1765 demonstrates false
+    // negatives here, but lowering only the slope also admits coherent wrong matches.
+    if (inliers as f64) <= 8.0 + 0.3 * m.len() as f64 {
+        report(m.len(), Some(inliers), PairStatus::Rejected);
+        return None;
+    }
+    report(m.len(), Some(inliers), PairStatus::Accepted);
+    let (si, sj) = (scales[i], scales[j]);
+    let pts = fit.inliers.iter().map(|&k| (Point::new(a[k].x / si, a[k].y / si), Point::new(b[k].x / sj, b[k].y / sj))).collect();
+    let levels = fit.inliers.iter().map(|&k| feats[i].points[m[k].0].level.max(feats[j].points[m[k].1].level)).collect();
+    // conjugate to full resolution: H_full = S_j⁻¹ · H · S_i
+    let s_i = Homography([si, 0.0, 0.0, 0.0, si, 0.0, 0.0, 0.0, 1.0]);
+    let s_j_inv = Homography([1.0 / sj, 0.0, 0.0, 0.0, 1.0 / sj, 0.0, 0.0, 0.0, 1.0]);
+    Some(PairMatch { i, j, h: s_j_inv.mul(&fit.h).mul(&s_i), pts, levels })
 }
 
 /// The largest connected component of the match graph (sorted image indices).

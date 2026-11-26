@@ -1,4 +1,7 @@
 {
+  "Photo Merge Result": "Результат объединения фото",
+  "LightCraft could not align these photos with the included set, so the panorama leaves them out.": "LightCraft не удалось совместить эти фото с остальными, поэтому панорама их не включает.",
+  "LightCraft could not align these photos with the included set. Review the preview before merging.": "LightCraft не удалось выровнять эти фотографии с включёнными. Проверьте предпросмотр перед объединением.",
   "+ Group": "+ Группа",
   "+ Rule": "+ Условие",
   "0: nothing is rejected.": "0: ничего не отклоняется.",

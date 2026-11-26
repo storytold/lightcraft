@@ -1,4 +1,7 @@
 {
+  "Photo Merge Result": "Výsledek sloučení fotografií",
+  "LightCraft could not align these photos with the included set, so the panorama leaves them out.": "LightCraft nedokázal tyto fotografie zarovnat s ostatními, proto je panorama vynechává.",
+  "LightCraft could not align these photos with the included set. Review the preview before merging.": "LightCraft nedokázal tyto fotografie zarovnat se zahrnutou sadou. Před sloučením zkontrolujte náhled.",
   "  (library default)": "  (výchozí nastavení knihovny)",
   " (inverted)": " (invertováno)",
   " · best of its burst": " · nejlepší ze série",
