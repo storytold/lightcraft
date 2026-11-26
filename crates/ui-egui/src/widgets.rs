@@ -417,7 +417,11 @@ const THUMB_RING: f32 = 7.0;
 /// Double-click the label or thumb to reset (hovering either says so). Shift-drag = fine adjustment.
 /// Scroll sideways over it to nudge it. Click the value to type one: Return or clicking away applies it,
 /// Esc keeps the old one. Drag the value sideways to scrub it, as if dragging the thumb (Shift: a tenth
-/// as far).
+/// as far). Tab, a click or a drag selects it, and the selected slider is outlined.
+///
+/// By keyboard: Tab and Shift+Tab move from slider to slider (the name and value are no stops of their own), Return
+/// on the selected slider types a value, and Tab or Shift+Tab while typing applies it and types into the next or
+/// previous slider's value (`slider_chain`); Return or Esc there goes back to the slider.
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -429,14 +433,24 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
     let id = ui.scope_id().with(spec.id);
     let g = SliderLayout { spec, value, enabled, id, track_rect, value_rect };
+    if enabled {
+        slider_chain::push(ui.ctx(), id);
+    }
+    // Return on the selected slider types a value, as a click on its value does; taken before the
+    // track would read it as a click
+    let return_types = enabled
+        && ui.memory(|m| m.has_focus(id))
+        && ui.data(|m| m.get_temp::<Draft>(g.typing_id()).is_none())
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
     let (wheel_armed, pointer_in_row) = update_wheel_arming(ui, id, &resp, row, enabled);
     // screen readers: a slider named after its control, with its value
     let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
     resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label_text.clone()));
     describe_slider(ui, &g, &resp);
-    // the name: double-click it to reset, as the thumb (a disabled slider's name is only text)
-    let label_resp = ui.interact(label_rect, id.with("label"), if enabled { Sense::click() } else { Sense::hover() });
+    // the name: double-click it to reset, as the thumb (a disabled slider's name is only text). No
+    // Tab stop: Tab goes from slider to slider
+    let label_resp = ui.interact(label_rect, id.with("label"), if enabled { Sense::CLICK } else { Sense::hover() });
     // say how to reset (issue #1436: the double-click was hard to discover), as the curve channels do
     let reset_hint = crate::i18n::tr_format!("{name} — double-click to reset it", name = label_text);
     let label_resp = if enabled { label_resp.on_hover_text(reset_hint.as_str()) } else { label_resp };
@@ -444,8 +458,8 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     register(ui, format!("sliderLabel:{}", spec.id), label_rect);
     register(ui, format!("slider:{}", spec.id), track_rect);
     // the value: click it to type an exact one, drag it sideways to scrub (over the label, so it
-    // takes the click)
-    let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click_and_drag() } else { Sense::hover() });
+    // takes the click). No Tab stop either: Return on the slider types a value
+    let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::CLICK | Sense::DRAG } else { Sense::hover() });
     // the name is short ("Exposure value"); how to use it is the description the hover text below gives
     crate::widgets::announce(&value_resp, crate::i18n::tr_format!("{name} value", name = label_text.clone()));
     register(ui, format!("sliderValue:{}", spec.id), value_rect);
@@ -461,6 +475,12 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         ui.data_mut(|m| m.remove::<f64>(g.scrub_id()));
     }
     update_typing_gesture(ui, &g, &value_resp, &mut typing);
+    // typing by keyboard: Return on the slider, or Tab from the value typed into its neighbour
+    if enabled && typing.is_none() && scrub.is_none() && (return_types || slider_chain::take_target(ui.ctx(), id)) {
+        typing = Some(g.draft(false));
+        ui.data_mut(|m| m.insert_temp(g.by_keyboard_id(), true));
+        ui.scroll_to_rect(row, None);
+    }
     let mut out = SliderOut::default();
     // the thumb: a click there doesn't move the value, and resting on it says how to reset (the rest
     // of the track, which is clicked and dragged, gets no tooltip)
@@ -470,7 +490,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     if let Some(pos) = scrub {
         scrub_value(ui, &g, &value_resp, pos, scrub_started, &mut out);
     } else if let Some(draft) = typing.take() {
-        typing = edit_value(ui, &t, &g, draft, &mut out);
+        typing = edit_value(ui, &t, &g, &label_text, draft, &mut out);
     } else if resp.double_clicked() || label_resp.double_clicked() {
         out.reset = true;
         out.value = Some(spec.default);
@@ -509,6 +529,12 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
+    // the selected slider (by Tab, a click or a drag) is outlined, name, value and track, so the
+    // keyboard focus shows where ↑ and ↓ act; so is the one whose value is typed, which Tab moves on
+    if enabled && (resp.has_focus() || typing.is_some()) {
+        let outline = Rect::from_min_max(pos2(label_rect.left() - 10.0, row.top() + 1.0), pos2(label_rect.right() + 10.0, row.bottom() - 1.0));
+        focus_ring(ui.painter(), outline, &t);
+    }
     out
 }
 
@@ -535,6 +561,17 @@ impl SliderLayout<'_> {
 
     fn scrub_id(&self) -> egui::Id {
         self.id.with("scrub-pos")
+    }
+
+    /// Set while a value opened by keyboard (Return, or Tab from a neighbour) is typed: ending it with Return or Esc
+    /// gives the focus back to the slider, so Tab goes on from there.
+    fn by_keyboard_id(&self) -> egui::Id {
+        self.id.with("typing-by-keyboard")
+    }
+
+    /// A new edit of the value, starting from the one shown; `pressed` while the press that opened it is down.
+    fn draft(&self, pressed: bool) -> Draft {
+        (shown_value(self.spec, self.value).trim_start_matches('+').to_string(), 0, pressed)
     }
 
     /// The text field a value is typed in.
@@ -624,7 +661,7 @@ fn update_typing_gesture(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, t
     let value_pressed = value_resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
     // Focus on the owned primary press before fast typing; retain the readout's click activation.
     if g.enabled && typing.is_none() && (value_resp.clicked() || value_pressed) {
-        *typing = Some((shown_value(g.spec, g.value).trim_start_matches('+').to_string(), 0, value_pressed));
+        *typing = Some(g.draft(value_pressed));
     }
     let value_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
     // A release over the value keeps the field the press opened, however long the button was held
@@ -660,8 +697,16 @@ fn scrub_value(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, mut pos: f6
 }
 
 /// The text field over the readout while a value is typed. Returns the draft to keep, if the edit goes on.
-fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, draft: Draft, out: &mut SliderOut) -> Option<Draft> {
+fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, name: &str, draft: Draft, out: &mut SliderOut) -> Option<Draft> {
     let (mut text, frames, pressed) = draft;
+    // Tab / Shift+Tab with a slider beyond: the key is kept from egui's focus walk (which would
+    // take the focus to the next widget, this slider's track or a section header) before the field
+    // can hand the focus on, and the value typed so far, this frame's keys included, is applied below
+    let tab_to = slider_chain::tab(ui).and_then(|backward| slider_chain::neighbour(ui.ctx(), g.id, backward).map(|to| (to, backward)));
+    if let Some((_, backward)) = tab_to {
+        ui.input_mut(|i| i.consume_key(if backward { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }, egui::Key::Tab));
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     // Keep the owned opening release focused without restarting its draft or selection.
     // egui gives that release's click to the readout, so the field under it gives up the focus
     // whatever frame it lands on (issue #1362): the field takes it back after drawing too.
@@ -681,7 +726,21 @@ fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, draft: Draft, out: &mut
         .margin(egui::Margin::ZERO)
         .select_on_focus(true)
         .begin_edit(frames == 0)
+        // what a screen reader says as the focus lands here, by Tab from the neighbour too
+        .label(crate::i18n::tr_format!("{name} value", name = name))
         .show(&mut child);
+    if let Some((to, _)) = tab_to {
+        if let Some(nv) = typed_value(g.spec, &text).filter(|nv| g.enabled && g.differs(*nv)) {
+            g.set_whole(out, nv);
+        }
+        ui.memory_mut(|m| m.surrender_focus(g.field_id()));
+        ui.data_mut(|m| {
+            m.remove::<Draft>(g.typing_id());
+            m.remove::<bool>(g.by_keyboard_id());
+        });
+        slider_chain::set_target(ui.ctx(), to);
+        return None;
+    }
     if (frames < 2 || opening_release) && !matches!(field.ending, Some(crate::text_field::Ending::Return | crate::text_field::Ending::Escape)) {
         field.response.request_focus();
         let draft = (text, frames.saturating_add(1), pressed);
@@ -696,6 +755,14 @@ fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, draft: Draft, out: &mut
         }
         if let Some(nv) = typed_value(g.spec, &text).filter(|nv| !cancelled && g.differs(*nv)) {
             g.set_whole(out, nv);
+        }
+        // a value opened by keyboard and ended by keyboard goes back to its slider, so Tab and the
+        // arrow keys carry on from there (a click elsewhere keeps the focus it gave)
+        let by_keyboard = ui.data_mut(|m| m.remove_temp::<bool>(g.by_keyboard_id())).unwrap_or(false);
+        if by_keyboard && g.enabled && matches!(field.ending, Some(crate::text_field::Ending::Return | crate::text_field::Ending::Escape)) {
+            // selected as Tab selects it (egui counts the focus as held last frame, so no `gained_focus` follows)
+            ui.memory_mut(|m| m.request_focus(g.id));
+            ui.data_mut(|d| d.insert_temp(focused_slider_key(), g.id));
         }
         ui.data_mut(|m| m.remove::<Draft>(g.typing_id()));
         return None;
@@ -1416,4 +1483,83 @@ fn wheel_slider_key() -> egui::Id {
 pub fn slider_has_focus(ctx: &egui::Context) -> bool {
     let focused = ctx.memory(|m| m.focused());
     focused.is_some() && focused == ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_key()))
+}
+
+/// The order Tab takes from one slider's typed value to the next: every enabled slider drawn in a pass, in drawing
+/// order (top to bottom; a collapsed section draws none). A slider asks for its neighbour from the last complete
+/// pass, since the ones below it are not drawn yet when Tab is pressed in its value.
+mod slider_chain {
+    use egui::{Context, Id, Key, Ui};
+
+    #[derive(Clone, Default)]
+    struct Chain {
+        pass: u64,
+        this: Vec<Id>,
+        last: Vec<Id>,
+    }
+
+    fn chain_key() -> Id {
+        Id::unique("lightcraft-slider-chain")
+    }
+
+    /// The slider whose value Tab opens next, and the pass it was asked in.
+    fn target_key() -> Id {
+        Id::unique("lightcraft-slider-tab-target")
+    }
+
+    /// Add a slider drawn in this pass.
+    pub(super) fn push(ctx: &Context, id: Id) {
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| {
+            let chain = d.get_temp_mut_or_default::<Chain>(chain_key());
+            if chain.pass != pass {
+                // only the pass just before is complete and current: after passes without sliders, start over
+                let this = std::mem::take(&mut chain.this);
+                chain.last = if chain.pass.checked_add(1) == Some(pass) { this } else { Vec::new() };
+                chain.pass = pass;
+            }
+            chain.this.push(id);
+        });
+    }
+
+    /// The slider after (or with `backward`, before) `id`.
+    pub(super) fn neighbour(ctx: &Context, id: Id, backward: bool) -> Option<Id> {
+        ctx.data(|d| {
+            let chain = d.get_temp::<Chain>(chain_key())?;
+            let list = if chain.last.contains(&id) { &chain.last } else { &chain.this };
+            let at = list.iter().position(|s| *s == id)?;
+            if backward { at.checked_sub(1).and_then(|i| list.get(i)) } else { list.get(at + 1) }.copied()
+        })
+    }
+
+    /// Tab (`Some(false)`) or Shift+Tab (`Some(true)`) pressed this frame.
+    pub(super) fn tab(ui: &Ui) -> Option<bool> {
+        ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key: Key::Tab, pressed: true, modifiers, .. } if modifiers.is_none() => Some(false),
+                egui::Event::Key { key: Key::Tab, pressed: true, modifiers, .. } if modifiers.shift_only() => Some(true),
+                _ => None,
+            })
+        })
+    }
+
+    /// Have `id` open its value for typing when it is next drawn (this pass if it comes later, else the next one).
+    pub(super) fn set_target(ctx: &Context, id: Id) {
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| d.insert_temp(target_key(), (id, pass)));
+        ctx.request_repaint();
+    }
+
+    /// Whether `id` is to open its value now. A target not drawn within a pass (its section closed) lapses.
+    pub(super) fn take_target(ctx: &Context, id: Id) -> bool {
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| {
+            let Some((target, asked)) = d.get_temp::<(Id, u64)>(target_key()) else { return false };
+            let current = pass.saturating_sub(asked) <= 1;
+            if target == id || !current {
+                d.remove::<(Id, u64)>(target_key());
+            }
+            target == id && current
+        })
+    }
 }

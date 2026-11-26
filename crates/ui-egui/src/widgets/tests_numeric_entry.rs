@@ -341,3 +341,225 @@ fn leaving_and_returning_within_one_frame_still_disarms_the_wheel() {
         assert_eq!(h.value, selected, "the pointer left the row between two frames ({away:?})");
     }
 }
+
+/// Two sliders between buttons on either side, as the develop panel sits between the photo and the window edge.
+struct Panel {
+    view: HeadlessView,
+    specs: [ControlSpec; 2],
+    time: f64,
+}
+impl Panel {
+    fn new() -> Self {
+        let specs = [*controls::find("light.exposure").unwrap(), *controls::find("light.contrast").unwrap()];
+        let mut p = Self { view: HeadlessView::new(), specs, time: 0.0 };
+        for _ in 0..3 {
+            p.frame(vec![]);
+        }
+        p
+    }
+    fn frame(&mut self, events: Vec<Event>) {
+        self.time += 0.02;
+        let specs = &self.specs;
+        self.view.run(HeadlessView::raw_input(vec2(400.0, 200.0), 1.0, self.time, events), |ui| {
+            let full = ui.max_rect();
+            ui.put(Rect::from_min_size(egui::pos2(full.left(), full.top() + 20.0), vec2(40.0, 20.0)), egui::Button::new("left"));
+            ui.put(Rect::from_min_size(egui::pos2(full.right() - 40.0, full.top() + 20.0), vec2(40.0, 20.0)), egui::Button::new("right"));
+            let column = Rect::from_min_max(egui::pos2(full.left() + 60.0, full.top()), egui::pos2(full.right() - 60.0, full.bottom()));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(column));
+            for spec in specs {
+                slider(&mut child, spec, spec.default, true, None);
+            }
+        });
+    }
+    fn tab(&mut self) {
+        self.frame(vec![Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        self.frame(vec![]);
+    }
+    /// Whether a focus ring is painted around each slider's track, in order.
+    fn outlined(&self) -> Vec<bool> {
+        let registry = take_registry(&self.view.ctx);
+        let stroke = crate::widgets::focus_stroke(&crate::theme::Tokens::get(&self.view.ctx));
+        let shapes = self.view.painted_shapes();
+        self.specs
+            .iter()
+            .map(|spec| {
+                let track = registry.iter().find(|(id, _)| id == &format!("slider:{}", spec.id)).map(|(_, r)| *r);
+                track.is_some_and(|track| {
+                    shapes.iter().any(|s| matches!(s, egui::epaint::Shape::Rect(r) if r.stroke == stroke && r.rect.contains_rect(track)))
+                })
+            })
+            .collect()
+    }
+}
+
+/// The slider Tab selects is outlined, so a keyboard user sees which one ↑ and ↓ will move; the outline follows
+/// the focus to the next slider and goes when the focus leaves.
+#[test]
+fn a_tab_selected_slider_is_outlined() {
+    let mut p = Panel::new();
+    assert_eq!(p.outlined(), [false, false], "nothing is outlined before Tab");
+    let mut walk = Vec::new();
+    for _ in 0..12 {
+        p.tab();
+        let outlined = p.outlined();
+        walk.push((super::slider_has_focus(&p.view.ctx), outlined[0], outlined[1]));
+    }
+    let exposure = walk.iter().position(|(slider, ..)| *slider).expect("Tab reaches a slider");
+    assert_eq!(walk[exposure], (true, true, false), "the first slider Tab reaches is outlined, and only it: {walk:?}");
+    let contrast = exposure + 1 + walk[exposure + 1..].iter().position(|(slider, ..)| *slider).expect("Tab reaches the second slider");
+    assert_eq!(walk[contrast], (true, false, true), "the outline moves to the next slider: {walk:?}");
+    assert!(walk[exposure + 1..contrast].iter().all(|(_, e, c)| !e && !c), "and nothing is outlined between them: {walk:?}");
+}
+
+/// Light-panel sliders between buttons, each with its value kept as the panel would keep it.
+struct Column {
+    view: HeadlessView,
+    specs: Vec<ControlSpec>,
+    enabled: Vec<bool>,
+    values: Vec<f64>,
+    time: f64,
+    registry: Vec<(String, Rect)>,
+}
+impl Column {
+    fn new(ids: &[&str], enabled: &[bool]) -> Self {
+        let specs: Vec<ControlSpec> = ids.iter().map(|id| *controls::find(id).unwrap()).collect();
+        let values = specs.iter().map(|s| s.default).collect();
+        let mut c = Self { view: HeadlessView::new(), specs, enabled: enabled.to_vec(), values, time: 0.0, registry: Vec::new() };
+        for _ in 0..3 {
+            c.frame(vec![]);
+        }
+        c
+    }
+    fn frame(&mut self, events: Vec<Event>) {
+        self.time += 0.02;
+        let mut outs = vec![None; self.specs.len()];
+        let (specs, values, enabled) = (&self.specs, &self.values, &self.enabled);
+        self.view.run(HeadlessView::raw_input(vec2(400.0, 300.0), 1.0, self.time, events), |ui| {
+            let full = ui.max_rect();
+            ui.put(Rect::from_min_size(egui::pos2(full.left(), full.top() + 20.0), vec2(40.0, 20.0)), egui::Button::new("left"));
+            let column = Rect::from_min_max(egui::pos2(full.left() + 60.0, full.top()), egui::pos2(full.right() - 60.0, full.bottom()));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(column));
+            for (i, spec) in specs.iter().enumerate() {
+                outs[i] = slider(&mut child, spec, values[i], enabled[i], None).value;
+            }
+            ui.put(Rect::from_min_size(egui::pos2(full.right() - 40.0, full.bottom() - 30.0), vec2(40.0, 20.0)), egui::Button::new("after"));
+        });
+        self.registry = take_registry(&self.view.ctx);
+        for (v, out) in self.values.iter_mut().zip(outs) {
+            *v = out.unwrap_or(*v);
+        }
+    }
+    fn settle(&mut self) {
+        for _ in 0..3 {
+            self.frame(vec![]);
+        }
+    }
+    fn key(&mut self, key: Key, modifiers: Modifiers) {
+        self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]);
+        self.settle();
+    }
+    fn type_text(&mut self, text: &str) {
+        self.frame(vec![Event::Text(text.into())]);
+        self.settle();
+    }
+    fn click_value(&mut self, id: &str) {
+        let pos = self.registry.iter().find(|(w, _)| w == &format!("sliderValue:{id}")).map(|(_, r)| r.center()).unwrap();
+        self.frame(vec![Event::PointerMoved(pos)]);
+        self.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        self.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        self.settle();
+    }
+    /// The slider whose value is being typed, if any.
+    fn typing(&self) -> Option<&'static str> {
+        let focused = self.view.ctx.memory(|m| m.focused())?;
+        self.specs.iter().find(|s| crate::text_field::id(&format!("sliderField:{}", s.id)) == focused).map(|s| s.id)
+    }
+    fn value(&self, id: &str) -> f64 {
+        self.values[self.specs.iter().position(|s| s.id == id).unwrap()]
+    }
+    /// The sliders with a focus ring painted around their track.
+    fn outlined(&self) -> Vec<&'static str> {
+        let stroke = crate::widgets::focus_stroke(&crate::theme::Tokens::get(&self.view.ctx));
+        let shapes = self.view.painted_shapes();
+        let track = |id: &str| self.registry.iter().find(|(w, _)| w == &format!("slider:{id}")).map(|(_, r)| *r);
+        self.specs
+            .iter()
+            .filter(|s| {
+                track(s.id).is_some_and(|t| {
+                    shapes.iter().any(|sh| matches!(sh, egui::epaint::Shape::Rect(r) if r.stroke == stroke && r.rect.contains_rect(t)))
+                })
+            })
+            .map(|s| s.id)
+            .collect()
+    }
+}
+
+/// Typing a value and pressing Tab applies it and types into the next slider's value, skipping a slider that is
+/// off; Shift+Tab goes back; Return applies the last and leaves its slider selected.
+#[test]
+fn tab_in_a_typed_value_types_into_the_next_slider() {
+    let mut c = Column::new(&["light.exposure", "light.contrast", "light.highlights", "light.shadows"], &[true, false, true, true]);
+    c.click_value("light.exposure");
+    assert_eq!(c.typing(), Some("light.exposure"));
+    c.type_text("1");
+    c.key(Key::Tab, Modifiers::NONE);
+    assert_eq!(c.value("light.exposure"), 1.0, "Tab applies the value typed");
+    assert_eq!(c.typing(), Some("light.highlights"), "and types into the next slider that is on");
+    assert_eq!(c.outlined(), ["light.highlights"], "which is outlined, and only it");
+    c.type_text("-30");
+    c.key(Key::Tab, Modifiers::NONE);
+    assert_eq!(c.typing(), Some("light.shadows"));
+    c.type_text("25");
+    c.key(Key::Tab, Modifiers::SHIFT);
+    assert_eq!((c.value("light.highlights"), c.value("light.shadows")), (-30.0, 25.0));
+    assert_eq!(c.typing(), Some("light.highlights"), "Shift+Tab goes back");
+    c.type_text("-40");
+    c.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(c.value("light.highlights"), -40.0);
+    assert_eq!(c.typing(), None, "Return ends the typing");
+    assert!(super::slider_has_focus(&c.view.ctx), "and leaves the slider selected, so Tab carries on from it");
+    assert_eq!(c.value("light.contrast"), 0.0, "the slider that is off is never typed into");
+}
+
+/// From the last slider's value Tab leaves the sliders as it does any field: the value is applied and the focus
+/// goes to the next control.
+#[test]
+fn tab_from_the_last_value_applies_it_and_moves_on() {
+    let mut c = Column::new(&["light.exposure", "light.contrast"], &[true, true]);
+    c.click_value("light.contrast");
+    c.type_text("12");
+    c.key(Key::Tab, Modifiers::NONE);
+    assert_eq!(c.value("light.contrast"), 12.0);
+    assert_eq!(c.typing(), None);
+    assert!(!super::slider_has_focus(&c.view.ctx), "the focus moves past the sliders");
+}
+
+/// Tab goes from slider to slider (a slider's name and value are no stops of their own), and Return on the selected
+/// slider types a value, which Esc leaves unchanged.
+#[test]
+fn tab_goes_slider_to_slider_and_return_types_a_value() {
+    let mut c = Column::new(&["light.exposure", "light.contrast", "light.highlights"], &[true, true, true]);
+    let mut stops = Vec::new();
+    for _ in 0..6 {
+        c.key(Key::Tab, Modifiers::NONE);
+        stops.push((c.view.ctx.memory(|m| m.focused()), super::slider_has_focus(&c.view.ctx)));
+    }
+    let first = stops.iter().position(|(_, slider)| *slider).expect("Tab reaches a slider");
+    assert!(stops[first..first + 3].iter().all(|(_, slider)| *slider), "three Tabs, three sliders: {stops:?}");
+    assert_eq!(stops[first + 1..first + 3].iter().map(|(f, _)| *f).collect::<std::collections::HashSet<_>>().len(), 2);
+    // back to the middle slider, then Return
+    c.key(Key::Tab, Modifiers::SHIFT);
+    while !super::slider_has_focus(&c.view.ctx) || c.view.ctx.memory(|m| m.focused()) != stops[first + 1].0 {
+        c.key(Key::Tab, Modifiers::SHIFT);
+    }
+    c.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(c.typing(), Some("light.contrast"), "Return on the selected slider types its value");
+    c.type_text("40");
+    c.key(Key::Escape, Modifiers::NONE);
+    assert_eq!((c.typing(), c.value("light.contrast")), (None, 0.0), "Esc keeps the old value");
+    assert!(super::slider_has_focus(&c.view.ctx), "and goes back to the slider");
+    c.key(Key::Enter, Modifiers::NONE);
+    c.type_text("40");
+    c.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(c.value("light.contrast"), 40.0, "Return applies it");
+}

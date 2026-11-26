@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Type slider values without the mouse
+- While typing a Develop slider's value, Tab applies it and moves on to type the next slider's value (Shift+Tab goes
+  back), so you can type Exposure, Contrast, Highlights and the rest in a row. Sliders that are off, and those in
+  closed sections, are skipped, and the slider being typed is outlined.
+- Return on a selected slider types its value; Return or Esc goes back to the slider. Tab now goes from slider to
+  slider, without stopping on each slider's name and value.
+
+### The selected slider is outlined
+- A Develop slider selected with Tab, a click or a drag now has an outline around its name, value and track, so you
+  can see which slider the Up and Down arrow keys will change.
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
