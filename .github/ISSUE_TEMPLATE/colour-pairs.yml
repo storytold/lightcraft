@@ -1,0 +1,48 @@
+name: Share colour pairs for a camera profile
+description: Contribute a pairs file from `lightcraft-cli calibrate --pairs` so a built-in camera profile can be fitted on more photographers' photos.
+title: "Colour pairs: <camera model>"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Make the file with `lightcraft-cli calibrate --pairs <model>-pairs.json "<your photo folders>"`. It holds aggregate colour numbers only: no images, file names, GPS, serial numbers or dates (see `docs/camera-preview-colour.md`, "Sharing colour pairs"). Zip it, then drag the zip into the box below.
+  - type: input
+    id: model
+    attributes:
+      label: Camera model
+      description: As LightCraft shows it, for example ILCE-7CR.
+    validations:
+      required: true
+  - type: input
+    id: photos
+    attributes:
+      label: Number of photos
+      description: The count `calibrate --pairs` printed.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LightCraft version
+      description: From `lightcraft-cli --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: style
+    attributes:
+      label: Picture style (optional)
+      description: The creative style, picture control or film simulation you mostly shot with, and Sony DRO settings if you know them.
+  - type: textarea
+    id: file
+    attributes:
+      label: Pairs file
+      description: Drag the zipped pairs file here.
+    validations:
+      required: true
+  - type: checkboxes
+    id: licence
+    attributes:
+      label: Licence
+      options:
+        - label: I took these photos and I release this pairs file under CC0 1.0 (public domain dedication).
+          required: true
