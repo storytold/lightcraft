@@ -2029,12 +2029,10 @@ fn settings_past_the_decode_budget_are_left_out_with_one_warning() {
     let rows = reader.table_within("Adobe_libraryImageDevelopHistoryStep", true, 1 << 20, &mut warnings).unwrap();
     assert_eq!(rows.len(), 4, "every step is still read");
     assert_eq!(rows.iter().filter(|r| r.contains_key("text")).count(), 2, "the two steps within 1 MiB keep their settings");
-    assert_eq!(
-        warnings,
-        ["2 history steps archived without their settings: more than 1 MiB of settings in Adobe_libraryImageDevelopHistoryStep"]
-    );
+    assert_eq!(warnings, ["2 history steps archived without their settings: more than 1 MiB of settings in Adobe_libraryImageDevelopHistoryStep"]);
     let _ = std::fs::remove_dir_all(dir);
 }
+
 /// A stream that inflates past the length its header declares is stopped there, not inflated up to 16 MiB first.
 #[test]
 fn a_stream_longer_than_its_declared_length_is_stopped_at_that_length() {
