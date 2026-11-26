@@ -111,6 +111,12 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
         let v = DevelopSettings::from_json(&json!({"process": claimed})).unwrap().process;
         assert_eq!((v.process(), v.is_known(), v.is_outdated()), (Process::V10, false, true), "{claimed}");
     }
+    // V13 and V14 edits keep their process (V15 adds Exposure's shoulder on display-referred sources), and Update
+    // to Current Process applies
+    for (saved, p) in [(13, Process::V13), (14, Process::V14)] {
+        let v = DevelopSettings::from_json(&json!({"process": saved})).unwrap().process;
+        assert_eq!((v.process(), v.is_known(), v.is_outdated()), (p, true, true), "{saved}");
+    }
 }
 
 #[test]

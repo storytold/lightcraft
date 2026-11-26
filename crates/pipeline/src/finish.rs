@@ -103,10 +103,10 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 if draft => {
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V15 if draft => {
                 crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal)
             }
-            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 => {
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V15 => {
                 crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal)
             }
         }
@@ -213,6 +213,10 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
+    /// Process V15's Exposure on a display-referred source: the channel level past which a brightening gain is
+    /// compressed towards white instead of clipping ([`expose`], [`EXPOSURE_KNEE`]); 0 when off (raws, which
+    /// have their tone curve's roll-off, darkening, HDR renders, and processes before V15).
+    pub expo_knee: f32,
     /// Film grain: the model of the photo's process ([`GrainModel`]).
     pub grain: Option<GrainModel>,
     /// Output px → normalized oriented coordinates.
@@ -264,6 +268,7 @@ impl FinishParams {
         let grain = if effects && finite_frame { GrainModel::new(s, px_per_long, draft) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
+        let expo_knee = if s.process.process() >= Process::V15 && !info.raw && peak <= 1.0 && gain > 1.0 { EXPOSURE_KNEE } else { 0.0 };
         FinishParams {
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
@@ -296,6 +301,7 @@ impl FinishParams {
             air: air_pre * gain,
             air_pre,
             gain,
+            expo_knee,
             ev,
             grain,
             out_to_norm,
@@ -357,6 +363,34 @@ pub fn texture_slider(value: f64, process: lightcraft_develop::Process) -> f32 {
     if process >= lightcraft_develop::Process::V13 && t < 0.0 { (t * NEGATIVE_TEXTURE_V13) as f32 } else { t as f32 }
 }
 
+/// The display-linear level up to which process V15's Exposure brightens a display-referred source (a JPEG, PNG,
+/// TIFF) by the plain gain: about 73 % in sRGB, so shadows and midtones move by the full amount.
+pub const EXPOSURE_KNEE: f32 = 0.5;
+
+/// A pixel brightened or darkened by Exposure's `gain`: `c · gain`, unless `knee` is on (> 0, [`FinishParams::expo_knee`])
+/// and the pixel's largest channel passes it after the gain.
+///
+/// A plain gain clips everything the gain lifts past white: at +1 EV every tone above 50 % (73 % in sRGB) of a
+/// JPEG turns flat white (issue #4586). Here the channel maximum `y = m·gain` follows the gain up to `knee` and then
+/// an extended Reinhard shoulder, `knee + (1 − knee)·z·(1 + z / z_w²) / (1 + z)` for `z = (y − knee) / (1 − knee)` and
+/// `z_w = (gain − knee) / (1 − knee)`: slope 1 at the knee (no kink), the source's white (`m = 1`) on white, every
+/// brighter tone still brighter and spread over the highlights (no flat white), and the identity as the gain
+/// approaches 1. The curve rises on past white, so a channel white balance lifted above 1 keeps its order (a local
+/// darkening after it brings the tones back apart), and a tiny gain renders like none. The pixel is scaled by
+/// `f(y) / m`, keeping its hue and saturation.
+pub fn expose(c: [f32; 3], gain: f32, knee: f32) -> [f32; 3] {
+    let m = c[0].max(c[1]).max(c[2]);
+    let y = m * gain;
+    if knee <= 0.0 || gain <= 1.0 || y <= knee || m <= 0.0 {
+        return c.map(|v| v * gain);
+    }
+    let zw = (gain - knee) / (1.0 - knee);
+    let z = (y - knee) / (1.0 - knee);
+    let f = knee + (1.0 - knee) * z * (1.0 + z / (zw * zw)) / (1.0 + z);
+    let scale = f / m;
+    c.map(|v| v * scale)
+}
+
 /// The base tone map (scene → display luminance, with Contrast, Whites and Blacks) of `s`'s
 /// rendering process. This is where a new tone model branches: a retuned default tone curve (issue
 /// #146) is a new [`Process`] with its own arm here, and V1's arm stays as it is, so photos edited
@@ -383,7 +417,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 => {
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V15 => {
             match info.camera_tone.as_ref().filter(|_| info.raw) {
                 Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
                 None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -716,7 +750,7 @@ fn pixel_local_terms(p: &Prepared, terms: &[[f32; MASK_TERMS]], index: usize) ->
 
 fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
     let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe] = local.values;
-    let mut color = if fp.gain == 1.0 { raw } else { raw.map(|value| value * fp.gain) };
+    let mut color = if fp.gain == 1.0 { raw } else { expose(raw, fp.gain, fp.expo_knee) };
 
     let moire = (l_moire + 0.5 * l_noise.max(0.0)).clamp(-1.0, 1.0);
     if moire != 0.0
@@ -767,7 +801,8 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
     }
 
     let l0 = p.log_l.data[index] + fp.ev;
-    let log_luminance = if dehaze != 0.0 || l_exp != 0.0 { log_lum(color) } else { l0 };
+    // (Exposure's compression towards white changes the pixel's luminance from `l0`'s plain gain)
+    let log_luminance = if dehaze != 0.0 || l_exp != 0.0 || fp.expo_knee > 0.0 { log_lum(color) } else { l0 };
     (color, log_luminance)
 }
 
@@ -914,6 +949,144 @@ fn enc(v: f32, dither: f32) -> u8 {
 mod tests {
     use super::*;
     use lightcraft_develop::Process;
+
+    #[test]
+    fn exposure_compresses_towards_white_instead_of_clipping() {
+        let (gain, knee) = (2f32, EXPOSURE_KNEE);
+        // below the knee: the plain gain
+        assert_eq!(expose([0.1, 0.2, 0.05], gain, knee), [0.2, 0.4, 0.1]);
+        // the source's white lands on white, not past it
+        let white = expose([1.0, 1.0, 1.0], gain, knee);
+        assert!(white.iter().all(|v| (v - 1.0).abs() < 1e-6), "{white:?}");
+        // every brighter tone stays brighter (no flat highlight) and nothing passes white
+        let mut last = 0.0;
+        for i in 1..=100 {
+            let v = expose([i as f32 / 100.0; 3], gain, knee)[0];
+            assert!(v > last && v <= 1.0 + 1e-6, "{i}: {v} after {last}");
+            last = v;
+        }
+        // hue kept: the channels keep their ratios
+        let c = expose([0.9, 0.45, 0.3], gain, knee);
+        assert!((c[1] / c[0] - 0.5).abs() < 1e-5 && (c[2] / c[0] - 1.0 / 3.0).abs() < 1e-5);
+        // the identity as the gain approaches 1, and off (knee 0) a plain gain
+        let near = expose([0.8, 0.6, 0.95], 1.0001, knee);
+        assert!(near.iter().zip([0.8, 0.6, 0.95]).all(|(a, b)| (a - b).abs() < 1e-3), "{near:?}");
+        assert_eq!(expose([0.9, 0.9, 0.9], gain, 0.0), [1.8, 1.8, 1.8]);
+        // past the source's white (white balance can lift a channel there): still rising, so the order stays, and
+        // the identity as the gain approaches 1
+        let (a, b) = (expose([1.1; 3], gain, knee)[0], expose([1.3; 3], gain, knee)[0]);
+        assert!(1.0 < a && a < b, "{a} {b}");
+        let near = expose([1.3, 1.1, 0.9], 1.0001, knee);
+        assert!(near.iter().zip([1.3, 1.1, 0.9]).all(|(a, b)| (a - b).abs() < 1e-3), "{near:?}");
+        // no kink at the knee: the slope just past it is the gain's
+        let (a, b) = (expose([0.25; 3], gain, knee)[0], expose([0.2501; 3], gain, knee)[0]);
+        assert!(((b - a) / 0.0001 - gain).abs() < 0.01);
+    }
+
+    #[test]
+    fn local_tone_sees_the_compressed_luminance_with_or_without_a_mask() {
+        // Highlights after a compressing Exposure: a mask with a negligible local Exposure over the whole frame
+        // must not change the render (the local tone took the plain gain's luminance without one, the compressed
+        // pixel's with one)
+        use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+        let src = lightcraft_raster::Rgb32f::from_fn(256, 4, |x, _| [(x as f32 / 255.0).powf(2.2); 3]);
+        let mut s = DevelopSettings { process: Process::V15.version(), ..Default::default() };
+        s.light.exposure = 1.5;
+        s.light.highlights = -60.0;
+        let req = crate::RenderRequest::fit(256, 4);
+        let plain = crate::render(&src, &SourceInfo::default(), &s, &req).image;
+        s.masks.push(Mask {
+            components: vec![MaskComponent {
+                name: None,
+                op: MaskOp::Add,
+                invert: false,
+                shape: MaskShape::Radial { center: lightcraft_geom::Point::new(0.5, 0.5), rx: 4.0, ry: 4.0, angle: 0.0, feather: 0.0, invert: false },
+            }],
+            adjust: LocalAdjustments { exposure: 0.001, ..Default::default() },
+            ..Default::default()
+        });
+        let masked = crate::render(&src, &SourceInfo::default(), &s, &req).image;
+        let worst = (0..256).map(|x| plain.get(x, 2)[1].abs_diff(masked.get(x, 2)[1])).max().unwrap_or(0);
+        assert!(worst <= 2, "a negligible mask moved a tone by {worst} codes");
+    }
+
+    #[test]
+    fn above_white_from_white_balance_keeps_its_order_under_local_darkening() {
+        // a warm white balance lifts a bright JPEG's red past white before Exposure, and a mask darkening the whole
+        // frame brings it back below: the shoulder keeps those tones apart, and a tiny Exposure renders like none
+        use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, WbMode};
+        let src = lightcraft_raster::Rgb32f::from_fn(256, 4, |x, _| [(0.6 + 0.4 * x as f32 / 255.0).powf(2.2); 3]);
+        let mut s = DevelopSettings { process: Process::V15.version(), ..Default::default() };
+        (s.wb.mode, s.wb.temp) = (WbMode::Custom, 12000.0);
+        s.masks.push(Mask {
+            components: vec![MaskComponent {
+                name: None,
+                op: MaskOp::Add,
+                invert: false,
+                shape: MaskShape::Radial { center: lightcraft_geom::Point::new(0.5, 0.5), rx: 4.0, ry: 4.0, angle: 0.0, feather: 0.0, invert: false },
+            }],
+            adjust: LocalAdjustments { exposure: -1.5, ..Default::default() },
+            ..Default::default()
+        });
+        let row = |s: &mut DevelopSettings, ev: f64| {
+            s.light.exposure = ev;
+            let r = crate::render(&src, &SourceInfo::default(), s, &crate::RenderRequest::fit(256, 4));
+            (0..256).map(|x| r.image.get(x, 2)).collect::<Vec<_>>()
+        };
+        let (zero, tiny, up) = (row(&mut s, 0.0), row(&mut s, 0.01), row(&mut s, 0.5));
+        let worst = zero.iter().zip(&tiny).flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c]))).max().unwrap_or(0);
+        assert!(worst <= 2, "a tiny Exposure moved a tone by {worst} codes");
+        // the brightest quarter (red past white after the white balance) stays a gradient after the darkening
+        let red: Vec<u8> = up[192..].iter().map(|p| p[0]).collect();
+        assert!(red.windows(2).all(|p| u16::from(p[1]) + 1 >= u16::from(p[0])), "{red:?}");
+        assert!(red.last().copied().unwrap_or(0) > red[0].saturating_add(8), "flattened: {red:?}");
+    }
+
+    #[test]
+    fn only_v15_brightening_a_display_source_compresses() {
+        let knee = |p: Process, raw: bool, ev: f64| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            s.light.exposure = ev;
+            let frame = crate::geometry::Frame::new(64, 8, &s, false);
+            let info = SourceInfo { raw, ..Default::default() };
+            FinishParams::new(FinishParamsInput {
+                settings: &s,
+                frame: &frame,
+                info: &info,
+                image_size: (64, 8),
+                px_per_long: 64.0,
+                air_pre: 0.0,
+                space: OutputSpace::Srgb,
+                draft: false,
+            })
+            .expo_knee
+        };
+        assert_eq!(knee(Process::V15, false, 1.0), EXPOSURE_KNEE);
+        assert_eq!(knee(Process::V15, true, 1.0), 0.0, "raws keep their tone curve's roll-off");
+        assert_eq!(knee(Process::V15, false, -1.0), 0.0, "darkening is a plain gain");
+        for p in [Process::V10, Process::V13, Process::V14] {
+            assert_eq!(knee(p, false, 1.0), 0.0, "{p:?} keeps its plain gain");
+        }
+    }
+
+    #[test]
+    fn a_brightened_jpeg_keeps_its_highlights() {
+        // a display-referred ramp from black to white at +1.5 EV: V14 turns its whole upper part flat white, V15
+        // keeps it a gradient up to white, and both treat the darks alike
+        let src = lightcraft_raster::Rgb32f::from_fn(256, 4, |x, _| [(x as f32 / 255.0).powf(2.2); 3]);
+        let row = |p: Process| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            s.light.exposure = 1.5;
+            let r = crate::render(&src, &SourceInfo::default(), &s, &crate::RenderRequest::fit(256, 4));
+            (0..256).map(|x| r.image.get(x, 2)[1]).collect::<Vec<u8>>()
+        };
+        let (v14, v15) = (row(Process::V14), row(Process::V15));
+        let white = |r: &[u8]| r.iter().filter(|v| **v >= 254).count();
+        assert!(white(&v14) > 80 && white(&v15) * 4 < white(&v14), "flat white: V14 {}, V15 {}", white(&v14), white(&v15));
+        // (8-bit output is dithered: one code of slack)
+        assert!(v15.windows(2).all(|p| u16::from(p[1]) + 1 >= u16::from(p[0])), "V15 stays a ramp: {v15:?}");
+        assert!((0..60).all(|x| v14[x].abs_diff(v15[x]) <= 1), "the darks move alike");
+    }
 
     /// Every process before V13, which renders global Shadows, negative Texture and the Global wheel as before.
     fn before_v13() -> impl Iterator<Item = Process> {

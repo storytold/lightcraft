@@ -24,6 +24,7 @@ const FIELDS: &[(&str, usize)] = &[
     ("CURVE_OFF", 1),
     ("CURVES", 1),
     ("GAIN", 1),
+    ("EXPO_KNEE", 1),
     ("EV", 1),
     ("AIR", 1),
     ("AIR_PRE", 1),
@@ -260,6 +261,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.b("CURVES", fp.curves.is_some());
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
+    p.f("EXPO_KNEE", fp.expo_knee);
     p.f("EV", fp.ev);
     p.f("AIR", fp.air);
     p.f("AIR_PRE", fp.air_pre);

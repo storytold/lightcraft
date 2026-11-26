@@ -473,6 +473,20 @@ fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32, top: f32) -> vec3<f32> {
     return r;
 }
 
+// Exposure's gain, with process V15's compression towards white past `knee` on display-referred sources
+// (`lightcraft_pipeline::finish::expose`).
+fn expose(c: vec3<f32>, gain: f32, knee: f32) -> vec3<f32> {
+    let m = max(c.x, max(c.y, c.z));
+    let y = m * gain;
+    if (knee <= 0.0 || gain <= 1.0 || y <= knee || m <= 0.0) {
+        return c * gain;
+    }
+    let zw = (gain - knee) / (1.0 - knee);
+    let z = (y - knee) / (1.0 - knee);
+    let f = knee + (1.0 - knee) * z * (1.0 + z / (zw * zw)) / (1.0 + z);
+    return c * (f / m);
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
@@ -491,7 +505,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let deep = pu(F_DEEP) != 0u;
     var c = vec3<f32>(img[3u * i], img[3u * i + 1u], img[3u * i + 2u]);
     if (gain != 1.0) {
-        c = c * gain;
+        c = expose(c, gain, pf(F_EXPO_KNEE));
     }
     let l_pre = log_l[i];
     let l0 = l_pre + ev;
@@ -575,7 +589,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- local tone in log luminance
     var l1 = l0;
-    if (dz != 0.0 || l_exp != 0.0) {
+    // (Exposure's compression towards white changes the pixel's luminance from `l0`'s plain gain)
+    if (dz != 0.0 || l_exp != 0.0 || pf(F_EXPO_KNEE) > 0.0) {
         l1 = log_lum(c);
     }
     let shift = l1 - l0;

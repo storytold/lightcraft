@@ -117,12 +117,15 @@ pub enum Process {
     /// surroundings, and every spot reads its source at whole pixels
     /// (`lightcraft_pipeline::spots::HealMethod`).
     V14,
+    /// V14, with Exposure on a display-referred source (a JPEG, PNG, TIFF) compressing what it lifts past white
+    /// instead of clipping it (`lightcraft_pipeline::finish::expose`, issue #4586); raws and darkening as in V14.
+    V15,
 }
 
 impl Process {
     /// Every process, oldest first (`ProcessVersion(9)` names none and renders as V8; 11 and 12 name none and
     /// render as V10, 12 being claimed by an open pull request).
-    pub const ALL: [Process; 11] = [
+    pub const ALL: [Process; 12] = [
         Process::V1,
         Process::V2,
         Process::V3,
@@ -134,8 +137,9 @@ impl Process {
         Process::V10,
         Process::V13,
         Process::V14,
+        Process::V15,
     ];
-    pub const LATEST: Process = Process::V14;
+    pub const LATEST: Process = Process::V15;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -150,6 +154,7 @@ impl Process {
             Process::V10 => ProcessVersion(10),
             Process::V13 => ProcessVersion(13),
             Process::V14 => ProcessVersion(14),
+            Process::V15 => ProcessVersion(15),
         }
     }
 }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Exposure no longer burns out JPEGs (process V15)
+- Raising Exposure on a JPEG, PNG or TIFF used to turn every tone it lifted past white flat white, so a small
+  move could ruin the highlights. It now brightens the shadows and midtones by the full amount and eases the
+  highlights towards white, keeping their detail. Raws and darkening are unchanged. This is rendering process 15:
+  photos you already edited keep their look until you choose Photo ▸ Update to Current Process.
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges

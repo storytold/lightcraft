@@ -792,6 +792,49 @@ fn cached_renders_match_uncached() {
     }
 }
 
+/// Process V15's Exposure on a display-referred source compresses towards white instead of clipping
+/// (`lightcraft_pipeline::finish::expose`): the GPU kernel follows the CPU.
+#[test]
+fn display_exposure_shoulder_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 960, 640);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(960, 640);
+    for ev in [0.3, 1.0, 2.5] {
+        let mut s = DevelopSettings { process: Process::V15.version(), ..Default::default() };
+        s.light.exposure = ev;
+        check(&format!("V15 display Exposure +{ev}"), &src, &info, &s, &req);
+        // Highlights after the compression takes the compressed luminance on both
+        s.light.highlights = -60.0;
+        check(&format!("V15 display Exposure +{ev}, Highlights -60"), &src, &info, &s, &req);
+        // an existing V14 edit keeps its plain gain on both
+        s.process = Process::V14.version();
+        check(&format!("V14 display Exposure +{ev}, Highlights -60"), &src, &info, &s, &req);
+    }
+    // a warm white balance lifting channels past white, brought back by a mask darkening the whole frame: both
+    // keep the order above white, also at a tiny Exposure
+    let mut s = DevelopSettings { process: Process::V15.version(), ..Default::default() };
+    (s.wb.mode, s.wb.temp) = (WbMode::Custom, 12000.0);
+    s.masks.push(Mask {
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 4.0, ry: 4.0, angle: 0.0, feather: 0.0, invert: false },
+        }],
+        adjust: lightcraft_develop::LocalAdjustments { exposure: -1.5, ..Default::default() },
+        ..Default::default()
+    });
+    // (a bright ramp, so the white balance lifts its top past white)
+    let bright = Arc::new(Rgb32f::from_fn(960, 640, |x, _| [(0.6 + 0.4 * x as f32 / 959.0).powf(2.2); 3]));
+    for ev in [0.01, 0.5] {
+        s.light.exposure = ev;
+        check(&format!("V15 warm white balance, Exposure +{ev}, mask -1.5"), &bright, &info, &s, &req);
+    }
+}
+
 /// Calibrated Contrast and Blacks, legacy Whites, combined edits, windows and cache reuse.
 #[test]
 fn light_v3_operators_match() {
