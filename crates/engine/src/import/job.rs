@@ -288,6 +288,57 @@ impl ImportJob {
         Some(library)
     }
 
+    /// The batch's files the library already knows of, by path: a duplicate, a browsed file promoted (or a replaced
+    /// one probed again, noted in `changed`), the others left in `todo` to be probed.
+    fn sort_by_library(
+        &mut self,
+        files: Vec<String>,
+        verdicts: Vec<Option<BrowsedFile>>,
+        local: bool,
+        out: &mut Prepared,
+        changed: &mut HashMap<String, PhotoId>,
+        todo: &mut Vec<String>,
+    ) {
+        use std::sync::atomic::Ordering::Relaxed;
+        for (f, verdict) in files.into_iter().zip(verdicts) {
+            match self.by_path.get(f.as_str()).cloned() {
+                Some((id, true, hash)) if !local => match verdict {
+                    // ✕ before its size was looked at: nothing is decided about it, so it isn't promoted
+                    Some(BrowsedFile::Unchecked) => {}
+                    Some(BrowsedFile::Changed) => {
+                        changed.insert(f.clone(), id);
+                        todo.push(f);
+                    }
+                    Some(BrowsedFile::Unchanged) | None => {
+                        out.items.push(self.promote_browsed(f, id, hash));
+                        self.done.fetch_add(1, Relaxed);
+                    }
+                },
+                Some((id, _, _)) => {
+                    out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None, file: None });
+                    self.done.fetch_add(1, Relaxed);
+                }
+                None => todo.push(f),
+            }
+        }
+    }
+
+    /// A browsed file this import brings into the library (its size unchanged): a duplicate of a library photo with
+    /// the same content, or promoted (and from then on the library's).
+    fn promote_browsed(&mut self, f: String, id: PhotoId, hash: Option<String>) -> PreparedItem {
+        // a library photo with the same content comes first, and a file promoted earlier
+        // (here or in a previous batch) counts as the library's from then on
+        if let Some(h) = &hash {
+            if let Some(existing) = self.by_hash.get(h) {
+                return PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, file: None };
+            }
+            self.by_hash.insert(h.clone(), Some(id));
+        }
+        // a file that was only browsed (Local) joins the library when it is imported for real
+        self.by_path.insert(f, (id, false, hash));
+        PreparedItem::Promote(id, None)
+    }
+
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
     pub fn prepare_files(&mut self, files: Vec<String>, cancel: &std::sync::atomic::AtomicBool) -> Prepared {
         use std::sync::atomic::Ordering::Relaxed;
@@ -307,41 +358,7 @@ impl ImportJob {
             files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_sizes.get(f.as_str()).copied().unwrap_or(0))).collect();
         let mut looked_at = browsed_files_changed(&browsed, cancel).into_iter();
         let verdicts: Vec<Option<BrowsedFile>> = files.iter().map(|f| is_browsed(f).then(|| looked_at.next()).flatten()).collect();
-        for (f, verdict) in files.into_iter().zip(verdicts) {
-            match self.by_path.get(f.as_str()).cloned() {
-                Some((id, true, hash)) if !opts.local => {
-                    match verdict {
-                        // ✕ before its size was looked at: nothing is decided about it, so it isn't promoted
-                        Some(BrowsedFile::Unchecked) => continue,
-                        Some(BrowsedFile::Changed) => {
-                            changed.insert(f.clone(), id);
-                            todo.push(f);
-                            continue;
-                        }
-                        Some(BrowsedFile::Unchanged) | None => {}
-                    }
-                    // a library photo with the same content comes first, and a file promoted earlier
-                    // (here or in a previous batch) counts as the library's from then on
-                    if let Some(h) = &hash {
-                        if let Some(existing) = self.by_hash.get(h) {
-                            out.items.push(PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, file: None });
-                            self.done.fetch_add(1, Relaxed);
-                            continue;
-                        }
-                        self.by_hash.insert(h.clone(), Some(id));
-                    }
-                    // a file that was only browsed (Local) joins the library when it is imported for real
-                    self.by_path.insert(f, (id, false, hash));
-                    out.items.push(PreparedItem::Promote(id, None));
-                    self.done.fetch_add(1, Relaxed);
-                }
-                Some((id, _, _)) => {
-                    out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None, file: None });
-                    self.done.fetch_add(1, Relaxed);
-                }
-                None => todo.push(f),
-            }
-        }
+        self.sort_by_library(files, verdicts, opts.local, &mut out, &mut changed, &mut todo);
 
         // files a preceding scan already probed are not read again (a network share is slow to read),
         // as long as they are still there, as they were: a file gone or changed since is probed again
@@ -425,22 +442,49 @@ impl ImportJob {
                 plan.slots.push(Slot::Item(PreparedItem::Promote(id, Some(Box::new(info)))));
                 continue;
             }
-            // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
+            // the XMP sidecar (or a file's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none (a skipped duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
-            let packet = if duplicate_of.is_some() && info.captured.is_some() && !opts.read_duplicates {
+            let has_embedded_xmp = raw || matches!(info.format.to_ascii_uppercase().as_str(), "JPEG" | "JPG" | "TIFF" | "TIF" | "PNG" | "WEBP");
+            let skip_sidecar = duplicate_of.is_some() && info.captured.is_some() && !opts.read_duplicates;
+            let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
+            let mut embedded_sidecar = if skip_sidecar {
                 None
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
+                info.xmp.as_deref().filter(|_| has_embedded_xmp).and_then(|x| match crate::sidecar::parse_sidecar(x, target) {
+                    Ok(sc) => Some(sc),
+                    Err(e) => {
+                        log::warn!("import {path}: embedded XMP: {e}");
+                        None
+                    }
+                })
             };
-            let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
-            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
-                Ok(sc) => Some(sc),
-                Err(e) => {
-                    log::warn!("import {path}: XMP: {e}");
-                    None
+            // Embedded XMP on a rendered file (JPEG, TIFF, PNG, WebP) has develop adjustments
+            // already baked into the pixels; only raws/DNGs keep foreign develop settings from embedded XMP.
+            if !raw && let Some(sc) = &mut embedded_sidecar {
+                sc.develop = None;
+                sc.warnings.clear();
+            }
+            let external_sidecar = if skip_sidecar {
+                None
+            } else {
+                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
+                    Ok(sc) => Some(sc),
+                    Err(e) => {
+                        log::warn!("import {path}: XMP: {e}");
+                        None
+                    }
+                })
+            };
+            let sidecar = match (embedded_sidecar, external_sidecar) {
+                (Some(mut embedded), Some(external)) => {
+                    embedded.override_with(external);
+                    Some(embedded)
                 }
-            });
+                (Some(embedded), None) => Some(embedded),
+                (None, Some(external)) => Some(external),
+                (None, None) => None,
+            };
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
             }
@@ -469,6 +513,9 @@ impl ImportJob {
                     let mut q = Photo::new(PhotoId(0), Source::File { path: path.clone() }, &own, &info.format, 0, 0, &self.now);
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
+                    if let Some(sc) = &sidecar {
+                        crate::sidecar::merge_into(&mut q, sc, &self.now);
+                    }
                     let name = if let Some(template) = opts.rename.as_deref().filter(|t| !t.trim().is_empty()) {
                         let Some(seq) = self.seq else {
                             self.done.fetch_add(1, Relaxed);

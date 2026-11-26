@@ -456,3 +456,12 @@ fn an_adapter_short_of_the_limits_is_refused_with_what_it_lacks() {
     assert_eq!(short.len(), 1, "{short:?}");
     assert!(short[0].starts_with("max_compute_workgroup_storage_size 8192 <"), "{short:?}");
 }
+
+/// DX12 pipeline creation can take minutes for the fully unrolled attention shader; other backends keep the larger tile.
+#[test]
+fn attention_tiles_are_smaller_on_dx12() {
+    assert_eq!(attention_keys(wgpu::Backend::Dx12), 8);
+    assert_eq!(attention_keys(wgpu::Backend::Vulkan), ATTENTION_KEYS);
+    let src = attention_source(attention_keys(wgpu::Backend::Dx12));
+    assert!(src.contains("let s7 = ") && !src.contains("let s8 = "));
+}
