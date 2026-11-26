@@ -398,15 +398,13 @@ impl ImportJob {
             let external_sidecar = if skip_sidecar {
                 None
             } else {
-                found_sidecar
-                    .and_then(|f| std::fs::read_to_string(f).ok())
-                    .and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
-                        Ok(sc) => Some(sc),
-                        Err(e) => {
-                            log::warn!("import {path}: XMP: {e}");
-                            None
-                        }
-                    })
+                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
+                    Ok(sc) => Some(sc),
+                    Err(e) => {
+                        log::warn!("import {path}: XMP: {e}");
+                        None
+                    }
+                })
             };
             let sidecar = match (embedded_sidecar, external_sidecar) {
                 (Some(mut embedded), Some(external)) => {
