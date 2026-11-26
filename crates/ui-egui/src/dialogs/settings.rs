@@ -1,5 +1,5 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Slideshow, Faces,
-//! AI Denoise.
+//! The Settings dialog (⌘,): General, Import, Performance (incl. where AI masks run), Display,
+//! Interface, Slideshow, Faces, AI Denoise.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -16,7 +16,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
+use crate::state::{GridBadges, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, PREVIEW_LIMITS, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -57,8 +57,8 @@ pub const TABS: &[(&str, &str)] = &[
     ("denoise", "AI Denoise"),
 ];
 
-/// Thumbnail cache sizes offered (MB).
-const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
+/// Preview cache sizes offered (MB; 0 = automatic: room for every photo of the library).
+const CACHE_SIZES: [u32; 8] = [512, 1024, 2048, 4096, 8192, 51_200, 204_800, 0];
 
 const LABEL_W: f32 = 150.0;
 

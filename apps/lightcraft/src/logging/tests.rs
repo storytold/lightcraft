@@ -167,7 +167,11 @@ fn a_line_carries_time_level_thread_target_and_message() {
         "2026-10-08T07:59:17.728Z INFO  [main] lightcraft: library /photos: 12 photos\n"
     );
     // A multi-line message keeps its lines; the record still ends in one newline.
-    assert!(format_line("t", log::Level::Error, "w", "x", "a\nb\n").ends_with("x: a\nb\n"));
+    // later lines are indented and control characters escaped, so a message cannot forge a record
+    assert!(format_line("t", log::Level::Error, "w", "x", "a\nb\n").ends_with("x: a\n    b\n"));
+    let forged = format_line("t", log::Level::Info, "w", "x", "name\r\n2026-01-01T00:00:00Z ERROR [main] x: fake\u{1b}[2J");
+    assert!(forged.lines().skip(1).all(|l| l.starts_with(' ')), "{forged:?}");
+    assert!(!forged.contains('\r') && !forged.contains('\u{1b}'), "{forged:?}");
 }
 
 #[test]
@@ -357,7 +361,7 @@ fn a_panic_report_goes_to_the_file_and_never_deadlocks() {
         logger.record_panic("main", "while the sink is held");
     }
     let text = read(&path);
-    assert!(text.contains(" ERROR [render] lightcraft: panicked at crates/x/src/lib.rs:3:5:\nboom\n"), "{text}");
+    assert!(text.contains(" ERROR [render] lightcraft: panicked at crates/x/src/lib.rs:3:5:\n    boom\n"), "{text}");
     assert!(!text.contains("while the sink is held"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }

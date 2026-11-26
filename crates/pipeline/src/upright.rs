@@ -845,6 +845,16 @@ pub fn analyze_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> A
 
 /// [`analysis_plane`] at `long` px on its long edge (the evaluation examples read a larger one).
 pub fn analysis_luminance(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, long: usize) -> Plane {
+    // Raw decoding keeps negative channels (noise near black through the camera matrix). Resampled as they are,
+    // they lower the luminance the segments are found in, so Upright would find a different correction than for
+    // the same photo decoded with its channels clipped at zero; it analyses that clipped source, as it always has.
+    let clipped;
+    let src = if src.data.iter().flatten().any(|v| *v < 0.0) {
+        clipped = src.map(|p| p.map(|v| v.max(0.0)));
+        &clipped
+    } else {
+        src
+    };
     let mut base = s.clone();
     base.geometry = Geometry::default();
     base.crop = Crop::default();

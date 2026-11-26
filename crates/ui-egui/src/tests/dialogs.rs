@@ -161,3 +161,39 @@ fn modal_dialogs_close_background_menus() {
     h.step();
     assert!(!egui::Popup::is_any_open(&h.view.ctx), "background menus cannot remain above the modal window");
 }
+
+/// The Create Preset name box is a `dialog_field` registered under `field:presetName`: Esc
+/// restores the name from before the edit and cancels the dialog, and Return keeps it and
+/// creates the preset. Drawn as a plain `egui::TextEdit` in `widgets::named` (the bug), the box
+/// is never focused under that id, so typing never lands, Esc does not restore, and Return does
+/// not confirm.
+#[test]
+fn create_preset_name_box_restores_on_escape_and_keeps_its_text_on_return() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.run("dialog.createPreset", json!({})).unwrap();
+    h.step(); // the dialog opens and its name field takes the focus
+    let r = h.request("ui.text", json!({"text": "My Preset"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let preset_name = |h: &Headless| match &h.app.ui.dialog {
+        Some(crate::state::Dialog::CreatePreset { name, .. }) => Some(name.clone()),
+        _ => None,
+    };
+    assert_eq!(preset_name(&h), Some("My Preset".to_string()), "the typed text is in the name box");
+    // Esc gives back the name from before the edit and cancels the dialog
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "escape cancels the dialog");
+    h.app.run("dialog.createPreset", json!({})).unwrap();
+    h.step();
+    assert_eq!(preset_name(&h), Some(String::new()), "the name is back to what it was before the edit");
+    let r = h.request("ui.text", json!({"text": "My Preset"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // Return keeps the text and creates the preset with it
+    let r = h.request("ui.key", json!({"key": "return"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "return confirms the dialog and closes it");
+    let preset = h.app.session.presets.iter().find(|p| p.name == "My Preset").expect("the preset was created with the typed name");
+    assert_eq!(preset.group, "User Presets", "the preset stays in the dialog's group");
+}

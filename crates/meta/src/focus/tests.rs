@@ -1,5 +1,5 @@
 use super::*;
-use lightcraft_tiff::{Entry, IfdBuilder, TiffWriter, Value};
+use craft_tiff::{Entry, IfdBuilder, TiffWriter, Value};
 
 fn encipher(p: u8) -> u8 {
     if p >= 249 { p } else { ((u32::from(p).pow(3)) % 249) as u8 }
@@ -206,7 +206,7 @@ fn sony_file_with(make: &str, model: &str, orientation: u16, note_entries: &[(u1
         let mut outside: Vec<u8> = Vec::new();
         order.put_u16(&mut note, note_entries.len() as u16);
         for (tag, v) in note_entries {
-            let raw = lightcraft_tiff::writer::encode(order, v);
+            let raw = craft_tiff::writer::encode(order, v);
             order.put_u16(&mut note, *tag);
             order.put_u16(&mut note, v.field_type() as u16);
             order.put_u32(&mut note, v.count() as u32);

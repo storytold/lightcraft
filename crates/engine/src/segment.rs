@@ -64,6 +64,9 @@ pub(crate) enum Tag {
     NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
     /// A zoomed-in pass for a component, computed from `shape` (without its detail).
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
+    /// Find Subject for component `comp` of mask `mask` (an Object waiting for it): the people /
+    /// animals found become a "person" Describe selection; none, the object at `point`.
+    Subject { photo: PhotoId, mask: u32, comp: usize, point: Point },
 }
 
 /// The model input: 8-bit RGB.
@@ -117,12 +120,57 @@ pub struct DownloadStatus {
     pub finished: bool,
 }
 
+/// Where SAM 3 runs (Settings ▸ Performance ▸ AI masks; `segment.settings {runOn}`, kept in
+/// [`Segmenter::settings_file`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunOn {
+    /// The GPU when there is one: Metal on macOS, elsewhere the image encoder through wgpu unless
+    /// the GPU is switched off ("Use the GPU for rendering", `LIGHTCRAFT_GPU=0`, …).
+    #[default]
+    Auto,
+    /// The CPU for all of it, on every platform (on macOS candle's CPU device instead of Metal).
+    Cpu,
+}
+
+impl RunOn {
+    pub fn parse(name: &str) -> Option<RunOn> {
+        match name {
+            "auto" => Some(RunOn::Auto),
+            "cpu" => Some(RunOn::Cpu),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RunOn::Auto => "auto",
+            RunOn::Cpu => "cpu",
+        }
+    }
+}
+
+/// Why the model runs on the CPU when [`RunOn::Cpu`] is chosen (`segment.model.status` →
+/// `backend.fallback`).
+pub const CPU_CHOSEN: &str = "the CPU is chosen in Settings (AI masks)";
+
+/// The settings file's contents (`sam3-settings.json`).
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Settings {
+    /// `auto` or `cpu` (`None` or anything else: `auto`).
+    run_on: Option<String>,
+}
+
 /// The model (on its worker thread), the download, and AI mask requests in flight.
 pub struct Segmenter {
     /// Where the `facebook/sam3` files live (set by the app; `None`: no AI masks).
     pub dir: Option<PathBuf>,
     /// The user's list of download mirrors (one base URL per line), if any.
     pub mirrors_file: Option<PathBuf>,
+    /// Where [`Segmenter::run_on`] is kept (`<config>/models/sam3-settings.json` in the app; `None`:
+    /// only for this session).
+    pub settings_file: Option<PathBuf>,
+    run_on: RunOn,
     /// Run requests in the background and apply them in [`Session::segment_poll`] (the
     /// desktop app); otherwise commands wait for their result (CLI, MCP, tests).
     pub background: bool,
@@ -143,6 +191,8 @@ impl Default for Segmenter {
         Segmenter {
             dir: None,
             mirrors_file: None,
+            settings_file: None,
+            run_on: RunOn::Auto,
             background: false,
             pending: None,
             messages: Vec::new(),
@@ -159,6 +209,33 @@ impl Default for Segmenter {
 impl Segmenter {
     /// Whether this build can compute AI masks at all.
     pub const AVAILABLE: bool = cfg!(feature = "sam");
+
+    /// Where SAM 3 runs: the user's choice.
+    pub fn run_on(&self) -> RunOn {
+        self.run_on
+    }
+
+    /// Read the choice of where SAM 3 runs from [`Segmenter::settings_file`] (a missing or damaged
+    /// file is [`RunOn::Auto`]).
+    pub fn load_settings(&mut self) {
+        let read = self.settings_file.as_deref().and_then(|f| crate::denoise::read_capped(f, 4096));
+        let st: Settings = read.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        self.run_on = st.run_on.as_deref().and_then(RunOn::parse).unwrap_or_default();
+    }
+
+    /// Choose where SAM 3 runs, and keep the choice in [`Segmenter::settings_file`]. A loaded model
+    /// moves at its next request (it loads again).
+    pub fn set_run_on(&mut self, run_on: RunOn) -> Result<(), String> {
+        if let Some(f) = &self.settings_file {
+            if let Some(parent) = f.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+            }
+            let st = Settings { run_on: Some(run_on.name().to_string()) };
+            crate::denoise::write_atomic(f, &serde_json::to_vec_pretty(&st).map_err(|e| e.to_string())?)?;
+        }
+        self.run_on = run_on;
+        Ok(())
+    }
 
     pub fn remote_endpoint(&self) -> Option<String> {
         #[cfg(feature = "sam")]
@@ -190,6 +267,28 @@ impl Segmenter {
         return self.worker.encoding();
         #[cfg(not(feature = "sam"))]
         false
+    }
+
+    /// Where the model runs and how long the last photo took (`segment.model.status` → `backend`):
+    /// `{device, runtime, heads, fallback, encodeMs, analyzeMs}` (see `worker::Backend`; `device`
+    /// is `null` until the model first loads, and `fallback` then says whether the GPU is switched
+    /// off), or `null` in a build without AI masks.
+    pub fn backend(&self) -> serde_json::Value {
+        #[cfg(feature = "sam")]
+        {
+            let mut b = self.worker.backend();
+            if b.device.is_none() {
+                b.fallback = match self.run_on {
+                    RunOn::Cpu => Some(CPU_CHOSEN.into()),
+                    // macOS: Metal, unless the environment switches the GPU off (the preference is wgpu's)
+                    RunOn::Auto if cfg!(target_os = "macos") => lightcraft_gpu::env_off_reason().map(Into::into),
+                    RunOn::Auto => lightcraft_gpu::switched_off(),
+                };
+            }
+            serde_json::to_value(b).unwrap_or_default()
+        }
+        #[cfg(not(feature = "sam"))]
+        serde_json::Value::Null
     }
 
     /// Whether a zoomed-in detail pass is queued or running.
@@ -376,12 +475,23 @@ fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
 }
 
 impl Session {
-    /// The key and settings of photo `id` as the model sees it: its look without masks, uncropped.
+    /// The key and settings of photo `id` as the model sees it: its look without masks, uncropped
+    /// and unflipped, and without lens corrections, Upright and Transform. Mask coordinates
+    /// (clicks, stored selections) live on the photo before those (`Mask::on_photo`), so a
+    /// selection stays on its content when they change, and changing them doesn't ask again.
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
-    fn segment_key(&self, id: PhotoId) -> Option<(u64, lightcraft_develop::DevelopSettings)> {
+    pub(crate) fn segment_key(&self, id: PhotoId) -> Option<(u64, lightcraft_develop::DevelopSettings)> {
         let p = self.catalog.photo(id)?;
         let mut d = (*p.develop).clone();
         d.masks.clear();
+        // (the crop doesn't show in the uncropped input: it doesn't ask again either)
+        d.crop = Default::default();
+        d.geometry = Default::default();
+        d.optics.lens_profile = false;
+        d.optics.distortion = 0.0;
+        d.optics.remove_ca = false;
+        d.optics.ca_red = 0.0;
+        d.optics.ca_blue = 0.0;
         let content = crate::media::content_key(p);
         let mut h = mix(0xcbf2_9ce4_8422_2325, d.hash64());
         h = mix(h, id.0);
@@ -410,6 +520,13 @@ impl Session {
         region: Option<[f64; 4]>,
     ) -> Result<worker::Job, String> {
         let dir = self.segmenter.model_dir()?;
+        // old masks go onto the photo first: the selection that comes back is in its coordinates
+        if let Some(cur) = self.develop_of(id).filter(|d| d.masks.iter().any(|m| !m.on_photo)) {
+            let mut on = (*cur).clone();
+            self.attach_masks(id, &cur, &mut on);
+            self.apply_silent(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(on), label: "Masks".into(), edited: None })
+                .map_err(|e| e.to_string())?;
+        }
         let (key, mut d) = self.segment_key(id).ok_or("no such photo")?;
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let missing = match &p.source {
@@ -431,7 +548,8 @@ impl Session {
                 job
             }
         };
-        Ok(worker::Job { dir, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
+        let cpu = self.segmenter.run_on == RunOn::Cpu;
+        Ok(worker::Job { dir, cpu, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
     }
 
     /// Send a request and wait for its result (CLI, MCP, tests; or when not in background mode).
@@ -479,6 +597,9 @@ impl Session {
         self.segmenter.model_dir()?;
         if !clicks.iter().any(|c| c.include) {
             return Err("click the object to include it first".into());
+        }
+        if clicks.len() > MAX_CLICKS {
+            return Err(format!("an Object selection takes at most {MAX_CLICKS} clicks"));
         }
         #[cfg(feature = "sam")]
         {
@@ -548,6 +669,35 @@ impl Session {
         #[cfg(not(feature = "sam"))]
         {
             let _ = (id, mask, op, name);
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// Find Subject for component `comp` of mask `mask` on photo `id` (an Object without clicks):
+    /// the photo's main people / animals ([`worker::Kind::Subject`]), those the camera's `focus`
+    /// falls on when the file records it; when the subject is neither, the object at `point`. In
+    /// background mode [`Session::segment_poll`] applies the result; otherwise it is applied
+    /// before this returns.
+    pub(crate) fn segment_subject_later(&mut self, id: PhotoId, mask: u32, comp: usize, point: Point, focus: Option<Point>) -> Result<(), String> {
+        self.segmenter.model_dir()?;
+        #[cfg(feature = "sam")]
+        {
+            let kind = worker::Kind::Subject { focus: focus.map(|p| (p.x as f32, p.y as f32)) };
+            let tag = Tag::Subject { photo: id, mask, comp, point };
+            if self.segmenter.background {
+                return self.segment_queue(id, kind, tag, None);
+            }
+            let seg = self.segment_wait(id, kind, None)?;
+            let mut polled = Polled::default();
+            self.apply_outcome(worker::Outcome { tag, result: Ok(seg), superseded: false, notice: None }, &mut polled);
+            match polled.messages.into_iter().next() {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, mask, comp, point, focus);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -688,6 +838,51 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
+            Tag::Subject { photo, mask, comp, point } => {
+                let found = match o.result {
+                    Ok(found) => found,
+                    Err(e) => return polled.messages.push(e),
+                };
+                let Some(d) = self.develop_of(photo) else { return };
+                let mut d = (*d).clone();
+                let Some(c) = d.masks.iter_mut().find(|m| m.id == mask).and_then(|m| m.components.get_mut(comp)) else { return };
+                // still the Object waiting for it (not clicked or replaced meanwhile)
+                let MaskShape::Object { hint, seg: None, edge, .. } = &c.shape else { return };
+                if !hint.is_empty() {
+                    return;
+                }
+                let edge = *edge;
+                let seg = match found {
+                    Some(seg) => seg,
+                    // neither a person nor an animal: the object at the point
+                    None if self.segmenter.background => {
+                        if let Err(e) = self.segment_clicks_later(photo, mask, comp, vec![point], Vec::new()) {
+                            polled.messages.push(e);
+                        }
+                        return;
+                    }
+                    None => {
+                        match self.segment_clicks(photo, &clicks_of(&[point], &[])) {
+                            Ok(seg) => {
+                                c.shape = MaskShape::Object { hint: vec![point], exclude: Vec::new(), seg: Some(seg), detail: Vec::new(), edge }
+                            }
+                            Err(e) => return polled.messages.push(e),
+                        }
+                        if let Err(e) = self.set_develop(photo, d, "Find Subject") {
+                            polled.messages.push(e.to_string());
+                        } else {
+                            polled.changed = true;
+                        }
+                        return;
+                    }
+                };
+                let text = lightcraft_segment::SUBJECT_CONCEPTS.join(", ");
+                c.shape = MaskShape::Prompt { text, seg: Some(seg), detail: Vec::new(), edge };
+                match self.set_develop(photo, d, "Find Subject") {
+                    Ok(()) => polled.changed = true,
+                    Err(e) => polled.messages.push(e.to_string()),
+                }
+            }
             Tag::Detail { photo, mask, comp, shape } => {
                 let patch = match o.result {
                     Ok(Some(p)) => p,
@@ -729,6 +924,47 @@ mod tests {
         assert!(s.segment_poll().messages.is_empty(), "once");
     }
 
+    /// Find Subject's result: people / animals found become a Describe selection of the waiting
+    /// Object (one undo step), not after it was clicked meanwhile; nothing found queues the object
+    /// at the point (here: no model, so a message, and the mask still waits).
+    #[cfg(feature = "sam")]
+    #[test]
+    fn find_subject_results_fill_the_waiting_mask() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp};
+        let mut s = Session::with_demo();
+        s.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-no-sam3-subject-{}", std::process::id())));
+        let id = s.active().unwrap();
+        let waiting = || MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+        let mut d = (*s.develop_of(id).unwrap()).clone();
+        d.masks.push(Mask {
+            id: 3,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: waiting() }],
+            ..Default::default()
+        });
+        s.set_develop(id, d, "test").unwrap();
+        let point = Point::new(0.4, 0.5);
+        let send = |s: &mut Session, result| {
+            let tag = Tag::Subject { photo: id, mask: 3, comp: 0, point };
+            s.segmenter.results.0.send(worker::Outcome { tag, result, superseded: false, notice: None }).unwrap();
+            s.segment_poll()
+        };
+        let shape = |s: &Session| s.develop_of(id).unwrap().masks[0].components[0].shape.clone();
+        // nothing found, no model to click with: said so, and the mask still waits
+        let polled = send(&mut s, Ok(None));
+        assert!(!polled.messages.is_empty() && shape(&s) == waiting(), "{:?}", polled.messages);
+        // people found: a Describe selection of them
+        let polled = send(&mut s, Ok(Some(seg_box(20, 5, 5, 15, 15))));
+        assert!(polled.changed && polled.messages.is_empty());
+        let MaskShape::Prompt { text, seg: Some(_), .. } = shape(&s) else { panic!("{:?}", shape(&s)) };
+        assert_eq!(text, "person, animal");
+        // a result for a mask that changed meanwhile is dropped
+        let before = shape(&s);
+        assert!(!send(&mut s, Ok(Some(seg_box(20, 0, 0, 4, 4)))).changed);
+        assert_eq!(shape(&s), before);
+        // an error reaches the user
+        assert_eq!(send(&mut s, Err("boom".into())).messages, vec!["boom".to_string()]);
+    }
+
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {
         let l: Vec<f32> =
             (0..side * side).map(|i| if (x0..x1).contains(&(i % side)) && (y0..y1).contains(&(i / side)) { 8.0 } else { -8.0 }).collect();
@@ -757,7 +993,7 @@ mod tests {
     fn no_region_for_nothing_or_most_of_the_photo() {
         assert!(detail_region(&seg_box(50, 0, 0, 0, 0), 1.0).is_none());
         assert!(detail_region(&seg_box(50, 2, 2, 48, 48), 1.0).is_none());
-        let damaged = SegMask { side: 50, data: "?".into(), rect: None };
+        let damaged = SegMask { side: 50, data: "?".into(), rect: None, grid: None };
         assert!(detail_region(&damaged, 1.0).is_none());
     }
 }
