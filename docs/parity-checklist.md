@@ -36,7 +36,7 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 6 | 2 | 1 | 25/28 (89%) | 14/15 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 41 | 7 | 2 | 1 | 25/28 (89%) | 13/15 (87%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -58,9 +58,9 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 418 | 74 | 55 | 35 | 192/203 (95%) | 147/163 (90%) |
+| **Total** | 417 | 75 | 55 | 35 | 192/203 (95%) | 146/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 547 in-scope rows — P0 97.3% of 203 · P1 94.5% of 163 · P2 56.9% of 180.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.1%** of 547 in-scope rows — P0 97.3% of 203 · P1 94.2% of 163 · P2 56.9% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -223,7 +223,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 )
 | LR-EDIT-OPTICS-DEFRINGE | Defringe | P1 | ✅ | `ctl:optics.defringe*` | no fringe eyedropper |
 | LR-EDIT-OPTICS-MANUAL | Manual distortion / vignetting | P1 | ✅ | `ctl:optics.distortion`, `ctl:optics.vignetting`, `ctl:optics.vignettingMidpoint` | |
-| LR-EDIT-GEOM-UPRIGHT | Upright | P1 | ✅ | `cmd:geometry.upright`, `cmd:geometry.guides` | |
+| LR-EDIT-GEOM-UPRIGHT | Upright | P1 | 🟡 | `cmd:geometry.upright`, `cmd:geometry.guides`, `crates/pipeline/src/upright.rs` | a vertical family is accepted when most of it agrees, or when the lines that disagree (people, folds, foliage) gather at no rival point half as strong, so two long posts flanking a crowd decide (`upright_corrects_converging_posts_among_people`); a mode that finds nothing to correct says why (`note`, shown over the photo: too few / too short lines, one object, lines that disagree, lines meeting inside the photo) and suggests Guided. Downgraded from ✅: a user's real pavilion shots (thick posts, thin poles) were not corrected and the tuning is so far proven on synthetic scenes only; thin poles below a pixel at the 1024 px analysis size are still lost |
 | LR-EDIT-GEOM-MANUAL | Manual transform | P1 | ✅ | `ctl:geometry.*` | |
 | LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`), `crates/engine/src/lib.rs` (`fit_constrained_crop`) | Ticking it, or changing Geometry, Upright or lens corrections while it is ticked, shrinks the stored crop about its centre until no blank corner is left, so the Crop tool shows it (it used to apply at render time only, outside the Crop tool: issue #1927; tests in `crates/engine/src/tests/constrain_crop.rs`). A crop drawn by hand is kept as drawn; unticking keeps the tighter crop |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
@@ -835,6 +835,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-31 | patch | LR-MASK-OVERLAY: the pointer on a mask's own row (name, eye, menu) shows no overlay, so its eye judges the effect; a component row under it shows the whole mask's overlay; status unchanged (✅) |
 | 2026-10-25 | minor | LR-MASK-OVERLAY: one overlay rule (O / the eye, or the pointer on the mask's row or pin while nothing is adjusted, or a mask without settings yet); a mask with settings never shows by itself, so picking, creating, duplicating or adding to one no longer shows the overlay (#1800's re-show replaced, its test changed to the rule); sliders, mask drags and brush strokes hide it and the mask's lines and pins while at work; no stand-in overlay while an AI selection is computed; status unchanged (✅) |
 | 2026-10-25 | minor | LR-EDIT-COLOR-MIXER-HSL: Lightroom Classic's layout (Mixer \| Point Color tabs, Adjust HSL / Color, Hue \| Saturation \| Luminance \| All with a targeted adjustment per group), `view.colorMixer`; status unchanged (✅) |
+| 2026-10-25 | minor | LR-EDIT-GEOM-UPRIGHT: ✅ → 🟡 (real shots of posts among people were not corrected; tuned on synthetic scenes only): a vertical family wins over a crowd of disagreeing lines unless they gather at a rival point, Vertical follows long posts rather than decks, drapes or gown folds; a mode that finds nothing says why |
 | 2026-10-30 | patch | LR-BEHAV-ACCESS: the Flatpak manifests grant `--talk-name=org.a11y.Bus`, so AccessKit can find out whether a screen reader is running and publish the window inside the sandbox; packaging lint requires it in both manifests; status unchanged (🟡), not tried with Orca |
 | 2026-10-27 | patch | LR-LIB-LABEL, MENU-PHOTO-LABEL, KEY-LABELS: Clear Color Label (`photo.clearLabel`) is a command of its own, so Help → Keyboard Shortcuts can give it a key (#2980); the Photo ▸ Set Color Label ▸ None row runs it; status unchanged |
 | 2026-10-25 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌘⌥⇧K / Ctrl+Alt+Shift+K (`dialog.keywordShortcut`, Set Keyword Shortcut) and ⇧K (`keyword.toggleShortcut`) add and remove the keyword shortcut's keywords; Keyword Shortcut leaves LRC-LIB-KEYWORDS' Not yet list; status counts unchanged (KEYC-METADATA stays 🟡) |
