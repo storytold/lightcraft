@@ -147,7 +147,27 @@ fn library_error(dir: &str, e: lightcraft_engine::EngineError) -> String {
     }
 }
 
+/// The desktop GUI's Launcher protocol is not a headless option: a CLI invoked with it (a shell
+/// completing `lightcraft` to `lightcraft-cli`, say) must say so rather than import the profile path
+/// as a folder. Checked before the arguments are otherwise read.
+fn launch_profile_refusal(args: impl Iterator<Item = String>) -> Option<String> {
+    for arg in args {
+        // (`--` ends the options: a file after it may be named like one of these.)
+        if arg == "--" {
+            break;
+        }
+        if arg == "--launch-profile" || arg == "--profile-root" || arg.starts_with("--launch-profile=") || arg.starts_with("--profile-root=") {
+            return Some(format!("lightcraft-cli: `{arg}` belongs to the LightCraft desktop app, not the headless CLI"));
+        }
+    }
+    None
+}
+
 fn main() -> ExitCode {
+    if let Some(refusal) = launch_profile_refusal(std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned())) {
+        eprintln!("{refusal}");
+        return ExitCode::from(2);
+    }
     // `--features dhat-heap`: count allocations; the profile is written when `_heap` drops
     // (LIGHTCRAFT_DHAT_FILE, default dhat-heap.json).
     #[cfg(feature = "dhat-heap")]
@@ -1134,6 +1154,28 @@ mod raw_files_tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
         assert_eq!(files, vec![a.join("one.NEF")]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod launch_profile_tests {
+    use super::launch_profile_refusal;
+
+    fn refusal(args: &[&str]) -> Option<String> {
+        launch_profile_refusal(args.iter().map(|a| (*a).to_string()))
+    }
+
+    #[test]
+    fn the_desktop_launch_protocol_is_refused_before_it_can_be_read_as_a_folder() {
+        for args in [
+            vec!["--launch-profile", "nightly-v1", "--profile-root", "/p", "--"],
+            vec!["run", "--profile-root=/p"],
+            vec!["--launch-profile=nightly-v1"],
+        ] {
+            assert!(refusal(&args).is_some(), "{args:?}");
+        }
+        assert!(refusal(&["run", "--library", "a", "--", "/p"]).is_none(), "a file named like an option after -- is a file");
+        assert!(refusal(&["run", "--demo"]).is_none());
     }
 }
 

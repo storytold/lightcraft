@@ -1,0 +1,71 @@
+{
+  "title": "LightCraft Nightly deep-background icons",
+  "author": "@skylartaylor",
+  "license": "MIT OR Apache-2.0",
+  "inputs": [
+    {
+      "path": "assets/app-icon/hicolor/256x256/apps/ai.storyteller.lightcraft.png",
+      "sha256": "57e58898ea1a1012ebafe1472e2438db2f02886a0e022c6abf88bcb71b690fc3",
+      "purpose": "Windows/Linux full-bleed 256 px master"
+    },
+    {
+      "path": "assets/app-icon/lightcraft-macos-512.png",
+      "sha256": "650dfc3a821e70e47d806e9eb4a4065de46bb518d78052708b4ed9722307151e",
+      "purpose": "padded macOS 512 px master; the 16/32/64 px icns slots are downsampled from it, never upscaled"
+    },
+    {
+      "path": "assets/app-icon/lightcraft.ico",
+      "sha256": "ef198753b4eca2e252553890a345cba48884998d6515fc36a67fb441c583999b",
+      "purpose": "the nine committed full-bleed frames"
+    },
+    {
+      "path": "assets/app-icon/lightcraft.icns",
+      "sha256": "73b594f33963d14ba8533cd9e5bf96fd8d37a1ac2a2cf78e81ba180235692f3b",
+      "purpose": "the committed padded macOS frames"
+    }
+  ],
+  "method": {
+    "kind": "original code-generated derivative of the project-owned icon",
+    "original_palette": {
+      "ink": "#0b0b0c",
+      "paper": "#efe9dc",
+      "background": "#f2a516"
+    },
+    "nightly_background": "#9a6610",
+    "transform": "Project every pixel onto the nearest two-colour segment of the drawing's exact palette (ink/paper, ink/background, paper/background), then move only the background share from the stable amber to the Nightly amber. Ink, paper, alpha and the macOS padding are unchanged; frames are packed at their own size and never upscaled. A frame downsampled from the padded master weights each channel by its pixel's alpha, so the transparent margin cannot darken the edge it borders. No crescent, letter or badge.",
+    "why_two_colours": "Solving ink, paper and background weights at once is numerically unstable for this palette: ink and paper are nearly collinear with the neutral axis, so a half-unit of rounding moves the ink/paper split by more than one. A real edge pixel is a blend of exactly two of the three colours.",
+    "generator": "packaging/nightly-icons.py",
+    "generator_sha256": "dff74f2a243d205c1babb8ebfa2d528bb8696b13839215f5f824447b09bf89f8"
+  },
+  "outputs": {
+    "assets/app-icon/lightcraft-nightly.png": "b92530460f2fc49cb768fd8b12be957b5d1cbaf2f82e89b335bc64193283d4c3",
+    "assets/app-icon/lightcraft-nightly.ico": "69a0c3f003dbf74d7ecb29252c1fbae4ca594a2744ee67cdbb2f3a8c85db0304",
+    "assets/app-icon/lightcraft-nightly-1024.png": "caa27ef797c22e6a2a95928341a717c6c5784acd5c09ce5547cefcf482617ddb",
+    "assets/app-icon/lightcraft-nightly.icns": "e738bbb001f347459c7ef1994c2c38f42570992238ad4bcf6d041ec7335a3767"
+  },
+  "ico_frame_sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icns_png_slots": {
+    "icp4": 16,
+    "icp5": 32,
+    "ic11": 32,
+    "icp6": 64,
+    "ic12": 64,
+    "ic07": 128,
+    "ic08": 256,
+    "ic13": 256,
+    "ic09": 512,
+    "ic14": 512,
+    "ic10": 1024
+  },
+  "validation": "packaging/nightly-icons-tests.py re-derives the committed bytes (--check) and pins that only the field share changes, that alpha and the padded margin are preserved, that a transparent block never darkens its visible colour, and that every container frame has its own size. The 16/32/64 px padded slots were regenerated with the alpha-weighted filter: only their anti-aliased edge colour moved (52/100/197 pixels, no alpha change); the other frames are byte-identical. Native Explorer/Finder qualification remains unrun."
+}
