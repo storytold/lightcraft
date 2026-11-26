@@ -5,7 +5,8 @@
 ### Import several Lightroom catalogs at once
 - File ▸ Import Lightroom Catalog… now takes several catalogs. The first asks where it goes, as before; the others are
   imported after it, one by one, into the same library, so two catalogs end up in one library without starting each
-  import by hand. If an import is cancelled or fails, the rest of the batch is not imported.
+  import by hand. Each catalog's result is shown in turn. If an import is cancelled or fails, the rest of the batch is
+  not imported, and closing the destination window without importing drops it.
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.

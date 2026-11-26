@@ -150,6 +150,7 @@ pub fn import(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Valu
                 location,
                 dont_ask: false,
                 generation: app.session.library_generation(),
+                then: Vec::new(),
             });
             Ok(json!({"asking": true, "path": path, "into": if new_library { "new" } else { "open" }}))
         }
@@ -191,16 +192,16 @@ fn params(catalog: &str, new_library: bool, name: &str, location: &str) -> Value
 /// agent, the control channel) makes the window stale for both choices: nothing is merged into
 /// it, and no new library is made from defaults that described the library it replaced.
 pub fn confirm(app: &mut LightcraftApp, dialog: &Dialog) -> Result<Value, String> {
-    let Dialog::LightroomDestination { catalog, new_library, name, location, dont_ask, generation, .. } = dialog else {
+    let Dialog::LightroomDestination { catalog, new_library, name, location, dont_ask, generation, then, .. } = dialog else {
         return Err("not the Lightroom catalog destination window".into());
     };
     if *generation != app.session.library_generation() {
         return Err(crate::i18n::tr("Another library was opened since this window appeared: nothing was imported").to_string());
     }
     let mut p = params(catalog, *new_library, name, location);
-    // several catalogs chosen: the others still follow this one
-    if !app.lightroom_queue.is_empty() {
-        p["paths"] = json!(std::iter::once(catalog.clone()).chain(app.lightroom_queue.iter().cloned()).collect::<Vec<_>>());
+    // several catalogs chosen: the others follow this one
+    if !then.is_empty() {
+        p["paths"] = json!(std::iter::once(catalog.clone()).chain(then.iter().cloned()).collect::<Vec<_>>());
     }
     let r = app.run("file.importLightroom", p)?;
     if !*new_library && *dont_ask {

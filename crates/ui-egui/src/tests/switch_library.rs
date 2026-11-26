@@ -66,11 +66,11 @@ fn switching_libraries_dismisses_the_previous_lightroom_result() {
         first: Some(1),
     };
     app.ui.dialog = Some(result());
-    app.lightroom_result = Some(result());
+    app.lightroom_results.push(result());
     app.lightroom_last = Some(json!({"imported": 1}));
     app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Second"})).unwrap();
     assert!(app.ui.dialog.is_none(), "the old destination and photo ID must not act on the new library");
-    assert!(app.lightroom_result.is_none());
+    assert!(app.lightroom_results.is_empty());
     assert!(app.lightroom_last.is_none());
     let _ = std::fs::remove_dir_all(dir);
 }

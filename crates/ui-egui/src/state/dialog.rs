@@ -287,6 +287,9 @@ pub enum Dialog {
         dont_ask: bool,
         /// `Session::library_generation` when the window opened.
         generation: u64,
+        /// The other catalogs chosen with this one, imported after it into the same library once the window
+        /// is confirmed (closed without importing, they are dropped with it).
+        then: Vec<String>,
     },
     /// Save the selected mask's sliders as a mask effect preset: which sliders (`FIELDS` names,
     /// the colour as `color_sat`), whether it carries Amount and the brush settings.

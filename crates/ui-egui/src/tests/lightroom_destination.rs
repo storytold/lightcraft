@@ -435,11 +435,16 @@ fn several_catalogs_import_one_after_another_and_a_failure_stops_the_rest() {
     let second = second.to_string_lossy().into_owned();
     let mut h = f.app(false);
     h.app.run("file.importLightroom", json!({"paths": [f.lrcat(), second], "into": "open"})).unwrap();
-    assert_eq!(h.app.lightroom_queue, vec![second.clone()], "the second waits for the first");
+    assert_eq!(queued(&h), Some((f.lrcat(), vec![second.clone()])), "the second waits for the first");
     let last = import_ends(&mut h, &f.lrcat);
     assert!(last.get("error").is_some(), "the fake catalog fails to read: {last}");
-    assert!(h.app.lightroom_queue.is_empty(), "the failed import stopped the batch");
+    assert_eq!(queued(&h), None, "the failed import stopped the batch");
     assert!(h.app.lightroom.is_none(), "the second catalog was not started");
+}
+
+/// The batch waiting for an import: the catalog it follows and the ones still to import.
+fn queued(h: &Headless) -> Option<(String, Vec<String>)> {
+    h.app.lightroom_queue.as_ref().map(|b| (b.after.clone(), b.rest.clone()))
 }
 
 /// A second fake catalog next to the fixture's, as text.
@@ -471,7 +476,7 @@ fn several_catalogs_chosen_in_the_background_dialog_are_imported_without_asking_
     let last = import_ends(&mut h, &f.lrcat);
     assert_eq!(asked.load(Ordering::Relaxed), 1, "the dialog was not opened again");
     assert!(last.get("error").is_some(), "the first fake catalog fails to read: {last}");
-    assert!(h.app.lightroom_queue.is_empty() && h.app.lightroom.is_none(), "and that stopped the batch");
+    assert!(queued(&h).is_none() && h.app.lightroom.is_none(), "and that stopped the batch");
 }
 
 /// A batch asked for while another one imports is refused, and the running batch keeps the catalogs it queued.
@@ -483,7 +488,7 @@ fn a_refused_batch_leaves_the_running_batchs_queue_alone() {
     h.app.run("file.importLightroom", json!({"paths": [f.lrcat(), second.clone()], "into": "open"})).unwrap();
     assert!(h.app.lightroom.is_some(), "the first catalog is importing");
     assert!(h.app.run("file.importLightroom", json!({"paths": [third, f.lrcat()], "into": "open"})).is_err(), "busy");
-    assert_eq!(h.app.lightroom_queue, vec![second], "the running batch's queue is unchanged");
+    assert_eq!(queued(&h), Some((f.lrcat(), vec![second])), "the running batch's queue is unchanged");
     import_ends(&mut h, &f.lrcat);
 }
 
@@ -497,19 +502,23 @@ fn the_destination_window_keeps_the_other_catalogs_only_when_it_starts_an_import
     let batch = json!({"paths": [f.lrcat(), second.clone()]});
     assert_eq!(h.app.run("file.importLightroom", batch.clone()).unwrap()["asking"], true);
     h.step();
-    assert_eq!(h.app.lightroom_queue, vec![second.clone()], "the rest waits behind the window");
+    assert!(
+        matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { then, .. }) if *then == vec![second.clone()]),
+        "the window keeps the rest"
+    );
+    assert_eq!(queued(&h), None, "nothing waits for an import before the window is confirmed");
     click(&mut h, "button:dialogCancel");
     assert!(destination(&h).is_none() && h.app.lightroom.is_none());
-    assert!(h.app.lightroom_queue.is_empty(), "closing the window dropped the batch");
+    assert_eq!(queued(&h), None, "closing the window dropped the batch");
 
     h.app.run("file.importLightroom", batch).unwrap();
     h.step();
-    let Some(Dialog::LightroomDestination { catalog, library, photos, name, location, generation, .. }) = h.app.ui.dialog.clone() else {
+    let Some(Dialog::LightroomDestination { catalog, library, photos, name, location, generation, then, .. }) = h.app.ui.dialog.clone() else {
         panic!("no destination window")
     };
-    let merge = Dialog::LightroomDestination { catalog, library, photos, new_library: false, name, location, dont_ask: false, generation };
+    let merge = Dialog::LightroomDestination { catalog, library, photos, new_library: false, name, location, dont_ask: false, generation, then };
     crate::lightroom_destination::confirm(&mut h.app, &merge).unwrap();
     assert!(h.app.lightroom.is_some(), "the first catalog is importing");
-    assert_eq!(h.app.lightroom_queue, vec![second], "the second still follows it");
+    assert_eq!(queued(&h), Some((f.lrcat(), vec![second])), "the second follows it, bound to its import");
     import_ends(&mut h, &f.lrcat);
 }
