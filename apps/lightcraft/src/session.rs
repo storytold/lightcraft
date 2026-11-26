@@ -1,6 +1,9 @@
 #[cfg(any(target_os = "freebsd", target_os = "linux"))]
 use super::platform::DIALOG_PARENT;
-use super::platform::{explorer_select_command, file_dialog, windows_open_url_command};
+use super::platform::file_dialog;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use super::platform::reveal_files;
+use super::platform::{open_url, reveal_one};
 use super::prefs::display_profile_dir;
 use super::*;
 
@@ -71,28 +74,13 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
             if !url.starts_with("https://") {
                 return Err("only https links are opened".into());
             }
-            let status = if cfg!(target_os = "macos") {
-                std::process::Command::new("open").arg(url).status()
-            } else if cfg!(target_os = "windows") {
-                windows_open_url_command(url).status()
-            } else {
-                std::process::Command::new("xdg-open").arg(url).status()
-            };
-            status.map(|_| ()).map_err(|e| e.to_string())
+            open_url(url)
         })),
-        reveal: Some(Box::new(|path: &str| {
-            let status = if cfg!(target_os = "macos") {
-                std::process::Command::new("open").args(["-R", path]).status()
-            } else if cfg!(target_os = "windows") {
-                explorer_select_command(path).status()
-            } else {
-                let dir = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
-                std::process::Command::new("xdg-open").arg(dir).status()
-            };
-            status
-                .map_err(|e| e.to_string())
-                .and_then(|s| if s.success() || cfg!(target_os = "windows") { Ok(()) } else { Err(format!("reveal failed: {s}")) })
-        })),
+        reveal: Some(Box::new(|path: &str| reveal_one(path))),
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        reveal_many: Some(Box::new(|paths: &[String]| reveal_files(paths))),
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        reveal_many: None,
         pick_files: Some(Box::new(|| {
             file_dialog()
                 .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS)

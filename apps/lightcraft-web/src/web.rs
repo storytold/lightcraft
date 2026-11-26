@@ -323,6 +323,7 @@ fn services(
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
         reveal: None,
+        reveal_many: None,
         log_file: None,
         open_with: None,
         open_all_with: None,
