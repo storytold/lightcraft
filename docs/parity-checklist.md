@@ -282,7 +282,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-REM-PEOPLE | Remove people (generative) | OOS | 🚫 | | |
 | LR-REM-REFLECT | Remove reflections | P2 | ⬜ | | |
 | LR-REM-DUST | Dust detection | P2 | ✅ | `cmd:spot.findDust`, `crates/pipeline/src/dust.rs` | Remove panel ▸ Find Dust Spots: small, soft, round dark spots on smooth areas become heal spots (sensitivity; one undo step); Visualize Spots for checking by eye |
-| LR-REM-BLEMISH | Find blemishes on faces (beyond Lightroom) | P2 | ✅ | `cmd:spot.findBlemishes`, `crates/pipeline/src/blemish.rs`, `crates/engine/src/cmd/face_detect.rs` | Remove panel ▸ Find Blemishes: with the YuNet detector installed, small darker-or-redder round spots on each face's skin (eyes, brows, nostrils and mouth cut out around the landmarks) become heal spots (one undo step); faces under 160 px and faces with more than 12 candidates (stubble, freckles) get none, at most 6 per face; sensitivity 0–100. Classical, no learned model beyond the detector; not a Lightroom feature |
+| LR-REM-BLEMISH | Find blemishes on faces (beyond Lightroom) | P2 | ✅ | `cmd:spot.findBlemishes`, `crates/pipeline/src/blemish.rs`, `crates/engine/src/cmd/face_detect.rs` | Remove panel ▸ Find Blemishes: with the YuNet detector installed, small darker-or-redder round spots on each face's skin (eyes, brows, nostrils and mouth cut out around the landmarks) become heal spots (one undo step); on a photo that carries Apple's skin and glasses mattes (ProRAW DNG semantic masks, and iPhone HEICs with #4354), the skin matte says what is skin instead of the colour gate (every skin tone and light) and nothing under the glasses counts (#4355); faces under 160 px and faces with more than 12 candidates (stubble, freckles) get none, at most 6 per face; sensitivity 0–100. Classical, no learned model beyond the detector; not a Lightroom feature |
 | LR-REM-SYNC | Sync spots | P1 | ✅ | `cmd:develop.copy` (`groups`), `crates/develop/src/presets.rs` | |
 
 ## J. Red eye (EYE)
@@ -807,6 +807,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | patch | LR-REM-BLEMISH: Find Blemishes keeps to the photo's skin matte and away from its glasses matte when it carries them (#4355); status unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-23 | minor | LR-BEHAV-RENDER-FIDELITY, LR-EDIT-LIGHT-SHADOWS, LR-EDIT-EFFECTS-TEXTURE, LR-EDIT-COLOR-GRADING, LRC-DEV-PROCESS: process V13 eases global Shadows off at large amounts, negative Texture and the Global grading wheel act less, fitted to Lightroom exports of real edits (#523); statuses and counts unchanged |
 | 2026-11-24 | minor | LR-REM-HEAL, LR-REM-CLONE, LRC-DEV-PROCESS: process V14 pins Heal and Remove spots to the photo on the spot's edge (membrane fill of the log ratio), matches the source's grain to its surroundings and reads every spot's source at whole pixels; statuses and counts unchanged |
