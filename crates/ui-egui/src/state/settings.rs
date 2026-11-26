@@ -30,7 +30,7 @@ pub enum LaunchLibrary {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GridBadges {
-    /// On hover, on the selection, and on rated or flagged photos.
+    /// Flags and colour labels always; stars and the edited mark on hover and on the selection.
     #[default]
     Auto,
     Always,
