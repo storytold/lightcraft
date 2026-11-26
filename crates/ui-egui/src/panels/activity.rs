@@ -55,7 +55,8 @@ fn detail_line(t: &TaskInfo) -> String {
 
 /// Draw the stack (called every frame, after the panels and dialogs).
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let all = app.session.activity.list();
+    // (a task waiting in line has nothing to show yet and no progress to draw: agents see it in `activity.list`)
+    let all: Vec<TaskInfo> = app.session.activity.list().into_iter().filter(|t| !t.waiting).collect();
     if all.is_empty() {
         app.activity_expanded = false;
         return;
