@@ -37,7 +37,7 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             area.center(),
             egui::Align2::CENTER_CENTER,
             crate::i18n::tr("No photo selected"),
-            egui::FontId::proportional(14.0),
+            crate::theme::Tokens::get(ui.ctx()).title(),
             Color32::GRAY,
         );
         return;

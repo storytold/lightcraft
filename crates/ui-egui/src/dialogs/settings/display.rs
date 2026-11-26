@@ -41,13 +41,13 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         }
     });
     if let Some(e) = &app.display_error {
-        ui.label(RichText::new(e).size(11.0).color(t.reject));
+        ui.label(RichText::new(e).font(t.caption()).color(t.reject));
     }
     if let Some(d) = &current {
         let info = d.describe();
         if !screen {
             row(ui, t, crate::i18n::tr("File"), |ui| {
-                path_label(ui, "settingsDisplayFile", &d.path, egui::FontId::proportional(11.0), t.text_dim, 0.0);
+                path_label(ui, "settingsDisplayFile", &d.path, t.caption(), t.text_dim, 0.0);
             });
         }
         row(ui, t, crate::i18n::tr("Type"), |ui| {
@@ -61,7 +61,7 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             let p = &info["primaries"];
             let xy = |(k, l): (&str, &str)| format!("{l} {:.3}, {:.3}", p[k][0].as_f64().unwrap_or(0.0), p[k][1].as_f64().unwrap_or(0.0));
             let text = [("red", "R"), ("green", "G"), ("blue", "B")].map(xy).join("   ");
-            ui.label(RichText::new(text).size(11.0).color(t.text_dim));
+            ui.label(RichText::new(text).font(t.caption()).color(t.text_dim));
         });
     }
     hint(
