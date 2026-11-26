@@ -254,6 +254,19 @@ fn other_device(here: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_link_is_not_copied_as_its_target() {
+    use crate::rename::MoveFs;
+    let dir = Scratch::new("copy-link");
+    std::fs::create_dir_all(dir.0.join("local")).unwrap();
+    std::fs::create_dir_all(dir.0.join("share")).unwrap();
+    std::fs::write(dir.0.join("local/private.txt"), b"secret").unwrap();
+    std::os::unix::fs::symlink(dir.0.join("local/private.txt"), dir.0.join("local/photo.xmp")).unwrap();
+    assert!(crate::rename::RealFs.copy_no_replace(&dir.0.join("local/photo.xmp"), &dir.0.join("share/photo.xmp")).is_err());
+    assert!(!dir.0.join("share/photo.xmp").exists());
+}
+
 #[test]
 fn the_copy_across_volumes_is_whole_or_absent_and_never_replaces() {
     use crate::rename::MoveFs;
