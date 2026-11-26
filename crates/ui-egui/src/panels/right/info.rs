@@ -102,7 +102,8 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 lightcraft_catalog::Source::File { path } => path.clone(),
                 lightcraft_catalog::Source::Demo { .. } => crate::i18n::tr("Generated demo photo").into(),
             };
-            ui.add(egui::Label::new(egui::RichText::new(path).size(12.0).color(t.text_label)).truncate());
+            // Selectable so the source path can still be copied (#1885 turned plain labels off).
+            ui.add(egui::Label::new(egui::RichText::new(path).size(12.0).color(t.text_label)).truncate().selectable(true));
             if crate::menus::ui_enabled(app, "app.showInFinder") {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, "infoReveal", Icon::Folder, vec2(20.0, 20.0), false, true, crate::menus::reveal_label())

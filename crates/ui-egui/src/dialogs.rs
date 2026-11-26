@@ -1017,7 +1017,8 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                 for (n, v) in list {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
-                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap());
+                    // values (serial numbers, lens names) are copied out of here; the field names are not
+                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap().selectable(true));
                     ui.end_row();
                 }
             });
@@ -2002,9 +2003,9 @@ fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the MovePhotos dialog.
 fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::MovePhotos { ids, name, dont_ask, .. } = dlg else { return };
-    let n = ids.len();
-    ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
+    let Dialog::MovePhotos { name, files, dont_ask, .. } = dlg else { return };
+    let n = *files;
+    ui.label(crate::i18n::tr_format!("Move {n} file{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);
     let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));

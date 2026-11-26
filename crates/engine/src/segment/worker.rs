@@ -9,8 +9,8 @@
 //! after [`IDLE_UNLOAD`] without requests (it holds several GB).
 //!
 //! Where the model runs ([`Placement`]): on macOS candle runs all of it on the GPU through Metal.
-//! Elsewhere candle runs on the CPU, and the backbone (most of the work) can run on the GPU through an
-//! accelerator ([`GPU_BACKBONE`]: none in this build yet, so it runs in candle as before), unless the GPU is switched off (`LIGHTCRAFT_GPU=0`,
+//! Elsewhere candle runs on the CPU, and the backbone (most of the work) on the GPU with
+//! `lightcraft-gpu`'s wgpu kernels, unless the GPU is switched off (`LIGHTCRAFT_GPU=0`,
 //! `LIGHTCRAFT_GPU_BACKEND=off`, or Settings ▸ Performance ▸ Use the GPU for rendering, as for AI
 //! Denoise and faces); a GPU that can't be used or fails on a photo leaves the backbone to the CPU.
 //! Settings ▸ Performance ▸ AI masks ▸ CPU ([`Job::cpu`]) puts all of it on the CPU, on every
@@ -213,11 +213,7 @@ fn wanted(best_is_cpu: bool, cpu: bool, failed: Option<&str>) -> Placement {
     if let Some(why) = lightcraft_gpu::env_off_reason() {
         return Placement::Cpu(why.into());
     }
-    match placement(best_is_cpu, lightcraft_gpu::switched_off(), false) {
-        // without a GPU backbone in this build, candle's best device runs it all
-        Placement::GpuBackbone if GPU_BACKBONE.is_none() => Placement::Best,
-        p => p,
-    }
+    placement(best_is_cpu, lightcraft_gpu::switched_off(), false)
 }
 
 /// Whether a model loaded for `loaded` runs somewhere else than `wanted` (it must load again), candle's best device
@@ -239,16 +235,8 @@ fn moves(loaded: &Placement, wanted: &Placement, best_is_cpu: bool) -> bool {
     runs(loaded) != runs(wanted)
 }
 
-/// Builds the GPU backbone from the checkpoint (tests use fakes).
+/// Builds the GPU backbone from the checkpoint (`lightcraft_gpu::sam3::backbone`; tests use fakes).
 type MakeAccel = fn(&WeightReader) -> Result<Box<dyn BackboneAccel>, String>;
-
-/// The GPU backbone of this build: none yet (its wgpu kernels come separately), so where candle has no GPU the
-/// model runs in candle on the CPU, as before.
-const GPU_BACKBONE: Option<MakeAccel> = None;
-
-fn no_accelerator(_: &WeightReader) -> Result<Box<dyn BackboneAccel>, String> {
-    Err("this build has no GPU backbone".into())
-}
 
 /// Load the model in `dir` as `placement` says, on `best` (candle's best device).
 fn load(dir: &Path, best: Device, placement: &Placement, make: MakeAccel) -> lightcraft_segment::Result<Sam3> {
@@ -535,7 +523,7 @@ fn model<'a>(state: &'a mut State, shared: &Shared, dir: &Path, cpu: bool, faile
         let best = if skip { Device::Cpu } else { lightcraft_segment::best_device() };
         let best_is_cpu = if skip { !cfg!(target_os = "macos") } else { best.is_cpu() };
         let placement = wanted(best_is_cpu, cpu, failed);
-        let m = load(dir, best, &placement, GPU_BACKBONE.unwrap_or(no_accelerator))?;
+        let m = load(dir, best, &placement, lightcraft_gpu::sam3::backbone)?;
         log::info!("SAM 3 loaded in {:?}: the backbone on the {}, the rest on the {}", t.elapsed(), m.backbone_device(), m.heads_device());
         note_loaded(shared, &m, &placement);
         state.model = Some((dir.to_path_buf(), m));
