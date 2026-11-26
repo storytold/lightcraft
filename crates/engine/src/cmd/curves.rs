@@ -311,6 +311,13 @@ fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "missing `path` / `paths`"));
     }
     let (mut imported, mut failed) = (Vec::new(), Vec::new());
+    // the user presets by name, kept up to date: a file of many presets replaces or adds each
+    // without a scan of all the others
+    // (the first of two same-named presets, as `upsert` and the lookups find it)
+    let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, x) in s.curve_presets.iter().enumerate() {
+        by_name.entry(x.name.to_ascii_lowercase()).or_insert(i);
+    }
     for f in &paths {
         match std::fs::read(f).map_err(|e| e.to_string()).and_then(|b| parse_file(&b)) {
             Ok(list) => {
@@ -321,7 +328,13 @@ fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
                         preset.name = format!("{} (imported)", preset.name);
                     }
                     imported.push(preset.name.clone());
-                    upsert(s, preset);
+                    match by_name.get(&preset.name.to_ascii_lowercase()).and_then(|&i| s.curve_presets.get_mut(i)) {
+                        Some(x) => *x = preset,
+                        None => {
+                            by_name.insert(preset.name.to_ascii_lowercase(), s.curve_presets.len());
+                            s.curve_presets.push(preset);
+                        }
+                    }
                 }
             }
             Err(e) => failed.push(json!([f, e])),
@@ -349,9 +362,8 @@ fn export_presets(s: &mut Session, p: &Value) -> Result<Value> {
     if chosen.is_empty() {
         return Err(bad(C, "no curve presets to export (save one first, or pass names)"));
     }
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).map_err(|e| crate::EngineError::Other(format!("{}: {e}", dir.display())))?;
-    }
-    std::fs::write(&path, to_file(&chosen)).map_err(|e| crate::EngineError::Other(format!("{}: {e}", path.display())))?;
+    let target = path.to_string_lossy();
+    s.check_write_target(&target).map_err(|e| bad(C, e))?;
+    crate::export::write_file_durable(&target, to_file(&chosen).as_bytes()).map_err(crate::EngineError::Other)?;
     Ok(json!({"path": path.display().to_string(), "count": chosen.len()}))
 }

@@ -1,5 +1,5 @@
 //! Safe CPU kernels shared by detection and recognition. No inner thread pool.
-use super::*;
+use super::{ConvJob, Graph, MAX_TENSOR, NetError, Node, Result, Tensor, chw, conv_direct, pads, pair, program, shape, shape_err};
 use ndarray::{ArrayView2, ArrayViewMut2, linalg::general_mat_mul};
 const BLOCK: usize = 256;
 #[derive(Default)]
@@ -30,7 +30,16 @@ fn multiply(w: &[f32], x: &[f32], y: &mut [f32], m: usize, k: usize, n: usize) -
 }
 /// For equal-width, unit-stride maps a shifted plane is one contiguous copy. Only horizontal
 /// border stripes need masking; clipping the flat source range also removes vertical padding.
-fn shifted_plane(plane: &[f32], width: usize, ky: usize, kx: usize, pt: usize, pl: usize, start: usize, row: &mut [f32]) -> Result<()> {
+#[derive(Clone, Copy)]
+struct PlaneShift {
+    width: usize,
+    kernel: (usize, usize),
+    padding: (usize, usize),
+    start: usize,
+}
+
+fn shifted_plane(plane: &[f32], row: &mut [f32], shift: PlaneShift) -> Result<()> {
+    let PlaneShift { width, kernel: (ky, kx), padding: (pt, pl), start } = shift;
     let end = start + row.len();
     let delta = (ky as i128 - pt as i128) * width as i128 + kx as i128 - pl as i128;
     let lo = (-delta).clamp(start as i128, end as i128);
@@ -58,6 +67,33 @@ fn shifted_plane(plane: &[f32], width: usize, ky: usize, kx: usize, pt: usize, p
         }
     }
     Ok(())
+}
+/// The checked geometry of a convolution node, for an accelerator.
+pub(super) fn conv_job<'a>(layer: usize, n: &Node, shape: &[usize], input: &'a [f32], g: &'a Graph) -> Result<ConvJob<'a>> {
+    let (cin, h, w) = program::chw_of(shape)?;
+    let wt = shape::weight(n, g, 1)?;
+    let weights = shape::floats(n, g, 1)?;
+    let [cout, cg, kh, kw] = wt.dims.as_slice() else {
+        return shape_err("invalid convolution weights");
+    };
+    let (cout, cg, kh, kw) = (*cout, *cg, *kh, *kw);
+    let groups = usize::try_from(n.int("group").unwrap_or(1)).map_err(|_| NetError::Shape("invalid group".into()))?;
+    let (sh, sw) = pair(n, "strides", 1)?;
+    let (pt, pl, pb, pr) = pads(n)?;
+    let ph = h.checked_add(pt).and_then(|v| v.checked_add(pb)).ok_or_else(|| NetError::Shape("padding overflow".into()))?;
+    let pw = w.checked_add(pl).and_then(|v| v.checked_add(pr)).ok_or_else(|| NetError::Shape("padding overflow".into()))?;
+    if ph < kh || pw < kw || groups == 0 || cg == 0 || kh == 0 || kw == 0 || cin != groups * cg || cout % groups != 0 {
+        return shape_err("invalid convolution shape");
+    }
+    if cout.checked_mul(cg).and_then(|v| v.checked_mul(kh * kw)) != Some(weights.len()) {
+        return shape_err("short convolution weights");
+    }
+    let bias = if n.inputs.get(2).is_some_and(|s| !s.is_empty()) { Some(shape::floats(n, g, 2)?) } else { None };
+    if bias.is_some_and(|b| b.len() != cout) {
+        return shape_err("the convolution bias does not match");
+    }
+    let (oh, ow) = ((ph - kh) / sh + 1, (pw - kw) / sw + 1);
+    Ok(ConvJob { layer, cin, h, w, cout, groups, kh, kw, sh, sw, pt, pl, oh, ow, weights, bias, input })
 }
 pub(super) fn conv(n: &Node, x: &Tensor, g: &Graph, scratch: &mut Scratch) -> Result<Tensor> {
     let (cin, h, w) = chw(x)?;
@@ -118,13 +154,8 @@ pub(super) fn conv(n: &Node, x: &Tensor, g: &Graph, scratch: &mut Scratch) -> Re
                         if sh == 1 && sw == 1 && ow == w {
                             shifted_plane(
                                 plane,
-                                w,
-                                ky,
-                                kx,
-                                pt,
-                                pl,
-                                start,
                                 row.get_mut(..len).ok_or_else(|| NetError::Shape("short lower panel".into()))?,
+                                PlaneShift { width: w, kernel: (ky, kx), padding: (pt, pl), start },
                             )?;
                             continue;
                         }
@@ -181,7 +212,7 @@ pub(super) fn conv(n: &Node, x: &Tensor, g: &Graph, scratch: &mut Scratch) -> Re
     Ok(out)
 }
 /// Flat offset under ONNX's trailing-dimension broadcasting; shapes are checked before execution.
-fn broadcast_offset(mut at: usize, out: &[usize], input: &[usize]) -> usize {
+pub(super) fn broadcast_offset(mut at: usize, out: &[usize], input: &[usize]) -> usize {
     let mut offset = 0;
     let mut stride = 1;
     for (axis, &size) in out.iter().enumerate().rev() {

@@ -238,6 +238,23 @@ fn recently_deleted_shows_the_deleted_photos_of_the_chosen_folder() {
 }
 
 #[test]
+fn a_deleted_browsed_photo_shows_in_recently_deleted_and_comes_back() {
+    let mut c = Catalog::new();
+    let browsed = add_with(&mut c, "/pics/trip/a.jpg", |p| p.local = true);
+    let recently_deleted = Filter { deleted: true, ..Default::default() };
+    let library = Filter::default();
+    assert!(!recently_deleted.matches(c.photo(browsed).unwrap(), &c));
+    assert!(!library.matches(c.photo(browsed).unwrap(), &c), "browsed photos stay out of the library view");
+
+    c.apply(Op::SetDeleted { id: browsed, deleted: true }).unwrap();
+    assert_eq!(c.query(&recently_deleted, &Sort::default()), vec![browsed], "#1430: it was invisible everywhere");
+    assert!(c.query(&library, &Sort::default()).is_empty());
+
+    c.apply(Op::SetDeleted { id: browsed, deleted: false }).unwrap();
+    assert!(c.query(&recently_deleted, &Sort::default()).is_empty());
+}
+
+#[test]
 fn an_empty_folder_choice_is_no_choice() {
     let c = library(&["/pics/a.jpg"]);
     let f = Filter { library_folder: Some("  ".into()), ..Default::default() };

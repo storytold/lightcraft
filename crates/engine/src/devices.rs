@@ -104,6 +104,18 @@ impl DeviceWatch {
         s.list.clone()
     }
 
+    /// Like [`DeviceWatch::get`], but `None` until the first scan has landed, so an empty list
+    /// means no cards rather than not looked yet.
+    pub fn get_scanned(self: &Arc<Self>) -> Option<Vec<Device>> {
+        let _ = self.get();
+        let s = self.state();
+        #[cfg(not(target_arch = "wasm32"))]
+        let scanned = s.scanned.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let scanned = false;
+        scanned.then(|| s.list.clone())
+    }
+
     /// Scan now on this thread, and serve the result to later [`DeviceWatch::get`] calls.
     pub fn scan_now(&self) -> Vec<Device> {
         let list = (self.scanner)();
@@ -146,6 +158,12 @@ fn global() -> &'static Arc<DeviceWatch> {
 /// refreshed in the background when older than [`MAX_AGE`] (empty until the first scan lands).
 pub fn devices() -> Vec<Device> {
     global().get()
+}
+
+/// [`devices`], but `None` until the first scan lands. The import prompt uses it so a card that was
+/// already in when LightCraft started isn't taken for a new one.
+pub fn devices_scanned() -> Option<Vec<Device>> {
+    global().get_scanned()
 }
 
 /// Scan the mounted volumes now (blocking), for explicit requests.
@@ -284,5 +302,25 @@ mod tests {
         mounted.lock().unwrap().clear();
         assert!(watch.scan_now().is_empty());
         assert_eq!(changes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn get_scanned_waits_for_the_first_scan() {
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let g = gate.clone();
+        let watch = DeviceWatch::new(
+            move || {
+                while !g.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                vec![card("NIKON Z 8")]
+            },
+            Duration::from_secs(60),
+        );
+        assert_eq!(watch.get_scanned(), None, "nothing scanned yet");
+        assert_eq!(watch.get_scanned(), None);
+        gate.store(true, Ordering::SeqCst);
+        assert!(until(|| watch.get_scanned().is_some()));
+        assert_eq!(watch.get_scanned(), Some(vec![card("NIKON Z 8")]));
     }
 }

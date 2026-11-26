@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
+use craft_http_url::parse_content_range;
 use http::{HttpError, Limits, Url};
 
 /// One file of the model.
@@ -242,6 +243,7 @@ fn validate_files(files: &[FileSpec<'_>]) -> Result<u64, DownloadError> {
     if files.len() > 256 {
         return Err(DownloadError::Invalid("too many files".into()));
     }
+    // (names that differ only in case are one file on a case-insensitive file system)
     let mut seen = std::collections::HashSet::new();
     let mut total = 0u64;
     for f in files {
@@ -259,7 +261,7 @@ fn validate_files(files: &[FileSpec<'_>]) -> Result<u64, DownloadError> {
             || f.name.starts_with('.')
             || f.name.contains(['/', '\\', ':'])
             || f.name.chars().any(char::is_control)
-            || !seen.insert(f.name)
+            || !seen.insert(f.name.to_lowercase())
         {
             return Err(DownloadError::Invalid("a filename must be a unique, ordinary filename".into()));
         }
@@ -314,6 +316,15 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// A new, empty partial download at `part`, created exclusively after removing whatever was there (a link itself,
+/// never its target).
+fn new_part(part: &Path) -> std::io::Result<File> {
+    if std::fs::symlink_metadata(part).is_ok() {
+        std::fs::remove_file(part)?;
+    }
+    OpenOptions::new().write(true).create_new(true).open(part)
+}
+
 fn part_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.part"))
 }
@@ -324,9 +335,10 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
     let part = part_path(dir, f.name);
     let limit = f.size.unwrap_or(f.max);
     let disk = |e: std::io::Error| Fail::Disk(format!("{}: {e}", part.display()));
-    // resume only a pinned file (an unpinned one can't be checked after resuming)
-    let mut have = match std::fs::metadata(&part) {
-        Ok(m) if f.size.is_some() && m.len() <= limit => m.len(),
+    // resume only a pinned file (an unpinned one can't be checked after resuming), and only a plain file: anything
+    // else at that name (a link, which `metadata` would follow) is removed, never written through (issue #1502)
+    let mut have = match std::fs::symlink_metadata(&part) {
+        Ok(m) if m.is_file() && f.size.is_some() && m.len() <= limit => m.len(),
         Ok(_) => {
             std::fs::remove_file(&part).map_err(disk)?;
             0
@@ -368,13 +380,17 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
                     return Err(Fail::NextMirror(format!("the server's file has the wrong size ({:?} bytes)", resp.content_length())));
                 }
                 have = 0;
-                File::create(&part).map_err(disk)?
+                new_part(&part).map_err(disk)?
             }
             206 if have > 0 => {
                 let range = resp.header("content-range").unwrap_or_default();
                 let (start, total) = parse_content_range(range).ok_or_else(|| Fail::NextMirror(format!("bad Content-Range `{range}`")))?;
                 if start != have || total.is_some_and(|t| Some(t) != f.size) {
                     return Err(Fail::NextMirror(format!("the server resumed at the wrong place ({range})")));
+                }
+                // (still the plain file checked above: a link put there meanwhile is not appended to)
+                if !std::fs::symlink_metadata(&part).is_ok_and(|m| m.is_file()) {
+                    return Err(Fail::Retry("the partial download changed; starting over".into()));
                 }
                 OpenOptions::new().append(true).open(&part).map_err(disk)?
             }
@@ -445,22 +461,6 @@ fn http_fail(e: HttpError) -> Fail {
         HttpError::Stalled | HttpError::Io(_) | HttpError::Protocol(_) => Fail::Retry(e.to_string()),
         HttpError::BadUrl(_) | HttpError::Connect(_) | HttpError::Tls(_) => Fail::NextMirror(e.to_string()),
     }
-}
-
-/// `bytes a-b/total` → (a, total) (`*` total → None).
-fn parse_content_range(v: &str) -> Option<(u64, Option<u64>)> {
-    let v = v.trim().strip_prefix("bytes")?.trim();
-    let (range, total) = v.split_once('/')?;
-    let (a, b) = range.split_once('-')?;
-    let (a, b) = (a.trim().parse::<u64>().ok()?, b.trim().parse::<u64>().ok()?);
-    if b < a {
-        return None;
-    }
-    let total = match total.trim() {
-        "*" => None,
-        t => Some(t.parse::<u64>().ok()?),
-    };
-    Some((a, total))
 }
 
 #[cfg(test)]

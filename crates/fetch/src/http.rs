@@ -10,7 +10,7 @@
 //! the downloading thread. No proxies (see docs/ai-masks.md).
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -59,91 +59,30 @@ pub struct Url {
 }
 
 impl Url {
-    pub fn parse(s: &str) -> Result<Url, HttpError> {
-        let bad = |why: &str| HttpError::BadUrl(why.to_string());
-        if s.len() > 16 * 1024 {
-            return Err(bad("URL exceeds 16 KiB"));
-        }
-        let s = s.trim();
-        if s.chars().any(|c| c.is_control() || c == ' ') {
-            return Err(bad("contains spaces or control characters"));
-        }
-        let (tls, rest) = if let Some(r) = s.strip_prefix("https://") {
-            (true, r)
-        } else if let Some(r) = s.strip_prefix("http://") {
-            (false, r)
-        } else {
-            return Err(bad("only http:// and https:// are supported"));
-        };
-        let rest = rest.split('#').next().unwrap_or_default();
-        let (authority, path) = match rest.find(['/', '?']) {
-            Some(i) => (rest.get(..i).unwrap_or_default(), rest.get(i..).unwrap_or_default()),
-            None => (rest, ""),
-        };
-        let path = if path.starts_with('/') { path.to_string() } else { format!("/{path}") };
-        if authority.contains('@') {
-            return Err(bad("user names and passwords in URLs are not supported"));
-        }
-        let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
-            let end = v6.find(']').ok_or_else(|| bad("unterminated IPv6 address"))?;
-            let host = v6.get(..end).unwrap_or_default();
-            let after = v6.get(end + 1..).unwrap_or_default();
-            (host.to_string(), after.strip_prefix(':'))
-        } else {
-            match authority.rsplit_once(':') {
-                Some((h, p)) => (h.to_string(), Some(p)),
-                None => (authority.to_string(), None),
-            }
-        };
-        let port = match port {
-            Some(p) => p.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(|| bad("bad port"))?,
-            None if tls => 443,
-            None => 80,
-        };
-        if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | ':' | '_')) {
-            return Err(bad("bad host name"));
-        }
-        Ok(Url { tls, host: host.to_ascii_lowercase(), port, path })
+    fn shared(&self) -> craft_http_url::Url {
+        craft_http_url::Url { tls: self.tls, host: self.host.clone(), port: self.port, path: self.path.clone() }
     }
 
-    /// `Location` of a redirect, resolved against this URL.
-    pub fn join(&self, location: &str) -> Result<Url, HttpError> {
-        let l = location.trim();
-        if l.starts_with("http://") || l.starts_with("https://") {
-            return Url::parse(l);
-        }
-        // another scheme (`ftp:`, `file:`, `data:`…)
-        if let Some((scheme, _)) = l.split_once(':')
-            && !scheme.is_empty()
-            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-        {
-            return Err(HttpError::BadUrl(format!("redirect to an unsupported location `{scheme}:`")));
-        }
-        let scheme = if self.tls { "https" } else { "http" };
-        let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
-        let base = format!("{scheme}://{host}:{}", self.port);
-        if let Some(rest) = l.strip_prefix("//") {
-            return Url::parse(&format!("{scheme}://{rest}"));
-        }
-        if l.starts_with('/') {
-            return Url::parse(&format!("{base}{l}"));
-        }
-        // relative to the current directory
-        let dir = self.path.split('?').next().unwrap_or("/");
-        let dir = dir.rsplit_once('/').map_or("", |(d, _)| d);
-        Url::parse(&format!("{base}{dir}/{l}"))
+    fn from_shared(url: craft_http_url::Url) -> Self {
+        Self { tls: url.tls, host: url.host, port: url.port, path: url.path }
+    }
+
+    pub fn parse(s: &str) -> Result<Self, HttpError> {
+        craft_http_url::Url::parse(s).map(Self::from_shared).map_err(|e| HttpError::BadUrl(e.0))
+    }
+
+    /// Resolve a redirect without weakening HTTPS or changing app-owned credential policy.
+    pub fn join(&self, location: &str) -> Result<Self, HttpError> {
+        self.shared().join(location).map(Self::from_shared).map_err(|e| HttpError::BadUrl(e.0))
     }
 
     fn host_header(&self) -> String {
-        let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
-        let default = if self.tls { 443 } else { 80 };
-        if self.port == default { host } else { format!("{host}:{}", self.port) }
+        self.shared().host_header()
     }
 
-    /// The URL without its query (for messages: a query may hold a signed token).
+    /// The URL without its query (which may contain a signed token).
     pub fn display(&self) -> String {
-        let scheme = if self.tls { "https" } else { "http" };
-        format!("{scheme}://{}{}", self.host_header(), self.path.split('?').next().unwrap_or("/"))
+        self.shared().display()
     }
 }
 
@@ -178,27 +117,68 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>, HttpError> {
     Ok(Arc::new(config))
 }
 
+/// Resolve a host name within `deadline`, checking the cancel flag while it runs. The system resolver blocks with no
+/// timeout of its own, so it runs on a helper thread (which ends when the resolver returns); a lookup that takes too
+/// long is given up on, and Cancel works during it (issue #1532).
+fn lookup(
+    host: &str,
+    resolve: impl FnOnce() -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+    deadline: Instant,
+    limits: &Limits,
+) -> Result<Vec<SocketAddr>, HttpError> {
+    if limits.cancel.load(Ordering::Relaxed) {
+        return Err(HttpError::Cancelled);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("lc-fetch-lookup".into())
+        .spawn(move || {
+            let _ = tx.send(resolve());
+        })
+        .map_err(|e| HttpError::Connect(format!("{host}: {e}")))?;
+    loop {
+        if limits.cancel.load(Ordering::Relaxed) {
+            return Err(HttpError::Cancelled);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(HttpError::Connect(format!("{host}: the name lookup timed out")));
+        }
+        match rx.recv_timeout(left.min(TICK)) {
+            Ok(r) => return r.map_err(|e| HttpError::Connect(format!("{host}: {e}"))),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(HttpError::Connect(format!("{host}: the name lookup failed"))),
+        }
+    }
+}
+
+/// Connect to the first of `addrs` that answers, all of them together within `deadline` (each used to get the whole
+/// connect timeout of its own, issue #1532).
+fn connect_any(host: &str, addrs: &[SocketAddr], deadline: Instant, limits: &Limits) -> Result<TcpStream, HttpError> {
+    let mut last = format!("{host}: no address");
+    for a in addrs {
+        if limits.cancel.load(Ordering::Relaxed) {
+            return Err(HttpError::Cancelled);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(HttpError::Connect(format!("{host}: connecting timed out")));
+        }
+        match TcpStream::connect_timeout(a, left) {
+            Ok(s) => return Ok(s),
+            Err(e) => last = format!("{host}: {e}"),
+        }
+    }
+    Err(HttpError::Connect(last))
+}
+
 impl Stream {
     fn connect(url: &Url, limits: &Limits) -> Result<Stream, HttpError> {
-        let addrs: Vec<_> = (url.host.as_str(), url.port).to_socket_addrs().map_err(|e| HttpError::Connect(format!("{}: {e}", url.host)))?.collect();
-        if addrs.is_empty() {
-            return Err(HttpError::Connect(format!("{}: no address", url.host)));
-        }
-        let mut last = String::new();
-        let mut sock = None;
-        for a in addrs {
-            if limits.cancel.load(Ordering::Relaxed) {
-                return Err(HttpError::Cancelled);
-            }
-            match TcpStream::connect_timeout(&a, limits.connect) {
-                Ok(s) => {
-                    sock = Some(s);
-                    break;
-                }
-                Err(e) => last = format!("{}: {e}", url.host),
-            }
-        }
-        let sock = sock.ok_or(HttpError::Connect(last))?;
+        // the lookup and the connection attempts share one connect timeout
+        let deadline = Instant::now() + limits.connect;
+        let (host, port) = (url.host.clone(), url.port);
+        let addrs = lookup(&url.host, move || (host.as_str(), port).to_socket_addrs().map(Iterator::collect), deadline, limits)?;
+        let sock = connect_any(&url.host, &addrs, deadline, limits)?;
         sock.set_read_timeout(Some(TICK)).map_err(|e| HttpError::Io(e.to_string()))?;
         sock.set_write_timeout(Some(TICK)).map_err(|e| HttpError::Io(e.to_string()))?;
         let _ = sock.set_nodelay(true);
@@ -425,7 +405,8 @@ impl Response {
                 if *left == 0 {
                     let line = self.conn.line(1024, limits)?;
                     let hex = line.split(';').next().unwrap_or_default().trim();
-                    let size = u64::from_str_radix(hex, 16).map_err(|_| HttpError::Protocol(format!("bad chunk size `{hex}`")))?;
+                    let size = if hex.bytes().all(|b| b.is_ascii_hexdigit()) { u64::from_str_radix(hex, 16).ok() } else { None }
+                        .ok_or_else(|| HttpError::Protocol(format!("bad chunk size `{hex}`")))?;
                     if size == 0 {
                         // trailers, up to the empty line
                         let mut n = 0;
@@ -501,7 +482,10 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
     } else if find("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
         BodyMode::Chunked { left: 0, done: false }
     } else if let Some(n) = find("content-length") {
-        BodyMode::Length(n.trim().parse::<u64>().map_err(|_| HttpError::Protocol(format!("bad Content-Length `{n}`")))?)
+        // RFC 9110: `1*DIGIT`; `u64::from_str` alone would also take a leading '+'
+        let v = n.trim();
+        let len = if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) { v.parse::<u64>().ok() } else { None };
+        BodyMode::Length(len.ok_or_else(|| HttpError::Protocol(format!("bad Content-Length `{n}`")))?)
     } else {
         BodyMode::Close
     };
@@ -509,13 +493,124 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
 }
 
 #[cfg(test)]
+mod tests_connect {
+    use super::*;
+
+    fn limits(cancel: &AtomicBool) -> Limits<'_> {
+        Limits { connect: Duration::from_millis(300), stall: Duration::from_secs(1), cancel }
+    }
+
+    /// A name lookup that hangs is given up on at the connect timeout, and Cancel stops it at once (issue #1532).
+    #[test]
+    fn a_hung_name_lookup_times_out_and_can_be_cancelled() {
+        let cancel = AtomicBool::new(false);
+        let slow = || {
+            std::thread::sleep(Duration::from_secs(10));
+            Ok(Vec::new())
+        };
+        let t = Instant::now();
+        let r = lookup("slow.example", slow, Instant::now() + Duration::from_millis(300), &limits(&cancel));
+        assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+        // Cancel while the lookup is waiting on the resolver, not before it starts
+        let t = Instant::now();
+        let r = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                cancel.store(true, Ordering::Relaxed);
+            });
+            lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel))
+        });
+        assert!(matches!(r, Err(HttpError::Cancelled)), "{r:?}");
+        assert!(t.elapsed() >= Duration::from_millis(100) && t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        // and a lookup asked for after Cancel doesn't start
+        assert!(matches!(lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel)), Err(HttpError::Cancelled)));
+        // a lookup that answers is used
+        let cancel = AtomicBool::new(false);
+        let local: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        assert_eq!(lookup("local", move || Ok(vec![local]), Instant::now() + Duration::from_secs(5), &limits(&cancel)).unwrap(), [local]);
+    }
+
+    /// Several addresses that don't answer share one deadline instead of each getting the full timeout.
+    #[test]
+    fn addresses_share_one_connect_deadline() {
+        let cancel = AtomicBool::new(false);
+        // non-routable addresses: each either hangs until the deadline or fails at once, never longer
+        let addrs: Vec<SocketAddr> = (1..=5).map(|i| format!("10.255.255.{i}:81").parse().unwrap()).collect();
+        let t = Instant::now();
+        let r = connect_any("blackhole", &addrs, Instant::now() + Duration::from_millis(400), &limits(&cancel));
+        assert!(r.is_err());
+        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+    }
+
+    /// Content-Length is `1*DIGIT`: a sign, hex prefix, trailing junk or empty value is refused, not read as a length.
+    #[test]
+    fn signed_or_malformed_content_length_is_refused() {
+        for value in ["+3", "-3", "3x", "", "0x10", "+0"] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = std::thread::spawn(move || {
+                let (mut s, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {value}\r\n\r\nabc").as_bytes());
+            });
+            let cancel = AtomicBool::new(false);
+            let url = Url::parse(&format!("http://127.0.0.1:{port}/f")).unwrap();
+            match get(&url, &[], &limits(&cancel)) {
+                Err(HttpError::Protocol(m)) => assert!(m.contains("bad Content-Length"), "{value:?}: {m}"),
+                Err(e) => panic!("{value:?}: unexpected error {e:?}"),
+                Ok(r) => panic!("{value:?}: malformed Content-Length accepted (status {})", r.status),
+            }
+            server.join().unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn fragment_only_or_empty_location_keeps_file_name_and_query() {
+        let base = Url::parse("https://a.example/x/y/file?q").unwrap();
+        for l in ["#top", "", "  "] {
+            let u = base.join(l).unwrap();
+            assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/x/y/file?q"), "{l:?}");
+        }
+    }
+
+    #[test]
     fn rejects_oversized_and_control_character_urls() {
+        let base = Url::parse("https://example.com/path").unwrap();
+        assert!(base.join(&format!("#{}", "x".repeat(16 * 1024))).is_err());
         assert!(Url::parse(&format!("https://example.com/{}", "x".repeat(16 * 1024))).is_err());
         assert!(Url::parse("https://example.com/x?secret=abc\r\nInjected: 1").is_err());
+    }
+
+    #[test]
+    fn join_query_only_keeps_file_name() {
+        let u = Url::parse("https://a.example/x/y/file?q=1").unwrap();
+        assert_eq!(u.join("?page=2").unwrap().path, "/x/y/file?page=2");
+    }
+
+    #[test]
+    fn join_removes_dot_segments() {
+        let base = Url::parse("https://a.example/x/y/file").unwrap();
+        for (loc, want) in
+            [("../z", "/x/z"), ("./z", "/x/y/z"), ("../../../z", "/z"), ("/a/./b/../c", "/a/c"), ("../z?q=1", "/x/z?q=1"), ("..", "/x/")]
+        {
+            assert_eq!(base.join(loc).unwrap().path, want, "{loc}");
+        }
+    }
+
+    #[test]
+    fn url_scheme_is_matched_case_insensitively() {
+        let u = Url::parse("HTTPS://A.example/z").unwrap();
+        assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/z"));
+        assert!(Url::parse("Http://a.example/").is_ok());
+        let j = Url::parse("https://a.example/start").unwrap().join("HTTPS://cdn.example/file").unwrap();
+        assert_eq!((j.tls, j.host.as_str(), j.path.as_str()), (true, "cdn.example", "/file"));
     }
 
     #[test]
@@ -534,6 +629,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_signed_ports() {
+        for bad in ["http://example.com:+80/x", "http://example.com:-80/x", "http://[::1]:+80/x"] {
+            assert!(Url::parse(bad).is_err(), "{bad}");
+        }
+        assert!(Url::parse("http://a.test/").unwrap().join("http://example.com:+80/x").is_err());
+        assert_eq!(Url::parse("http://example.com:80/x").unwrap().port, 80);
+    }
+
+    #[test]
+    fn rejects_text_after_a_bracketed_ipv6_host() {
+        for bad in ["http://[::1]junk/x", "https://[::1]junk/x", "http://[::1]8080/x", "http://[::1]8080"] {
+            assert!(matches!(Url::parse(bad), Err(HttpError::BadUrl(_))), "{bad}");
+        }
+        let u = Url::parse("http://[::1]:8080/x").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 8080));
+        let u = Url::parse("http://[::1]/x").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 80));
+    }
+
+    #[test]
     fn resolves_redirects() {
         let u = Url::parse("https://a.example/x/y/file?q").unwrap();
         assert_eq!(u.join("https://b.example/z").unwrap().host, "b.example");
@@ -541,6 +656,11 @@ mod tests {
         assert_eq!(u.join("other").unwrap().path, "/x/y/other");
         assert_eq!(u.join("//c.example/p").unwrap().host, "c.example");
         assert!(u.join("ftp://nope").is_err());
+        // no downgrade from https to http, however the redirect is written
+        assert!(u.join("http://a.example/z").is_err());
+        let plain = Url::parse("http://127.0.0.1:8080/a").unwrap();
+        assert!(!plain.join("http://127.0.0.1:9/b").unwrap().tls);
+        assert!(plain.join("https://b.example/z").unwrap().tls);
     }
 
     #[test]

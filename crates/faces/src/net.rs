@@ -9,8 +9,10 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::{Arc, PoisonError, RwLock};
 
 mod kernels;
+pub mod program;
 mod shape;
 
 use crate::graph::{Data, Graph, Node};
@@ -64,9 +66,64 @@ impl Tensor {
     }
 }
 
+/// One convolution, as handed to an [`Accelerator`]: batch 1, planar (NCHW) float32, already checked.
+///
+/// `out[co][oy][ox] = bias[co] + Σ weights[co][ci][ky][kx] · input[g·cg + ci][oy·sh + ky − pt][ox·sw + kx − pl]`
+/// with `g = co / (cout / groups)` and zero outside the input.
+#[derive(Clone, Copy, Debug)]
+pub struct ConvJob<'a> {
+    /// The node's index in the graph: the same for every run of a net, so its weights can stay on the device.
+    pub layer: usize,
+    pub cin: usize,
+    pub h: usize,
+    pub w: usize,
+    pub cout: usize,
+    pub groups: usize,
+    pub kh: usize,
+    pub kw: usize,
+    pub sh: usize,
+    pub sw: usize,
+    pub pt: usize,
+    pub pl: usize,
+    pub oh: usize,
+    pub ow: usize,
+    /// `[cout][cin / groups][kh][kw]`.
+    pub weights: &'a [f32],
+    /// `[cout]`, if the node has one.
+    pub bias: Option<&'a [f32]>,
+    /// `[cin][h][w]`.
+    pub input: &'a [f32],
+}
+
+impl ConvJob<'_> {
+    /// Multiply-adds the convolution takes.
+    pub fn macs(&self) -> usize {
+        let per_group = (self.cin / self.groups.max(1)).saturating_mul(self.kh).saturating_mul(self.kw);
+        self.cout.saturating_mul(per_group).saturating_mul(self.oh).saturating_mul(self.ow)
+    }
+}
+
+/// Something that can run a network's convolutions faster than the CPU kernels (the GPU, in `lightcraft-gpu`).
+///
+/// The CPU interpreter stays the reference: a net only uses an accelerator that agreed with it on a test input
+/// ([`Net::attach_checked`]), and the first error makes the net drop it and run on the CPU again.
+pub trait Accelerator: Send + Sync {
+    /// What it runs on, for the user ("AMD Radeon RX 7900 (Vulkan)").
+    fn device(&self) -> String;
+    /// `[cout][oh][ow]`, or `Ok(None)` to leave this one to the CPU (too small to be worth a dispatch, say).
+    fn conv(&self, job: &ConvJob) -> std::result::Result<Option<Vec<f32>>, String>;
+    /// The whole network on the device, keeping every value there between steps, for each of `inputs` (all of
+    /// `program.lens[INPUT]` values) in one go: per input, each of `program.outputs` in order. `Ok(None)` leaves the
+    /// run to the CPU path (which may still use [`Accelerator::conv`]).
+    fn run_program(&self, _program: &program::Program, _inputs: &[&[f32]]) -> std::result::Result<Option<Vec<Vec<Vec<f32>>>>, String> {
+        Ok(None)
+    }
+}
+
 /// A loaded network, ready to run.
 pub struct Net {
     graph: Graph,
+    accelerator: RwLock<Option<Arc<dyn Accelerator>>>,
 }
 
 /// Validate semantics rather than silently ignoring unknown or mistyped attributes.
@@ -80,7 +137,75 @@ impl Net {
         for n in &graph.nodes {
             check(n, &graph)?;
         }
-        Ok(Net { graph })
+        Ok(Net { graph, accelerator: RwLock::new(None) })
+    }
+
+    /// The accelerator in use, if any.
+    pub fn accelerator(&self) -> Option<Arc<dyn Accelerator>> {
+        self.accelerator.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Use `accelerator` for this net's convolutions, but only after it gave the CPU's outputs on `probe` (every
+    /// output value within `tolerance` of the CPU's, relative to that output's largest magnitude) and, with
+    /// `require_faster`, ran it faster than the CPU did (a GPU's per-layer round trip can cost more than a small
+    /// model's layers). Returns why it was not used, so the caller can say so; the net then stays on the CPU.
+    pub fn attach_checked(
+        &self,
+        accelerator: Arc<dyn Accelerator>,
+        probe: &Tensor,
+        tolerance: f32,
+        require_faster: bool,
+    ) -> std::result::Result<(), String> {
+        self.detach();
+        let started = web_time::Instant::now();
+        let cpu = self.run(probe.clone()).map_err(|e| e.to_string())?;
+        let cpu_time = started.elapsed();
+        *self.accelerator.write().unwrap_or_else(PoisonError::into_inner) = Some(accelerator);
+        // the first run also uploads the weights and builds the kernels: time a second one
+        let fast = self.run(probe.clone()).map_err(|e| e.to_string());
+        let mut verdict = match fast {
+            Err(e) => Err(e),
+            Ok(_) if self.accelerator().is_none() => Err("the device failed on the test input".into()),
+            Ok(fast) => agree(&cpu, &fast, tolerance),
+        };
+        if verdict.is_ok() && require_faster {
+            let started = web_time::Instant::now();
+            let again = self.run(probe.clone()).map_err(|e| e.to_string());
+            let fast_time = started.elapsed();
+            verdict = match again {
+                Err(e) => Err(e),
+                Ok(_) if self.accelerator().is_none() => Err("the device failed on the test input".into()),
+                Ok(_) if fast_time >= cpu_time => Err(format!(
+                    "the device is not faster for this model ({:.0} ms against {:.0} ms on the CPU)",
+                    fast_time.as_secs_f64() * 1000.0,
+                    cpu_time.as_secs_f64() * 1000.0
+                )),
+                Ok(_) => Ok(()),
+            };
+        }
+        if verdict.is_err() {
+            self.detach();
+        }
+        verdict
+    }
+
+    /// Run on the CPU only from now on.
+    pub fn detach(&self) {
+        *self.accelerator.write().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// A convolution on the accelerator, if one is attached and takes it. A failing accelerator is dropped.
+    fn accelerated_conv(&self, layer: usize, node: &Node, x: &Tensor) -> Result<Option<Tensor>> {
+        let Some(accelerator) = self.accelerator() else { return Ok(None) };
+        let job = kernels::conv_job(layer, node, &x.shape, &x.data, &self.graph)?;
+        match accelerator.conv(&job) {
+            Ok(Some(out)) if out.len() == job.cout * job.oh * job.ow => Ok(Some(Tensor::new(vec![1, job.cout, job.oh, job.ow], out)?)),
+            Ok(None) => Ok(None),
+            Ok(Some(_)) | Err(_) => {
+                self.detach();
+                Ok(None)
+            }
+        }
     }
 
     /// The shape the model declares for its input (0 for a dynamic size).
@@ -96,7 +221,67 @@ impl Net {
 
     /// Run the network on `input` (its single input); returns each output by name.
     pub fn run(&self, input: Tensor) -> Result<Vec<(String, Tensor)>> {
-        shape::tensor(&input.shape, input.data.len(), &input.data)?;
+        self.run_batch(vec![input])?.pop().ok_or_else(|| NetError::Shape("the run gave nothing".into()))
+    }
+
+    /// Run the network on each of `inputs`; an accelerator that keeps the values on its device runs inputs of one shape
+    /// together (one upload and one read-back for all of them).
+    pub fn run_batch(&self, inputs: Vec<Tensor>) -> Result<Vec<Vec<(String, Tensor)>>> {
+        for input in &inputs {
+            shape::tensor(&input.shape, input.data.len(), &input.data)?;
+        }
+        if let Some(out) = self.run_on_device(&inputs)? {
+            return Ok(out);
+        }
+        inputs.into_iter().map(|input| self.run_one(input)).collect()
+    }
+
+    /// The whole batch on the attached accelerator, or `None` to run it on the CPU path. A failing or misbehaving
+    /// accelerator is dropped.
+    fn run_on_device(&self, inputs: &[Tensor]) -> Result<Option<Vec<Vec<(String, Tensor)>>>> {
+        let (Some(accelerator), Some(first)) = (self.accelerator(), inputs.first()) else { return Ok(None) };
+        if inputs.iter().any(|t| t.shape != first.shape) {
+            return Ok(None);
+        }
+        let Some(program) = self.program(&first.shape)? else { return Ok(None) };
+        let slices: Vec<&[f32]> = inputs.iter().map(|t| t.data.as_slice()).collect();
+        let started = web_time::Instant::now();
+        let outs = match accelerator.run_program(&program, &slices) {
+            Ok(Some(outs)) => outs,
+            Ok(None) => return Ok(None),
+            Err(_) => {
+                self.detach();
+                return Ok(None);
+            }
+        };
+        let gathered: Option<Vec<Vec<(String, Tensor)>>> = (outs.len() == inputs.len())
+            .then(|| {
+                outs.into_iter()
+                    .map(|values| {
+                        (values.len() == program.outputs.len())
+                            .then(|| {
+                                values
+                                    .into_iter()
+                                    .zip(&program.outputs)
+                                    .map(|(data, (name, _, shape))| Tensor::new(shape.clone(), data).ok().map(|t| (name.clone(), t)))
+                                    .collect::<Option<Vec<_>>>()
+                            })
+                            .flatten()
+                    })
+                    .collect()
+            })
+            .flatten();
+        if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
+            eprintln!("[faces-gpu] {} steps x {}: {:.3} ms", program.steps.len(), inputs.len(), started.elapsed().as_secs_f64() * 1000.0);
+        }
+        if gathered.is_none() {
+            // wrong sizes or values that are not finite: the device is not trusted any more
+            self.detach();
+        }
+        Ok(gathered)
+    }
+
+    fn run_one(&self, input: Tensor) -> Result<Vec<(String, Tensor)>> {
         self.validate_input(&input.shape)?;
         let mut scratch = kernels::Scratch::default();
         let profile = std::env::var_os("LIGHTCRAFT_PROFILE").is_some();
@@ -127,7 +312,13 @@ impl Net {
             };
             let started = web_time::Instant::now();
             let out = match node.op.as_str() {
-                "Conv" => kernels::conv(node, &*get(0)?, g, &mut scratch)?,
+                "Conv" => {
+                    let x = get(0)?;
+                    match self.accelerated_conv(i, node, &x)? {
+                        Some(out) => out,
+                        None => kernels::conv(node, &x, g, &mut scratch)?,
+                    }
+                }
                 "Relu" => map(&*get(0)?, |v| v.max(0.0)),
                 "Sigmoid" => map(&*get(0)?, |v| 1.0 / (1.0 + (-v).exp())),
                 "Add" | "Sub" | "Mul" => kernels::binary(node.op.as_str(), &*get(0)?, &*get(1)?)?,
@@ -166,6 +357,25 @@ impl Net {
             })
             .collect()
     }
+}
+
+/// Whether two runs' outputs agree: same names and shapes, values within `tolerance` of each other relative to the
+/// output's largest magnitude.
+fn agree(a: &[(String, Tensor)], b: &[(String, Tensor)], tolerance: f32) -> std::result::Result<(), String> {
+    if a.len() != b.len() {
+        return Err("the device gave a different number of outputs".into());
+    }
+    for ((name, x), (other, y)) in a.iter().zip(b) {
+        if name != other || x.shape != y.shape {
+            return Err(format!("the device gave `{other}` a different shape"));
+        }
+        let scale = x.data.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-6);
+        let worst = x.data.iter().zip(&y.data).fold(0f32, |m, (p, q)| m.max((p - q).abs()));
+        if worst.is_nan() || worst > tolerance * scale {
+            return Err(format!("the device's `{name}` differs from the CPU's by {:.2e} (of {scale:.2e})", worst));
+        }
+    }
+    Ok(())
 }
 
 fn map(x: &Tensor, f: impl Fn(f32) -> f32) -> Tensor {
@@ -410,161 +620,7 @@ fn reshape(node: &Node, x: &Tensor, g: &Graph) -> Result<Tensor> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::graph::{Attr, Weight};
-
-    fn node(op: &str, inputs: &[&str], attrs: &[(&str, Attr)]) -> Node {
-        Node {
-            op: op.into(),
-            inputs: inputs.iter().map(|s| s.to_string()).collect(),
-            outputs: vec!["y".into()],
-            attrs: attrs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
-        }
-    }
-    fn graph(nodes: Vec<Node>, weights: Vec<(&str, Weight)>) -> Graph {
-        Graph {
-            nodes,
-            weights: weights.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
-            inputs: vec![("x".into(), vec![1, 1, 3, 3])],
-            outputs: vec!["y".into()],
-        }
-    }
-    fn w(dims: &[usize], v: Vec<f32>) -> Weight {
-        Weight { dims: dims.to_vec(), data: Data::F32(v) }
-    }
-    fn input(c: usize, h: usize, wd: usize, f: impl Fn(usize) -> f32) -> Tensor {
-        Tensor::new(vec![1, c, h, wd], (0..c * h * wd).map(f).collect()).unwrap()
-    }
-    fn run(g: Graph, x: Tensor) -> Result<Tensor> {
-        Ok(Net::new(g)?.run(x)?.remove(0).1)
-    }
-
-    /// A direct, slow reference convolution to check the fast one against.
-    fn reference_conv(x: &Tensor, wd: &[f32], dims: [usize; 4], bias: &[f32], s: usize, p: usize, groups: usize) -> Tensor {
-        let (c, h, wi) = (x.shape[1], x.shape[2], x.shape[3]);
-        let [co_n, cin_g, kh, kw] = dims;
-        let (oh, ow) = ((h + 2 * p - kh) / s + 1, (wi + 2 * p - kw) / s + 1);
-        let mut out = vec![0.0f32; co_n * oh * ow];
-        for co in 0..co_n {
-            let g = co / (co_n / groups);
-            for oy in 0..oh {
-                for ox in 0..ow {
-                    let mut acc = bias[co];
-                    for cl in 0..cin_g {
-                        for ky in 0..kh {
-                            for kx in 0..kw {
-                                let (iy, ix) = ((oy * s + ky) as isize - p as isize, (ox * s + kx) as isize - p as isize);
-                                if iy >= 0 && ix >= 0 && (iy as usize) < h && (ix as usize) < wi {
-                                    acc +=
-                                        x.data[((g * cin_g + cl) * h + iy as usize) * wi + ix as usize] * wd[((co * cin_g + cl) * kh + ky) * kw + kx];
-                                }
-                            }
-                        }
-                    }
-                    out[(co * oh + oy) * ow + ox] = acc;
-                }
-            }
-        }
-        let _ = c;
-        Tensor::new(vec![1, co_n, oh, ow], out).unwrap()
-    }
-
-    #[test]
-    fn convolutions_match_a_slow_reference() {
-        // (cin, cout, groups, kernel, stride, pad, h, w)
-        for (cin, cout, groups, k, s, p, h, wi) in [
-            (3, 4, 1, 3, 1, 1, 7, 9),
-            (3, 4, 1, 3, 2, 1, 8, 8),
-            (4, 4, 4, 3, 1, 1, 6, 5),
-            (2, 6, 1, 1, 1, 0, 5, 5),
-            (4, 8, 2, 3, 1, 1, 5, 6),
-            (1, 1, 1, 3, 1, 0, 3, 3),
-        ] {
-            let cin_g = cin / groups;
-            let wd: Vec<f32> = (0..cout * cin_g * k * k).map(|i| ((i * 37 % 11) as f32 - 5.0) * 0.1).collect();
-            let bias: Vec<f32> = (0..cout).map(|i| i as f32 * 0.25 - 0.5).collect();
-            let x = input(cin, h, wi, |i| ((i * 13 % 17) as f32 - 8.0) * 0.2);
-            let attrs = [("group", Attr::Int(groups as i64)), ("strides", Attr::Ints(vec![s as i64; 2])), ("pads", Attr::Ints(vec![p as i64; 4]))];
-            let g = graph(
-                vec![node("Conv", &["x", "w", "b"], &attrs)],
-                vec![("w", w(&[cout, cin_g, k, k], wd.clone())), ("b", w(&[cout], bias.clone()))],
-            );
-            let got = run(g, x.clone()).unwrap();
-            let want = reference_conv(&x, &wd, [cout, cin_g, k, k], &bias, s, p, groups);
-            assert_eq!(got.shape, want.shape, "{cin} {cout} {groups} {k} {s} {p}");
-            for (a, b) in got.data.iter().zip(&want.data) {
-                assert!((a - b).abs() < 1e-4, "{cin} {cout} {groups} {k} {s} {p}: {a} vs {b}");
-            }
-        }
-    }
-
-    #[test]
-    fn the_small_operators() {
-        let x = input(1, 4, 4, |i| i as f32 - 6.0);
-        // Relu, Sigmoid
-        let r = run(graph(vec![node("Relu", &["x"], &[])], vec![]), x.clone()).unwrap();
-        assert!(r.data.iter().all(|v| *v >= 0.0) && r.data.get(7) == Some(&1.0));
-        let s = run(graph(vec![node("Sigmoid", &["x"], &[])], vec![]), x.clone()).unwrap();
-        assert!((s.data[6] - 0.5).abs() < 1e-6 && s.data.iter().all(|v| (0.0..=1.0).contains(v)));
-        // MaxPool 2x2/2
-        let m = run(
-            graph(vec![node("MaxPool", &["x"], &[("kernel_shape", Attr::Ints(vec![2, 2])), ("strides", Attr::Ints(vec![2, 2]))])], vec![]),
-            x.clone(),
-        )
-        .unwrap();
-        assert_eq!((m.shape.clone(), m.data.clone()), (vec![1, 1, 2, 2], vec![-1.0, 1.0, 7.0, 9.0]));
-        // Resize x2 nearest
-        let z = run(graph(vec![node("Resize", &["x", "", "s"], &[])], vec![("s", w(&[4], vec![1.0, 1.0, 2.0, 2.0]))]), input(1, 2, 2, |i| i as f32))
-            .unwrap();
-        assert_eq!(z.shape, vec![1, 1, 4, 4]);
-        assert_eq!(&z.data[..8], &[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0]);
-        // Add
-        let a = run(graph(vec![node("Add", &["x", "x"], &[])], vec![]), x.clone()).unwrap();
-        assert_eq!(a.data[5], 2.0 * x.data[5]);
-        // Transpose [0,2,3,1] then Reshape [1,-1,2]
-        let t = run(graph(vec![node("Transpose", &["x"], &[("perm", Attr::Ints(vec![0, 2, 3, 1]))])], vec![]), input(2, 2, 3, |i| i as f32)).unwrap();
-        assert_eq!(t.shape, vec![1, 2, 3, 2]);
-        assert_eq!(t.data, vec![0.0, 6.0, 1.0, 7.0, 2.0, 8.0, 3.0, 9.0, 4.0, 10.0, 5.0, 11.0]);
-        let rs = run(
-            graph(vec![node("Reshape", &["x", "s"], &[])], vec![("s", Weight { dims: vec![3], data: Data::I64(vec![1, -1, 2]) })]),
-            input(2, 2, 3, |i| i as f32),
-        )
-        .unwrap();
-        assert_eq!(rs.shape, vec![1, 6, 2]);
-    }
-
-    #[test]
-    fn unsupported_and_inconsistent_models_are_errors() {
-        let x = input(1, 3, 3, |i| i as f32);
-        for (what, g) in [
-            ("unknown op", graph(vec![node("Softmax", &["x"], &[])], vec![])),
-            (
-                "dilated conv",
-                graph(vec![node("Conv", &["x", "w"], &[("dilations", Attr::Ints(vec![2, 2]))])], vec![("w", w(&[1, 1, 1, 1], vec![1.0]))]),
-            ),
-            ("conv without weights", graph(vec![node("Conv", &["x", "w"], &[])], vec![])),
-            ("channels do not match", graph(vec![node("Conv", &["x", "w"], &[])], vec![("w", w(&[1, 5, 1, 1], vec![1.0; 5]))])),
-            ("kernel too big", graph(vec![node("Conv", &["x", "w"], &[])], vec![("w", w(&[1, 1, 5, 5], vec![1.0; 25]))])),
-            ("zero group", graph(vec![node("Conv", &["x", "w"], &[("group", Attr::Int(0))])], vec![("w", w(&[1, 1, 1, 1], vec![1.0]))])),
-            ("zero stride", graph(vec![node("Conv", &["x", "w"], &[("strides", Attr::Ints(vec![0, 0]))])], vec![("w", w(&[1, 1, 1, 1], vec![1.0]))])),
-            (
-                "negative pad",
-                graph(vec![node("Conv", &["x", "w"], &[("pads", Attr::Ints(vec![-1, 0, 0, 0]))])], vec![("w", w(&[1, 1, 1, 1], vec![1.0]))]),
-            ),
-            ("bad perm", graph(vec![node("Transpose", &["x"], &[("perm", Attr::Ints(vec![0, 0, 1, 2]))])], vec![])),
-            (
-                "huge reshape",
-                graph(vec![node("Reshape", &["x", "s"], &[])], vec![("s", Weight { dims: vec![2], data: Data::I64(vec![i64::MAX, 1]) })]),
-            ),
-            ("reshape mismatch", graph(vec![node("Reshape", &["x", "s"], &[])], vec![("s", Weight { dims: vec![2], data: Data::I64(vec![4, 4]) })])),
-            ("non-integer resize", graph(vec![node("Resize", &["x", "", "s"], &[])], vec![("s", w(&[4], vec![1.0, 1.0, 1.5, 1.5]))])),
-            ("add that broadcasts", graph(vec![node("Add", &["x", "c"], &[])], vec![])),
-        ] {
-            assert!(run(g, x.clone()).is_err(), "{what}");
-        }
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod recognition_tests;

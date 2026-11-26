@@ -27,6 +27,10 @@ pub(crate) fn line_x(img: &Rgba8, y: usize, x0: f64, win: f64) -> f64 {
     let (a, b) = ((x0 - win).max(0.0) as usize, ((x0 + win) as usize).min(img.width - 1));
     let row: Vec<f64> = (a..=b).map(|x| img.get(x, y)[1] as f64).collect();
     let max = row.iter().cloned().fold(0.0, f64::max);
+    let min = row.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return (a as f64 + b as f64) / 2.0 + 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in row.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);
@@ -41,6 +45,10 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
     let (a, b) = ((y0 - win).max(0.0) as usize, ((y0 + win) as usize).min(img.height - 1));
     let col: Vec<f64> = (a..=b).map(|y| img.get(x, y)[1] as f64).collect();
     let max = col.iter().cloned().fold(0.0, f64::max);
+    let min = col.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return (a as f64 + b as f64) / 2.0 + 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in col.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);
@@ -52,6 +60,20 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
 
 fn spread(v: &[f64]) -> f64 {
     v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
+}
+
+/// Asserts that a vertical edge with contrast > 1 LSB exists in row `y` around `x0 ± win`.
+fn assert_vertical_edge(img: &Rgba8, y: usize, x0: f64, win: f64) {
+    let (a, b) = ((x0 - win).max(0.0) as usize, ((x0 + win) as usize).min(img.width - 1));
+    let values: Vec<f64> = (a..=b).map(|x| img.get(x, y)[1] as f64).collect();
+    assert!(spread(&values) > 1.0, "no vertical edge near x={x0} on row {y}");
+}
+
+/// Asserts that a horizontal edge with contrast > 1 LSB exists in column `x` around `y0 ± win`.
+fn assert_horizontal_edge(img: &Rgba8, x: usize, y0: f64, win: f64) {
+    let (a, b) = ((y0 - win).max(0.0) as usize, ((y0 + win) as usize).min(img.height - 1));
+    let values: Vec<f64> = (a..=b).map(|y| img.get(x, y)[1] as f64).collect();
+    assert!(spread(&values) > 1.0, "no horizontal edge near y={y0} on column {x}");
 }
 
 /// Barrel distortion with coefficient `k` (< 0): distorted radius = r·(1 + k·r²), r in half-diagonal units.
@@ -213,6 +235,7 @@ fn manual_vertical_keystone_widens_the_top() {
     assert!(lb.y - lt.y > rb.y - rt.y, "left side enlarged");
 }
 
+/// Verifies manual geometry corrections straighten a keystoned grid test fixture.
 #[test]
 fn manual_transforms_straighten_known_keystone() {
     let (w, h) = (480usize, 320usize);
@@ -226,6 +249,12 @@ fn manual_transforms_straighten_known_keystone() {
         let src = keystoned_grid(w, h, fwd, 40.0);
         let s = DevelopSettings { geometry: g.clone(), ..Default::default() };
         let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+        for &y in &[60usize, 150, 260] {
+            assert_vertical_edge(&img, y, 200.0, 15.0);
+        }
+        for &x in &[60usize, 220, 420] {
+            assert_horizontal_edge(&img, x, 200.0, 15.0);
+        }
         let xs: Vec<f64> = [60usize, 150, 260].iter().map(|&y| line_x(&img, y, 200.0, 15.0)).collect();
         let ys: Vec<f64> = [60usize, 220, 420].iter().map(|&x| line_y(&img, x, 200.0, 15.0)).collect();
         assert!(spread(&xs) < 1.0 && (xs[0] - 200.0).abs() < 1.0, "{g:?}: vertical line at {xs:?}");
@@ -258,6 +287,26 @@ fn constrain_crop_removes_blank_areas() {
     let c = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
     assert_eq!((c.width, c.height), (free.width, free.height), "constrain keeps the aspect");
     assert!(blank_fraction(&c) < 0.002, "constrained: {}", blank_fraction(&c));
+}
+
+/// Issue #2361: lens corrections never show the blank past the photo's edge, with or without
+/// Constrain Crop, in every colour plane; perspective alone still needs Constrain Crop.
+#[test]
+fn lens_corrections_leave_no_blank_corners() {
+    let src = Rgb32f::from_fn(300, 200, |x, y| [0.05 + 0.002 * x as f32, 0.1 + 0.002 * y as f32, 0.3]);
+    for (distortion, ca) in [(-80.0, 0.0), (80.0, 0.0), (-40.0, 100.0), (0.0, -100.0)] {
+        let mut s = DevelopSettings::default();
+        s.optics.distortion = distortion;
+        s.optics.ca_red = ca;
+        s.optics.ca_blue = -ca;
+        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+        assert!(blank_fraction(&r) < 0.002, "distortion {distortion}, CA {ca}: {}", blank_fraction(&r));
+    }
+    let mut s = DevelopSettings::default();
+    s.optics.distortion = -60.0;
+    s.geometry.vertical = -60.0;
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+    assert!(blank_fraction(&r) > 0.03, "the keystone keeps its corners: {}", blank_fraction(&r));
 }
 
 #[test]
@@ -469,12 +518,12 @@ fn debug_upright_scene() {
     }
 }
 
-/// Sign convention for Auto straighten: a horizon descending 6° to the right needs crop angle −6°,
+/// Sign convention for Auto straighten: a horizon descending 4° to the right needs crop angle −4°,
 /// which `level_degrees` must report (the crop panel uses it as the crop angle directly).
 #[test]
 fn level_degrees_sign_matches_crop_angle() {
     let (w, h) = (900usize, 600usize);
-    let t = 6f32.to_radians().tan();
+    let t = 4f32.to_radians().tan();
     let src = Rgb32f::from_fn(w, h, |x, y| {
         let yh = h as f32 / 2.0 + (x as f32 - w as f32 / 2.0) * t;
         if (y as f32) < yh {
@@ -486,5 +535,133 @@ fn level_degrees_sign_matches_crop_angle() {
         }
     });
     let deg = crate::upright::level_degrees(&src, &SourceInfo::default(), &DevelopSettings::default()).expect("lines found");
-    assert!((deg + 6.0).abs() < 0.5, "{deg}");
+    assert!((deg + 4.0).abs() < 0.5, "{deg}");
+}
+
+/// A "horizon" of `deg` degrees: sky above, below it bands of `band` px (0: one edge only).
+fn tilted_scene(deg: f32, band: f32) -> Rgb32f {
+    let (w, h) = (900usize, 600usize);
+    let t = deg.to_radians().tan();
+    Rgb32f::from_fn(w, h, |x, y| {
+        let yh = h as f32 / 2.0 + (x as f32 - w as f32 / 2.0) * t;
+        if (y as f32) < yh {
+            [0.6, 0.7, 0.9]
+        } else if band > 0.0 && (((y as f32 - yh) / band) as i32) % 2 == 1 {
+            [0.1, 0.2, 0.3]
+        } else {
+            [0.05, 0.1, 0.2]
+        }
+    })
+}
+
+fn auto_level(src: &Rgb32f) -> Option<f64> {
+    crate::upright::level_degrees(src, &SourceInfo::default(), &DevelopSettings::default())
+}
+
+/// Thick dark lines on a light ground, each from `a` to `b` in centred coordinates (half the long
+/// edge = 1).
+fn line_drawing(lines: &[((f32, f32), (f32, f32))]) -> Rgb32f {
+    let (w, h) = (900usize, 600usize);
+    let half = w as f32 / 2.0;
+    Rgb32f::from_fn(w, h, |x, y| {
+        let p = ((x as f32 - w as f32 / 2.0) / half, (y as f32 - h as f32 / 2.0) / half);
+        let near = lines.iter().any(|&((ax, ay), (bx, by))| {
+            let (dx, dy) = (bx - ax, by - ay);
+            let t = (((p.0 - ax) * dx + (p.1 - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            let (qx, qy) = (ax + t * dx - p.0, ay + t * dy - p.1);
+            qx.hypot(qy) * half < 3.0
+        });
+        if near { [0.05, 0.05, 0.05] } else { [0.8, 0.8, 0.8] }
+    })
+}
+
+/// A single short line (the frame of a window, a branch) levels nothing: it turned straight
+/// photos in a measurement on real ones.
+#[test]
+fn auto_straighten_ignores_a_single_short_line() {
+    let t = 4f32.to_radians().tan();
+    assert_eq!(auto_level(&line_drawing(&[((-0.3, -0.3 * t), (0.3, 0.3 * t))])), None, "one short line");
+    // a horizon is one straight edge too, but across the whole width
+    let deg = auto_level(&tilted_scene(4.0, 0.0)).expect("a horizon");
+    assert!((deg + 4.0).abs() < 0.3, "{deg}");
+}
+
+/// Auto straighten turns by at most `straighten::MAX_DEGREES` (5°): none of 113 photos
+/// straightened by hand needed more than 6.1°, and larger "levels" came from texture.
+#[test]
+fn auto_straighten_leaves_steep_lines_alone() {
+    assert_eq!(auto_level(&tilted_scene(20.0, 30.0)), None, "20° is not a horizon to level");
+    assert_eq!(auto_level(&tilted_scene(8.0, 30.0)), None, "nor is 8°");
+    let deg = auto_level(&tilted_scene(4.0, 30.0)).expect("4° is");
+    assert!((deg + 4.0).abs() < 0.3, "{deg}");
+}
+
+/// A sea horizon among ripples: the short, randomly tilted edges of the water outnumber the
+/// horizon, which the line consensus took for no answer (or the ripples' angle), but the horizon
+/// runs across the whole width and levels the photo.
+#[test]
+fn auto_straighten_finds_a_sea_horizon_among_ripples() {
+    let (w, h) = (900usize, 600usize);
+    let t = 2f32.to_radians().tan();
+    let mut seed = 7u32;
+    let mut rnd = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    // ripples: short bright dashes tilted up to ±12°
+    let ripples: Vec<(f32, f32, f32, f32)> =
+        (0..400).map(|_| (rnd() * w as f32, rnd() * h as f32, (rnd() - 0.5) * 0.4, 8.0 + rnd() * 25.0)).collect();
+    let src = Rgb32f::from_fn(w, h, |x, y| {
+        let (x, y) = (x as f32, y as f32);
+        let yh = h as f32 * 0.4 + (x - w as f32 / 2.0) * t;
+        if y < yh {
+            return [0.75, 0.8, 0.9];
+        }
+        let lit = ripples.iter().any(|&(rx, ry, slope, len)| {
+            let dx = x - rx;
+            dx.abs() < len && (y - ry - slope * dx).abs() < 1.2 && ry > yh + 4.0
+        });
+        if lit { [0.5, 0.55, 0.6] } else { [0.1, 0.15, 0.25] }
+    });
+    let deg = auto_level(&src).expect("the horizon");
+    assert!((deg + 2.0).abs() < 0.3, "{deg}");
+}
+
+/// A building shot upward and rolled 3°: its verticals converge on a vanishing point above the
+/// frame. Their mean tilt depends on where in the frame they stand (here all right of centre);
+/// the vanishing point gives the roll.
+#[test]
+fn auto_straighten_takes_the_roll_from_converging_verticals() {
+    let roll = 3f32.to_radians();
+    let vp = (6.0 * roll.sin(), -6.0 * roll.cos());
+    let lines: Vec<_> = (0..12)
+        .map(|i| {
+            let x = 0.05 + i as f32 * 0.07;
+            let bottom = (x, 0.6);
+            // two thirds of the way from the bottom towards the vanishing point, ending in the frame
+            let top_t = (0.6 + 0.6) / (0.6 - vp.1);
+            (bottom, (x + (vp.0 - x) * top_t, 0.6 + (vp.1 - 0.6) * top_t))
+        })
+        .collect();
+    let deg = auto_level(&line_drawing(&lines)).expect("the vanishing point");
+    assert!((deg + 3.0).abs() < 0.3, "{deg}");
+}
+
+/// The Upright analysis cache tells apart what changes the analysis image: another lens (`info.lens`)
+/// or the optics section switched off (review of #2809).
+#[test]
+fn the_analysis_cache_tells_lenses_and_optics_apart() {
+    let src = tilted_scene(2.0, 30.0);
+    let s = DevelopSettings::default();
+    let plain = SourceInfo::default();
+    let vignette = lightcraft_develop::EmbeddedVignette::default();
+    let lens =
+        SourceInfo { lens: Some(lightcraft_develop::EmbeddedLens { vignette: Some(vignette), ..Default::default() }), ..SourceInfo::default() };
+    let key = crate::upright::analysis_key;
+    assert_eq!(key(&src, &plain, &s), key(&src, &plain.clone(), &s), "the same source, settings and lens");
+    assert_ne!(key(&src, &plain, &s), key(&src, &lens, &s), "another lens");
+    let mut off = s.clone();
+    off.disabled_sections.push("optics".into());
+    assert!(!off.section_enabled("optics"));
+    assert_ne!(key(&src, &plain, &s), key(&src, &plain, &off), "the optics section off");
 }

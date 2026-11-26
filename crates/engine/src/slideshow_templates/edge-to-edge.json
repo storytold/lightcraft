@@ -1,0 +1,10 @@
+{
+  "format": "lightcraft.slideshowTemplate",
+  "version": 1,
+  "name": "Edge to Edge",
+  "description": "Every photo cropped to fill the whole screen, with slow crossfades.",
+  "playback": {"slideDuration": 6, "fadeDuration": 2, "fadeColor": null, "randomOrder": false, "repeat": true},
+  "layout": {"zoomToFill": true},
+  "overlays": {},
+  "titles": {}
+}

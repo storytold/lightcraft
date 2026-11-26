@@ -15,15 +15,17 @@
 
 pub mod align;
 pub mod features;
+pub mod flow;
 pub mod frame;
 pub mod hdr;
 pub mod linalg;
 pub mod output;
 pub mod pano;
 pub mod ransac;
+pub mod refine;
 pub mod synth;
 
-pub use frame::{Frame, FrameColor, load_frame};
+pub use frame::{Frame, FrameColor, RawColour, load_frame, load_frame_with};
 pub use hdr::{Deghost, HdrOptions, HdrResult, merge_hdr};
 pub use output::{DngSamples, write_linear_dng};
 pub use pano::{PanoOptions, PanoResult, Projection, stitch};
@@ -32,6 +34,8 @@ pub use pano::{PanoOptions, PanoResult, Projection, stitch};
 pub enum MergeError {
     #[error("{0} photo(s) selected; at least {1} are needed")]
     TooFew(usize, usize),
+    #[error("{0} photo(s) selected; a stitch of more than {1} is refused: matching every pair would take far too long")]
+    TooMany(usize, usize),
     #[error("{0}")]
     Mismatch(String),
     #[error("could not read a photo: {0}")]

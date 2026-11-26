@@ -207,14 +207,31 @@ impl Catalog {
     /// folder that is no longer there and are dropped (undo restores them). Empty when there is
     /// nothing to carry or drop.
     pub fn folder_records_follow(&self, from: &str, to: &str) -> Vec<Op> {
+        self.folder_records_carried(from, to, true)
+    }
+
+    /// [`Catalog::folder_records_follow`] for a folder located where it already is on disk
+    /// (`folder.updateLocation`): nothing arrived at `to`, the library only learned that the
+    /// folder is there. So what it knows about folders at or below `to` (other folders of the
+    /// library there) stays; a record carried over replaces the one at the same place.
+    pub fn folder_records_located(&self, from: &str, to: &str) -> Vec<Op> {
+        self.folder_records_carried(from, to, false)
+    }
+
+    fn folder_records_carried(&self, from: &str, to: &str, clear_destination: bool) -> Vec<Op> {
         let (Some(root), Some(dest)) = (record_key(from), record_key(to)) else { return Vec::new() };
         if root == dest {
             return Vec::new();
         }
+        // a folder located below itself: what is already at or below `to` belongs to the folders
+        // of the library there, not to the folder located, so it is neither carried nor cleared
+        // (the record of `from` itself still lands at `to`, replacing the one there)
+        let nested = !clear_destination && key_within(&dest, &root);
+        let carried = |k: &str| key_within(k, &root) && !(nested && key_within(k, &dest));
         let moved: Vec<(String, FolderRecord)> = self
             .folder_records
             .iter()
-            .filter(|(k, _)| key_within(k, &root))
+            .filter(|(k, _)| carried(k))
             .filter_map(|(k, r)| {
                 let rest = folder_rest(k, &root)?;
                 let base = dest.trim_end_matches('/');
@@ -224,7 +241,7 @@ impl Catalog {
             .collect();
         // what was known at the old place goes, and so does what is left at the new one (also
         // when the moved folder carries nothing: the folder now there is not the one it was about)
-        let stale = self.folder_records.keys().filter(|k| key_within(k, &root) || key_within(k, &dest));
+        let stale = self.folder_records.keys().filter(|k| carried(k) || (clear_destination && key_within(k, &dest)));
         let mut ops: Vec<Op> = stale.map(|k| Op::SetFolderRecord { folder: k.clone(), record: None }).collect();
         ops.extend(moved.into_iter().map(|(k, r)| Op::SetFolderRecord { folder: k, record: Some(r) }));
         ops

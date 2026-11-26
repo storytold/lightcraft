@@ -1,4 +1,4 @@
-//! PNG decode via the `png` crate (8/16-bit, palette, tRNS, iCCP, eXIf, iTXt XMP, sRGB/cICP/cHRM/gAMA).
+//! PNG decode via `craft-image-codecs` (8/16-bit, palette, tRNS, iCCP, eXIf, iTXt XMP, sRGB/cICP/cHRM/gAMA).
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};
@@ -7,136 +7,70 @@ use lightcraft_color::{Mat3, RgbSpace, Xy};
 
 const F: Format = Format::Png;
 
+/// Expansion cap for a compressed text chunk's payload: real XMP documents are a few hundred
+/// kilobytes, so anything past this is hostile input, not metadata.
+const MAX_TEXT_CHUNK: usize = 4 << 20;
+
 fn err(e: impl std::fmt::Display) -> Error {
     Error::Malformed(F, e.to_string())
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
-    dec.set_transformations(png::Transformations::EXPAND);
-    dec.set_limits(png::Limits { bytes: opts.max_pixels.saturating_mul(8).min(usize::MAX as u64) as usize });
-    let mut reader = dec.read_info().map_err(err)?;
-    let (w, h) = {
-        let i = reader.info();
-        (i.width, i.height)
+    if let Some((w, h)) = craft_image_codecs::png_probe::declared_dimensions(bytes) {
+        check_size(F, w as u64, h as u64, opts)?;
+    }
+    let ic_opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits {
+            max_width: u32::MAX,
+            max_height: u32::MAX,
+            max_pixels: opts.max_pixels,
+            max_alloc: opts.max_pixels.saturating_mul(8),
+        },
+        keep_orientation: true,
     };
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, bytes, &ic_opts).map_err(|e| match e {
+        craft_image_codecs::CodecError::LimitExceeded(_) => Error::TooLarge(0, 0),
+        other => err(other),
+    })?;
+    let (w, h) = (img.width(), img.height());
     check_size(F, w as u64, h as u64, opts)?;
-    let size = reader.output_buffer_size().ok_or_else(|| err("buffer size overflow"))?;
-    let mut buf = vec![0u8; size];
-    let out = reader.next_frame(&mut buf).map_err(err)?;
-    // Text chunks after IDAT land in `info` once the stream is finished; ignore trailing errors.
-    let _ = reader.finish();
-    let info = reader.info();
-
-    let (model, alpha) = match out.color_type {
-        png::ColorType::Grayscale => (Model::Gray, false),
-        png::ColorType::GrayscaleAlpha => (Model::Gray, true),
-        png::ColorType::Rgb => (Model::Rgb, false),
-        png::ColorType::Rgba => (Model::Rgb, true),
-        png::ColorType::Indexed => return Err(err("palette not expanded")),
+    let model = if img.layout().is_gray() { Model::Gray } else { Model::Rgb };
+    let alpha = img.layout().has_alpha();
+    let (samples, depth) = match img.sample_type() {
+        craft_image_codecs::SampleType::U16 => (Buf::U16(img.to_u16_samples().ok_or_else(|| err("expected 16-bit samples"))?), 16),
+        _ => (Buf::U8(img.as_u8().ok_or_else(|| err("expected 8-bit samples"))?.to_vec()), 8),
     };
-    buf.truncate(out.buffer_size());
-    let (samples, depth) = match out.bit_depth {
-        png::BitDepth::Sixteen => (Buf::U16(buf.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect()), 16),
-        _ => (Buf::U8(buf), info.bit_depth as u8),
-    };
-    let raw = Raw { width: out.width as usize, height: out.height as usize, model, alpha, premultiplied: false, buf: samples, bit_depth: depth };
+    let raw = Raw { width: w as usize, height: h as usize, model, alpha, premultiplied: false, buf: samples, bit_depth: depth };
 
-    let xmp = info
-        .utf8_text
-        .iter()
-        .find(|t| t.keyword == "XML:com.adobe.xmp")
-        .and_then(|t| t.get_text().ok())
-        .or_else(|| info.uncompressed_latin1_text.iter().find(|t| t.keyword == "XML:com.adobe.xmp").map(|t| t.text.clone()));
-    let exif = info.exif_metadata.as_ref().map(|e| {
-        let e = e.to_vec();
-        // Some writers keep the JPEG "Exif\0\0" prefix.
-        if e.starts_with(b"Exif\0\0") { e[6..].to_vec() } else { e }
-    });
-    let meta = Meta { icc: info.icc_profile.as_ref().map(|c| c.to_vec()), exif, xmp, hint: container_hint(info), ..Default::default() };
+    let cicp_hint = img.cicp.as_ref().and_then(|c| SourceSpace::from_cicp(c.primaries, c.transfer));
+    let hint = cicp_hint.or_else(|| container_hint_from_chunks(bytes));
+    let xmp = img.meta.xmp.filter(|x| x.len() <= MAX_TEXT_CHUNK);
+    let exif = img.meta.exif.map(|e| if e.starts_with(b"Exif\0\0") { e[6..].to_vec() } else { e });
+    let meta = Meta { icc: img.icc, exif, xmp, hint, ..Default::default() };
     finish(F, raw, meta, (w, h), opts)
 }
 
-/// Stored dimensions and EXIF orientation (`eXIf`, wherever it is) from the chunk headers, without
-/// inflating the image data. Refused, as a decode would refuse it: an invalid IHDR, an indexed
-/// image without a palette, no IDAT, or a file that ends before the chunk after the last IDAT
-/// begins (truncated image data). Chunk CRCs and the deflate stream are not checked.
+/// Stored dimensions and EXIF orientation without inflating pixels.
 pub(crate) fn header(b: &[u8]) -> Result<(u32, u32, u16)> {
-    if !b.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err(err("bad signature"));
-    }
-    let be32 = |p: usize| b.get(p..p.checked_add(4)?).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]));
-    if be32(8) != Some(13) || b.get(12..16) != Some(b"IHDR") {
-        return Err(err("missing IHDR"));
-    }
-    let ihdr = b.get(16..29).ok_or_else(|| err("truncated IHDR"))?;
-    let (w, h) = (u32::from_be_bytes([ihdr[0], ihdr[1], ihdr[2], ihdr[3]]), u32::from_be_bytes([ihdr[4], ihdr[5], ihdr[6], ihdr[7]]));
-    let (depth, color, compression, filter, interlace) = (ihdr[8], ihdr[9], ihdr[10], ihdr[11], ihdr[12]);
-    if w > i32::MAX as u32 || h > i32::MAX as u32 {
-        return Err(err("dimensions out of range"));
-    }
-    check_size(F, w as u64, h as u64, &DecodeOptions::default())?;
-    let depth_ok = match color {
-        0 => matches!(depth, 1 | 2 | 4 | 8 | 16),
-        3 => matches!(depth, 1 | 2 | 4 | 8),
-        2 | 4 | 6 => matches!(depth, 8 | 16),
-        _ => false,
-    };
-    if !depth_ok || compression != 0 || filter != 0 || interlace > 1 {
-        return Err(err("invalid IHDR"));
-    }
-    let (mut p, mut palette, mut idat, mut after_idat, mut exif) = (8usize, false, false, false, None);
-    while let Some(len) = be32(p) {
-        let Some(kind) = p.checked_add(4).and_then(|k| b.get(k..k.checked_add(4)?)) else { break };
-        if idat && kind != b"IDAT" {
-            // a chunk follows the image data: the IDAT run is complete
-            after_idat = true;
-        }
-        if kind == b"IEND" {
-            break;
-        }
-        let start = p.saturating_add(8);
-        let data = (len <= i32::MAX as u32).then(|| start.checked_add(len as usize).and_then(|end| b.get(start..end))).flatten();
-        let Some(data) = data else {
-            if after_idat {
-                break; // a damaged chunk after the image data: a decode ignores it too
+    let (w, h, orientation) =
+        craft_image_codecs::png_probe::header_with_max_pixels(b, DecodeOptions::default().max_pixels).map_err(|error| match error {
+            craft_image_codecs::CodecError::LimitExceeded(_) => {
+                let (w, h) = craft_image_codecs::png_probe::declared_dimensions(b).unwrap_or((0, 0));
+                Error::TooLarge(w as u64, h as u64)
             }
-            return Err(err("truncated"));
-        };
-        match kind {
-            b"PLTE" => palette = true,
-            b"IDAT" if after_idat => {} // a stray IDAT after other chunks: the first run is the image
-            b"IDAT" => {
-                if color == 3 && !palette {
-                    return Err(err("indexed image without a palette"));
-                }
-                idat = true;
-            }
-            b"eXIf" if exif.is_none() => exif = Some(data.strip_prefix(b"Exif\0\0").unwrap_or(data)),
-            _ => {}
-        }
-        p = start.saturating_add(data.len()).saturating_add(4);
-    }
-    if !idat {
-        return Err(err("no image data"));
-    }
-    if !after_idat {
-        return Err(err("truncated image data"));
-    }
-    Ok((w, h, exif.map(crate::exif::summarize).unwrap_or_default().orientation.unwrap_or(1)))
+            other => err(other),
+        })?;
+    Ok((w, h, orientation))
 }
 
-fn container_hint(info: &png::Info) -> Option<SourceSpace> {
-    if let Some(s) =
-        info.coding_independent_code_points.as_ref().and_then(|c| SourceSpace::from_cicp(c.color_primaries.into(), c.transfer_function.into()))
-    {
-        return Some(s);
-    }
-    if info.srgb.is_some() {
+fn container_hint_from_chunks(b: &[u8]) -> Option<SourceSpace> {
+    let chunks = craft_image_codecs::png_probe::color_chunks(b)?;
+    let has_srgb = chunks.srgb;
+    let gamma = chunks.gamma;
+    let chrm = chunks.chromaticities;
+    if has_srgb {
         return Some(SourceSpace::named(NamedSpace::Srgb, SpaceOrigin::Container));
     }
-    let gamma = info.gama_chunk.or(info.source_gamma).map(|g| g.into_value()).filter(|g| *g > 0.0 && g.is_finite());
-    let chrm = info.chrm_chunk.or(info.source_chromaticities);
     if gamma.is_none() && chrm.is_none() {
         return None;
     }
@@ -147,8 +81,7 @@ fn container_hint(info: &png::Info) -> Option<SourceSpace> {
     };
     let mut s = SourceSpace::named(NamedSpace::Srgb, SpaceOrigin::Container);
     if let Some(c) = chrm {
-        let xy = |p: (png::ScaledFloat, png::ScaledFloat)| Xy::new(p.0.into_value() as f64, p.1.into_value() as f64);
-        let space = RgbSpace { name: "PNG cHRM", r: xy(c.red), g: xy(c.green), b: xy(c.blue), white: xy(c.white) };
+        let space = RgbSpace { name: "PNG cHRM", white: Xy::new(c[0], c[1]), r: Xy::new(c[2], c[3]), g: Xy::new(c[4], c[5]), b: Xy::new(c[6], c[7]) };
         let valid = [space.r, space.g, space.b, space.white].iter().all(|p| p.y > 1e-4 && p.x >= 0.0 && p.x + p.y <= 1.0 + 1e-6);
         let m = if valid { rgb_to_xyz_d50_checked(&space) } else { None };
         if let Some(m) = m {
@@ -167,4 +100,130 @@ fn rgb_to_xyz_d50_checked(space: &RgbSpace) -> Option<Mat3> {
         return None;
     }
     Some(crate::space::rgb_to_xyz_d50(space))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::DecodeOptions;
+
+    /// An IFD0 with two Orientation entries (1, then 6): `read_header` and `decode` read it with
+    /// the same reader, so they agree on the orientation.
+    #[test]
+    fn header_and_decode_agree_on_conflicting_orientation_entries() {
+        let image = craft_image_codecs::Image::from_u8(2, 3, craft_image_codecs::ChannelLayout::Gray, vec![0; 6]).unwrap();
+        let base = craft_image_codecs::encode(&image, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let mut exif = b"II*\0\x08\0\0\0\x02\0".to_vec();
+        for value in [1u16, 6] {
+            exif.extend_from_slice(&0x0112u16.to_le_bytes());
+            exif.extend_from_slice(&3u16.to_le_bytes());
+            exif.extend_from_slice(&1u32.to_le_bytes());
+            exif.extend_from_slice(&value.to_le_bytes());
+            exif.extend_from_slice(&[0, 0]);
+        }
+        exif.extend_from_slice(&0u32.to_le_bytes());
+        let mut png = base.clone();
+        let iend = png.len() - 12;
+        png.splice(iend..iend, png_chunk(*b"eXIf", &exif));
+        let header = crate::read_header(&png).unwrap();
+        let decoded = crate::decode(&png, DecodeOptions::default()).unwrap();
+        assert_eq!((header.width, header.height), (2, 3));
+        assert_eq!(header.orientation, decoded.orientation);
+    }
+
+    #[test]
+    fn exif_orientation_mutation_parity() {
+        let image = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Gray, vec![0]).unwrap();
+        let base = craft_image_codecs::encode(&image, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let exif = crate::exif::minimal_exif(6);
+        for at in 0..exif.len() {
+            for value in [0, 255] {
+                let mut data = exif.clone();
+                data[at] = value;
+                let mut png = base.clone();
+                let iend = png.len() - 12;
+                png.splice(iend..iend, png_chunk(*b"eXIf", &data));
+                let old = crate::exif::legacy_reference(&data);
+                let shared = crate::exif::summarize(&data);
+                assert_eq!((shared.orientation, shared.thumbnail, shared.adobe_rgb_hint), (old.orientation, old.thumbnail, old.adobe_rgb_hint));
+                assert_eq!(super::header(&png).unwrap().2, old.orientation.unwrap_or(1), "at {at}, value {value}");
+            }
+        }
+    }
+
+    /// A compressed text chunk is expanded by `png` through our own cap: an XMP document
+    /// bigger than it is dropped, not inflated. Compressing an 8 MiB string is a few
+    /// kilobytes — the reverse of what the unbounded `get_text()` path allowed.
+    #[test]
+    fn compressed_xmp_over_the_cap_is_dropped() {
+        let out = png_with_compressed_xmp(&"x".repeat(8 << 20));
+        let d = crate::decode(&out, DecodeOptions::default()).unwrap();
+        assert!(d.xmp.is_none());
+        assert_eq!((d.width, d.height), (1, 1));
+    }
+
+    /// XMP within the cap is still read, compressed or not.
+    #[test]
+    fn compressed_xmp_under_the_cap_is_read() {
+        let out = png_with_compressed_xmp(&"<?xpacket?><xmp/>".repeat(100));
+        let d = crate::decode(&out, DecodeOptions::default()).unwrap();
+        assert!(d.xmp.as_deref().is_some_and(|x| x.contains("xmp/")));
+    }
+
+    /// A little-endian PNG with one compressed iTXt chunk carrying `payload` as XMP.
+    fn png_with_compressed_xmp(payload: &str) -> Vec<u8> {
+        let img = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Gray, vec![0x7F]).unwrap();
+        let base = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        // Build a valid zlib stream using uncompressed DEFLATE stored blocks (<= 65535 bytes each).
+        let raw = payload.as_bytes();
+        let mut z = vec![0x78u8, 0x01];
+        let mut offset = 0usize;
+        loop {
+            let end = (offset + 65535).min(raw.len());
+            let block = &raw[offset..end];
+            let is_last = end == raw.len();
+            let len = block.len() as u16;
+            z.push(u8::from(is_last));
+            z.extend_from_slice(&len.to_le_bytes());
+            z.extend_from_slice(&(!len).to_le_bytes());
+            z.extend_from_slice(block);
+            offset = end;
+            if is_last {
+                break;
+            }
+        }
+        let (mut s1, mut s2) = (1u32, 0u32);
+        for &b in raw {
+            s1 = (s1 + u32::from(b)) % 65521;
+            s2 = (s2 + s1) % 65521;
+        }
+        z.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+        let mut itxt = Vec::new();
+        itxt.extend_from_slice(b"XML:com.adobe.xmp\0");
+        itxt.push(1); // compression_flag = 1
+        itxt.push(0); // compression_method = 0
+        itxt.extend_from_slice(b"\0\0"); // empty language_tag + translated_keyword
+        itxt.extend_from_slice(&z);
+        let chunk = png_chunk(*b"iTXt", &itxt);
+        let split = base.len() - 12;
+        let mut out = base[..split].to_vec();
+        out.extend_from_slice(&chunk);
+        out.extend_from_slice(&base[split..]);
+        out
+    }
+
+    fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(12 + data.len());
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(&kind);
+        out.extend_from_slice(data);
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in &out[4..] {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        out.extend_from_slice(&(!crc).to_be_bytes());
+        out
+    }
 }

@@ -1,4 +1,4 @@
-//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`.
+//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.hdrBatch`.
 //!
 //! Run synchronously here (CLI, MCP, control channel); the desktop UI plans the same job with
 //! [`Session::plan_merge`] and runs it on a worker thread. `preview: true` merges ≤ 1024 px frames
@@ -20,7 +20,7 @@ fn can_merge(s: &Session) -> std::result::Result<(), String> {
 
 fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     let (kind, finish) = crate::merge::parse(id, p)?;
-    let ids: Vec<PhotoId> = s.targets(p);
+    let ids: Vec<PhotoId> = s.targets(p)?;
     if !bool_or(p, "preview", false) {
         return s.merge_now(kind, finish, &ids);
     }
@@ -40,6 +40,26 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     Ok(info)
 }
 
+/// `merge.hdrBatch`: an HDR merge of each bracket set among the photos ([`lightcraft_catalog::Catalog::bracket_sets`]),
+/// one after the other. A set that fails is reported and the others still run.
+fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "merge.hdrBatch";
+    let (kind, finish) = crate::merge::parse("merge.hdr", p)?;
+    let ids: Vec<PhotoId> = s.targets(p)?;
+    let sets = s.catalog.bracket_sets(&ids);
+    if sets.is_empty() {
+        return Err(bad(ID, crate::merge::NO_BRACKET_SETS));
+    }
+    let (mut merged, mut failed) = (Vec::new(), Vec::new());
+    for set in sets {
+        match s.merge_now(kind.clone(), finish.clone(), &set) {
+            Ok(v) => merged.push(v),
+            Err(e) => failed.push(json!({"photos": set.iter().map(|p| p.0).collect::<Vec<_>>(), "error": e.to_string()})),
+        }
+    }
+    Ok(json!({"merged": merged, "failed": failed}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -56,7 +76,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Panorama Merge",
             [],
             None,
-            "{ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, stack=false, maxMegapixels=40, preview=false, previewPath?}",
+            "{ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, stack=false, maxMegapixels=full size (≤ 512, held to memory), preview=false, previewPath?}",
             can_merge,
             |s, p| run(s, "merge.panorama", p)
         ),
@@ -68,6 +88,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, bracket=0 (auto from EXIF), align, deghost, projection, boundaryWarp, autoCrop, fillEdges, autoSettings, stack, preview, previewPath?}",
             can_merge,
             |s, p| run(s, "merge.hdrPanorama", p)
+        ),
+        cmd!(
+            "merge.hdrBatch",
+            "HDR for Each Bracket Set",
+            ["Photo", "Photo Merge"],
+            None,
+            "{ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false}: an HDR merge of each bracket set among the photos (each stack, then photos taken less than a second apart at exposures ≥ ½ EV apart) → {merged: [{id, path, …}], failed: [{photos, error}]}",
+            can_merge,
+            run_batch
         ),
     ]
 }
