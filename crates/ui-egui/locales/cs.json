@@ -2547,5 +2547,11 @@
   "Stack — click to collapse (S)": "Sada — kliknutím sbalíte (S)",
   "Virtual copy": "Virtuální kopie",
   "Right-click ▸ Locate Missing File… to find it again.": "Klikněte pravým tlačítkem → Najít chybějící soubor… a najděte jej znovu.",
-  "Right-click ▸ Reload from Disk to try again.": "Klikněte pravým tlačítkem → Znovu načíst z disku a zkuste to znovu."
+  "Right-click ▸ Reload from Disk to try again.": "Klikněte pravým tlačítkem → Znovu načíst z disku a zkuste to znovu.",
+  "Album name (empty outside an album view)": "Název alba (prázdné mimo zobrazení alba)",
+  "Export date (YYYYMMDD)": "Datum exportu (YYYYMMDD)",
+  "Export time (HHMM)": "Čas exportu (HHMM)",
+  "Insert variable": "Vložit proměnnou",
+  "Insert…": "Vložit…",
+  "none  ({album}, {date}, {hour})": "žádné  ({album}, {date}, {hour})"
 }

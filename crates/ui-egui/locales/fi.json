@@ -2459,5 +2459,11 @@
   "Stack — click to expand (S)": "Pino — napsauta laajentaaksesi (S)",
   "Stars on hover": "Tähdet osoitettaessa",
   "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Tähdet osoitettaessa: liput ja värimerkinnät näkyvät aina; tähdet ja muokattu-merkki näkyvät, kun kuvaa osoitetaan tai se on valittuna.",
-  "Virtual copy": "Virtuaalikopio"
+  "Virtual copy": "Virtuaalikopio",
+  "Album name (empty outside an album view)": "Albumin nimi (tyhjä albumnäkymän ulkopuolella)",
+  "Export date (YYYYMMDD)": "Vientipäivämäärä (YYYYMMDD)",
+  "Export time (HHMM)": "Vientiaika (HHMM)",
+  "Insert variable": "Lisää muuttuja",
+  "Insert…": "Lisää…",
+  "none  ({album}, {date}, {hour})": "ei mitään  ({album}, {date}, {hour})"
 }

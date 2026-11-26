@@ -2473,5 +2473,11 @@
   "Stack — click to expand (S)": "Tumpukan — klik untuk meluaskan (S)",
   "Stars on hover": "Bintang saat kursor di atas",
   "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Bintang saat kursor di atas: bendera dan label warna selalu tampil; bintang dan tanda telah diedit muncul saat kursor berada di atas foto atau foto dipilih.",
-  "Virtual copy": "Salinan virtual"
+  "Virtual copy": "Salinan virtual",
+  "Album name (empty outside an album view)": "Nama album (kosong di luar tampilan album)",
+  "Export date (YYYYMMDD)": "Tanggal ekspor (YYYYMMDD)",
+  "Export time (HHMM)": "Waktu ekspor (HHMM)",
+  "Insert variable": "Sisipkan variabel",
+  "Insert…": "Sisipkan…",
+  "none  ({album}, {date}, {hour})": "tidak ada  ({album}, {date}, {hour})"
 }

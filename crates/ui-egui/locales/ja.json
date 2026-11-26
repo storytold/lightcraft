@@ -2500,5 +2500,11 @@
   "Stack — click to collapse (S)": "スタック — クリックして折りたたむ (S)",
   "Virtual copy": "仮想コピー",
   "Right-click ▸ Locate Missing File… to find it again.": "右クリック → 見つからないファイルを指定… で、ファイルをもう一度指定できます。",
-  "Right-click ▸ Reload from Disk to try again.": "右クリック → ディスクから再読み込み で、もう一度試せます。"
+  "Right-click ▸ Reload from Disk to try again.": "右クリック → ディスクから再読み込み で、もう一度試せます。",
+  "Album name (empty outside an album view)": "アルバム名（アルバム表示外では空）",
+  "Export date (YYYYMMDD)": "書き出し日 (YYYYMMDD)",
+  "Export time (HHMM)": "書き出し時刻 (HHMM)",
+  "Insert variable": "変数を挿入",
+  "Insert…": "挿入…",
+  "none  ({album}, {date}, {hour})": "なし  ({album}, {date}, {hour})"
 }

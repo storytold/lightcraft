@@ -3889,5 +3889,11 @@
   "Stack — click to expand (S)": "Stapel — klicka för att expandera (S)",
   "Stars on hover": "Stjärnor vid pekaren",
   "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Stjärnor vid pekaren: flaggor och färgetiketter visas alltid; stjärnorna och märket för redigerad visas när pekaren är över ett foto eller när det är markerat.",
-  "Virtual copy": "Virtuell kopia"
+  "Virtual copy": "Virtuell kopia",
+  "Album name (empty outside an album view)": "Albumnamn (tomt utanför en albumvy)",
+  "Export date (YYYYMMDD)": "Exportdatum (YYYYMMDD)",
+  "Export time (HHMM)": "Exporttid (HHMM)",
+  "Insert variable": "Infoga variabel",
+  "Insert…": "Infoga…",
+  "none  ({album}, {date}, {hour})": "ingen  ({album}, {date}, {hour})"
 }
