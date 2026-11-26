@@ -457,13 +457,17 @@
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
   the `=` was read as part of the number, so such a search quietly showed no photos at all.
 
+### Keywords
+- **No more ghost text in the Keywords list.** Some cameras write their whole keyword list as one metadata entry,
+  a keyword a line; LightCraft now reads it as one keyword a line, and repairs libraries that already hold such a
+  keyword when they open. A name with a line break in it is drawn on one line in the sidebar and the Keyword List.
+
 ### Color Mixer: HSL
 - **Color Mixer: HSL**, laid out as in Lightroom Classic: **Mixer | Point Color** tabs, then
   **Adjust: HSL / Color**. HSL shows **Hue, Saturation, Luminance** or **All** (the three stacked,
   each with its heading): eight colour sliders each, with coloured tracks, and a targeted
   adjustment per group. HSL is the default and your choice is remembered. Point Color is now the
   Color Mixer's second tab.
-
 ### Import rename numbering stops safely at its limit
 - Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
   reported as failed with guidance to lower `renameStart` or leave `rename` blank; completed transfers stay
