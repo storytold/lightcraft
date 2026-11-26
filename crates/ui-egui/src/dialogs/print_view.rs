@@ -11,6 +11,7 @@ use lightcraft_engine::export::ExportOptions;
 use lightcraft_engine::print::compose::{self, place};
 use lightcraft_engine::print::layout::{self, Snap, Style, Unit};
 use lightcraft_engine::print::template::PrintSettings;
+use lightcraft_engine::print::{JPEG_QUALITY, PrintOutput};
 use lightcraft_engine::print_color::{ManagedSpace, PrintColorSettings, PrintIntent, PrintMedia, PrintProfile, PrintSharpen};
 use serde_json::{Value, json};
 
@@ -498,7 +499,25 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             patch(app, &ctx, json!({"job": {"ppi": ppi}}));
         }
     });
-    print_job_color(app, ui, t, &st.job.color);
+    // JPEG files go into a folder, which the web build can't write (#4675).
+    if !cfg!(target_arch = "wasm32") {
+        row(ui, t, "Print To", |ui| {
+            if let Some(v) = choice(ui, "printOutput", &[(PrintOutput::Pdf, "PDF"), (PrintOutput::Jpeg, "JPEG Files")], st.job.output) {
+                patch(app, &ctx, json!({"job": {"output": to_value(v)}}));
+            }
+        });
+        if st.job.output == PrintOutput::Jpeg {
+            row(ui, t, "JPEG Quality", |ui| {
+                let mut q = st.job.jpeg_quality;
+                let r = ui.add(egui::DragValue::new(&mut q).range(JPEG_QUALITY).speed(0.5));
+                register(ui, "drag:printJpegQuality", r.rect);
+                if r.changed() {
+                    patch(app, &ctx, json!({"job": {"jpegQuality": q}}));
+                }
+            });
+        }
+    }
+    print_job_color(app, ui, t, &st.job.color, st.job.output, st.job.jpeg_quality);
 }
 
 /// Send one colour setting of the print job (the rest stay as they are).
@@ -510,8 +529,9 @@ fn to_value<V: serde::Serialize>(v: V) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
-/// The Print Job panel's colour management, print adjustment, print sharpening and depth.
-fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &PrintColorSettings) {
+/// The Print Job panel's colour management, print adjustment, print sharpening and depth, and the
+/// summary of what the print writes (`output`, at `quality` for JPEG files).
+fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &PrintColorSettings, output: PrintOutput, quality: u8) {
     let ctx = ui.ctx().clone();
     let managed = |space| PrintProfile::Managed { space };
     let shown = match &color.profile {
@@ -577,11 +597,16 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
             }
         });
     });
-    if let Some(v) = check(ui, "print16bit", "16 bits per channel", color.sixteen_bit) {
-        patch_color(app, &ctx, "sixteenBit", json!(v));
-    }
-    let bits = if color.sixteen_bit { "16-bit" } else { "8-bit" };
-    let summary = format!("PDF · {shown} · {bits} · {}", crate::i18n::tr("current edits"));
+    // JPEG files are 8-bit: the depth is for the PDF
+    ui.add_enabled_ui(output == PrintOutput::Pdf, |ui| {
+        if let Some(v) = check(ui, "print16bit", "16 bits per channel", color.sixteen_bit) {
+            patch_color(app, &ctx, "sixteenBit", json!(v));
+        }
+    });
+    let summary = match output {
+        PrintOutput::Pdf => format!("PDF · {shown} · {} · {}", if color.sixteen_bit { "16-bit" } else { "8-bit" }, crate::i18n::tr("current edits")),
+        PrintOutput::Jpeg => format!("JPEG · {shown} · 8-bit · {} {quality} · {}", crate::i18n::tr("quality"), crate::i18n::tr("current edits")),
+    };
     ui.label(egui::RichText::new(summary).color(t.text_dim));
 }
 

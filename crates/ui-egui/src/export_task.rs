@@ -132,17 +132,35 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     Ok(json!({"background": true, "total": total}))
 }
 
-/// Print the session's current print (`print.get`) to a PDF in the background, with the same
-/// activity row and cancellation as the other exports.
+/// Print the session's current print (`print.get`) to a PDF (`path`) or, when its job says so, to
+/// JPEG files in `folder` (#4675), in the background, with the same activity row and cancellation
+/// as the other exports.
 pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
-    use lightcraft_engine::print::{compose, output};
+    use lightcraft_engine::print::{PrintOutput, compose, output};
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
-    let path = params.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or("missing path")?.to_string();
+    let settings = app.session.print.clone();
+    let jpeg = settings.job.output == PrintOutput::Jpeg;
+    let key = if jpeg { "folder" } else { "path" };
+    let path = params.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or(format!("missing {key}"))?.to_string();
+    let name = if jpeg {
+        if cfg!(target_arch = "wasm32") {
+            return Err("JPEG files need a folder, which the web build can't write".into());
+        }
+        // a printer profile JPEG files can't hold fails before anything renders
+        lightcraft_engine::print_color::PrintColorJob::new(&settings.job.color).and_then(|c| c.jpeg_ready())?;
+        let name = match params.get("name") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(n)) => Some(n.as_str()),
+            Some(v) => return Err(format!("`name` must be text, not {v}")),
+        };
+        Some(output::jpeg_name(name, &path)?)
+    } else {
+        None
+    };
     app.session.check_write_target(&path)?;
     let guard = app.session.original_guard();
-    let settings = app.session.print.clone();
     let ids = app.session.targets(params).map_err(|e| e.to_string())?;
     let prepared = compose::prepare(&mut app.session, &settings, &ids)?;
     let total = prepared.len();
@@ -165,6 +183,11 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
                 if c.load(Ordering::Relaxed) {
                     return Err("Print cancelled".into());
                 }
+                if let Some(name) = &name {
+                    let (files, bytes) =
+                        output::write_jpegs(&pages, &settings.job, std::path::Path::new(&path), name, &guard, &|| c.load(Ordering::Relaxed))?;
+                    return Ok(vec![json!({"folder": path, "files": files, "pages": pages.len(), "photos": photos, "bytes": bytes, "print": true})]);
+                }
                 let bytes = output::write(&pages, &settings.job, &title)?;
                 guard.check(std::path::Path::new(&path))?;
                 match write {
@@ -179,7 +202,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     std::thread::Builder::new().name("print".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
+    let row = app.session.activity.start("export", if jpeg { "Printing to JPEG files" } else { "Printing to PDF" }, Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
     app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
@@ -242,8 +265,9 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     if let Some(sheet) = sheet {
         m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
     }
-    if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
-        m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
+    if let Some(print) = files.first().filter(|f| f["print"] == true) {
+        let to = if print.get("folder").is_some() { "JPEG files" } else { "PDF" };
+        m = format!("Printed to {to}: {} photos, {} pages", print["photos"], print["pages"]);
     }
     if skipped > 0 {
         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);

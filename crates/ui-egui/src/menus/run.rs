@@ -1234,15 +1234,26 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 return Some(Err("an export is already running".into()));
             }
             let mut params = p.clone();
-            if p.get("path").is_none() {
-                let req = PickRequest::save("Print to PDF", "PDF", &["pdf"], "Print.pdf");
-                let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
+            // JPEG files (#4675) go into a folder; a PDF is one file.
+            let jpeg = app.session.print.job.output == lightcraft_engine::print::PrintOutput::Jpeg;
+            let key = if jpeg { "folder" } else { "path" };
+            if p.get(key).is_none() {
+                let req = if jpeg {
+                    PickRequest::folder(crate::i18n::tr("Print to JPEG Files"))
+                } else {
+                    PickRequest::save("Print to PDF", "PDF", &["pdf"], "Print.pdf")
+                };
+                let paths = match crate::pick::ask(app, id, p, key, req, |_| None) {
                     Picked::Now(paths) => paths,
                     Picked::Later => return Some(Ok(Value::Null)),
-                    Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
+                    Picked::Unavailable => {
+                        let why =
+                            if jpeg { "no folder dialog on this platform; supply folder" } else { "no save dialog on this platform; supply path" };
+                        return Some(Err(why.into()));
+                    }
                 };
                 let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
-                params["path"] = json!(path);
+                params[key] = json!(path);
             }
             crate::export_task::start_print(app, &params)
         }

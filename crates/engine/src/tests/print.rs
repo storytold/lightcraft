@@ -1,4 +1,4 @@
-//! The `print.*` commands: state, cells, templates and the PDF.
+//! The `print.*` commands: state, cells, templates, the PDF and the JPEG files.
 
 use lightcraft_catalog::MemStore;
 use serde_json::{Value, json};
@@ -286,6 +286,65 @@ fn export_pdf_with_a_printer_profile() {
     assert!(s.activity.list().is_empty(), "nothing started");
 }
 
+/// Print to JPEG files (#4675): the output and the JPEG quality are print settings, and
+/// `print.exportJpeg` writes one file per page, named after the folder or `name`.
+#[test]
+fn export_jpeg_writes_a_file_per_page() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    let scratch = Scratch::new("jpeg");
+    let folder = scratch.0.join("Proofs");
+    run(
+        &mut s,
+        "print.set",
+        json!({"layout": {"style": "contactSheet", "grid": {"columns": 1, "rows": 2}, "page": {"paper": "a5"}}, "job": {"ppi": 100.0, "output": "jpeg", "jpegQuality": 80}}),
+    );
+    let job = run(&mut s, "print.get", json!({}))["settings"]["job"].clone();
+    assert_eq!((job["output"].as_str(), job["jpegQuality"].as_u64()), (Some("jpeg"), Some(80)));
+    for bad in [json!({"jpegQuality": 0}), json!({"jpegQuality": 101}), json!({"output": "tiff"})] {
+        fails(&mut s, "print.set", json!({ "job": bad }));
+    }
+    let r = run(&mut s, "print.exportJpeg", json!({"folder": folder, "ids": ids}));
+    assert_eq!((r["pages"].as_u64(), r["photos"].as_u64()), (Some(2), Some(3)));
+    let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
+    assert_eq!(files, [folder.join("Proofs-001.jpg"), folder.join("Proofs-002.jpg")].map(|p| p.to_string_lossy().into_owned()));
+    let total: u64 = files.iter().map(|f| std::fs::metadata(f).unwrap().len()).sum();
+    assert_eq!(total, r["bytes"].as_u64().unwrap());
+    assert!(s.activity.list().is_empty(), "the row in the activity stack is gone when the print is done");
+    let unnamed = run(&mut s, "print.exportJpeg", json!({"folder": folder, "name": null, "ids": ids}));
+    assert_eq!(unnamed["files"][0], r["files"][0], "a null name is no name");
+    let named = run(&mut s, "print.exportJpeg", json!({"folder": folder, "name": "Lab order", "ids": ids}));
+    assert!(named["files"][0].as_str().unwrap().ends_with("Lab order-001.jpg"), "{named}");
+    for bad in [
+        json!({}),
+        json!({"folder": folder, "typo": 1}),
+        json!({"folder": folder, "name": "a/b"}),
+        json!({"folder": folder, "name": 5}),
+        json!({"folder": folder, "ids": ["x"]}),
+    ] {
+        fails(&mut s, "print.exportJpeg", bad);
+    }
+}
+
+/// A printer profile is converted to and embedded in each JPEG file.
+#[test]
+fn export_jpeg_embeds_the_printer_profile() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(1).map(|p| p.id.0).collect();
+    let scratch = Scratch::new("jpeg-icc");
+    let profile = lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::AdobeRgb);
+    let icc = scratch.0.join("Lustre Paper.icc");
+    std::fs::write(&icc, &profile).unwrap();
+    run(
+        &mut s,
+        "print.set",
+        json!({"layout": {"style": "contactSheet", "grid": {"columns": 1, "rows": 1}, "page": {"paper": "4x6"}}, "job": {"ppi": 72.0, "color": {"profile": {"kind": "icc", "path": icc}}}}),
+    );
+    let r = run(&mut s, "print.exportJpeg", json!({"folder": scratch.0.join("out"), "ids": ids}));
+    let jpg = std::fs::read(r["files"][0].as_str().unwrap()).unwrap();
+    assert!(jpg.windows(profile.len()).any(|w| w == profile.as_slice()), "the printer profile is embedded");
+}
+
 #[test]
 fn custom_package_prints_each_cells_photo() {
     let mut s = Session::with_demo();
@@ -497,6 +556,7 @@ fn every_print_command_is_registered_with_a_description() {
         "print.layout.newPage",
         "print.layout.clear",
         "print.exportPdf",
+        "print.exportJpeg",
         "print.template.list",
         "print.template.save",
         "print.template.apply",
