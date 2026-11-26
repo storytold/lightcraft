@@ -177,6 +177,10 @@
   stops the remote Metal worker (#2574). Startup validation and bind failures still report an error.
 ### Reference View's empty state paints on every platform
 - Its instruction now uses the supported menu arrow symbol, avoiding a missing-glyph panic while the view is drawn.
+### Opening an image at launch honors the Detail startup view
+- When LightCraft starts with a new or already-catalogued image path, an explicit Startup View → Detail View opens
+  the selected image in Detail after the asynchronous import completes. Grid and Last continue to open launch files in
+  Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
 
 ### Lightroom catalogs with a print inside a collection import their collections
@@ -355,6 +359,11 @@
 
 ## 2026-10-27
 
+### One feedback row in the macOS Help menu
+- On macOS the Help menu showed macOS's own "Send LightCraft Feedback" row above LightCraft's Send Feedback…. Only
+  LightCraft's row is left; it opens a new issue on the project's GitHub. (A `--memory` session doesn't change that
+  setting, so on a Mac where LightCraft only ever ran that way macOS's row stays.)
+
 ### The Edit menu loses its Language submenu
 - Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
 
@@ -465,6 +474,11 @@
 ### `>=` and `<=` work in the search box
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
   the `=` was read as part of the number, so such a search quietly showed no photos at all.
+
+### Keywords
+- **No more ghost text in the Keywords list.** Some cameras write their whole keyword list as one metadata entry,
+  a keyword a line; LightCraft now reads it as one keyword a line, and repairs libraries that already hold such a
+  keyword when they open. A name with a line break in it is drawn on one line in the sidebar and the Keyword List.
 
 ### Import rename numbering stops safely at its limit
 - Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
@@ -587,6 +601,15 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
+
+
+### A change that could only be partly taken back is saved and can be undone
+- When a change made of several steps (such as deleting photos that sit in stacks) failed part-way and LightCraft
+  could not put everything back, what it had changed stayed in the open library but was neither saved nor undoable,
+  so a restart brought back the old state and Undo could not finish the job. Such a change is now saved as it
+  stands, the error says it was only partly taken back, and Undo finishes taking it back once whatever stopped the
+  rollback (such as a file that could not be moved back) is gone. While that remains, Undo reports it and keeps the
+  rest of the change.
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
