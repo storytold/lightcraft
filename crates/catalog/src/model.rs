@@ -223,8 +223,8 @@ pub struct Meta {
     /// Left out of the catalog JSON when empty (most photos), so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<lightcraft_meta::Region>,
-    /// Where the camera focused (read from the file's maker notes at import or Reload from Disk; Sony
-    /// bodies whose files have been checked), on the upright (EXIF-oriented) photo. Read-only: never
+    /// Where the camera focused (read from the file's maker notes at import or Reload from Disk; the Sony
+    /// and Nikon bodies whose files have been checked), on the upright (EXIF-oriented) photo. Read-only: never
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,

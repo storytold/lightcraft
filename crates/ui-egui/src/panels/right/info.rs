@@ -251,6 +251,12 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
             ("Aperture", m.aperture.map(|f| format!("f / {f:.1}").replace(".0", ""))),
             ("ISO", m.iso.map(|i| i.to_string())),
         ];
+        // exposure compensation and flash only when the camera recorded them (no rows of dashes for other photos)
+        let extra = [
+            ("Exposure", m.exposure_bias.filter(|v| v.is_finite()).map(exposure_bias_text)),
+            ("Flash", m.flash.map(|fired| crate::i18n::tr(if fired { "Yes" } else { "No" }).to_string())),
+        ];
+        let rows: Vec<(&str, Option<String>)> = rows.into_iter().chain(extra.into_iter().filter(|r| r.1.is_some())).collect();
         if rows.iter().any(|r| r.1.is_some()) {
             ui.add_space(6.0);
             egui::Grid::new("info-capture").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
@@ -279,8 +285,20 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
 /// Tracking"), or `None` when the photo has no focus point.
 pub(crate) fn focus_text(f: Option<&lightcraft_meta::FocusPoint>) -> Option<String> {
     let f = f?;
-    let words: Vec<&str> = f.words().into_iter().map(crate::i18n::tr).collect();
+    let mut words: Vec<String> = f.words().into_iter().map(|w| crate::i18n::tr(w).to_string()).collect();
+    // a camera's named grid point (Nikon `C7`): one translated phrase, whatever the point
+    if let Some(point) = f.af_point.as_deref().filter(|p| !p.is_empty()) {
+        words.push(crate::i18n::tr_format!("Point {point}", point = point));
+    }
     Some(if words.is_empty() { crate::i18n::tr("Focus point").to_string() } else { words.join(" · ") })
+}
+
+/// Exposure compensation as the camera recorded it: "+0.7 EV", "−1 EV", "0 EV".
+fn exposure_bias_text(v: f32) -> String {
+    if v.abs() < 0.05 {
+        return "0 EV".into();
+    }
+    format!("{v:+.1} EV").replace(".0 EV", " EV").replace('-', "−")
 }
 
 fn human_size(bytes: u64) -> String {

@@ -7,7 +7,7 @@ zooms to it, so checking whether the subject is sharp takes one key while cullin
 ## Using it
 
 - **View ▸ Focus Point** (⌥F; `view.focusPoint {on?}`) draws the camera's AF frame as green corner brackets in
-  Detail, Compare and Survey. It follows Rotate, flips and the crop; a point cropped away is not drawn. Off by
+  Detail, Compare and Survey (a Nikon's named AF point as a red rounded rectangle, as its viewfinder lights it). It follows Rotate, flips and the crop; a point cropped away is not drawn. Off by
   default; the choice is saved with the app's settings.
 - **View ▸ Zoom to Focus Point** (`view.zoomToFocus {on?}`, on by default): Toggle Zoom (Z or Space) zooms in
   centred on the focus point instead of the last position. A click on the photo still zooms where you click, and a
@@ -17,7 +17,8 @@ zooms to it, so checking whether the subject is sharp takes one key while cullin
 - **Info panel**: a *Focus* row says how the camera focused, e.g. `AF-C · Wide · Animal Eye Tracking` (focus mode,
   the AF area set on the camera, and what it tracked when the camera says).
 - **Agents**: `photo.inspect` (and the MCP `lightcraft://photo/active` resource) returns it as `meta.focus`:
-  `{rect: {x0, y0, x1, y1}, mode?, area?, tracking?}`, the box normalized to the upright (EXIF-oriented) photo, y down.
+  `{rect: {x0, y0, x1, y1}, mode?, area?, tracking?, af_point?}`, the box normalized to the upright (EXIF-oriented)
+  photo, y down; `af_point` names a camera's grid point (a Nikon `C7`).
   Photos without one have no `focus` key. `view.zoomToggle` replies `{focus: [x, y]}` (the pan it centred on) when it
   zoomed to one.
 
@@ -33,8 +34,8 @@ from a supported body have no point and haven't been looked at, LightCraft reads
 (`photo.readFocusPoints`) starts the same job by hand. Photo ▸ Reload from Disk still fills a missing point too, but it
 re-reads and hashes whole files and runs while you wait, so it is for a few photos, not a library.
 
-- **What is opened**: only photos whose stored camera is a supported body (`SONY ILCE-1`, `SONY ILCE-7SM3`), whose
-  file is an ARW or JPEG, that are in the library and have no point yet. Nothing else is opened.
+- **What is opened**: only photos whose stored camera is a supported body (`SONY ILCE-1`, `SONY ILCE-7SM3`, `NIKON
+  D800E`…), whose file is an ARW, NEF or JPEG, that are in the library and have no point yet. Nothing else is opened.
 - **What is read**: the few kilobytes that hold the focus data, not the file
   (`lightcraft_meta::focus::read_header`). It walks the file's structure as the decoder does — the TIFF header and
   IFD0 (Make, Model), the Exif IFD (the MakerNote entry), the maker note's IFD and the values of the focus tags; in a
@@ -65,8 +66,8 @@ re-reads and hashes whole files and runs while you wait, so it is for a few phot
 
 Sony first, on bodies whose files have been checked: **ILCE-1 (α1)** and **ILCE-7SM3 (A7S III)**
 (`lightcraft_meta::focus::SONY_MODELS`). Other Sony bodies store the same tags, but a body is added only after its
-files are checked, so an unchecked one shows nothing rather than a misleading box. Fujifilm, Canon, Nikon, OM System
-and Panasonic record similar data and are later steps.
+files are checked, so an unchecked one shows nothing rather than a misleading box. Fujifilm, Canon, OM System and Panasonic record
+similar data and are later steps; the Nikon D800E is supported (below).
 
 ### Sony layout and evidence
 
@@ -105,6 +106,47 @@ Nothing is stored (so nothing is drawn and Z zooms as before) when:
   is kept (49 of the 111 sampled spot and zone files were centred, the camera's default position).
 
 DMF (AF, then manual touch-up) keeps its point.
+
+### Nikon (D800E)
+
+On the **NIKON D800E** the maker note's AFInfo2 (`0x00b7`, version `0100`, 51-point schema) is decoded
+(`craft_metadata::nikon`). The **primary AF point** (the point the camera focused with: the one chosen in Single Area,
+or where 3D-tracking had it at capture) is drawn the way the viewfinder lights its active point: a thin red rounded
+rectangle about 0.7 of the point pitch wide and 0.5 tall (the proportions of the public 51-point diagram). It follows
+Rotate, flips and crop, is what Zoom to
+Focus Point centres on, and is read by the background job for photos imported earlier (NEF and JPEG). The Focus row
+reads e.g. `AF-C · Dynamic Area (3D-tracking) · Point C7`. **All Metadata** (and `photo.allMetadata`) lists the
+Nikon rows, among them *Primary AF Point* and *AF Points Used* (what the camera reports having used, or
+`(none reported)`).
+
+**Selected, used, in focus.** The box is the primary point, not a confirmation of focus: version `0100` records **no
+in-focus points** (AFPointsInFocus only exists in version `0101`, D5/D500/D850…), so none is drawn or claimed. The
+used points are listed, not drawn (on the sampled files they were the primary point or nothing). With 3D-tracking on a
+fast subject the primary point is where the camera's tracking was, which is not always on the subject: on a sample of
+RC-car shots it sat on the car in about half of the off-centre frames, and on the ground or a drain in the others,
+as the camera recorded it.
+
+**Where the points lie** is not in any public documentation; it was measured. A contributor shot 51 frames of a small
+dark target on a plain wall (AF-S, Single Area, FX, landscape), one per point, the chosen point's viewfinder square on
+the target; the target's centre in each camera preview gives the point's place (each detection checked by eye). The
+points fall on 11 columns at an even pitch of about 370 sensor pixels both ways, A1–A9 and E1–E9 under columns 2–10,
+C6 at the centre, the outer groups (columns 1–4, 8–11) holding their A, B, D and E rows nearer the middle than the
+centre group. The table keeps each column's median x and each row's median y within its group (residuals 0.3 % rms,
+1.4 % at most: the aim of a hand-held shot). The places are in the FX frame the camera's preview and the raw decoder
+show: the sensor's active area, 7360 × 4912 from (8, 6) of the 7424 × 4924 that the maker note's CropHiSpeed counts in.
+A DX, 1.2× or 5:4 crop (CropHiSpeed's crop size and origin) is applied in those sensor pixels; portrait shots turn with
+the photo's orientation. Both were confirmed on seven more target frames (DX: C6, C1, C11, A5, E5 landscape; C1 and C11
+held upright): every target's centre lies inside the drawn point. Applying the crop in sensor pixels rather than to the
+active area (the first version's mistake) cut the horizontal error across the DX frames by about a third.
+
+**Nothing is drawn** when the focus mode is manual, the schema is 0 (manual focus, live view), there is no primary
+point, the crop record is malformed, or the point lies outside the recorded frame. Other Nikon bodies are not decoded
+(`craft_metadata::nikon::AF_MODELS`): they use other AFInfo2 versions and schemas (11-, 39-, 153-, 81-, 105-point) and
+need their own files checked.
+
+Checked on 721 D800E NEFs of one photographer (670 shots, FX and DX, 3 portrait, AF-C 3D-tracking, AF-S, manual; 51
+calibration frames): every area mode, primary point and used-points list equal to ExifTool's, run as a black box; on
+71 of them the header read (32 KB each) gives the same point as the whole-file read.
 
 ## Code
 

@@ -38,6 +38,7 @@ pub fn load(s: &mut Session) {
                 mode: Some("AF-S".into()),
                 area: Some("Flexible Spot".into()),
                 tracking: None,
+                af_point: None,
             });
         }
         p.rating = [0, 3, 4, 5, 2, 0, 4, 3][sc.id as usize % 8];

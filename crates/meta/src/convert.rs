@@ -17,11 +17,17 @@ pub(crate) fn orientation_to_craft(o: Orientation) -> craft_metadata::Orientatio
 }
 
 pub(crate) fn focus_from_craft(f: craft_metadata::FocusPoint) -> FocusPoint {
-    FocusPoint { rect: rect_from_craft(f.rect), mode: f.mode, area: f.area, tracking: f.tracking }
+    FocusPoint { rect: rect_from_craft(f.rect), mode: f.mode, area: f.area, tracking: f.tracking, af_point: f.af_point }
 }
 
 pub(crate) fn focus_to_craft(f: &FocusPoint) -> craft_metadata::FocusPoint {
-    craft_metadata::FocusPoint { rect: rect_to_craft(f.rect), mode: f.mode.clone(), area: f.area.clone(), tracking: f.tracking.clone() }
+    craft_metadata::FocusPoint {
+        rect: rect_to_craft(f.rect),
+        mode: f.mode.clone(),
+        area: f.area.clone(),
+        tracking: f.tracking.clone(),
+        af_point: f.af_point.clone(),
+    }
 }
 
 pub(crate) fn region_from_craft(r: craft_metadata::Region) -> Region {

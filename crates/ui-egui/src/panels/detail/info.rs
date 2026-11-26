@@ -2,12 +2,31 @@ use super::geometry::focus_box;
 use super::{Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Stroke, Tokens, json, pos2, register, register_geometry, vec2};
 
 /// Draw the camera's focus box over a photo drawn in `img` (View ▸ Focus Point): green corner
-/// brackets with a dark keyline, the way cameras show their AF frame, never smaller than 14 pt.
+/// brackets with a dark keyline, the way cameras show their AF frame, never smaller than 14 pt; a named point from a
+/// camera's fixed grid (Nikon) as a red rectangle, the way the viewfinder lights its active point.
 /// `key` names it for tests and the control channel (`canvas:focusPoint`, `compare:focusPoint:<id>`).
 pub(crate) fn draw_focus_point(p: &egui::Painter, img: Rect, photo: &lightcraft_catalog::Photo, key: &str) {
     let Some(r) = focus_box(photo) else { return };
     let at = |x: f64, y: f64| pos2(img.left() + x as f32 * img.width(), img.top() + y as f32 * img.height());
     let b = Rect::from_two_pos(at(r.x0, r.y0), at(r.x1, r.y1));
+    // a camera that names its point from a fixed grid (Nikon) lights it red in the viewfinder: draw it that way, a
+    // thin red rounded rectangle (its box keeps the point's own proportions) on a dark keyline, its long side never under 14 pt
+    if photo.meta.focus.as_ref().is_some_and(|f| f.af_point.is_some()) {
+        // grown evenly until its long side is 14 pt, so a turned photo's point keeps the same size and shape
+        let long = b.width().max(b.height());
+        let size = match long {
+            l if l >= 14.0 => b.size(),
+            l if l > 0.01 => b.size() * (14.0 / l),
+            _ => vec2(14.0, 10.0),
+        };
+        let b = Rect::from_center_size(b.center(), size);
+        let round = (b.width().min(b.height()) * 0.15).clamp(1.5, 10.0);
+        let red = Color32::from_rgb(235, 45, 40);
+        p.rect_stroke(b, round, Stroke::new(4.0, Color32::from_black_alpha(170)), egui::StrokeKind::Middle);
+        p.rect_stroke(b, round, Stroke::new(2.0, red), egui::StrokeKind::Middle);
+        register_geometry(p.ctx(), key, b);
+        return;
+    }
     let b = Rect::from_center_size(b.center(), b.size().max(vec2(14.0, 14.0)));
     let arm = (b.width().min(b.height()) * 0.3).max(5.0);
     let green = Color32::from_rgb(90, 230, 110);
