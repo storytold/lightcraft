@@ -54,13 +54,13 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
-| X. Cross-cutting behaviours (BEHAV) | 22 | 7 | 1 | 1 | 7/8 (88%) | 7/10 (70%) |
+| X. Cross-cutting behaviours (BEHAV) | 22 | 8 | 1 | 1 | 7/8 (88%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 418 | 72 | 56 | 35 | 192/203 (95%) | 147/163 (90%) |
+| **Total** | 418 | 73 | 56 | 35 | 192/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.3% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.1%** of 547 in-scope rows — P0 97.3% of 203 · P1 94.2% of 163 · P2 56.9% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -493,6 +493,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-BEHAV-WHATSNEW | What's new | P2 | ✅ | `cmd:app.whatsNew`, `docs/whats-new.md` | Help ▸ What's New: release highlights |
 | LR-BEHAV-AI-EA | Early-access badges | P2 | ⬜ | | |
 | LR-BEHAV-TITLEBAR | Title bar drag and double-click zoom (macOS) | P2 | 🟡 | `crates/ui-egui/src/panels/topbar.rs`, `crates/ui-egui/src/tests/titlebar.rs` | the native title bar is hidden on macOS, so the top bar's empty space (including the traffic-light margin) moves the window and a double-click does what System Settings › “Double-click a window's title bar to” says (zoom or restore, minimize, nothing; craft-window's `title_bar`); buttons and the search field keep their clicks; ignored in full screen, where the traffic lights are gone and the bar's left buttons move into their space (#1763). A press that starts on a button, the search field or a panel floating over the bar never moves the window (AppKit's `movable` is off while the pointer is there). While a dialog is open the bar is not dimmed, so it stays level with the window buttons AppKit draws over it (as under a macOS sheet): its controls are inactive, a click on it does not close the dialog, and its empty space still moves the window; not on a window with its native title bar, nor in full screen. Known gap: egui-winit reads the zoomed state only at start-up and after our own `Maximized` command, so a window zoomed another way (green button, Window ▸ Zoom, snapping) makes the first double-click a no-op before the toggle catches up. Checked by hand on a real macOS window (drag, zoom, restore) |
+| LR-BEHAV-WINDOW | Window size and maximized state remembered | P2 | 🟡 | `crates/ui-egui/src/window_place.rs`, `apps/lightcraft/src/prefs.rs`, `apps/lightcraft/src/main.rs` | the window opens at the size it was left at, zoomed / maximized if it was; full screen and the place on the desktop are not remembered; Windows: a maximized window is built at its size and maximized once it shows (built maximized it could cover half the screen while Windows took it for maximized), and restored and maximized again once if it only says so; a window remembered larger than its screen is fitted to it. Not verified on several monitors with different scales on hardware |
 
 ## Y. Menus
 
@@ -830,6 +831,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-28 | minor | LR-EDIT-OPTICS-PROFILE: lensfun's database offered once on the first launch and downloaded on request (Download / Not Now, Settings) (pinned, CC BY-SA, never bundled), the library looked up when it arrives or Enable Lens Corrections is ticked, the Optics panel names the profile or the lens without one; status unchanged (🟡) |
 | 2026-10-26 | minor | LR-BEHAV-PANEL-RESIZE, KEY-INFO: closing a tool panel (Crop, Remove, Masking, Red Eye) puts back the panel shown before it, hidden if it was hidden, at the same width and scroll position; a panel key or button (I, M, C, H…) pressed again puts back exactly what the right column showed before it (Edit → I → I = Edit, closed → I → I = closed); status unchanged (✅) |
 | 2026-10-25 | patch | LRC-LIB-KEYWORDS: a file whose keyword list is one `dc:subject` (or `lr:hierarchicalSubject`) entry with a keyword a line is read as one keyword a line; a library holding such a keyword is repaired when it opens (journaled, not an undo step); sidebar and Keyword List rows draw a name on one line; status unchanged |
+| 2026-10-25 | minor | LR-BEHAV-WINDOW (new row, 🟡): on Windows a window remembered maximized is built at its size and maximized once it shows (built maximized it could cover half the screen while Windows took it for maximized), and restored and maximized again once if it only says so; a window remembered larger than the screen it opens on is fitted to it, on every platform |
 | 2026-10-30 | patch | LR-BEHAV-ACCESS: the Flatpak manifests grant `--talk-name=org.a11y.Bus`, so AccessKit can find out whether a screen reader is running and publish the window inside the sandbox; packaging lint requires it in both manifests; status unchanged (🟡), not tried with Orca |
 | 2026-10-27 | patch | LR-LIB-LABEL, MENU-PHOTO-LABEL, KEY-LABELS: Clear Color Label (`photo.clearLabel`) is a command of its own, so Help → Keyboard Shortcuts can give it a key (#2980); the Photo ▸ Set Color Label ▸ None row runs it; status unchanged |
 | 2026-10-25 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌘⌥⇧K / Ctrl+Alt+Shift+K (`dialog.keywordShortcut`, Set Keyword Shortcut) and ⇧K (`keyword.toggleShortcut`) add and remove the keyword shortcut's keywords; Keyword Shortcut leaves LRC-LIB-KEYWORDS' Not yet list; status counts unchanged (KEYC-METADATA stays 🟡) |
