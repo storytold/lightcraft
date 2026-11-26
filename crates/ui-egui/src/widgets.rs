@@ -143,6 +143,8 @@ pub fn arrow_button(ui: &mut Ui, text: &str, icon: Icon, leading: bool) -> HitAr
         let centre_y = rect.center().y;
         painter.galley_with_override_text_color(pos2(text_x, centre_y - galley.size().y / 2.0), galley, visuals.fg_stroke.color);
         paint(painter, Rect::from_min_size(pos2(arrow_x, centre_y - 8.0), vec2(16.0, 16.0)), icon, visuals.fg_stroke.color);
+        // the face fills the leaf's focus ring: it goes under it, not over it
+        resp.face_under_ring();
     }
     resp
 }
@@ -488,6 +490,8 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
     let chev = Rect::from_center_size(pos2(r.left() + 30.0, r.center().y), vec2(16.0, 16.0));
     paint(p, chev, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.text_label);
     p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(14.0), t.text);
+    // the face fills the leaf's focus ring: it goes under it, not over it
+    resp.face_under_ring();
     let mut toggled = None;
     // shown while the pointer is anywhere on the header: `resp.hovered()` turns false as soon as the
     // pointer is over the eye itself (the eye is on top), which hid the eye before it could be
@@ -504,6 +508,7 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
         if !on {
             ui.painter().line_segment([eye.left_bottom(), eye.right_top()], Stroke::new(1.5, t.text_disabled));
         }
+        er.face_under_ring();
         if er.clicked() {
             toggled = Some(!on);
         }
@@ -539,6 +544,8 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
         if open { Icon::ChevronDown } else { Icon::ChevronLeft },
         t.text_label,
     );
+    // the face fills the leaf's focus ring: it goes under it, not over it
+    resp.face_under_ring();
     resp
 }
 
@@ -591,6 +598,8 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 let p = ui.painter();
                 p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
                 p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                // the face fills the leaf's focus ring: it goes under it, not over it
+                resp.face_under_ring();
                 if resp.clicked() {
                     clicked = Some(i);
                 }
@@ -636,6 +645,8 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     let c = if resp.hovered() { t.text } else { color };
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
+    // the label and chevron fill the leaf's focus ring: they go under it, not over it
+    resp.face_under_ring();
     if elided { resp.on_hover_text(text) } else { resp }
 }
 
