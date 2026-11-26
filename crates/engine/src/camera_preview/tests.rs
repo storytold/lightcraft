@@ -3387,10 +3387,37 @@ fn diagnostic_tsv_field(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\t', "\\t").replace('\r', "\\r").replace('\n', "\\n")
 }
 
-/// Remove only this source's three owned output files; filesystem errors must stop the diagnostic.
-fn remove_diagnostic_pngs(output: &std::path::Path, name: &str) -> std::io::Result<()> {
+/// Derive the PNG path from the native filename. Lossy text is used only for display in geometry.tsv.
+fn diagnostic_png_path(output: &std::path::Path, name: &std::ffi::OsStr, label: &str) -> std::path::PathBuf {
+    let mut png = name.to_owned();
+    png.push(format!("-{label}.png"));
+    output.join(png)
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn cr3_diagnostics_preserve_distinct_native_filenames() {
+    #[cfg(unix)]
+    let names = {
+        use std::os::unix::ffi::OsStrExt;
+        [b"A\x80.CR3", b"A\x81.CR3"].map(|bytes| std::ffi::OsStr::from_bytes(bytes).to_owned())
+    };
+    #[cfg(windows)]
+    let names = {
+        use std::os::windows::ffi::OsStringExt;
+        [0xd800, 0xd801].map(|unit| std::ffi::OsString::from_wide(&[65, unit, 46, 67, 82, 51]))
+    };
+    let output = std::path::Path::new("diagnostics");
+    assert_eq!(names[0].to_string_lossy(), names[1].to_string_lossy());
     for label in ["plain", "chosen", "jpeg"] {
-        match std::fs::remove_file(output.join(format!("{name}-{label}.png"))) {
+        assert_ne!(diagnostic_png_path(output, &names[0], label), diagnostic_png_path(output, &names[1], label));
+    }
+}
+
+/// Remove only this source's three owned output files; filesystem errors must stop the diagnostic.
+fn remove_diagnostic_pngs(output: &std::path::Path, name: &std::ffi::OsStr) -> std::io::Result<()> {
+    for label in ["plain", "chosen", "jpeg"] {
+        match std::fs::remove_file(diagnostic_png_path(output, name, label)) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -3403,13 +3430,14 @@ fn remove_diagnostic_pngs(output: &std::path::Path, name: &str) -> std::io::Resu
 /// `proxies` exposes no rejection reason, so the row records only which call returned `None`.
 fn diagnostic_proxies_or_report(
     output: &std::path::Path,
-    name: &str,
+    name: impl AsRef<std::ffi::OsStr>,
     raw: &RawImage,
     profile_warp: bool,
     plain: Option<DiagnosticProxy>,
     chosen: Option<DiagnosticProxy>,
     report: &mut String,
 ) -> std::io::Result<Option<(DiagnosticProxy, DiagnosticProxy)>> {
+    let name = name.as_ref();
     let status = match (plain, chosen) {
         (Some(plain), Some(chosen)) => return Ok(Some((plain, chosen))),
         (None, Some(_)) => "missing_plain_proxy",
@@ -3418,7 +3446,7 @@ fn diagnostic_proxies_or_report(
     };
     remove_diagnostic_pngs(output, name)?;
     let mut fields = vec![String::new(); 17];
-    fields[0] = diagnostic_tsv_field(name);
+    fields[0] = diagnostic_tsv_field(&name.to_string_lossy());
     fields[1] = diagnostic_tsv_field(raw.metadata.model.as_deref().unwrap_or(""));
     fields[2] = format!("{:?}", raw.orientation);
     fields[3] = profile_warp.to_string();
@@ -3595,9 +3623,9 @@ fn corpus_cr3_profile_geometry_diagnostics() {
         });
         let plain = super::look_fit::look_proxies(&raw, &bytes, &transform, lens.as_ref(), plain_correction.as_ref());
         let chosen = super::look_fit::look_proxies(&raw, &bytes, &transform, lens.as_ref(), correction.as_ref());
-        let name = path.file_name().unwrap().to_string_lossy();
+        let name = path.file_name().unwrap();
         let profile_warp = correction.as_ref().is_some_and(|l| l.warp.is_some());
-        let Some((plain, chosen)) = diagnostic_proxies_or_report(&output, &name, &raw, profile_warp, plain, chosen, &mut report).unwrap() else {
+        let Some((plain, chosen)) = diagnostic_proxies_or_report(&output, name, &raw, profile_warp, plain, chosen, &mut report).unwrap() else {
             std::fs::write(output.join("geometry.tsv"), &report).unwrap();
             continue;
         };
@@ -3612,7 +3640,7 @@ fn corpus_cr3_profile_geometry_diagnostics() {
         let after = fit_preview(&raw, &bytes, &transform, lens.as_ref(), correction.as_ref()).0.is_some();
         report.push_str(&format!(
             "{}\t{}\t{:?}\t{}\t{accepted}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{before}\t{after}\t{framed_scores:?}\t{original_scores:?}\tmeasured\t\n",
-            diagnostic_tsv_field(&name),
+            diagnostic_tsv_field(&name.to_string_lossy()),
             diagnostic_tsv_field(raw.metadata.model.as_deref().unwrap_or("")),
             raw.orientation,
             profile_warp,
@@ -3637,7 +3665,7 @@ fn corpus_cr3_profile_geometry_diagnostics() {
                 })
                 .collect();
             let image = lightcraft_codecs::EncodeImage::new(image.width as u32, image.height as u32, 3, lightcraft_codecs::Samples::U8(&pixels));
-            std::fs::write(output.join(format!("{name}-{label}.png")), lightcraft_codecs::encode_png(&image, &Default::default()).unwrap()).unwrap();
+            std::fs::write(diagnostic_png_path(&output, name, label), lightcraft_codecs::encode_png(&image, &Default::default()).unwrap()).unwrap();
         }
         std::fs::write(output.join("geometry.tsv"), &report).unwrap();
     }
