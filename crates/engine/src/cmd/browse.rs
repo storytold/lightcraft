@@ -10,7 +10,7 @@
 //! browse also forgets at once the untouched records of the folder's files that are gone from
 //! the disk (deleted or moved by another app), so the folder shows what is on disk.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lightcraft_catalog::query::in_folder;
 use lightcraft_catalog::{Op, PhotoId, Source};
@@ -261,6 +261,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let from = str_param(p, "path").ok_or_else(|| bad("folder.rename", "missing path"))?.trim_end_matches(['/', '\\']).to_string();
                 refuse_protected_place("folder.rename", &from)?;
+                let from = rewrite_case_only_library_path(s, &from);
                 let name = str_param(p, "name")
                     .map(str::trim)
                     .filter(|n| !n.is_empty() && !n.contains(['/', '\\']) && *n != "." && *n != "..")
@@ -280,9 +281,11 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let from = str_param(p, "path").ok_or_else(|| bad("folder.move", "missing path"))?.trim_end_matches(['/', '\\']).to_string();
                 refuse_protected_place("folder.move", &from)?;
+                let from = rewrite_case_only_library_path(s, &from);
                 let into = str_param(p, "into").ok_or_else(|| bad("folder.move", "missing into"))?;
+                let into = spelling_in_open_library(s, into, false).map_err(|e| bad("folder.move", e))?;
                 let name = Path::new(&from).file_name().ok_or_else(|| bad("folder.move", "bad path"))?;
-                let to = Path::new(into).join(name).to_string_lossy().to_string();
+                let to = Path::new(&into).join(name).to_string_lossy().to_string();
                 let n = move_folder(s, &from, &to).map_err(|e| bad("folder.move", e))?;
                 Ok(json!({"path": to, "relinked": n}))
             }
@@ -514,11 +517,133 @@ fn follow_library_folder(chosen: &mut Option<String>, from: &str, to: &str) {
     }
 }
 
+/// The library's own spelling of `path` when it differs only in letter case. A path that only reaches the library
+/// through a link is left as given, so the caller can refuse the library's own folders first and then the link.
+fn rewrite_case_only_library_path(s: &Session, path: &str) -> String {
+    match spelling_in_open_library(s, path, true) {
+        Ok(spelled) => spelled,
+        Err(_) => path.to_string(),
+    }
+}
+
+/// If `path` is a folder inside the open library, the same folder spelled the way the library stores it. Letter
+/// case in the library prefix is ignored (`LIB/Originals/day` is `lib/Originals/day`). When `refuse_link` is set
+/// (the path being renamed or moved), a path that only reaches the library through a link or a junction is
+/// refused; a destination that may not exist yet is only rewritten when it is the library's path with letter
+/// case changed.
+fn spelling_in_open_library(s: &Session, path: &str, refuse_link: bool) -> std::result::Result<String, String> {
+    let Some(lib) = s.library.as_ref().map(|l| l.dir.clone()) else {
+        return Ok(path.to_string());
+    };
+    let src = Path::new(path);
+    let (lib_on_disk, chosen) = (lib.canonicalize().unwrap_or_else(|_| lib.clone()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
+    let inside_on_disk = chosen.starts_with(&lib_on_disk);
+    let as_library = library_spelling(src, &lib);
+    let refused = || format!("{path}: give the folder's path inside the library as {}", lib.display());
+    if inside_on_disk {
+        if src.starts_with(&lib) {
+            return Ok(path.to_string());
+        }
+        if let Some(spelled) = as_library {
+            if refuse_link && foreign_link_in_library_prefix(src, &lib) {
+                return Err(refused());
+            }
+            return Ok(spelled.to_string_lossy().into_owned());
+        }
+        if refuse_link {
+            return Err(refused());
+        }
+        return Ok(path.to_string());
+    }
+    Ok(match as_library {
+        Some(spelled) if !refuse_link => spelled.to_string_lossy().into_owned(),
+        _ => path.to_string(),
+    })
+}
+
+/// `path` as `root` plus the names below it, when they share a prefix if letter case is ignored.
+fn library_spelling(path: &Path, root: &Path) -> Option<PathBuf> {
+    if !path_starts_with_ignore_case(path, root) {
+        return None;
+    }
+    Some(path.components().skip(root.components().count()).fold(root.to_path_buf(), |p, c| p.join(c)))
+}
+
+/// Whether `path` lies at or under `root` when each component is compared in Unicode lowercase.
+fn path_starts_with_ignore_case(path: &Path, root: &Path) -> bool {
+    let fold = |c: std::path::Component<'_>| c.as_os_str().to_string_lossy().to_lowercase();
+    let root: Vec<_> = root.components().map(fold).collect();
+    let path: Vec<_> = path.components().map(fold).collect();
+    path.starts_with(&root)
+}
+
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink() || is_reparse_point(&meta))
+}
+
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+fn same_dir_entry(a: &Path, b: &Path) -> bool {
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+        (Ok(am), Ok(bm)) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                am.dev() == bm.dev() && am.ino() == bm.ino()
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                matches!(
+                    (am.volume_serial_number(), bm.volume_serial_number(), am.file_index(), bm.file_index()),
+                    (Some(va), Some(vb), Some(ia), Some(ib)) if va == vb && ia == ib
+                )
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                let _ = (am, bm);
+                a == b
+            }
+        }
+        _ => a == b,
+    }
+}
+
+/// Whether the prefix of `src` that names the library walks through a link that is not the library's own path
+/// (a differently-cased spelling of the same folder is not a different path).
+fn foreign_link_in_library_prefix(src: &Path, lib: &Path) -> bool {
+    let lib_comps: Vec<_> = lib.components().collect();
+    let src_comps: Vec<_> = src.components().collect();
+    if src_comps.len() < lib_comps.len() {
+        return false;
+    }
+    let mut src_p = PathBuf::new();
+    let mut lib_p = PathBuf::new();
+    for (s, l) in src_comps.iter().zip(lib_comps.iter()) {
+        src_p.push(*s);
+        lib_p.push(*l);
+        if is_link(&src_p) && !same_dir_entry(&src_p, &lib_p) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Rename or move a folder on disk (everything in it goes along, sidecars included) and relink
 /// the photos inside, as one undo step: undo renames the folder back and restores the photos'
 /// paths, redo repeats the move — each refused (and reported) when the destination is taken.
 pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result::Result<usize, String> {
-    let (src, dst) = (Path::new(from), Path::new(to));
+    let src = Path::new(from);
     if !src.is_dir() {
         return Err(format!("{from} is not a folder"));
     }
@@ -537,18 +662,16 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if s.library.as_ref().is_some_and(|l| same_folder(&l.dir)) {
         return Err("the library's own folders can't be moved here".into());
     }
-    // a folder inside the library reached through a link (or another spelling of the library's path) would move on
-    // disk, but its photos are stored under the library's own spelling, so the relink below couldn't find them
-    if let Some(l) = s.library.as_ref() {
-        let (lib, chosen) = (l.dir.canonicalize().unwrap_or_else(|_| l.dir.clone()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
-        if chosen.starts_with(&lib) && !src.starts_with(&l.dir) {
-            return Err(format!("{from}: give the folder's path inside the library as {}", l.dir.display()));
-        }
-    }
+    // a folder inside the library reached through a link would move on disk, but its photos are stored under the
+    // library's own spelling, so the relink below couldn't find them. A path that differs only in letter case is
+    // the library's own folder: rewrite it so relink matches, and do the same for the destination.
+    let from = spelling_in_open_library(s, from, true)?;
+    let to = spelling_in_open_library(s, to, false)?;
+    let (src, dst) = (Path::new(&from), Path::new(&to));
     // Repairs retain their exact old paths, including those on surviving history entries.
     // Complete them before the directory moves; an unavailable repair leaves it in place.
     s.repair_sidecars_with(&crate::rename::RealFs).map_err(|e| e.to_string())?;
-    rename_folder_on_disk(from, to)?;
+    rename_folder_on_disk(&from, &to)?;
     let mut ops: Vec<Op> = s
         .catalog
         .photos()
@@ -565,17 +688,17 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
         .collect();
     let n = ops.len();
     // what the library knows about the folder (and those inside it) goes along, in the same step
-    ops.extend(s.catalog.folder_records_follow(from, to));
-    let name = Path::new(to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    ops.extend(s.catalog.folder_records_follow(&from, &to));
+    let name = Path::new(&to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let renamed = src.parent() == dst.parent();
     let label = if renamed { format!("Rename Folder to “{name}”") } else { format!("Move Folder “{name}”") };
     let folder = crate::FolderMove { from: to.to_string(), to: from.to_string(), on_disk: true };
     if let Err(e) = s.commit_with_folder(&label, Op::Batch { ops }, folder) {
         // the catalog didn't take it: put the folder back where the photos still point
-        let back = rename_folder_on_disk(to, from).err().map(|b| format!("; moving it back failed too: {b}")).unwrap_or_default();
+        let back = rename_folder_on_disk(&to, &from).err().map(|b| format!("; moving it back failed too: {b}")).unwrap_or_default();
         return Err(format!("{e}{back}"));
     }
-    follow_folder(s, from, to);
+    follow_folder(s, &from, &to);
     Ok(n)
 }
 
@@ -653,8 +776,32 @@ fn refuse_protected_place_in(command: &str, from: &str, home: Option<&Path>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{is_protected_place, refuse_protected_place_in};
+    use super::{is_protected_place, library_spelling, path_starts_with_ignore_case, refuse_protected_place_in};
     use std::path::Path;
+
+    #[test]
+    fn a_path_that_differs_only_in_letter_case_is_the_librarys_spelling() {
+        let lib = Path::new("/Users/Foo/Pictures/Lib");
+        let src = Path::new("/users/foo/pictures/lib/Originals/2026-10-16");
+        assert!(path_starts_with_ignore_case(src, lib), "case-folded components match");
+        assert!(!src.starts_with(lib), "Path::starts_with is case-sensitive: this is the refusal #3016 got wrong");
+        let spelled = library_spelling(src, lib).expect("rewritten under the library's own path");
+        assert_eq!(spelled, Path::new("/Users/Foo/Pictures/Lib/Originals/2026-10-16"));
+        // Unicode case folding (É / é), so a typographic capital is not a different folder
+        let cafe = Path::new("/data/Café/Originals/day");
+        assert!(path_starts_with_ignore_case(cafe, Path::new("/data/CAFÉ")));
+        assert_eq!(library_spelling(cafe, Path::new("/data/CAFÉ")).unwrap(), Path::new("/data/CAFÉ/Originals/day"));
+    }
+
+    #[test]
+    fn a_linked_spelling_is_not_the_librarys_own_path() {
+        let lib = Path::new("/Users/Foo/Pictures/Lib");
+        let linked = Path::new("/Users/Foo/Pictures/lib-link/Originals/2026-10-16");
+        assert!(!path_starts_with_ignore_case(linked, lib));
+        assert!(library_spelling(linked, lib).is_none());
+        // a different prefix must not match as a string prefix of a component
+        assert!(!path_starts_with_ignore_case(Path::new("/Users/Foo/Pictures/Library/day"), lib));
+    }
 
     #[test]
     fn the_home_folder_and_its_standard_places_are_protected() {

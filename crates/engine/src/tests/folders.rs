@@ -775,6 +775,75 @@ fn a_folder_inside_the_library_named_through_a_link_is_refused_and_its_photos_ke
     assert!(paths.iter().all(|p| Path::new(p).exists()), "every photo still points at a file: {paths:?}");
 }
 
+/// A date folder inside the library named with only letter case changed is the library's own spelling:
+/// it can be renamed and its photos are relinked under the library's path. On a case-sensitive volume
+/// the flipped path is not a folder, so the command is not reached; the spelling check itself is
+/// covered by `a_path_that_differs_only_in_letter_case_is_the_librarys_spelling`.
+#[test]
+fn a_date_folder_named_with_different_letter_case_can_be_renamed() {
+    let dir = Scratch::new("in-library-case");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    let photo = day.join("a.jpg");
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo.to_string_lossy());
+    let flipped = dir.0.join("LIB").join("Originals").join("2026-10-16");
+    if !flipped.is_dir() {
+        // case-sensitive volume: this path is not the library folder, so the #3016 refusal does not arise
+        assert!(!Path::new(&flipped).starts_with(&lib) || flipped == day);
+        return;
+    }
+    let r = s.execute("folder.rename", &json!({"path": flipped.to_string_lossy(), "name": "Beach"})).unwrap();
+    assert_eq!(r["relinked"], 1, "the photo inside is relinked");
+    let moved = lib.join("Originals/Beach/a.jpg");
+    assert!(moved.is_file(), "renamed on disk under the library's own spelling");
+    let paths: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, [moved.to_string_lossy().to_string()], "the catalog uses the library's spelling, not the flipped case");
+    assert_eq!(r["path"], moved.parent().unwrap().to_string_lossy().as_ref(), "the returned path also uses the library's spelling");
+}
+
+/// A link whose name is only a case change of the library folder is still a link: refused, nothing moves.
+#[cfg(unix)]
+#[test]
+fn a_folder_named_through_a_link_that_differs_only_in_letter_case_is_still_refused() {
+    let dir = Scratch::new("in-library-case-link");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    let photo = day.join("a.jpg").to_string_lossy().to_string();
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo);
+    // on a case-insensitive volume this name is the library folder itself, so there is no separate link to refuse
+    if dir.0.join("LIB").exists() {
+        return;
+    }
+    std::os::unix::fs::symlink(&lib, dir.0.join("LIB")).unwrap();
+    let linked = dir.0.join("LIB").join("Originals").join("2026-10-16").to_string_lossy().to_string();
+    assert!(s.execute("folder.rename", &json!({"path": linked, "name": "Beach"})).is_err(), "a case-variant link is still refused");
+    assert!(day.is_dir() && !lib.join("Originals/Beach").exists(), "nothing moved on disk");
+    let paths: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(paths.iter().all(|p| Path::new(p).exists()), "every photo still points at a file: {paths:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn the_library_folder_is_protected_however_its_path_is_spelled() {
