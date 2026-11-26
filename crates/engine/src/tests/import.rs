@@ -5044,3 +5044,23 @@ fn review_reload_keeps_an_implicit_copy_when_its_selected_parent_moves() {
     assert_eq!(photo.meta.camera, before.meta.camera);
     assert_eq!(s.catalog.photo(id).unwrap(), &parent);
 }
+
+#[test]
+fn reload_refreshes_a_copy_created_during_the_probe() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-late-copy");
+    let file = dir.join("a.png");
+    write_png(&file, 10);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let items = reload::plan(&mut s, &json!({"id": id.0})).unwrap();
+    write_png(&file, 200);
+    let info = reload::file_probe(&s).unwrap()(&file.to_string_lossy()).unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"id": id.0})).unwrap()["ids"][0].as_u64().unwrap());
+    assert_ne!(s.catalog.photo(copy).unwrap().content_hash, info.content_hash);
+    let hash = info.content_hash.clone();
+    let out = reload::apply(&mut s, items, vec![Ok(info)]).unwrap();
+    assert!(out.reloaded.contains(&copy));
+    assert_eq!(s.catalog.photo(copy).unwrap().content_hash, hash);
+}

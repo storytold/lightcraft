@@ -25,7 +25,7 @@ pub struct Item {
     pub path: String,
     /// Explicitly selected photos sharing this probe; each may gain missing metadata.
     pub metadata_targets: Vec<PhotoId>,
-    /// Same-file family members present at planning time, including implicit fallback targets.
+    /// Same-file family members, including implicit fallback targets.
     pub(crate) source_targets: Vec<PhotoId>,
     family: PhotoId,
     /// The [`plan`] it came from, in the order reloads were started (see [`Tickets`]).
@@ -67,6 +67,15 @@ impl Tickets {
         self.invalidated.insert(id, self.last);
     }
 
+    /// A new virtual copy shares the source's facts and their freshness.
+    pub(crate) fn inherit_copy(&mut self, copy: PhotoId, source: PhotoId) {
+        if let Some(cutoff) = self.invalidated.get(&source).copied() {
+            self.invalidated.insert(copy, cutoff);
+        } else {
+            self.invalidated.remove(&copy);
+        }
+    }
+
     /// Keep changed file facts without cancelling an untouched sibling's pending read.
     pub(crate) fn valid(&self, id: PhotoId, ticket: u64) -> bool {
         self.invalidated.get(&id).is_none_or(|cutoff| *cutoff < ticket)
@@ -90,7 +99,7 @@ pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
     Ok(plan_ids(s, ids))
 }
 
-/// Group explicit targets and index their same-file siblings once, also for automatic rechecks.
+/// Group explicit targets for Reload and automatic rechecks.
 pub(crate) fn plan_ids(s: &mut Session, ids: Vec<PhotoId>) -> Vec<Item> {
     let mut groups = std::collections::HashMap::<(PhotoId, &str), usize>::new();
     let mut items: Vec<Item> = Vec::new();
@@ -112,19 +121,24 @@ pub(crate) fn plan_ids(s: &mut Session, ids: Vec<PhotoId>) -> Vec<Item> {
             items.push(Item { id, path: path.clone(), metadata_targets: vec![id], source_targets: vec![id], family, ticket });
         }
     }
+    items
+}
+
+/// Index same-file siblings in one pass at completion, including copies created during the probe.
+pub(crate) fn include_same_file_copies<'a>(catalog: &lightcraft_catalog::Catalog, items: impl Iterator<Item = &'a mut Item>) {
+    let mut groups: std::collections::HashMap<_, _> =
+        items.map(|item| ((item.family, item.path.as_str()), (item.id, &mut item.source_targets))).collect();
     if groups.is_empty() {
-        return items;
+        return;
     }
-    for ph in s.catalog.photos().filter(|p| !p.deleted) {
+    for ph in catalog.photos().filter(|p| !p.deleted) {
         if let Source::File { path } = &ph.source
-            && let Some(index) = groups.get(&(ph.copy_of.unwrap_or(ph.id), path.as_str()))
-            && let Some(item) = items.get_mut(*index)
-            && ph.id != item.id
+            && let Some((id, targets)) = groups.get_mut(&(ph.copy_of.unwrap_or(ph.id), path.as_str()))
+            && ph.id != *id
         {
-            item.source_targets.push(ph.id);
+            targets.push(ph.id);
         }
     }
-    items
 }
 
 /// The session's file probe, to [`probe`] with on a worker thread (`None` in a session without file
@@ -182,8 +196,9 @@ impl Reloaded {
 pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result<ProbeInfo, String>>) -> Result<Reloaded> {
     let mut ops = Vec::new();
     let mut out = Reloaded::default();
-    for (mut item, info) in items.into_iter().zip(results) {
-        let Ok(info) = info else { continue };
+    let mut results: Vec<_> = items.into_iter().zip(results).filter_map(|(item, info)| info.ok().map(|info| (item, info))).collect();
+    include_same_file_copies(&s.catalog, results.iter_mut().map(|(item, _)| item));
+    for (mut item, info) in results {
         let Some(id) = item.accept(s) else { continue };
         let selected: HashSet<_> = item.metadata_targets.into_iter().collect();
         crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.reloaded, item.source_targets.iter().copied(), |id| {

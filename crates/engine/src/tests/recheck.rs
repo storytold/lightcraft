@@ -297,6 +297,19 @@ fn review_same_path_relink_invalidates_older_reads_even_when_facts_match() {
 }
 
 #[test]
+fn recheck_refreshes_a_copy_created_during_the_probe() {
+    let mut x = checked_orf("new-copy");
+    let listed = recheck::stale(&mut x.s, true);
+    replace_checked_orf(&x.file);
+    let info = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    let copy = PhotoId(x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap()["ids"][0].as_u64().unwrap());
+    assert_ne!(x.s.catalog.photo(copy).unwrap().content_hash, info.content_hash);
+    let out = recheck::apply(&mut x.s, listed.into_iter().map(|item| (item, Ok(info.clone()))).collect()).unwrap();
+    assert!(out.updated.contains(&copy));
+    assert_eq!(x.s.catalog.photo(copy).unwrap().content_hash, info.content_hash);
+}
+
+#[test]
 fn recheck_does_not_overwrite_copies_created_after_its_listing() {
     let mut x = checked_orf("late-copy");
     let copy = PhotoId(x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap()["ids"][0].as_u64().unwrap());

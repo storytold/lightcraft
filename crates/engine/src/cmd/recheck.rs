@@ -70,8 +70,9 @@ impl Rechecked {
 pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo, String>)>) -> Result<Rechecked> {
     let mut ops = Vec::new();
     let mut out = Rechecked::default();
+    let mut results: Vec<_> = results.into_iter().filter_map(|(item, info)| info.ok().map(|info| (item, info))).collect();
+    super::reload::include_same_file_copies(&s.catalog, results.iter_mut().map(|(item, _)| item));
     for (mut item, info) in results {
-        let Ok(info) = info else { continue };
         let Some(id) = item.accept(s) else { continue };
         let first = out.updated.len();
         let selected: std::collections::HashSet<_> = item.metadata_targets.into_iter().collect();
