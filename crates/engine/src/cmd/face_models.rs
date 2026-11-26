@@ -515,10 +515,19 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     }
     st.enabled = on;
     write_settings(&dir, &st)?;
-    // the background scan notices at once, not within the second it trusts its last look
+    // the background scan notices at once, not within the second it trusts its last look; switching it on is also how a
+    // scan whose ✕ was pressed is asked for again, however soon after the off (a row whose ✕ was pressed goes: a new
+    // scan must not be stopped by it)
     #[cfg(not(target_arch = "wasm32"))]
     {
         s.faces.enabled_seen = None;
+        if on {
+            s.faces.stopped = false;
+            if s.faces.task.as_ref().is_some_and(|t| t.is_cancelled()) {
+                s.faces.task = None;
+                s.faces.peak = 0;
+            }
+        }
     }
     Ok(json!({"enabled": st.enabled}))
 }
