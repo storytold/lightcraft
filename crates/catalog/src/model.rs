@@ -320,6 +320,7 @@ fn maker_word(w: &str) -> String {
 pub struct Version {
     pub name: String,
     pub created: String,
+    #[serde(deserialize_with = "crate::shared::deserialize")]
     pub settings: Arc<DevelopSettings>,
     #[serde(default)]
     pub auto: bool,
@@ -328,6 +329,7 @@ pub struct Version {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HistoryStep {
     pub label: String,
+    #[serde(deserialize_with = "crate::shared::deserialize")]
     pub settings: Arc<DevelopSettings>,
 }
 
@@ -355,6 +357,7 @@ pub struct Photo {
     pub flag: Flag,
     #[serde(default)]
     pub label: Option<ColorLabel>,
+    #[serde(deserialize_with = "crate::shared::deserialize_current")]
     pub develop: Arc<DevelopSettings>,
     #[serde(default)]
     pub edited: Option<String>,
@@ -397,7 +400,7 @@ pub struct Photo {
     /// The settings import gave the photo when a user default (a raw/JPEG default preset, see
     /// the engine's import defaults) changed them from [`Photo::camera_defaults`]. They count as
     /// unedited, and Reset returns to them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::shared::deserialize_optional")]
     pub import_look: Option<Arc<DevelopSettings>>,
     /// Assisted culling scores (`None` until analysed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -513,7 +516,7 @@ impl Photo {
             rating: 0,
             flag: Flag::None,
             label: None,
-            develop: Arc::new(DevelopSettings::default()),
+            develop: crate::shared::default_settings(),
             edited: None,
             versions: Vec::new(),
             history: Vec::new(),

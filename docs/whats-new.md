@@ -553,6 +553,11 @@
   itself".
 - Esc gives up a drag of photos, as it already did for albums, sidebar sections and keywords: that press ends the drag and does nothing else
   (it does not also close a dialog, leave full screen or light back on). A drag started before entering full screen or a slideshow now ends with the mouse button, so Esc works there again.
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved in an older catalog format upgrades it, and versions that don't know the new format can't
+  open it afterward. In the desktop app, the library as it was is now kept beside it (`catalog.snap.v<format>-<seq>`,
+  `catalog.log.v<format>-<seq>`), and LightCraft says where once: to go back, see `docs/catalog-persistence.md`. A
+  library that can't be kept is not upgraded. The browser build keeps no copy (it always runs the newest version).
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -660,6 +665,13 @@
 - When an archive with the history settings would be too big (over 32 MiB), it is now saved without them, with a
   warning, instead of not at all.
 
+### Big libraries take less memory
+- Photos whose develop settings are equal now hold them once in memory: every unedited JPEG, PNG or other rendered
+  file, every raw on the same import look, and the equal history steps, versions and import looks of one photo. (A
+  raw's unedited Kelvin settings carry its own as-shot white balance, so those share only with raws of the very same
+  white balance.) On a test library of 100,000 photos, 90 % unedited JPEGs, 8 % raws with one as-shot white balance
+  and 2 % edited, a photo takes about 2.8 kB where it took 4.4 kB (285 MB instead of 441 MB). Nothing changes on
+  screen, and the library's files are byte for byte what they were, so earlier versions open them as before.
 ## 2026-10-23
 
 ### AI Denoise works out of the box
@@ -1033,6 +1045,17 @@
   over from a Lightroom catalog don't until you run Photo ▸ Reload from Disk on them, so they match nothing until
   then, even when their files are identical.
 
+### Menus that fit the screen
+- The View menu is down from 63 rows to 36, so it opens without scrolling on a laptop's menu bar. Its overlays,
+  before/after and slideshow items sit in submenus: Loupe Overlay, Before/After, Mask Overlay (every overlay mode and
+  colour, with the current one checked), Crop Overlay and Slideshow.
+- The panel toggles (My Photos Panel, Right Panel, Sidebar Sections, Photo Counts, Filmstrip, Histogram, Navigator) moved to
+  the Window menu. Photo ▸ Metadata gathers the metadata commands, including Metadata Preset, Save Metadata to File
+  and Detect Faces.
+- File no longer lists Discard Preview Cache twice (it is one command), View no longer lists
+  Choose and Layout Image twice, and every command has a fixed place instead of sitting in a pile at the end of
+  its menu.
+- Keyboard shortcuts are unchanged.
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
