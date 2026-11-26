@@ -78,6 +78,7 @@ impl PreviewPath {
     }
 
     /// Rebuilds write only their captured interpretation; older identities remain read-only.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(crate) fn write_path(&self) -> &Path {
         &self.current
     }
@@ -92,6 +93,7 @@ impl PreviewPath {
     }
 
     /// Existing but incompatible/damaged proxies must not make the opening refresh look complete.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn needs_refresh(&self, is_stale: impl FnOnce(&Path) -> bool) -> bool {
         self.candidates().iter().any(|path| path.exists()) && self.load_with_path().map_or(true, |(path, _)| is_stale(&path))
     }

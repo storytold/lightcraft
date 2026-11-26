@@ -40,6 +40,7 @@ impl Availability {
     }
 
     /// Writes and explicit discards invalidate every interpretation, including in-flight probes.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(crate) fn invalidate(&self, paths: &[std::path::PathBuf]) {
         for path in paths {
             let path = path.to_string_lossy();
