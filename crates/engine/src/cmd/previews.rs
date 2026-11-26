@@ -48,6 +48,8 @@ pub struct PreviewBuild {
     pub order: Vec<u64>,
     pub focus: AtomicUsize,
     pub backward: AtomicBool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) discard_retention: Option<Arc<std::sync::Mutex<DiscardRetention>>>,
     /// Test-only: the gate this build's lanes wait at before a photo's first render (see
     /// [`test_gate`]). Captured by `build` on the calling thread; production builds never have one.
     #[cfg(test)]
@@ -669,9 +671,64 @@ struct SmartJob {
     path: crate::smart::PreviewPath,
     source: Option<crate::media::SourceRef>,
     ages: Ages,
-    /// Only identities that no unselected photo uses, in either folder layout.
-    discard_paths: Vec<std::path::PathBuf>,
     availability: crate::smart::Availability,
+}
+
+/// Shared with catalog edits for the lifetime of a discard. A worker holds this
+/// lock only while checking and removing one path.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub(crate) struct DiscardRetention {
+    dir: std::path::PathBuf,
+    selected: std::collections::HashSet<lightcraft_catalog::PhotoId>,
+    candidates: std::collections::HashSet<std::path::PathBuf>,
+    held_by: std::collections::HashMap<lightcraft_catalog::PhotoId, Vec<std::path::PathBuf>>,
+    counts: std::collections::HashMap<std::path::PathBuf, usize>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DiscardRetention {
+    fn new(
+        dir: &std::path::Path,
+        selected: std::collections::HashSet<lightcraft_catalog::PhotoId>,
+        jobs: &[SmartJob],
+        catalog: &lightcraft_catalog::Catalog,
+    ) -> Self {
+        let candidates = jobs.iter().flat_map(|job| job.path.candidates()).collect();
+        let mut retention = Self { dir: dir.to_path_buf(), selected, candidates, held_by: Default::default(), counts: Default::default() };
+        if !retention.candidates.is_empty() {
+            for p in catalog.photos() {
+                retention.update(p.id, Some(p));
+            }
+        }
+        retention
+    }
+
+    pub(crate) fn update(&mut self, id: lightcraft_catalog::PhotoId, photo: Option<&lightcraft_catalog::Photo>) {
+        if let Some(previous) = self.held_by.remove(&id) {
+            for path in previous {
+                if let std::collections::hash_map::Entry::Occupied(mut count) = self.counts.entry(path) {
+                    *count.get_mut() -= 1;
+                    if *count.get() == 0 {
+                        count.remove();
+                    }
+                }
+            }
+        }
+        if self.selected.contains(&id) {
+            return;
+        }
+        if let Some(p) = photo.filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })) {
+            let paths: Vec<_> =
+                crate::smart::PreviewPath::new(&self.dir, p).candidates().into_iter().filter(|p| self.candidates.contains(p)).collect();
+            for path in &paths {
+                *self.counts.entry(path.clone()).or_default() += 1;
+            }
+            if !paths.is_empty() {
+                self.held_by.insert(id, paths);
+            }
+        }
+    }
 }
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
@@ -758,12 +815,12 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
 fn smart_run(
     dir: &std::path::Path,
     custom: bool,
-    discard: bool,
+    discard: Option<&std::sync::Mutex<DiscardRetention>>,
     jobs: Vec<SmartJob>,
     state: Option<(&PreviewBuild, &TaskGuard)>,
 ) -> std::result::Result<SmartCounts, String> {
     let mut n = SmartCounts::default();
-    if !discard {
+    if discard.is_none() {
         // a chosen folder on another drive must be there: never recreate it on this one
         if custom {
             crate::smart::check_writable(dir)?;
@@ -771,7 +828,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for SmartJob { id, path, source, ages, discard_paths, availability } in jobs {
+    for SmartJob { id, path, source, ages, availability } in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -779,11 +836,29 @@ fn smart_run(
         let candidates = path.candidates();
         // Read either the new shard or a pre-upgrade flat file, without making new work
         // depend on having the original online.
-        if discard {
-            for path in discard_paths {
-                if std::fs::remove_file(&path).is_ok() {
-                    n.removed += 1;
+        if let Some(retention) = discard {
+            let mut errors = Vec::new();
+            for path in &candidates {
+                let guard = retention.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
+                    break;
                 }
+                if guard.counts.contains_key(path) {
+                    continue;
+                }
+                match std::fs::remove_file(path) {
+                    Ok(()) => n.removed += 1,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => errors.push(format!("{}: {e}", path.display())),
+                }
+            }
+            if !errors.is_empty() {
+                let why = errors.join("\n");
+                if let Some((st, _)) = state {
+                    st.failed.fetch_add(1, Ordering::Relaxed);
+                    *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why.clone());
+                }
+                n.failed.push(json!([id.0, why]));
             }
         } else {
             let reusable = path.load_with_path().ok().map(|(path, _)| path);
@@ -798,7 +873,14 @@ fn smart_run(
             let damaged = existing.exists();
             let newer = valid && crate::smart::from_newer_build(&existing);
             let stale = valid && !newer && ages.stale(&existing);
-            if valid && !stale {
+            if crate::smart::from_newer_build(path) {
+                n.newer_kept += 1;
+                if valid {
+                    n.built += 1;
+                } else if let Some((st, _)) = state {
+                    st.skipped.fetch_add(1, Ordering::Relaxed);
+                }
+            } else if valid && !stale {
                 n.built += 1;
                 if newer {
                     n.newer_kept += 1;
@@ -913,38 +995,27 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut jobs: Vec<SmartJob> = Vec::new();
     let selected: std::collections::HashSet<_> = ids.iter().copied().collect();
-    let retained: std::collections::HashSet<_> = if discard {
-        s.catalog
-            .photos()
-            .filter(|p| !selected.contains(&p.id) && matches!(p.source, lightcraft_catalog::Source::File { .. }))
-            .flat_map(|p| crate::smart::PreviewPath::new(&dir, p).candidates())
-            .collect()
-    } else {
-        Default::default()
-    };
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
         if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
             continue;
         }
         let path = crate::smart::PreviewPath::new(&dir, &ph);
-        // Copies can share the current decoder identity as well as the content-only legacy
-        // identity. Deleting either would strand an unselected photo whose original is offline.
-        let discard_paths = if discard { path.candidates().into_iter().filter(|p| !retained.contains(p)).collect() } else { Vec::new() };
         // Decode the original afresh, with the photo's hot-pixel setting. Cached sources may
         // carry an imported profile or predate the lens database captured by smart_run.
         let source = (!discard).then(|| s.media.origin_ref_of(&ph, crate::media::SourceLevel::Preview.max_edge()));
-        jobs.push(SmartJob { id, path, source, ages: Ages::of(&ph), discard_paths, availability: s.media.smart_availability.clone() });
+        jobs.push(SmartJob { id, path, source, ages: Ages::of(&ph), availability: s.media.smart_availability.clone() });
     }
     let custom = s.smart_previews_dir.is_some();
+    let retention = discard.then(|| Arc::new(std::sync::Mutex::new(DiscardRetention::new(&dir, selected, &jobs, &s.catalog))));
     if background {
-        let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
+        let state = Arc::new(PreviewBuild { total: jobs.len(), what, discard_retention: retention.clone(), ..Default::default() });
         let previous = s.preview_build.clone();
         set_current(s, state.clone());
         // (this build always has its row)
         let run = Running { task: Some(task_for(s, &state)), state: state.clone() };
         let work = move || {
-            if let Err(e) = smart_run(&dir, custom, discard, jobs, run.task.as_ref().map(|task| (&*run.state, task))) {
+            if let Err(e) = smart_run(&dir, custom, retention.as_deref(), jobs, run.task.as_ref().map(|task| (&*run.state, task))) {
                 log::warn!("{C}: {e}");
                 *run.state.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
             }
@@ -971,10 +1042,55 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(state.json());
     }
-    let r = smart_run(&dir, custom, discard, jobs, None).map_err(|e| bad(C, e))?;
+    let r = smart_run(&dir, custom, retention.as_deref(), jobs, None).map_err(|e| bad(C, e))?;
     Ok(
         json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "newerKept": r.newer_kept, "removed": r.removed, "failed": r.failed}),
     )
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn pending_discard_retains_the_proxy_an_unselected_photo_regains_on_undo() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    let dir = crate::tests::TestDir::new("discard-retention");
+    let mut s = Session::new();
+    s.media.smart_dir = Some(dir.to_path_buf());
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "offline.dng".into() }, "offline.dng", "DNG", 8, 8, "");
+    p.kind = MediaKind::Raw;
+    let path = crate::smart::sharded_file_path(&dir, &p);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let bytes = crate::smart::encode(
+        &lightcraft_raster::Rgb32f::filled(8, 8, [0.2; 3]),
+        Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }),
+    )
+    .unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let mut copy = p.clone();
+    copy.id = PhotoId(2);
+    s.commit("Add", Op::Batch { ops: vec![Op::AddPhoto { photo: Box::new(p) }, Op::AddPhoto { photo: Box::new(copy.clone()) }] }).unwrap();
+    s.commit(
+        "Change interpretation",
+        Op::SetContent {
+            id: copy.id,
+            width: copy.width,
+            height: copy.height,
+            file_size: copy.file_size,
+            content_hash: copy.content_hash,
+            preview_only: Some("decoder changed".into()),
+            preview_checked: String::new(),
+        },
+    )
+    .unwrap();
+    let gate = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    smart(&mut s, &json!({"id": 1, "background": true, "discard": true})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    drop(gate);
+    let started = std::time::Instant::now();
+    while s.preview_build.as_ref().unwrap().running() {
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::yield_now();
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
 }
 
 /// Refresh existing proxies for the Compact encoding, preview-fitted look, and raw-source versions.
@@ -997,7 +1113,6 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
             path: crate::smart::PreviewPath::new(&dir, p),
             source: Some(s.media.origin_ref_of(p, max_edge)),
             ages: Ages::of(p),
-            discard_paths: Vec::new(),
             availability: s.media.smart_availability.clone(),
         })
         .collect();
@@ -1024,7 +1139,7 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
         jobs.into_iter().filter(|job| job.path.needs_refresh(|path| !crate::smart::from_newer_build(path) && job.ages.stale(path))).collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
-        match smart_run(dir, true, false, stale, None) {
+        match smart_run(dir, true, None, stale, None) {
             Ok(n) if !n.failed.is_empty() => {
                 log::warn!("smart previews: look refresh needs attention: {:?}", n.failed);
                 return;

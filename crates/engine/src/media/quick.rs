@@ -157,6 +157,9 @@ pub fn source_identity(p: &Photo) -> Hash128 {
     if decoder != 0 {
         k.str("decoder").u64(decoder);
     }
+    if let Some(raw) = crate::smart::raw_interpretation(p) {
+        k.str("raw-interpretation").u64(u64::from(raw));
+    }
     let metadata = source_metadata_key(p);
     if metadata != 0 {
         k.u64(metadata);

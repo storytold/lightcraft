@@ -637,6 +637,10 @@ impl Session {
         // never edited this session would look unchanged and show the old library's numbers.
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(discard) = self.preview_build.as_ref().filter(|b| b.discard_retention.is_some()) {
+            discard.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.catalog = catalog;
         // nor do tasks waiting in line carry over: they name the old library's photos and folders
         let dropped = self.activity.library_changed();

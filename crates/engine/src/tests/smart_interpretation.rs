@@ -146,6 +146,35 @@ fn stale_interpretation_mismatch_does_not_complete_the_refresh() {
 }
 
 #[test]
+fn a_newer_incompatible_proxy_at_the_write_destination_is_preserved() {
+    let mut x = Lib::new("newer-incompatible", true);
+    let path = crate::smart::sharded_file_path(&x.smart_dir(), &x.photo());
+    let mut bytes = write_proxy(&path, Some(&SourceInfo { raw: false, ..Default::default() }), false);
+    let (start, end, mut h) = header(&bytes);
+    h["source_version"] = json!(crate::smart::SOURCE_VERSION + 1);
+    bytes.splice(start..end, h.to_string().bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(crate::smart::from_newer_build(&path));
+    let report = x.build();
+    assert_eq!(report["built"], 0);
+    assert_eq!(report["newerKept"], 1);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn an_offline_render_from_the_old_interpretation_does_not_reenter_the_cache() {
+    let mut x = Lib::new("stale-render", false);
+    let path = crate::smart::sharded_file_path(&x.smart_dir(), &x.photo());
+    write_proxy(&path, Some(&SourceInfo { raw: false, ..Default::default() }), false);
+    std::fs::remove_file(&x.file).unwrap();
+    let old = x.s.render_job(x.id, 48, 32, false, true).unwrap().run();
+    assert!(old.loaded.as_ref().is_some_and(|s| s.from_proxy));
+    x.set_preview(false, true);
+    x.s.accept(&old);
+    assert!(!x.s.media.has_source(x.id, old.level));
+}
+
+#[test]
 fn undo_during_a_build_cannot_overwrite_another_interpretation() {
     let mut x = Lib::new("undo-worker", false);
     let preview = crate::smart::sharded_file_path(&x.smart_dir(), &x.photo());
@@ -377,6 +406,27 @@ fn discard_preserves_every_unselected_consumer() {
             assert!(!path.exists(), "selecting every consumer permits explicit deletion");
         }
     }
+}
+
+#[test]
+fn discard_reports_unremovable_candidates_even_when_it_removes_another() {
+    let mut x = Lib::new("discard-broken", true);
+    let photo = x.photo();
+    let dir = x.smart_dir();
+    let path = crate::smart::sharded_file_path(&dir, &photo);
+    write_proxy(&path, Some(&SourceInfo { raw: true, ..Default::default() }), false);
+    let blocked = old_path(&dir, &photo, true);
+    std::fs::create_dir(&blocked).unwrap();
+    let options = json!({"id": x.id.0, "discard": true});
+    let r = x.s.execute("library.smartPreviews", &options).unwrap();
+    assert_eq!(r["removed"], 1);
+    assert!(r["failed"][0][1].as_str().unwrap().contains(blocked.to_string_lossy().as_ref()));
+    assert!(!path.exists());
+    x.s.execute("library.smartPreviews", &json!({"id": x.id.0, "discard": true, "background": true})).unwrap();
+    wait_build(&x.s);
+    let progress = x.s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!(progress["failed"], 1);
+    assert!(progress["error"].as_str().unwrap().contains(blocked.to_string_lossy().as_ref()));
 }
 
 #[test]

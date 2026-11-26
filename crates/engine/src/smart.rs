@@ -23,7 +23,7 @@ pub use availability::Availability;
 const MAGIC: &[u8] = b"LCSP1\n";
 
 /// Raw proxies retain their sensor/preview interpretation; rendered-image identities stay unchanged.
-fn raw_interpretation(p: &Photo) -> Option<bool> {
+pub(crate) fn raw_interpretation(p: &Photo) -> Option<bool> {
     // Keep the existing ORF proxy policy until the shared-decoder migration.
     (p.kind == lightcraft_catalog::MediaKind::Raw && !p.format.eq_ignore_ascii_case("ORF")).then(|| p.develops_raw())
 }

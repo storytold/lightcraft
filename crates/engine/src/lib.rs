@@ -804,11 +804,20 @@ impl Session {
             }
         }
         // (a batch that was only partly taken back changed the catalog all the same: what hangs on its photos goes too)
+        #[cfg(not(target_arch = "wasm32"))]
+        let retention = self.preview_build.as_ref().filter(|b| b.running()).and_then(|b| b.discard_retention.as_ref());
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut discard =
+            retention.filter(|_| !invalidated.is_empty()).map(|r| r.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let applied = apply(&mut self.catalog, op);
         if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
             return applied.map_err(Into::into);
         }
         for id in invalidated {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(retention) = &mut discard {
+                retention.update(id, self.catalog.photo(id).map(|p| &**p));
+            }
             if invalidate_reads {
                 self.reload_tickets.invalidate(id);
             }
