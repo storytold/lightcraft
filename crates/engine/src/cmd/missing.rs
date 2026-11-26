@@ -145,7 +145,7 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
             ops.push(Op::SetMeta { id, meta: Box::new(meta) });
         }
         ops.extend(crate::cmd::convert::reload_wb_op(ph, &info, camera));
-        if info.embedded_lens != ph.embedded_lens {
+        if info.embedded_lens.as_ref() != ph.embedded_lens.as_deref() {
             ops.push(Op::SetEmbeddedLens { id, lens: info.embedded_lens.map(Box::new) });
         }
     }
