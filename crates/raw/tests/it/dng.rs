@@ -1164,3 +1164,27 @@ fn legacy_lightcraft_dng_keeps_the_sensor_anchored_pattern() {
     assert_eq!(build("Adobe Photoshop Lightroom").cfa.unwrap().name(), "BGGR");
     assert_ne!(lightcraft_raw::dngwrite::SOFTWARE, "LightCraft");
 }
+
+/// The DJI compatibility fix in craft-raw #2042 must reach the application decoder,
+/// without making a genuinely truncated raster acceptable.
+#[test]
+fn active_width_strip_count_keeps_the_full_sensor_raster() {
+    let mut raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
+    raw.active_area = Rect::new(0, 0, 12, 16);
+    raw.crop = raw.active_area;
+    let mut bytes = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, order: ByteOrder::Little, xmp: None }).unwrap();
+    let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()) as usize;
+    let entry =
+        (0..count).map(|i| ifd + 2 + i * 12).find(|&at| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) == t::STRIP_BYTE_COUNTS).unwrap();
+    assert_eq!(u16::from_le_bytes(bytes[entry + 2..entry + 4].try_into().unwrap()), 4);
+    assert_eq!(u32::from_le_bytes(bytes[entry + 4..entry + 8].try_into().unwrap()), 1);
+    bytes[entry + 8..entry + 12].copy_from_slice(&(12u32 * 16 * 2).to_le_bytes());
+    let decoded = decode(&bytes).unwrap();
+    assert_eq!((decoded.width, decoded.height), (16, 16));
+    assert_eq!(decoded.data, raw.data);
+    assert_eq!(decoded.active_area, raw.active_area);
+    assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap(), decoded.info());
+    bytes.truncate(bytes.len() - 8);
+    assert!(decode(&bytes).is_err(), "a short raster must still be refused");
+}
