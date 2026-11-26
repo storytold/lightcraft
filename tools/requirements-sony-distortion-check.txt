@@ -1,0 +1,6 @@
+# Python packages for tools/sony_distortion_check.py (docs/sony-lens-corrections.md).
+#   python3 -m venv .venv-distortion && .venv-distortion/bin/pip install -r tools/requirements-sony-distortion-check.txt
+numpy==2.5.3
+scipy==1.18.1
+opencv-python-headless==5.0.0.93
+Pillow==12.3.0

@@ -41,7 +41,10 @@ try {
   $ns.AddNamespace('w', 'http://wixtoolset.org/schemas/v4/wxs')
   # Copy the real search/action authoring, changing only registry roots/keys for isolation.
   # Do not reimplement folder resolution here: removing the fallback must fail the legacy case.
-  $nodes = $source.SelectNodes('/w:Wix/w:Package/w:Property[w:RegistrySearch] | /w:Wix/w:Package/w:SetProperty[@Id="INSTALLFOLDER"]', $ns)
+  [xml] $scope = Get-Content (Join-Path $PSScriptRoot 'install-policy.wxi') -Raw
+  $scopeNs = [Xml.XmlNamespaceManager]::new($scope.NameTable)
+  $scopeNs.AddNamespace('w', 'http://wixtoolset.org/schemas/v4/wxs')
+  $nodes = $scope.SelectNodes('/w:Include/w:Property | /w:Include/w:SetProperty[@Sequence="both"]', $scopeNs)
   $authoring = foreach ($node in $nodes) {
     $copy = $node.CloneNode($true)
     foreach ($search in $copy.SelectNodes('.//w:RegistrySearch', $ns)) {
@@ -50,11 +53,11 @@ try {
     }
     $copy.OuterXml
   }
-  $directory = $source.SelectSingleNode('/w:Wix/w:Package/w:StandardDirectory[w:Directory[@Id="INSTALLFOLDER"]]', $ns).OuterXml
+  $directory = $source.SelectSingleNode('/w:Wix/w:Package/w:StandardDirectory[.//w:Directory[@Id="INSTALLFOLDER"]]', $ns).OuterXml
   $probe = @"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="LightCraft folder search test $id" Manufacturer="LightCraft tests"
-      Version="1.0.0" ProductCode="$product" UpgradeCode="$upgrade" Scope="perUser">
+      Version="1.0.0" ProductCode="$product" UpgradeCode="$upgrade" Scope="perUserOrMachine">
     $($authoring -join "`n")
     $directory
     <Feature Id="Main"><ComponentRef Id="Result" /></Feature>
@@ -77,7 +80,7 @@ try {
   New-Item -ItemType Directory -Path $legacy, $modern, $explicit, $emptied | Out-Null
   $legacyExe = Join-Path $legacy 'lightcraft.exe'
   [IO.File]::WriteAllText($legacyExe, 'test placeholder; never executed')
-  $programFiles = if ($Arch -eq 'x86' -and ${env:ProgramFiles(x86)}) { ${env:ProgramFiles(x86)} } else { $env:ProgramFiles }
+  $programFiles = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\ArtCraft'
   $cases = @(
     @{ Name = 'fresh'; Expected = (Join-Path $programFiles 'LightCraft') },
     @{ Name = 'legacy-app-paths'; Legacy = $legacyExe; Expected = $legacy },

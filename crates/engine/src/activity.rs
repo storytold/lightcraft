@@ -73,7 +73,7 @@ impl Unit {
 pub struct TaskInfo {
     pub id: u64,
     /// A stable id: `import`, `export`, `scan`, `previews`, `smartPreviews`, `lightroom`, `merge`, `download`,
-    /// `faces`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`.
+    /// `faces`, `facesGpu`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`, `geocode`, `move`, `sync`, `recheck`, `reload`.
     pub kind: &'static str,
     /// English; the frontend translates it.
     pub label: String,
@@ -211,6 +211,12 @@ impl Activity {
     pub fn cancel_all(&self) -> usize {
         let tasks = lock(&self.inner.tasks);
         tasks.iter().filter(|e| e.try_cancel()).count()
+    }
+
+    /// Whether a task of one of `kinds` is in flight. Its guard's lifetime is the answer: a task that
+    /// ends, fails or panics stops counting.
+    pub fn any_of(&self, kinds: &[&str]) -> bool {
+        lock(&self.inner.tasks).iter().any(|e| kinds.contains(&e.kind))
     }
 
     /// Tasks that quitting would cut short: cancellable ones not already stopping.
@@ -396,6 +402,26 @@ mod tests {
         assert!(a.inner.tasks.is_poisoned());
         let _g = a.start("export", "E", Cancel::Yes);
         assert_eq!(a.list().len(), 1);
+    }
+
+    #[test]
+    fn any_of_asks_for_the_kinds_in_flight_and_a_dropped_guard_stops_counting() {
+        let a = Activity::default();
+        assert!(!a.any_of(&["scan", "import"]));
+        let scan = a.start("scan", "Reading photos", Cancel::No);
+        let other = a.start("export", "Exporting", Cancel::No);
+        assert!(a.any_of(&["scan", "import"]) && a.any_of(&["export"]) && !a.any_of(&["import", "sync"]));
+        drop(scan);
+        assert!(!a.any_of(&["scan", "import"]), "the guard's lifetime is the answer");
+        // a task whose thread panics lets go as well
+        let a2 = a.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = a2.start("import", "Importing", Cancel::No);
+            panic!("synthetic panic in an import");
+        })
+        .join();
+        assert!(!a.any_of(&["import"]));
+        drop(other);
     }
 
     /// Codex review of #643: a worker that turns cancelling off and then reads the cancel flag

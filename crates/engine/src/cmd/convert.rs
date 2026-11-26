@@ -206,7 +206,7 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
-    let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
+    let preview_checked = ph.preview_stamp(&info.preview_only);
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
@@ -233,12 +233,26 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.lens.is_empty() {
         m.lens = src.lens.clone();
     }
+    if m.make.is_empty() {
+        m.make = src.make.clone();
+    }
+    if m.lens_make.is_empty() {
+        m.lens_make = src.lens_make.clone();
+    }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
+        m.exposure_time = src.exposure_time;
+    } else {
+        repair_legacy_shutter(&mut m, src);
     }
     m.focal_mm = m.focal_mm.or(src.focal_mm);
     m.aperture = m.aperture.or(src.aperture);
     m.iso = m.iso.or(src.iso);
+    m.flash = m.flash.or(src.flash);
+    m.exposure_bias = m.exposure_bias.or(src.exposure_bias);
+    if m.serial_number.is_empty() {
+        m.serial_number = src.serial_number.clone();
+    }
     m.gps = m.gps.or(src.gps);
     // the camera's focus point: photos imported before it was read get it here
     if m.focus.is_none() {
@@ -252,6 +266,26 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
         ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
     }
     ops
+}
+
+/// Repair only the shutter data an old import wrote, keeping independently edited metadata.
+fn repair_legacy_shutter(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
+    if m.exposure_time.is_none()
+        && let Some(t) = src.exposure_time
+        && (m.shutter.trim() == src.shutter || legacy_shutter_text(t).is_some_and(|old| m.shutter.trim() == old))
+    {
+        m.shutter = src.shutter.clone();
+        m.exposure_time = Some(t);
+        true
+    } else {
+        false
+    }
+}
+
+/// The shutter text an import wrote before the exact exposure time was kept (#1619): whole seconds at
+/// one second and over, otherwise `1/n` with `n` rounded. Only for recognising such a text again.
+fn legacy_shutter_text(t: f64) -> Option<String> {
+    (t.is_finite() && t > 0.0).then(|| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) })
 }
 
 /// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
@@ -303,8 +337,16 @@ pub(crate) fn reload_ops(
     }
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let mut meta = c.meta.clone();
+        // Copies share the source file but may have independently edited metadata. Repair only
+        // recognizable legacy shutter values, not every missing field on the copy.
+        let shutter_op = repair_legacy_shutter(&mut meta, &info.meta).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(shutter_op)
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -430,6 +472,78 @@ mod tests {
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
     }
 
+    /// Reload from Disk repairs a shutter speed an older import rounded (0.4 s stored as `1/2`, with no
+    /// exact time): the photo takes the file's exact time and today's text. A shutter speed set by hand
+    /// that is not what an import wrote, and one that already has its exact time, are kept.
+    #[test]
+    fn reload_repairs_a_shutter_speed_an_older_import_rounded() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.nef".into() }, "x.nef", "NEF", 6000, 4000, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        for (t, legacy, shown) in [(0.4, "1/2", "0.4"), (2.5, "2", "2.5"), (1.0 / 2.8, "1/3", "0.3571"), (1.0 / 250.0, "1/250", "1/250")] {
+            info.meta.exposure_time = Some(t);
+            info.meta.shutter = lightcraft_meta::format_exposure_time(t).unwrap();
+            ph.meta.shutter = legacy.into();
+            ph.meta.exposure_time = None;
+            let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+            let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{t}: {ops:?}") };
+            assert_eq!((meta.shutter.as_str(), meta.exposure_time), (shown, Some(t)), "{t}");
+            assert_eq!(meta.shutter_seconds(), Some(t), "{t}");
+            // repaired → nothing more to do
+            ph.meta = (**meta).clone();
+            assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "{t}");
+        }
+        // typed by hand, not what any import wrote for this file
+        info.meta.exposure_time = Some(0.4);
+        info.meta.shutter = "0.4".into();
+        ph.meta.shutter = "1/8".into();
+        ph.meta.exposure_time = None;
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a hand-set shutter speed is kept");
+        // already has an exact time (the text was edited afterwards): kept
+        ph.meta.shutter = "1/2".into();
+        ph.meta.exposure_time = Some(0.4);
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a photo with an exact time is left alone");
+    }
+
+    #[test]
+    fn reload_repairs_legacy_shutter_on_copies_without_replacing_edits() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut source = Photo::new(PhotoId(1), Source::File { path: "/x.nef".into() }, "x.nef", "NEF", 6000, 4000, "");
+        source.meta.shutter = "1/2".into();
+        cat.apply(Op::AddPhoto { photo: Box::new(source.clone()) }).unwrap();
+        for (id, text, exact) in [(2, "1/2", None), (3, "0.4", None), (4, "1/8", None), (5, "1/2", Some(0.4))] {
+            let mut copy = source.clone();
+            copy.id = PhotoId(id);
+            copy.copy_of = Some(source.id);
+            copy.meta.shutter = text.into();
+            copy.meta.exposure_time = exact;
+            copy.meta.title = "My copy".into();
+            cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        }
+        let mut info = crate::media::ProbeInfo::default();
+        info.meta.shutter = "0.4".into();
+        info.meta.exposure_time = Some(0.4);
+        info.meta.title = "File title".into();
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        reload_ops(&cat, source.id, &info, &mut ops, &mut changed);
+        for op in ops {
+            cat.apply(op).unwrap();
+        }
+        for id in [1, 2, 3] {
+            let m = &cat.photo(PhotoId(id)).unwrap().meta;
+            assert_eq!((m.shutter.as_str(), m.exposure_time), ("0.4", Some(0.4)));
+            assert_eq!(m.shutter_seconds(), Some(0.4));
+        }
+        for (id, text, exact) in [(4, "1/8", None), (5, "1/2", Some(0.4))] {
+            let m = &cat.photo(PhotoId(id)).unwrap().meta;
+            assert_eq!((m.shutter.as_str(), m.exposure_time), (text, exact));
+        }
+        for id in [2, 3, 4, 5] {
+            assert_eq!(cat.photo(PhotoId(id)).unwrap().meta.title, "My copy");
+        }
+    }
+
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
     /// and never replaces one it has.
     #[test]
@@ -456,6 +570,7 @@ mod tests {
             warp: Some(lightcraft_develop::EmbeddedWarp { planes: [[1.0, -0.1, 0.03, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
             vignette: None,
             stages: Default::default(),
+            source: Default::default(),
         }
     }
     fn old_rw2() -> lightcraft_catalog::Photo {

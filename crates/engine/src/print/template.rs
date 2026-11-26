@@ -30,6 +30,19 @@ impl PrintSettings {
 pub const MAX_NAME: usize = 80;
 /// Most templates kept.
 pub const MAX_TEMPLATES: usize = 200;
+/// File extension of an exported print template (JSON).
+pub const FILE_EXT: &str = "lcprint";
+/// `format` tag of an exported print template file.
+const FILE_FORMAT: &str = "lightcraft.printTemplate";
+/// Version of the template file this build writes and the newest it reads.
+const FILE_VERSION: u64 = 1;
+/// Largest template file read, bytes.
+pub const MAX_FILE: u64 = 256 * 1024;
+/// The Template Browser folder a template is in until it is moved to another. It always exists
+/// and can't be renamed or deleted.
+pub const DEFAULT_FOLDER: &str = "User Templates";
+/// Most Template Browser folders kept, besides [`DEFAULT_FOLDER`].
+pub const MAX_FOLDERS: usize = 100;
 
 /// A saved print template: the layout, image settings, page and job of a print, without the
 /// photos assigned to cells and without the guides (a view preference). The settings are kept as
@@ -39,7 +52,57 @@ pub const MAX_TEMPLATES: usize = 200;
 #[serde(rename_all = "camelCase")]
 pub struct PrintTemplate {
     pub name: String,
+    /// The Template Browser folder the template is listed in; `None`: [`DEFAULT_FOLDER`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     pub settings: serde_json::Value,
+}
+
+/// A folder name: trimmed, 1 to [`MAX_NAME`] characters, no control characters, and not
+/// [`DEFAULT_FOLDER`] in any case.
+pub fn clean_folder(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_NAME || name.chars().any(char::is_control) {
+        return Err(format!("a folder name is 1 to {MAX_NAME} characters without control characters"));
+    }
+    if name.eq_ignore_ascii_case(DEFAULT_FOLDER) {
+        return Err(format!("“{DEFAULT_FOLDER}” is always there; choose another name"));
+    }
+    Ok(name.to_string())
+}
+
+/// Sorts `folders` by name, ignoring case.
+pub fn sort_folders(folders: &mut [String]) {
+    folders.sort_by_cached_key(|f| f.to_lowercase());
+}
+
+/// Makes folders and templates read from the preferences consistent: folders with a bad, reserved
+/// or repeated name and those past [`MAX_FOLDERS`] are dropped; a template in a folder that isn't
+/// listed gets the folder listed when its name is good and there is room, and goes to
+/// [`DEFAULT_FOLDER`] otherwise; each template's folder takes the listed folder's spelling.
+pub fn tidy_folders(folders: &mut Vec<String>, templates: &mut [PrintTemplate]) {
+    let mut kept: Vec<String> = Vec::new();
+    for f in folders.iter() {
+        if let Ok(f) = clean_folder(f)
+            && kept.len() < MAX_FOLDERS
+            && !kept.iter().any(|k| k.eq_ignore_ascii_case(&f))
+        {
+            kept.push(f);
+        }
+    }
+    for t in templates.iter_mut() {
+        let Some(f) = t.folder.take() else { continue };
+        if let Some(k) = kept.iter().find(|k| k.eq_ignore_ascii_case(f.trim())) {
+            t.folder = Some(k.clone());
+        } else if let Ok(f) = clean_folder(&f)
+            && kept.len() < MAX_FOLDERS
+        {
+            kept.push(f.clone());
+            t.folder = Some(f);
+        }
+    }
+    sort_folders(&mut kept);
+    *folders = kept;
 }
 
 /// A template name: trimmed, 1 to [`MAX_NAME`] characters, no control characters.
@@ -63,7 +126,7 @@ impl PrintTemplate {
         if let Some(o) = value.as_object_mut() {
             o.remove("guides");
         }
-        Ok(Self { name: clean_name(name)?, settings: value })
+        Ok(Self { name: clean_name(name)?, folder: None, settings: value })
     }
 
     /// The settings, checked: unknown fields, hostile numbers and inconsistent layouts are errors.
@@ -73,6 +136,53 @@ impl PrintTemplate {
         s.guides = *guides;
         s.validate().map_err(|e| format!("template `{}`: {e}", self.name))?;
         Ok(s)
+    }
+
+    /// The document of an exported template: `{format, version, name, settings}`.
+    pub fn to_file(&self) -> serde_json::Value {
+        serde_json::json!({"format": FILE_FORMAT, "version": FILE_VERSION, "name": self.name, "settings": self.settings})
+    }
+
+    /// A template read from an exported file. Refused: more than [`MAX_FILE`] bytes, not JSON,
+    /// another format or a newer version, a bad name, and settings that fail the checks a saved
+    /// template's settings get. Photos assigned to cells and guides in the file are dropped.
+    pub fn from_file(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() as u64 > MAX_FILE {
+            return Err(format!("{} bytes is too large for a print template (at most {} KB)", bytes.len(), MAX_FILE / 1024));
+        }
+        let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| format!("not a print template file: {e}"))?;
+        if v.get("format").and_then(serde_json::Value::as_str) != Some(FILE_FORMAT) {
+            return Err(format!("not a print template file (`format` is not \"{FILE_FORMAT}\")"));
+        }
+        match v.get("version").and_then(serde_json::Value::as_u64) {
+            Some(1..=FILE_VERSION) => {}
+            Some(n) => return Err(format!("print template file version {n} is not one this version of LightCraft reads (1 to {FILE_VERSION})")),
+            None => return Err("a print template file needs a `version` number".into()),
+        }
+        let name = clean_name(v.get("name").and_then(serde_json::Value::as_str).ok_or("a print template file needs a `name`")?)?;
+        let settings = v.get("settings").cloned().ok_or("a print template file needs `settings`")?;
+        let checked = PrintTemplate { name: name.clone(), folder: None, settings }.settings(&Guides::default())?;
+        Self::new(&name, &checked)
+    }
+}
+
+/// `name` if no template in `taken` has it (in any case), else the first free `name (2)`,
+/// `name (3)`…, with `name` shortened to keep the result within [`MAX_NAME`] characters.
+pub fn unique_name(name: &str, taken: &[PrintTemplate]) -> String {
+    let free = |n: &str| !taken.iter().any(|t| t.name.eq_ignore_ascii_case(n));
+    if free(name) {
+        return name.to_string();
+    }
+    let mut n = 2usize;
+    loop {
+        let suffix = format!(" ({n})");
+        let keep = MAX_NAME.saturating_sub(suffix.chars().count());
+        let base: String = name.chars().take(keep).collect();
+        let candidate = format!("{}{suffix}", base.trim_end());
+        if free(&candidate) || n > taken.len() {
+            return candidate;
+        }
+        n += 1;
     }
 }
 
@@ -108,7 +218,7 @@ mod tests {
         for name in ["", "   ", "a\nb", &"x".repeat(MAX_NAME + 1)] {
             assert!(PrintTemplate::new(name, &PrintSettings::default()).is_err(), "{name:?}");
         }
-        let bad = |v: serde_json::Value| PrintTemplate { name: "t".into(), settings: v }.settings(&Guides::default()).is_err();
+        let bad = |v: serde_json::Value| PrintTemplate { name: "t".into(), folder: None, settings: v }.settings(&Guides::default()).is_err();
         assert!(bad(json!("text")));
         assert!(bad(json!({"surprise": 1})));
         assert!(bad(json!({"job": {"ppi": 1e30}})));
@@ -120,5 +230,65 @@ mod tests {
         let mut s = PrintSettings::default();
         s.job.ppi = f32::NAN;
         assert!(PrintTemplate::new("t", &s).is_err());
+    }
+
+    #[test]
+    fn a_template_file_reads_back_as_the_template() {
+        let mut s = PrintSettings::default();
+        s.layout.style = Style::ContactSheet;
+        s.page.background = [1, 2, 3];
+        let t = PrintTemplate::new("Proofs", &s).unwrap();
+        let bytes = serde_json::to_vec(&t.to_file()).unwrap();
+        assert_eq!(PrintTemplate::from_file(&bytes).unwrap(), t);
+        // a hand-written file: photos and guides are not taken in
+        let doc = json!({"format": FILE_FORMAT, "version": 1, "name": " Hand ", "settings": {
+            "layout": {"style": "customPackage", "cells": [{"id": 1, "rect": {"x": 1, "y": 1, "w": 2, "h": 2}, "photo": 9}]},
+            "guides": {"gridSize": 1.0}}});
+        let t = PrintTemplate::from_file(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert_eq!(t.name, "Hand");
+        assert!(t.settings.get("guides").is_none());
+        assert!(t.settings.pointer("/layout/cells/0/rect").is_some());
+        assert_eq!(t.settings.pointer("/layout/cells/0/photo"), None);
+    }
+
+    #[test]
+    fn hostile_template_files_are_refused() {
+        let file = |v: serde_json::Value| PrintTemplate::from_file(&serde_json::to_vec(&v).unwrap()).unwrap_err();
+        let ok = |extra: serde_json::Value| {
+            let mut v = json!({"format": FILE_FORMAT, "version": 1, "name": "t", "settings": {}});
+            if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            v
+        };
+        assert!(PrintTemplate::from_file(b"not json").unwrap_err().contains("not a print template file"));
+        assert!(PrintTemplate::from_file(&vec![b' '; MAX_FILE as usize + 1]).unwrap_err().contains("too large"));
+        assert!(file(json!([1, 2])).contains("format"));
+        assert!(file(ok(json!({"format": "lightcraft.slideshowTemplate"}))).contains("format"));
+        assert!(file(ok(json!({"version": 2}))).contains("version 2"));
+        assert!(file(ok(json!({"version": 0}))).contains("version 0"));
+        assert!(file(ok(json!({"version": "1"}))).contains("`version` number"));
+        assert!(file(json!({"format": FILE_FORMAT, "name": "t", "settings": {}})).contains("`version` number"));
+        assert!(file(ok(json!({"name": "a\nb"}))).contains("template name"));
+        assert!(file(ok(json!({"name": 5}))).contains("`name`"));
+        assert!(file(json!({"format": FILE_FORMAT, "version": 1, "name": "t"})).contains("`settings`"));
+        assert!(file(ok(json!({"settings": {"job": {"ppi": 1e30}}}))).contains("template `t`"));
+        assert!(file(ok(json!({"settings": {"surprise": 1}}))).contains("template `t`"));
+        assert!(PrintTemplate::from_file(&serde_json::to_vec(&ok(json!({}))).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn an_imported_name_never_takes_an_existing_one() {
+        let t = |n: &str| PrintTemplate::new(n, &PrintSettings::default()).unwrap();
+        assert_eq!(unique_name("Proofs", &[]), "Proofs");
+        assert_eq!(unique_name("Proofs", &[t("proofs")]), "Proofs (2)");
+        assert_eq!(unique_name("Proofs", &[t("Proofs"), t("PROOFS (2)")]), "Proofs (3)");
+        let long = "x".repeat(MAX_NAME);
+        let named = unique_name(&long, &[t(&long)]);
+        assert_eq!(named.chars().count(), MAX_NAME);
+        assert!(named.ends_with(" (2)"));
+        let many: Vec<PrintTemplate> = std::iter::once(t("A")).chain((2..=MAX_TEMPLATES).map(|n| t(&format!("A ({n})")))).collect();
+        let named = unique_name("A", &many);
+        assert!(!many.iter().any(|x| x.name.eq_ignore_ascii_case(&named)), "{named}");
     }
 }
