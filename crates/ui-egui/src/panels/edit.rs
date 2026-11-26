@@ -182,7 +182,7 @@ fn vignette_style(
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    light_controls::apply_pending(app, ui.ctx());
+    light_controls::apply_pending(app, ui);
     color_controls::apply_pending(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
