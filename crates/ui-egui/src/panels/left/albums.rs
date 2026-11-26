@@ -1,5 +1,5 @@
 use super::folders::{folder_menu, is_within};
-use super::rows::{INDENT_STEP, Row, indent_x, set_tree_open, tree_open, tree_toggle};
+use super::rows::{INDENT_STEP, Inside, Row, Said, indent_x, set_tree_open, tree_inside, tree_open, tree_toggle};
 use super::{Album, AlbumId, Align2, Icon, LibrarySource, LightcraftApp, Rect, Sense, Tokens, json, pos2, register, vec2};
 
 /// Albums: the tree of albums and the folders they are sorted into. `reveal`: an album just made,
@@ -13,14 +13,23 @@ pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Op
         open_to.push(p);
         cur = cat.album(p).and_then(|a| a.parent);
     }
-    albums_tree(app, ui, &kids, None, 0.0, &open_to);
+    albums_tree(app, ui, &kids, None, 0.0, &open_to, None);
 }
 
 /// The albums inside each folder (`None`: the top level), in the order they are listed.
 type AlbumKids = std::collections::HashMap<Option<AlbumId>, Vec<Album>>;
 
 /// `open_to`: folders forced open this frame (the way down to an album that was just made).
-fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Option<AlbumId>, indent: f32, open_to: &[AlbumId]) {
+/// `above`: what holds for these rows from the folders above them ([`tree_inside`]).
+fn albums_tree(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    all: &AlbumKids,
+    parent: Option<AlbumId>,
+    indent: f32,
+    open_to: &[AlbumId],
+    above: Option<Said>,
+) {
     // 64 folders deep at most (16 points a level): a catalog that loops must not overflow the stack
     if indent > 64.0 * INDENT_STEP {
         return;
@@ -29,7 +38,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
     for a in kids {
         if a.folder {
             let open_id = egui::Id::unique(("folder-open", a.id.0));
-            let mut open = tree_open(ui, open_id, true);
+            let mut open = tree_open(ui, open_id, true, above);
             if open_to.contains(&a.id) && !open {
                 open = true;
                 set_tree_open(ui, open_id, true);
@@ -47,7 +56,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             let draw_open = open;
             let mut toggled = false;
             if has_children {
-                let tri = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("albumToggle:{}", a.id.0), &a.name);
+                let tri = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("albumToggle:{}", a.id.0), &a.name, Inside::OpensAndFolds);
                 toggled = tri.clicked();
                 // the triangle sits on the row and takes its clicks: the menu opens from it too
                 folder_menu(app, &tri, a);
@@ -58,14 +67,14 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             }
             folder_menu(app, &resp, a);
             if draw_open {
-                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
+                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to, tree_inside(ui, open_id, above));
             }
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
-            // cached: a smart album's count scans the catalog
+            // cached: a smart album's count scans the catalog (in the background: no number until it is known)
             let now = (app.session.clock)();
-            let n = app.caches.album_counts(&app.session.catalog, &now).get(&a.id).copied().unwrap_or(0);
+            let n = app.caches.album_counts(&app.session.catalog, app.session.library_generation(), &now, ui.ctx()).get(&a.id).copied();
             // the album B adds to is marked "+"
             let target =
                 app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some()).or_else(|| app.session.catalog.quick_collection());
@@ -77,7 +86,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             let loop_note = crate::i18n::album_loop_note(&app.session.catalog, a.id);
             let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
             let mut resp = Row::new(&format!("album:{}", a.id.0), icon, &label)
-                .count(Some(n))
+                .count(n)
                 .selected(sel)
                 .indent(indent)
                 .sense(Sense::click_and_drag())
@@ -155,7 +164,7 @@ pub fn auto_scroll_speed(y: f32, top: f32, bottom: f32) -> f32 {
 /// While an album, or photos from the grid, are dragged over the sidebar: scrolls it when the
 /// pointer is near its top or bottom edge, so rows beyond the visible part can be reached. Call
 /// inside the scroll area.
-pub(super) fn drag_auto_scroll(app: &LightcraftApp, ui: &egui::Ui) {
+pub(crate) fn drag_auto_scroll(app: &LightcraftApp, ui: &egui::Ui) {
     if app.ui.dragging_album.is_none() && app.ui.dragging_photos.is_none() && app.ui.dragging_section.is_none() {
         return;
     }
