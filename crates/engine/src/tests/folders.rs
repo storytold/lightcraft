@@ -711,13 +711,30 @@ fn a_date_folder_inside_the_library_can_be_renamed_but_the_librarys_own_folders_
     s.open_library(&lib, false).unwrap();
     let day = lib.join("Originals").join("2026-10-16");
     std::fs::create_dir_all(&day).unwrap();
-    add(&mut s, &day.join("a.jpg").to_string_lossy());
+    let photo = day.join("a.jpg");
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo.to_string_lossy());
+    let paths = |s: &Session| -> Vec<String> {
+        s.catalog
+            .photos()
+            .filter_map(|p| match &p.source {
+                Source::File { path } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    };
     let day = day.to_string_lossy().to_string();
-    s.execute("folder.rename", &json!({"path": day, "name": "Beach"})).unwrap();
+    let r = s.execute("folder.rename", &json!({"path": day, "name": "Beach"})).unwrap();
+    assert_eq!(r["relinked"], 1, "the photo inside is relinked");
     assert!(lib.join("Originals/Beach").is_dir(), "the imported date folder is renamed");
     assert!(!Path::new(&day).exists());
+    let moved = lib.join("Originals/Beach/a.jpg");
+    assert_eq!(paths(&s), [moved.to_string_lossy().to_string()], "the catalog follows the photo");
+    assert!(moved.is_file());
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(Path::new(&day).is_dir(), "undo names it back");
+    assert_eq!(paths(&s), [photo.to_string_lossy().to_string()], "and points the photo back, in one step");
+    assert!(photo.is_file());
     for own in ["Originals", "thumbs"] {
         std::fs::create_dir_all(lib.join(own)).unwrap();
         let path = lib.join(own).to_string_lossy().to_string();
