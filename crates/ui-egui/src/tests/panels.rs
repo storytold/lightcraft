@@ -2517,7 +2517,8 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
 
-    // Photo ▸ Add to Album: the hint item first (off), the album and New Album… off
+    // Photo ▸ Add to Album: the album and New Album… off, and Add to My Photos is not repeated in it: the Photo
+    // menu's own item, right below the submenu, is the one row for that command (on for a Local photo)
     let add_to_album = |app: &LightcraftApp| -> Vec<crate::menubar::MenuNode> {
         let bar = crate::menubar::menu_bar(app);
         let photo = &bar.iter().find(|(t, _)| t == "Photo").expect("Photo menu").1;
@@ -2536,7 +2537,12 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
         })
     };
     let nodes = add_to_album(&h.app);
-    assert!(matches!(nodes.first(), Some(crate::menubar::MenuNode::Item { id, enabled: false, .. }) if id == "photo.addToLibrary"), "{nodes:?}");
+    assert_eq!(enabled_of(&nodes, "photo.addToLibrary"), None, "{nodes:?}");
+    let bar = crate::menubar::menu_bar(&h.app);
+    let photo = &bar.iter().find(|(t, _)| t == "Photo").expect("Photo menu").1;
+    let rows = photo.iter().filter(|n| matches!(n, crate::menubar::MenuNode::Item { id, .. } if id == "photo.addToLibrary")).count();
+    assert_eq!(rows, 1, "one Add to My Photos row in the Photo menu: {photo:?}");
+    assert_eq!(enabled_of(photo, "photo.addToLibrary"), Some(true), "{photo:?}");
     assert_eq!(enabled_of(&nodes, "album.addPhotos"), Some(false), "{nodes:?}");
     assert_eq!(enabled_of(&nodes, "dialog.newAlbum"), Some(false), "{nodes:?}");
 

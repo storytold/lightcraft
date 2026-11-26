@@ -910,13 +910,11 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
         "Add to Album" => {
             let targets = app.session.selected();
             let sel = !targets.is_empty();
-            // albums hold library photos (issue #684): a Local-only selection is told what to do first
+            // albums hold library photos (issue #684): a Local-only selection finds them off, and Add to My
+            // Photos is the Photo menu's own item right below this submenu (not repeated in it: one command,
+            // one row)
             let local_only = crate::panels::grid::local_only(app, &targets);
             let mut v: Vec<MenuNode> = vec![];
-            if local_only {
-                v.push(item("photo.addToLibrary", Value::Null, crate::i18n::tr("Add to My Photos First"), None, false, None));
-                v.push(MenuNode::Separator);
-            }
             let mut albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.name.clone(), a.id.0)).collect();
             albums.sort_by_key(|(n, _)| n.to_lowercase());
             let any = !albums.is_empty();
