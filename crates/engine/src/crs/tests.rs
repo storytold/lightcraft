@@ -127,6 +127,26 @@ fn conditional_fields_report_away_from_their_default() {
     assert_eq!(at("PointColors", "0.5, 0.2, 0.1, 10, 0, 0, 0, 0"), ["PointColors"]);
 }
 
+/// The manual chromatic aberration sliders import into the optics controls and leave the
+/// unmapped report. `MoireFilter` stays reported: exiftool documents it as the string
+/// "Off"/"On", which no amount control carries (#4829).
+#[test]
+fn manual_chromatic_aberration_imports_and_stops_reporting() {
+    let at = |name: &str, value: &str| {
+        let x = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:{name}="{value}"/>"#
+        );
+        to_partial_report(&props(&x), None, Target::Any, 1.5).1
+    };
+    let both = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:ChromaticAberrationR="-40" crs:ChromaticAberrationB="25"/>"#;
+    let p = props(both);
+    let s = apply_partial(&DevelopSettings::for_raw(5000.0, 0.0), &to_partial(&p, Target::Any), 1.0);
+    assert_eq!((s.optics.ca_red, s.optics.ca_blue), (-40.0, 25.0), "the sliders reach the manual CA controls");
+    assert!(at("ChromaticAberrationR", "-40").is_empty(), "the red slider is applied, not reported");
+    assert!(at("ChromaticAberrationB", "25").is_empty(), "the blue slider is applied, not reported");
+    assert_eq!(at("MoireFilter", "On"), ["MoireFilter"], "MoireFilter stays reported: an On/Off string, not an amount");
+}
+
 /// The grouped notations `docs/xmp-interop.md` writes instead of every field name on its own,
 /// expanded here so the drift guard sees through them.
 const DOC_GROUPS: &[(&str, &[&str])] = &[

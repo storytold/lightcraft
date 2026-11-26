@@ -362,6 +362,8 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     if let Some(b) = boolean(props, "crs:AutoLateralCA") {
         put(o, "optics.remove_ca", json!(b));
     }
+    n(o, "ChromaticAberrationR", "optics.ca_red");
+    n(o, "ChromaticAberrationB", "optics.ca_blue");
     n(o, "LensManualDistortionAmount", "optics.distortion");
     n(o, "VignetteAmount", "optics.vignetting");
     n(o, "VignetteMidpoint", "optics.vignetting_midpoint");

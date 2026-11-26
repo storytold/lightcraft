@@ -185,6 +185,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `LensProfileEnable`, `AutoLateralCA` | `optics.lens_profile`, `optics.remove_ca` | lens profiles are the file's own (DNG-embedded) corrections, which Lightroom applies whatever its profile switch says (our inference): only `LensProfileEnable=1` carries over, `0` leaves the switch as it is |
 | `LensManualDistortionAmount`, `VignetteAmount`, `VignetteMidpoint` | `optics.distortion`, `optics.vignetting`, `optics.vignetting_midpoint` | |
 | `DefringePurple/GreenAmount/HueLo/HueHi` | `optics.defringe_*` | |
+| `ChromaticAberrationR`, `ChromaticAberrationB` | `optics.ca_red`, `optics.ca_blue` | manual lateral CA, -100..100, added to the automatic estimate when `remove_ca` is on |
 | `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
@@ -210,7 +211,7 @@ process-version 2010 field names, and AI features. Local adjustments and spot re
 
 **Reported, not applied:** the legacy leftovers (`Defringe`, `Smoothness`, the process-version 2010 channel curves
 `ToneCurveRed/Green/Blue` - the old master `ToneCurve` is read when the packet has no 2012 curve), the ACR HDR display fields (`SDRBlend` and its siblings, `HDRMaxValue`,
-`ToneMapStrength`), `ChromaticAberrationR/B`, `MoireFilter`, `ToggleStyleAmount` / `ToggleStyleDigest`, the
+`ToneMapStrength`), `MoireFilter`, `ToggleStyleAmount` / `ToggleStyleDigest`, the
 lens-profile strengths away from their default (`LensProfileDistortionScale`, `LensProfileVignettingScale`,
 `LensProfileChromaticAberrationScale`), a used `PointColors` set, `LookName`, `Highlight2012`,
 `DepthBasedCorrections` / `DepthMapInfo` and a stray top-level `RangeMaskMapInfo` reach the import report as

@@ -93,13 +93,13 @@
                    },
                    {
                        "name":  "ChromaticAberrationB",
-                       "decision":  "reported",
-                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                       "decision":  "mapped",
+                       "note":  "optics"
                    },
                    {
                        "name":  "ChromaticAberrationR",
-                       "decision":  "reported",
-                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                       "decision":  "mapped",
+                       "note":  "optics"
                    },
                    {
                        "name":  "CircularGradientBasedCorrections",
@@ -721,7 +721,7 @@
                    {
                        "name":  "MoireFilter",
                        "decision":  "reported",
-                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                       "note":  "an ACR On/Off string (exiftool: Off/On); LightCraft moire is a mask-local amount with no global switch to carry it"
                    },
                    {
                        "name":  "Name",
