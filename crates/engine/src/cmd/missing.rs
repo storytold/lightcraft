@@ -596,13 +596,19 @@ pub struct DriveIo<'a> {
 
 /// Find Missing Photos on other drives: each missing photo's file looked for at the same path on every other
 /// drive in `roots` ([`split_volume`], [`drive_roots`]), so a library whose drive letter or mount changed, or that
-/// has its photos on a copy of the drive, finds them without walking any folder. A file found there is taken when
-/// 1. its size is the one on record (when there is one);
-/// 2. the time it was taken, read from its first [`CAPTURE_PREFIX`] bytes, is the one on record, to the second
-///    (when both are known: a file whose time differs is another photo);
-/// 3. with `verify_hash`, its content hash is the one on record (when the library knows one; the whole file is
-///    read). Found on several drives, a file whose hash confirms it everywhere is taken from the first; otherwise
-///    the photo is ambiguous and skipped, never guessed.
+/// has its photos on a copy of the drive, finds them without walking any folder. A file found there is another
+/// photo, and skipped, when
+/// 1. its size isn't the one on record (when there is one);
+/// 2. the time it was taken, read from its first [`CAPTURE_PREFIX`] bytes, isn't the one on record, to the second
+///    (when both are known);
+/// 3. with `verify_hash`, its content hash isn't the one on record (when the library knows one; the whole file is
+///    read).
+///
+/// What remains is taken only on positive evidence that it is this photo: the content hash confirmed, or a size
+/// on record and a capture time known on both sides that both match. A file without that evidence (no size or
+/// capture time to compare, no hash) is reported in `ambiguous` for the user to confirm, never relinked by itself.
+/// Found on several drives, a file whose hash confirms it everywhere is taken from the first; otherwise the photo
+/// is ambiguous too.
 ///
 /// Files that are already some photo's original (in any spelling, [`path_key`]), or that another photo was just
 /// matched with, are not used. With `only` (keys of [`path_key`]), just the missing photos at those paths are
@@ -641,7 +647,7 @@ pub fn plan_other_drives_with(
         let Some((root, rest)) = split_volume(&c.path, user) else { continue };
         let want_time = c.captured.as_deref().and_then(capture_key);
         let hash = c.hash.as_deref().filter(|_| verify_hash);
-        let mut hits: Vec<(String, bool)> = Vec::new();
+        let mut hits: Vec<Hit> = Vec::new();
         for r in roots {
             if same_root(r, root) {
                 continue;
@@ -651,33 +657,33 @@ pub fn plan_other_drives_with(
             if in_use.contains(&key) || used.contains(&key) || !(io.is_file)(&file) {
                 continue;
             }
-            // 1. the size on record
-            if c.size > 0 && (io.size)(&file) != Some(c.size) {
+            // 1. a size on record must match
+            let size_known = c.size > 0;
+            if size_known && (io.size)(&file) != Some(c.size) {
                 continue;
             }
-            // 2. the capture time on record, to the second, when both are known
-            if let Some(want) = &want_time
-                && let Some(got) = (io.captured)(&file).as_deref().and_then(capture_key)
-                && &got != want
-            {
-                continue;
-            }
-            // 3. the content hash on record, when asked for and known
-            let confirmed = match hash {
+            // 2. a capture time known on both sides must match, to the second
+            let time_matches = match (&want_time, (io.captured)(&file).as_deref().and_then(capture_key)) {
+                (Some(want), Some(got)) if &got != want => continue,
+                (Some(_), Some(_)) => true,
+                _ => false,
+            };
+            // 3. the content hash on record, when asked for and known, must match
+            let hashed = match hash {
                 Some(h) if (io.hash)(&file).as_deref() != Some(h) => continue,
                 Some(_) => true,
                 None => false,
             };
-            hits.push((file, confirmed));
+            hits.push(Hit { file, proven: hashed || (size_known && time_matches), hashed });
         }
-        let all_confirmed = hits.iter().all(|(_, ok)| *ok);
         let pick = match hits.as_slice() {
             [] => None,
-            [(one, _)] => Some(one.clone()),
+            [one] if one.proven => Some(one.file.clone()),
             // identical copies on several drives: the hash confirms each, take the first
-            [(first, _), ..] if all_confirmed => Some(first.clone()),
+            [first, ..] if hits.len() > 1 && hits.iter().all(|h| h.hashed) => Some(first.file.clone()),
+            // without positive evidence, or several unconfirmed: for the user to confirm, never guessed
             _ => {
-                plan.ambiguous.push(AmbiguousFile { id: c.id, from: c.path.clone(), candidates: hits.into_iter().map(|(f, _)| f).collect() });
+                plan.ambiguous.push(AmbiguousFile { id: c.id, from: c.path.clone(), candidates: hits.into_iter().map(|h| h.file).collect() });
                 continue;
             }
         };
@@ -688,6 +694,14 @@ pub fn plan_other_drives_with(
     }
     plan.missing = lost.len() - plan.found.len();
     plan
+}
+
+/// A file at a missing photo's path on another drive that passed every check it could be put to: `proven` when
+/// the hash, or both a size and a capture time, say it is this photo; `hashed` when the hash did.
+struct Hit {
+    file: String,
+    proven: bool,
+    hashed: bool,
 }
 
 /// The `paths` of a `findMissingOnOtherDrives` request, as [`path_key`]s (`None`: every missing photo).
@@ -845,7 +859,8 @@ mod drive_tests {
             (r"E:\Photos\2020\a.ARW".to_string(), (100, Some("2020:05:01 10:00:00"), "h1")),
             (r"E:\Photos\2020\b.ARW".to_string(), (100, None, "h2")),
         ]));
-        let lost = [photo(1, r"D:\Photos\2020\a.ARW", 100, Some("2020-05-01T10:00:00.12"), None), photo(2, r"D:\Photos\2020\b.ARW", 100, None, None)];
+        let lost =
+            [photo(1, r"D:\Photos\2020\a.ARW", 100, Some("2020-05-01T10:00:00.12"), None), photo(2, r"D:\Photos\2020\b.ARW", 100, None, Some("h2"))];
         let plan = disk.plan(&lost, &[r"C:\", r"E:\"], true);
         assert_eq!(
             plan.found.iter().map(|f| (f.id.0, f.to.as_str(), f.by)).collect::<Vec<_>>(),
@@ -862,11 +877,11 @@ mod drive_tests {
             (r"E:\Import\c.ARW".to_string(), (100, None, "hc")),
         ]));
         let photos = [
-            photo(1, r"D:\Import\a.ARW", 100, None, None),
+            photo(1, r"D:\Import\a.ARW", 100, None, Some("ha")),
             // missing before the import: not in the scope, so left alone
-            photo(2, r"D:\Old\b.ARW", 100, None, None),
+            photo(2, r"D:\Old\b.ARW", 100, None, Some("hb")),
             // in the scope, but its file on E: is another photo's original (outside the scope)
-            photo(3, r"D:\Import\c.ARW", 100, None, None),
+            photo(3, r"D:\Import\c.ARW", 100, None, Some("hc")),
             photo(4, r"E:\Import\c.ARW", 100, None, None),
         ];
         let plan = disk.plan_only(&photos, &[r"E:\"], true, Some(&[r"d:/import/a.arw", r"D:\Import\c.ARW"]));
@@ -878,12 +893,12 @@ mod drive_tests {
     #[test]
     fn mount_points_differing_in_case_are_different_disks() {
         let disk = Disk(HashMap::from([("/media/john/photos/2020/a.ARW".to_string(), (100, None, "h1"))]));
-        let lost = [photo(1, "/media/john/Photos/2020/a.ARW", 100, None, None)];
+        let lost = [photo(1, "/media/john/Photos/2020/a.ARW", 100, None, Some("h1"))];
         let plan = disk.plan(&lost, &["/media/john/photos"], true);
         assert_eq!(plan.found.iter().map(|f| f.to.as_str()).collect::<Vec<_>>(), ["/media/john/photos/2020/a.ARW"]);
         // a Windows drive letter in another case is the same drive, not another one
         let disk = Disk(HashMap::from([(r"d:\2020\a.ARW".to_string(), (100, None, "h1"))]));
-        let plan = disk.plan(&[photo(1, r"D:\2020\a.ARW", 100, None, None)], &[r"d:\"], true);
+        let plan = disk.plan(&[photo(1, r"D:\2020\a.ARW", 100, None, Some("h1"))], &[r"d:\"], true);
         assert!(plan.found.is_empty(), "{:?}", plan.found);
     }
 
@@ -891,9 +906,37 @@ mod drive_tests {
     fn a_file_in_use_under_another_spelling_is_not_taken() {
         let disk = Disk(HashMap::from([(r"E:\Photos\a.ARW".to_string(), (100, None, "h1"))]));
         // photo 2 has the same file, written with forward slashes and in lower case
-        let photos = [photo(1, r"D:\Photos\a.ARW", 100, None, None), photo(2, "e:/photos/a.arw", 100, None, None)];
+        let photos = [photo(1, r"D:\Photos\a.ARW", 100, None, Some("h1")), photo(2, "e:/photos/a.arw", 100, None, None)];
         let plan = disk.plan(&photos, &[r"E:\"], true);
         assert!(plan.found.is_empty(), "{:?}", plan.found);
+    }
+
+    #[test]
+    fn an_unverified_file_at_the_same_path_stays_missing() {
+        // nothing contradicts these files, but nothing proves they are the photos either: no hash, and a size or
+        // a capture time missing on one side
+        let disk = Disk(HashMap::from([
+            (r"E:\Import\a.ARW".to_string(), (100, None, "h1")),
+            (r"E:\Import\b.ARW".to_string(), (100, Some("2020:05:01 10:00:00"), "h2")),
+            (r"E:\Import\c.ARW".to_string(), (100, None, "h3")),
+        ]));
+        let lost = [
+            photo(1, r"D:\Import\a.ARW", 100, None, None),
+            // no size on record
+            photo(2, r"D:\Import\b.ARW", 0, Some("2020:05:01 10:00:00"), None),
+            // the file has no capture time to compare
+            photo(3, r"D:\Import\c.ARW", 100, Some("2020:05:01 10:00:00"), None),
+        ];
+        for verify_hash in [true, false] {
+            let plan = disk.plan(&lost, &[r"E:\"], verify_hash);
+            assert!(plan.found.is_empty(), "{:?}", plan.found);
+            assert_eq!(plan.missing, 3);
+            // offered for the user to confirm, with the file found
+            assert_eq!(
+                plan.ambiguous.iter().map(|a| (a.id.0, a.candidates.clone())).collect::<Vec<_>>(),
+                [(1, vec![r"E:\Import\a.ARW".to_string()]), (2, vec![r"E:\Import\b.ARW".to_string()]), (3, vec![r"E:\Import\c.ARW".to_string()])]
+            );
+        }
     }
 
     #[test]
@@ -935,7 +978,7 @@ mod drive_tests {
     #[test]
     fn a_library_from_windows_finds_its_photos_on_a_linux_mount() {
         let disk = Disk(HashMap::from([("/media/john/Photos/2020/a.ARW".to_string(), (100, None, "h"))]));
-        let plan = disk.plan(&[photo(1, r"D:\2020\a.ARW", 100, None, None)], &["/media/john/Photos"], true);
+        let plan = disk.plan(&[photo(1, r"D:\2020\a.ARW", 100, None, Some("h"))], &["/media/john/Photos"], true);
         assert_eq!(plan.found.iter().map(|f| f.to.as_str()).collect::<Vec<_>>(), ["/media/john/Photos/2020/a.ARW"]);
     }
 
@@ -950,7 +993,7 @@ mod drive_tests {
             photo(1, r"D:\Photos\here.ARW", 100, None, None),
             // another photo already points at E:'s file
             photo(2, r"E:\Photos\taken.ARW", 100, None, None),
-            photo(3, r"D:\Photos\taken.ARW", 100, None, None),
+            photo(3, r"D:\Photos\taken.ARW", 100, None, Some("t")),
         ];
         let plan = disk.plan(&photos, &[r"D:\", r"E:\"], true);
         assert!(plan.found.is_empty(), "{:?}", plan.found);
