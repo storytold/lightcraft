@@ -41,6 +41,12 @@ const EMBEDDED: &[(&str, &[&str])] = &[
     ("docs/whats-new.md", &["lightcraft-ui-egui"]),
     ("packaging/linux/flatpak/", &["lightcraft-ui-egui"]),
     ("docs/raw/coverage-sweep.tsv", &["lightcraft-raw"]),
+    ("docs/raw/decode-baseline.tsv", &["lightcraft-raw"]),
+    ("xtask/src/corpus.rs", &["lightcraft-raw"]),
+    // Both are workspace-wide already, so these change no plan; they keep `embedded_files_are_mapped` complete,
+    // because `crates/raw/tests/it/decode_baseline.rs` compiles them in.
+    ("Cargo.lock", &["lightcraft-raw"]),
+    ("Cargo.toml", &["lightcraft-raw"]),
     ("docs/raf-corpus.sha256", &["lightcraft-raw"]),
     ("xtask/src/raw_samples.rs", &["lightcraft-raw"]),
     ("crates/ui-egui/src/menus.rs", &["xtask"]),
