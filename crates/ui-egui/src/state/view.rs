@@ -16,6 +16,8 @@ pub enum ViewMode {
     Reference,
     /// A card per person named on faces (close-up, name, photo count).
     People,
+    /// Geographic map view plotting photos by GPS coordinates.
+    Map,
 }
 
 /// The right-hand tool/panel shown next to the tool strip.

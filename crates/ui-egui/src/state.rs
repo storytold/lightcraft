@@ -3,10 +3,12 @@
 use serde::{Deserialize, Serialize};
 
 mod dialog;
+mod map;
 mod settings;
 mod view;
 
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
+pub use map::MapUi;
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, KeywordChips,
     LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP, LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES,
@@ -385,6 +387,9 @@ pub struct UiState {
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
+    /// The Map module's state (viewport center, zoom, provider, locked, filters).
+    #[serde(default)]
+    pub map: MapUi,
 }
 
 impl Default for UiState {
@@ -536,6 +541,7 @@ impl Default for UiState {
             status: String::new(),
             dialog: None,
             print: Default::default(),
+            map: MapUi::default(),
         }
     }
 }

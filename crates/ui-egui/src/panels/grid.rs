@@ -1533,6 +1533,9 @@ fn context_menu_locate_and_export(app: &mut LightcraftApp, ui: &mut egui::Ui, id
     if ui.add_enabled(crate::menus::show_in_folders_enabled(app, Some(id)), egui::Button::new(crate::i18n::tr("Show in Folders"))).clicked() {
         let _ = app.run("app.showInFolders", json!({"id": id.0}));
     }
+    if ui.button(crate::i18n::tr("Show in Map")).clicked() {
+        let _ = app.run("photo.showInMap", json!({"id": id.0}));
+    }
     if ui.button(crate::i18n::tr("Export…")).clicked() {
         let _ = app.run("dialog.export", json!({}));
     }

@@ -216,3 +216,71 @@ fn a_preset_that_cannot_be_written_counts_as_unsaved_until_it_is() {
     assert!(s.unsaved().is_none(), "written once the disk works again");
     assert!(String::from_utf8_lossy(&stored(&files)).contains("Mine"));
 }
+
+/// A prefs.json write that failed (here: which photos' GPS is LightCraft's) is retried by the next
+/// save, though nothing was added to it since.
+#[test]
+fn a_failed_prefs_write_is_retried_until_it_lands() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    let id = s.selection.active.unwrap();
+    let owned = |f: &Flaky| -> Vec<serde_json::Value> {
+        let prefs = f.files.files.lock().unwrap().get("prefs.json").cloned().unwrap_or_default();
+        serde_json::from_slice::<serde_json::Value>(&prefs).ok().and_then(|v| v["gpsOwned"].as_array().cloned()).unwrap_or_default()
+    };
+    files.set_failing(true);
+    s.execute("photo.setGps", &json!({"lat": 1.0, "lon": 2.0})).unwrap();
+    assert!(owned(&files).is_empty(), "the write failed");
+    // meanwhile it counts as unsaved (the quit prompt asks, a backup refuses)
+    let (n, why) = s.unsaved().expect("prefs.json unsaved");
+    assert!(n >= 1 && why.starts_with("prefs:"), "{n} {why}");
+    files.set_failing(false);
+    // any later save writes it (the set didn't change)
+    s.execute("library.info", &json!({})).unwrap();
+    assert_eq!(owned(&files), vec![json!(id.0)]);
+    assert!(s.unsaved().is_none(), "written");
+}
+
+/// Closing the library while prefs.json can't be written is an error even though the catalog
+/// snapshot landed: what it holds (which photos' GPS is LightCraft's) would be lost when another
+/// library opens, so a switch stops and keeps this one open.
+#[test]
+fn closing_with_prefs_unwritten_is_an_error_until_they_land() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    let id = s.selection.active.unwrap();
+    files.set_failing(true);
+    s.execute("photo.setGps", &json!({"lat": 1.0, "lon": 2.0})).unwrap();
+    let e = s.close_library().expect_err("prefs.json unwritten");
+    assert!(e.to_string().contains("prefs"), "{e}");
+    assert!(s.gps_edited.contains(&id), "the ownership is still held in memory");
+    files.set_failing(false);
+    s.close_library().unwrap();
+    let prefs = files.files.files.lock().unwrap().get("prefs.json").cloned().unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_slice(&prefs).unwrap();
+    assert_eq!(v["gpsOwned"], json!([id.0]), "written on the close that could");
+}
+
+/// A preference change whose prefs.json write failed is taken back, so nothing is left unsaved:
+/// the failure isn't reported as pending (a quit would ask about a change that never happened).
+#[test]
+fn a_preference_taken_back_after_a_failed_write_leaves_nothing_unsaved() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    let was = s.hold_view;
+    files.set_failing(true);
+    assert!(s.execute("library.holdView", &json!({"on": !was})).is_err());
+    assert_eq!(s.hold_view, was, "not kept");
+    assert_eq!(s.unsaved(), None, "nothing changed, so nothing is unsaved");
+    // a failure already pending stays pending
+    s.execute("photo.setGps", &json!({"lat": 1.0, "lon": 2.0})).unwrap();
+    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("prefs:")));
+    assert!(s.execute("library.holdView", &json!({"on": !was})).is_err());
+    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("prefs:")), "the GPS ownership is still unsaved");
+}

@@ -326,5 +326,20 @@
   "View › Detail View ({keys}).": "Tampilan › Tampilan Detail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Ekspor… · File › Cetak… ({keys}).",
   "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}",
+  "Set the location of {n} photos": "Tetapkan lokasi {n} foto",
+  "{n} photos without GPS": "{n} foto tanpa GPS",
+  "Location {n}": "Lokasi {n}",
+  "In private location “{name}”": "Di lokasi pribadi “{name}”",
+  "within {d} of {lat}, {lon}": "dalam {d} dari {lat}, {lon}",
+  "All Tracks ({n})": "Semua Jejak ({n})",
+  "Auto-Tag {n} Selected Photos": "Tandai {n} Foto Terpilih",
+  "Loading tracklog {name}": "Memuat log jejak {name}",
+  "Set Time Zone Offset… (UTC{o})": "Atur Selisih Zona Waktu… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "{n} foto ditandai dari log jejak",
+  "Track {n}": "Jejak {n}",
+  "camera time, UTC{o}": "waktu kamera, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} di antaranya dalam rentang waktu jejak",
+  "{n} more tracks": "{n} jejak lagi",
+  "{size} MB, {n} tiles": "{size} MB, {n} ubin"
 }

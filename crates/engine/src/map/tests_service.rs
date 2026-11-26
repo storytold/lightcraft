@@ -1,0 +1,766 @@
+//! The fetch queue against an in-process fake tile server (a fake transport) and a localhost
+//! server (never the internet): viewport-only requests, newest view first, at most two in flight,
+//! backoff, the User-Agent, conditional refreshes, hostile responses and the activity row.
+//! Ported from PR #797 (Jason Baldwin).
+#![cfg(not(target_arch = "wasm32"))]
+
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use super::cache::{TileCache, TileMeta};
+use super::mercator::{LatLon, TileKey, Viewport};
+use super::service::*;
+use super::source::{TileSource, USER_AGENT};
+
+type Handler = Box<dyn Fn(&str, &[(&'static str, String)]) -> Result<HttpResponse, TransportError> + Send + Sync>;
+
+struct Fake {
+    log: Mutex<Vec<(String, Vec<(&'static str, String)>)>>,
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+    handler: Handler,
+}
+
+impl Fake {
+    fn new(handler: impl Fn(&str, &[(&'static str, String)]) -> Result<HttpResponse, TransportError> + Send + Sync + 'static) -> Arc<Fake> {
+        Arc::new(Fake { log: Mutex::new(Vec::new()), active: AtomicUsize::new(0), max_active: AtomicUsize::new(0), handler: Box::new(handler) })
+    }
+    fn urls(&self) -> Vec<String> {
+        self.log.lock().unwrap().iter().map(|(u, _)| u.clone()).collect()
+    }
+    fn keys(&self) -> Vec<TileKey> {
+        self.urls().iter().map(|u| key_of(u)).collect()
+    }
+}
+
+impl Transport for Fake {
+    fn get(&self, url: &str, headers: &[(&'static str, String)], _max: usize, _cancel: &AtomicBool) -> Result<HttpResponse, TransportError> {
+        self.log.lock().unwrap().push((url.to_string(), headers.to_vec()));
+        let n = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(n, Ordering::SeqCst);
+        let r = (self.handler)(url, headers);
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        r
+    }
+}
+
+fn source() -> TileSource {
+    TileSource::custom(Some("test"), "https://tiles.test/{z}/{x}/{y}.png", Some("© test"), Some(19)).unwrap()
+}
+
+fn key_of(url: &str) -> TileKey {
+    let p: Vec<u32> = url.trim_start_matches("https://tiles.test/").trim_end_matches(".png").split('/').map(|s| s.parse().unwrap()).collect();
+    TileKey::new(p[0] as u8, p[1], p[2]).unwrap()
+}
+
+fn png(w: u32, h: u32) -> Vec<u8> {
+    use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, encode_png};
+    let data: Vec<u8> = (0..w * h).flat_map(|i| [(i % 256) as u8, 100, 200, 255]).collect();
+    encode_png(&EncodeImage::new(w, h, 4, Samples::U8(&data)), &EncodeMeta::default()).unwrap()
+}
+
+fn ok_png(cache_control: &str) -> HttpResponse {
+    HttpResponse { status: 200, headers: vec![("Cache-Control".into(), cache_control.into()), ("ETag".into(), "\"v1\"".into())], body: png(256, 256) }
+}
+
+fn wait_until(what: &str, secs: u64, f: impl Fn() -> bool) {
+    let end = Instant::now() + Duration::from_secs(secs);
+    while !f() {
+        assert!(Instant::now() < end, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn tmp(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("lightcraft-map-svc-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+fn paris() -> Viewport {
+    Viewport::new(LatLon::new(48.8566, 2.3522).unwrap(), 12.0, 800.0, 600.0)
+}
+
+#[test]
+fn only_the_views_tiles_are_requested_with_our_user_agent() {
+    let fake = Fake::new(|_, _| Ok(ok_png("max-age=3600")));
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let view = paris();
+    svc.show(&view);
+    let want: HashSet<TileKey> = view.tile_keys(19, 1).into_iter().collect();
+    wait_until("all tiles", 20, || svc.is_idle() && fake.urls().len() >= want.len());
+    let got: Vec<TileKey> = fake.keys();
+    assert_eq!(got.len(), want.len(), "each tile once");
+    assert!(got.iter().all(|k| want.contains(k) && k.z == 12), "only the view's tiles at its zoom");
+    // the drawn tiles plus at most one ring: never more than (cols + 2) × (rows + 2)
+    let drawn: HashSet<TileKey> = view.tiles(19).iter().map(|t| t.key).collect();
+    assert!(want.is_superset(&drawn));
+    for (_, headers) in fake.log.lock().unwrap().iter() {
+        let ua: Vec<_> = headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("user-agent")).collect();
+        assert_eq!(ua.len(), 1);
+        assert_eq!(ua[0].1, USER_AGENT);
+        assert!(
+            !headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("pragma") || (k.eq_ignore_ascii_case("cache-control") && v.contains("no-cache")))
+        );
+    }
+    let events = svc.poll();
+    let ready: HashSet<TileKey> =
+        events.iter().filter_map(|e| if let TileEvent::Ready { key, stale: false, .. } = e { Some(*key) } else { None }).collect();
+    assert_eq!(ready, want);
+    let img = svc.get(*drawn.iter().next().unwrap()).unwrap();
+    assert_eq!((img.width, img.height, img.rgba.len()), (256, 256, 256 * 256 * 4));
+    assert_eq!(&img.rgba[..4], &[0, 100, 200, 255]);
+    // the same view again: nothing new
+    svc.show(&view);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(fake.urls().len(), want.len());
+}
+
+#[test]
+fn at_most_two_requests_at_a_time() {
+    let fake = Fake::new(|_, _| {
+        std::thread::sleep(Duration::from_millis(15));
+        Ok(ok_png("max-age=60"))
+    });
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let keys: Vec<TileKey> = (0..12).map(|x| TileKey::new(5, x, 3).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("12 tiles", 20, || svc.is_idle() && fake.urls().len() == 12);
+    assert_eq!(fake.max_active.load(Ordering::SeqCst), 2);
+    assert_eq!(svc.stats().max_in_flight, 2);
+    // nearest the centre (first in the list) first
+    assert_eq!(fake.keys()[..2].iter().map(|k| k.x).collect::<HashSet<_>>(), [0, 1].into_iter().collect());
+}
+
+#[test]
+fn tiles_that_left_the_view_are_dropped_before_they_start() {
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let g = gate.clone();
+    let fake = Fake::new(move |_, _| {
+        let (open, cv) = &*g;
+        let mut o = open.lock().unwrap();
+        while !*o {
+            o = cv.wait(o).unwrap();
+        }
+        Ok(ok_png("max-age=60"))
+    });
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let a = paris();
+    let b = Viewport::new(LatLon::new(-33.86, 151.21).unwrap(), 12.0, 800.0, 600.0);
+    svc.show(&a);
+    wait_until("two requests on the wire", 10, || fake.active.load(Ordering::SeqCst) == 2);
+    svc.show(&b);
+    {
+        let (open, cv) = &*gate;
+        *open.lock().unwrap() = true;
+        cv.notify_all();
+    }
+    let in_b: HashSet<TileKey> = b.tile_keys(19, 1).into_iter().collect();
+    wait_until("view B", 20, || svc.is_idle() && fake.urls().len() == 2 + in_b.len());
+    let keys = fake.keys();
+    let in_a: HashSet<TileKey> = a.tile_keys(19, 1).into_iter().collect();
+    assert!(keys[..2].iter().all(|k| in_a.contains(k)), "the two on the wire were A's");
+    assert!(keys[2..].iter().all(|k| in_b.contains(k)), "then only B's: {:?}", &keys[2..]);
+    assert_eq!(keys[2..].iter().collect::<HashSet<_>>().len(), in_b.len());
+}
+
+#[test]
+fn a_429_backs_off_the_host_instead_of_retrying() {
+    let fake = Fake::new(|_, _| Ok(HttpResponse { status: 429, headers: vec![], body: b"slow down".to_vec() }));
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let keys: Vec<TileKey> = (0..6).map(|x| TileKey::new(4, x, 4).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("the first answers", 10, || svc.stats().errors >= 1);
+    std::thread::sleep(Duration::from_millis(400));
+    // at most the two that were already on the wire; then silence while backing off
+    assert!(fake.urls().len() <= 2, "{:?}", fake.urls());
+    let s = svc.stats();
+    assert!(s.backoff_ms > 0, "{s:?}");
+    assert!(svc.poll().iter().any(|e| matches!(e, TileEvent::Failed { .. })));
+    // after the backoff the host is asked again (one request at a time while it keeps failing)
+    wait_until("a retry", 10, || fake.urls().len() > 2);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(fake.urls().len() <= 4, "no retry storm: {}", fake.urls().len());
+}
+
+#[test]
+fn retry_after_is_honoured() {
+    let fake = Fake::new(|_, _| Ok(HttpResponse { status: 503, headers: vec![("Retry-After".into(), "120".into())], body: vec![] }));
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    svc.want(&[TileKey::new(1, 0, 0).unwrap()]);
+    wait_until("the answer", 10, || svc.stats().errors == 1);
+    assert!(svc.stats().backoff_ms > 100_000, "{:?}", svc.stats());
+}
+
+#[test]
+fn cached_tiles_need_no_request_and_stale_ones_are_revalidated() {
+    let root = tmp("revalidate");
+    let fresh_key = TileKey::new(6, 10, 20).unwrap();
+    let stale_key = TileKey::new(6, 11, 20).unwrap();
+    let cache = TileCache::new(&root, "test", 100 << 20).unwrap();
+    let now = crate::map::now_secs();
+    cache.write(fresh_key, &TileMeta { fetched: now, expires: now + 3600, etag: Some("\"f\"".into()), last_modified: None }, &png(256, 256)).unwrap();
+    let old = TileMeta {
+        fetched: now - 900_000,
+        expires: now - 10,
+        etag: Some("\"v1\"".into()),
+        last_modified: Some("Sun, 06 Nov 1994 08:49:37 GMT".into()),
+    };
+    cache.write(stale_key, &old, &png(256, 256)).unwrap();
+    let fake = Fake::new(|_, _| Ok(HttpResponse { status: 304, headers: vec![("Cache-Control".into(), "max-age=3600".into())], body: vec![] }));
+    let svc = TileService::with_transport(source(), Some(TileCache::new(&root, "test", 100 << 20).unwrap()), Some(fake.clone()));
+    svc.want(&[fresh_key, stale_key]);
+    wait_until("both", 10, || svc.is_idle() && svc.stats().not_modified == 1);
+    let events = svc.poll();
+    assert!(events.iter().any(|e| matches!(e, TileEvent::Ready { key, stale: false, .. } if *key == fresh_key)));
+    assert!(events.iter().any(|e| matches!(e, TileEvent::Ready { key, stale: true, .. } if *key == stale_key)), "shown at once while refreshing");
+    // only the stale one was asked for, conditionally
+    let log = fake.log.lock().unwrap().clone();
+    assert_eq!(log.len(), 1);
+    assert_eq!(key_of(&log[0].0), stale_key);
+    assert!(log[0].1.contains(&("If-None-Match", "\"v1\"".to_string())));
+    assert!(log[0].1.contains(&("If-Modified-Since", "Sun, 06 Nov 1994 08:49:37 GMT".to_string())));
+    // the 304 renewed it on disk, keeping its validators and bytes
+    let c = TileCache::new(&root, "test", 100 << 20).unwrap().read(stale_key).unwrap();
+    assert!(c.meta.expires >= now + 3500 && c.meta.fetched >= now);
+    assert_eq!(c.meta.etag.as_deref(), Some("\"v1\""));
+    assert_eq!(c.bytes, png(256, 256));
+    // showing the same tiles again asks for nothing
+    svc.want(&[stale_key, fresh_key]);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(fake.urls().len(), 1);
+    drop(svc);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_304_that_forbids_storing_takes_the_tile_off_the_disk() {
+    let root = tmp("revalidate-no-store");
+    let key = TileKey::new(6, 11, 20).unwrap();
+    let now = crate::map::now_secs();
+    let old = TileMeta { fetched: now - 900_000, expires: now - 10, etag: Some("\"v1\"".into()), last_modified: None };
+    TileCache::new(&root, "test", 100 << 20).unwrap().write(key, &old, &png(256, 256)).unwrap();
+    let fake = Fake::new(|_, _| Ok(HttpResponse { status: 304, headers: vec![("Cache-Control".into(), "no-store".into())], body: vec![] }));
+    let svc = TileService::with_transport(source(), Some(TileCache::new(&root, "test", 100 << 20).unwrap()), Some(fake.clone()));
+    svc.want(&[key]);
+    wait_until("the refresh", 10, || svc.is_idle() && svc.stats().not_modified == 1);
+    assert!(TileCache::new(&root, "test", 100 << 20).unwrap().read(key).is_none(), "no-store: not kept on disk");
+    assert!(svc.get(key).is_some(), "the copy in memory is still shown");
+    assert!(!svc.poll().iter().any(|e| matches!(e, TileEvent::Failed { .. })));
+    drop(svc);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn repeated_cache_control_lines_are_read_together() {
+    let lines = [("cache-control", "max-age=3600"), ("cache-control", "no-store"), ("etag", "\"a\""), ("etag", "\"b\"")];
+    let kept = super::service::kept_headers(|h| lines.iter().filter(|(k, _)| *k == h).map(|(_, v)| *v).collect());
+    assert!(kept.contains(&("cache-control".into(), "max-age=3600, no-store".into())), "{kept:?}");
+    assert!(kept.contains(&("etag".into(), "\"a\"".into())), "the others: their first value");
+    assert!(!kept.iter().any(|(k, _)| k == "expires"));
+}
+
+#[test]
+fn a_stale_tile_whose_refresh_was_dropped_is_refreshed_when_back_in_view() {
+    let root = tmp("revalidate-dropped");
+    let stale_key = TileKey::new(6, 11, 20).unwrap();
+    let busy = [TileKey::new(6, 1, 1).unwrap(), TileKey::new(6, 2, 2).unwrap()];
+    let now = crate::map::now_secs();
+    let old = TileMeta { fetched: now - 900_000, expires: now - 10, etag: Some("\"v1\"".into()), last_modified: None };
+    TileCache::new(&root, "test", 100 << 20).unwrap().write(stale_key, &old, &png(256, 256)).unwrap();
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let g = gate.clone();
+    let fake = Fake::new(move |_, _| {
+        let (open, cv) = &*g;
+        let mut o = open.lock().unwrap();
+        while !*o {
+            o = cv.wait(o).unwrap();
+        }
+        Ok(ok_png("max-age=60"))
+    });
+    let svc = TileService::with_transport(source(), Some(TileCache::new(&root, "test", 100 << 20).unwrap()), Some(fake.clone()));
+    // both request slots held, so the stale tile's refresh can only wait in the queue
+    svc.want(&busy);
+    wait_until("two requests on the wire", 10, || fake.active.load(Ordering::SeqCst) == 2);
+    svc.want(&[busy[0], busy[1], stale_key]);
+    wait_until("the stale tile from disk", 10, || svc.stats().in_memory >= 1);
+    // it leaves the view before its refresh starts, then comes back
+    svc.want(&busy);
+    svc.want(&[busy[0], busy[1], stale_key]);
+    {
+        let (open, cv) = &*gate;
+        *open.lock().unwrap() = true;
+        cv.notify_all();
+    }
+    wait_until("the refresh", 10, || svc.is_idle() && fake.keys().contains(&stale_key));
+    drop(svc);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn tiles_that_arrive_already_stale_are_not_refetched_every_frame() {
+    for cache_control in ["no-cache", "max-age=0"] {
+        let fake = Fake::new(move |_, _| Ok(ok_png(cache_control)));
+        let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+        let keys = [TileKey::new(5, 1, 1).unwrap(), TileKey::new(5, 2, 1).unwrap()];
+        svc.want(&keys);
+        wait_until("both tiles", 10, || svc.is_idle() && svc.stats().in_memory == 2);
+        // the UI shows the same view every frame
+        for _ in 0..20 {
+            svc.want(&keys);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        wait_until("idle", 10, || svc.is_idle());
+        assert_eq!(fake.urls().len(), 2, "{cache_control}: one request per tile, not one per frame");
+    }
+}
+
+#[test]
+fn fetched_tiles_are_cached_and_damaged_entries_refetched() {
+    let root = tmp("store");
+    let fake = Fake::new(|_, _| Ok(ok_png("max-age=600")));
+    let k = TileKey::new(3, 4, 5).unwrap();
+    let file = root.join("test/3/4/5.tile");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"LCTILE1\ncorrupt").unwrap();
+    let svc = TileService::with_transport(source(), Some(TileCache::new(&root, "test", 100 << 20).unwrap()), Some(fake.clone()));
+    svc.want(&[k]);
+    wait_until("the tile", 10, || svc.get(k).is_some() && svc.is_idle());
+    assert_eq!(fake.urls().len(), 1, "the damaged entry was fetched again");
+    let c = TileCache::new(&root, "test", 100 << 20).unwrap().read(k).unwrap();
+    assert_eq!(c.meta.etag.as_deref(), Some("\"v1\""));
+    assert!(c.meta.expires > crate::map::now_secs() + 500);
+    // a cached file that isn't an image is deleted and fetched again too
+    drop(svc);
+    TileCache::new(&root, "test", 100 << 20).unwrap().write(k, &TileMeta { expires: i64::MAX, ..Default::default() }, b"not a png").unwrap();
+    let svc = TileService::with_transport(source(), Some(TileCache::new(&root, "test", 100 << 20).unwrap()), Some(fake.clone()));
+    svc.want(&[k]);
+    wait_until("the tile again", 10, || svc.get(k).is_some() && svc.is_idle());
+    assert_eq!(fake.urls().len(), 2);
+    drop(svc);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn hostile_responses_fail_cleanly_and_are_not_retried() {
+    let fake = Fake::new(|url, _| {
+        let k = key_of(url);
+        Ok(match k.x {
+            0 => HttpResponse { status: 200, headers: vec![], body: b"<html>captive portal</html>".to_vec() },
+            1 => HttpResponse { status: 200, headers: vec![], body: png(2048, 4) },
+            2 => HttpResponse { status: 404, headers: vec![], body: vec![] },
+            3 => HttpResponse { status: 200, headers: vec![], body: png(256, 256)[..300].to_vec() },
+            4 => HttpResponse { status: 304, headers: vec![], body: vec![] },
+            _ => panic!("a transport bug"),
+        })
+    });
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let keys: Vec<TileKey> = (0..6).map(|x| TileKey::new(3, x, 0).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("all answers", 10, || svc.is_idle() && fake.urls().len() == 6);
+    let failed: HashSet<TileKey> =
+        svc.poll().into_iter().filter_map(|e| if let TileEvent::Failed { key, .. } = e { Some(key) } else { None }).collect();
+    assert_eq!(failed, keys.iter().copied().collect());
+    assert!(keys.iter().all(|k| svc.get(*k).is_none()));
+    assert_eq!(svc.stats().backoff_ms, 0, "a refused tile is not the host's trouble");
+    // asked again (a new view with the same tiles): not retried for a while
+    svc.want(&keys[..3]);
+    svc.want(&keys);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(fake.urls().len(), 6);
+}
+
+#[test]
+fn offline_and_transportless_services_never_fetch() {
+    let fake = Fake::new(|_, _| Ok(ok_png("max-age=60")));
+    let svc = TileService::with_transport(TileSource::Offline, None, Some(fake.clone()));
+    svc.show(&paris());
+    let inert = TileService::with_transport(source(), None, None);
+    inert.show(&paris());
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(fake.urls().is_empty());
+    assert!(!inert.can_load() && !svc.can_load());
+    assert!(inert.is_idle(), "a service that can't load leaves nothing pending");
+    assert!(svc.poll().is_empty() && inert.poll().is_empty());
+    // the offline source has no cache either
+    let svc = TileService::new(TileSource::Offline, Some(tmp("offline")), 1 << 20, None, true);
+    svc.show(&paris());
+    assert!(svc.is_idle());
+}
+
+/// The real HTTP client against a localhost server: our User-Agent (once), conditional headers,
+/// no `no-cache`, 304s, and bodies over the cap refused.
+#[test]
+fn the_http_transport_sends_the_right_headers_and_caps_bodies() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let tile = png(256, 256);
+    let body = tile.clone();
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for i in 0..4 {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut head = Vec::new();
+            loop {
+                let mut line = String::new();
+                if r.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+                head.push(line.trim().to_string());
+            }
+            requests.push(head);
+            match i {
+                0 => {
+                    s.write_all(
+                        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nCache-Control: max-age=60\r\nETag: \"t\"\r\n\r\n", body.len()).as_bytes(),
+                    )
+                    .unwrap();
+                    s.write_all(&body).unwrap();
+                }
+                1 => s.write_all(b"HTTP/1.1 304 Not Modified\r\nCache-Control: max-age=60\r\n\r\n").unwrap(),
+                2 => s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3000000\r\n\r\n").unwrap(),
+                _ => {
+                    // chunked, past the cap without announcing it
+                    s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+                    let chunk = vec![b'x'; 64 * 1024];
+                    for _ in 0..40 {
+                        if s.write_all(format!("{:x}\r\n", chunk.len()).as_bytes()).is_err()
+                            || s.write_all(&chunk).is_err()
+                            || s.write_all(b"\r\n").is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        requests
+    });
+    let t = HttpTransport::default();
+    let cancel = AtomicBool::new(false);
+    let ua = vec![("User-Agent", USER_AGENT.to_string())];
+    let r = t.get(&format!("{base}/1/0/0.png"), &ua, MAX_TILE_BYTES, &cancel).unwrap();
+    assert_eq!((r.status, r.body.len(), r.header("etag")), (200, tile.len(), Some("\"t\"")));
+    assert!(decode_tile(&r.body).is_ok());
+    let mut cond = ua.clone();
+    cond.extend(TileMeta { etag: Some("\"t\"".into()), ..Default::default() }.conditional_headers());
+    let r = t.get(&format!("{base}/1/0/0.png"), &cond, MAX_TILE_BYTES, &cancel).unwrap();
+    assert_eq!((r.status, r.body.len()), (304, 0));
+    assert!(
+        matches!(t.get(&format!("{base}/1/0/1.png"), &ua, MAX_TILE_BYTES, &cancel).unwrap_err(), TransportError::TooLarge(m) if m.contains("larger"))
+    );
+    assert!(
+        matches!(t.get(&format!("{base}/1/1/1.png"), &ua, MAX_TILE_BYTES, &cancel).unwrap_err(), TransportError::TooLarge(m) if m.contains("larger"))
+    );
+    let requests = server.join().unwrap();
+    for head in &requests {
+        let agents: Vec<_> = head.iter().filter(|l| l.to_ascii_lowercase().starts_with("user-agent:")).collect();
+        assert_eq!(agents, vec![&format!("User-Agent: {USER_AGENT}")], "{head:?}");
+        assert!(
+            !head.iter().any(|l| l.to_ascii_lowercase().starts_with("pragma") || l.to_ascii_lowercase().starts_with("cache-control")),
+            "{head:?}"
+        );
+    }
+    assert!(requests[1].contains(&"If-None-Match: \"t\"".to_string()));
+}
+
+/// While tiles are queued or loading, one "Loading map tiles" row is on the activity stack; it
+/// goes when they are all in.
+#[test]
+fn a_fetch_shows_one_activity_row_until_it_is_done() {
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let g = gate.clone();
+    let fake = Fake::new(move |_, _| {
+        let (open, cv) = &*g;
+        let mut o = open.lock().unwrap();
+        while !*o {
+            o = cv.wait(o).unwrap();
+        }
+        Ok(ok_png("max-age=60"))
+    });
+    let activity = crate::activity::Activity::default();
+    let svc = TileService::with_transport(source(), None, Some(fake.clone())).with_activity(Some(activity.clone()));
+    assert!(activity.list().is_empty(), "nothing before a view asks");
+    let keys: Vec<TileKey> = (0..5).map(|x| TileKey::new(4, x, 4).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("two requests on the wire", 10, || fake.active.load(Ordering::SeqCst) == 2);
+    let rows = activity.list();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].cancellable), ("download", "Loading map tiles", false));
+    assert_eq!((rows[0].done, rows[0].total), (0, 5));
+    {
+        let (open, cv) = &*gate;
+        *open.lock().unwrap() = true;
+        cv.notify_all();
+    }
+    wait_until("all tiles", 10, || svc.is_idle() && fake.urls().len() == 5);
+    wait_until("the row to go", 10, || activity.list().is_empty());
+    // a view that leaves the map drops the queue, and the row with it
+    let more: Vec<TileKey> = (0..5).map(|x| TileKey::new(5, x, 4).unwrap()).collect();
+    let (open, _) = &*gate;
+    *open.lock().unwrap() = false;
+    svc.want(&more);
+    wait_until("a row again", 10, || activity.list().len() == 1);
+    svc.want(&[]);
+    *open.lock().unwrap() = true;
+    gate.1.notify_all();
+    wait_until("idle", 10, || svc.is_idle());
+    wait_until("no row", 10, || activity.list().is_empty());
+    drop(svc);
+}
+
+/// A server announcing a huge body is an error, not an allocation of that size (the old fetcher
+/// sized its buffer from the announced length and panicked with a capacity overflow).
+#[test]
+fn a_huge_announced_tile_length_is_an_error_not_an_allocation() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/6/25/31.png", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut r = BufReader::new(s.try_clone().unwrap());
+        let mut line = String::new();
+        while r.read_line(&mut line).unwrap_or(0) > 0 && !line.trim().is_empty() {
+            line.clear();
+        }
+        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551615\r\n\r\ntile");
+    });
+    let ua = vec![("User-Agent", USER_AGENT.to_string())];
+    let err = HttpTransport::default().get(&url, &ua, MAX_TILE_BYTES, &AtomicBool::new(false)).unwrap_err();
+    assert!(matches!(&err, TransportError::TooLarge(m) if m.contains("larger")), "{err}");
+    server.join().unwrap();
+}
+
+/// A server that sends a byte now and then never trips the stall timeout, but the whole body has
+/// a deadline: the network slot is freed.
+#[test]
+fn a_trickling_tile_body_gives_up_at_its_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/6/25/31.png", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut r = BufReader::new(s.try_clone().unwrap());
+        let mut line = String::new();
+        while r.read_line(&mut line).unwrap_or(0) > 0 && !line.trim().is_empty() {
+            line.clear();
+        }
+        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n");
+        for _ in 0..200 {
+            if s.write_all(b"x").and_then(|()| s.flush()).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let t = HttpTransport { body_timeout: Duration::from_millis(600), ..HttpTransport::default() };
+    let ua = vec![("User-Agent", USER_AGENT.to_string())];
+    let start = std::time::Instant::now();
+    let err = t.get(&url, &ua, MAX_TILE_BYTES, &AtomicBool::new(false)).unwrap_err();
+    assert!(matches!(&err, TransportError::Failed(m) if m.contains("not received within")), "{err}");
+    assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
+    server.join().unwrap();
+}
+
+const KEY: &str = "AAPK0123456789abcdef_TEST-key.x";
+
+fn esri_service(fake: Arc<Fake>, cache: Option<TileCache>) -> TileService {
+    let key = crate::map::ApiKey::parse(KEY).unwrap();
+    TileService::with_transport(TileSource::EsriStreet, cache, Some(fake)).with_token(Some(key))
+}
+
+/// The Esri layers: the key goes only into the request URL as `token`, never into errors, the
+/// cache's files or the stats; 512 px tiles are cut into the four 256 px tiles they hold, and one
+/// request serves all four.
+#[test]
+fn esri_tiles_carry_the_key_in_the_request_only_and_are_cut_in_quarters() {
+    let fake = Fake::new(|url, _| {
+        if url.contains("/static?f=json") {
+            return Ok(HttpResponse { status: 200, headers: vec![], body: br#"{"copyrightText": "Sources: Test Data Co"}"#.to_vec() });
+        }
+        if url.contains("/tile/3/") {
+            // a failing tile whose transport error quotes the URL (and so the key)
+            return Err(format!("connection reset fetching {url}").into());
+        }
+        Ok(HttpResponse { status: 200, headers: vec![("Cache-Control".into(), "max-age=86400".into())], body: png(512, 512) })
+    });
+    let root = tmp("esri");
+    let svc = esri_service(fake.clone(), Some(TileCache::new(&root, "esri-streets", 1 << 30).unwrap()));
+    // the four 256 px tiles of one 512 px tile at level 4
+    let keys: Vec<TileKey> = [(10, 6), (11, 6), (10, 7), (11, 7)].iter().map(|&(x, y)| TileKey::new(5, x, y).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("the tiles", 20, || svc.is_idle() && keys.iter().all(|k| svc.get(*k).is_some()));
+    for k in &keys {
+        let t = svc.get(*k).unwrap();
+        assert_eq!((t.width, t.height), (256, 256), "a quarter of the 512 px tile");
+    }
+    let tile_urls: Vec<String> = fake.urls().into_iter().filter(|u| u.contains("/tile/")).collect();
+    assert!(!tile_urls.is_empty() && tile_urls.len() <= 2, "one server tile serves its four quarters: {tile_urls:?}");
+    assert!(tile_urls.iter().all(|u| u.ends_with(&format!("/arcgis/streets/static/tile/4/3/5?token={KEY}"))), "{tile_urls:?}");
+    assert!(svc.stats().reused >= 2, "{:?}", svc.stats());
+    // the credit comes from the layer's metadata, fetched once with the key
+    wait_until("the credit", 20, || svc.attribution().contains("Test Data Co"));
+    assert_eq!(svc.attribution(), "Powered by Esri | Sources: Test Data Co");
+    assert_eq!(fake.urls().iter().filter(|u| u.contains("/static?f=json")).count(), 1);
+    // a failure's message hides the key
+    let bad = TileKey::new(4, 0, 0).unwrap();
+    svc.want(&[bad]);
+    let failed = Mutex::new(Vec::new());
+    wait_until("the failure", 20, || {
+        let mut f = failed.lock().unwrap();
+        f.extend(svc.poll().into_iter().filter_map(|e| if let TileEvent::Failed { error, .. } = e { Some(error) } else { None }));
+        !f.is_empty()
+    });
+    let failed = failed.into_inner().unwrap();
+    assert!(failed.iter().all(|e| !e.contains(KEY) && e.contains("[key]")), "{failed:?}");
+    // nothing on disk names the key
+    let mut stack = vec![root.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            assert!(!p.to_string_lossy().contains(KEY), "{}", p.display());
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                assert!(!std::fs::read(&p).unwrap().windows(KEY.len()).any(|w| w == KEY.as_bytes()), "{}", p.display());
+            }
+        }
+    }
+    assert!(!format!("{svc:?} {:?}", svc.stats()).contains(KEY));
+    drop(svc);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Metadata that is huge, not JSON, markup or the wrong shape gives the fixed credit.
+#[test]
+fn hostile_metadata_falls_back_to_the_fixed_credit() {
+    assert_eq!(metadata_credit(br#"{"copyrightText": "Esri, Maxar"}"#).as_deref(), Some("Esri, Maxar"));
+    let huge = format!(r#"{{"copyrightText": "{}"}}"#, "x".repeat(MAX_METADATA_BYTES));
+    for body in [
+        huge.as_bytes(),
+        b"<html><body>Service unavailable</body></html>",
+        br#"{"copyrightText": "<script>alert(1)</script>"}"#,
+        br#"{"copyrightText": "two\nlines"}"#,
+        br#"{"copyrightText": 5}"#,
+        br#"{"copyrightText": "   "}"#,
+        br#"{}"#,
+        b"",
+    ] {
+        assert_eq!(metadata_credit(body), None, "{}", String::from_utf8_lossy(&body[..body.len().min(60)]));
+    }
+    let fake = Fake::new(|url, _| {
+        if url.contains("/static?f=json") {
+            return Ok(HttpResponse { status: 200, headers: vec![], body: b"<html>nope</html>".to_vec() });
+        }
+        Ok(HttpResponse { status: 200, headers: vec![], body: png(512, 512) })
+    });
+    let svc = esri_service(fake.clone(), None);
+    svc.want(&[TileKey::new(2, 1, 1).unwrap()]);
+    wait_until("the metadata", 20, || fake.urls().iter().any(|u| u.contains("/static?f=json")) && svc.is_idle());
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(svc.attribution(), TileSource::EsriStreet.attribution());
+    assert!(svc.attribution().starts_with("Powered by Esri | "));
+}
+
+/// Cutting quarters and halving refuse sizes that don't fit, never panic.
+#[test]
+fn cropping_checks_the_tile() {
+    use super::source::Crop;
+    let img = |w: u32, h: u32| TileImage { width: w, height: h, rgba: vec![7; (w * h * 4) as usize] };
+    let q = crop_tile(img(512, 512), Crop::Quarter { right: true, bottom: false }).unwrap();
+    assert_eq!((q.width, q.height, q.rgba.len()), (256, 256, 256 * 256 * 4));
+    assert_eq!(crop_tile(img(512, 512), Crop::Half).unwrap().width, 256);
+    assert!(crop_tile(img(255, 256), Crop::Quarter { right: false, bottom: false }).is_err());
+    assert!(crop_tile(img(1, 1), Crop::Quarter { right: true, bottom: true }).is_err());
+    assert_eq!(crop_tile(img(3, 3), Crop::Half).unwrap().width, 3, "odd sizes are kept");
+    assert!(crop_tile(TileImage { width: 4, height: 4, rgba: vec![0; 3] }, Crop::Half).is_err(), "pixel data too short");
+}
+
+/// When no worker thread starts, nothing is queued: the service is idle, says it can't load, and
+/// leaves no "Loading map tiles" row behind (no one would ever finish it).
+#[test]
+fn a_service_whose_threads_never_start_queues_nothing() {
+    let fake = Fake::new(|_, _| Ok(ok_png("max-age=60")));
+    let activity = crate::activity::Activity::default();
+    let refuse: &Spawn = &|_, _| Err(std::io::Error::other("no threads"));
+    let svc = TileService::with_spawner(source(), Some(TileCache::new(tmp("nothreads"), "test", 1 << 20).unwrap()), Some(fake.clone()), refuse)
+        .with_activity(Some(activity.clone()));
+    svc.show(&paris());
+    assert!(!svc.can_load());
+    assert!(svc.is_idle(), "nothing left waiting for a worker");
+    assert!(activity.list().is_empty(), "no loading row that never ends");
+    assert!(fake.urls().is_empty());
+}
+
+/// A tile the transport refuses as too large is refused like a garbage one (not asked for again
+/// for a while); the host isn't backed off, so the other tiles still load.
+#[test]
+fn an_oversized_tile_is_refused_without_backing_off_the_host() {
+    let fake = Fake::new(|url, _| {
+        if url.ends_with("/4/0/4.png") {
+            return Err(TransportError::TooLarge(format!("tile larger than {MAX_TILE_BYTES} bytes")));
+        }
+        Ok(ok_png("max-age=60"))
+    });
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let keys: Vec<TileKey> = (0..4).map(|x| TileKey::new(4, x, 4).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("every tile answered", 10, || svc.is_idle() && fake.urls().len() >= 4);
+    let s = svc.stats();
+    assert_eq!(s.backoff_ms, 0, "{s:?}");
+    assert!(keys[1..].iter().all(|k| svc.get(*k).is_some()));
+    assert!(svc.poll().iter().any(|e| matches!(e, TileEvent::Failed { key, error } if *key == keys[0] && error.contains("larger"))));
+    svc.want(&keys);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(fake.keys().iter().filter(|k| **k == keys[0]).count(), 1, "not asked for again: {:?}", fake.urls());
+}
+
+/// A request already on the wire when the host starts failing doesn't end the backoff when it
+/// succeeds: only a request let through after the failure (the probe) does.
+#[test]
+fn an_earlier_request_does_not_end_a_newer_backoff() {
+    let slow = TileKey::new(4, 0, 4).unwrap();
+    let started = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&started);
+    let fake = Fake::new(move |url, _| {
+        if url.ends_with("/4/0/4.png") {
+            seen.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+            return Ok(ok_png("max-age=60"));
+        }
+        // fail only once the slow request is on the wire
+        let end = Instant::now() + Duration::from_secs(5);
+        while !seen.load(Ordering::SeqCst) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        Ok(HttpResponse { status: 503, headers: vec![("Retry-After".into(), "120".into())], body: vec![] })
+    });
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    svc.want(&[slow, TileKey::new(4, 1, 4).unwrap()]);
+    wait_until("the slow tile", 10, || svc.get(slow).is_some());
+    assert!(started.load(Ordering::SeqCst));
+    std::thread::sleep(Duration::from_millis(300));
+    // the failed tile waits out its Retry-After: not asked for again
+    assert_eq!(fake.urls().len(), 2, "{:?}", fake.urls());
+    assert!(svc.stats().backoff_ms > 100_000, "{:?}", svc.stats());
+}
+
+/// Decoded tiles are bounded by bytes, not only by count: a server sending 1024 px tiles (kept
+/// whole) gets [`MEMORY_BYTES`] of them, not 256 × 4 MB.
+#[test]
+fn large_tiles_are_kept_within_the_memory_budget() {
+    let big = png(1024, 1024);
+    let fake =
+        Fake::new(move |_, _| Ok(HttpResponse { status: 200, headers: vec![("Cache-Control".into(), "max-age=60".into())], body: big.clone() }));
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let keys: Vec<TileKey> = (0..24).map(|x| TileKey::new(5, x, 4).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("every tile", 30, || svc.is_idle() && fake.urls().len() >= keys.len());
+    let in_memory = svc.stats().in_memory;
+    assert!(in_memory <= MEMORY_BYTES / (1024 * 1024 * 4), "{in_memory} tiles of 4 MB");
+    assert!(in_memory > 0);
+}

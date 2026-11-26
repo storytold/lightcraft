@@ -456,11 +456,7 @@ impl Session {
         } else {
             let previous = self.prep.app;
             self.prep.app = settings;
-            let saved = self.save_prefs();
-            if saved.is_err() {
-                self.prep.app = previous;
-            }
-            saved
+            self.save_prefs_or_undo(|s| s.prep.app = previous)
         }
     }
 
@@ -474,11 +470,7 @@ impl Session {
     /// Save this library's preparation settings; when that fails, `previous` is put back, so the
     /// session doesn't go on with settings the command reported as not changed (CodeRabbit on #3544).
     fn save_library_prep(&mut self, previous: Option<PrepSettings>) -> crate::Result<()> {
-        let saved = self.save_prefs();
-        if saved.is_err() {
-            self.prep.library = previous;
-        }
-        saved
+        self.save_prefs_or_undo(|s| s.prep.library = previous)
     }
 
     pub(crate) fn prep_json(&self) -> Value {

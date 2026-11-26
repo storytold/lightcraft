@@ -106,6 +106,8 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// Map pin / Location marker.
+    MapPin,
 }
 
 struct Pen<'a> {
@@ -226,6 +228,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             // outer arc of the disc, then the inner arc of the bite, meeting at the horns
             pen.arc(10.0, 10.0, 6.5, 2.9, 263.8);
             pen.arc(13.4, 6.4, 5.0, 214.9, 51.8);
+        }
+        MapPin => {
+            pen.circle(10.0, 7.5, 4.0);
+            pen.line(&[(6.5, 9.5), (10.0, 17.0), (13.5, 9.5)]);
+            pen.circle(10.0, 7.5, 1.5);
         }
         Search => {
             pen.circle(8.5, 8.5, 5.0);

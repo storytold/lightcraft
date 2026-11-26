@@ -326,5 +326,20 @@
   "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
+  "Set the location of {n} photos": "Ange platsen för {n} foton",
+  "{n} photos without GPS": "{n} foton utan GPS",
+  "Location {n}": "Plats {n}",
+  "In private location “{name}”": "På den privata platsen ”{name}”",
+  "within {d} of {lat}, {lon}": "inom {d} från {lat}, {lon}",
+  "All Tracks ({n})": "Alla spår ({n})",
+  "Auto-Tag {n} Selected Photos": "Platsmärk {n} markerade foton",
+  "Loading tracklog {name}": "Läser in spårlogg {name}",
+  "Set Time Zone Offset… (UTC{o})": "Ange tidszonsförskjutning… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "{n} foton platsmärkta från spårloggen",
+  "Track {n}": "Spår {n}",
+  "camera time, UTC{o}": "kamerans tid, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} av dem faller inom spårets tidsintervall",
+  "{n} more tracks": "{n} spår till",
+  "{size} MB, {n} tiles": "{size} MB, {n} rutor"
 }

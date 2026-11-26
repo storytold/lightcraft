@@ -327,5 +327,20 @@
   "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
+  "Set the location of {n} photos": "{n} 枚の写真の位置を設定",
+  "{n} photos without GPS": "GPS なしの写真 {n} 枚",
+  "Location {n}": "場所 {n}",
+  "In private location “{name}”": "非公開の場所「{name}」内",
+  "within {d} of {lat}, {lon}": "{lat}, {lon} から {d} 以内",
+  "All Tracks ({n})": "すべてのトラック（{n}）",
+  "Auto-Tag {n} Selected Photos": "選択した {n} 枚の写真を自動タグ付け",
+  "Loading tracklog {name}": "トラックログ {name} を読み込み中",
+  "Set Time Zone Offset… (UTC{o})": "タイムゾーンのずれを設定…（UTC{o}）",
+  "Tagged {n} photos from the tracklog": "トラックログから {n} 枚の写真にタグを付けました",
+  "Track {n}": "トラック {n}",
+  "camera time, UTC{o}": "カメラの時刻、UTC{o}",
+  "{m} of them fall within the track's time range": "そのうち {m} 枚がトラックの時間範囲内です",
+  "{n} more tracks": "ほか {n} 件のトラック",
+  "{size} MB, {n} tiles": "{size} MB、{n} タイル"
 }

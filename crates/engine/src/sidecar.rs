@@ -730,6 +730,11 @@ pub const OWNED: &[&str] = &[
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
 
+/// GPS properties added to [`OWNED`] for a photo whose position was set or cleared in LightCraft
+/// ([`Session::gps_edited`]): its position is LightCraft's, so one cleared (or a geotag undone) is
+/// removed from the sidecar instead of the old value staying (ported from PR #810).
+pub const GPS_OWNED: &[&str] = &["exif:GPSLatitude", "exif:GPSLongitude", "exif:GPSAltitude", "exif:GPSAltitudeRef"];
+
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     lightcraft_catalog::safe_file::write_atomic(path, data)
@@ -773,7 +778,7 @@ pub struct SidecarSaved {
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
 /// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+fn sidecar_contents(path: &Path, fresh: String, stamp: &str, gps_owned: bool) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match crate::read_file::read_regular(path, SIDECAR_READ_MAX) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
@@ -783,7 +788,8 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((fresh, false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    let owned: Vec<&str> = OWNED.iter().chain(if gps_owned { GPS_OWNED } else { &[] }).copied().collect();
+    let rules = lightcraft_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
     let why = match std::str::from_utf8(&bytes) {
         Ok(old) => match lightcraft_meta::merge_xmp(old, &fresh, rules) {
             Ok(merged) => return Ok((merged, true, None)),
@@ -1168,7 +1174,8 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (data, merged, backup) =
+            sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)(), self.gps_edited.contains(&id)).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
@@ -1625,7 +1632,7 @@ mod tests {
         let path = dir.join("a.xmp");
         std::fs::write(&path, &old).unwrap();
         let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
-        assert!(super::sidecar_contents(&path, fresh, "t").is_err());
+        assert!(super::sidecar_contents(&path, fresh, "t", false).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no backup was made");
         std::fs::remove_dir_all(dir).unwrap();
@@ -1640,7 +1647,7 @@ mod tests {
         let path = dir.join("a.xmp");
         std::fs::write(&path, "not xml at all").unwrap();
         let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
-        let (data, merged, backup) = super::sidecar_contents(&path, fresh.clone(), "t").unwrap();
+        let (data, merged, backup) = super::sidecar_contents(&path, fresh.clone(), "t", false).unwrap();
         assert!(!merged && data == fresh);
         assert!(backup.is_some_and(|b| std::fs::read_to_string(b).unwrap() == "not xml at all"));
         std::fs::remove_dir_all(dir).unwrap();
@@ -1660,7 +1667,7 @@ mod tests {
         let path = dir.join("a.xmp");
         std::fs::write(&path, &old).unwrap();
         let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
-        assert!(super::sidecar_contents(&path, fresh, "t").is_err());
+        assert!(super::sidecar_contents(&path, fresh, "t", false).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no backup was made");
         std::fs::remove_dir_all(dir).unwrap();

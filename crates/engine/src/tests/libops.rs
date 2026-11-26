@@ -437,10 +437,14 @@ fn tracklog_auto_tag() {
     assert_eq!(r["skipped"], json!({"noTime": 0, "outside": 1, "hasGps": 1}));
     assert_eq!((r["points"].as_u64(), r["start"].as_str()), (Some(3), Some("2026-05-01T10:00:00Z")));
     assert_eq!(ids.iter().map(|i| gps(&s, *i)).collect::<Vec<_>>(), before);
+    assert!(!s.gps_edited.contains(&PhotoId(ids[0])), "a dry run marks nothing as LightCraft's");
     // tag: one undo step
     let undo_depth = s.undo.len();
     s.execute("photo.autoTagTracklog", &json!({"path": path, "ids": ids, "offset": 2})).unwrap();
     assert_eq!(s.undo.len(), undo_depth + 1);
+    // the tagged photos' positions are LightCraft's (sidecar GPS follows them, as photo.setGps's)
+    assert!(s.gps_edited.contains(&PhotoId(ids[0])) && s.gps_edited.contains(&PhotoId(ids[1])));
+    assert!(!s.gps_edited.contains(&PhotoId(ids[2])), "not tagged: not marked");
     assert_eq!(gps(&s, ids[0]), Some((46.0005, 7.001)), "interpolated half-way between the first two points");
     assert_eq!(gps(&s, ids[1]), Some((46.001, 7.002)));
     assert_eq!(gps(&s, ids[2]), None);

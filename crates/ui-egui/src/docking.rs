@@ -393,6 +393,12 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.font = t.font(12.0);
     // Tool and preset panels publish hover previews before the photo consumes them.
     let mut canvas = None;
+    // the Info panel's map is this frame's only (`map.state` reports none once it is gone)
+    app.mini_map = None;
+    // the Map view's location filter narrows the photos only while it is shown
+    crate::panels::map::sync_location_filter(app);
+    // a track log read on a worker thread lands here
+    crate::panels::map::tracks::poll(app, ui.ctx());
     let output = DockArea::new(egui::Id::unique("lightcraft-docking")).locked(workspace.locked).show_with_limits(
         ui,
         &workspace.layout,
@@ -422,6 +428,8 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             }
         },
     );
+    // what the Map view drew is this frame's only (`map.state` reports no pins once it is gone)
+    app.map_drawn = Default::default();
     if let Some(mut canvas) = canvas {
         let ui = &mut canvas;
         crate::panels::bottombar::show(app, ui);
@@ -441,8 +449,11 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             crate::state::ViewMode::Survey => crate::panels::compare::show_survey(app, ui),
             crate::state::ViewMode::Reference => crate::panels::compare::show_reference(app, ui),
             crate::state::ViewMode::People => crate::panels::people::show(app, ui),
+            crate::state::ViewMode::Map => crate::panels::map::show(app, ui),
         });
     }
+    // no map drawn for two frames: the tile service stops fetching (only what is in view)
+    crate::panels::map::tiles::end_frame(&app.session, ui.ctx());
 
     let rendered = workspace;
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));

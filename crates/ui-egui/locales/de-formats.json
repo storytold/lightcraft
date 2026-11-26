@@ -327,5 +327,20 @@
   "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
   "Bring photos in with File › Import Photos… ({keys}).": "Fotos holen Sie mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
   "View › Detail View ({keys}).": "Ansicht › Detailansicht ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys}).",
+  "Set the location of {n} photos": "Ort von {n} Fotos festlegen",
+  "{n} photos without GPS": "{n} Fotos ohne GPS",
+  "Location {n}": "Ort {n}",
+  "In private location “{name}”": "Im privaten Ort „{name}“",
+  "within {d} of {lat}, {lon}": "innerhalb von {d} um {lat}, {lon}",
+  "All Tracks ({n})": "Alle Tracks ({n})",
+  "Auto-Tag {n} Selected Photos": "{n} ausgewählte Fotos verorten",
+  "Loading tracklog {name}": "Tracklog {name} wird geladen",
+  "Set Time Zone Offset… (UTC{o})": "Zeitzonenversatz festlegen… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "{n} Fotos aus dem Tracklog verortet",
+  "Track {n}": "Track {n}",
+  "camera time, UTC{o}": "Kamerazeit, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} davon liegen im Zeitraum des Tracks",
+  "{n} more tracks": "{n} weitere Tracks",
+  "{size} MB, {n} tiles": "{size} MB, {n} Kacheln"
 }
