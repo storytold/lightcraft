@@ -391,9 +391,10 @@ differently from the crop the file records (`CropLeft`/`CropTop` 36, 34); the fi
 
 Each loaded lens database snapshot is immutable. Its matching and calibration values, including profile order,
 form a semantic identity in camera-look render/view cache keys and smart-preview headers and scan markers.
-A download, replacement or explicit reload selects a new snapshot and updates that identity; fitted smart previews then rebuild when
-their originals are available. Existing offline proxies remain readable. Missing legacy identities require one
-new check; proxies from newer fit/encoding versions retain the existing downgrade protection.
+A reload with the same matching and calibration data preserves the identity and leaves current previews valid.
+When that data changes, affected fitted smart previews become eligible for rebuilding once their originals are available.
+Existing offline proxies remain readable. A missing legacy identity triggers a new check. Proxies from newer
+fit or encoding versions retain their downgrade protection.
 Smart-preview builds decode the original afresh and capture its database identity before decoding. A reload
 or replacement during decoding rejects that write; a later change during encoding leaves the captured identity
 on the proxy so it can still be recognized as stale. A scan interrupted by a database change does not mark the

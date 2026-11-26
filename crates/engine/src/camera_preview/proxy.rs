@@ -434,12 +434,26 @@ pub(super) fn resample_correspondence(image: &Rgb32f, source: impl Fn(f64, f64) 
     for (i, pixel) in out.data.iter_mut().enumerate() {
         let p = source((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
         *pixel = if p.x.is_finite() && p.y.is_finite() && p.x >= 0.5 && p.y >= 0.5 && p.x <= w as f64 - 0.5 && p.y <= h as f64 - 0.5 {
-            image.sample_bilinear(p.x as f32, p.y as f32)
+            sample_correspondence(image, p.x as f32 - 0.5, p.y as f32 - 0.5)
         } else {
             [f32::NAN; 3]
         };
     }
     out
+}
+
+/// Bilinear interpolation inside the image, with integer coordinates at pixel centres.
+/// At an exact coordinate the two bounds coincide. An invalid neighbour with zero weight
+/// must not turn a usable training pixel or its clip mask into NaN.
+fn sample_correspondence(image: &Rgb32f, x: f32, y: f32) -> [f32; 3] {
+    let row = |y| -> [f32; 3] {
+        let left = image.get(x.floor() as usize, y);
+        let right = image.get(x.ceil() as usize, y);
+        std::array::from_fn(|i| left[i] + (right[i] - left[i]) * x.fract())
+    };
+    let top = row(y.floor() as usize);
+    let bottom = row(y.ceil() as usize);
+    std::array::from_fn(|i| top[i] + (bottom[i] - top[i]) * y.fract())
 }
 
 /// A resolved profile is a proposal for camera-JPEG geometry, never an instruction to change

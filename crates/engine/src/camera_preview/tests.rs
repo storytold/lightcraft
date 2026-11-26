@@ -1010,6 +1010,22 @@ fn external_profile_geometry_cannot_improve_by_dropping_disagreeing_borders() {
     }
 }
 
+#[test]
+fn correspondence_samples_use_only_neighbours_with_nonzero_weight() {
+    let valid = [0.25, 0.5, 1.0];
+    let mut image = Rgb32f::new(2, 2);
+    image.data.fill([f32::NAN; 3]);
+    image.set(0, 0, valid);
+    let sample = |image: &Rgb32f, x, y| resample_correspondence(image, |_, _| lightcraft_geom::Point::new(x, y)).get(0, 0);
+    assert_eq!(sample(&image, 0.5, 0.5), valid);
+    assert!(sample(&image, 1.0, 1.0).iter().all(|v| v.is_nan()));
+    for (x, y) in [(1, 0), (0, 1)] {
+        let mut axis = image.clone();
+        axis.set(x, y, valid.map(|v| 3.0 * v));
+        assert_eq!(sample(&axis, 0.5 + x as f64 * 0.5, 0.5 + y as f64 * 0.5), valid.map(|v| 2.0 * v));
+    }
+}
+
 fn synthetic_profile_lens() -> lightcraft_develop::EmbeddedLens {
     lightcraft_develop::EmbeddedLens {
         warp: Some(lightcraft_develop::EmbeddedWarp {
