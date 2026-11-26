@@ -53,6 +53,7 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+mod thumb;
 pub mod widgets;
 pub mod window_place;
 

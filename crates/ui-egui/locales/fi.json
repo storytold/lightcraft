@@ -2193,7 +2193,6 @@
   "Wednesday": "keskiviikko",
   "What's New": "Mitä uutta",
   "When pins show on the photo (Shift+H cycles)": "Milloin nastat näkyvät kuvassa (Shift+H vaihtaa)",
-  "When rated or hovered": "Luokiteltaessa tai osoitettaessa",
   "White Balance": "Valkotasapaino",
   "White Balance Selector": "Valkotasapainon valitsin",
   "White Balance Selector (W)": "Valkotasapainon valitsin (W)",
@@ -2419,5 +2418,12 @@
   "Reduce motion": "Vähennä liikettä",
   "Turns off zoom and spinner animations. Fades stay.": "Poistaa zoomaus- ja pyörivät animaatiot käytöstä. Häivytykset säilyvät.",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Poistaa zoomaus- ja pyörivät animaatiot käytöstä. Häivytykset säilyvät. Seuraa järjestelmän Vähennä liikettä -asetusta, kunnes muutat sitä täällä.",
-  "Use the system setting": "Käytä järjestelmän asetusta"
+  "Use the system setting": "Käytä järjestelmän asetusta",
+  "Right-click ▸ Locate Missing File… to find it again.": "Napsauta hiiren kakkospainikkeella → Paikanna puuttuva tiedosto… löytääksesi sen uudelleen.",
+  "Right-click ▸ Reload from Disk to try again.": "Napsauta hiiren kakkospainikkeella → Lataa levyltä uudelleen yrittääksesi uudelleen.",
+  "Stack — click to collapse (S)": "Pino — napsauta tiivistääksesi (S)",
+  "Stack — click to expand (S)": "Pino — napsauta laajentaaksesi (S)",
+  "Stars on hover": "Tähdet osoitettaessa",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Tähdet osoitettaessa: liput ja värimerkinnät näkyvät aina; tähdet ja muokattu-merkki näkyvät, kun kuvaa osoitetaan tai se on valittuna.",
+  "Virtual copy": "Virtuaalikopio"
 }

@@ -1537,7 +1537,8 @@
   "Watched folder": "Відстежувана тека",
   "Watermark": "Водяний знак",
   "What's New": "Що нового",
-  "When rated or hovered": "Після оцінювання або наведення",
+  "Stars on hover": "Зірки при наведенні",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Зірки при наведенні: прапорці й кольорові мітки видно завжди; зірки та позначка редагування з’являються, поки фото під курсором або вибране.",
   "White Balance": "Баланс білого",
   "White Balance Selector": "Вибір балансу білого",
   "White Balance Selector (W)": "Вибір балансу білого (W)",
@@ -2458,5 +2459,10 @@
   "Reduce motion": "Зменшити рух",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються. Доки ви не зміните це тут, діє системне налаштування «Зменшити рух».",
   "Use the system setting": "Використовувати налаштування системи",
-  "Turns off zoom and spinner animations. Fades stay.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються."
+  "Turns off zoom and spinner animations. Fades stay.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються.",
+  "Stack — click to expand (S)": "Стос — клацніть, щоб розгорнути (S)",
+  "Stack — click to collapse (S)": "Стос — клацніть, щоб згорнути (S)",
+  "Virtual copy": "Віртуальна копія",
+  "Right-click ▸ Locate Missing File… to find it again.": "Клацніть правою кнопкою → Знайти відсутній файл…, щоб знайти його знову.",
+  "Right-click ▸ Reload from Disk to try again.": "Клацніть правою кнопкою → Перезавантажити з диска, щоб спробувати ще раз."
 }

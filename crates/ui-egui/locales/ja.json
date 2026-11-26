@@ -1507,7 +1507,8 @@
   "Watched folder": "監視フォルダ",
   "Watermark": "透かし",
   "What's New": "新着情報",
-  "When rated or hovered": "評価時またはカーソルを合わせたとき",
+  "Stars on hover": "星はカーソルを合わせたとき",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "星はカーソルを合わせたとき：フラグとカラーラベルは常に表示され、星と編集済みマークは写真にカーソルを合わせたか選択したときに表示されます。",
   "White Balance": "ホワイトバランス",
   "White Balance Selector": "ホワイトバランス選択",
   "White Balance Selector (W)": "ホワイトバランス選択（W）",
@@ -2460,5 +2461,10 @@
   "Reduce motion": "動きを減らす",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。ここで変更するまで、システムの「視差効果を減らす」設定に従います。",
   "Use the system setting": "システム設定に従う",
-  "Turns off zoom and spinner animations. Fades stay.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。"
+  "Turns off zoom and spinner animations. Fades stay.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。",
+  "Stack — click to expand (S)": "スタック — クリックして展開 (S)",
+  "Stack — click to collapse (S)": "スタック — クリックして折りたたむ (S)",
+  "Virtual copy": "仮想コピー",
+  "Right-click ▸ Locate Missing File… to find it again.": "右クリック → 見つからないファイルを指定… で、ファイルをもう一度指定できます。",
+  "Right-click ▸ Reload from Disk to try again.": "右クリック → ディスクから再読み込み で、もう一度試せます。"
 }

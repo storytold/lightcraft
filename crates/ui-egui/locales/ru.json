@@ -1560,7 +1560,8 @@
   "Watermark": "Водяной знак",
   "Wednesday": "Среда",
   "What's New": "Что нового",
-  "When rated or hovered": "При оценке или наведении",
+  "Stars on hover": "Звёзды при наведении",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Звёзды при наведении: флаги и цветные метки видны всегда; звёзды и значок правки появляются, пока фото под курсором или выбрано.",
   "White Balance": "Баланс белого",
   "White Balance Selector": "Пипетка баланса белого",
   "White Balance Selector (W)": "Пипетка баланса белого (W)",
@@ -2668,5 +2669,10 @@
   "Reduce motion": "Уменьшить движение",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются. Пока вы не измените это здесь, действует системная настройка «Уменьшение движения».",
   "Use the system setting": "Использовать настройку системы",
-  "Turns off zoom and spinner animations. Fades stay.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются."
+  "Turns off zoom and spinner animations. Fades stay.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются.",
+  "Stack — click to expand (S)": "Стопка — щёлкните, чтобы развернуть (S)",
+  "Stack — click to collapse (S)": "Стопка — щёлкните, чтобы свернуть (S)",
+  "Virtual copy": "Виртуальная копия",
+  "Right-click ▸ Locate Missing File… to find it again.": "Щёлкните правой кнопкой → Указать отсутствующий файл…, чтобы найти его снова.",
+  "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку."
 }

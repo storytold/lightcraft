@@ -2186,7 +2186,6 @@
   "We": "Rb",
   "Wednesday": "Rabu",
   "What's New": "Yang baru",
-  "When rated or hovered": "Saat diberi rating atau saat kursor di atasnya",
   "White Balance": "Keseimbangan putih",
   "White Balance Selector": "Pemilih keseimbangan putih",
   "White Balance Selector (W)": "Pemilih keseimbangan putih (W)",
@@ -2433,5 +2432,12 @@
   "Reduce motion": "Kurangi gerakan",
   "Turns off zoom and spinner animations. Fades stay.": "Menonaktifkan animasi zoom dan indikator putar. Efek memudar tetap ada.",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Menonaktifkan animasi zoom dan indikator putar. Efek memudar tetap ada. Mengikuti pengaturan Kurangi Gerakan sistem sampai Anda mengubahnya di sini.",
-  "Use the system setting": "Gunakan pengaturan sistem"
+  "Use the system setting": "Gunakan pengaturan sistem",
+  "Right-click ▸ Locate Missing File… to find it again.": "Klik kanan → Temukan file hilang… untuk menemukannya lagi.",
+  "Right-click ▸ Reload from Disk to try again.": "Klik kanan → Muat ulang dari disk untuk mencoba lagi.",
+  "Stack — click to collapse (S)": "Tumpukan — klik untuk menciutkan (S)",
+  "Stack — click to expand (S)": "Tumpukan — klik untuk meluaskan (S)",
+  "Stars on hover": "Bintang saat kursor di atas",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Bintang saat kursor di atas: bendera dan label warna selalu tampil; bintang dan tanda telah diedit muncul saat kursor berada di atas foto atau foto dipilih.",
+  "Virtual copy": "Salinan virtual"
 }

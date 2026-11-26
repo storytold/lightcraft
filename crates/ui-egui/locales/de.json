@@ -1652,7 +1652,8 @@
   "Watermark": "Wasserzeichen",
   "Wednesday": "Mittwoch",
   "What's New": "Neuigkeiten",
-  "When rated or hovered": "Bei Bewertung oder unter dem Mauszeiger",
+  "Stars on hover": "Sterne beim Überfahren",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Sterne beim Überfahren: Flaggen und Farbmarkierungen sind immer sichtbar; die Sterne und das Bearbeitet-Zeichen erscheinen, solange ein Foto überfahren oder ausgewählt ist.",
   "White Balance": "Weißabgleich",
   "White Balance Selector": "Weißabgleich-Pipette",
   "White Balance Selector (W)": "Weißabgleich-Pipette (W)",
@@ -3543,5 +3544,10 @@
   "Reduce motion": "Bewegung reduzieren",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Schaltet Zoom- und Ladeanimationen ab. Überblendungen bleiben erhalten. Folgt der Systemeinstellung „Bewegung reduzieren“, bis Sie sie hier ändern.",
   "Use the system setting": "Systemeinstellung verwenden",
-  "Turns off zoom and spinner animations. Fades stay.": "Schaltet Zoom- und Ladeanimationen ab. Überblendungen bleiben erhalten."
+  "Turns off zoom and spinner animations. Fades stay.": "Schaltet Zoom- und Ladeanimationen ab. Überblendungen bleiben erhalten.",
+  "Stack — click to expand (S)": "Stapel — Klicken zum Aufklappen (S)",
+  "Stack — click to collapse (S)": "Stapel — Klicken zum Zuklappen (S)",
+  "Virtual copy": "Virtuelle Kopie",
+  "Right-click ▸ Locate Missing File… to find it again.": "Rechtsklick → Fehlende Datei suchen…, um sie wiederzufinden.",
+  "Right-click ▸ Reload from Disk to try again.": "Rechtsklick → Vom Datenträger neu laden, um es erneut zu versuchen."
 }
