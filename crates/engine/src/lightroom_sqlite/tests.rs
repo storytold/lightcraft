@@ -412,6 +412,14 @@ fn malformed_varint_and_wal_cycle_fail_cleanly() {
 }
 
 #[test]
+fn record_serial_types_must_end_in_the_header() {
+    assert_eq!(decode_record(&[2, 1, 7], 2, TextEncoding::Utf8).unwrap(), [Value::Integer(7), Value::Null]);
+    for payload in [&[2, 0x80][..], &[2, 0x80, 9][..]] {
+        assert_eq!(decode_record(payload, 2, TextEncoding::Utf8).unwrap_err(), "SQLite record header is malformed");
+    }
+}
+
+#[test]
 fn record_values_decode_all_serial_types_and_reject_reserved() {
     let mut header = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 17];
     let header_len = 1 + header.len();
