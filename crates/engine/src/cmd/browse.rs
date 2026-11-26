@@ -495,9 +495,9 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
         follow_library_folder(&mut f.folder, from, to);
     }
     if let Some(b) = &mut s.browse
-        && let Ok(rel) = Path::new(&b.path).strip_prefix(from)
+        && let Some(rel) = strip_prefix_ignore_case(Path::new(&b.path), Path::new(from))
     {
-        b.path = Path::new(to).join(rel).to_string_lossy().to_string();
+        b.path = if rel.as_os_str().is_empty() { to.to_string() } else { Path::new(to).join(rel).to_string_lossy().to_string() };
         // with filters off the filter stays empty: Cmd+L brings back the one put aside
         if s.shelved_filter.is_none() {
             let f = b.path.clone();
@@ -511,9 +511,12 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
 /// the folder itself.
 fn follow_library_folder(chosen: &mut Option<String>, from: &str, to: &str) {
     let Some(c) = chosen.as_deref() else { return };
-    if let Some(rest) = lightcraft_catalog::query::folder_rest(c, from) {
+    let rest = lightcraft_catalog::query::folder_rest(c, from).or_else(|| {
+        strip_prefix_ignore_case(Path::new(c), Path::new(from)).map(|rel| rel.iter().map(|n| n.to_string_lossy().into_owned()).collect())
+    });
+    if let Some(rest) = rest {
         // joined by the platform, so the result is spelled like `to` and like a path read from disk
-        *chosen = Some(rest.iter().fold(std::path::PathBuf::from(to), |p, name| p.join(name)).to_string_lossy().to_string());
+        *chosen = Some(rest.iter().fold(PathBuf::from(to), |p, name| p.join(name)).to_string_lossy().to_string());
     }
 }
 
@@ -555,8 +558,10 @@ fn spelling_in_open_library(s: &Session, path: &str, refuse_link: bool) -> std::
         }
         return Ok(path.to_string());
     }
+    // a destination that may not exist yet: rewrite only when its library-length prefix is the open library on disk
+    // (on a case-sensitive volume, `LIB` can be a different folder and must be left alone)
     Ok(match as_library {
-        Some(spelled) if !refuse_link => spelled.to_string_lossy().into_owned(),
+        Some(spelled) if !refuse_link && prefix_is_the_open_library(src, &lib) => spelled.to_string_lossy().into_owned(),
         _ => path.to_string(),
     })
 }
@@ -575,6 +580,24 @@ fn path_starts_with_ignore_case(path: &Path, root: &Path) -> bool {
     let root: Vec<_> = root.components().map(fold).collect();
     let path: Vec<_> = path.components().map(fold).collect();
     path.starts_with(&root)
+}
+
+/// The names below `prefix` in `path`, when they share a prefix if letter case is ignored.
+fn strip_prefix_ignore_case(path: &Path, prefix: &Path) -> Option<PathBuf> {
+    path.strip_prefix(prefix)
+        .ok()
+        .map(|rel| rel.to_path_buf())
+        .or_else(|| path_starts_with_ignore_case(path, prefix).then(|| path.components().skip(prefix.components().count()).collect()))
+}
+
+/// Whether the library-length prefix of `path` is, on disk, the open library (following links). A missing prefix is
+/// not the library; a different directory whose name only differs in letter case is not either.
+fn prefix_is_the_open_library(path: &Path, lib: &Path) -> bool {
+    if !path_starts_with_ignore_case(path, lib) {
+        return false;
+    }
+    let prefix: PathBuf = path.components().take(lib.components().count()).collect();
+    matches!((prefix.canonicalize(), lib.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
 fn is_link(path: &Path) -> bool {
@@ -603,11 +626,11 @@ fn same_dir_entry(a: &Path, b: &Path) -> bool {
             }
             #[cfg(windows)]
             {
-                use std::os::windows::fs::MetadataExt;
-                matches!(
-                    (am.volume_serial_number(), bm.volume_serial_number(), am.file_index(), bm.file_index()),
-                    (Some(va), Some(vb), Some(ia), Some(ib)) if va == vb && ia == ib
-                )
+                // std's volume serial / file index on Metadata needs nightly `windows_by_handle` (see opened_folder.rs)
+                let _ = (am, bm);
+                let a = std::path::absolute(a).unwrap_or_else(|_| a.to_path_buf());
+                let b = std::path::absolute(b).unwrap_or_else(|_| b.to_path_buf());
+                path_starts_with_ignore_case(&a, &b) && path_starts_with_ignore_case(&b, &a)
             }
             #[cfg(not(any(unix, windows)))]
             {
@@ -676,7 +699,9 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
         .catalog
         .photos()
         .filter_map(|p| match &p.source {
-            lightcraft_catalog::Source::File { path } => Path::new(path).strip_prefix(src).ok().map(|rel| (p.id, p.file_name.clone(), dst.join(rel))),
+            lightcraft_catalog::Source::File { path } => {
+                strip_prefix_ignore_case(Path::new(path), src).map(|rel| (p.id, p.file_name.clone(), dst.join(rel)))
+            }
             _ => None,
         })
         .map(|(id, file_name, np)| Op::Relink {
@@ -776,8 +801,8 @@ fn refuse_protected_place_in(command: &str, from: &str, home: Option<&Path>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{is_protected_place, library_spelling, path_starts_with_ignore_case, refuse_protected_place_in};
-    use std::path::Path;
+    use super::{is_protected_place, library_spelling, path_starts_with_ignore_case, refuse_protected_place_in, strip_prefix_ignore_case};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn a_path_that_differs_only_in_letter_case_is_the_librarys_spelling() {
@@ -791,6 +816,17 @@ mod tests {
         let cafe = Path::new("/data/Café/Originals/day");
         assert!(path_starts_with_ignore_case(cafe, Path::new("/data/CAFÉ")));
         assert_eq!(library_spelling(cafe, Path::new("/data/CAFÉ")).unwrap(), Path::new("/data/CAFÉ/Originals/day"));
+    }
+
+    #[test]
+    fn strip_prefix_ignore_case_keeps_the_names_below_a_flipped_prefix() {
+        let rel = strip_prefix_ignore_case(
+            Path::new("/users/foo/pictures/lib/Originals/2026-10-16/a.jpg"),
+            Path::new("/Users/Foo/Pictures/Lib/Originals/2026-10-16"),
+        )
+        .expect("case-folded prefix matches");
+        assert_eq!(rel, PathBuf::from("a.jpg"));
+        assert!(strip_prefix_ignore_case(Path::new("/Users/Foo/Pictures/lib-link/day"), Path::new("/Users/Foo/Pictures/Lib")).is_none());
     }
 
     #[test]

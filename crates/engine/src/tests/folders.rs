@@ -844,6 +844,64 @@ fn a_folder_named_through_a_link_that_differs_only_in_letter_case_is_still_refus
     assert!(paths.iter().all(|p| Path::new(p).exists()), "every photo still points at a file: {paths:?}");
 }
 
+/// On a case-sensitive volume, a destination named like the library with only letter case changed
+/// can be a different folder: a move into it must not be rewritten into the open library.
+#[test]
+fn a_destination_whose_name_differs_only_in_letter_case_is_left_alone_when_it_is_another_folder() {
+    let dir = Scratch::new("dest-other-case");
+    let lib = dir.0.join("lib");
+    let other = dir.0.join("LIB");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    if other.exists() {
+        // the volume treats lib and LIB as one folder: the distinct-directory case does not arise
+        return;
+    }
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::create_dir_all(dir.0.join("work/Trip")).unwrap();
+    let photo = dir.0.join("work/Trip/a.jpg");
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo.to_string_lossy());
+    s.execute("folder.move", &json!({"path": dir.path("work/Trip"), "into": other.to_string_lossy()})).unwrap();
+    assert!(other.join("Trip").is_dir(), "the folder moved into the destination as given");
+    assert!(!lib.join("Trip").exists(), "it was not rewritten into the open library");
+}
+
+/// Imports keep the path as given, so a photo may be stored under a flipped library prefix. Renaming
+/// the date folder still relinks it, and a browsed path that used that prefix follows too.
+#[test]
+fn a_photo_stored_under_a_differently_cased_library_path_is_relinked() {
+    let dir = Scratch::new("catalog-case");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    let photo = day.join("a.jpg");
+    std::fs::write(&photo, b"jpeg").unwrap();
+    let flipped_photo = dir.0.join("LIB").join("Originals").join("2026-10-16").join("a.jpg");
+    add(&mut s, &flipped_photo.to_string_lossy());
+    s.browse = Some(crate::Browse { path: dir.0.join("LIB").join("Originals").join("2026-10-16").to_string_lossy().to_string(), subfolders: false });
+    let r = s.execute("folder.rename", &json!({"path": day.to_string_lossy(), "name": "Beach"})).unwrap();
+    assert_eq!(r["relinked"], 1, "the photo stored under the flipped spelling is relinked");
+    let moved = lib.join("Originals/Beach/a.jpg");
+    let paths: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, [moved.to_string_lossy().to_string()], "the catalog path uses the library's spelling");
+    assert!(moved.is_file());
+    assert_eq!(
+        s.browse.as_ref().expect("browse follows").path,
+        moved.parent().unwrap().to_string_lossy().as_ref(),
+        "the browsed folder follows the resolved path"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn the_library_folder_is_protected_however_its_path_is_spelled() {
