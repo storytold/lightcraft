@@ -23,7 +23,7 @@ pub(super) fn slideshow_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
     export_section(app, ui, t);
 }
 
-/// Export: PDF, JPEG sequence or video of the slideshow (View ▸ Export Slideshow…).
+/// Export: PDF, JPEG sequence or video of the slideshow (View ▸ Slideshow ▸ Export Slideshow…).
 fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Export"));
     let running = app.session.slideshow_export.as_ref().is_some_and(|r| r.running());

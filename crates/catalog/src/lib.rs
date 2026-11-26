@@ -31,6 +31,7 @@ pub mod opened_folder;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
+pub mod shared;
 pub mod stacks;
 pub mod store;
 pub mod tally;
@@ -75,6 +76,12 @@ pub enum CatalogError {
     /// version doesn't know). Nothing was read into the session and nothing was modified.
     #[error("this library was written by a newer version of LightCraft ({0}); update LightCraft to open it. The library was left unchanged.")]
     Newer(String),
+    /// A batch failed, and rolling back what it had applied failed too: the catalog is not as it was, and part of
+    /// the batch stays. `remaining` is what is left of the rollback (applied in order, it takes the catalog back to
+    /// where it was before the batch), so the change can still be undone, and the batch itself is the record to keep
+    /// of it: replaying the batch from the same catalog fails the same way and leaves the same changes.
+    #[error("{cause}; the change was only partly taken back, so part of it stays")]
+    PartlyApplied { cause: Box<CatalogError>, remaining: Box<Op> },
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
@@ -301,8 +308,8 @@ pub struct Catalog {
     /// references and clears the table when a snapshot is read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     grids: Vec<String>,
-    /// Increments on every applied op, and when a batch fails and its rollback cannot undo it whole (the catalog
-    /// changed, so what is keyed by the revision is out of date).
+    /// Increments on every applied op, and when a batch fails and part of it stays ([`CatalogError::PartlyApplied`]): the
+    /// catalog changed, so what is keyed by the revision is out of date.
     #[serde(skip)]
     pub revision: u64,
     /// Which photos the latest ops touched ([`Catalog::touched_since`]).
@@ -382,23 +389,46 @@ impl std::fmt::Debug for PlansMemo {
     }
 }
 
+/// What [`resolve_grids`] has made of each value with references so far: the value as read (held
+/// here so its address stays its own), what it resolved to and how many dangling references it
+/// held. Holders that shared a value before resolving share the result, whatever else is between
+/// them (a photo's settings and its last history step, with the earlier steps in between).
+type ResolvedGrids = std::collections::HashMap<*const DevelopSettings, (Arc<DevelopSettings>, Arc<DevelopSettings>, usize)>;
+
 /// Resolves the shared-grid references of one settings holder (see [`Photo::settings_holders`])
 /// against a snapshot's grid table: each referenced mask takes its
 /// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
 /// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
 /// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
-fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize) -> usize {
-    let mut dangling = dangling;
+///
+/// Settings that refer to no grid (nearly all of them) are left alone, so a value shared by many
+/// holders stays shared: [`Arc::make_mut`] would copy it for each. A value with references is
+/// resolved once (`done`): every holder that held it takes the same result, which is handed to
+/// [`shared::settings`], so holders that are equal once resolved share one value too.
+fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize, done: &mut ResolvedGrids) -> usize {
+    let mut referenced = false;
+    settings.visit_seg_masks(&mut |m| referenced |= m.grid.is_some());
+    if !referenced {
+        return dangling;
+    }
+    if let Some((_, resolved, dangled)) = done.get(&Arc::as_ptr(settings)) {
+        *settings = resolved.clone();
+        return dangling + dangled;
+    }
+    let original = settings.clone();
+    let mut dangled = 0usize;
     Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
         if let Some(i) = m.grid.take() {
             match (m.data.is_empty(), grids.get(i as usize)) {
                 (true, Some(data)) => m.data = data.clone(),
-                (true, None) => dangling += 1,
+                (true, None) => dangled += 1,
                 (false, _) => {}
             }
         }
     });
-    dangling
+    *settings = shared::settings(settings.clone());
+    done.insert(Arc::as_ptr(&original), (original, settings.clone(), dangled));
+    dangling + dangled
 }
 
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
@@ -420,14 +450,24 @@ struct Changes {
     /// outside (a library just loaded takes a range of its own, so that nothing kept from another library is
     /// taken for this one's): nothing is known of how the catalog got to where it is.
     seen: u64,
-    /// A batch that failed could not be rolled back whole: what it changed stays, so what it noted must too.
-    torn: bool,
+    /// The inverses of a failed batch's ops that could not be applied when it was rolled back, in the order they
+    /// are to be applied (see [`CatalogError::PartlyApplied`]). Empty unless a rollback is under way or has just
+    /// failed; [`Catalog::apply`] hands it out.
+    leftover: Vec<Op>,
 }
 
 impl PartialEq for Changes {
     /// Two catalogs are the same catalog whatever each remembers of how it got there.
     fn eq(&self, _: &Self) -> bool {
         true
+    }
+}
+
+/// `op` and, when it is a batch, the ops in it (nested batches too), each alone and in the order the batch lists them.
+fn unbatch(op: Op, out: &mut Vec<Op>) {
+    match op {
+        Op::Batch { ops } => ops.into_iter().for_each(|op| unbatch(op, out)),
+        op => out.push(op),
     }
 }
 
@@ -762,8 +802,9 @@ impl Catalog {
     }
 
     /// Apply an op; returns its inverse. On error the catalog is as it was, the revision included, and nothing is
-    /// remembered of the op in what the latest ops touched. The one exception is a batch whose rollback fails: the
-    /// catalog did change, so the revision advances and anything may be taken to have changed.
+    /// remembered of the op in what the latest ops touched. The one exception is a batch that fails and cannot be rolled
+    /// back whole: it is [`CatalogError::PartlyApplied`], the catalog did change (the revision advances and anything may
+    /// be taken to have changed), and the caller must record the op.
     pub fn apply(&mut self, op: Op) -> Result<Op> {
         if self.changes.seen != self.revision {
             // the revision was set from outside: what is remembered is of another past
@@ -771,20 +812,12 @@ impl Catalog {
         }
         let broad = self.changes.broad;
         let keyword_list = self.changes.keyword_list;
-        self.changes.torn = false;
         let inv = match self.apply_inner(op) {
             Ok(inv) => inv,
-            Err(e) => {
+            Err(cause) => {
                 let made = self.revision.saturating_add(1);
-                if self.changes.torn {
-                    // (a batch the rollback of which failed changed something and says not what: it makes a
-                    // revision, so what is kept for the one before is dropped, and anything may have changed, as
-                    // after an op of a wider reach)
-                    self.changes.torn = false;
-                    self.changes.broad = made;
-                    self.revision = made;
-                    self.changes.seen = made;
-                } else {
+                let left = std::mem::take(&mut self.changes.leftover);
+                if left.is_empty() {
                     // (everything the failed op, or the rollback of a batch, noted was made for the revision it
                     // would have made: nothing earlier has that one. A note the cap already dropped stays
                     // dropped, which only says less than is known, as the cap does.)
@@ -793,8 +826,15 @@ impl Catalog {
                     }
                     self.changes.broad = broad;
                     self.changes.keyword_list = keyword_list;
+                    return Err(cause);
                 }
-                return Err(e);
+                // (a batch the rollback of which failed changed something and says not what: it makes a revision, so
+                // what is kept for the one before is dropped, and anything may have changed, as after an op of a
+                // wider reach)
+                self.changes.broad = made;
+                self.revision = made;
+                self.changes.seen = made;
+                return Err(CatalogError::PartlyApplied { cause: Box::new(cause), remaining: Box::new(Op::Batch { ops: left }) });
             }
         };
         self.revision += 1;
@@ -918,6 +958,7 @@ impl Catalog {
                 photo.trim_history();
                 let id = photo.id;
                 self.next_photo = self.next_photo.max(id.0.saturating_add(1));
+                shared::photo(&mut photo);
                 self.index.file_changed(id, None, file_path(&photo.source));
                 self.photos.insert(id, Arc::new(*photo));
                 self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
@@ -948,7 +989,7 @@ impl Catalog {
             }
             Op::SetDevelop { id, settings, label, edited } => {
                 let p = self.photo_mut(id)?;
-                let old = std::mem::replace(&mut p.develop, settings);
+                let old = std::mem::replace(&mut p.develop, shared::settings(settings));
                 let old_edit = std::mem::replace(&mut p.edited, edited);
                 Op::SetDevelop { id, settings: old, label, edited: old_edit }
             }
@@ -966,12 +1007,15 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetLocal { id, local: std::mem::replace(&mut p.local, local) }
             }
-            Op::SetVersions { id, versions } => {
+            Op::SetVersions { id, mut versions } => {
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).versions(&mut versions);
                 Op::SetVersions { id, versions: std::mem::replace(&mut p.versions, versions) }
             }
-            Op::SetHistory { id, history } => {
+            Op::SetHistory { id, mut history } => {
                 let p = self.photo_mut(id)?;
+                let own = shared::Anchor::new(p.develop.clone());
+                history.iter_mut().for_each(|s| own.step(s));
                 let old = std::mem::replace(&mut p.history, history);
                 let old_cursor = p.history_cursor;
                 p.trim_history();
@@ -981,8 +1025,9 @@ impl Catalog {
                     Op::Batch { ops: vec![Op::SetHistory { id, history: old }, Op::SetHistoryCursor { id, cursor: old_cursor }] }
                 }
             }
-            Op::PushHistory { id, step } => {
+            Op::PushHistory { id, mut step } => {
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).step(&mut step);
                 let old = p.history.clone();
                 let old_cursor = p.history_cursor.take();
                 // a new edit made from an earlier step drops the steps after it
@@ -1229,12 +1274,21 @@ impl Catalog {
                     match self.apply_inner(op) {
                         Ok(inv) => inverses.push(inv),
                         Err(e) => {
-                            // roll back what was applied
-                            for inv in inverses.into_iter().rev() {
-                                if self.apply_inner(inv).is_err() {
-                                    self.changes.torn = true;
+                            // roll back what was applied: first what a batch inside this one could not take back
+                            // (it was done last), then the inverses, newest first. A batch among them (the inverse
+                            // of one that went through) goes op by op, in the order it lists them: as a whole it would
+                            // stop at the first op that cannot go yet and be kept whole, to stop there again at the
+                            // retry, while its later ops (the one that makes the first possible) never ran.
+                            let mut todo = Vec::new();
+                            let leftover = std::mem::take(&mut self.changes.leftover);
+                            leftover.into_iter().chain(inverses.into_iter().rev()).for_each(|inv| unbatch(inv, &mut todo));
+                            let mut left = Vec::new();
+                            for inv in todo {
+                                if self.apply_inner(inv.clone()).is_err() {
+                                    left.push(inv);
                                 }
                             }
+                            self.changes.leftover = left;
                             return Err(e);
                         }
                     }
@@ -1310,10 +1364,11 @@ impl Catalog {
         // an empty table, which is always dangling, so the table being empty does not skip it.
         let grids = std::mem::take(&mut self.grids);
         let mut dangling = 0usize;
+        let mut done = ResolvedGrids::new();
         for p in self.photos.values_mut() {
             let photo = Arc::make_mut(p);
             for settings in photo.settings_holders_mut() {
-                dangling = resolve_grids(settings, &grids, dangling);
+                dangling = resolve_grids(settings, &grids, dangling, &mut done);
             }
         }
         if dangling > 0 {
@@ -1426,7 +1481,7 @@ impl Catalog {
         for (i, line) in lines.iter().enumerate() {
             match serde_json::from_str::<Op>(line) {
                 Ok(op) => {
-                    self.apply(op)?;
+                    self.replay_op(op)?;
                     n += 1;
                 }
                 Err(e) if i + 1 == lines.len() => {
@@ -1437,6 +1492,17 @@ impl Catalog {
             }
         }
         Ok(n)
+    }
+
+    /// Apply one op of a saved log: the one place that says which failures of a logged op are the log being replayed, not
+    /// damage (`Journal::open` and [`Self::replay`] both go through it). A batch that was only partly taken back when it
+    /// was applied is logged as it was ([`CatalogError::PartlyApplied`]) and fails the same way again, leaving the same
+    /// changes, so replaying it counts as done; any other error is the caller's to handle.
+    pub(crate) fn replay_op(&mut self, op: Op) -> Result<()> {
+        match self.apply(op) {
+            Ok(_) | Err(CatalogError::PartlyApplied { .. }) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn op_to_log_line(op: &Op) -> String {
@@ -1637,6 +1703,8 @@ mod tests_rule_order;
 mod tests_scale;
 #[cfg(test)]
 mod tests_search_text;
+#[cfg(test)]
+mod tests_shared;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]
