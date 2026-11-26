@@ -6,8 +6,6 @@
 //! bit-exact decoder round-trip tests. The raw image is stored in IFD0 (allowed by DNG 1.7 §"File Structure").
 
 use crate::{RawData, RawError, RawImage, Result, ljpeg, opcodes};
-// Keep shared RAW field types aligned; this TIFF source is unchanged across the pin.
-use craft_raw_tiff as craft_tiff;
 use craft_tiff::tags::{self as t, compression, photometric};
 use craft_tiff::writer::{rational, srational};
 use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
