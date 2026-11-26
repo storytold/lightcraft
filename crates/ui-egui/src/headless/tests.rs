@@ -731,7 +731,7 @@ fn adding_a_face_model_shows_its_terms_and_installs_only_once_accepted() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Photo > Detect Faces without the detector offers the download: the terms first, nothing fetched before they are
+/// Photo > Metadata > Detect Faces without the detector offers the download: the terms first, nothing fetched before they are
 /// accepted, and the model's row in Settings has its Download button.
 #[test]
 fn detect_faces_without_the_detector_offers_the_download_and_fetches_nothing_before_acceptance() {
@@ -4211,6 +4211,12 @@ fn import_copy_renames_into_destination() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The instant this machine reads as the tests' clock time: an undated file takes the file's
+/// date in the host's zone, so a fixed epoch would file it on the day before west of UTC.
+fn filed_at() -> u64 {
+    lightcraft_engine::import::local_instant("2026-01-14T05:58:48").and_then(|s| u64::try_from(s).ok()).unwrap_or(0)
+}
+
 /// Import review, Copy, Folders → Custom template…: the default `{date:%Y}/{date:%Y%m%d}`
 /// files copies under `2026/20260114/`, the example line shows the full destination, and a
 /// template that would climb out of the destination is refused.
@@ -4223,13 +4229,10 @@ fn import_copy_into_a_custom_folder_template() {
     let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40, 3, 9, 255]; 64] };
     let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(src.join("IMG_01.png"), png).unwrap();
-    // undated files are filed by the file's date (2026-01-14T05:58:48)
-    std::fs::File::options()
-        .write(true)
-        .open(src.join("IMG_01.png"))
-        .unwrap()
-        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
-        .unwrap();
+    // Undated files are filed by the file's date, read in the host's zone (issue #2284), so
+    // the file is pinned to the instant this machine reads as 2026-01-14T05:58:48.
+    let when = std::time::UNIX_EPOCH + Duration::from_secs(filed_at());
+    std::fs::File::options().write(true).open(src.join("IMG_01.png")).unwrap().set_modified(when).unwrap();
     let dest_s = dest.to_string_lossy().to_string();
     let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
     let mut session = lightcraft_engine::Session::with_demo().with_fs();
@@ -4282,12 +4285,8 @@ fn import_move_into_a_folder_template() {
         let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40 + i, 3, 9, 255]; 64] };
         let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(src.join(format!("IMG_0{i}.png")), png).unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(src.join(format!("IMG_0{i}.png")))
-            .unwrap()
-            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
-            .unwrap();
+        let when = std::time::UNIX_EPOCH + Duration::from_secs(filed_at());
+        std::fs::File::options().write(true).open(src.join(format!("IMG_0{i}.png"))).unwrap().set_modified(when).unwrap();
     }
     let dest_s = dest.to_string_lossy().to_string();
     let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
@@ -4700,7 +4699,7 @@ fn info_overlay_toasts_are_painted_in_the_users_language() {
     }
 }
 
-/// ⌘J opens View ▸ View Options; its menus choose Info 1's and Info 2's lines, Use Defaults puts
+/// ⌘J opens View ▸ Loupe Overlay ▸ View Options…; its menus choose Info 1's and Info 2's lines, Use Defaults puts
 /// them back, and `view.viewOptions` sets them for an agent (refusing a line it doesn't know).
 #[test]
 fn view_options_choose_the_info_overlay_lines() {

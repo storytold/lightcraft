@@ -20,6 +20,9 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
+/// The clock these tests run on; an undated file is pinned to it too (see `write_png`).
+const CLOCK: &str = "2026-01-14T05:58:48";
+
 /// A small procedural PNG (distinct per seed).
 fn write_png(path: &Path, seed: u8) {
     write_png_sized(path, seed, 48, 32);
@@ -32,8 +35,10 @@ fn write_png_sized(path: &Path, seed: u8, w: usize, h: usize) {
     let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
-    // undated files take the file's date: the tests' clock time (2026-01-14T05:58:48)
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    // Undated files take the file's date, read in the host's zone (issue #2284), so the file is
+    // pinned to the instant this machine reads as the tests' clock time rather than to a fixed one.
+    let secs = crate::import::local_instant(CLOCK).and_then(|s| u64::try_from(s).ok()).unwrap_or(0);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
@@ -61,7 +66,8 @@ fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Opti
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
     // Keep the same known file-date fallback as write_png, distinct from the regression timestamp.
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    let secs = crate::import::local_instant(CLOCK).and_then(|s| u64::try_from(s).ok()).unwrap_or(0);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 

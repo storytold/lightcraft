@@ -9,7 +9,7 @@ use super::{
 
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
-    heading(ui, t, crate::i18n::tr("Rendering"));
+    heading(ui, t, "Rendering");
     #[cfg(target_os = "windows")]
     check(ui, "settings.composeWindow", &mut app.ui.settings.compose_window, "Prevent G-SYNC/FreeSync flicker (applies at next launch)");
     check(ui, "settings.gpu", &mut app.ui.settings.gpu, "Use the GPU for rendering");
@@ -66,7 +66,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             "Remove Hot Pixels (Detail) leaves a raw unchanged when more than this share of its photosites would be replaced: such a photo doesn't look like hot pixels on a sensor.",
         ),
     );
-    heading(ui, t, crate::i18n::tr("Preview cache"));
+    heading(ui, t, "Preview cache");
     let cur = app.session.cache_mb;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
         let gb = lightcraft_engine::media::default_disk_cache_bytes(app.session.catalog.len()).div_ceil(1 << 30);
@@ -103,7 +103,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         }
     });
     background_prep(app, ui, t);
-    heading(ui, t, crate::i18n::tr("Local folders"));
+    heading(ui, t, "Local folders");
     row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
         let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
         let mut v = app.session.forget_local_days;
@@ -131,7 +131,7 @@ fn ai_masks(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if !lightcraft_engine::segment::Segmenter::AVAILABLE {
         return;
     }
-    heading(ui, t, crate::i18n::tr("AI masks"));
+    heading(ui, t, "AI masks");
     let current = app.session.segmenter.run_on().name();
     let mut run_on = current;
     if row(ui, t, "Run on", |ui| choices(ui, "settingsAiMasksRunOn", &[("auto", "Automatic (GPU when available)"), ("cpu", "CPU")], &mut run_on))
@@ -179,7 +179,7 @@ fn ai_masks(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// is made ready before the user gets to it (`prefs.backgroundPrep`), app-wide or for this library.
 fn background_prep(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::prep::{Mode, Scope};
-    heading(ui, t, crate::i18n::tr("Prepare photos in the background"));
+    heading(ui, t, "Prepare photos in the background");
     hint(
         ui,
         t,
@@ -279,7 +279,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if loc.is_null() {
         return;
     }
-    heading(ui, t, crate::i18n::tr("Smart previews"));
+    heading(ui, t, "Smart previews");
     let path = loc["path"].as_str().unwrap_or_default().to_string();
     let available = loc["available"].as_bool().unwrap_or(true);
     let custom = loc["custom"].as_bool().unwrap_or(false);
