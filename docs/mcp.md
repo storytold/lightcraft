@@ -353,7 +353,9 @@ until the export ends. EOF lets a pending export finish and preserves queued req
 photo, suppressing its response. Unknown/completed request ids are ignored. A photo already
 being processed finishes first: completed photos remain, each written with the existing atomic
 file writer, and there are no partial files to delete. Unrelated outputs and earlier exports
-are untouched. A failed export is an `isError` tool result. Transport mutexes recover poisoning.
+are untouched. In a headless batch export, a failed photo is listed as `{photo, file, error}` in
+`files` and later photos continue exporting. A failed single-photo export is an `isError` tool
+result. Transport mutexes recover poisoning.
 
 If a protocol write or flush fails, the CLI reports the output error and shuts down without
 waiting for stdin to close. Output failures are observable only when writing. An active direct

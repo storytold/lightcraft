@@ -85,6 +85,7 @@ impl Headless {
         let after = self.session.after_export(&opts)?;
         let items = prepare_batch(&mut self.session, &ids, &opts)?;
         let total = items.len();
+        let stop_on_error = total == 1;
         let mut hook = self.progress.take();
         let mut cancelled = false;
         let files = run_batch(
@@ -93,7 +94,7 @@ impl Headless {
             &Destination { dir: dir.to_string(), exact: exact.map(str::to_string) },
             write,
             &|path| Path::new(path).exists(),
-            true,
+            stop_on_error,
             &mut |done, name| {
                 cancelled = hook.as_mut().is_some_and(|h| !h(done, total, name));
                 !cancelled
@@ -105,8 +106,8 @@ impl Headless {
         if cancelled {
             return Err("cancelled".into());
         }
-        // Single-photo exports also report path/width/height at the top level (back-compat).
-        let mut out = files.first().cloned().unwrap_or_else(|| json!({}));
+        // Keep top-level fields for successful exports (back-compat), but don't promote a per-file error.
+        let mut out = files.first().filter(|file| file.get("error").is_none()).cloned().unwrap_or_else(|| json!({}));
         if let Some(photos) = after.run(&files, false) {
             out["applePhotos"] = photos;
         }
@@ -298,6 +299,38 @@ mod tests {
             .unwrap();
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue #4714: a missing original in a headless export is reported per file, and later photos still export.
+    #[test]
+    fn a_missing_original_does_not_stop_a_headless_batch_export() {
+        let base = std::env::temp_dir().join(format!("lc-mcp-missing-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (source, output) = (base.join("source"), base.join("output"));
+        std::fs::create_dir_all(&source).unwrap();
+
+        let mut h = Headless::demo();
+        let mut ids = Vec::new();
+        for (i, name) in ["missing.png", "before.png", "after.png"].into_iter().enumerate() {
+            let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[20 + i as u8, 3, 9, 255]; 64] };
+            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+            let path = source.join(name);
+            std::fs::write(&path, &png).unwrap();
+            let r = crate::call_tool(&mut h, "import", &json!({"paths": [path.to_string_lossy()]}));
+            assert!(!r.is_error, "{r:?}");
+            ids.push(h.session.catalog.photos().find(|p| p.file_name == name).unwrap().id.0);
+        }
+        std::fs::remove_file(source.join("missing.png")).unwrap();
+
+        let r = h.call("app.export", json!({"ids": ids, "dir": output.to_string_lossy(), "longEdge": 32, "format": "png"})).unwrap();
+        let files = r["files"].as_array().unwrap();
+        assert_eq!(files.len(), 3, "{r}");
+        assert!(files[0]["error"].as_str().is_some_and(|e| e.contains("missing.png")), "{r}");
+        assert!(r.get("error").is_none(), "{r}");
+        assert!(output.join("before.png").is_file(), "{r}");
+        assert!(output.join("after.png").is_file(), "{r}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// The export file-name template takes the Rename Photos tokens.
