@@ -79,6 +79,8 @@ fn mark_orf_preview_only(s: &mut Session) {
             id: p.id,
             width: p.width,
             height: p.height,
+            source_width: None,
+            source_height: None,
             file_size: p.file_size,
             content_hash: p.content_hash.clone(),
             preview_only: Some("Olympus compressed ORF".into()),
