@@ -147,6 +147,53 @@ fn session_without_file_access_refuses() {
     assert!(x.s.catalog.photo(x.id).unwrap().preview_only.is_some());
 }
 
+#[test]
+fn reload_without_a_file_reader_preserves_verified_facts() {
+    use crate::cmd::reload;
+    let mut x = library("reload-no-reader");
+    let before = x.s.catalog.photo(x.id).unwrap().clone();
+    x.s.media.file_probe = None;
+    let options = json!({"id": x.id.0});
+    let err = x.s.execute("photo.reload", &options).unwrap_err().to_string();
+    assert!(err.contains("no file access"), "{err}");
+
+    let items = reload::plan(&mut x.s, &options).unwrap();
+    let results = reload::probe(None, &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
+    assert!(results.iter().all(Result::is_err));
+    assert!(reload::apply(&mut x.s, items, results).unwrap().checked.is_empty());
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
+}
+
+#[test]
+fn rejected_recheck_does_not_supersede_an_older_reload() {
+    use crate::cmd::reload;
+    let mut x = checked_orf("rejected-batch");
+    let before = x.s.catalog.photo(x.id).unwrap().clone();
+    let mut another = (*before).clone();
+    another.id = x.s.catalog.alloc_photo_id();
+    another.captured = None;
+    another.source = lightcraft_catalog::Source::File { path: x.dir.join("other.orf").to_string_lossy().into() };
+    let other_id = another.id;
+    x.s.commit("Add", Op::AddPhoto { photo: Box::new(another) }).unwrap();
+
+    let older = reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap();
+    replace_checked_orf(&x.file);
+    let old = reload::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    let newer = recheck::stale(&mut x.s, true)
+        .into_iter()
+        .map(|item| {
+            let mut info = old.clone();
+            if item.id == other_id {
+                info.captured = Some("invalid capture date".into());
+            }
+            (item, Ok(info))
+        })
+        .collect();
+    assert!(recheck::apply(&mut x.s, newer).is_err());
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
+    assert_eq!(reload::apply(&mut x.s, older, vec![Ok(old)]).unwrap().reloaded, [x.id]);
+}
+
 /// Relinked copies must be checked independently, and must not receive their parent's file facts.
 #[test]
 fn relinked_copy_rechecks_its_own_file() {

@@ -33,8 +33,8 @@ pub struct Item {
 }
 
 impl Item {
-    /// Accept a successful read for the still-current members, returning its representative.
-    pub(crate) fn accept(&mut self, s: &mut Session) -> Option<PhotoId> {
+    /// Find a still-current representative without recording the read before its batch commits.
+    pub(crate) fn current_representative(&mut self, s: &Session) -> Option<PhotoId> {
         self.source_targets.retain(|id| {
             s.reload_tickets.valid(*id, self.ticket)
                 && s.catalog.photo(*id).is_some_and(|p| {
@@ -42,7 +42,7 @@ impl Item {
                 })
         });
         let id = *self.source_targets.first()?;
-        s.reload_tickets.accept(self.family, self.path.clone(), self.ticket).then_some(id)
+        s.reload_tickets.applied.get(&(self.family, self.path.clone())).is_none_or(|latest| *latest <= self.ticket).then_some(id)
     }
 }
 
@@ -80,16 +80,18 @@ impl Tickets {
     pub(crate) fn valid(&self, id: PhotoId, ticket: u64) -> bool {
         self.invalidated.get(&id).is_none_or(|cutoff| *cutoff < ticket)
     }
+}
 
-    /// Only a newer completed read of this family's file supersedes its result.
-    pub(crate) fn accept(&mut self, family: PhotoId, path: String, ticket: u64) -> bool {
-        let key = (family, path);
-        if self.applied.get(&key).is_some_and(|latest| *latest > ticket) {
-            return false;
+/// Supersede earlier reads after a successful batch, including a successful read with no
+/// changes. A partial rollback can leave new facts behind, so preserve their ordering too.
+pub(crate) fn finish_reads(tickets: &mut Tickets, accepted: Vec<Item>, result: Result<()>) -> Result<()> {
+    if result.is_ok() || matches!(result, Err(crate::EngineError::Catalog(lightcraft_catalog::CatalogError::PartlyApplied { .. }))) {
+        for item in accepted {
+            let latest = tickets.applied.entry((item.family, item.path)).or_default();
+            *latest = (*latest).max(item.ticket);
         }
-        self.applied.insert(key, ticket);
-        true
     }
+    result
 }
 
 /// The files `p` targets (`ids`, else the selection), grouped by family and path under a new
@@ -141,8 +143,7 @@ pub(crate) fn include_same_file_copies<'a>(catalog: &lightcraft_catalog::Catalog
     }
 }
 
-/// The session's file probe, to [`probe`] with on a worker thread (`None` in a session without file
-/// access, where a reload reads nothing but the file name, as the command does).
+/// The session's file probe, to [`probe`] with on a worker thread (`None` without file access).
 pub fn file_probe(s: &Session) -> Option<FileProbe> {
     s.media.file_probe.clone()
 }
@@ -156,11 +157,15 @@ pub fn probe(
     cancel: &AtomicBool,
     progress: &dyn Fn(usize),
 ) -> Vec<std::result::Result<ProbeInfo, String>> {
+    let Some(probe) = probe else {
+        progress(items.len());
+        return items.iter().map(|item| Err(format!("{}: this session has no file access", item.path))).collect();
+    };
     let paths: Vec<String> = items.iter().map(|i| i.path.clone()).collect();
     let done = AtomicUsize::new(0);
     #[cfg(not(target_arch = "wasm32"))]
     let r = std::thread::scope(|sc| {
-        let h = sc.spawn(|| crate::import::probe_all(probe, &paths, &done, cancel));
+        let h = sc.spawn(|| crate::import::probe_all(Some(probe), &paths, &done, cancel));
         while !h.is_finished() {
             progress(done.load(Ordering::Relaxed));
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -169,7 +174,7 @@ pub fn probe(
         h.join().unwrap_or_else(|_| paths.iter().map(|p| Err(format!("{p}: could not be read"))).collect())
     });
     #[cfg(target_arch = "wasm32")]
-    let r = crate::import::probe_all(probe, &paths, &done, cancel);
+    let r = crate::import::probe_all(Some(probe), &paths, &done, cancel);
     progress(done.load(Ordering::Relaxed));
     r
 }
@@ -198,16 +203,17 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
     let mut out = Reloaded::default();
     let mut results: Vec<_> = items.into_iter().zip(results).filter_map(|(item, info)| info.ok().map(|info| (item, info))).collect();
     include_same_file_copies(&s.catalog, results.iter_mut().map(|(item, _)| item));
+    let mut accepted = Vec::new();
     for (mut item, info) in results {
-        let Some(id) = item.accept(s) else { continue };
-        let selected: HashSet<_> = item.metadata_targets.into_iter().collect();
+        let Some(id) = item.current_representative(s) else { continue };
+        let selected: HashSet<_> = std::mem::take(&mut item.metadata_targets).into_iter().collect();
         crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.reloaded, item.source_targets.iter().copied(), |id| {
             selected.contains(&id)
         });
-        out.checked.extend(item.source_targets);
+        out.checked.extend(item.source_targets.iter().copied());
+        accepted.push(item);
     }
-    if !ops.is_empty() {
-        s.commit_with_read_invalidation("Reload Changed Files", Op::Batch { ops }, false)?;
-    }
+    let result = if ops.is_empty() { Ok(()) } else { s.commit_with_read_invalidation("Reload Changed Files", Op::Batch { ops }, false) };
+    finish_reads(&mut s.reload_tickets, accepted, result)?;
     Ok(out)
 }

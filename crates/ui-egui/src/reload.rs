@@ -37,14 +37,15 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
     }
     let count = items.len();
     let library = app.session.library_generation();
-    let probe = reload::file_probe(&app.session);
+    // Let the engine report an unavailable file reader before a task starts.
+    let probe = reload::file_probe(&app.session)?;
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
     let stopped = cancel.clone();
     let work = move |task: lightcraft_engine::activity::TaskHandle| {
         let total = items.len() as u64;
         task.progress(0, total);
-        let results = reload::probe(probe.as_ref(), &items, &flag, &|done| task.progress(done as u64, total));
+        let results = reload::probe(Some(&probe), &items, &flag, &|done| task.progress(done as u64, total));
         (items, results)
     };
     let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (items, results): (Vec<reload::Item>, _)| {

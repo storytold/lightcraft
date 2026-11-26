@@ -359,8 +359,11 @@ pub(crate) fn shares_reload_source(a: &lightcraft_catalog::Photo, b: &lightcraft
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::cmd::reload as r;
     let items = r::plan(s, p)?;
-    let probe = r::file_probe(s);
-    let results = r::probe(probe.as_ref(), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
+    if items.is_empty() {
+        return Ok(r::Reloaded::default().to_json());
+    }
+    let probe = r::file_probe(s).ok_or_else(|| bad("photo.reload", "this session has no file access"))?;
+    let results = r::probe(Some(&probe), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
     Ok(r::apply(s, items, results)?.to_json())
 }
 

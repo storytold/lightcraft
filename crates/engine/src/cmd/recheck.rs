@@ -72,18 +72,21 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
     let mut out = Rechecked::default();
     let mut results: Vec<_> = results.into_iter().filter_map(|(item, info)| info.ok().map(|info| (item, info))).collect();
     super::reload::include_same_file_copies(&s.catalog, results.iter_mut().map(|(item, _)| item));
+    let mut accepted = Vec::new();
     for (mut item, info) in results {
-        let Some(id) = item.accept(s) else { continue };
+        let Some(id) = item.current_representative(s) else { continue };
         let first = out.updated.len();
-        let selected: std::collections::HashSet<_> = item.metadata_targets.into_iter().collect();
-        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.updated, item.source_targets, |id| selected.contains(&id));
+        let selected: std::collections::HashSet<_> = std::mem::take(&mut item.metadata_targets).into_iter().collect();
+        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.updated, item.source_targets.iter().copied(), |id| {
+            selected.contains(&id)
+        });
         if info.preview_only.is_none() {
             out.cleared.extend(out.updated[first..].iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.preview_only.is_some())));
         }
+        accepted.push(item);
     }
-    if !ops.is_empty() {
-        s.apply_system(Op::Batch { ops })?;
-    }
+    let result = if ops.is_empty() { Ok(()) } else { s.apply_system(Op::Batch { ops }) };
+    super::reload::finish_reads(&mut s.reload_tickets, accepted, result)?;
     out.cleared.retain(|id| s.catalog.photo(*id).is_some_and(|p| p.develops_raw()));
     for id in &out.updated {
         s.media.forget(*id);
