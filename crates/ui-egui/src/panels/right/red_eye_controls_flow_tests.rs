@@ -818,3 +818,28 @@ fn red_eye_actual_parent_post_selection_immediate_enter_belongs_to_observed_catc
     assert_eq!(serde_json::to_value(f.app.session.catalog.photo(f.photos[0]).unwrap()).unwrap(), before["photos"][0]);
     f.idle();
 }
+
+/// Reset Edits commits while a pupil-size drag is open: invalidating the drag afterwards gives the
+/// live preview up and keeps the reset, rather than restoring the settings from before it
+/// (CodeRabbit #4750, t10).
+#[test]
+fn red_eye_invalidated_drag_keeps_an_edit_committed_after_its_snapshot() {
+    let mut f = Fixture::new(1, true);
+    let undo = f.app.session.undo.len();
+    let end = f.begin_drag(PUPIL, 0.71);
+    assert!(f.app.session.interaction.is_some(), "a real drag is open; trace={:#?}", f.trace);
+    f.app.run("develop.reset", json!({})).unwrap();
+    let reset = f.develop();
+    assert!(reset.red_eye.is_empty(), "the committed reset took the correction the drag was on");
+    let steps = f.app.session.undo.len();
+    assert_eq!(steps, undo + 1, "the reset is one committed step");
+    // The correction the drag owned is gone, so the panel invalidates the drag.
+    f.settle();
+    assert_eq!(f.develop(), reset, "the invalidation keeps what the committed reset left, not the drag's snapshot");
+    assert_eq!(f.app.session.undo.len(), steps, "invalidating the drag adds no step");
+    assert!(f.app.session.interaction.is_none() && f.app.ui.dragging_control.is_none());
+    let before = f.document();
+    f.pointer(end, false);
+    assert_eq!(f.document(), before, "the old drag release is inert");
+    f.idle();
+}

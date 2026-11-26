@@ -199,6 +199,19 @@ pub struct Interaction {
     /// photo shows was fitted by Constrain Crop, and the final commit starts again from the original
     /// crop, so Auto Sync carries the edit and not the active photo's fitted crop.
     pub crop_edited: bool,
+    /// The photo was edited by a committed command while the interaction was open (Reset Edits,
+    /// say): the snapshot is older than that edit, so cancelling the interaction keeps it rather
+    /// than bringing back the settings from before it.
+    pub superseded: bool,
+}
+
+/// Whether `op` sets photo `id`'s develop settings, itself or inside a batch.
+fn sets_develop(op: &Op, id: PhotoId) -> bool {
+    match op {
+        Op::SetDevelop { id: target, .. } => *target == id,
+        Op::Batch { ops } => ops.iter().any(|op| sets_develop(op, id)),
+        _ => false,
+    }
 }
 
 /// The most photos an edit may touch for the view to follow it photo by photo; a larger edit is worked out whole.
@@ -665,6 +678,13 @@ impl Session {
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
         let inv = self.apply_through(op, Catalog::apply_new)?;
+        // A committed edit of the photo a drag is previewing comes after the drag's snapshot: it is
+        // not restored over when the drag is cancelled (CodeRabbit #4750).
+        if let Some(i) = &mut self.interaction
+            && sets_develop(&fwd, i.photo)
+        {
+            i.superseded = true;
+        }
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -1144,7 +1164,7 @@ impl Session {
             self.apply_silent(Op::SetDevelop { id, settings: Arc::new(on), label: label.into(), edited: original_edited.clone() })?;
         }
         let original = self.develop_of(id).unwrap_or_default();
-        self.interaction = Some(Interaction { label: label.into(), photo: id, original, original_edited, crop_edited: false });
+        self.interaction = Some(Interaction { label: label.into(), photo: id, original, original_edited, crop_edited: false, superseded: false });
         Ok(())
     }
 
@@ -1171,7 +1191,11 @@ impl Session {
     }
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
-        if let Some(i) = self.interaction.take() {
+        // A snapshot an edit was committed over is not the photo's: the drag's preview is given up
+        // and that edit stays (CodeRabbit #4750).
+        if let Some(i) = self.interaction.take()
+            && !i.superseded
+        {
             self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: i.original_edited })?;
         }
         Ok(())

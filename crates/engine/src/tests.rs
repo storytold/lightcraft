@@ -2312,6 +2312,29 @@ mod interaction_edit_metadata {
         assert_eq!(s.undo.len(), undo);
     }
 
+    /// An edit committed while a drag is open (Reset Edits, say) is newer than the drag's snapshot:
+    /// cancelling the drag gives the live preview up and keeps that edit, rather than restoring the
+    /// settings from before it (CodeRabbit #4750).
+    #[test]
+    fn cancel_after_a_committed_edit_keeps_that_edit() {
+        let (mut s, ids) = fixture(None);
+        // a committed edit the drag starts from, so the reset below is a third, distinct state
+        set(&mut s, 1.75);
+        let before = records(&s, ids);
+        let (undo, redo) = (s.undo.len(), s.redo.len());
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        set(&mut s, 0.25);
+        assert_eq!(s.undo.len(), undo, "live updates are not Undo entries");
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = records(&s, ids);
+        assert_ne!(reset[0]["develop"], before[0]["develop"], "the committed edit actually replaced the settings");
+        assert_eq!(s.undo.len(), undo + 1, "Reset is one committed step");
+        s.execute("develop.cancelInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), reset, "Cancel keeps what the committed edit left, not the drag's snapshot");
+        assert_eq!((s.undo.len(), s.redo.len()), (undo + 1, redo), "Cancel adds neither Undo nor Redo entries");
+        assert!(s.interaction.is_none());
+    }
+
     #[test]
     fn release_undo_redo_restore_prior_some_timestamp_and_complete_photos() {
         release_undo_redo(Some(PRIOR));

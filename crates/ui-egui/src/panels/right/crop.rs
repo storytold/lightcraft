@@ -823,7 +823,9 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             && let Some(gesture) = &gesture
         {
             // Cancel only the exact engine interaction this adapter began. A
-            // foreign interaction with the same control name is not ours.
+            // foreign interaction with the same control name is not ours. The engine
+            // keeps an edit committed after the drag's snapshot (Reset Edits run
+            // mid-drag) instead of restoring over it.
             if owns(app, gesture) {
                 let _ = app.run("develop.cancelInteraction", json!({}));
                 app.ui.dragging_control = None;
