@@ -277,3 +277,39 @@ fn no_match_enter_keeps_search_ready_and_escape_preserves_the_existing_choice() 
     assert_eq!(f.value, Some(3));
     assert_eq!(f.changes, 0);
 }
+
+/// The keyboard's highlight is the album, not its place: a caller that reorders the albums between
+/// frames cannot make Enter pick another one, and Enter picks nothing when the highlighted album
+/// has gone or become blocked.
+#[test]
+fn keyboard_highlight_follows_its_album_through_a_reorder_and_a_blocking() {
+    let mut f = Frames::new();
+    f.open();
+    f.frame(vec![Event::Text("same".to_owned())]);
+    f.settle();
+    // 2, 3 and 5 can be picked (4 would make an album cycle): ↓ highlights the second of them
+    f.key(Key::ArrowDown);
+    f.entries.swap(2, 4); // the caller reorders: album 5 now sits where album 3 did
+    f.settle();
+    f.key(Key::Enter);
+    assert_eq!(f.value, Some(3), "Enter picks the highlighted album, not the one that took its place");
+    assert_eq!(f.changes, 1);
+
+    let mut f = Frames::new();
+    f.open();
+    f.frame(vec![Event::Text("same".to_owned())]);
+    f.settle();
+    f.key(Key::ArrowDown);
+    f.entries[2].blocked = Some("Would create an album cycle".to_owned()); // album 3 can't be picked now
+    f.settle();
+    f.key(Key::Enter);
+    assert_eq!(f.value, None, "the highlighted album became blocked: Enter picks nothing rather than its neighbour");
+    assert_eq!(f.changes, 0);
+    assert!(f.has("albumPickerSearch:fixture"), "the popup stays open, ready for another choice");
+    // the same album is highlighted again once it can be picked
+    f.entries[2].blocked = None;
+    f.settle();
+    f.key(Key::Enter);
+    assert_eq!(f.value, Some(3), "Enter picks the album still highlighted");
+    assert_eq!(f.changes, 1);
+}

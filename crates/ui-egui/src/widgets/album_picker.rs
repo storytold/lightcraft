@@ -178,8 +178,10 @@ pub fn search(entries: &[AlbumEntry], query: &str) -> Vec<usize> {
 struct State {
     query: String,
     open: Vec<u64>,
-    /// The highlighted search result (↑ / ↓, Enter).
-    highlight: usize,
+    /// The highlighted search result, by album id (`None`: the first result that can be picked).
+    /// An id, not a place in the list: a caller may reorder the albums between frames, and Enter
+    /// picks the album that was highlighted, never another one that took its place.
+    highlight: Option<u64>,
     focus: bool,
     popup_open: bool,
 }
@@ -316,7 +318,7 @@ impl<'a> AlbumPicker<'a> {
                     state.focus = false;
                 }
                 if state.query != before {
-                    state.highlight = 0;
+                    state.highlight = None;
                 }
                 // `scroll`: bring the row into view (the arrow keys just moved to it); never every frame,
                 // which would fight the mouse wheel
@@ -404,13 +406,25 @@ impl<'a> AlbumPicker<'a> {
                                 )
                             })
                         };
+                        // Where the highlighted album sits in this pass's results: its own id, so a
+                        // reorder never moves the highlight; the first result when none is stored;
+                        // nowhere when the album it names has gone or become blocked.
+                        let at = match state.highlight {
+                            None => Some(0),
+                            Some(id) => pickable.iter().position(|&i| entries[i].id == id),
+                        };
                         if down {
-                            state.highlight = (state.highlight + 1).min(pickable.len().saturating_sub(1));
+                            let p = at.map_or(0, |p| (p + 1).min(pickable.len().saturating_sub(1)));
+                            state.highlight = pickable.get(p).map(|&i| entries[i].id);
                         }
                         if up {
-                            state.highlight = state.highlight.saturating_sub(1);
+                            let p = at.map_or(0, |p| p.saturating_sub(1));
+                            state.highlight = pickable.get(p).map(|&i| entries[i].id);
                         }
-                        let highlighted = pickable.get(state.highlight).copied();
+                        let highlighted = match state.highlight {
+                            None => pickable.first().copied(),
+                            Some(id) => pickable.iter().position(|&i| entries[i].id == id).map(|p| pickable[p]),
+                        };
                         if enter {
                             match highlighted {
                                 Some(i) => picked = Some(entries[i].id),
