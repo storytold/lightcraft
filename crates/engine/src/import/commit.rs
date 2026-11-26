@@ -239,9 +239,11 @@ fn ready_duplicate(
         _ => false,
     });
     let relocate = !pending
-        && !same_path
         && opts.on_deleted == OnDeleted::Restore
         && photo.is_some_and(|p| p.deleted && trashed_file_differs(p, ready.info.content_hash.as_deref(), checks.get(&id)));
+    if relocate && same_path {
+        return PreparedItem::Failed(ready.path, format!("the verified output at {} changed before Restore", ready.stored));
+    }
     if !relocate
         && !same_path
         && let Some(placed) = &ready.placed
@@ -362,7 +364,6 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                             continue;
                         }
                         if !report.restored.contains(&id.0) {
-                            ops.push(Op::SetDeleted { id, deleted: false });
                             let relink = match restore {
                                 RestoreTarget::Relink => true,
                                 RestoreTarget::Keep => false,
@@ -373,6 +374,14 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                                             .is_some_and(|p| trashed_file_differs(p, hash.as_deref(), prepared.restore_checks.get(&id)))
                                 }
                             };
+                            if relink
+                                && let Some(Source::File { path: existing }) = s.catalog.photo(id).map(|p| &p.source)
+                                && same_import_file(existing, &path)
+                            {
+                                report.failed.push((path, "the file changed before Restore".into()));
+                                continue;
+                            }
+                            ops.push(Op::SetDeleted { id, deleted: false });
                             if relink
                                 && !s.catalog.photos().any(|p| p.id != id && matches!(&p.source, Source::File { path: held } if *held == path))
                             {

@@ -363,7 +363,10 @@ impl ImportJob {
         for (f, verdict) in files.into_iter().zip(verdicts) {
             match self.by_path.get(f.as_str()).cloned() {
                 // A known deleted path is only a candidate. Its bytes might belong to another photo now.
-                Some((id, _, _)) if !local && self.restore_sources.contains_key(&id) => todo.push(f),
+                Some((id, _, _)) if !local && self.restore_sources.contains_key(&id) => {
+                    self.cache.remove(&f);
+                    todo.push(f);
+                }
                 Some((id, true, hash)) if !local => match verdict {
                     // ✕ before its size was looked at: nothing is decided about it, so it isn't promoted
                     Some(BrowsedFile::Unchecked) => {}
