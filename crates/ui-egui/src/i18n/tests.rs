@@ -22,7 +22,6 @@ fn languages_switch_persist_and_keep_user_values() {
         app.run(&command, serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, locale);
         assert_eq!(language(), locale);
-        assert_eq!(crate::menubar::checked(&app, &command), Some(true));
         assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
         assert_eq!(builtin_label("Warm Glow", true), locale.tr("Warm Glow"));
         assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
@@ -369,7 +368,308 @@ fn translated_catalogs_do_not_use_missing_menu_triangles() {
     }
 }
 
-/// The language menu covers every language, and a language's own command selects it.
+/// The string literals of non-test code in `src`, with the line each starts on. Code under
+/// `#[cfg(test)]` and comments are left out; escapes are decoded where they matter here (`\u{…}`,
+/// line continuations).
+fn string_literals(src: &str) -> Vec<(usize, String)> {
+    let chars: Vec<char> = src.chars().collect();
+    let at = |i: usize| chars.get(i).copied().unwrap_or('\0');
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    // where the inside of a `#[cfg(…)]` or `#![cfg(…)]` attribute starts; other attributes are read
+    // as code, so the strings in `#[error("…")]` and `#[cfg_attr(…, error("…"))]` are checked
+    let cfg_start = |i: usize| {
+        let open = if at(i) == '#' && at(i + 1) == '[' {
+            i + 2
+        } else if at(i) == '#' && at(i + 1) == '!' && at(i + 2) == '[' {
+            i + 3
+        } else {
+            return None;
+        };
+        let name = (open..chars.len()).find(|&j| !chars[j].is_whitespace())?;
+        let paren = (name + 3..chars.len()).find(|&j| !chars[j].is_whitespace())?;
+        (chars[name..].starts_with(&['c', 'f', 'g']) && chars[paren] == '(').then_some(open)
+    };
+    // whether `test` is one of the top-level conditions of an `all(…)`: `all(unix, any(test, …))`
+    // can ship without it
+    let all_has_test = |args: &str| {
+        let (mut level, mut from) = (0, 0);
+        for (k, ch) in args.char_indices().chain([(args.len(), ',')]) {
+            match ch {
+                '(' => level += 1,
+                ')' => level -= 1,
+                ',' if level == 0 => {
+                    if &args[from..k] == "test" {
+                        return true;
+                    }
+                    from = k + 1;
+                }
+                _ => {}
+            }
+        }
+        false
+    };
+    let (mut out, mut i, mut line) = (Vec::new(), 0, 1);
+    let (mut depth, mut test_depth, mut pending_test) = (0usize, None, false);
+    while i < chars.len() {
+        let c = chars[i];
+        let raw_start = if c == 'r' {
+            Some(i + 1)
+        } else if c == 'b' && at(i + 1) == 'r' {
+            Some(i + 2)
+        } else {
+            None
+        };
+        let raw_hashes = raw_start.filter(|_| i == 0 || !ident(at(i - 1))).and_then(|start| {
+            let hashes = chars[start..].iter().take_while(|&&h| h == '#').count();
+            (at(start + hashes) == '"').then_some((start, hashes))
+        });
+        if c == '\n' {
+            line += 1;
+            i += 1;
+        } else if c == '/' && at(i + 1) == '/' {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && at(i + 1) == '*' {
+            skip_block_comment(&chars, &mut i, &mut line);
+        } else if let Some(start) = cfg_start(i) {
+            // `#[cfg(test)]` (spaces allowed) and `#[cfg(all(test, …))]` mark the next item as test
+            // code up to its `;` or through its body, `#![cfg(test)]` the rest of the file;
+            // `cfg(any(test, …))` code can ship, so it stays
+            let mut end = start;
+            let mut nested = 1;
+            while end < chars.len() && nested > 0 {
+                nested = match chars[end] {
+                    '[' => nested + 1,
+                    ']' => nested - 1,
+                    _ => nested,
+                };
+                line += usize::from(chars[end] == '\n');
+                end += 1;
+            }
+            let attr: String = chars[start..end.saturating_sub(1)].iter().filter(|ch| !ch.is_whitespace()).collect();
+            let all_test = attr.strip_prefix("cfg(all(").and_then(|rest| rest.strip_suffix("))")).is_some_and(all_has_test);
+            if attr == "cfg(test)" || all_test {
+                if c == '#' && at(i + 1) == '!' {
+                    break;
+                }
+                pending_test = true;
+            }
+            i = end;
+        } else if let Some((start, hashes)) = raw_hashes {
+            let (first, mut text) = (line, String::new());
+            i = start + hashes + 1;
+            while i < chars.len() && !(chars[i] == '"' && chars[i + 1..].iter().take(hashes).filter(|&&h| h == '#').count() == hashes) {
+                line += usize::from(chars[i] == '\n');
+                text.push(chars[i]);
+                i += 1;
+            }
+            i += 1 + hashes;
+            if test_depth.is_none() && !pending_test {
+                out.push((first, text));
+            }
+        } else if c == '"' {
+            let first = line;
+            let text = quoted_literal(&chars, &mut i, &mut line);
+            if test_depth.is_none() && !pending_test {
+                out.push((first, text));
+            }
+        } else if c == '\'' {
+            // a char literal ('"', '\'', '{') or a lifetime ('a)
+            i += if at(i + 1) == '\\' {
+                chars[i + 3..].iter().position(|&q| q == '\'').map_or(1, |end| end + 4)
+            } else if at(i + 2) == '\'' {
+                3
+            } else {
+                1
+            };
+        } else {
+            match c {
+                '{' => {
+                    depth += 1;
+                    if pending_test && test_depth.is_none() {
+                        test_depth = Some(depth);
+                    }
+                    pending_test = false;
+                }
+                '}' => {
+                    if test_depth == Some(depth) {
+                        test_depth = None;
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                ';' => pending_test = false,
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Skips the block comment (nested ones too) that starts at `chars[*i]`, counting its lines.
+fn skip_block_comment(chars: &[char], i: &mut usize, line: &mut usize) {
+    let at = |k: usize| chars.get(k).copied().unwrap_or('\0');
+    let mut nested = 0;
+    while *i < chars.len() {
+        if chars[*i] == '/' && at(*i + 1) == '*' {
+            nested += 1;
+            *i += 2;
+        } else if chars[*i] == '*' && at(*i + 1) == '/' {
+            nested -= 1;
+            *i += 2;
+            if nested == 0 {
+                break;
+            }
+        } else {
+            *line += usize::from(chars[*i] == '\n');
+            *i += 1;
+        }
+    }
+}
+
+/// The text of the `"…"` literal that starts at `chars[*i]`, with `\u{…}`, line continuations and
+/// other escapes decoded; `*i` ends past its closing quote.
+fn quoted_literal(chars: &[char], i: &mut usize, line: &mut usize) -> String {
+    let at = |k: usize| chars.get(k).copied().unwrap_or('\0');
+    let mut text = String::new();
+    *i += 1;
+    while *i < chars.len() && chars[*i] != '"' {
+        if chars[*i] != '\\' {
+            *line += usize::from(chars[*i] == '\n');
+            text.push(chars[*i]);
+            *i += 1;
+            continue;
+        }
+        match at(*i + 1) {
+            '\n' => {
+                *line += 1;
+                *i += 2;
+                while at(*i).is_whitespace() {
+                    *line += usize::from(at(*i) == '\n');
+                    *i += 1;
+                }
+            }
+            'u' => {
+                let hex: String = chars[*i + 3..].iter().take_while(|&&h| h != '}').collect();
+                text.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                *i += 4 + hex.len();
+            }
+            escaped => {
+                text.push(escaped);
+                *i += 2;
+            }
+        }
+    }
+    *i += 1;
+    text
+}
+
+#[test]
+fn string_literals_skip_comments_tests_and_char_literals() {
+    let src = r##"// "a"
+fn f() { let q = '"'; let e = '\''; let s = "one ▸ \"two\""; }
+/* "b" */ const R: &str = r#"raw "x""#;
+fn g<'a>(x: &'a str) -> &'a str { "long \
+  line \u{2192}" }
+#[cfg(test)]
+mod tests { fn t() { "test"; } }
+const Z: &str = "after";
+#[ cfg( test ) ] fn spaced() { "test"; }
+#[cfg(all(unix, test))] fn both() { "test"; }
+#[cfg(any(test, feature = "x"))] fn either() { "either"; }
+#[error("shown")] struct E;
+#[cfg(all(unix, any(test, feature = "y")))] fn nested() { "nested"; }
+#[cfg(all(test, not(feature = "y")))] fn negated() { "test"; }
+#[cfg(test)] const SYMBOL: &str = "test";
+const KEPT: &str = "kept";
+#[cfg_attr(feature = "y", error("conditional"))] struct C;
+#![cfg(test)]
+fn rest() { "test"; }"##;
+    let found = string_literals(src);
+    let found: Vec<(usize, &str)> = found.iter().map(|(line, text)| (*line, text.as_str())).collect();
+    let expected = [
+        (2, "one ▸ \"two\""),
+        (3, "raw \"x\""),
+        (4, "long line →"),
+        (8, "after"),
+        (11, "either"),
+        (12, "shown"),
+        (13, "nested"),
+        (16, "kept"),
+        (17, "y"),
+        (17, "conditional"),
+    ];
+    assert_eq!(found, expected);
+}
+
+/// Every symbol in the interface's own text has a glyph (issue #1950: ▸ showed as a box in the
+/// English strings, which untranslated messages fall back to). Checked on the string literals of
+/// the code, not just the catalogs, with the fonts the build installs: a build without craft-fonts
+/// checks Inter and egui's own fonts alone, so a symbol can't lean on a CJK face. Letters and the
+/// full-width forms only CJK text uses are `catalog_characters_are_paintable`'s business.
+/// Test code is left out: `tests/` directories, files named `tests.rs`, `tests_*.rs` or
+/// `*_tests.rs`, and items under `#[cfg(test)]` or `#[cfg(all(test, …))]`. A string only a test
+/// uses belongs in one of those, or it is checked like interface text.
+#[test]
+fn source_strings_use_paintable_symbols() {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(crate::theme::font_definitions(lightcraft_engine::CRAFT_FONTS));
+    let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+    out.textures_delta.clear();
+    let cjk_only = |ch: char| matches!(ch, '\u{3000}'..='\u{303f}' | '\u{ff00}'..='\u{ffef}');
+    // noncharacters are sentinels (an IndexedDB key range's end), never shown
+    let text = |ch: char| u32::from(ch) & 0xfffe != 0xfffe && !matches!(ch, '\u{fdd0}'..='\u{fdef}') && !ch.is_control();
+    let checked = |ch: &char| !ch.is_ascii() && !ch.is_whitespace() && !ch.is_alphanumeric() && !cjk_only(*ch) && text(*ch);
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    for group in ["crates", "apps"] {
+        for krate in std::fs::read_dir(root.join(group)).unwrap() {
+            let mut dirs = vec![krate.unwrap().path().join("src")];
+            while let Some(dir) = dirs.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+                for entry in entries {
+                    let path = entry.unwrap().path();
+                    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string();
+                    if path.is_dir() {
+                        if name != "tests" {
+                            dirs.push(path);
+                        }
+                    } else if name.ends_with(".rs") && !name.starts_with("tests_") && !name.ends_with("_tests.rs") && name != "tests.rs" {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    }
+    assert!(files.len() > 100, "found the workspace's sources ({} files)", files.len());
+    let mut texts: Vec<(String, String)> = Vec::new();
+    for path in &files {
+        let src = std::fs::read_to_string(path).unwrap();
+        let shown = path.strip_prefix(&root).unwrap_or(path).display().to_string();
+        texts.extend(string_literals(&src).into_iter().map(|(line, text)| (format!("{shown}:{line}"), text)));
+    }
+    // What's New as the dialog shows it
+    for line in crate::panels::dialogs::WHATS_NEW.lines().map(str::trim) {
+        let line = line.strip_prefix("### ").or_else(|| line.strip_prefix("## ")).or_else(|| line.strip_prefix("- ")).unwrap_or(line);
+        texts.push(("docs/whats-new.md".into(), crate::panels::dialogs::whats_new_line(line)));
+    }
+    let font = egui::FontId::new(13.0, egui::FontFamily::Proportional);
+    let mut missing: Vec<String> = Vec::new();
+    ctx.fonts_mut(|fonts| {
+        for (place, text) in &texts {
+            for ch in text.chars().filter(checked) {
+                if !fonts.has_glyph(&font, ch) {
+                    missing.push(format!("{place}: {ch:?} (U+{:04X})", u32::from(ch)));
+                }
+            }
+        }
+    });
+    missing.dedup();
+    assert!(missing.is_empty(), "symbols no UI font has (they paint as boxes):\n{}", missing.join("\n"));
+}
+
+/// Every language has a command, and a language's own command selects it.
 #[test]
 fn language_commands_cover_every_language() {
     let commands = [
@@ -392,11 +692,11 @@ fn language_commands_cover_every_language() {
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
     ];
-    // One command per language, and every command reachable from the menu table.
+    // One command per language, and every command in the UI command tables.
     assert_eq!(commands.len(), Locale::ALL.len());
     for (id, language) in commands {
         assert_eq!(crate::menus::language_from_command(id), Some(language), "{id}");
-        assert!(crate::menus::ui_commands().any(|command| command.0 == id), "{id} is not in the menu");
+        assert!(crate::menus::ui_commands().any(|command| command.0 == id), "{id} is not a UI command");
     }
     assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
     assert_eq!(crate::menus::language_from_command("view.detail"), None);
@@ -586,7 +886,6 @@ fn german_switches_via_menu_and_control_and_persists() {
     app.run("app.language.german", serde_json::json!({})).unwrap();
     assert_eq!(app.ui.language, Locale::De);
     assert_eq!(language(), Locale::De);
-    assert_eq!(crate::menubar::checked(&app, "app.language.german"), Some(true));
     let saved = serde_json::to_string(&app.ui).unwrap();
     assert!(saved.contains(r#""language":"de""#));
     assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::De);
@@ -887,8 +1186,6 @@ fn traditional_chinese_switches_through_menu_and_control_and_persists() {
     assert_eq!(source_label(lightcraft_engine::LibrarySource::All, &app.session.catalog), Locale::ZhHant.tr("All Photos"));
     assert_eq!(date_group_label("", false), Locale::ZhHant.tr("Unknown Date"));
     assert_eq!(display_time("a-user-value"), "a-user-value");
-    assert_eq!(crate::menubar::checked(&app, "app.language.traditionalChinese"), Some(true));
-    assert_eq!(crate::menubar::checked(&app, "app.language.english"), Some(false));
     assert_eq!(tr("my-photo.jpg"), "my-photo.jpg");
     for id in ["album.addPhotos", "metadata.applyPreset", "label.applySet"] {
         assert_eq!(crate::menubar::display_item_label(id, &serde_json::json!({"id": 1}), "Color"), "Color");
@@ -1275,7 +1572,6 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     app.run("app.language.polish", serde_json::json!({})).unwrap();
     assert_eq!(app.ui.language, Locale::Pl);
     assert_eq!(Locale::Pl.name(), "Polski");
-    assert_eq!(crate::menubar::checked(&app, "app.language.polish"), Some(true));
     assert_eq!(tr("File"), "Plik");
     assert_eq!(tr("Exposure"), "Ekspozycja");
     assert_eq!(date_group_label("2026-09-20", false), "Niedziela, 20.09.2026");

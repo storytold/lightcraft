@@ -1,6 +1,8 @@
 //! JPEG XL encoder adapter to the shared `craft-jxl` codec.
 
-use crate::encode::{EncodeImage, EncodeMeta, Samples};
+#[cfg(feature = "jxl")]
+use crate::encode::Samples;
+use crate::encode::{EncodeImage, EncodeMeta};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +62,7 @@ impl Default for JxlOptions {
 }
 
 /// Encode JPEG XL while preserving LightCraft's public option and metadata types.
+#[cfg(feature = "jxl")]
 pub fn encode_jxl(image: &EncodeImage, options: &JxlOptions, metadata: &EncodeMeta) -> Result<Vec<u8>> {
     image.validate()?;
     let layout = match image.channels {
@@ -96,4 +99,10 @@ pub fn encode_jxl(image: &EncodeImage, options: &JxlOptions, metadata: &EncodeMe
         xmp: metadata.xmp.map(|packet| packet.as_bytes().to_vec()),
     };
     craft_jxl::encode(&image, options, &metadata).map_err(|error| Error::Encode(error.to_string()))
+}
+
+/// Return an encoding error when the JPEG XL codec was disabled at build time.
+#[cfg(not(feature = "jxl"))]
+pub fn encode_jxl(_image: &EncodeImage, _options: &JxlOptions, _metadata: &EncodeMeta) -> Result<Vec<u8>> {
+    Err(Error::Encode("JPEG XL encoding is not included in this build".into()))
 }
