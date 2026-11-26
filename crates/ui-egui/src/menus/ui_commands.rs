@@ -75,6 +75,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.focusPoint", "Focus Point", Some("Alt+F"), "View"),
     ("view.zoomToFocus", "Zoom to Focus Point", None, "View"),
+    ("view.reduceMotion", "Reduce Motion", None, ""),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
     ("compare.swap", "Swap Compare Photos", None, "View"),
@@ -156,6 +157,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Edit Keyword Tag for the keyword picked in the Keyword List
     ("panel.editKeywords", "Edit Keywords", Some("Cmd+Shift+K"), ""),
     ("panel.activity", "History", None, "Window"),
+    ("panel.bursts", "Bursts", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it
     ("section.light", "Light", Some("Cmd+1"), "Window>Edit Sections"),

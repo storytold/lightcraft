@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bursts;
 pub mod dates;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
@@ -714,20 +715,44 @@ impl Catalog {
 
     /// Whether every change since the catalog was at `revision` is remembered photo by photo.
     fn remembers(&self, revision: u64) -> bool {
-        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor && self.changes.broad <= revision
+        self.remembers_photos(revision) && self.changes.broad <= revision
+    }
+
+    /// Whether every change to a photo since the catalog was at `revision` is remembered.
+    fn remembers_photos(&self, revision: u64) -> bool {
+        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor
     }
 
     /// The photos changed, added or removed since the catalog was at `revision`, each once. `None` when that is not
     /// known: an op since then changed more than photos of its own, or it was too long ago. Then anything may
     /// have changed.
     pub fn touched_since(&self, revision: u64) -> Option<Vec<PhotoId>> {
-        if !self.remembers(revision) {
-            return None;
-        }
-        let mut ids: Vec<PhotoId> = self.changes.touched.iter().filter(|(r, _, _)| *r > revision).map(|(_, id, _)| *id).collect();
+        self.remembers(revision).then(|| self.touched_after(revision, Aspects::ALL))
+    }
+
+    /// The photos whose `reads` (what a tally reads of them) changed since the catalog was at
+    /// `revision`, added and removed photos included, each once; ops that change no photo of their
+    /// own (an album, a stack, the keyword list, a folder's label) and other things of a photo (a
+    /// rating, a slider) aside: for what is counted from the photos alone (the folders, days and
+    /// keywords they carry). `None` when that is not known: too long ago, or the catalog was set
+    /// from outside (a library loaded).
+    pub fn photos_changed_since(&self, revision: u64, reads: Aspects) -> Option<Vec<PhotoId>> {
+        // (every op that changes a photo says which, in `photo_mut` or as it adds or removes it:
+        // the ops `apply_inner` marks broad change no photo)
+        self.remembers_photos(revision).then(|| self.touched_after(revision, reads))
+    }
+
+    fn touched_after(&self, revision: u64, reads: Aspects) -> Vec<PhotoId> {
+        let mut ids: Vec<PhotoId> = self
+            .changes
+            .touched
+            .iter()
+            .filter(|(r, _, a)| *r > revision && (reads == Aspects::ALL || a.any_of(reads)))
+            .map(|(_, id, _)| *id)
+            .collect();
         ids.sort_unstable();
         ids.dedup();
-        Some(ids)
+        ids
     }
     fn album_mut(&mut self, id: AlbumId) -> Result<&mut Album> {
         self.albums.get_mut(&id).ok_or(CatalogError::NoAlbum(id))
@@ -813,6 +838,29 @@ impl Catalog {
     }
 
     fn apply_inner(&mut self, op: Op) -> Result<Op> {
+        // a photo that comes, goes, is deleted or restored, is imported from Local or gets other content can change
+        // whether the photos with its content have the same content as another one (`index::content_key`), when
+        // anything asks
+        let photo = match &op {
+            Op::AddPhoto { photo } => Some(photo.id),
+            Op::RemovePhoto { id } | Op::SetDeleted { id, .. } | Op::SetLocal { id, .. } | Op::SetContent { id, .. } => Some(*id),
+            _ => None,
+        }
+        .filter(|_| self.follows_contents());
+        let albums = matches!(op, Op::AddAlbum { .. } | Op::RemoveAlbum { .. } | Op::SetAlbumRules { .. });
+        let before = photo.and_then(|id| self.content_of(id));
+        let inv = self.apply_op(op)?;
+        if let Some(id) = photo {
+            let after = self.content_of(id);
+            self.content_moved(id, before, after);
+        }
+        if albums {
+            self.index.albums_changed();
+        }
+        Ok(inv)
+    }
+
+    fn apply_op(&mut self, op: Op) -> Result<Op> {
         // An op that changes one photo says which (`photo_mut`, and adding or removing it below). Most other kinds
         // can change what any photo matches or where it sorts: an album's photos or rules, a stack. The keyword
         // list changes only lists of keywords. Listed kind by kind, so a new one has to be put on one side.
@@ -1105,7 +1153,7 @@ impl Catalog {
             }
             Op::SetEmbeddedLens { id, lens } => {
                 let p = self.photo_mut(id)?;
-                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens.map(|l| *l)).map(Box::new) }
+                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens) }
             }
             Op::SetAsShotWb { id, wb } => {
                 if wb.is_some_and(|(t, tint)| !(t.is_finite() && tint.is_finite())) {

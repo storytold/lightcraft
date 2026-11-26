@@ -30,20 +30,26 @@ fn remove_brush(app: &mut LightcraftApp) {
 
 /// `[` / `]` (size ×`k`) and ⇧`[` / ⇧`]` (feather +`df`) for the brush in use: the Remove tool's
 /// (and its selected spot's) or the Masking brush's.
-fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
+pub(crate) fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
+    let v = resize_brush(app, k, df);
+    if app.ui.right == RightPanel::Remove && app.session.active_spot.is_some() {
+        let mut p = json!({});
+        if k != 1.0 {
+            p["size"] = json!(app.ui.remove_size);
+        }
+        if df != 0.0 {
+            p["feather"] = json!(app.ui.remove_feather);
+        }
+        let _ = app.run("spot.update", p);
+    }
+    v
+}
+
+/// The brush in use alone, size ×`k` and feather +`df`, for the next stroke: no spot changes.
+pub(crate) fn resize_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
     if app.ui.right == RightPanel::Remove {
         app.ui.remove_size = (app.ui.remove_size * k).clamp(0.001, 0.25);
         app.ui.remove_feather = (app.ui.remove_feather + df).clamp(0.0, 100.0);
-        if app.session.active_spot.is_some() {
-            let mut p = json!({});
-            if k != 1.0 {
-                p["size"] = json!(app.ui.remove_size);
-            }
-            if df != 0.0 {
-                p["feather"] = json!(app.ui.remove_feather);
-            }
-            let _ = app.run("spot.update", p);
-        }
         json!({"size": app.ui.remove_size, "feather": app.ui.remove_feather})
     } else {
         app.ui.brush_size = (app.ui.brush_size * k).clamp(0.002, 0.5);
@@ -370,6 +376,21 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             // {on?}; no params toggles. Toggle Zoom (Z) centres on the focus point when there is one.
             app.ui.settings.zoom_to_focus = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.zoom_to_focus);
             Ok(json!({"on": app.ui.settings.zoom_to_focus}))
+        }
+        "view.reduceMotion" => {
+            // {on?} sets it; {follow: true} goes back to the system's Reduce Motion; no params toggles
+            // what is in effect. Zoom and spinner animations stop; fades stay.
+            let (follow, on) = match (bool_param(id, p, "follow"), bool_param(id, p, "on")) {
+                (Ok(follow), Ok(on)) => (follow, on),
+                (Err(e), _) | (_, Err(e)) => return Some(Err(e)),
+            };
+            // (where the host has no system setting to read, or its reader has not answered, following
+            // would turn off a choice made for nothing, and report a system that is not there)
+            if follow == Some(true) && !app.system_reduce_motion_available() {
+                return Some(Err("view.reduceMotion: this system has no Reduce Motion setting to follow".into()));
+            }
+            app.ui.settings.reduce_motion = if follow == Some(true) { None } else { Some(on.unwrap_or(!app.reduce_motion())) };
+            Ok(json!({"on": app.reduce_motion(), "followsSystem": app.ui.settings.reduce_motion.is_none()}))
         }
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);
@@ -1017,6 +1038,10 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             panel(app, ctx, RightPanel::Activity, "History");
             Ok(Value::Null)
         }
+        "panel.bursts" => {
+            panel(app, ctx, RightPanel::Bursts, "Bursts");
+            Ok(Value::Null)
+        }
         "panel.presets" => {
             app.ui.presets = !app.ui.presets || !crate::docking::exposed(app, crate::docking::Panel::Presets);
             if app.ui.presets && app.ui.view != ViewMode::Detail {
@@ -1311,7 +1336,14 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
+            app.ui.dialog = Some(Dialog::Cull {
+                reject_below: 0.0,
+                pick_best: true,
+                stack_groups: app.ui.cull_stack,
+                burst_gap,
+                similarity,
+                reset_bursts: false,
+            });
             Ok(Value::Null)
         }
         "app.whatsNew" => {
@@ -1663,12 +1695,11 @@ fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> 
         .and_then(Value::as_u64)
         .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)).filter(|a| a.is_smart()).cloned());
     app.ui.dialog = Some(match album {
-        Some(a) => Dialog::SmartRules {
-            id: Some(a.id.0),
-            name: a.name.clone(),
+        Some(a) => Dialog::smart_rules(
+            Some(a.id.0),
+            a.name.clone(),
             // older rules read as they always matched (RuleSet::upgrade)
-            rules: a
-                .smart
+            a.smart
                 .as_ref()
                 .and_then(|f| f.rule_set.clone())
                 .map(|mut r| {
@@ -1676,14 +1707,14 @@ fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> 
                     r
                 })
                 .unwrap_or_default(),
-            parent: None,
-        },
-        None => Dialog::SmartRules {
-            id: None,
-            name: p.get("name").and_then(Value::as_str).unwrap_or("").into(),
-            rules: lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
-            parent: parent_param(p),
-        },
+            None,
+        ),
+        None => Dialog::smart_rules(
+            None,
+            p.get("name").and_then(Value::as_str).unwrap_or("").into(),
+            lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
+            parent_param(p),
+        ),
     });
     Ok(Value::Null)
 }
@@ -1694,7 +1725,7 @@ fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, 
     let gpu = (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten();
     let mb = |b: u64| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
     let mut rows = vec![
-        ("Version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+        ("Version".to_string(), crate::channel::display_version()),
         ("System".to_string(), format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)),
         ("CPU threads".to_string(), std::thread::available_parallelism().map(|n| n.get().to_string()).unwrap_or_else(|_| "?".into())),
         (
@@ -1958,7 +1989,7 @@ fn import_luts(app: &mut LightcraftApp, lut_paths: &[&String], news: &mut Import
             let profiles = v["imported"].as_array().map_or(0, Vec::len);
             if profiles > 0 {
                 news.parts.push(crate::i18n::tr_format!(
-                    "Imported {profiles} profile{} (Profile browser ▸ their groups)",
+                    "Imported {profiles} profile{} (Profile browser → their groups)",
                     crate::i18n::plural_s(profiles),
                     profiles = profiles
                 ));

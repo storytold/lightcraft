@@ -776,6 +776,51 @@ fn custom_white_balance_redevelops_in_camera_space() {
 }
 
 #[test]
+fn cpu_white_balance_stages_redevelop_the_dual_illuminant_card() {
+    use crate::local::{scene_linear_pre, wb_matrix_for, white_balance};
+    use lightcraft_color::cct::temp_tint_to_xy;
+    use lightcraft_develop::{Process, WbMode};
+
+    let cc = camera_color(5500.0, 0.0);
+    let target = temp_tint_to_xy(3200.0, 10.0);
+    let neutral = lightcraft_raw::color::camera_neutral(&cc.tags, target);
+    let developed_at = |xy| {
+        let t = lightcraft_raw::color::camera_transform_of(&cc.tags, xy);
+        t.matrix.apply(std::array::from_fn(|c| neutral[c] * f64::from(t.wb[c]))).map(|v| v as f32)
+    };
+    let card = developed_at(cc.developed_for);
+    // Develop the same camera samples directly for the requested white, without either render route.
+    let expected = developed_at(target);
+    let camera = SourceInfo { raw: true, as_shot_temp: 5500.0, as_shot_tint: 0.0, camera_color: Some(cc), ..Default::default() };
+    let relative = SourceInfo { camera_color: None, relative_wb: true, ..camera.clone() };
+    let close = |actual: &Rgb32f, want: [f32; 3]| {
+        assert_eq!(actual.data.len(), 4);
+        for px in &actual.data {
+            assert!(px.iter().zip(want).all(|(&v, w)| (v - w).abs() < 1e-4), "wanted {want:?}, got {px:?}");
+        }
+    };
+    for process in [Process::V8, Process::V10] {
+        let mut settings = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
+        (settings.wb.mode, settings.wb.temp, settings.wb.tint) = (WbMode::Custom, 3200.0, 10.0);
+        settings.light.exposure = 1.0;
+        let mut wb = Rgb32f::filled(2, 2, card);
+        white_balance(&mut wb, &camera, &settings);
+        close(&wb, expected);
+        let mut scene = Rgb32f::filled(2, 2, card);
+        scene_linear_pre(&mut scene, &camera, &settings);
+        close(&scene, expected.map(|v| v * 2.0));
+
+        // Without camera facts, the CPU stage still uses the relative Bradford result.
+        let m = wb_matrix_for(&relative, &settings).unwrap();
+        let relative_expected = m.map(|r| (r[0] * card[0] + r[1] * card[1] + r[2] * card[2]).max(0.0));
+        assert!(relative_expected.iter().zip(expected).any(|(&v, w)| (v - w).abs() > 1e-4));
+        let mut wb = Rgb32f::filled(2, 2, card);
+        white_balance(&mut wb, &relative, &settings);
+        close(&wb, relative_expected);
+    }
+}
+
+#[test]
 fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback() {
     use crate::local::wb_matrix_for;
     use lightcraft_color::REC2020;
@@ -797,7 +842,7 @@ fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback
         let legacy_m = wb_matrix_for(&info, &saved).unwrap();
 
         // New V10 edit at the same warm-green WB uses the shared checked Mat3::IDENTITY fallback.
-        let mut v10 = DevelopSettings::default();
+        let mut v10 = DevelopSettings { process: Process::V10.version(), ..Default::default() };
         assert_eq!(v10.process.process(), Process::V10);
         (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
         let v10_reopened = DevelopSettings::from_json(&v10.to_json()).unwrap();
@@ -927,6 +972,72 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
         assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
     }
+}
+
+/// A raw's linear Rec.2020 as decoding leaves it since it stopped clamping channels at zero: a dark ramp with
+/// sensor noise through a saturating camera matrix (a NIKON D780 profile's), so near black many channels are
+/// negative, and a few strongly out-of-gamut pixels.
+fn negative_noise() -> Rgb32f {
+    let m = [[3.48f32, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]];
+    // ±0.004 of noise per channel, a hash of the position
+    let noise = |x: usize, y: usize, c: usize| {
+        let h = ((x * 7919 + y * 104_729 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    Rgb32f::from_fn(48, 32, |x, y| {
+        if (x + y) % 37 == 0 {
+            return [-0.05, 0.01, -0.02];
+        }
+        let g = 0.0005 * 1.15f32.powi(x as i32);
+        let cam: [f32; 3] = std::array::from_fn(|c| g + noise(x, y, c));
+        std::array::from_fn(|i| m[i][0] * cam[0] + m[i][1] * cam[1] + m[i][2] * cam[2])
+    })
+}
+
+/// Negative channels from decoding reach every stage after it: every slider at its ends, at every output depth
+/// (HDR on and off), and the auto settings give finite values only.
+#[test]
+fn negative_channels_render_finite_everywhere() {
+    use crate::{DeepSamples, OutputDepth, auto};
+    let src = negative_noise();
+    assert!(src.data.iter().flatten().filter(|v| **v < 0.0).count() > src.data.len() / 4, "the source has few negatives");
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let finite = |s: &DevelopSettings, depth: OutputDepth, what: &str| {
+        let r = render(&src, &info, s, &RenderRequest { depth, ..RenderRequest::fit(48, 48) });
+        assert!(r.histogram.total > 0, "{what}");
+        match (depth, r.deep.map(|d| d.samples)) {
+            (OutputDepth::U8, None) | (OutputDepth::U16, Some(DeepSamples::U16(_))) => {}
+            (OutputDepth::F32Linear | OutputDepth::F32Hdr, Some(DeepSamples::F32(v))) => {
+                assert!(v.iter().all(|v| v.is_finite()), "{what} {depth:?}: non-finite output");
+            }
+            _ => panic!("{what} {depth:?}: missing or wrong deep samples"),
+        }
+    };
+    let mut pushed = DevelopSettings::default();
+    pushed.light.exposure = 4.0;
+    pushed.light.shadows = 100.0;
+    pushed.light.blacks = 100.0;
+    for hdr in [false, true] {
+        let mut s = pushed.clone();
+        s.hdr.enabled = hdr;
+        for depth in [OutputDepth::U8, OutputDepth::U16, OutputDepth::F32Linear, OutputDepth::F32Hdr] {
+            finite(&s, depth, &format!("pushed, hdr {hdr}"));
+        }
+    }
+    for c in controls::CONTROLS {
+        for v in [c.min, c.max] {
+            let mut s = pushed.clone();
+            controls::set(&mut s, c.id, v);
+            finite(&s, OutputDepth::F32Linear, &format!("{} = {v}", c.id));
+        }
+    }
+    let tone = auto::auto_tone(&src, &info, &pushed);
+    let t = [tone.exposure, tone.contrast, tone.highlights, tone.shadows, tone.whites, tone.blacks, tone.vibrance, tone.saturation];
+    assert!(t.iter().all(|v| v.is_finite()), "auto tone {t:?}");
+    assert!(auto::auto_bw_mix(&src, &info, &pushed).iter().all(|v| v.is_finite()));
+    let (t, k) = auto::auto_wb(&src, &info);
+    assert!(t.is_finite() && k.is_finite(), "auto WB {t} {k}");
+    assert!(auto::scene_log_mean(&src, &info, &pushed).is_none_or(f64::is_finite));
 }
 
 // Given a cached render with one process, a change to a process with another colour filter (Update
