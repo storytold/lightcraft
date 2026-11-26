@@ -296,7 +296,7 @@ fn a_partly_applied_folder_step_keeps_its_folder_move() {
         || Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
 
     // the folder was renamed before the commit: the step that takes the change back renames it back
-    let folder = crate::FolderMove { from: "/new".into(), to: "/old".into() };
+    let folder = crate::FolderMove { from: "/new".into(), to: "/old".into(), on_disk: true };
     let e = s.commit_with_folder("Rename Folder", torn(), folder.clone()).unwrap_err();
     assert!(matches!(e, EngineError::Catalog(CatalogError::PartlyApplied { .. })), "{e:?}");
     assert_eq!(s.undo.last().and_then(|u| u.folder.clone()), Some(folder));
@@ -306,7 +306,7 @@ fn a_partly_applied_folder_step_keeps_its_folder_move() {
         s.commit_with_folder(
             "Rename Folder",
             Op::SetRating { id: PhotoId(9_999), rating: 1 },
-            crate::FolderMove { from: "/a".into(), to: "/b".into() }
+            crate::FolderMove { from: "/a".into(), to: "/b".into(), on_disk: true }
         )
         .is_err()
     );
