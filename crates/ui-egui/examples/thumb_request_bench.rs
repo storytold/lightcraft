@@ -124,6 +124,7 @@ fn micro(points: usize, pending: bool) {
                     quick: None,
                     pixels: None,
                     native: None,
+                    slide_photo: None,
                 },
             );
         }

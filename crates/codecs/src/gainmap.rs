@@ -16,33 +16,6 @@ pub use craft_gainmap::{GainImage, GainMapMeta, GainMapOptions, ISO_URN, apply, 
 use crate::encode::{EncodeImage, EncodeMeta, Samples, jpeg_app_segments, xmp_segment};
 use crate::{ChromaSubsampling, Error, Format, Result, jpeg};
 
-/// Offsets within the MPF payload (from "MPF\0"): the endian field, then the index IFD (3 tags).
-const MPF_ENTRIES_FROM_ENDIAN: usize = 8 + 2 + 3 * 12 + 4;
-
-/// The primary image's MPF payload, entry sizes and offset to be patched once the file exists.
-fn mpf_placeholder() -> Vec<u8> {
-    let mut p = b"MPF\0MM".to_vec();
-    p.extend_from_slice(&42u16.to_be_bytes());
-    p.extend_from_slice(&8u32.to_be_bytes()); // first IFD
-    p.extend_from_slice(&3u16.to_be_bytes());
-    let tag = |p: &mut Vec<u8>, tag: u16, ty: u16, count: u32, value: [u8; 4]| {
-        p.extend_from_slice(&tag.to_be_bytes());
-        p.extend_from_slice(&ty.to_be_bytes());
-        p.extend_from_slice(&count.to_be_bytes());
-        p.extend_from_slice(&value);
-    };
-    tag(&mut p, 0xB000, 7, 4, *b"0100"); // MPFVersion
-    tag(&mut p, 0xB001, 4, 1, 2u32.to_be_bytes()); // NumberOfImages
-    tag(&mut p, 0xB002, 7, 32, (MPF_ENTRIES_FROM_ENDIAN as u32).to_be_bytes()); // MPEntry
-    p.extend_from_slice(&0u32.to_be_bytes()); // no next IFD
-    // entry 0: baseline primary (0x030000) flagged as the representative image (bit 29)
-    for attr in [0x2003_0000u32, jpeg::MPF_GAIN_MAP] {
-        p.extend_from_slice(&attr.to_be_bytes());
-        p.extend_from_slice(&[0; 12]); // size, offset, two dependent-image entries
-    }
-    p
-}
-
 /// Encode a gain map JPEG: `base` (8-bit SDR, 3 or 4 channels, colour-managed by `meta.icc`) and
 /// its gain map, both at `quality`. `meta.xmp` is kept, with the gain map container added.
 pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, quality: u8, sub: ChromaSubsampling, meta: &EncodeMeta) -> Result<Vec<u8>> {
@@ -87,28 +60,13 @@ pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, qualit
     let xmp = craft_gainmap::primary_xmp(meta.xmp, gain_jpeg.len());
     let mut segs = jpeg_app_segments(&EncodeMeta { xmp: Some(&xmp), ..*meta })?;
     segs.push((0xE2, craft_gainmap::primary_iso_marker()));
-    segs.push((0xE2, mpf_placeholder()));
     let sub = match sub {
         ChromaSubsampling::S444 => craft_jpeg::ChromaSubsampling::S444,
         ChromaSubsampling::S422 => craft_jpeg::ChromaSubsampling::S420,
         ChromaSubsampling::S420 => craft_jpeg::ChromaSubsampling::S420,
     };
-    let mut primary =
-        craft_jpeg::encode_baseline(data, w, h, base.channels as usize, quality, sub, &segs).map_err(|e| Error::Encode(e.to_string()))?;
-
-    // patch the MPF index: sizes, and the gain map's offset from the MPF endian field
-    let markers = jpeg::parse_markers(&primary).ok_or_else(|| Error::Encode("gain map JPEG: primary image unreadable".into()))?;
-    let endian = markers.mpf.as_ref().map(|m| m.0).ok_or_else(|| Error::Encode("gain map JPEG: MPF segment missing".into()))?;
-    let entries = endian + MPF_ENTRIES_FROM_ENDIAN;
-    let (plen, glen) = (primary.len(), gain_jpeg.len());
-    let fields = [(entries + 4, plen), (entries + 8, 0), (entries + 20, glen), (entries + 24, plen - endian)];
-    for (at, v) in fields {
-        let v = u32::try_from(v).map_err(|_| Error::Encode("gain map JPEG larger than 4 GiB".into()))?;
-        let slot = primary.get_mut(at..at + 4).ok_or_else(|| Error::Encode("gain map JPEG: truncated MPF segment".into()))?;
-        slot.copy_from_slice(&v.to_be_bytes());
-    }
-    primary.extend_from_slice(&gain_jpeg);
-    Ok(primary)
+    let primary = craft_jpeg::encode_baseline(data, w, h, base.channels as usize, quality, sub, &segs).map_err(|e| Error::Encode(e.to_string()))?;
+    craft_metadata::mpf::write(&primary, &[(jpeg::MPF_GAIN_MAP, &gain_jpeg)]).map_err(|error| Error::Encode(format!("gain map JPEG: {error}")))
 }
 
 /// The gain map of a gain map JPEG.
