@@ -367,6 +367,7 @@ fn a_proxy_from_an_older_encode_is_stale() {
     let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
     let head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
     assert_eq!(head[ENC_FIELD].as_u64(), Some(ENCODE_VERSION));
+    assert_eq!(head[SOURCE_FIELD].as_u64(), Some(u64::from(SOURCE_VERSION)));
     let mut older = head.as_object().cloned().unwrap_or_default();
     older.remove(ENC_FIELD);
     let mut old = MAGIC.to_vec();
