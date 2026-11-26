@@ -78,6 +78,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("kind", "File Type", Kind::Choice(&[("image", "Image"), ("raw", "Raw"), ("video", "Video")])),
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
+    ("sameContent", "Same Content as Another Photo", Kind::Bool),
     // Date
     ("captureDate", "Capture Date", Kind::Date),
     ("importDate", "Import Date", Kind::Date),
@@ -105,6 +106,9 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("aperture", "Aperture", Kind::Number),
     ("shutterSpeed", "Shutter Speed", Kind::Number),
     ("iso", "ISO Speed", Kind::Number),
+    ("flash", "Flash", Kind::Bool),
+    ("exposureBias", "Exposure Bias", Kind::Number),
+    ("cameraSerial", "Camera Serial Number", Kind::Text),
     // Location
     ("location", "Location", Kind::Text),
     ("city", "City", Kind::Text),
@@ -132,11 +136,11 @@ pub const TOP_LEVEL_FIELDS: &[&str] = &["rating", "flag", "label", "text"];
 /// once or in [`TOP_LEVEL_FIELDS`].
 pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Source", &["album", "virtualCopy", "copyName", "stacked"]),
-    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration"]),
+    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration", "sameContent"]),
     ("Date", &["captureDate", "importDate", "editDate"]),
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
     ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
-    ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso"]),
+    ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso", "flash", "exposureBias", "cameraSerial"]),
     ("Location", &["location", "city", "state", "country", "hasGps"]),
     ("Size", &["longEdge", "shortEdge", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment"]),
@@ -1046,6 +1050,7 @@ impl Rule {
             "virtualCopy" => yes(p.copy_of.is_some()),
             "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
             "stacked" => yes(cat.stack_of(p.id).is_some()),
+            "sameContent" => yes(cat.has_same_content(p)),
             "cropped" => yes(p.is_cropped()),
             "treatment" => {
                 let t = if p.develop.treatment == lightcraft_develop::Treatment::Bw { "monochrome" } else { "color" };
@@ -1097,8 +1102,13 @@ impl Rule {
             "captureDate" => date_op(op, p.captured.as_deref(), value),
             "importDate" => date_op(op, Some(&p.imported), value),
             "editDate" => date_op(op, p.edited.as_deref(), value),
+            // (the shown shutter text, not the exact time kept for export: a rule matches the value the
+            // photo shows, `1/3` or `0.3571`, at every op, including `is` and the edges of a range)
             "shutterSpeed" => num_op(op, crate::parse_shutter_seconds(&m.shutter), &shutter_value(value)),
             "iso" => num_op(op, m.iso.map(|v| v as f64), value),
+            "flash" => yes(m.flash.unwrap_or(false)),
+            "exposureBias" => num_op(op, m.exposure_bias.map(f32_as_decimal), value),
+            "cameraSerial" => text(&m.serial_number),
             "aperture" => num_op(op, m.aperture.map(f32_as_decimal), value),
             "focalLength" => num_op(op, m.focal_mm.map(f32_as_decimal), value),
             "longEdge" | "shortEdge" => {
@@ -1146,7 +1156,7 @@ impl Rule {
                 "text" | "filePath" | "location" => COST_TEXT,
                 "keywords" | "person" | "personCount" | "stacked" | "copyName" | "fileName" | "extension" | "format" | "title" | "caption"
                 | "altText" | "city" | "state" | "country" | "camera" | "lens" | "creator" | "copyright" | "captureDate" | "importDate"
-                | "editDate" | "shutterSpeed" | "aspect" => COST_SMALL,
+                | "editDate" | "shutterSpeed" | "aspect" | "flash" | "cameraSerial" | "exposureBias" => COST_SMALL,
                 _ => COST_SCALAR,
             },
         }
@@ -1198,6 +1208,14 @@ impl RuleSet {
         self.rules.iter().any(|r| match r {
             Rule::Group { group } => group.depends_on_now(),
             Rule::Field { op, .. } => op == "inLast" || op == "notInLast",
+        })
+    }
+
+    /// Whether a rule (nested groups included) tests `field`.
+    pub fn reads(&self, field: &str) -> bool {
+        self.rules.iter().any(|r| match r {
+            Rule::Group { group } => group.reads(field),
+            Rule::Field { field: f, .. } => f == field,
         })
     }
 
