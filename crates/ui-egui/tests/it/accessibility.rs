@@ -16,6 +16,10 @@ fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp>
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
+    // as the app opens Remove (`panel.remove`): with a brush, so its canvas offers the New spot stop
+    if right == RightPanel::Remove {
+        app.ui.tool = "remove".into();
+    }
     let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
     // text such as "▸" in the Reference view's hint has its glyph only in the craft-fonts faces (releases
     // always have them): without them it is drawn as a box, which this audit of names doesn't need
