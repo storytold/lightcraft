@@ -325,7 +325,8 @@ fn a_measuring_pass_does_not_finish_the_drag() {
     // the release reaches a measuring run of the histogram before any pass that draws for real
     let ctx = h.view.ctx.clone();
     let release = egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE };
-    let raw = HeadlessView::raw_input(egui::vec2(1400.0, 1000.0), 1.0, h.time() + 0.1, vec![release]);
+    // the harness's own clock: the frames after this one continue from it, so none steps back
+    let raw = HeadlessView::raw_input(egui::vec2(1400.0, 1000.0), 1.0, h.time(), vec![release]);
     let mut out = ctx.run_ui(raw, |ui| {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             craft::ui::runtime::measure::run(&ctx, || crate::panels::edit::histogram(&mut h.app, ui, id));
