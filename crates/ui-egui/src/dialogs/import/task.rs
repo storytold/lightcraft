@@ -17,6 +17,8 @@ pub struct ImportTask {
     pub total: usize,
     pub done: usize,
     pub(super) params: Value,
+    /// What the review that started this import listed, for its job.
+    listed: Option<lightcraft_engine::import::ListedFolders>,
     pub imported: usize,
     /// Brought back from Recently Deleted (`onDeleted: restore`).
     pub restored: usize,
@@ -202,6 +204,10 @@ impl ImportRun {
 /// import runs: replacing `app.import` would stop its worker.
 pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String> {
     busy_synchronizing(app)?;
+    // a Lightroom catalog import owns the catalog until it ends (its photos may share a file's content), as for a drop
+    if app.lightroom.is_some() {
+        return Err(crate::i18n::tr("Finish Lightroom catalog import before adding photos").to_string());
+    }
     if !d.in_library(app) {
         return Err("another library was opened since the photos were scanned: nothing was imported".into());
     }
@@ -261,7 +267,9 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         }
     }
     let total = queue.len();
-    app.import = Some(ImportTask::new(queue, params, undo0, false));
+    let mut task = ImportTask::new(queue, params, undo0, false);
+    task.listed = app.review_listed.take();
+    app.import = Some(task);
     app.renderer.forget_imports();
     Ok(json!({"importing": total}))
 }
@@ -287,6 +295,16 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         p["paths"] = json!(task.queue);
         let started = lightcraft_engine::cmd::library::import_params(&app.session, &p)
             .and_then(|req| Ok((lightcraft_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
+            .map(|(job, album, name)| {
+                (
+                    match task.listed.take() {
+                        Some(l) => job.with_listed(l),
+                        None => job,
+                    },
+                    album,
+                    name,
+                )
+            })
             .map_err(|e| e.to_string())
             .and_then(|(job, album, name)| ImportRun::start(job, std::mem::take(&mut task.queue), album, name, ctx));
         if task.auto {
@@ -554,7 +572,7 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
         crate::i18n::tr_format!("Already in the library: {} photo{} selected in All Photos", n, plural)
     } else {
         crate::i18n::tr_format!(
-            "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh",
+            "Already in the library, in Recently Deleted: {} photo{} selected · right-click → Restore, or Delete Permanently to import afresh",
             n,
             plural
         )

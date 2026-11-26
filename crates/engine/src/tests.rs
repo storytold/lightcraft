@@ -8,6 +8,8 @@ mod album_order;
 mod album_remove;
 mod albums_local;
 mod autosync_wb;
+mod batch_sidebar;
+mod bursts;
 mod color;
 mod constrain_crop;
 mod crop_angle;
@@ -36,6 +38,7 @@ mod lens_refresh;
 mod libops;
 mod library;
 mod lightroom_folder;
+mod lightroom_history;
 mod mask_effects;
 mod mask_geometry;
 mod merge;
@@ -50,6 +53,7 @@ mod preview_prep;
 mod print;
 mod process;
 mod recheck;
+mod relocate;
 mod segment;
 mod settings_files;
 mod shelved_folder;
@@ -59,6 +63,7 @@ mod slideshow_export;
 mod slow_drive;
 mod spots;
 mod sync;
+mod task_queue;
 mod view_follow;
 pub(super) mod xmp;
 
@@ -501,6 +506,24 @@ fn connected_brush_strokes_start_where_the_last_one_ended() {
     // all of it is one undo step
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(strokes(&s).len(), 2);
+}
+
+/// A stroke sent again as it grows (its effect shows while painting) replaces itself; earlier strokes stay.
+#[test]
+fn a_stroke_sent_again_as_it_grows_replaces_itself() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+    s.execute("mask.brushStroke", &json!({"points": [[0.1, 0.1]]})).unwrap();
+    s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.2]]})).unwrap();
+    for n in [3, 4] {
+        let pts: Vec<[f64; 2]> = (0..n).map(|i| [0.2 + 0.1 * i as f64, 0.2]).collect();
+        s.execute("mask.brushStroke", &json!({"points": pts, "continue": true})).unwrap();
+    }
+    let dev = active_dev(&s);
+    let Some(lightcraft_develop::MaskShape::Brush { strokes }) = dev.masks.first().and_then(|m| m.components.first()).map(|c| &c.shape) else {
+        panic!("a brush mask")
+    };
+    assert_eq!(strokes.iter().map(|s| s.points.len()).collect::<Vec<_>>(), vec![1, 4], "the earlier stroke stays, the live one is replaced");
 }
 
 #[test]

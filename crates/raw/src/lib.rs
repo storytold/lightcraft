@@ -6,9 +6,11 @@
 //!   [`semantic_masks`] reads a DNG's semantic masks (segmentation mattes, e.g. iPhone ProRAW's sky matte).
 //! - [`RawImage::normalized`] subtracts black, scales white to 1.0 and crops to the active area (applying DNG
 //!   `OpcodeList1`/`OpcodeList2`); [`demosaic`] turns CFA data into camera-RGB [`Rgb32f`];
-//!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_binned`]
-//!   produces the same at 1/k of the size straight from the mosaic (previews, thumbnails;
-//!   [`RawImage::develop_binned_masked`] with the mask of blocks holding clipped samples, for [`highlight`]).
+//!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_balanced`]
+//!   and [`RawImage::develop_balanced_masked`] do the same after white-balancing the mosaic (the 1:1 view and unbinned
+//!   engine loads, including ordinary exports; lossy DNG export and Photo Merge frames still use [`RawImage::develop`]);
+//!   [`RawImage::develop_binned`] produces the development at 1/k of the size straight from the mosaic
+//!   (previews, thumbnails; [`RawImage::develop_binned_masked`] with the mask of blocks holding clipped samples, for [`highlight`]).
 //! - [`color`] implements the DNG colour model (dual-illuminant interpolation, forward matrices, white balance)
 //!   and produces camera → linear Rec.2020 D65 matrices; [`profile`] reads and applies a DNG's own profile
 //!   look tables and tone curve, and [`gaintable`] its gain table map (Apple ProRAW's local tone mapping).
@@ -388,6 +390,32 @@ impl RawImage {
         let rgb = demosaic(&n, method);
         drop(n);
         Ok(self.finish_demosaiced(rgb))
+    }
+
+    /// [`Self::develop`] with white balance `wb` applied to the mosaic before directional demosaicing,
+    /// then divided back to camera RGB.
+    pub fn develop_balanced(&self, method: Method, wb: [f32; 3]) -> Result<Rgb32f> {
+        let mut craft = bridge::to_craft_raw_header(self);
+        craft.data = self.data.clone();
+        craft_develop::sensor::RawDevelopExt::develop_balanced(&craft, method, wb).map(bridge::from_craft_rgb32f)
+    }
+
+    /// [`Self::develop_balanced`] with a per-pixel sensor clip mask for [`highlight::reconstruct_masked`].
+    pub fn develop_balanced_masked(&self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
+        let mut craft = bridge::to_craft_raw_header(self);
+        craft.data = self.data.clone();
+        let (rgb, mask) = craft_develop::sensor::RawDevelopExt::develop_balanced_masked(&craft, method, wb, clip)?;
+        Ok((bridge::from_craft_rgb32f(rgb), mask))
+    }
+
+    /// Like [`Self::develop_balanced_masked`], moving `self.data` temporarily to avoid cloning raw samples.
+    pub fn take_develop_balanced_masked(&mut self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
+        let mut craft = bridge::to_craft_raw_header(self);
+        craft.data = std::mem::replace(&mut self.data, RawData::U16(Vec::new()));
+        let res = craft_develop::sensor::RawDevelopExt::develop_balanced_masked(&craft, method, wb, clip);
+        self.data = craft.data;
+        let (rgb, mask) = res?;
+        Ok((bridge::from_craft_rgb32f(rgb), mask))
     }
 
     /// The last steps of [`Self::develop`] for camera RGB made some other way (a denoiser that demosaics too) from

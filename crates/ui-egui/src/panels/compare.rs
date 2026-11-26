@@ -222,7 +222,7 @@ fn frame_of(photo: &lightcraft_catalog::Photo) -> lightcraft_pipeline::geometry:
         photo.height.max(1) as usize,
         &photo.develop,
         true,
-        photo.embedded_lens.as_ref(),
+        photo.embedded_lens.as_deref(),
     )
 }
 

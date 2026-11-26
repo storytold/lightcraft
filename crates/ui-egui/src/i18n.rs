@@ -397,6 +397,20 @@ pub fn source_title(session: &lightcraft_engine::Session) -> String {
     }
 }
 
+/// For a smart album on a loop (it includes itself through the albums it tests, so it holds no
+/// photos): what the album's empty view says, as its title and what to do about it, naming the
+/// album the loop goes through. `None` for an album that is not on a loop.
+pub fn album_loop_note(catalog: &lightcraft_catalog::Catalog, id: lightcraft_catalog::AlbumId) -> Option<(String, String)> {
+    let through = catalog.album_loops_through(id)?;
+    let body = if through == id {
+        tr("It tests itself: change its rules (Edit Smart Album…)").to_string()
+    } else {
+        let name = catalog.album(through).map(|a| a.name.clone()).unwrap_or_default();
+        tr_format!("It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)", name)
+    };
+    Some((tr("This album is in a loop, so it shows nothing").to_string(), body))
+}
+
 /// A date group heading (`2026-09-20`, `2026-09`, `2026`) in the UI language: the grid's full
 /// form, or the date sidebar's `short` one ("Sunday, 20" / "September" / "2026"). English keeps the
 /// catalog's own wording; every other language formats it with its `*-formats.json` date
