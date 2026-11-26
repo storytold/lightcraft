@@ -4,7 +4,7 @@
 use crate::net::{Net, NetError, Op, TensorId};
 use crate::run::{Error, TileRunner};
 
-/// The tensors' size cap: the same one the real runner's buffers share (`crates/denoise/src/cpu.rs`). A hostile `Net`
+/// The tensors' size cap: the same one the real runner's buffers share (`crates/denoise/src/cpu.rs`, whose cap is higher: it also holds the scratch). A hostile `Net`
 /// only ever has to satisfy the final shape: a `ConvT2` doubles the sides and a `MaxPool` halves them, so a small
 /// accepted graph can zoom its intermediates far out and back. Every tensor is counted here, and a run whose layers
 /// would retain more than one real tile's whole working set is refused before the memory behind it is reserved.
@@ -41,7 +41,7 @@ fn tensor(channels: usize, side: usize, total: &mut usize) -> Result<Vec<f32>, N
 
 /// Run `net` on `input` (`in_channels` planes of `tile × tile`).
 pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> {
-    if !net.fits_tile(tile) || input.len() != net.in_channels * tile * tile {
+    if !(net.fits_tile(tile) || net.fits_tile_at(tile, 0)) || input.len() != net.in_channels * tile * tile {
         return Err(NetError::Invalid("the tile does not fit the network".into()));
     }
     let input = input.to_vec();
@@ -76,7 +76,7 @@ pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> 
                                     }
                                 }
                             }
-                            data[(co * side + y) * side + x] = leaky(sum, c.leaky);
+                            data[(co * side + y) * side + x] = c.activation.apply(sum);
                         }
                     }
                 }
@@ -96,7 +96,7 @@ pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> 
                                     for ci in 0..c.cin {
                                         sum += tensors[a].data[(ci * side + y) * side + x] * c.weight[((ci * c.cout + co) * 2 + dy) * 2 + dx];
                                     }
-                                    data[(co * out_side + 2 * y + dy) * out_side + 2 * x + dx] = leaky(sum, c.leaky);
+                                    data[(co * out_side + 2 * y + dy) * out_side + 2 * x + dx] = c.activation.apply(sum);
                                 }
                             }
                         }
@@ -143,13 +143,6 @@ pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> 
     tensors.pop().map(|t| t.data).ok_or_else(|| NetError::Invalid("no layers".into()))
 }
 
-fn leaky(v: f32, alpha: Option<f32>) -> f32 {
-    match alpha {
-        Some(a) if v < 0.0 => v * a,
-        _ => v,
-    }
-}
-
 /// The reference as a [`TileRunner`] (for tests of the code around the model).
 pub struct ReferenceRunner {
     pub net: Net,
@@ -165,10 +158,10 @@ impl TileRunner for ReferenceRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::ConvT2;
+    use crate::net::{Activation, ConvT2};
 
     fn convt(src: TensorId, cin: usize, cout: usize) -> Op {
-        Op::ConvT2(ConvT2 { src, cin, cout, weight: vec![0.1; cin * cout * 4], bias: vec![0.0; cout], leaky: None })
+        Op::ConvT2(ConvT2 { src, cin, cout, weight: vec![0.1; cin * cout * 4], bias: vec![0.0; cout], activation: Activation::None })
     }
 
     /// A graph that fits the final-shape check while zooming its intermediates out and back: 256 `ConvT2`s double

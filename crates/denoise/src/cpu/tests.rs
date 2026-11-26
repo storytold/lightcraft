@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    net::{Conv, ConvT2},
+    net::{Activation, Conv, ConvT2},
     reference, synthetic,
 };
 
@@ -56,8 +56,26 @@ fn malformed_values_fail_before_execution_and_workspace_sizes_are_bounded() {
     let n = Net::new(
         4,
         vec![
-            Op::Conv(Conv { src: 0, src2: None, cin: 4, cout: 4096, k: 1, weight: vec![0.1; 4 * 4096], bias: vec![0.0; 4096], leaky: None }),
-            Op::Conv(Conv { src: 1, src2: None, cin: 4096, cout: 12, k: 1, weight: vec![0.1; 4096 * 12], bias: vec![0.0; 12], leaky: None }),
+            Op::Conv(Conv {
+                src: 0,
+                src2: None,
+                cin: 4,
+                cout: 4096,
+                k: 1,
+                weight: vec![0.1; 4 * 4096],
+                bias: vec![0.0; 4096],
+                activation: Activation::None,
+            }),
+            Op::Conv(Conv {
+                src: 1,
+                src2: None,
+                cin: 4096,
+                cout: 12,
+                k: 1,
+                weight: vec![0.1; 4096 * 12],
+                bias: vec![0.0; 12],
+                activation: Activation::None,
+            }),
             Op::DepthToSpace2 { src: 2 },
         ],
     )
@@ -66,14 +84,14 @@ fn malformed_values_fail_before_execution_and_workspace_sizes_are_bounded() {
     let ops = (0..100).map(|i| Op::MaxPool2 { src: i }).collect();
     let n = Net::new(4, ops).unwrap();
     assert!(NetRunner::new(&n, 16).is_err());
-    let c = Conv { src: 0, src2: None, cin: 4, cout: 12, k: 1, weight: vec![0.25; 48], bias: vec![0.0; 12], leaky: None };
+    let c = Conv { src: 0, src2: None, cin: 4, cout: 12, k: 1, weight: vec![0.25; 48], bias: vec![0.0; 12], activation: Activation::None };
     for mode in 0..6 {
         let mut bad = c.clone();
         match mode {
             0 => bad.src = usize::MAX,
             1 => bad.weight.pop().map(|_| ()).unwrap(),
             2 => bad.bias[0] = f32::NAN,
-            3 => bad.leaky = Some(f32::INFINITY),
+            3 => bad.activation = Activation::Leaky(f32::INFINITY),
             4 => bad.cout = usize::MAX,
             _ => bad.k = usize::MAX,
         }
@@ -82,7 +100,7 @@ fn malformed_values_fail_before_execution_and_workspace_sizes_are_bounded() {
 }
 #[test]
 fn bad_tiles_and_arithmetic_overflow_are_errors_and_do_not_poison_reuse() {
-    let c = Conv { src: 0, src2: None, cin: 4, cout: 12, k: 1, weight: vec![f32::MAX; 48], bias: vec![0.0; 12], leaky: None };
+    let c = Conv { src: 0, src2: None, cin: 4, cout: 12, k: 1, weight: vec![f32::MAX; 48], bias: vec![0.0; 12], activation: Activation::None };
     let n = Net::new(4, vec![Op::Conv(c), Op::DepthToSpace2 { src: 1 }]).unwrap();
     let r = NetRunner::new(&n, 1).unwrap();
     assert!(r.run(&[]).is_err());
@@ -117,12 +135,21 @@ fn shared_runner_serves_concurrent_tiles_without_cross_contamination() {
 }
 #[test]
 fn join_may_read_the_same_tensor_twice_and_leaky_up_convolution_is_supported() {
-    let c = ConvT2 { src: 0, cin: 4, cout: 3, weight: random(48, 2), bias: vec![0.1, -0.1, 0.0], leaky: Some(0.13) };
+    let c = ConvT2 { src: 0, cin: 4, cout: 3, weight: random(48, 2), bias: vec![0.1, -0.1, 0.0], activation: Activation::Leaky(0.13) };
     let n = Net::new(
         4,
         vec![
             Op::ConvT2(c),
-            Op::Conv(Conv { src: 1, src2: Some(1), cin: 6, cout: 3, k: 3, weight: random(162, 3), bias: vec![0.0; 3], leaky: Some(0.0) }),
+            Op::Conv(Conv {
+                src: 1,
+                src2: Some(1),
+                cin: 6,
+                cout: 3,
+                k: 3,
+                weight: random(162, 3),
+                bias: vec![0.0; 3],
+                activation: Activation::Leaky(0.0),
+            }),
         ],
     )
     .unwrap();
@@ -148,4 +175,66 @@ fn profile_one_real_tile() {
     let r = crate::runtime::CpuRunner::load(std::path::Path::new(&model), &m).unwrap();
     println!("workspace {:.1} MB", r.bytes_per_tile() as f64 / 1e6);
     r.run(&crate::runtime::check_tile(512)).unwrap();
+}
+
+fn rgb_net(tile: u64, ch: u64, depth: usize, seed: u64) -> Net {
+    let path = std::env::temp_dir().join(format!("lc-cpu-rgb-{}-{tile}-{ch}-{depth}-{seed}.onnx", std::process::id()));
+    std::fs::write(&path, synthetic::unet_rgb_onnx(tile, ch, depth, seed)).unwrap();
+    let n = crate::onnx::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    n
+}
+#[test]
+fn an_rgb_network_gives_three_planes_at_the_input_size_and_matches_the_reference() {
+    for (t, ch, depth, seed) in [(4u64, 4u64, 0usize, 3u64), (8, 4, 1, 5), (16, 8, 2, 6), (24, 4, 1, 7)] {
+        let n = rgb_net(t, ch, depth, seed);
+        let r = NetRunner::new(&n, t as usize).unwrap();
+        assert_eq!((r.out_channels(), r.out_side()), (3, t as usize));
+        let x = random(3 * (t * t) as usize, seed as u32);
+        let got = r.run(&x).unwrap();
+        assert_eq!(got.len(), 3 * (t * t) as usize);
+        assert!(got.iter().all(|v| (0.0..=1.0).contains(v)), "a sigmoid keeps the picture in 0..1");
+        agree(&got, &reference::run(&n, t as usize, &x).unwrap());
+    }
+}
+#[test]
+fn the_contracts_are_told_apart() {
+    let rgb = rgb_net(8, 4, 1, 1);
+    assert!(NetRunner::new(&rgb, 8).is_ok());
+    assert!(NetRunner::new(&rgb, 7).is_err(), "pooling must divide the tile");
+    let bayer = net(8, 4, 1, 1);
+    assert_eq!(NetRunner::new(&bayer, 8).map(|r| (r.out_channels(), r.out_side())).ok(), Some((3, 16)));
+    // 3 planes in but twice the size out, and 4 planes in but the same size out, are neither contract
+    let odd = Net::new(
+        3,
+        vec![
+            Op::Conv(Conv { src: 0, src2: None, cin: 3, cout: 12, k: 1, weight: random(36, 1), bias: vec![0.0; 12], activation: Activation::None }),
+            Op::DepthToSpace2 { src: 1 },
+        ],
+    )
+    .unwrap();
+    assert!(NetRunner::new(&odd, 2).is_err());
+    let odd = Net::new(
+        4,
+        vec![Op::Conv(Conv { src: 0, src2: None, cin: 4, cout: 3, k: 1, weight: random(12, 1), bias: vec![0.0; 3], activation: Activation::None })],
+    )
+    .unwrap();
+    assert!(NetRunner::new(&odd, 2).is_err());
+}
+#[test]
+fn a_tile_spread_over_the_threads_gives_the_same_values_and_counts_its_work() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    // 144² positions are 81 blocks: more than one group, and a short last block
+    for (n, t, planes) in [(net(16, 4, 2, 11), 16usize, 4usize), (rgb_net(24, 4, 1, 12), 24, 3), (rgb_net(144, 4, 2, 13), 144, 3)] {
+        let r = NetRunner::new(&n, t).unwrap();
+        let x = random(planes * t * t, t as u32);
+        let one = r.run(&x).unwrap();
+        let (wide, busy_ms) = pool.install(|| r.run_wide(&x)).unwrap();
+        assert_eq!(wide, one, "tile {t}: the same blocks give the same values");
+        assert!(busy_ms > 0.0 && busy_ms.is_finite(), "{busy_ms}");
+        // the workspace goes back for reuse, and a plain run after a wide one is unchanged
+        assert_eq!(r.run(&x).unwrap(), one);
+    }
+    let r = NetRunner::new(&rgb_net(24, 4, 1, 12), 24).unwrap();
+    assert!(matches!(r.run_wide(&[f32::NAN; 3 * 24 * 24]), Err(Error::Input(_))));
 }
