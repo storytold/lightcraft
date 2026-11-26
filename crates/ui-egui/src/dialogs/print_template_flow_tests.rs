@@ -4,6 +4,7 @@ use crate::headless::HeadlessView;
 use crate::state::Dialog;
 use egui::{Event, Key, Modifiers, PointerButton, Rect};
 use lightcraft_engine::print::layout::{Orientation, Unit};
+use lightcraft_engine::print::template::{PrintSettings, PrintTemplate};
 use serde_json::{Value, json};
 
 const NAME: &str = "field:printTemplateName";
@@ -289,19 +290,35 @@ fn print_templates_actual_typed_save_apply_delete_preserve_exact_settings_and_cu
     let unrelated = r.app.session.print_templates.clone();
     assert_eq!(unrelated.len(), 1);
     let saved = r.app.session.print.clone();
+    assert_saved_look(&saved);
+    let mut expected_template = serde_json::to_value(&saved).unwrap();
+    expected_template.as_object_mut().unwrap().remove("guides");
+    let before = r.persisted();
+    save_typed_template(&mut r, &unrelated, &saved, &expected_template, &before, &document);
+    edit_grid_and_page(&mut r);
+    let mut restored = saved.clone();
+    restored.guides = r.app.session.print.guides;
+    apply_template(&mut r, &restored);
+    delete_target_template(&mut r, &unrelated, &restored, &document);
+}
+
+/// The active print look as the dialog opens it: A4 paper, landscape, a 3 × 2 grid, no cells.
+fn assert_saved_look(saved: &PrintSettings) {
     assert_eq!(saved.layout.grid.columns, 3);
     assert_eq!(saved.layout.grid.rows, 2);
     assert_eq!(saved.layout.page.paper, "a4");
     assert_eq!(saved.layout.page.orientation, Orientation::Landscape);
     assert!(saved.layout.cells.is_empty());
-    let mut expected_template = serde_json::to_value(&saved).unwrap();
-    expected_template.as_object_mut().unwrap().remove("guides");
-    let before = r.persisted();
+}
+
+/// The typed Name, Return and Save: the name survives Return, Save stores the look rather than the
+/// layout change, and neither is journalled.
+fn save_typed_template(r: &mut Review, unrelated: &[PrintTemplate], saved: &PrintSettings, expected: &Value, before: &Value, document: &Value) {
     r.replace(NAME, "   Typed proof sheet   ");
     assert_eq!(r.app.ui.print.template_name, "   Typed proof sheet   ");
     r.key(Key::Enter);
     r.assert_print();
-    assert_eq!(r.persisted(), before, "typing/Return does not save or start printing");
+    assert_eq!(&r.persisted(), before, "typing/Return does not save or start printing");
     assert_eq!(r.app.ui.print.template_name, "   Typed proof sheet   ", "the exact real Name survives Return until Save");
     assert_eq!(r.app.session.print_templates, unrelated);
     // Print template commands are intentionally non-journaled queries. An empty journal
@@ -310,11 +327,15 @@ fn print_templates_actual_typed_save_apply_delete_preserve_exact_settings_and_cu
     r.click("button:printSaveTemplate");
     assert_eq!(r.app.session.journal, journal, "Save is a non-journaled query");
     assert_eq!(r.app.session.print_templates.len(), unrelated.len() + 1, "one new target template");
-    assert_eq!(&r.app.session.print_templates[..unrelated.len()], unrelated.as_slice());
+    assert_eq!(&r.app.session.print_templates[..unrelated.len()], unrelated);
     assert_eq!(r.app.session.print_templates[1].name, "Typed proof sheet");
-    assert_eq!(r.app.session.print_templates[1].settings, expected_template);
-    assert_eq!(r.app.session.print, saved, "Save captures settings, not a layout change");
-    assert_eq!(r.no_document_changes(), document);
+    assert_eq!(r.app.session.print_templates[1].settings, *expected);
+    assert_eq!(r.app.session.print, *saved, "Save captures settings, not a layout change");
+    assert_eq!(&r.no_document_changes(), document);
+}
+
+/// The grid and page edits, through the real dialog's number field and orientation buttons.
+fn edit_grid_and_page(r: &mut Review) {
     r.number("drag:printColumns", "7");
     r.number("drag:printRows", "4");
     // Do the already-planned real units action first: it naturally blurs the committed
@@ -327,24 +348,29 @@ fn print_templates_actual_typed_save_apply_delete_preserve_exact_settings_and_cu
     assert_eq!(r.app.session.print.layout.page.orientation, Orientation::Portrait);
     assert_eq!(r.app.session.print.guides.units, Unit::Points);
     assert_eq!(r.app.session.print.layout.page.paper, "a4", "other settings retain the selected paper");
-    let guides = r.app.session.print.guides;
-    let mut restored = saved.clone();
-    restored.guides = guides;
+}
+
+/// Apply restores the template's exact look and keeps the guides in use.
+fn apply_template(r: &mut Review, restored: &PrintSettings) {
     let journal = r.app.session.journal.clone();
     let templates = r.app.session.print_templates.clone();
     r.reveal_settings("button:printTemplateApply-1");
     r.click("button:printTemplateApply-1");
     assert_eq!(r.app.session.journal, journal, "Apply is a non-journaled query");
     assert_eq!(r.app.session.print_templates, templates, "Apply leaves both stored templates untouched");
-    assert_eq!(r.app.session.print, restored, "Apply restores exact saved look but keeps current guides");
+    assert_eq!(r.app.session.print, *restored, "Apply restores exact saved look but keeps current guides");
     assert_eq!(r.app.ui.print.page, 0);
     assert_eq!(r.app.ui.print.selected, None);
+}
+
+/// Delete removes only the target template: the unrelated one, the active look and the document stay.
+fn delete_target_template(r: &mut Review, unrelated: &[PrintTemplate], restored: &PrintSettings, document: &Value) {
     let journal = r.app.session.journal.clone();
     r.click("button:printTemplateDelete-1");
     assert_eq!(r.app.session.journal, journal, "Delete is a non-journaled query");
     assert_eq!(r.app.session.print_templates, unrelated, "Delete removes only the target, not the unrelated existing template");
-    assert_eq!(r.app.session.print, restored, "Delete does not edit the active look");
-    assert_eq!(r.no_document_changes(), document);
+    assert_eq!(r.app.session.print, *restored, "Delete does not edit the active look");
+    assert_eq!(&r.no_document_changes(), document);
     r.assert_print();
     r.safety();
 }

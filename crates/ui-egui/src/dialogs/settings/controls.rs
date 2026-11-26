@@ -23,7 +23,7 @@ pub(crate) fn live(ui: &egui::Ui) -> bool {
 
 /// The identity a control called `name` keeps its framework state under.
 pub(crate) fn owner(name: &str) -> egui::Id {
-    egui::Id::new(("settings-control", name))
+    egui::Id::unique(("settings-control", name))
 }
 
 /// A push button (`button:{name}`); true when it was activated by the pointer, the keyboard or

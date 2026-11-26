@@ -98,20 +98,12 @@ impl Fixture {
         // This is layout only: no pixel image matching this size is ever allocated.
         let raw = HeadlessView::raw_input(egui::vec2(1000.0, 16000.0), 1.0, f64::from(self.tick) / 60.0, events);
         let app = &mut self.app;
-        let native = self.native;
         let probe = self.probe;
         let out = self.ctx.run_ui(raw, |root| {
             egui::CentralPanel::default().show(root, |ui| {
                 let ctx = ui.ctx().clone();
                 let mut draw = |ui: &mut egui::Ui| {
-                    let mut subtree = || {
-                        super::text_overlays(app, ui, &crate::theme::Tokens::get(&ctx));
-                    };
-                    if native {
-                        (subtree)();
-                    } else {
-                        subtree();
-                    }
+                    super::text_overlays(app, ui, &crate::theme::Tokens::get(&ctx));
                 };
                 match probe {
                     Probe::Normal => draw(ui),

@@ -25,6 +25,7 @@ mod masks;
 mod retouch;
 mod window;
 
+#[cfg(test)]
 pub(crate) use crop::crop_angle_label;
 use crop::crop_overlay;
 #[cfg(test)]

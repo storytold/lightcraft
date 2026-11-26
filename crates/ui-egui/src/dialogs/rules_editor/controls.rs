@@ -48,7 +48,18 @@ pub(super) fn text(ui: &mut egui::Ui, id: &str, value: &mut String, width: f32, 
     register(ui, id, &shown.response);
 }
 
-pub(super) fn number(ui: &mut egui::Ui, id: &str, label: &str, value: f64, lo: f64, hi: f64, step: f64, whole: bool) -> Option<f64> {
+/// A number field's span (`lo..=hi`), the step one arrow press takes, and whether it holds whole numbers.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Span {
+    pub lo: f64,
+    pub hi: f64,
+    pub step: f64,
+    pub whole: bool,
+}
+
+/// A number field (`field:{id}`): its value once a real edit commits it.
+pub(super) fn number(ui: &mut egui::Ui, id: &str, label: &str, value: f64, span: Span) -> Option<f64> {
+    let Span { lo, hi, step, whole } = span;
     let mut next = Some(value);
     let rect = rect(ui, 72.0);
     let field = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut next))

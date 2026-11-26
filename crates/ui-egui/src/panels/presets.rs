@@ -246,7 +246,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let open_id = egui::Id::unique(("preset-group", favorites, &g));
                 let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
                 let (_, r) = ui.allocate_space(vec2(ui.available_width(), 32.0));
-                let shown = sdk::group_row(ui, r, favorites, &g, crate::i18n::builtin_label(&g, builtin).as_ref(), open);
+                let shown = sdk::group_row(ui, r, favorites, &g, crate::i18n::builtin_label(&g, builtin), open);
                 let resp = shown.response;
                 // outside the `presetGroup:` ids, which a user group of any name can take
                 if !measuring {

@@ -253,7 +253,6 @@ impl<'a> AlbumPicker<'a> {
         }
         let mut popup_open = state.popup_open;
         let body_interactive = popup_open;
-        let mut state = state;
         let mut picked: Option<u64> = None;
         let mut choices = choices;
         let mut chose_extra = false;

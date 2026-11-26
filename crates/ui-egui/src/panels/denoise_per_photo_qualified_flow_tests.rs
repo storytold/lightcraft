@@ -21,18 +21,10 @@ enum Probe {
     Measure,
 }
 #[derive(Clone, Debug)]
-struct PaintedText {
-    text: String,
-    rect: Rect,
-    clip: Rect,
-}
-#[derive(Clone, Debug)]
 struct Node {
     id: u64,
     role: String,
     name: Option<String>,
-    description: Option<String>,
-    checked: String,
     bounds: Option<Rect>,
 }
 struct Output(egui::FullOutput);
@@ -113,7 +105,6 @@ struct Fixture {
     rects: Vec<(String, Rect)>,
     hits: Vec<(String, crate::widgets::WidgetHit)>,
     nodes: Vec<Node>,
-    texts: Vec<PaintedText>,
     panel: Rect,
     record: Option<Arc<craft::ui::runtime::inspect::Recorded>>,
     trace: VecDeque<String>,
@@ -198,7 +189,6 @@ impl Fixture {
             rects: vec![],
             hits: vec![],
             nodes: vec![],
-            texts: vec![],
             panel: Rect::NOTHING,
             record: None,
             trace: VecDeque::new(),
@@ -309,23 +299,6 @@ impl Fixture {
             assert!(final_registry.0.iter().filter(|(name, _)| name == KEY).count() <= 1, "duplicate original aliases");
             assert!(final_registry.1.iter().filter(|(name, _)| name == KEY).count() <= 1, "duplicate original hits");
         }));
-        fn texts(shape: &egui::Shape, clip: Rect, out: &mut Vec<PaintedText>) {
-            match shape {
-                egui::Shape::Text(t) => {
-                    out.push(PaintedText { text: t.galley.job.text.clone(), rect: Rect::from_min_size(t.pos, t.galley.size()), clip })
-                }
-                egui::Shape::Vec(parts) => {
-                    for part in parts {
-                        texts(part, clip, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-        self.texts.clear();
-        for shape in &output.0.shapes {
-            texts(&shape.shape, shape.clip_rect, &mut self.texts);
-        }
         self.nodes.clear();
         if let Some(update) = &output.0.platform_output.accesskit_update {
             for (id, node) in &update.nodes {
@@ -333,8 +306,6 @@ impl Fixture {
                     id: id.0,
                     role: format!("{:?}", node.role()),
                     name: node.label().map(str::to_owned),
-                    description: node.description().map(str::to_owned),
-                    checked: format!("{:?}", node.toggled()),
                     bounds: node.bounds().map(|r| Rect::from_min_max(egui::pos2(r.x0 as f32, r.y0 as f32), egui::pos2(r.x1 as f32, r.y1 as f32))),
                 });
             }
@@ -366,11 +337,6 @@ impl Fixture {
         for _ in 0..DRAWER_FRAMES {
             self.frame(vec![]);
         }
-    }
-    fn idle(&mut self) {
-        let before = self.state();
-        self.settle();
-        assert_eq!(self.state(), before, "no idle replay");
     }
     fn has(&self, key: &str) -> bool {
         self.rects.iter().any(|(name, _)| name == key)

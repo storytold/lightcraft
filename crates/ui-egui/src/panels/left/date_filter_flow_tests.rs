@@ -300,15 +300,15 @@ impl Fixture {
     }
 
     fn focused(&self, id: &str) -> bool {
-        if id.starts_with("source:date:") {
-            if let Some(root) = self.collection_root() {
-                // List owns one real native/SDK stop; its public lead is the
-                // identity of the current row, not an egui focus on that row.
-                let root_focused = self.ctx.memory(|m| m.focused()) == Some(root.id)
-                    && craft::ui::runtime::focus::focused_rec(&self.ctx).is_some_and(|rec| rec.stop.id == root.id && rec.stop.part.is_none());
-                let rows = self.widgets.iter().filter(|(name, _)| name.starts_with("source:date:")).collect::<Vec<_>>();
-                return root_focused && self.collection_lead().and_then(|at| rows.get(at)).is_some_and(|(name, _)| name == id);
-            }
+        if id.starts_with("source:date:")
+            && let Some(root) = self.collection_root()
+        {
+            // List owns one real native/SDK stop; its public lead is the
+            // identity of the current row, not an egui focus on that row.
+            let root_focused = self.ctx.memory(|m| m.focused()) == Some(root.id)
+                && craft::ui::runtime::focus::focused_rec(&self.ctx).is_some_and(|rec| rec.stop.id == root.id && rec.stop.part.is_none());
+            let rows = self.widgets.iter().filter(|(name, _)| name.starts_with("source:date:")).collect::<Vec<_>>();
+            return root_focused && self.collection_lead().and_then(|at| rows.get(at)).is_some_and(|(name, _)| name == id);
         }
         let Some(native) = self.ctx.memory(|m| m.focused()) else { return false };
         let Some(response) = self.ctx.read_response(native) else { return false };
@@ -360,11 +360,6 @@ impl Fixture {
             self.trace
         );
     }
-    fn arm(&mut self, command: &str, params: Value) {
-        self.oracle.run(command, params).unwrap();
-        self.pending = Some(document(&self.oracle));
-        assert_ne!(self.pending.as_ref().unwrap(), &self.baseline, "the original command must make a genuine change");
-    }
     fn accepted(&mut self) {
         assert_eq!(document(&self.app), self.pending.take().unwrap());
         self.baseline = document(&self.app);
@@ -412,11 +407,6 @@ impl Fixture {
     }
     fn visible(&mut self) -> std::collections::BTreeSet<u64> {
         self.app.session.visible_cloned().iter().map(|id| id.0).collect()
-    }
-    fn undo_redo(&mut self) {
-        for cmd in ["edit.undo", "edit.redo"] {
-            self.run_both(cmd, json!({}));
-        }
     }
 }
 impl Drop for Fixture {

@@ -103,6 +103,8 @@ impl HeadlessView {
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
         // Every control is a framework component: a view without the runtime would not sense or route input.
+        // Installing it only registers on a fresh context, which cannot fail; a view without it is not a view.
+        #[allow(clippy::expect_used)]
         crate::app::install_runtime(&ctx).expect("the UI runtime installs on a fresh context");
         HeadlessView {
             ctx,
