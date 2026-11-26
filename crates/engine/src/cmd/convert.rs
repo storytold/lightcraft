@@ -92,8 +92,8 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
         match write_dng_for(s, path, packet) {
             Ok((out, info)) => {
                 let file_name = Path::new(&out).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                // virtual copies of this photo follow it to the DNG
-                for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)).chain(std::iter::once(&ph)) {
+                // Copies that read this file follow its conversion. Independently relinked copies keep their own source.
+                for c in s.catalog.photos().filter(|c| c.copy_of == Some(id) && shares_reload_source(c, &ph)).chain(std::iter::once(&ph)) {
                     ops.push(Op::Relink {
                         id: c.id,
                         file_name: file_name.clone(),

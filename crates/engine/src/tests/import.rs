@@ -5288,8 +5288,22 @@ fn convert_to_dng_refreshes_copy_classification_and_undo_redo() {
         .unwrap();
     let copy = s.execute("photo.virtualCopy", &json!({"ids": [parent.0]})).unwrap();
     let copy = PhotoId(copy["ids"][0].as_u64().unwrap());
-    s.execute("photo.relink", &json!({"id": copy.0, "path": png.to_string_lossy()})).unwrap();
+    let independent = s.execute("photo.virtualCopy", &json!({"ids": [parent.0]})).unwrap();
+    let independent = PhotoId(independent["ids"][0].as_u64().unwrap());
+    s.execute("photo.relink", &json!({"id": independent.0, "path": png.to_string_lossy()})).unwrap();
+    let independent_before = s.catalog.photo(independent).unwrap().clone();
+    let shared = s.catalog.photo(copy).unwrap();
+    s.catalog
+        .apply(Op::Relink {
+            id: copy,
+            file_name: shared.file_name.clone(),
+            source: shared.source.clone(),
+            format: Some("PNG".into()),
+            kind: Some(MediaKind::Image),
+        })
+        .unwrap();
     s.catalog.apply(Op::SetAsShotWb { id: copy, wb: None }).unwrap();
+    s.catalog.apply(Op::SetEmbeddedLens { id: copy, lens: Some(Box::default()) }).unwrap();
     s.execute("develop.set", &json!({"ids": [copy.0], "control": "light.exposure", "value": 0.4})).unwrap();
     let before = s.catalog.photo(copy).unwrap().clone();
     let parent_before = s.catalog.photo(parent).unwrap().clone();
@@ -5297,22 +5311,26 @@ fn convert_to_dng_refreshes_copy_classification_and_undo_redo() {
     let converted = s.execute("photo.convertToDng", &json!({"ids": [parent.0]})).unwrap();
     assert_eq!(converted["converted"].as_array().unwrap().len(), 1, "{converted}");
     let output = Source::File { path: converted["converted"][0]["path"].as_str().unwrap().into() };
-    let output_wb =
-        crate::files::probe_bytes("converted.dng", &std::fs::read(converted["converted"][0]["path"].as_str().unwrap()).unwrap()).unwrap().as_shot_wb;
-    assert!(output_wb.is_some());
+    let output_info =
+        crate::files::probe_bytes("converted.dng", &std::fs::read(converted["converted"][0]["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(output_info.as_shot_wb.is_some());
     for id in [parent, copy] {
         let photo = s.catalog.photo(id).unwrap();
         assert_eq!((photo.kind, photo.format.as_str()), (MediaKind::Raw, "DNG"), "known DNG output is always raw");
         assert_eq!(photo.source, output);
-        assert_eq!(photo.as_shot_wb, output_wb, "every relinked record uses the generated DNG's As Shot facts");
+        assert_eq!(photo.as_shot_wb, output_info.as_shot_wb, "every relinked record uses the generated DNG's As Shot facts");
+        assert_eq!(photo.embedded_lens.as_deref(), output_info.embedded_lens.as_ref());
     }
+    assert_eq!(s.catalog.photo(independent).unwrap(), &independent_before);
     let after = s.catalog.photo(copy).unwrap().clone();
     assert_eq!(after.develop, before.develop);
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(copy).unwrap(), &before);
     assert_eq!(s.catalog.photo(parent).unwrap(), &parent_before);
+    assert_eq!(s.catalog.photo(independent).unwrap(), &independent_before);
     s.execute("edit.redo", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(copy).unwrap(), &after);
+    assert_eq!(s.catalog.photo(independent).unwrap(), &independent_before);
 }
 
 #[test]
