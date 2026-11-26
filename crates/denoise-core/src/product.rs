@@ -160,7 +160,10 @@ pub fn write(path: &Path, img: &Rgb32f, key: &str) -> Result<(), ProductError> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+        // a new temp file: an entry already under the name (a link planted in the cache folder
+        // would be written through) is removed, never opened
+        let _ = std::fs::remove_file(&tmp);
+        let mut f = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?);
         f.write_all(MAGIC)?;
         f.write_all(&[VERSION, 0, 0, 0])?;
         f.write_all(&(header.len() as u32).to_le_bytes())?;
@@ -457,6 +460,22 @@ mod tests {
 
     fn temp(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("lc-denoise-{name}-{}.lcdn", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_planted_under_the_temp_name_is_not_written_through() {
+        let p = temp("planted");
+        let victim = temp("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        let _ = std::fs::remove_file(p.with_extension("tmp"));
+        std::os::unix::fs::symlink(&victim, p.with_extension("tmp")).unwrap();
+        write(&p, &picture(16, 4), "k").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert!(read_header_at(&p).is_ok());
+        for f in [p, victim] {
+            let _ = std::fs::remove_file(f);
+        }
     }
 
     fn picture(w: usize, h: usize) -> Rgb32f {

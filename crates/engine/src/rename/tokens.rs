@@ -205,6 +205,20 @@ pub fn expand(template: &str, p: &Photo, seq: usize) -> String {
     if ext.is_empty() { stem_out } else { format!("{stem_out}.{ext}") }
 }
 
+/// Most bytes one expansion yields (far above any file name or overlay line). A token repeated many times
+/// with a long metadata value would otherwise multiply into gigabytes; the result is cut at this size.
+pub const MAX_EXPANDED_BYTES: usize = 1 << 20;
+
+/// `s` appended to `out`, cut at a character boundary where `out` would pass [`MAX_EXPANDED_BYTES`].
+fn push_capped(out: &mut String, s: &str) {
+    let room = MAX_EXPANDED_BYTES.saturating_sub(out.len());
+    let mut n = s.len().min(room);
+    while !s.is_char_boundary(n) {
+        n -= 1;
+    }
+    out.push_str(&s[..n]);
+}
+
 /// The template's tokens replaced for `p` (no extension added, nothing sanitized). A bare `{seq}`
 /// is zero-padded to `seq_width` digits.
 pub fn expand_tokens(template: &str, p: &Photo, seq: usize, seq_width: usize) -> String {
@@ -225,9 +239,12 @@ pub fn expand_tokens_with(
     let mut out = String::new();
     let mut rest = template;
     while let Some(i) = rest.find('{') {
-        out.push_str(&rest[..i]);
+        if out.len() >= MAX_EXPANDED_BYTES {
+            return out;
+        }
+        push_capped(&mut out, &rest[..i]);
         let Some(j) = rest[i..].find('}') else {
-            out.push_str(&rest[i..]);
+            push_capped(&mut out, &rest[i..]);
             rest = "";
             break;
         };
@@ -263,9 +280,9 @@ pub fn expand_tokens_with(
                 _ => format!("{{{tok}}}"),
             },
         };
-        out.push_str(&v);
+        push_capped(&mut out, &v);
         rest = &rest[i + j + 1..];
     }
-    out.push_str(rest);
+    push_capped(&mut out, rest);
     out
 }
