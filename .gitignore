@@ -17,3 +17,8 @@ plan/
 
 # Python tools import their public operator family.
 __pycache__/
+
+# Checked out inside the workspace by the shared nightly workflows (craft-common-actions).
+/.nightly-tools
+/.nightly-input
+/craft-i18n

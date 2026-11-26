@@ -45,6 +45,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 29 | **HDR merge leftovers** (LR-MERGE-HDR): AI Denoise doesn't run on merged (linear) DNGs; JPEG brackets are treated as linear (no camera response curve); every frame is held as 32-bit float, ~0.86 GB per 67 MP frame (half-float frames would halve it) | tested on Sony A7R VI brackets 2026-10-14 ([merge.md](merge.md)); Lightroom's Denoise supports HDR DNGs | HDR shooters who denoise their merges, merge JPEGs, or merge 7+ frames of high-resolution raws on 16 GB machines | 10–20 (+ denoise linear-RGB contract, gap 11) | [merge](merge.md) |
 | 28 | **Small Classic shortcuts and keys**: Tab / ⇧Tab (hide the side panels / all panels; Tab moves the keyboard focus here) and F5. Rating `[` `]`, flag cycling (`` ` ``), `\` (Filter Bar), ⌘L (Enable Filters), ⌘⌥⇧C / ⌘⌥⇧V (Copy / Paste Metadata), F1 help, F6 / F7 / F8 (filmstrip, left panel, right panel) are bound; the grid-cycle key is shown beside both grid rows in View (#2500) | [ui-parity](ui-parity.md#shortcuts) | Classic muscle memory | 2–4 | [ui-parity](ui-parity.md) |
 | 30 | **Multi-select metadata editing in the UI**: `photo.setMeta` already iterates all selected photos, so the engine applies changes to every target. The Info panel's Show Metadata For choice (Target Photo / Selected Photos) shows the values the selected photos share and marks each field where they differ as Mixed; the All Metadata dialog still shows one photo's values with no "mixed" indication | standard in Lightroom Classic's multi-select Info panel | anyone editing metadata on a batch (copyright, keywords, custom fields) | 1–3 | [ui-parity](ui-parity.md) |
+| 31 | **Sidebar multi-selection** (LR-BEHAV-MULTISELECT): `album.delete` / `album.move` take `ids`, `keyword.delete` / `keyword.move` take `keywords`, and `library.removeFolder` / `folder.label` take `paths`, each as one undo step, but the sidebar has no Cmd/Shift-click rows to choose several albums, keywords or library folders, so only the automation interface reaches the batch forms | LR-BEHAV-MULTISELECT 🟡 (engine only) | anyone tidying many albums, keywords or folders at once in the sidebar | 2–4 | [parity-checklist](parity-checklist.md) |
 
 Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform work they need around them,
 **~340–600 h** to beta (incl. 40–80 h for the ~92 open core-path user issues) (see [target-app-parity.md](target-app-parity.md#stage)).
@@ -52,7 +53,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 ## Gaps by kind
 
 - **Feature:** 5, 8, 11, 12, 13, 15, 16, 18, 19, 29
-- **UI / UX:** 4, 23, 24, 28, 30
+- **UI / UX:** 4, 23, 24, 28, 30, 31
 - **File format:** 2, 6, 7, 10, 13, 20, 25 (raw ones in [raw-parity.md](raw-parity.md))
 - **Hardware:** 14, 17, 22, 27
 - **Localization:** 21
@@ -90,6 +91,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-26 | minor | Gap 31 added: sidebar multi-selection — the batch album, keyword and library-folder commands (#2757) have no sidebar caller yet |
 | 2026-11-18 | patch | Gap 11: the linear-RGB denoise product keeps the negative camera values the LinRec2020 inverse transform produces instead of clipping them at zero (hue in dark, saturated areas), so the product cache version moves to 5; hours unchanged |
 | 2026-11-01 | minor | Gap 13: Lightroom catalog backup zips import directly, and a backup of an imported catalog adds no collection twice (#2592); the gap stays open |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
@@ -99,6 +101,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-27 | minor | Gap 26: the loupe shows built previews (they were rendered again), photos ahead and the whole view are prepared in the background with settings per mode; gap not closed |
 | 2026-10-27 | minor | Gap 26: culling speed measured and improved (progressive Local browse, camera previews made ahead, a CR3's smallest covering JPEG, camera JPEG first at 100 %); what is left listed; gap not closed |
 | 2026-11-02 | minor | PERF-STEP-STALL: the catalog log is written and synced off the UI thread, so stepping and flagging never wait for the drive (a 300 ms sync: slowest flag 0.2 ms, was 305 ms); a failed write is held and retried, counted as unsaved, never dropped; gap 26 not closed |
+| 2026-11-04 | patch | LR-MASK-OBJECTS, #2574: remote SAM worker logs and retries listener accept errors after 100 ms; startup and bind failures remain errors; gap ranking and readiness unchanged |
+| 2026-11-04 | patch | #3028: launch image paths honor explicit Detail; Grid and Last keep Photo Grid; populated-library launches without image arguments keep their saved view; ranked gaps and readiness estimates unchanged |
 | 2026-11-02 | patch | Gap 11: a linear-RGB denoise tile matches each colour plane's scale on its own, so dark, strongly coloured X-Trans night shots keep their colour (red was 7–9 8-bit levels down, green 3 up); a download of the linear RawNIND model installs that model instead of the Bayer one; the product cache version moves to 4; hours unchanged |
 | 2026-11-02 | minor | Gap 11: AI Denoise supports Fujifilm X-Trans sensors via the post-demosaic LinearRgb contract (`Domain::LinearRgb`) |
 | 2026-10-28 | minor | Gap 8 shrinks: the desktop app offers lensfun's lens database (CC BY-SA, pinned) once on the first launch and downloads it on request and looks the library's raws up when it arrives; validation, a profile picker and own calibration remain |
