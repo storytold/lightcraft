@@ -13,7 +13,10 @@ const KEPT: &str = "/nowhere/kept.cr3";
 
 fn demo() -> Headless {
     let services = crate::Services { png: None, ..Default::default() };
-    Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), services), [1000.0, 700.0], 1.0)
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    // Probe ownership needs no GPU output or process-wide device warm-up in this short fixture (#620).
+    app.ui.settings.gpu = false;
+    Headless::new(app, [1000.0, 700.0], 1.0)
 }
 
 fn probes() -> std::collections::HashMap<String, lightcraft_engine::media::ProbeInfo> {
