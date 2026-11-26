@@ -48,6 +48,9 @@ pub use source::{
     face_edge, thumb_bucket,
 };
 
+/// Latest successful replacement per proxy file, shared by every virtual copy and preview worker.
+pub(crate) type ProxyRefreshes = Arc<std::sync::Mutex<HashMap<std::path::PathBuf, u64>>>;
+
 pub struct MediaCache {
     settings_hashes: SettingsHashes,
     /// Decoded thumbnail-level sources (LRU by bytes).
@@ -81,6 +84,8 @@ pub struct MediaCache {
     scenes: Vec<lightcraft_scenes::Scene>,
     /// Rendered thumbnails (memory, plus disk once a library is attached).
     pub rendered: Arc<PreviewCache>,
+    /// Invalidates old proxy decodes without giving workers ownership of the media cache.
+    pub(crate) proxy_refreshes: ProxyRefreshes,
     /// Which photos have a cached denoised picture, and how to read it.
     pub denoise: DenoiseIndex,
     /// Imported camera profiles by id ([`crate::cmd::dcp_profiles`]), handed to the decoder of photos using them.

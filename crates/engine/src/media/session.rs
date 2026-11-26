@@ -35,6 +35,8 @@ impl crate::Session {
         apply_crop: bool,
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
+        // Capture before selecting a cached source so a concurrent refresh rejects writes using old pixels.
+        let cache_generation = self.media.rendered.generation();
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
@@ -98,7 +100,7 @@ impl crate::Session {
         });
         Some(RenderJob {
             request_id: 0,
-            cache_generation: self.media.rendered.generation(),
+            cache_generation,
             source_key: Some(source_key),
             photo: id,
             level,
@@ -179,6 +181,7 @@ impl crate::Session {
     /// hash, so a variant renders once; `key` is derived from the same hash, so a frontend can
     /// keep one texture per variant.
     pub fn variant_job(&mut self, id: PhotoId, settings: &DevelopSettings, edge: usize) -> Option<RenderJob> {
+        let cache_generation = self.media.rendered.generation();
         let mut p = (**self.catalog.photo(id)?).clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
@@ -188,7 +191,7 @@ impl crate::Session {
         let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         Some(RenderJob {
             request_id: 0,
-            cache_generation: self.media.rendered.generation(),
+            cache_generation,
             source_key: Some(super::quick::source_identity(&p)),
             photo: id,
             level,
@@ -219,6 +222,7 @@ impl crate::Session {
     /// library's thumbnail cache on disk) like [`Self::variant_job`], and `key` likewise follows
     /// the content: a later launch shows the tile without reading the original.
     pub fn face_job(&mut self, id: PhotoId, face: lightcraft_geom::Rect, edge: usize) -> Option<RenderJob> {
+        let cache_generation = self.media.rendered.generation();
         let p = self.catalog.photo(id)?.clone();
         // `face` is on the upright (EXIF-oriented) photo; the crop below is in the frame after the
         // user's Rotate Left/Right, so carry the box (and the photo's size) over to it.
@@ -244,7 +248,7 @@ impl crate::Session {
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
             request_id: 0,
-            cache_generation: self.media.rendered.generation(),
+            cache_generation,
             source_key: Some(super::quick::source_identity(&p)),
             photo: id,
             level,
