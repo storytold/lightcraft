@@ -1,4 +1,7 @@
 //! Real SDK controls; only deterministic local check answers, never update servers/installers.
+// The module is `#[cfg(all(test, not(target_arch = "wasm32")))]`, which clippy does not treat as
+// test code, so its unwraps and panics in these fixtures need the test exemption by hand.
+#![allow(clippy::unwrap_used, clippy::panic, reason = "test-only fixtures clippy does not see as tests")]
 use super::*;
 use crate::headless::HeadlessView;
 use crate::widgets::take_registries;

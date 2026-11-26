@@ -1,7 +1,7 @@
 //! Native baseline only: real owned PNG folders, Browse workers and catalog transactions.
 //! No mock command dispatch, forced focus, altered production behavior or SDK candidate.
 use crate::{LightcraftApp, Services, headless::Headless};
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
+use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 use lightcraft_catalog::{Op, PhotoId, Source};
 use serde_json::{Value, json};
 use std::{
@@ -186,36 +186,6 @@ impl Review {
         self.pointer(pos, true);
         self.pointer(pos, false);
         assert!(self.settle());
-    }
-    fn key(&mut self, key: Key, shift: bool) {
-        let modifiers = Modifiers { shift, ..Default::default() };
-        for pressed in [true, false] {
-            self.frame(vec![Event::ModifiersChanged(modifiers), Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }]);
-        }
-        self.h.step();
-    }
-    fn focus(&self) -> Option<String> {
-        let id = self.h.view.ctx.memory(|m| m.focused())?;
-        let response = self.h.view.ctx.read_response(id)?;
-        self.h
-            .app
-            .widgets
-            .iter()
-            .find(|(_, rect)| (*rect == response.rect || *rect == response.interact_rect) && response.sense.senses_click())
-            .map(|(name, _)| name.clone())
-    }
-    fn tab_to(&mut self, alias: &str, shift: bool) -> Vec<String> {
-        let mut stops = vec![];
-        for _ in 0..180 {
-            self.key(Key::Tab, shift);
-            let name = self.focus().unwrap_or_else(|| format!("other:{:?}", self.h.view.ctx.memory(|m| m.focused())));
-            stops.push(name.clone());
-            if name == alias {
-                println!("FOLDER_BOUNDARY_TAB {}", json!({"shift":shift,"stops":stops}));
-                return stops;
-            }
-        }
-        panic!("natural traversal did not reach {alias}: {stops:?}");
     }
     fn history(entries: &[lightcraft_engine::UndoEntry]) -> Value {
         json!(entries.iter().map(|e| json!({"label":e.label,"op":e.op,"folder":format!("{:?}",e.folder)})).collect::<Vec<_>>())

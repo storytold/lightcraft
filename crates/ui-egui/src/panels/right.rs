@@ -110,7 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // (the offset this real pass ended at: the next pass holds from it, not from the state a sizing or
         // measuring run in between may already have pulled back as the content shrank)
         if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
-            ui.data_mut(|d| d.insert_temp(egui::Id::unique(ENDED), scrolled.state.offset().y));
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique(ENDED), scrolled.state.clamped_offset().y));
         }
     });
 }

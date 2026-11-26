@@ -73,7 +73,7 @@ impl PresetFrames {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());
                     draw(&mut child);
                 }
-                _ => unreachable!(),
+                other => panic!("unknown pass mode {other}"),
             }
         });
         output.textures_delta.clear();

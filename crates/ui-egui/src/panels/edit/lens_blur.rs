@@ -2,8 +2,8 @@
 //! shape that can be moved on the photo), Find Subject and Brush Refinement.
 
 use super::{
-    Color32, ControlSpec, Icon, LightcraftApp, Pos2, Rect, RichText, Section, Sense, Stroke, Tokens, Track, control, paint, pos2, register, slider,
-    sub_title, text_button, vec2,
+    Color32, ControlSpec, Icon, LightcraftApp, Pos2, Rect, RichText, Section, Sense, Stroke, Tokens, Track, control, paint, pos2, slider, sub_title,
+    text_button, vec2,
 };
 use lightcraft_develop::DevelopSettings;
 use serde_json::json;

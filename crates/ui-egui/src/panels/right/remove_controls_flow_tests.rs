@@ -351,7 +351,7 @@ fn remove_selected_brush_drags_edit_only_one_spot_and_photo_in_one_real_undo_tra
             SIZE => wanted.spots[1].size = expected,
             FEATHER => wanted.spots[1].feather = expected,
             OPACITY => wanted.spots[1].opacity = expected,
-            _ => unreachable!(),
+            _ => panic!("unexpected control {control}"),
         }
         assert_eq!(after, wanted, "the selected spot is the only develop delta");
         assert_eq!(f.other(), other);

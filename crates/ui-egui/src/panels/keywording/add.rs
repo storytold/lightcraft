@@ -64,10 +64,10 @@ pub(crate) fn painter_field(ui: &mut egui::Ui, text: &mut String) -> bool {
             .show_at(ui, rect)
     });
     crate::text_field::register_field(ui, "field:keywordPainter", &shown.response, record.as_deref());
-    if shown.submitted || shown.escaped {
-        if let Some(stop) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == id) {
-            ui.memory_mut(|m| m.surrender_focus(stop.stop.root));
-        }
+    if (shown.submitted || shown.escaped)
+        && let Some(stop) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == id)
+    {
+        ui.memory_mut(|m| m.surrender_focus(stop.stop.root));
     }
     shown.submitted
 }
@@ -222,10 +222,10 @@ pub(crate) fn add_field(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &
             Err(e) => app.toast_error(ui.ctx(), e),
         }
     }
-    if r.submitted || r.escaped {
-        if let Some(stop) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == field) {
-            ui.memory_mut(|m| m.surrender_focus(stop.stop.root));
-        }
+    if (r.submitted || r.escaped)
+        && let Some(stop) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == field)
+    {
+        ui.memory_mut(|m| m.surrender_focus(stop.stop.root));
     }
     ui.data_mut(|d| d.insert_temp(kid, text));
     have

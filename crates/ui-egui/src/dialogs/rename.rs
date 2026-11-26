@@ -69,7 +69,7 @@ fn start_field(ui: &mut egui::Ui, start: &mut u32) {
 fn name_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
     // recorded, so the field's edit menu items (`{id}:paste` …) are registered while that menu is open
-    let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::new(("name-field-inspect", id)), |ui| {
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique(("name-field-inspect", id)), |ui| {
         TextField::new(crate::i18n::tr(hint).to_owned(), Bind::bound(value))
             .id_salt(id)
             .placeholder(crate::i18n::tr(hint).to_owned())

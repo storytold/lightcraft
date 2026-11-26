@@ -628,7 +628,6 @@ pub fn save_body(
     use craft::ui::primitives::DocRun;
     use craft::ui::style::DataColor;
 
-    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     Stack::new().id_salt("save-effect-include-block").show(ui, |ui, cx| {
         // The Stack is measured on its own, with no width given: its two columns would share an endless one and the
         // dialog would be as wide as the window.

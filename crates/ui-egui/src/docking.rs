@@ -611,7 +611,9 @@ fn fitted(workspace: &Workspace, room: f32) -> Workspace {
     }
     let excess = docked.iter().map(|(_, width, _)| width).sum::<f32>() + crate::state::MIN_PHOTO_WIDTH - room;
     let give: f32 = docked.iter().map(|(_, width, min)| (width - min).max(0.0)).sum();
-    if !room.is_finite() || !(excess > 0.0) || !(give > 0.0) {
+    // (`>` rather than `>=` so a NaN width or room leaves the workspace as it is)
+    let narrows = room.is_finite() && excess > 0.0 && give > 0.0;
+    if !narrows {
         return workspace.clone();
     }
     let share = (excess / give).min(1.0);

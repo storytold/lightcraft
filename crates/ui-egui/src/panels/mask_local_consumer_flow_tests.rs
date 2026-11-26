@@ -88,10 +88,10 @@ impl Fixture {
             egui::CentralPanel::default().show(root, |ui| {
                 ui.set_max_width(360.0);
                 let mut draw = |ui: &mut egui::Ui| {
-                    if app.ui.right == crate::state::RightPanel::Masking {
-                        if let Some(photo) = app.session.active() {
-                            super::show(app, ui, photo);
-                        }
+                    if app.ui.right == crate::state::RightPanel::Masking
+                        && let Some(photo) = app.session.active()
+                    {
+                        super::show(app, ui, photo);
                     }
                 };
                 match probe {
@@ -137,7 +137,7 @@ impl Fixture {
     fn value(&self, name: &str) -> f64 {
         let settings = self.settings();
         let mask = settings.masks.iter().find(|mask| mask.id == self.target).unwrap();
-        if name == "refine" { f64::from(mask.refine) } else { super::local_get(&mask.adjust, name) }
+        if name == "refine" { mask.refine } else { super::local_get(&mask.adjust, name) }
     }
     fn tab(&mut self, prefix: &str, name: &str) {
         let id = self.hits[&format!("{prefix}:{name}")].id;

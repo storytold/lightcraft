@@ -1,4 +1,4 @@
-use super::{LightcraftApp, PhotoId, Tokens, divider, header, json, padded, register, slider, text_button};
+use super::{LightcraftApp, PhotoId, Tokens, divider, header, json, padded, slider, text_button};
 
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _};
@@ -533,7 +533,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // apply_slider_out adapter owns engine begin/update/end and Undo grouping.
     let field = |ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: f64, enabled: bool| {
         // a draft or gesture belongs to the photo and spot it began on
-        let out = crate::widgets::slider_salted(ui, spec, value, interactive && enabled, None, egui::Id::new(("remove-field", id, selected)));
+        let out = crate::widgets::slider_salted(ui, spec, value, interactive && enabled, None, egui::Id::unique(("remove-field", id, selected)));
         (out, out.cancelled)
     };
     let sliders = [
@@ -704,46 +704,72 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 #[path = "shared_tool_overlay_flow_tests.rs"]
 mod shared_tool_overlay_flow_tests;
 
-pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    let d = app.session.develop_of(id).unwrap_or_default();
+/// The photo, eye, eye count, the eye's geometry and its kind, which the numeric values belong to.
+type RedEyeOwner = (PhotoId, usize, usize, [u64; 4], bool);
 
-    // Numeric ownership belongs to the actual bound interaction. The earlier
-    // mode/delete controls and commands only gain real-pass action eligibility.
-    type Owner = (PhotoId, usize, usize, [u64; 4], bool);
-    #[derive(Clone)]
-    struct Gesture {
-        owner: Owner,
-        control: String,
-        label: String,
-        original: std::sync::Arc<lightcraft_develop::DevelopSettings>,
+/// The engine interaction a Red Eye slider began, so only that drag's own interaction is cancelled.
+#[derive(Clone)]
+struct RedEyeGesture {
+    owner: RedEyeOwner,
+    control: String,
+    label: String,
+    original: std::sync::Arc<lightcraft_develop::DevelopSettings>,
+}
+
+/// The key of the gesture the real pass recorded.
+fn red_eye_gesture_key() -> egui::Id {
+    egui::Id::unique("red-eye-numeric-interaction-owner")
+}
+
+/// The key of the owner and pass the pass before ended at.
+fn red_eye_previous_key() -> egui::Id {
+    egui::Id::unique("red-eye-numeric-parent-pass")
+}
+
+/// Whether `gesture` is the interaction this adapter began.
+fn red_eye_owns(app: &LightcraftApp, gesture: &RedEyeGesture) -> bool {
+    app.ui.dragging_control.as_deref() == Some(gesture.control.as_str())
+        && app.session.interaction.as_ref().is_some_and(|interaction| {
+            interaction.photo == gesture.owner.0
+                && interaction.label == gesture.label
+                && std::sync::Arc::ptr_eq(&interaction.original, &gesture.original)
+        })
+}
+
+/// The eye whose values the numeric sliders show, as the owner an interaction on it is bound to.
+fn red_eye_target(app: &LightcraftApp, id: PhotoId, d: &lightcraft_develop::DevelopSettings) -> Option<RedEyeOwner> {
+    let selected = app.ui.eye.min(d.red_eye.len().saturating_sub(1));
+    d.red_eye
+        .get(selected)
+        .map(|eye| (id, selected, d.red_eye.len(), [eye.center.x.to_bits(), eye.center.y.to_bits(), eye.rx.to_bits(), eye.ry.to_bits()], eye.pet))
+}
+
+/// Cancels the gesture `spec`'s slider began when it cancelled the drag: only the exact engine
+/// interaction this adapter began, and only for the eye the gesture belongs to.
+fn red_eye_cancel(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, selected: Option<RedEyeOwner>) {
+    if let Some(gesture) = ui.data(|data| data.get_temp::<RedEyeGesture>(red_eye_gesture_key()))
+        && gesture.control == spec.id
+        && Some(gesture.owner) == selected
+    {
+        if red_eye_owns(app, &gesture) {
+            let _ = app.run("develop.cancelInteraction", json!({}));
+            app.ui.dragging_control = None;
+        }
+        ui.data_mut(|data| data.remove::<RedEyeGesture>(red_eye_gesture_key()));
     }
-    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let interactive = real && ui.is_enabled() && app.session.active() == Some(id);
-    let selected = d.red_eye.get(app.ui.eye.min(d.red_eye.len().saturating_sub(1))).map(|eye| {
-        (
-            id,
-            app.ui.eye.min(d.red_eye.len().saturating_sub(1)),
-            d.red_eye.len(),
-            [eye.center.x.to_bits(), eye.center.y.to_bits(), eye.rx.to_bits(), eye.ry.to_bits()],
-            eye.pet,
-        )
-    });
-    let gesture_key = egui::Id::unique("red-eye-numeric-interaction-owner");
-    let previous_key = egui::Id::unique("red-eye-numeric-parent-pass");
-    let gesture = ui.data(|data| data.get_temp::<Gesture>(gesture_key));
-    let owns = |app: &LightcraftApp, gesture: &Gesture| {
-        app.ui.dragging_control.as_deref() == Some(gesture.control.as_str())
-            && app.session.interaction.as_ref().is_some_and(|interaction| {
-                interaction.photo == gesture.owner.0
-                    && interaction.label == gesture.label
-                    && std::sync::Arc::ptr_eq(&interaction.original, &gesture.original)
-            })
-    };
+}
+
+/// The epoch of the numeric ownership, bumped whenever the eye, the interaction or this panel
+/// changes. A gesture that no longer belongs to the pass's owner is cancelled here, before the
+/// sliders draw.
+fn red_eye_epoch(app: &mut LightcraftApp, ui: &mut egui::Ui, selected: Option<RedEyeOwner>, real: bool, interactive: bool) -> u64 {
+    let (gesture_key, previous_key) = (red_eye_gesture_key(), red_eye_previous_key());
+    let gesture = ui.data(|data| data.get_temp::<RedEyeGesture>(gesture_key));
     let pass = ui.ctx().cumulative_pass_nr();
-    let previous = ui.data(|data| data.get_temp::<(Option<Owner>, bool, u64, u64)>(previous_key));
+    let previous = ui.data(|data| data.get_temp::<(Option<RedEyeOwner>, bool, u64, u64)>(previous_key));
     let gap = previous.is_some_and(|(_, _, seen, _)| seen.saturating_add(1) < pass);
     let rebound = previous.is_some_and(|(owner, enabled, _, _)| owner != selected || enabled != interactive);
-    let lost = gesture.as_ref().is_some_and(|gesture| !owns(app, gesture));
+    let lost = gesture.as_ref().is_some_and(|gesture| !red_eye_owns(app, gesture));
     let epoch = previous.map_or(0, |(_, _, _, epoch)| epoch.saturating_add(u64::from(gap || rebound || lost)));
     if real {
         if (gap || rebound || lost || !interactive || gesture.as_ref().is_some_and(|gesture| Some(gesture.owner) != selected))
@@ -753,17 +779,28 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             // foreign interaction with the same control name is not ours. The engine
             // keeps an edit committed after the drag's snapshot (Reset Edits run
             // mid-drag) instead of restoring over it.
-            if owns(app, gesture) {
+            if red_eye_owns(app, gesture) {
                 let _ = app.run("develop.cancelInteraction", json!({}));
                 app.ui.dragging_control = None;
             } else if app.session.interaction.is_none() && app.ui.dragging_control.as_deref() == Some(gesture.control.as_str()) {
                 // A genuine panel/selection command may already have committed it.
                 app.ui.dragging_control = None;
             }
-            ui.data_mut(|data| data.remove::<Gesture>(gesture_key));
+            ui.data_mut(|data| data.remove::<RedEyeGesture>(gesture_key));
         }
         ui.data_mut(|data| data.insert_temp(previous_key, (selected, interactive, pass, epoch)));
     }
+    epoch
+}
+
+pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let d = app.session.develop_of(id).unwrap_or_default();
+    // Numeric ownership belongs to the actual bound interaction. The earlier
+    // mode/delete controls and commands only gain real-pass action eligibility.
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let interactive = real && ui.is_enabled() && app.session.active() == Some(id);
+    let selected = red_eye_target(app, id, &d);
+    let epoch = red_eye_epoch(app, ui, selected, real, interactive);
     header(ui, "Red Eye");
     padded(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -807,7 +844,7 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             value,
             enabled: interactive,
             label: None,
-            salt: egui::Id::new(("red-eye-field", selected, epoch)),
+            salt: egui::Id::unique(("red-eye-field", selected, epoch)),
             record: Some(egui::Id::unique(("red-eye-field-record", id, i, spec.id))),
         };
         let out = crate::widgets::slider_row(ui, &row);
@@ -819,16 +856,7 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let v = lightcraft_develop::controls::get(&d, &cid).unwrap_or(spec.default);
         let (out, cancelled) = field(ui, spec, v);
         if cancelled {
-            if let Some(gesture) = ui.data(|data| data.get_temp::<Gesture>(gesture_key))
-                && gesture.control == spec.id
-                && Some(gesture.owner) == selected
-            {
-                if owns(app, &gesture) {
-                    let _ = app.run("develop.cancelInteraction", json!({}));
-                    app.ui.dragging_control = None;
-                }
-                ui.data_mut(|data| data.remove::<Gesture>(gesture_key));
-            }
+            red_eye_cancel(app, ui, spec, selected);
         } else if interactive {
             crate::panels::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": cid, "value": v})));
             if out.drag_started
@@ -836,13 +864,18 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             {
                 ui.data_mut(|data| {
                     data.insert_temp(
-                        gesture_key,
-                        Gesture { owner, control: spec.id.to_owned(), label: interaction.label.clone(), original: interaction.original.clone() },
+                        red_eye_gesture_key(),
+                        RedEyeGesture {
+                            owner,
+                            control: spec.id.to_owned(),
+                            label: interaction.label.clone(),
+                            original: interaction.original.clone(),
+                        },
                     )
                 });
             }
             if out.drag_stopped {
-                ui.data_mut(|data| data.remove::<Gesture>(gesture_key));
+                ui.data_mut(|data| data.remove::<RedEyeGesture>(red_eye_gesture_key()));
             }
         }
     }
