@@ -99,7 +99,6 @@ impl Component for MaskHit {
         HitOutput {
             response: cx.response.clone(),
             clicks,
-            cancelled: matches!(phase, PressPhase::Cancel { .. }),
             // egui's drag_stopped is only set while the press is still down, so the pass of the release is read from the press itself
             drag_ended: matches!(phase, PressPhase::Release { click: false, .. } | PressPhase::Cancel { .. }),
         }
@@ -113,8 +112,6 @@ impl Component for MaskHit {
 /// Keep the output through tooltip chains.
 pub(in crate::panels) struct HitOutput {
     pub response: Response,
-    /// The captured press was cancelled (Escape, focus loss or removal of the control).
-    pub cancelled: bool,
     clicks: u32,
     drag_ended: bool,
 }
@@ -171,24 +168,13 @@ pub(in crate::panels) struct Hit<'a> {
     drag: bool,
     pointer_only: bool,
     enabled: bool,
-    visual: Option<Rect>,
     id: Option<egui::Id>,
 }
 
 impl<'a> Hit<'a> {
     /// A control registered for automation as `widget`, named `label` for a screen reader.
     pub fn new(widget: &'a str, label: impl Into<String>) -> Self {
-        Self {
-            widget,
-            label: label.into(),
-            fill: Fill::NONE,
-            selected: false,
-            drag: false,
-            pointer_only: false,
-            enabled: true,
-            visual: None,
-            id: None,
-        }
+        Self { widget, label: label.into(), fill: Fill::NONE, selected: false, drag: false, pointer_only: false, enabled: true, id: None }
     }
 
     pub fn fill(mut self, fill: Fill) -> Self {
@@ -226,12 +212,6 @@ impl<'a> Hit<'a> {
         self
     }
 
-    /// The rectangle published for automation, when it is smaller than the hit area.
-    pub fn published(mut self, rect: Rect) -> Self {
-        self.visual = Some(rect);
-        self
-    }
-
     pub fn show_at(self, ui: &mut Ui, rect: Rect) -> HitOutput {
         let t = Tokens::get(ui.ctx());
         let hit = MaskHit {
@@ -246,7 +226,7 @@ impl<'a> Hit<'a> {
         let enabled = self.enabled && ui.is_enabled();
         let shown = hit.label(self.label).id(self.id.unwrap_or_else(|| egui::Id::unique(self.widget))).enabled(enabled).show_at(ui, rect);
         if !measuring(ui) {
-            crate::widgets::register_response(self.widget, self.visual.unwrap_or(rect), &shown.response);
+            crate::widgets::register_response(self.widget, rect, &shown.response);
         }
         shown
     }

@@ -229,9 +229,6 @@ impl Fixture {
         assert_eq!(hits.len(), 1, "one actual {name}; trace={:#?}", self.trace);
         hits[0].1
     }
-    fn has(&self, name: &str) -> bool {
-        self.rects.iter().any(|(id, _)| id == name)
-    }
     fn pointer(&mut self, position: Pos2, pressed: bool) {
         self.frame(vec![
             Event::PointerMoved(position),

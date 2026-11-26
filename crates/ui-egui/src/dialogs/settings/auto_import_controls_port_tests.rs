@@ -92,15 +92,13 @@ impl Fixture {
                 };
                 ui.add_enabled_ui(enabled, |ui| {
                     // The actual Settings presentation keeps neighboring text/Album native.
-                    (|| {
-                        let tokens = crate::theme::Tokens::get(&ctx);
-                        let mut draw = |ui: &mut egui::Ui| super::import_tab(app, ui, &tokens);
-                        if mode == 1 {
-                            craft::ui::runtime::measure::run(&ctx, || draw(ui));
-                        } else {
-                            draw(ui);
-                        }
-                    })();
+                    let tokens = crate::theme::Tokens::get(&ctx);
+                    let mut draw = |ui: &mut egui::Ui| super::import_tab(app, ui, &tokens);
+                    if mode == 1 {
+                        craft::ui::runtime::measure::run(&ctx, || draw(ui));
+                    } else {
+                        draw(ui);
+                    }
                 });
             });
         }));

@@ -253,7 +253,7 @@ fn in_window_titles_opening_never_executes_and_one_real_item_executes_exactly_on
         f.click("menuitem:library.selectNone");
         assert_eq!(f.app.session.journal.get(journal..).unwrap(), &[("library.selectNone".into(), json!({}))]);
         assert_eq!(f.app.session.selection.active, active);
-        assert_eq!(f.app.session.selection.ids.iter().copied().collect::<Vec<_>>(), active.into_iter().collect::<Vec<_>>());
+        assert_eq!(f.app.session.selection.ids.to_vec(), active.into_iter().collect::<Vec<_>>());
         assert_eq!(f.document(), before, "only the non-destructive selection command runs");
         assert!(!f.is_open());
         for _ in 0..3 {

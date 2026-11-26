@@ -247,6 +247,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "auto_import_controls_port_tests.rs"]
 mod auto_import_controls_port_tests;

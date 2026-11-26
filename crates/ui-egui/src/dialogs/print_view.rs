@@ -5,6 +5,8 @@
 //! commands: dragging a cell is `print.cell.move`, its corner handle `print.cell.resize`, with
 //! the guides' snapping done by the command. Widgets register under `print:*`, `button:print*`
 //! and `drag:print*` ids for the control channel and the headless tests.
+use std::ops::RangeInclusive;
+
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::pickers::Select;
@@ -104,18 +106,21 @@ fn measuring(ui: &Ui) -> bool {
     ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
 }
 
-/// Mount fields in the native settings rows, not an inherited SDK column width.
-/// The engine owns inches; only the displayed value and scrub step use the ruler unit.
-fn number(
-    ui: &mut Ui,
-    id: &str,
-    label: &str,
-    value: f64,
-    range: std::ops::RangeInclusive<f64>,
+/// One number row: the id it registers for automation, the label it shows, and the field's own
+/// range, scrub step, displayed decimals and unit.
+struct NumberSpec<'a> {
+    id: &'a str,
+    label: &'a str,
+    range: RangeInclusive<f64>,
     step: f64,
     decimals: usize,
-    unit: &str,
-) -> Option<f64> {
+    unit: &'a str,
+}
+
+/// Mount fields in the native settings rows, not an inherited SDK column width.
+/// The engine owns inches; only the displayed value and scrub step use the ruler unit.
+fn number(ui: &mut Ui, spec: NumberSpec<'_>, value: f64) -> Option<f64> {
+    let NumberSpec { id, label, range, step, decimals, unit } = spec;
     let mut typed = Some(value);
     let (rect, _) = ui.allocate_exact_size(vec2(76.0, 24.0), Sense::hover());
     let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut typed))
@@ -142,17 +147,15 @@ fn number(
 
 /// A length field in the ruler's unit; the new value in inches when it changed.
 fn length(ui: &mut Ui, id: &str, inches: f64, unit: Unit, min_in: f64, max_in: f64) -> Option<f64> {
-    number(
-        ui,
+    let spec = NumberSpec {
         id,
-        id,
-        unit.from_inches(inches),
-        unit.from_inches(min_in)..=unit.from_inches(max_in),
-        unit.per_inch() * 0.01,
-        decimals(unit),
-        unit.label(),
-    )
-    .map(|v| unit.to_inches(v))
+        label: id,
+        range: unit.from_inches(min_in)..=unit.from_inches(max_in),
+        step: unit.per_inch() * 0.01,
+        decimals: decimals(unit),
+        unit: unit.label(),
+    };
+    number(ui, spec, unit.from_inches(inches)).map(|v| unit.to_inches(v))
 }
 
 fn check(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
@@ -341,7 +344,8 @@ fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSet
         if let Some(v) = check(ui, "printStroke", "Inner Stroke", im.stroke_enabled) {
             patch(app, &ctx, json!({"image": {"strokeEnabled": v}}));
         }
-        if let Some(pt) = number(ui, "printStrokeWidth", "Inner stroke width", im.stroke_width_pt, 0.0..=36.0, 0.05, 2, "pt") {
+        let width = NumberSpec { id: "printStrokeWidth", label: "Inner stroke width", range: 0.0..=36.0, step: 0.05, decimals: 2, unit: "pt" };
+        if let Some(pt) = number(ui, width, im.stroke_width_pt) {
             patch(app, &ctx, json!({"image": {"strokeWidthPt": pt}}));
         }
         if let Some(c) = colour(ui, "printStrokeColor", im.stroke_color) {
@@ -407,8 +411,11 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         Style::ContactSheet => {
             let g = &l.grid;
             row(ui, t, "Grid", |ui| {
-                let c = number(ui, "printColumns", "Columns", g.columns as f64, 1.0..=layout::MAX_GRID as f64, 1.0, 0, "cols");
-                let r = number(ui, "printRows", "Rows", g.rows as f64, 1.0..=layout::MAX_GRID as f64, 1.0, 0, "rows");
+                let cells = 1.0..=layout::MAX_GRID as f64;
+                let columns = NumberSpec { id: "printColumns", label: "Columns", range: cells.clone(), step: 1.0, decimals: 0, unit: "cols" };
+                let rows = NumberSpec { id: "printRows", label: "Rows", range: cells, step: 1.0, decimals: 0, unit: "rows" };
+                let c = number(ui, columns, g.columns as f64);
+                let r = number(ui, rows, g.rows as f64);
                 if c.is_some() || r.is_some() {
                     patch(
                         app,
@@ -559,7 +566,8 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
 
     heading(ui, t, "Print Job");
     row(ui, t, "Resolution", |ui| {
-        if let Some(ppi) = number(ui, "printPpi", "Resolution", f64::from(st.job.ppi), 72.0..=720.0, 1.0, 0, "ppi") {
+        let spec = NumberSpec { id: "printPpi", label: "Resolution", range: 72.0..=720.0, step: 1.0, decimals: 0, unit: "ppi" };
+        if let Some(ppi) = number(ui, spec, f64::from(st.job.ppi)) {
             patch(app, &ctx, json!({"job": {"ppi": ppi}}));
         }
     });
@@ -626,7 +634,9 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     });
     for (key, label, value) in [("brightness", "Brightness", color.brightness), ("contrast", "Contrast", color.contrast)] {
         row(ui, t, label, |ui| {
-            if let Some(v) = number(ui, &format!("print{label}"), label, f64::from(value), -100.0..=100.0, 0.5, 0, "") {
+            let id = format!("print{label}");
+            let spec = NumberSpec { id: &id, label, range: -100.0..=100.0, step: 0.5, decimals: 0, unit: "" };
+            if let Some(v) = number(ui, spec, f64::from(value)) {
                 patch_color(app, &ctx, key, json!(v));
             }
         });

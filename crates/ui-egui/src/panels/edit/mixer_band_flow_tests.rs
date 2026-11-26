@@ -171,20 +171,20 @@ impl Fixture {
                         });
                         final_record = record;
                         let observations = crate::widgets::take_registries(ui.ctx());
-                        if observations.0.iter().any(|(name, _)| owned(name)) {
-                            if let Some((band, bw)) = initial_target {
-                                for channel in if bw {
-                                    vec![format!("bw.{band}")]
-                                } else {
-                                    ["hue", "sat", "lum"].iter().map(|key| format!("mixer.{band}.{key}")).collect()
-                                } {
-                                    assert!(
-                                        observations.0.iter().any(|(name, _)| name == &format!("slider:{channel}")),
-                                        "scalar rows keep the callback-entry target {channel}, not a mid-callback picker change"
-                                    );
-                                }
-                                callback_targets.push((band, bw));
+                        if observations.0.iter().any(|(name, _)| owned(name))
+                            && let Some((band, bw)) = initial_target
+                        {
+                            for channel in if bw {
+                                vec![format!("bw.{band}")]
+                            } else {
+                                ["hue", "sat", "lum"].iter().map(|key| format!("mixer.{band}.{key}")).collect()
+                            } {
+                                assert!(
+                                    observations.0.iter().any(|(name, _)| name == &format!("slider:{channel}")),
+                                    "scalar rows keep the callback-entry target {channel}, not a mid-callback picker change"
+                                );
                             }
+                            callback_targets.push((band, bw));
                         }
                         final_registry = observations;
                     };
@@ -760,7 +760,7 @@ fn hide_parent(f: &mut Fixture, which: u8) {
         2 => {
             f.app.run("library.select", json!({"ids":[]})).unwrap();
         }
-        _ => unreachable!(),
+        _ => panic!("hide_parent has no parent {which}"),
     }
     f.settle();
     assert!(!f.rects.iter().any(|(name, _)| owned(name)));
@@ -776,7 +776,7 @@ fn restore_parent(f: &mut Fixture, which: u8) {
         2 => {
             f.app.run("library.select", json!({"ids":[f.photos[0].0,f.photos[1].0],"active":f.photos[0].0})).unwrap();
         }
-        _ => unreachable!(),
+        _ => panic!("restore_parent has no parent {which}"),
     }
     f.settle();
 }

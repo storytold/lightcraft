@@ -226,11 +226,7 @@ impl Fixture {
                             draw(&mut child);
                         }
                     };
-                    if host == Host::NativePage {
-                        (present)();
-                    } else {
-                        present();
-                    }
+                    present();
                 });
             });
             registry = crate::widgets::take_registries(root.ctx());

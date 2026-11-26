@@ -402,7 +402,7 @@ fn profile_tile_favorite_pointer_idle_stays_hidden_but_keyboard_star_focus_is_vi
     f.click(&star(""));
     assert!(!f.app.session.profile_favorites.iter().any(|id| id == PROFILE));
     f.frame(vec![Event::PointerMoved(pos2(430.0, 300.0))], Pass::Real);
-    assert_eq!(f.visible_focus.iter().find(|(id, _)| *id == star_id).unwrap().1, false);
+    assert!(!f.visible_focus.iter().find(|(id, _)| *id == star_id).unwrap().1);
     // Pointer clicks need not leave keyboard focus on their owner. Traverse naturally
     // from the observed post-pointer state; only the ordinary (not duplicate) star counts.
     let before = f.snapshot();

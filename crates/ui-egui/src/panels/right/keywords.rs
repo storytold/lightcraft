@@ -1,4 +1,4 @@
-use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, register, text_button, vec2};
+use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, text_button, vec2};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Props as _, Show as _};
 

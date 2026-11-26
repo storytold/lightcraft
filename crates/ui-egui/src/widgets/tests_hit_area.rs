@@ -3,7 +3,6 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
-use craft::ui::contract::Show as _;
 use egui::{Color32, Shape, Ui, vec2};
 
 use crate::headless::HeadlessView;

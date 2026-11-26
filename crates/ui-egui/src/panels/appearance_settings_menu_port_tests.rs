@@ -153,9 +153,7 @@ impl Frames {
         assert_eq!(response.interact_rect, hit.interact_rect);
         let label = crate::i18n::tr("Appearance Settings…");
         assert!(
-            self.nodes
-                .get(&hit.id.accesskit_id())
-                .is_some_and(|node| node.role() == egui::accesskit::Role::MenuItem && node.label() == Some(label.as_ref())),
+            self.nodes.get(&hit.id.accesskit_id()).is_some_and(|node| node.role() == egui::accesskit::Role::MenuItem && node.label() == Some(label)),
             "installed SDK menu-item role/name, not the old egui button"
         );
         hit
@@ -358,7 +356,7 @@ fn inert_release(mode: Mode) {
         assert!(!sense.senses_click(), "disabled release must not advertise CLICK (raw enabled={enabled})");
         let node = f.nodes.get(&target.accesskit_id()).expect("disabled row from this exact frame");
         assert_eq!(node.role(), egui::accesskit::Role::MenuItem);
-        assert_eq!(node.label(), Some(crate::i18n::tr("Appearance Settings…").as_ref()));
+        assert_eq!(node.label(), Some(crate::i18n::tr("Appearance Settings…")));
         assert!(node.is_disabled());
     } else {
         assert!(!f.rects.iter().any(|(name, _)| name == SETTINGS));

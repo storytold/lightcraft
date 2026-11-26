@@ -134,7 +134,7 @@ impl Fixture {
                     let t = Tokens::get(ui.ctx());
                     match presentation {
                         Presentation::NativeSections => {
-                            (|| sections(app, ui, &t))();
+                            sections(app, ui, &t);
                         }
                         Presentation::SdkWorkflow => {
                             let settings = app.session.slide_titles.clone();

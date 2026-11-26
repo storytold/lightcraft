@@ -563,7 +563,7 @@ fn transition(f: &mut Fixture, which: u8) {
         5 => {
             f.app.run("library.select", json!({"ids":[103],"active":103})).unwrap();
         }
-        _ => unreachable!(),
+        _ => panic!("parent transition {which} is not defined"),
     }
     f.settle_drawer();
     assert_eq!(f.has(KEY), which == 5, "observed parent after its real native animation");
