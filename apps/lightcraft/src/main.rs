@@ -260,6 +260,20 @@ impl eframe::App for App {
 /// a second; anything slower gives way to quitting.
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Import files passed on the command line once the library is open. Preserve an explicit Detail
+/// startup view; Grid and Last keep the existing Photo Grid launch behavior.
+fn start_launch_files(app: &mut LightcraftApp, files: Vec<String>) {
+    if files.is_empty() {
+        return;
+    }
+    if let Err(e) = lightcraft_ui_egui::import::start_paths(app, files) {
+        log::warn!("import at launch: {e}");
+    }
+    if app.ui.settings.startup_view != lightcraft_ui_egui::state::StartupView::Detail {
+        app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+    }
+}
+
 /// The nightly Windows taskbar/Start identity, before any window or COM service exists.
 fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
     process_identity::initialize(
@@ -651,10 +665,7 @@ fn main() -> eframe::Result {
                     // listed and read on the import worker once the window shows (issue #374: never
                     // here, before the first frame, where a large folder kept the window from
                     // appearing)
-                    if let Err(e) = lightcraft_ui_egui::import::start_paths(&mut app, files) {
-                        log::warn!("import at launch: {e}");
-                    }
-                    app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+                    start_launch_files(&mut app, files);
                 }
                 // native menu bar generated from the command registry (macOS; elsewhere the menus are
                 // drawn in the window's top bar). LIGHTCRAFT_NO_NATIVE_MENU=1 keeps the in-window menus.

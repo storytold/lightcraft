@@ -177,6 +177,10 @@
   stops the remote Metal worker (#2574). Startup validation and bind failures still report an error.
 ### Reference View's empty state paints on every platform
 - Its instruction now uses the supported menu arrow symbol, avoiding a missing-glyph panic while the view is drawn.
+### Opening an image at launch honors the Detail startup view
+- When LightCraft starts with a new or already-catalogued image path, an explicit Startup View → Detail View opens
+  the selected image in Detail after the asynchronous import completes. Grid and Last continue to open launch files in
+  Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
 
 ### Lightroom catalogs with a print inside a collection import their collections
