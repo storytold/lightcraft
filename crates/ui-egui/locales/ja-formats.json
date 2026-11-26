@@ -329,6 +329,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "アルバム「{}」を通じて自分自身に戻っています。循環しているアルバムのどれかの条件を変更してください（スマートアルバムを編集…）",
   "Add {n} photo{} to “{}”": "{n}枚を「{1}」に追加{0:.0}",
   "{n} already there": "{n}枚は追加済み",
   "Add “{keyword}” to {n} photo{}": "写真{n}枚に「{keyword}」を追加{:.0}",

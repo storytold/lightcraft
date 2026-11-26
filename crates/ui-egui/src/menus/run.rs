@@ -728,7 +728,7 @@ fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "view.zoomToggle" => {
             // the same ratio a click on the photo zooms to; zooming in centres on the camera's focus
-            // point when the photo has one (View ▸ Zoom to Focus Point)
+            // point when the photo has one (View ▸ Loupe Overlay ▸ Zoom to Focus Point)
             let zoom_in = app.ui.zoom == Zoom::Fit;
             app.ui.zoom = if zoom_in { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
             app.ui.zoom_anim = true;
@@ -835,8 +835,25 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "view.maskOverlay" => {
-            app.ui.mask_overlay = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_overlay);
-            Ok(json!({"maskOverlay": app.ui.mask_overlay}))
+            // O shows or hides what is on screen now: an overlay that showed by itself (a mask
+            // without settings yet) is hidden for that mask
+            let selected = app.session.active().and_then(|id| app.session.develop_of(id)).and_then(|d| {
+                app.session
+                    .active_mask
+                    .and_then(|mid| d.masks.iter().find(|m| m.id == mid).map(|m| (mid, crate::panels::detail::overlay_shown(app, m))))
+            });
+            let shown = selected.is_some_and(|s| s.1) || (selected.is_none() && app.ui.mask_overlay);
+            let show = p.get("show").and_then(Value::as_bool).unwrap_or(!shown);
+            app.ui.mask_overlay = show;
+            let photo = app.session.active();
+            if let Some(key) = selected.and_then(|s| photo.map(|p| (p, s.0))) {
+                // each hidden mask stays hidden until O shows it again (not until another is hidden)
+                app.ui.mask_overlay_hidden.retain(|k| *k != key);
+                if !show {
+                    app.ui.mask_overlay_hidden.push(key);
+                }
+            }
+            Ok(json!({"maskOverlay": show}))
         }
         "view.maskOverlayAll" => {
             app.ui.mask_overlay_all = !app.ui.mask_overlay_all;
@@ -1130,6 +1147,21 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         }),
         s if s.starts_with("tool.") => {
             let tool = &s["tool.".len()..];
+            // a Brush stroke ends before another tool takes over (its release would go unseen: the next
+            // stroke would carry on from it), and before a Brush request that makes a new mask or component
+            // (what was painted stays on the mask it was painted on); a live one closes its undo step, so a
+            // new mask isn't folded into the "Brush" step
+            let creates = p.get("new").and_then(Value::as_bool) == Some(true) || p.get("op").is_some();
+            if (tool != "brush" || creates)
+                && let Some(crate::panels::detail::Gesture::Brush { live, .. }) = &app.gesture
+            {
+                let went_live = live.is_some();
+                app.gesture = None;
+                app.brush_live = None;
+                if went_live {
+                    let _ = app.run("develop.endInteraction", json!({}));
+                }
+            }
             match tool {
                 "none" => app.ui.tool.clear(),
                 "guidedUpright" => {
@@ -1159,7 +1191,6 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                             return Some(Err(e));
                         }
                         app.ui.brush_erase = false;
-                        app.ui.mask_overlay = true;
                     }
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
