@@ -288,7 +288,13 @@ pub(crate) fn same_pass_click(response: &egui::Response) -> bool {
     };
     let pointer = match (at(true), at(false)) {
         (Some(down), Some(up)) => {
-            response.interact_rect.contains(down) && response.interact_rect.contains(up) && ctx.layer_id_at(down) == Some(response.layer_id)
+            response.interact_rect.contains(down)
+                && response.interact_rect.contains(up)
+                && ctx.layer_id_at(down) == Some(response.layer_id)
+                // The press and the release alone would also accept a drag that ends back on the widget: egui drops
+                // a click whose pointer travelled past its click distance (or was held past its click time) before
+                // the release. Only a click it recognized is a click.
+                && ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary))
         }
         _ => false,
     };
