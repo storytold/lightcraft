@@ -14,8 +14,9 @@
 //! `wgsl/sam3_attention.wgsl` (flash style: online softmax, the 16 × 5184² scores of a global layer never exist),
 //! `wgsl/sam3_ops.wgsl` (layer norm, RoPE, im2col, the final reorder). All of the dispatches, with their parameters
 //! and bind groups, are built once with the weights; a forward pass uploads the pixels, submits one command buffer
-//! per layer and reads the result back once. No subgroups or shader-f16 needed. The necks and the text detector's
-//! heads stay in candle on the CPU.
+//! per layer and reads the result back once. No subgroups or shader-f16 needed. The two necks that follow the
+//! backbone run on the same device, built when first asked for (`sam3/neck.rs`). The text detector's heads stay in
+//! candle on the CPU.
 //!
 //! The device is its own (like denoise's and faces'): it respects the same switches as GPU rendering
 //! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, `LIGHTCRAFT_GPU_ADAPTER`, the GPU preference), the crash sentinel
@@ -27,9 +28,10 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use bytemuck::Pod;
-use lightcraft_segment::{BACKBONE_PREFIX, BackboneAccel, WeightReader};
+use lightcraft_segment::{BACKBONE_PREFIX, BackboneAccel, NeckKind, WeightReader};
 use wgpu::util::DeviceExt;
 
+mod neck;
 #[cfg(test)]
 mod tests;
 
@@ -947,6 +949,8 @@ pub struct Sam3Gpu {
     /// Bytes of work buffers on the device.
     work_bytes: u64,
     precision: Precision,
+    /// The feature pyramids, built on first use.
+    necks: neck::Necks,
 }
 
 /// The SAM 3 backbone on the GPU with the checkpoint's weights uploaded, or why it can't run there (GPU off, missing,
@@ -1040,7 +1044,8 @@ fn build_inner(dev: &'static Dev, weights: &WeightReader, precision: Precision) 
     }
     g.channels_first(&x, &y, HIDDEN, GRID, WINDOW)?;
     let recorded = g.record();
-    Ok(Sam3Gpu { dev, recorded, work: Mutex::new(Work { pixels, out: y, staging }), weight_bytes: ld.bytes, work_bytes, precision })
+    let necks = neck::Necks::new(weights.clone());
+    Ok(Sam3Gpu { dev, recorded, work: Mutex::new(Work { pixels, out: y, staging }), weight_bytes: ld.bytes, work_bytes, precision, necks })
 }
 
 /// Run `f`, the work of `stage`, turning a panic into a broken device (with the stage's name).
@@ -1088,8 +1093,22 @@ impl BackboneAccel for Sam3Gpu {
         guarded("the SAM 3 backbone", || self.run(pixels))
     }
 
+    fn neck(&self, which: NeckKind, backbone: &[f32], n: usize) -> Result<Vec<Vec<f32>>, String> {
+        if let Some(why) = broken_reason() {
+            return Err(format!("the GPU is not used any more: {why}"));
+        }
+        if let Some(why) = crate::switched_off() {
+            return Err(why);
+        }
+        guarded("a SAM 3 neck", || self.necks.run(self.dev, which, backbone, n))
+    }
+
     fn closing(&self) -> bool {
         crate::shutting_down()
+    }
+
+    fn runs_necks(&self) -> bool {
+        true
     }
 
     fn device(&self) -> String {
