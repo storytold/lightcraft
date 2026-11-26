@@ -52,10 +52,16 @@ pub(crate) struct Shape<'a> {
 /// What a slider asks its owner to do, in the numbers it shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Step {
+    /// A gesture began at `value`: the control's own value then (`None` when it had no single one).
+    /// An owner that needs the settings the gesture started from keeps its own copy here.
+    Begin(Option<f64>),
     /// Show `value` now (a drag in progress, or an abandoned gesture's value going back) without saving it.
     Preview(f64),
     /// The change is done: save `value`.
     Save(f64),
+    /// The gesture is over (`Save` has come, or a cancel gave its value back): whatever an owner kept
+    /// for it is dropped here, so nothing of it can colour the next change.
+    End,
 }
 
 /// A slider with its number field in one line (`slider:{name}`, `sliderValue:{name}`), over `value`.
@@ -110,19 +116,37 @@ pub(crate) fn slider(ui: &mut egui::Ui, owner: egui::Id, name: &str, shape: &Sha
     }
     for event in &out.events {
         match event {
+            EditEvent::Begin { before: Mixed::Same(before), .. } => steps.push(Step::Begin(Some(*before))),
+            EditEvent::Begin { .. } => steps.push(Step::Begin(None)),
             EditEvent::Update { value, .. } => steps.push(Step::Preview(*value)),
             EditEvent::Commit { before: Mixed::Same(before), after, .. } => {
                 steps.push(Step::Preview(*before));
                 if after != before {
                     steps.push(Step::Save(*after));
                 }
+                steps.push(Step::End);
             }
+            // A commit with no single value before it changes nothing to preview or save, but it still
+            // ends a gesture.
+            EditEvent::Commit { .. } => steps.push(Step::End),
+            // A value that arrived in one pass (a press on the track, a typed number, the wheel) is a
+            // gesture of its own: it begins where it began, so an owner that keeps the settings a
+            // change started from hears both ends of it rather than a save out of nowhere.
             EditEvent::Set { before, after, .. } => {
                 if !matches!(before, Mixed::Same(value) if value == after) {
+                    match before {
+                        Mixed::Same(before) => steps.push(Step::Begin(Some(*before))),
+                        _ => steps.push(Step::Begin(None)),
+                    }
                     steps.push(Step::Save(*after));
+                    steps.push(Step::End);
                 }
             }
-            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => steps.push(Step::Preview(*before)),
+            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => {
+                steps.push(Step::Preview(*before));
+                steps.push(Step::End);
+            }
+            EditEvent::Cancel { .. } => steps.push(Step::End),
             _ => {}
         }
     }
@@ -180,9 +204,13 @@ pub(crate) fn colour(ui: &mut egui::Ui, owner: egui::Id, name: &str, label: &str
                 })
                 .inner;
             for step in steps {
-                let (Step::Preview(v) | Step::Save(v)) = step;
-                rgb[i] = v.round().clamp(0.0, 255.0) as u8;
-                saved |= matches!(step, Step::Save(_));
+                match step {
+                    Step::Begin(_) | Step::End => {}
+                    Step::Preview(v) | Step::Save(v) => {
+                        rgb[i] = v.round().clamp(0.0, 255.0) as u8;
+                        saved |= matches!(step, Step::Save(_));
+                    }
+                }
             }
         }
         if let Some(typed) = hex_field(ui, owner, name, rgb) {

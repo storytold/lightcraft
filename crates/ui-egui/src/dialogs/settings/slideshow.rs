@@ -141,3 +141,7 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 #[cfg(test)]
 #[path = "slideshow_export_launcher_candidate_flow_tests.rs"]
 mod slideshow_export_launcher_candidate_flow_tests;
+
+#[cfg(test)]
+#[path = "slideshow_duration_flow_tests.rs"]
+mod slideshow_duration_flow_tests;
