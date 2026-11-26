@@ -8,6 +8,7 @@ use std::ops::Deref;
 
 use craft::behavior::Metrics;
 use craft::ui::contract::{Access, Common, Component, Cx, NoValue, Outcome, Props as _, Role, Show as _};
+use craft::ui::primitives::PaintSlot;
 use craft::ui::style::{ComponentStyle, FocusLook, StyleCx};
 use egui::{Color32, Rect, Response, Stroke, Ui};
 
@@ -59,7 +60,7 @@ impl Component for AreaLeaf {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> HitAreaOutput {
-        HitAreaOutput { response: cx.response.clone() }
+        HitAreaOutput { response: cx.response.clone(), ring: None }
     }
 }
 
@@ -70,11 +71,25 @@ impl Component for AreaLeaf {
 #[derive(Clone, Debug)]
 pub struct HitAreaOutput {
     pub response: Response,
+    /// The places in the paint list before and after the leaf's own paint (its keyboard focus ring), for
+    /// [`HitAreaOutput::face_under_ring`].
+    ring: Option<(PaintSlot, PaintSlot)>,
 }
 
 impl HitAreaOutput {
     pub fn clicked(&self) -> bool {
         craft::ui::contract::clicked(&self.response)
+    }
+
+    /// Keeps the face the caller painted over the area under the leaf's keyboard focus ring.
+    ///
+    /// The face fills the same rectangle the leaf paints its inset ring in, so a face painted after the leaf hides the
+    /// ring from keyboard users. Call this once the face is drawn and before anything else is painted on the layer:
+    /// what was drawn since [`HitArea::show_at`] moves to the place under the ring, keeping its order.
+    pub fn face_under_ring(&self) {
+        let Some((under, after)) = self.ring else { return };
+        let ctx = &self.response.ctx;
+        under.extend(ctx, after.take_after(ctx));
     }
 
     pub fn on_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
@@ -156,12 +171,21 @@ impl HitArea {
         if let Some(selected) = self.selected {
             leaf = leaf.selected(selected);
         }
+        // The caller paints the area's face over this rectangle, where the leaf paints its inset focus ring: a place
+        // in the paint list before the leaf's own paint is where the face goes, so the ring stays above it (see
+        // `face_under_ring`).
+        let under = PaintSlot::reserve(ui.painter());
         let shown = leaf.show_at(ui, rect);
+        let after = PaintSlot::reserve(ui.painter());
         if let Some(widget) = self.widget
             && !super::measuring(ui)
         {
             super::register_response(widget, rect, &shown.response);
         }
-        shown
+        HitAreaOutput { ring: Some((under, after)), ..shown }
     }
 }
+
+#[cfg(test)]
+#[path = "tests_hit_area.rs"]
+mod tests;

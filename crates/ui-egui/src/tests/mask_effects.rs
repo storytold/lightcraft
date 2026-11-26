@@ -213,3 +213,26 @@ fn imported_effects_toast_reports_groups_and_what_was_kept() {
     let msg = crate::panels::mask_effects::import_toast(&v);
     assert!(msg.contains("3 mask effects") && msg.contains("2 groups") && msg.contains("Grain, Point Color"), "{msg}");
 }
+
+/// Return belongs to the control that has the keyboard: with the menu's Manage Presets action focused and the search
+/// field not, Return runs the manager and applies no preset to the mask.
+#[test]
+fn effect_menu_return_runs_the_focused_action_instead_of_applying_a_preset() {
+    let mut h = setup();
+    click(&mut h, "dropdown:maskEffect");
+    h.step();
+    h.step();
+    // the keyboard goes to the menu's last action, as Tab or a screen reader moving focus would put it there
+    let manage = egui::Id::unique("maskEffectMenu:manage");
+    assert!(craft::ui::runtime::focus::request(&h.view.ctx, craft::ui::runtime::focus::FocusTarget::Id(manage)), "Manage Presets is a focus stop");
+    h.step();
+    assert!(
+        craft::ui::runtime::focus::focused_rec(&h.view.ctx).is_some_and(|rec| rec.stop.id == manage),
+        "the keyboard is on the menu's Manage Presets action"
+    );
+    req(&mut h, "ui.key", json!({"key": "Enter"}));
+    h.step();
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ManageEffects { .. })), "Return ran the focused action: {:?}", h.app.ui.dialog);
+    assert_eq!(mask(&h).adjust.clarity, 0.0, "and applied no preset to the mask");
+}

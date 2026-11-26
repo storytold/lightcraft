@@ -131,6 +131,9 @@ fn state_id() -> egui::Id {
     egui::Id::unique("maskEffectMenuState")
 }
 
+/// The menu's search field, under which it is registered for the tests and the control channel.
+const SEARCH: &str = "maskEffectSearch";
+
 /// A framework button of the Effect menu and the manager: what it reports is whether it was
 /// clicked (the pointer or the keyboard) and its response, which the popups hang from. Measuring
 /// publishes no automation name and acts on nothing.
@@ -232,6 +235,24 @@ pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
     });
 }
 
+/// What the menu's ↑ ↓ and Return did this pass: (down, up, Return), which applies the highlighted effect or the first
+/// one. They belong to the search field, which has the keyboard while the menu is used and reports its own Return as it
+/// gives the keyboard up; a measuring run of the menu reads nothing and applies nothing, and Return on another control
+/// (Reset Sliders, Manage Presets…) is left for that control.
+fn menu_keys(field: &crate::text_field::TextFieldResponse, ui: &egui::Ui, rows: usize) -> (bool, bool, bool) {
+    let returned = field.ending == Some(crate::text_field::Ending::Return);
+    if measuring(ui) || !(returned || crate::text_field::focused(ui.ctx(), SEARCH)) {
+        return (false, false, false);
+    }
+    ui.input_mut(|i| {
+        (
+            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+            (i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || returned) && rows > 0,
+        )
+    })
+}
+
 /// The menu's body; whether a choice was made and the menu is to close.
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option<&str>) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -239,11 +260,12 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
     ui.set_max_width(320.0);
     let mut st: MenuState = ui.data(|d| d.get_temp(state_id())).unwrap_or_default();
     let before = st.search.clone();
-    let r = crate::text_field::TextField::singleline("maskEffectSearch", &mut st.search)
+    let r = crate::text_field::TextField::singleline(SEARCH, &mut st.search)
         .hint(crate::i18n::tr("Search effects"))
         .width(f32::INFINITY)
         .show(ui);
-    if !st.focused {
+    // the search field takes the keyboard when the menu opens, in a live pass: a measuring run moves nothing
+    if !measuring(ui) && !st.focused {
         crate::text_field::focus_id(ui.ctx(), r.response.id);
         st.focused = true;
     }
@@ -251,14 +273,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
         st.highlight = None;
     }
     let rows = menu_rows(&app.session.mask_effects, &st.search);
-    // ↑ ↓ move through the list, Return applies
-    let (down, up, enter) = ui.input_mut(|i| {
-        (
-            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-            i.key_pressed(egui::Key::Enter) && !rows.is_empty(),
-        )
-    });
+    let (down, up, enter) = menu_keys(&r, ui, rows.len());
     let moved = down || up;
     if !rows.is_empty() {
         let last = rows.len() - 1;

@@ -706,3 +706,68 @@ fn date_actual_section_has_supported_list_and_identity_keyed_tree_row_owners() {
     f.choose("2025-03");
     assert_eq!(f.visible(), [104].into_iter().collect());
 }
+
+/// [t08] A By Date tree with every month of several years open lists more rows than the framework's size guard
+/// (32,768 points) has room for. The list builds the rows in view and stands the rest as plain space, so the tree,
+/// its names and its triangles still show instead of the whole collection going inert.
+#[test]
+fn an_expanded_by_date_tree_keeps_showing_past_the_size_guard() {
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    let mut session = Session::new();
+    session.clock = Box::new(|| CLOCK.into());
+    session.xmp.auto_write = false;
+    // one photo a day, every day of every month of four years: with the days shown, the tree is past the guard
+    let mut id = 101;
+    for year in 2022..=2025 {
+        for month in 1..=12 {
+            for day in 1..=25 {
+                let captured = format!("{year}-{month:02}-{day:02}T10:00:00Z");
+                let mut p = Photo::new(PhotoId(id), Source::Demo { scene: (id % 4) as u32 }, &format!("Day photo {id}"), "JPEG", 8, 6, &captured);
+                p.captured = Some(captured);
+                session.commit("Fixture", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+                id += 1;
+            }
+        }
+    }
+    let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    app.set_simulated_clock(Some(0.0));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx);
+    app.install_framework(&ctx);
+    // every row the fully expanded tree would list: a year, its months, and each open month's days
+    let groups = app.session.catalog.date_groups();
+    let tree = groups.iter().map(|group| 1 + group.months.len() + group.days.len()).sum::<usize>();
+    assert!(
+        tree as f32 * super::super::rows::ROW_HEIGHT > craft::ui::contract::MAX_EXTENT,
+        "the whole tree is longer than the framework's size guard allows: {tree} rows"
+    );
+    // the section drawn where the sidebar draws it: a 360-wide panel of an 800-point window
+    let mut names = Vec::new();
+    let mut built = Vec::new();
+    for tick in 0..8 {
+        let raw = HeadlessView::raw_input(egui::vec2(1000.0, 800.0), 1.0, f64::from(tick) / 60.0, vec![]);
+        let _drain = Drain(ctx.run_ui(raw, |root| {
+            crate::widgets::take_registries(&ctx);
+            // every year and month open, as scrolling the tree down and opening its groups leaves them
+            for group in &groups {
+                for key in std::iter::once(&group.year).chain(group.months.iter().map(|(month, _)| month)) {
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("date-open", key.clone())), true));
+                }
+            }
+            egui::Panel::left("by-date-window-left").resizable(false).default_size(360.0).size_range(360.0..=360.0).show(root, |ui| {
+                draw_section(&mut app, ui);
+            });
+        }));
+        let (rects, _hits) = crate::widgets::take_registries(&ctx);
+        names = rects.iter().filter(|(name, _)| name.starts_with("source:date:")).map(|(name, _)| name.clone()).collect();
+        built = rects.iter().filter(|(name, _)| name.starts_with("label:date:")).map(|(name, _)| name.clone()).collect();
+    }
+    // the rows in view are drawn: the collection measures the window, not the whole tree
+    assert!(!built.is_empty(), "the rows in view are drawn of {tree}");
+    assert!(built.len() * 4 < tree, "{} rows built of {tree}: only the rows in view", built.len());
+    // and every row of the tree keeps its name, so the panel scrolls to it and it is built once it is in view
+    for row in ["2025", "2022"] {
+        assert!(names.iter().any(|name| name == &format!("source:date:{row}")), "{row} is named: {names:?}");
+    }
+}
