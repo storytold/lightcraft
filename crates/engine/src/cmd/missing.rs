@@ -12,28 +12,15 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, bad, cmd, str_param};
 use crate::{Result, Session};
 
-/// The file Missing Photos checks for `p`, if it is in scope: a library photo (not in Recently
-/// Deleted, not a Local-only record seen while browsing a folder) whose original is a file.
-///
-/// Local browse records are out of scope on purpose: browsing can leave tens of thousands of
-/// them in the catalog, they never show in library views (Missing Photos included), and a
-/// folder that is gone is simply not browsed again. The sidebar count, the Missing Photos view,
-/// `library.missing` and Find Missing Photos all use this one rule.
-pub fn checked_path(p: &Photo) -> Option<&str> {
-    match &p.source {
-        Source::File { path } if p.in_library() => Some(path),
-        _ => None,
-    }
-}
-
-/// Every in-scope photo's file ([`checked_path`]), without touching the disk.
+/// Every in-scope photo's file ([`Photo::library_file`]: the rule the sidebar count, the Missing
+/// Photos view, `library.missing` and Find Missing Photos all use), without touching the disk.
 pub fn candidates(cat: &Catalog) -> Vec<String> {
-    cat.photos().filter_map(|p| checked_path(p).map(str::to_string)).collect()
+    cat.photos().filter_map(|p| p.library_file().map(str::to_string)).collect()
 }
 
 /// [`missing`] with the existence check supplied (tests count the file-system calls).
 pub fn missing_with(cat: &Catalog, mut exists: impl FnMut(&str) -> bool) -> Vec<(PhotoId, String)> {
-    cat.photos().filter_map(|p| checked_path(p).filter(|f| !exists(f)).map(|f| (p.id, f.to_string()))).collect()
+    cat.photos().filter_map(|p| p.library_file().filter(|f| !exists(f)).map(|f| (p.id, f.to_string()))).collect()
 }
 
 /// Library photos whose original file can't be found: (id, path).
@@ -45,11 +32,11 @@ pub fn missing(s: &Session) -> Vec<(PhotoId, String)> {
     missing_with(&s.catalog, |f| exists(f))
 }
 
-/// Every in-scope photo with its file ([`checked_path`]), without touching the disk: what a
+/// Every in-scope photo with its file ([`Photo::library_file`]), without touching the disk: what a
 /// sweep ([`sweep`]) goes through, so a caller can take the list on its own thread and check
 /// the files on another.
 pub fn checked(cat: &Catalog) -> Vec<(PhotoId, String)> {
-    cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f.to_string()))).collect()
+    cat.photos().filter_map(|p| p.library_file().map(|f| (p.id, f.to_string()))).collect()
 }
 
 fn fingerprint_of<'a>(entries: impl Iterator<Item = (PhotoId, &'a str)>) -> u64 {
@@ -66,7 +53,7 @@ fn fingerprint_of<'a>(entries: impl Iterator<Item = (PhotoId, &'a str)>) -> u64 
 /// files on another thread compares it with [`fingerprint_of_checked`] to know whether the photos
 /// changed meanwhile.
 pub fn fingerprint(cat: &Catalog) -> u64 {
-    fingerprint_of(cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f))))
+    fingerprint_of(cat.photos().filter_map(|p| p.library_file().map(|f| (p.id, f))))
 }
 
 /// [`fingerprint`] of the list [`checked`] gave.
@@ -78,7 +65,7 @@ pub fn fingerprint_of_checked(files: &[(PhotoId, String)]) -> u64 {
 /// photos still in scope that still point at the file that was not found. A photo removed, moved to
 /// Recently Deleted or relinked since is not reported as missing; one added since was not checked.
 pub fn still_missing(cat: &Catalog, gone: Vec<(PhotoId, String)>) -> Vec<(PhotoId, String)> {
-    gone.into_iter().filter(|(id, file)| cat.photo(*id).and_then(|p| checked_path(p)) == Some(file.as_str())).collect()
+    gone.into_iter().filter(|(id, file)| cat.photo(*id).and_then(|p| p.library_file()) == Some(file.as_str())).collect()
 }
 
 /// How many files [`sweep`] checks between two reports of its progress.
@@ -118,7 +105,7 @@ pub fn missing_json(gone: Vec<(PhotoId, String)>) -> Value {
 /// the photos its query already narrowed to). In the app `avail` answers from its cache (files
 /// not checked yet count as present until the background check finds them gone).
 pub fn is_missing(cat: &Catalog, avail: &crate::availability::Availability, id: PhotoId) -> bool {
-    !cfg!(target_arch = "wasm32") && cat.photo(id).and_then(|p| checked_path(p)).is_some_and(|f| avail.is_offline(f))
+    !cfg!(target_arch = "wasm32") && cat.photo(id).and_then(|p| p.library_file()).is_some_and(|f| avail.is_offline(f))
 }
 
 pub(crate) fn relink_op(id: PhotoId, path: &str) -> Op {
@@ -156,13 +143,13 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The stored content hash of a photo, without the `:dupN` suffix duplicates get.
-fn stored_hash(p: &Photo) -> Option<&str> {
+pub(crate) fn stored_hash(p: &Photo) -> Option<&str> {
     p.content_hash.as_deref().map(|h| h.split(':').next().unwrap_or(h)).filter(|h| !h.is_empty())
 }
 
 /// The content hash of the file at `path` (as import computes it), if it can be read. Read in
 /// pieces: the file is whatever is on the disk, of any size.
-fn file_hash(path: &str) -> Option<String> {
+pub(crate) fn file_hash(path: &str) -> Option<String> {
     use std::io::Read;
     // the opened file must be regular (a FIFO or device would never end), and no more than its size at open is read
     let file = std::fs::File::open(path).ok()?;
@@ -171,7 +158,7 @@ fn file_hash(path: &str) -> Option<String> {
 }
 
 /// The content hash of what `r` gives, read in pieces (the hash import computes of the whole).
-fn hash_reader(mut r: impl std::io::Read) -> Option<String> {
+pub(crate) fn hash_reader(mut r: impl std::io::Read) -> Option<String> {
     let mut hasher = lightcraft_preview::Hasher128::new();
     let mut piece = vec![0u8; 1 << 16];
     loop {
@@ -240,7 +227,7 @@ mod tests {
     }
 }
 
-/// An in-scope photo ([`checked_path`]) as Find Missing Photos sees it: its file, the size and
+/// An in-scope photo ([`Photo::library_file`]) as Find Missing Photos sees it: its file, the size and
 /// content hash the library knows (0 / `None` = unknown).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FindCandidate {
@@ -256,7 +243,7 @@ pub struct FindCandidate {
 pub fn find_candidates(cat: &Catalog) -> Vec<FindCandidate> {
     cat.photos()
         .filter_map(|p| {
-            checked_path(p).map(|f| FindCandidate { id: p.id, path: f.to_string(), size: p.file_size, hash: stored_hash(p).map(str::to_string) })
+            p.library_file().map(|f| FindCandidate { id: p.id, path: f.to_string(), size: p.file_size, hash: stored_hash(p).map(str::to_string) })
         })
         .collect()
 }
@@ -266,7 +253,7 @@ pub fn find_candidates(cat: &Catalog) -> Vec<FindCandidate> {
 pub enum MatchBy {
     /// Same name and size (and content, when the library knows its hash).
     Name,
-    /// Renamed: same size and content hash.
+    /// Renamed: same content hash (and size, when the library knows it).
     Content,
 }
 
@@ -360,8 +347,8 @@ fn name_key(path: &str) -> String {
 /// Matching, per photo:
 /// 1. a file with the same name ([`name_key`]: any letter case), the same size and the same
 ///    content hash;
-/// 2. renamed: a file of the same size with the same content hash (only same-size files are
-///    read, so this stays cheap);
+/// 2. renamed: a file with the same content hash (and the same size, when one is on record; with
+///    no size on record every file is read, but the hash alone confirms identity);
 /// 3. without a hash to confirm (or the file was edited in place): the one file with the same
 ///    name and size. Several such files are ambiguous: the photo is skipped and reported in
 ///    `ambiguous`, never guessed (two cameras' `IMG_0001.CR3` of one size are different photos).
@@ -406,24 +393,27 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
         // 1. same name and size, confirmed by the content hash
         let mut hit: Option<(String, MatchBy)> =
             hash.and_then(|h| named.iter().find(|f| hash_of(f).as_deref() == Some(h))).map(|f| (f.to_string(), MatchBy::Name));
-        // 2. renamed: same size and content
+        // 2. renamed: same content, and same size when one is on record
         if hit.is_none()
             && let Some(h) = hash
-            && size > 0
         {
-            let sizes = by_size.get_or_insert_with(|| {
-                let mut m: HashMap<u64, Vec<String>> = HashMap::new();
-                for f in &files {
-                    if let Some(n) = size_of(f) {
-                        m.entry(n).or_default().push(f.clone());
+            if size > 0 {
+                let sizes = by_size.get_or_insert_with(|| {
+                    let mut m: HashMap<u64, Vec<String>> = HashMap::new();
+                    for f in &files {
+                        if let Some(n) = size_of(f) {
+                            m.entry(n).or_default().push(f.clone());
+                        }
                     }
-                }
-                m
-            });
-            hit = sizes
-                .get(&size)
-                .and_then(|v| v.iter().find(|f| !used.contains(*f) && hash_of(f).as_deref() == Some(h)))
-                .map(|f| (f.clone(), MatchBy::Content));
+                    m
+                });
+                hit = sizes
+                    .get(&size)
+                    .and_then(|v| v.iter().find(|f| !used.contains(*f) && hash_of(f).as_deref() == Some(h)))
+                    .map(|f| (f.clone(), MatchBy::Content));
+            } else {
+                hit = files.iter().find(|f| !used.contains(*f) && hash_of(f).as_deref() == Some(h)).map(|f| (f.clone(), MatchBy::Content));
+            }
         }
         // 3. same name and size only (no hash, or the file was edited in place): one candidate
         //    is taken, several are ambiguous and skipped rather than guessed
@@ -452,7 +442,7 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
 /// used (that photo stays missing). `missing` is the plan's count, corrected for what changed
 /// among the photos the plan names.
 fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
-    let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| checked_path(p)) == Some(from);
+    let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| p.library_file()) == Some(from);
     let mut in_use: HashSet<String> = candidates(&s.catalog).into_iter().collect();
     let mut found = Vec::new();
     let mut missing = plan.missing;

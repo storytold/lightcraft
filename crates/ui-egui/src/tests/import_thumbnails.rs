@@ -13,6 +13,20 @@ use lightcraft_engine::import::ImportCandidate;
 
 const T: Duration = Duration::from_secs(30);
 
+fn import_preview_settle_timeout_for_instrumentation(instrumented: bool) -> Duration {
+    Duration::from_secs(if instrumented { 600 } else { 30 })
+}
+
+fn import_preview_settle_timeout() -> Duration {
+    import_preview_settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn import_preview_setup_timeout_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(import_preview_settle_timeout_for_instrumentation(false), Duration::from_secs(30));
+    assert_eq!(import_preview_settle_timeout_for_instrumentation(true), Duration::from_secs(600));
+}
+
 /// Size buckets follow physical pixels, with finite fallbacks and a fixed allocation ceiling.
 #[test]
 fn import_thumb_edges_follow_size_and_display_density() {
@@ -65,7 +79,7 @@ impl Review {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
         app.ui.dialog = Some(Dialog::Import { opts: Box::new(ImportDialog::new(candidates)) });
         let mut h = Headless::new(app, [1366.0, 1000.0], scale);
-        assert!(h.settle(T));
+        assert!(h.settle(import_preview_settle_timeout()));
         Self { h, dir }
     }
 
@@ -89,7 +103,7 @@ impl Review {
     /// Set thumbnail size through its command and wait for the resulting previews to settle.
     fn size(&mut self, size: f32) {
         self.request("engine.execute", json!({"command": "view.importThumbSize", "params": {"size": size}}));
-        assert!(self.h.settle(T));
+        assert!(self.h.settle(import_preview_settle_timeout()));
     }
 }
 
@@ -113,11 +127,11 @@ fn import_thumbnail_slider_reflows_without_changing_selection_or_badges() {
     assert!(!checked[0] && !checked[1] && !checked[2]);
     // Real pointer input on the slider, including its end stops.
     review.request("ui.clickWidget", json!({"id": "slider:importThumbSize", "fx": 0.0}));
-    assert!(review.h.settle(T));
+    assert!(review.h.settle(import_preview_settle_timeout()));
     assert_eq!(review.rect("import:0").width(), 80.0);
     let slider = review.rect("slider:importThumbSize");
     review.request("ui.dragWidget", json!({"id": "slider:importThumbSize", "toX": slider.right(), "toY": slider.center().y}));
-    assert!(review.h.settle(T));
+    assert!(review.h.settle(import_preview_settle_timeout()));
     assert_eq!(review.rect("import:0").width(), 320.0);
     assert_eq!(review.checks(), checked);
     let text = review.h.painted_text().join("\n");
@@ -235,7 +249,7 @@ fn import_thumbnail_exact_entry_escape_keeps_the_review_open() {
         review.request("ui.key", json!({"key": "a", "cmd": true}));
         review.request("ui.text", json!({"text": "240"}));
         review.request("ui.key", json!({"key": key}));
-        assert!(review.h.settle(T));
+        assert!(review.h.settle(import_preview_settle_timeout()));
         assert_eq!(review.h.app.ui.import_thumb_size, expected);
         assert_eq!(review.checks(), checked, "the review remains open after exact-value editing");
     }

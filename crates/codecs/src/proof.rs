@@ -12,10 +12,10 @@
 //! - Each entry carries a gamut flag: how far the relative-colorimetric round trip moved the colour.
 //!
 //! Sources: ICC.1:2022 (rendering intents, media white point, absolute colorimetric scaling);
-//! the transforms are moxcms's. Own design otherwise.
+//! the transforms are `craft-cms`'s. Own design otherwise.
 
+use craft_cms::{ColorSpace, Intent, Profile, Transform, TransformOptions};
 use lightcraft_color::{D50, D65, REC2020, bradford};
-use moxcms::{ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformOptions};
 
 use crate::display::MAX_PROFILE_BYTES;
 
@@ -57,47 +57,43 @@ pub struct ProofTable {
 /// Grid size of [`ProofTable`]s.
 pub const PROOF_GRID: usize = 33;
 
-fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok().flatten()
-}
-
 /// Build the proof table for an output profile. Errors say what's wrong with the file; nothing here
 /// panics on a hostile profile.
 pub fn proof_table(bytes: &[u8], intent: ProofIntent, paper_ink: bool) -> Result<ProofTable, String> {
     if bytes.len() > MAX_PROFILE_BYTES {
         return Err("the profile is too large".into());
     }
-    let dev = guarded(|| ColorProfile::new_from_slice(bytes).ok()).ok_or("not a valid ICC profile")?;
-    let (layout, ch) = match dev.color_space {
-        DataColorSpace::Rgb => (Layout::Rgb, 3),
-        DataColorSpace::Cmyk => (Layout::Rgba, 4),
-        DataColorSpace::Gray => (Layout::Gray, 1),
+    let dev = Profile::parse(bytes).map_err(|_| "not a valid ICC profile")?;
+    let ch = match dev.color_space {
+        ColorSpace::Rgb => 3,
+        ColorSpace::Cmyk => 4,
+        ColorSpace::Gray => 1,
         _ => return Err("only RGB, CMYK and grey output profiles can be proofed".into()),
     };
     let lin = crate::icc::linear_rec2020_profile();
-    let opts = |i| TransformOptions { rendering_intent: i, ..TransformOptions::default() };
+    let opts = |intent| TransformOptions { intent, bpc: false, precise_float: false };
     let fwd_i = match intent {
-        ProofIntent::Perceptual => RenderingIntent::Perceptual,
-        ProofIntent::Relative => RenderingIntent::RelativeColorimetric,
+        ProofIntent::Perceptual => Intent::Perceptual,
+        ProofIntent::Relative => Intent::RelativeColorimetric,
     };
-    let rel = RenderingIntent::RelativeColorimetric;
-    let fwd = guarded(|| lin.create_transform_f32(Layout::Rgb, &dev, layout, opts(fwd_i)).ok()).ok_or("can't convert to this profile")?;
-    let fwd_rel = guarded(|| lin.create_transform_f32(Layout::Rgb, &dev, layout, opts(rel)).ok()).ok_or("can't convert to this profile")?;
-    let back = guarded(|| dev.create_transform_f32(layout, &lin, Layout::Rgb, opts(rel)).ok()).ok_or("can't convert from this profile")?;
+    let rel = Intent::RelativeColorimetric;
+    let fwd = Transform::with_options(&lin, &dev, opts(fwd_i)).map_err(|_| "can't convert to this profile")?;
+    let fwd_rel = Transform::with_options(&lin, &dev, opts(rel)).map_err(|_| "can't convert to this profile")?;
+    let back = Transform::with_options(&dev, &lin, opts(rel)).map_err(|_| "can't convert from this profile")?;
 
     let n = PROOF_GRID;
     let grid: Vec<f32> = (0..n * n * n)
         .flat_map(|i| [i / (n * n), (i / n) % n, i % n].map(|k| lightcraft_color::transfer::srgb_to_linear(k as f32 / (n - 1) as f32)))
         .collect();
-    let round_trip = |there: &dyn moxcms::TransformExecutor<f32>| -> Option<Vec<f32>> {
+    let round_trip = |there: &Transform| -> Option<Vec<f32>> {
         let mut device = vec![0f32; n * n * n * ch];
-        there.transform(&grid, &mut device).ok()?;
+        there.convert_f32(&grid, 3, &mut device, ch, false).ok()?;
         let mut out = vec![0f32; n * n * n * 3];
-        back.transform(&device, &mut out).ok()?;
+        back.convert_f32(&device, ch, &mut out, 3, false).ok()?;
         Some(out)
     };
-    let sim = guarded(|| round_trip(fwd.as_ref())).ok_or("the profile's tables can't be applied")?;
-    let colorimetric = guarded(|| round_trip(fwd_rel.as_ref())).ok_or("the profile's tables can't be applied")?;
+    let sim = round_trip(&fwd).ok_or("the profile's tables can't be applied")?;
+    let colorimetric = round_trip(&fwd_rel).ok_or("the profile's tables can't be applied")?;
     let paper = if paper_ink { paper_white(&dev) } else { [1.0; 3] };
     let enc = |v: f32| lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0));
     let data = (0..n * n * n)
@@ -112,13 +108,13 @@ pub fn proof_table(bytes: &[u8], intent: ProofIntent, paper_ink: bool) -> Result
 }
 
 /// The paper's white in linear Rec.2020 (screen white = (1, 1, 1)), from the media white point.
-fn paper_white(p: &ColorProfile) -> [f32; 3] {
-    let Some(w) = p.media_white_point else { return [1.0; 3] };
+fn paper_white(p: &Profile) -> [f32; 3] {
+    let w = p.white_point;
     let to_xyz = bradford(D65, D50).mul(&REC2020.to_xyz());
     let Some(from_xyz) = to_xyz.inverse() else { return [1.0; 3] };
     // the PCS white is D50 = Rec.2020 (1, 1, 1) after adaptation; the paper is relative to it
     let d50 = to_xyz.apply([1.0; 3]);
-    let s = [w.x / d50[0], w.y / d50[1], w.z / d50[2]];
+    let s = [w[0] / d50[0], w[1] / d50[1], w[2] / d50[2]];
     let rgb = from_xyz.apply([d50[0] * s[0], d50[1] * s[1], d50[2] * s[2]]);
     if rgb.iter().all(|v| v.is_finite() && *v > 0.05 && *v <= 1.5) { rgb.map(|v| (v as f32).min(1.0)) } else { [1.0; 3] }
 }
@@ -148,10 +144,10 @@ mod tests {
 
     #[test]
     fn paper_white_dims_and_tints_white() {
-        let mut p = ColorProfile::new_from_slice(&crate::icc::write_named(NamedSpace::AdobeRgb)).unwrap();
+        let mut p = Profile::parse(&crate::icc::write_named(NamedSpace::AdobeRgb)).unwrap();
         // a warm, slightly dull paper
-        p.media_white_point = Some(moxcms::Xyzd { x: 0.9642 * 0.92, y: 0.90, z: 0.8249 * 0.80 });
-        let bytes = p.encode().unwrap();
+        p.white_point = [0.9642 * 0.92, 0.90, 0.8249 * 0.80];
+        let bytes = p.with_encoded_bytes().to_bytes().to_vec();
         let top = PROOF_GRID - 1;
         let plain = proof_table(&bytes, ProofIntent::Perceptual, false).unwrap();
         let paper = proof_table(&bytes, ProofIntent::Perceptual, true).unwrap();

@@ -49,6 +49,18 @@ guard.detail(&file_name);
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 
+## Waiting in line
+
+Jobs that must not run side by side share a lane (`activity::Lane`; for now only the preview builds: Build Previews and
+the background Build / Discard Smart Previews). A call that sets `queue: true` while its lane is busy does not fail:
+`Activity::enqueue` keeps what it was asked (`Request`: the command and its parameters, with the photos written out)
+and `Session::start_waiting` runs it, under the id it had in line, once the lane is free. The engine calls it after
+every command and the app every frame. `activity.list` shows a waiting task after the running ones (`waiting`,
+`place`, `lane`); the activity stack in the app draws only running tasks. `activity.cancel` takes a waiting task out
+of the line, `activity.cancel {all: true}` empties it, and opening another library drops it: the photos it names
+belong to the old one. At most `MAX_WAITING` (100) tasks wait. Without `queue` a call is refused while its lane is
+busy, as before. A waiting task whose start fails (there is no smart previews folder any more, say) is logged and the next in line goes on.
+
 ## Examples in the code
 
 | Job | Where | Shows how to |
@@ -61,6 +73,7 @@ guard.detail(&file_name);
 | Face scan, AI Denoise | `crates/engine/src/cmd/face_recognize.rs`, `crates/engine/src/denoise.rs` | a continuous job with no ✕, kept in session state |
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
+| Find Similar Photos | `crates/ui-egui/src/find_similar.rs`, `crates/engine/src/cmd/similar.rs` | a command split into plan / measure / apply, whose reads are kept when it is stopped; a control request is answered when it ends (`Outcome::Later`) |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
 
 ## Testing

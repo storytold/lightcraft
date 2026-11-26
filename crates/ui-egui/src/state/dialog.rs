@@ -6,10 +6,21 @@ pub fn default_preset_groups() -> Vec<String> {
     lightcraft_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
 }
 
+/// A number no other smart album dialog has had in this run ([`Dialog::SmartRules`]'s `instance`).
+fn new_smart_rules_instance() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Dialog {
     /// A fresh Create Preset dialog.
     pub fn create_preset() -> Dialog {
         Dialog::CreatePreset { name: String::new(), group: "User Presets".into(), groups: default_preset_groups() }
+    }
+
+    /// A new smart album rules dialog: a fresh one, whatever rules it holds.
+    pub fn smart_rules(id: Option<u64>, name: String, rules: lightcraft_catalog::RuleSet, parent: Option<u64>) -> Dialog {
+        Dialog::SmartRules { id, name, rules, parent, instance: new_smart_rules_instance() }
     }
 }
 
@@ -165,14 +176,25 @@ pub enum Dialog {
     },
     /// Help ▸ What's New.
     WhatsNew,
+    /// First launch: a short tour of the main views, one page at a time.
+    Welcome {
+        /// The page on show (0-based; clamped when rendered).
+        #[serde(default)]
+        page: usize,
+    },
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
-    /// of each burst; shots at most `burst_gap` seconds apart and at least `similarity` alike are
-    /// a burst.
+    /// of each burst (and stack each burst, best on top, with `stack_groups`); shots at most
+    /// `burst_gap` seconds apart and at least `similarity` alike are a burst. Bursts arranged by
+    /// hand (Window ▸ Bursts) are kept unless `reset_bursts`.
     Cull {
         reject_below: f32,
         pick_best: bool,
+        #[serde(default)]
+        stack_groups: bool,
         burst_gap: f32,
         similarity: f32,
+        #[serde(default)]
+        reset_bursts: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -203,6 +225,11 @@ pub enum Dialog {
         /// The folder a new smart album is created in (ignored when editing).
         #[serde(default)]
         parent: Option<u64>,
+        /// Which dialog this is: two dialogs holding the same rules can't be told apart by them, and a drag
+        /// in the editor belongs to the dialog it began in. Made with the dialog ([`Dialog::smart_rules`]),
+        /// never saved.
+        #[serde(skip, default = "new_smart_rules_instance")]
+        instance: u64,
     },
     /// `groups`: the settings groups the preset includes (`SettingsGroup` ids).
     CreatePreset {
