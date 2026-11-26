@@ -77,6 +77,7 @@ lightcraft-fetch = { path = "crates/fetch" }
 # HEIC/HEIF: the shared decoder (moved from crates/heif; craft-libs#784).
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39", default-features = false }
 lightcraft-segment = { path = "crates/segment" }
+lightcraft-vision = { path = "crates/vision" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
 lightcraft-testkit = { path = "crates/testkit" }
