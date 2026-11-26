@@ -575,13 +575,17 @@ impl Photo {
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
     }
-    /// Edited by the user: settings differ from what import gave the photo.
+    /// Edited by the user: settings differ from what import gave the photo, As Shot's stored numbers and Remove Hot
+    /// Pixels aside.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();
         // As Shot reads the source's current WB; stored numbers can predate a decoder update.
         if self.develop.wb.mode == WbMode::AsShot && defaults.wb.mode == WbMode::AsShot {
             defaults.wb = self.develop.wb;
         }
+        // Remove Hot Pixels is on for raws imported since the box exists and off for older ones
+        // (#4255); a photo without an import look doesn't record which it had, so neither is an edit.
+        defaults.detail.nr_outliers = self.develop.detail.nr_outliers;
         *self.develop != defaults && !self.develop.is_unedited()
     }
     /// Capture time if known, else import time (sort key).
@@ -660,6 +664,26 @@ mod edited_tests {
         assert!(p.is_edited());
         p.develop = Arc::new(DevelopSettings::default());
         assert!(!p.is_edited(), "a full reset is unedited too");
+    }
+
+    /// Issue #4255: a raw imported before Remove Hot Pixels existed has the box off, one imported since
+    /// has it on: neither is an edit, and a real edit on top of either still is one.
+    #[test]
+    fn remove_hot_pixels_on_or_off_is_not_an_edit() {
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.arw", "ARW", 10, 10, "2026-10-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        let now = p.import_defaults();
+        assert!(now.detail.nr_outliers, "a raw imported now has the box on");
+        let mut before = now.clone();
+        before.detail.nr_outliers = false;
+        for (settings, what) in [(before, "imported before the box"), (now, "imported now")] {
+            p.develop = Arc::new(settings.clone());
+            assert!(!p.is_edited(), "{what}");
+            let mut edited = settings;
+            edited.light.exposure = 0.5;
+            p.develop = Arc::new(edited);
+            assert!(p.is_edited(), "{what}: an edit still is one");
+        }
     }
 
     #[test]
