@@ -305,7 +305,7 @@
 
 ### The photo in Detail is named with its file for screen readers
 - With VoiceOver, the photo in Detail view is now announced with its file name, rating, flag and colour label ("Photo:
-  IMG_0042.JPG, 4 stars, picked") instead of only "Photo", as the grid names the same photo.
+  IMG_0042.JPG, rating 4 of 5, picked") instead of only "Photo", as the grid names the same photo.
 
 ### The grid's thumbnail size slider is a slider to screen readers
 - With VoiceOver, the Thumbnail size control at the right of the grid's bottom bar is now announced as a slider with its
@@ -576,6 +576,19 @@
   server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
   is in its place instead of writing through a link to somewhere else.
 
+### Open or fold a whole branch of the sidebar
+- Hold Option (Alt on Windows and Linux) and click a row's triangle in the left sidebar to open or fold that row
+  and all the rows inside it, however many: a folder of albums with the folders in it, a folder of the library
+  down to its last folder, a keyword with the keywords inside it, a year with its months. A plain click still
+  opens or folds the one row.
+- What you open or fold inside it afterwards holds for that row. A folder that appears inside it later is as
+  the last Option-click on a row above it left the rest.
+- In Local, Option-click folds everything inside the folder; opening opens the one folder (opening them all
+  would read every folder inside from the disk).
+- The sidebar's rows are not remembered between sessions, so a branch opened or folded this way starts again as
+  the sidebar starts.
+- For scripts: `ui.clickWidget` takes `alt: true` for this click.
+
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
   grid thumbnail (issue #2682). They can't read one, so each video failed with "unrecognised image format", showed a
@@ -841,6 +854,12 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Cleaner thumbnails in the grid
+- With Settings ▸ Interface ▸ Grid ▸ Ratings & flags set to Stars on hover (the default, which used to read "When rated
+  or hovered"), a photo now shows its stars and its edited mark only while the pointer is on it or it is selected.
+  Before, every rated photo wore the badge bar, which in a mostly rated library made it look like Always. Pick and
+  reject flags and colour labels stay on every thumbnail. Always and Never work as before.
+
 ### Selection rings you can see in the light themes
 - The active photo's white outline vanished on Silver and Paper's light grid, and told the active photo from the other
   selected ones by lightness alone. Now the active photo has a heavier ring (3 pt, with a thin line against the photo so
@@ -869,6 +888,22 @@
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
 
+### The same marks on every thumbnail
+- The filmstrip's thumbnails now carry what the grid's do: a virtual copy has its "Copy N" tag, so a copy and its
+  master tell apart; the stack badge can be clicked to expand or collapse the stack, with the same tooltip (now
+  translated); the colour label is a dot, and the grid's photo-shaped placeholder stands in until the picture is drawn.
+- A thumbnail that can't be drawn shows a warning icon instead of a bare "!". Hover it to read why, and where to go:
+  right-click ▸ Locate Missing File… when the original is gone, Reload from Disk otherwise.
+- In the Photo Grid a colour label is no longer a tinted band over the bottom of the picture; it is the dot in the
+  row of marks, as in the Square Grid and the filmstrip.
+- On a narrow thumbnail (a portrait photo at the smallest size) the marks no longer run over the photo's edge: the
+  copy tag drops its name, the edited mark goes, five stars become one star and the number, and what still doesn't fit is left out;
+  the stack badge sheds its icon and then the "1/" of "1/12". Nothing is painted outside the photo. The Preview pill sits
+  above the marks on the filmstrip too, and steps aside for the stack badge. In the Photo Grid, which has no tinted
+  surround, the label dot is kept before the stars on a narrow photo and stays when ratings and flags are turned off.
+- The filmstrip now dims rejected photos as the grid does, and in the grid the dim sits under the marks, so the red
+  reject flag stays clear. Right-clicking the stack badge opens the photo's menu.
+- Screen readers say "rating 3 of 5" in every language, instead of building "stars" from an English plural.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

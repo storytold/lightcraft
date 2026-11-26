@@ -106,6 +106,10 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// A render failed: a triangle with an exclamation mark.
+    Warning,
+    /// A virtual copy: a page with a folded corner.
+    VirtualCopy,
 }
 
 struct Pen<'a> {
@@ -346,6 +350,16 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.circle(10.0, 10.0, 7.5);
             pen.line(&[(10.0, 9.0), (10.0, 14.0)]);
             pen.dot(10.0, 6.3, 0.9);
+        }
+        Warning => {
+            pen.closed(&[(10.0, 3.0), (17.5, 16.5), (2.5, 16.5)]);
+            pen.line(&[(10.0, 8.0), (10.0, 11.8)]);
+            pen.dot(10.0, 14.1, 0.9);
+        }
+        VirtualCopy => {
+            // a page whose top right corner is folded down
+            pen.line(&[(11.0, 3.0), (5.0, 3.0), (5.0, 17.0), (15.0, 17.0), (15.0, 7.0)]);
+            pen.line(&[(11.0, 3.0), (15.0, 7.0), (11.0, 7.0), (11.0, 3.0)]);
         }
         GridPhoto => {
             pen.rect_fill(3.0, 4.0, 10.0, 9.5, 0.5);
