@@ -806,6 +806,28 @@ fn a_queued_photo_drop_imports_into_the_library_opened_from_the_list() {
     assert!(h.app.dropped_files.is_empty());
 }
 
+/// A probe the cache kept from an earlier scan (only its key is looked at).
+fn cached_probe(h: &mut Headless, path: &str) {
+    h.app.session.import_probes.insert(path.to_string(), lightcraft_engine::media::ProbeInfo::default());
+}
+
+/// An import scan whose thread can't start (the system is out of threads) is an error that keeps
+/// the probe cache, so the next scan doesn't probe unchanged files again; the next try works (#3071).
+#[test]
+fn an_import_scan_whose_worker_cannot_start_keeps_the_probe_cache() {
+    let dir = Scratch::new("refused");
+    let mut h = app(&dir);
+    let kept = dir.path("trip/a.png");
+    cached_probe(&mut h, &kept);
+    crate::tasks::refused::next(1);
+    let r = crate::import::open(&mut h.app, vec![dir.path("trip")]);
+    assert!(r.as_ref().is_err_and(|e| e.contains("could not start")), "{r:?}");
+    assert!(h.app.scan.is_none());
+    assert!(h.app.session.import_probes.contains_key(&kept), "the cache went back to the session");
+    crate::import::open(&mut h.app, vec![dir.path("trip")]).unwrap();
+    assert!(h.step_until(SETTLE, |h| h.app.scan.is_none()), "the scan ends");
+}
+
 /// The scan of a dropped folder finishing while another dialog is open (the face model's licence, Settings…)
 /// keeps that dialog; the review opens, with the scan's photos, once it is closed.
 #[test]

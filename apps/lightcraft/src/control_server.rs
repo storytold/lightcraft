@@ -32,8 +32,11 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
             return rx;
         }
     };
+    if let Err(e) = std::thread::Builder::new().name("lc-control".into()).spawn(move || accept_loop(listener, tx, ctx)) {
+        log::error!("control server could not start: {e}");
+        return rx;
+    }
     log::info!("control server listening on 127.0.0.1:{port}");
-    std::thread::spawn(move || accept_loop(listener, tx, ctx));
     rx
 }
 
@@ -57,10 +60,19 @@ fn spawn_connection(
         let _ = writeln!(stream, "{}", json!({"ok": false, "error": "too many control connections"}));
         return None;
     }
-    Some(std::thread::spawn(move || {
+    let slot = Arc::clone(&open);
+    match std::thread::Builder::new().name("lc-control-conn".into()).spawn(move || {
         serve(stream, &tx, &ctx, idle_timeout);
-        open.fetch_sub(1, Ordering::SeqCst);
-    }))
+        slot.fetch_sub(1, Ordering::SeqCst);
+    }) {
+        Ok(worker) => Some(worker),
+        Err(e) => {
+            // (the connection, moved into the thread that didn't start, is closed)
+            log::warn!("control connection not served: {e}");
+            open.fetch_sub(1, Ordering::SeqCst);
+            None
+        }
+    }
 }
 
 /// Five minutes allows pauses between automation commands without retaining abandoned slots forever.
@@ -330,6 +342,15 @@ mod tests {
             }
             self.join();
         }
+    }
+
+    /// A connection's thread is named, so a thread dump tells it from the app's other threads (#3071).
+    #[test]
+    fn connection_threads_are_named() {
+        let open = Arc::new(AtomicUsize::new(0));
+        let connection = Connection::new(&open, Duration::from_secs(1), |c| c.shutdown(std::net::Shutdown::Write).unwrap());
+        let name = connection.worker.as_ref().and_then(|w| w.thread().name().map(String::from));
+        assert_eq!(name.as_deref(), Some("lc-control-conn"));
     }
 
     #[test]
