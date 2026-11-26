@@ -81,6 +81,11 @@ pub fn library_state(dir: &Path) -> std::io::Result<bool> {
 /// The default library location: `$LIGHTCRAFT_LIBRARY` if set, else `~/Pictures/LightCraft Library`
 /// (`%USERPROFILE%\Pictures\LightCraft Library` on Windows).
 pub fn default_dir() -> Option<PathBuf> {
+    // A Nightly profile opens its own library: an inherited LIGHTCRAFT_LIBRARY could otherwise point
+    // Nightly's catalog at Stable's library (the launch-profile validator refuses that variable too).
+    if let Some(root) = crate::config::profile_root() {
+        return Some(root.join("Library"));
+    }
     if let Some(p) = std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
