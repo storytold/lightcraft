@@ -243,6 +243,9 @@ impl PrefsWriter {
                 for command in start.step(&seen, at, zoom) {
                     ctx.send_viewport_cmd(command);
                 }
+            } else {
+                // (hidden: nothing to place by, but the time limit still runs)
+                start.idle(at);
             }
             match start.waits() {
                 Some(wait) => ctx.request_repaint_after(wait),

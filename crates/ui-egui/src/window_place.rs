@@ -402,9 +402,7 @@ impl StartPlace {
             return Vec::new();
         }
         // (not shown yet, its screen unknown, full screen or minimized: wait, but not for ever)
-        let first = *self.first_step.get_or_insert(now);
-        if now - first > PLACE_WITHIN_SECONDS {
-            self.done = true;
+        if self.out_of_time(now) {
             return Vec::new();
         }
         if seen.full_screen || seen.minimized {
@@ -456,6 +454,23 @@ impl StartPlace {
                 Vec::new()
             }
         }
+    }
+
+    /// A pass with nothing to place by (the window is hidden: its size is stale) at time `now`: the time limit
+    /// still runs, so a window kept hidden ends the placement and stops asking to be looked at.
+    pub fn idle(&mut self, now: f64) {
+        if !self.done {
+            self.out_of_time(now);
+        }
+    }
+
+    /// Whether placing has gone on for longer than it may (it is then done); its clock starts at the first pass.
+    fn out_of_time(&mut self, now: f64) -> bool {
+        let first = *self.first_step.get_or_insert(now);
+        if now - first > PLACE_WITHIN_SECONDS {
+            self.done = true;
+        }
+        self.done
     }
 
     /// When to look again while it waits (the app may have nothing else to draw).

@@ -689,3 +689,16 @@ fn a_window_clamped_to_its_screen_before_it_shows_is_still_fitted() {
     let mut s = StartPlace::new(false);
     assert!(s.step(&clamped, 0.0, 1.0).is_empty());
 }
+
+/// A window kept hidden while it is being placed still ends the placement in time, and then stops asking to be
+/// looked at (CodeRabbit on #2974).
+#[test]
+fn placement_ends_in_time_while_the_window_is_hidden() {
+    let mut s = StartPlace::new(true);
+    s.idle(0.0);
+    assert!(!s.done() && s.waits().is_some(), "still within its time");
+    s.idle(PLACE_WITHIN_SECONDS + 0.1);
+    assert!(s.done());
+    assert_eq!(s.waits(), None);
+    assert!(s.step(&window([1300.0, 800.0]), PLACE_WITHIN_SECONDS + 0.2, 1.0).is_empty());
+}
