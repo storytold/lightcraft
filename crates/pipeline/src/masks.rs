@@ -819,6 +819,31 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
     });
 }
 
+/// Whether the strokes of one brush mask hold more dabs than the mask's shared budget ([`MAX_STROKE_DABS`]), so that
+/// rasterizing it would leave later strokes (an erase among them) unapplied. Callers that can fail check this and
+/// report an error rather than render a wrong mask.
+pub fn brush_over_budget(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize) -> bool {
+    let mut room = MAX_STROKE_DABS;
+    for s in strokes {
+        if s.points.is_empty() {
+            continue;
+        }
+        if room == 0 {
+            return true;
+        }
+        let n = brush_dabs_within(s, frame, w, h, room).dabs.len();
+        if n >= room {
+            // the budget is exactly filled, or the stroke was cut off at it: one more dab says which (a stroke
+            // already at its own cap [`MAX_STROKE_DABS`] is cut off, whatever it would have held)
+            if room >= MAX_STROKE_DABS || brush_dabs_within(s, frame, w, h, room + 1).dabs.len() > room {
+                return true;
+            }
+        }
+        room -= n;
+    }
+    false
+}
+
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight
 /// each dab by [`auto_similarity`] to the pixel under its centre and are refined with
 /// [`guided_cross`] on log luminance.
@@ -826,8 +851,15 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
     if w == 0 || h == 0 {
         return;
     }
+    // one dab budget for the whole mask, as the GPU path keeps: a stroke's own cap alone let a
+    // thousand far-flung two-point strokes build and stamp a billion dabs
+    let mut room = MAX_STROKE_DABS;
     for s in strokes {
-        let bd = brush_dabs(s, frame, w, h);
+        if room == 0 {
+            break;
+        }
+        let bd = brush_dabs_within(s, frame, w, h, room);
+        room = room.saturating_sub(bd.dabs.len());
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
         for (k, d) in bd.dabs.iter().enumerate() {

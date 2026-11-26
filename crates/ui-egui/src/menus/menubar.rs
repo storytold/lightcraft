@@ -305,6 +305,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "panel.activity",
             "panel.info",
             "panel.keywords",
+            "panel.bursts",
             "---",
             "@Edit Sections",
             "@Tools",
@@ -363,6 +364,8 @@ pub(crate) fn selection_deleted(app: &LightcraftApp) -> bool {
 /// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
+        // Nightly is updated by the ArtCraft Launcher: the Help item would query the stable feed.
+        "app.checkForUpdates" => !crate::channel::is_nightly(),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
@@ -392,8 +395,6 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
     let u = &app.ui;
     let panel = |p: RightPanel| Some(u.right == p);
     match id {
-        // Every language's command is checked when it is the active one.
-        _ if crate::menus::language_from_command(id).is_some() => Some(crate::menus::language_from_command(id) == Some(u.language)),
         "develop.autoSync" => Some(app.session.auto_sync),
         "view.photoCounts" => Some(u.show_counts),
         "view.secondWindow" => Some(u.second_window),
@@ -440,6 +441,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "panel.activity" => panel(RightPanel::Activity),
         "panel.info" => panel(RightPanel::Info),
         "panel.keywords" => panel(RightPanel::Keywords),
+        "panel.bursts" => panel(RightPanel::Bursts),
         "panel.presets" => Some(u.presets),
         "library.toggleAutoWriteXmp" => Some(app.session.xmp.auto_write),
         _ => None,

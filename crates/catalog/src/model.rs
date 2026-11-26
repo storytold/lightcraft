@@ -180,7 +180,13 @@ pub struct Meta {
     pub lens_make: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
+    /// Shutter speed for display, from [`lightcraft_meta::format_exposure_time`] (`1/3`, `0.3571`, `2.5`).
     pub shutter: String,
+    /// The file's exact exposure time in seconds, kept beside the rounded `shutter` text so export
+    /// writes the original duration; read through [`Meta::shutter_seconds`]. Left out of the catalog
+    /// JSON when unknown, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_time: Option<f64>,
     pub iso: Option<u32>,
     /// Whether the flash fired, from Exif `Flash`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -222,6 +228,16 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+}
+
+impl Meta {
+    /// Shutter speed in seconds: the exact [`Meta::exposure_time`] while `shutter` still shows it,
+    /// otherwise whatever `shutter` says (set by hand, or a catalog from before the exact time was kept).
+    pub fn shutter_seconds(&self) -> Option<f64> {
+        self.exposure_time
+            .filter(|t| lightcraft_meta::format_exposure_time(*t).is_some_and(|text| text == self.shutter.trim()))
+            .or_else(|| parse_shutter_seconds(&self.shutter))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -294,7 +310,7 @@ pub struct Photo {
     /// Lens corrections embedded in the file (DNG `WarpRectilinear` / `FixVignetteRadial`), applied when
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub embedded_lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -339,6 +355,20 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// Set when the person arranged this photo's burst by hand (Window ▸ Bursts, or
+    /// `photo.moveToBurst`): its place in [`Analysis::group`], 0 being the pick, or `Some(0)` for
+    /// a photo taken out of every burst. Culling run again keeps such a photo's burst, place and
+    /// pick (unless asked to regroup). `None` while the burst is as culling made it; left out of the
+    /// catalog JSON then, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+}
+
+impl Analysis {
+    /// Whether the person placed this photo by hand (see [`Analysis::rank`]).
+    pub fn by_hand(&self) -> bool {
+        self.rank.is_some()
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting
@@ -559,6 +589,18 @@ impl Photo {
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
     }
+    /// The file Missing Photos checks for this photo, if it is in scope: a library photo (not in
+    /// Recently Deleted, not a Local-only record seen while browsing a folder) whose original is a
+    /// file. Browse records are out of scope on purpose: browsing can leave tens of thousands of
+    /// them in the catalog, they never show in library views (Missing Photos included), and a
+    /// folder that is gone is simply not browsed again. The sidebar count, the Missing Photos view,
+    /// `library.missing` and Find Missing Photos all use this one rule.
+    pub fn library_file(&self) -> Option<&str> {
+        match &self.source {
+            Source::File { path } if self.in_library() => Some(path),
+            _ => None,
+        }
+    }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();
@@ -761,7 +803,28 @@ mod edited_tests {
 
 #[cfg(test)]
 mod shutter_tests {
-    use super::parse_shutter_seconds;
+    use super::*;
+
+    #[test]
+    fn shutter_seconds_prefers_the_exact_time_while_the_text_still_shows_it() {
+        let mut m = Meta { shutter: "0.3571".into(), exposure_time: Some(1.0 / 2.8), ..Default::default() };
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 2.8));
+        m.shutter = "1/3".into();
+        m.exposure_time = Some(1.0 / 3.0);
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 3.0));
+        // the text no longer matches the stored time (edited elsewhere): the text wins
+        m.shutter = "1/250".into();
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 250.0));
+        // an older catalog without the exact time
+        m.exposure_time = None;
+        m.shutter = "2.5".into();
+        assert_eq!(m.shutter_seconds(), Some(2.5));
+        // the exact time stays out of the JSON when unknown, and round-trips when known
+        assert!(!serde_json::to_string(&m).unwrap().contains("exposure_time"));
+        m.exposure_time = Some(2.5);
+        let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.exposure_time, Some(2.5));
+    }
 
     #[test]
     fn a_fraction_needs_a_positive_numerator_and_denominator() {
