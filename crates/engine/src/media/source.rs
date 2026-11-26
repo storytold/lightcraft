@@ -392,6 +392,8 @@ pub struct ProbeInfo {
     pub content_hash: Option<String>,
     /// Lens corrections embedded in the file (DNG opcodes).
     pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    /// The raw carries a DNG `ProfileGainTableMap` (Apple ProRAW's local tone mapping).
+    pub gain_table_map: bool,
     /// The file's embedded XMP packet (raw/DNG files), for develop settings stored inside the file.
     pub xmp: Option<String>,
     /// The file's Exif orientation, when it states one: how its stored pixels turn upright (`width` and `height` are

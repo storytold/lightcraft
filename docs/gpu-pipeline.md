@@ -230,7 +230,7 @@ walks the drive.
   `Histogram::of_srgb8`, so it is exact).
 - Soft proofing against an output space (`RenderRequest::proof`, with its destination and display gamut
   warnings) runs in `finish`; a proof against an output-device profile (its 3D table) renders on the CPU.
-- Per-stage hybrid: the camera's local tone mapping (ProRAW gain tables, off by default) runs the
+- Per-stage hybrid: the camera's local tone mapping (ProRAW gain tables, a per-photo option) runs the
   scene-linear stage on the CPU and uploads; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
   on the CPU.

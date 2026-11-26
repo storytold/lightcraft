@@ -276,6 +276,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens.map(Box::new);
+                p.gain_table_map = info.gain_table_map;
                 p.set_preview_only(info.preview_only.clone());
                 if let Some(sc) =
                     start_from_file(s, &mut p, FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar }, &now)

@@ -1764,6 +1764,30 @@ fn dng_gain_table_map_renders_when_asked() {
     assert!(!lightcraft_pipeline::local_tone::enabled(&jpeg, &s));
 }
 
+/// Import learns from the file's header alone whether a raw carries a gain table map, which turns
+/// Camera local tone mapping on in its defaults (`Photo::camera_defaults`).
+#[test]
+fn probing_a_dng_tells_whether_it_carries_a_gain_table_map() {
+    use lightcraft_raw::gaintable::GainTableMap;
+    let plain = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    let mut raw = lightcraft_raw::decode(&plain).unwrap();
+    raw.color.profile.gain_table_map = Some(GainTableMap {
+        points_v: 1,
+        points_h: 1,
+        points_n: 1,
+        spacing_v: 1.0,
+        spacing_h: 1.0,
+        origin_v: 0.0,
+        origin_h: 0.0,
+        weights: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0, 0.0],
+        gamma: 1.0,
+        gains: vec![2.0],
+    });
+    let with_map = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    assert!(probe_bytes("a.dng", &with_map).unwrap().gain_table_map);
+    assert!(!probe_bytes("b.dng", &plain).unwrap().gain_table_map);
+}
+
 #[test]
 fn unsupported_raw_falls_back_to_embedded_preview() {
     let b = cr3_with_preview(48, 32);
