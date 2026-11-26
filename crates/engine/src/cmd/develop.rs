@@ -1072,19 +1072,22 @@ pub fn specs() -> Vec<CommandSpec> {
             "Perspective Correction",
             [],
             None,
-            "{mode: off|auto|guided|level|vertical|full} — analyses the photo (line segments → vanishing points) and stores the correction; run again to update after lens changes",
+            "{mode: off|auto|guided|level|vertical|full} — analyses the photo (line segments → vanishing points) and stores the correction; run again to update after lens changes → {mode, transform, note (why the mode corrects less than it says, and what it did instead, when it does)}",
             has_active,
             |s, p| {
                 let mode: Upright =
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("auto"))).map_err(|e| bad("geometry.upright", e.to_string()))?;
                 let id = active(s, "geometry.upright")?;
                 let d = s.develop_of(id).unwrap_or_default();
-                let transform = match mode {
-                    Upright::Off | Upright::Guided => None,
+                let (transform, note, family, instead) = match mode {
+                    Upright::Off | Upright::Guided => (None, None, "", None),
                     m => {
                         let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad("geometry.upright", e))?;
                         let info = s.source_info(id);
-                        Some(lightcraft_pipeline::upright::auto_transform(&src, &info, &d, m))
+                        let a = lightcraft_pipeline::upright::analyze_source(&src, &info, &d);
+                        let family = lightcraft_pipeline::upright::guided_hint(m, &a);
+                        let instead = lightcraft_pipeline::upright::fallback(m, &a);
+                        (Some(lightcraft_pipeline::upright::solve(m, &a)), lightcraft_pipeline::upright::shortfall(m, &a), family, instead)
                     }
                 };
                 edit(s, "geometry.upright", "Perspective Correction", |d| {
@@ -1092,7 +1095,19 @@ pub fn specs() -> Vec<CommandSpec> {
                     d.geometry.upright_transform = transform;
                     Ok(())
                 })?;
-                Ok(json!({"mode": mode, "transform": transform}))
+                // say why when the mode can't do what it says, instead of nothing happening
+                let note = note.map(|why| {
+                    let what = match mode {
+                        Upright::Level => "No level correction",
+                        Upright::Vertical => "No vertical correction",
+                        Upright::Full => "No full correction",
+                        _ => "No perspective correction",
+                    };
+                    // (and what it did instead, when it fell back to a lesser correction: "nothing" is only said of none)
+                    let instead = instead.map(|i| format!(" {i}.")).unwrap_or_default();
+                    format!("{what}: {why}.{instead} Try Guided: draw {family}.")
+                });
+                Ok(json!({"mode": mode, "transform": transform, "note": note}))
             }
         ),
         cmd!(
