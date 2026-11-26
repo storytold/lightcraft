@@ -95,7 +95,7 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.len() < 4 {
         return None;
     }
-    if b.starts_with(b"8BPS") && b.len() >= 6 && matches!(u16::from_be_bytes([b[4], b[5]]), 1 | 2) {
+    if b.get(..6).and_then(craft_sniff::identify) == Some(craft_sniff::Kind::Psd) {
         return Some(Format::Psd);
     }
     if b.starts_with(b"FUJIFILMCCD-RAW") || b.starts_with(b"\0MRM") || b.starts_with(b"FOVb") {
@@ -133,15 +133,8 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
 }
 
 fn sniff_bmff(b: &[u8]) -> Option<Format> {
-    let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
-    let end = size.clamp(12, b.len().min(4096));
-    let mut brands: Vec<&[u8]> = vec![&b[8..12]];
-    let mut p = 16;
-    while p + 4 <= end {
-        brands.push(&b[p..p + 4]);
-        p += 4;
-    }
-    let has = |x: &[u8]| brands.contains(&x);
+    let mut brands = craft_image_codecs::ftyp_brands(&b[..b.len().min(4096)]);
+    let has = |brand: &[u8; 4]| brands.clone().any(|candidate| candidate == brand);
     if has(b"crx ") {
         return Some(Format::RawOther);
     }
@@ -151,10 +144,9 @@ fn sniff_bmff(b: &[u8]) -> Option<Format> {
     if has(b"avif") || has(b"avis") {
         return Some(Format::Avif);
     }
-    if [&b"heic"[..], b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"].iter().any(|x| has(x)) {
-        return Some(Format::Heif);
-    }
-    None
+    brands
+        .any(|brand| matches!(brand, b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"hevm" | b"hevs" | b"mif1" | b"msf1"))
+        .then_some(Format::Heif)
 }
 
 /// Heuristic camera-raw detection for classic TIFF: DNGVersion, the CR2 signature, CFA/LinearRaw
@@ -368,6 +360,19 @@ mod tests {
     }
 
     #[test]
+    fn bmff_probe_reads_the_last_complete_brand_in_its_prefix() {
+        let mut compatible = vec![b"zzzz"; 1021];
+        compatible[1019] = b"avif";
+        compatible[1020] = b"crx ";
+        let bytes = ftyp_box(None, b"heic", &compatible);
+
+        // AVIF starts at 4092, well beyond the shared image detector's 64-byte scan.
+        // CR3 starts at 4096, just past LightCraft's scan, so it cannot take precedence.
+        assert_eq!(sniff(&bytes), Some(Format::Avif));
+        assert_eq!(sniff(&bytes[..4095]), Some(Format::Heif));
+    }
+
+    #[test]
     fn bmff_probe_precedence_cr3_jxl_avif_heif() {
         // CR3 (`crx `) wins over JXL, AVIF, and HEIF regardless of brand position.
         assert_eq!(sniff(&ftyp_box(None, b"crx ", &[b"jxl ", b"avif", b"heic", b"mif1"])), Some(Format::RawOther));
@@ -437,5 +442,39 @@ mod tests {
         assert_eq!(sniff(b"II*\0\x08\0\0\0\0\0"), Some(Format::Tiff));
         assert_eq!(sniff(b"MM\0*\0\0\0\x08\0\0"), Some(Format::Tiff));
         assert_eq!(sniff(b"unknown-header"), None);
+    }
+
+    #[test]
+    fn short_inputs_and_psd_raw_precedence() {
+        for len in 0..4 {
+            assert_eq!(sniff(&[0xFF, 0xD8, 0xFF][..len]), None);
+        }
+        assert_eq!(sniff(b"8BPS"), None);
+        assert_eq!(sniff(b"8BPS\0"), None);
+        assert_eq!(sniff(b"8BPS\0\x00"), None);
+        assert_eq!(sniff(b"8BPS\0\x03"), None);
+        assert_eq!(sniff(b"8BPS\x01\x01"), None);
+        assert_eq!(sniff(b"8BPT\0\x01"), None);
+        assert_eq!(sniff(b"8BPS\0\x01"), Some(Format::Psd));
+        assert_eq!(sniff(b"8BPS\0\x02"), Some(Format::Psd));
+
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCD"), None);
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCDR"), Some(Format::RawOther));
+        for raw_magic in [b"FUJIFILMCCD-RAW".as_slice(), b"\0MRM", b"FOVb"] {
+            assert_eq!(sniff(raw_magic), Some(Format::RawOther));
+        }
+        for raw_tiff in [b"IIRO".as_slice(), b"IIRS", b"MMOR", b"IIU\0"] {
+            assert_eq!(sniff(raw_tiff), Some(Format::RawTiffLike));
+        }
+        for tiff_magic in [b"II*\0".as_slice(), b"MM\0*"] {
+            assert_eq!(sniff(tiff_magic), Some(Format::Tiff));
+        }
+
+        // Compound headers: PSD, RAW, and JPEG/JPEG-LS signatures take precedence over `ftyp` at offset 4.
+        assert_eq!(sniff(b"8BPS\0\x01ftypavif"), Some(Format::Psd));
+        assert_eq!(sniff(b"\0MRMftypavif"), Some(Format::RawOther));
+        assert_eq!(sniff(b"FOVbftypheic"), Some(Format::RawOther));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xF7ftypcrx "), Some(Format::Jpeg));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0ftypjxl "), Some(Format::Jpeg));
     }
 }

@@ -146,6 +146,25 @@ pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &
     });
 }
 
+/// [`choices`] laid out as a grid of `cols` columns, row by row (ids `button:{id}-{index}`).
+pub(super) fn choice_grid<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str)], cols: usize, value: &mut V) {
+    field(ui, label, |ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            for (r, row) in options.chunks(cols.max(1)).enumerate() {
+                ui.horizontal(|ui| {
+                    for (c, (v, l)) in row.iter().enumerate() {
+                        let i = r * cols.max(1) + c;
+                        if crate::widgets::text_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() {
+                            *value = *v;
+                        }
+                    }
+                });
+            }
+        });
+    });
+}
+
 /// Dialogs that Return confirms with nothing focused (those with text fields confirm from the
 /// field: `dialog_field`).
 pub(super) fn return_confirms(dlg: &Dialog) -> bool {

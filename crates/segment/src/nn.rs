@@ -7,7 +7,7 @@
 use candle_core::{D, DType, Device, Module, Tensor};
 use candle_nn::{LayerNorm, Linear, VarBuilder};
 
-use crate::Result;
+use crate::{Result, cpu};
 
 /// `nn.LayerNorm(d)` (PyTorch's default eps).
 pub const TORCH_LN_EPS: f64 = 1e-5;
@@ -25,8 +25,17 @@ pub fn linear(i: usize, o: usize, vb: VarBuilder) -> Result<Linear> {
 const SCORE_BLOCK: usize = 64 << 20;
 
 /// Scaled dot-product attention on `[B, H, L, d]` tensors, with an optional additive bias
-/// broadcastable to `[B, H, Lq, Lk]`. Heads are processed in groups to bound memory.
+/// broadcastable to `[B, H, Lq, Lk]` (on the CPU: [`cpu::sdpa`]).
 pub fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor, bias: Option<&Tensor>, scale: f64) -> Result<Tensor> {
+    if q.device().is_cpu() && bias.is_none_or(|t| t.rank() == 4) {
+        return cpu::sdpa(q, k, v, bias, scale);
+    }
+    sdpa_tensors(q, k, v, bias, scale)
+}
+
+/// [`sdpa`] with candle's tensor operations (any device). Heads are processed in groups to bound
+/// memory.
+pub fn sdpa_tensors(q: &Tensor, k: &Tensor, v: &Tensor, bias: Option<&Tensor>, scale: f64) -> Result<Tensor> {
     let (b, h, lq, _) = q.dims4()?;
     let lk = k.dim(2)?;
     let per_head = b.saturating_mul(lq).saturating_mul(lk).max(1);
@@ -97,6 +106,11 @@ impl Attention {
         Ok(self.o.forward(x)?)
     }
 
+    /// The q, k, v and output projections.
+    pub fn projections(&self) -> [&Linear; 4] {
+        [&self.q, &self.k, &self.v, &self.o]
+    }
+
     /// `q`, `k`, `v`: `[B, L, hidden]`; `bias` broadcastable to `[B, heads, Lq, Lk]`.
     pub fn forward(&self, q: &Tensor, k: &Tensor, v: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
         let (b, lq, _) = q.dims3()?;
@@ -132,6 +146,14 @@ impl Mlp {
         let x = if self.gelu { x.gelu_erf()? } else { x.relu()? };
         Ok(self.fc2.forward(&x)?)
     }
+
+    /// `residual + forward(x)`; on the CPU with the bias adds, activation and residual add fused.
+    pub fn forward_add(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
+        if !x.device().is_cpu() {
+            return Ok((residual + self.forward(x)?)?);
+        }
+        cpu::linear_add(&cpu::linear_act(x, &self.fc1, self.gelu)?, &self.fc2, residual)
+    }
 }
 
 /// `Sam3DecoderMLP`: `layer1 … layerN` with ReLU between (2 or 3 layers).
@@ -149,15 +171,25 @@ impl DecoderMlp {
         Ok(Self { layers })
     }
 
+    /// On the CPU the hidden layers' bias add and ReLU are fused ([`cpu::linear_act`]: the box bias's MLPs have
+    /// 200 · 72 rows of 256).
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let mut dims = x.dims().to_vec();
         let mut x = x.clone();
         for (i, l) in self.layers.iter().enumerate() {
-            x = l.forward(&x)?;
-            if i + 1 < self.layers.len() {
-                x = x.relu()?;
-            }
+            x = if i + 1 == self.layers.len() {
+                l.forward(&x)?
+            } else if x.device().is_cpu() {
+                cpu::linear_act(&x, l, false)?
+            } else {
+                l.forward(&x)?.relu()?
+            };
         }
-        Ok(x)
+        // the fused layers return rows
+        if let Some(last) = dims.last_mut() {
+            *last = x.dim(D::Minus1)?;
+        }
+        Ok(x.reshape(dims)?)
     }
 }
 
@@ -185,6 +217,30 @@ impl FeedForward {
         }
         let x = self.proj_out.forward(&x)?;
         Ok(if self.sigmoid { candle_nn::ops::sigmoid(&x)? } else { x })
+    }
+}
+
+/// `nn.GroupNorm` followed by ReLU (the pixel decoder's), fused on the CPU.
+pub struct GroupNormRelu {
+    norm: candle_nn::GroupNorm,
+    weight: Tensor,
+    bias: Tensor,
+    groups: usize,
+    eps: f64,
+}
+
+impl GroupNormRelu {
+    pub fn new(groups: usize, channels: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let (weight, bias) = (vb.get(channels, "weight")?, vb.get(channels, "bias")?);
+        let norm = candle_nn::GroupNorm::new(weight.clone(), bias.clone(), channels, groups, eps)?;
+        Ok(Self { norm, weight, bias, groups, eps })
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        if x.device().is_cpu() {
+            return cpu::group_norm_relu(x, &self.weight, &self.bias, self.groups, self.eps);
+        }
+        Ok(self.norm.forward(x)?.relu()?)
     }
 }
 
@@ -239,4 +295,30 @@ pub fn cxcywh_to_xyxy(b: &Tensor) -> Result<Tensor> {
 /// A tensor's values as `f32` on the CPU.
 pub fn to_vec(t: &Tensor) -> Result<Vec<f32>> {
     Ok(t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{DType, Device};
+    use candle_nn::VarMap;
+
+    use super::*;
+
+    #[test]
+    fn a_decoder_mlp_over_rows_matches_linear_per_batch() {
+        let vars = VarMap::new();
+        let vb = VarBuilder::from_varmap(&vars, DType::F32, &Device::Cpu);
+        let mlp = DecoderMlp::new(2, 256, 8, 2, vb).unwrap();
+        let x = Tensor::randn(0f32, 1.0, (200, 72, 2), &Device::Cpu).unwrap();
+        let mut want = x.clone();
+        for (i, l) in mlp.layers.iter().enumerate() {
+            want = l.forward(&want).unwrap();
+            if i + 1 < mlp.layers.len() {
+                want = want.relu().unwrap();
+            }
+        }
+        let got = mlp.forward(&x).unwrap();
+        assert_eq!(got.dims(), [200, 72, 8]);
+        assert_eq!(got.flatten_all().unwrap().to_vec1::<f32>().unwrap(), want.flatten_all().unwrap().to_vec1::<f32>().unwrap());
+    }
 }
