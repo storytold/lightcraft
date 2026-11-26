@@ -5471,6 +5471,58 @@ fn assert_copy_as_dng_restores(s: &mut Session, id: PhotoId, paths: &[String], o
     assert_ne!(std::fs::read(old).unwrap(), bytes);
 }
 
+#[test]
+fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
+    use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
+    use lightcraft_catalog::{Op, Source};
+    for remove_after_preparation in [false, true] {
+        let dir = super::TestDir::new(&format!("copy-dng-restore-batch-{remove_after_preparation}"));
+        let destination = dir.join("copies");
+        let source = ["first.nef", "second.nef"].map(|name| dir.join(name).to_string_lossy().into_owned());
+        let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        for path in &source {
+            std::fs::write(path, &raw).unwrap();
+        }
+        let mut session = Session::new().with_fs();
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(destination.to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut job = ImportJob::new(&mut session, opts.clone()).unwrap();
+        let first = job.prepare(&source[..1], &cancel);
+        let r = commit_prepared(&mut session, &opts, job.now(), first).unwrap();
+        let id = PhotoId(r.imported[0]);
+        let Source::File { path: old } = session.catalog.photo(id).unwrap().source.clone() else { panic!("file photo") };
+        let output = std::fs::read(&old).unwrap();
+        assert_ne!(output, raw);
+        session.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+
+        if remove_after_preparation {
+            // A new job sees the deleted record and verifies that its old DNG is still intact.
+            job = ImportJob::new(&mut session, opts.clone()).unwrap();
+        } else {
+            // The original job must not mistake a previous batch's input alias for a catalog hash.
+            std::fs::remove_file(&old).unwrap();
+        }
+        let second = job.prepare(&source[1..], &cancel);
+        if remove_after_preparation {
+            std::fs::remove_file(&old).unwrap();
+        }
+        let r = commit_prepared(&mut session, &opts, job.now(), second).unwrap();
+        assert_eq!(r.restored, [id.0], "{r:?}");
+        assert!(r.failed.is_empty() && r.imported.is_empty(), "{r:?}");
+        let photo = session.catalog.photo(id).unwrap();
+        let Source::File { path } = &photo.source else { panic!("file photo") };
+        assert_eq!(Path::new(path).extension().unwrap(), "dng");
+        assert_eq!(std::fs::read(path).unwrap(), output);
+        assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&output).to_string()));
+    }
+}
+
 fn copy_dng_output_names(destination: &Path) -> Vec<std::ffi::OsString> {
     let mut files: Vec<_> = std::fs::read_dir(destination).unwrap().map(|entry| entry.unwrap().file_name()).collect();
     files.sort();
