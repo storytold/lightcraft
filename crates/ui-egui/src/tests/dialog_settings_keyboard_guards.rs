@@ -4,7 +4,9 @@ use crate::state::Dialog;
 use crate::{LightcraftApp, Services};
 use serde_json::{Value, json};
 use std::time::Duration;
-const T: Duration = Duration::from_secs(20);
+/// A generous settle budget: the point is that the dialog settles, and hosted runners are several times slower
+/// than a developer machine.
+const T: Duration = Duration::from_secs(90);
 fn steps(h: &mut Headless) {
     for _ in 0..4 {
         h.step();
