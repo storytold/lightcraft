@@ -12,8 +12,7 @@ use std::{
 
 const CLEAR: &str = "denoise:clear";
 const LIMIT: &str = "Cache limit";
-const AUTO: &str = "check:settings.denoiseAuto";
-const QUEUE: &str = "denoise:queueAll";
+
 #[derive(Clone, Copy, Debug)]
 enum Scope {
     Full,
@@ -292,10 +291,11 @@ impl Review {
     }
     fn reveal(&mut self, name: &str) -> Rect {
         for _ in 0..10 {
-            if let Some(rect) = self.rect(name) {
-                if rect.min.y >= 0.0 && rect.max.y < self.size.y {
-                    return rect;
-                }
+            if let Some(rect) = self.rect(name)
+                && rect.min.y >= 0.0
+                && rect.max.y < self.size.y
+            {
+                return rect;
             }
             self.frame(vec![
                 Event::PointerMoved(egui::pos2(self.size.x / 2.0, self.size.y / 2.0)),
@@ -437,11 +437,11 @@ impl Review {
             let response = id.and_then(|id| self.ctx.read_response(id));
             trace.push(format!("{:?}: {:?}", id, response.as_ref().map(|r| (r.rect, r.interact_rect))));
             self.observe("tab-original-after-key-cycle", None);
-            if let (Some(response), Some(rect)) = (response, self.rect(name)) {
-                if response.rect == rect || response.interact_rect == rect {
-                    println!("DENOISE_DIAGNOSTIC_TAB {}", json!({"reverse":reverse,"target":name,"trace":trace}));
-                    return;
-                }
+            if let (Some(response), Some(rect)) = (response, self.rect(name))
+                && (response.rect == rect || response.interact_rect == rect)
+            {
+                println!("DENOISE_DIAGNOSTIC_TAB {}", json!({"reverse":reverse,"target":name,"trace":trace}));
+                return;
             }
         }
         panic!("natural Tab did not reach {name}: {trace:?}")

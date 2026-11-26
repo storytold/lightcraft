@@ -255,9 +255,6 @@ fn profile_url(c: &Contributor) -> String {
     format!("https://github.com/{}", c.login)
 }
 
-/// How the contributor table's spare width is shared out: all of it to Name.
-const CONTRIBUTOR_GROW: [f32; 10] = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-
 /// How the model table's spare width is shared out: to Company and Model, the text columns.
 const MODEL_GROW: [f32; 6] = [1.0, 2.0, 0.0, 0.0, 0.0, 0.0];
 

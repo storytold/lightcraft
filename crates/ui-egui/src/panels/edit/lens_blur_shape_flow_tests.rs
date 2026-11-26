@@ -761,7 +761,7 @@ fn context(f: &mut Fixture, which: u8) {
         4 => {
             f.app.run("library.select", json!({"ids":[]})).unwrap();
         }
-        _ => unreachable!(),
+        _ => panic!("context case out of range: {which}"),
     }
     f.settle();
 }
@@ -779,7 +779,7 @@ fn restore(f: &mut Fixture, which: u8) {
         3 => {
             f.app.run("panel.edit", json!({})).unwrap();
         }
-        _ => unreachable!(),
+        _ => panic!("restore case out of range: {which}"),
     }
     f.settle();
 }

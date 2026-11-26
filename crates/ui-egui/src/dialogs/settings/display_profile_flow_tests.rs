@@ -147,7 +147,7 @@ impl Fixture {
             .unwrap_or_default();
         events.insert(0, Event::ModifiersChanged(modifiers));
         let raw = HeadlessView::raw_input(egui::vec2(1200.0, 1000.0), 1.0, f64::from(self.tick) / 60.0, events);
-        let (native, disabled, measure, sizing) = (self.native, self.disabled, self.measure, self.sizing);
+        let (disabled, measure, sizing) = (self.disabled, self.measure, self.sizing);
         let app = &mut self.app;
         let ctx = self.ctx.clone();
         let mut last = None;
@@ -157,11 +157,9 @@ impl Fixture {
                     ui.set_max_width(620.0);
                     let mut draw = |ui: &mut egui::Ui| {
                         let t = Tokens::get(ui.ctx());
-                        if native {
-                            (|| display_tab(app, ui, &t))();
-                        } else {
-                            display_tab(app, ui, &t);
-                        }
+                        // Both presentations draw the native tab: `native` only records which one the fixture
+                        // stands for (asserted on its own).
+                        display_tab(app, ui, &t);
                     };
                     ui.add_enabled_ui(!disabled, |ui| {
                         if sizing {
@@ -205,11 +203,6 @@ impl Fixture {
             .unwrap_or_else(|| panic!("missing {alias}; actual {:?}", self.rects.iter().map(|(n, _)| n).collect::<Vec<_>>()))
             .1
     }
-
-    fn has(&self, alias: &str) -> bool {
-        self.rects.iter().any(|(n, _)| n == alias)
-    }
-
     fn pointer(&mut self, at: egui::Pos2, button: PointerButton, pressed: bool) {
         self.frame(vec![Event::PointerMoved(at), Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE }]);
     }

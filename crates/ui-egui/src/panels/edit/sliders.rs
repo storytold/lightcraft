@@ -62,7 +62,7 @@ pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
     // a typed draft or a gesture belongs to the photo it began on
-    let out = slider_salted(ui, spec, v, enabled, None, egui::Id::new(app.session.active()));
+    let out = slider_salted(ui, spec, v, enabled, None, egui::Id::unique(app.session.active()));
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
 }
 

@@ -241,39 +241,35 @@ impl Review {
             // response id that THIS completed draw registered, without making an owner,
             // requesting focus, changing input, or moving the physical release.
             let current_pick = registry.1.iter().find(|(name, _)| name == PICK).map(|(_, hit)| *hit);
-            if SDK_PICK {
-                if let Some(hit) = current_pick {
-                    ids.push(hit.id);
-                }
+            if SDK_PICK && let Some(hit) = current_pick {
+                ids.push(hit.id);
             }
             ids.sort_by_key(Id::value);
             ids.dedup();
             let responses = ids.into_iter().filter_map(|id| ctx.read_response(id)).collect::<Vec<_>>();
-            if SDK_PICK {
-                if let Some(hit) = current_pick {
-                    let (point, down, released) = ctx.input(|i| (
-                        i.pointer.latest_pos(), i.pointer.button_down(PointerButton::Primary),
-                        i.pointer.button_released(PointerButton::Primary)));
-                    let changed = prior_pick.is_some_and(|old| old.id != hit.id);
-                    if changed || down || released {
-                        let response = ctx.read_response(hit.id);
-                        callback_observation = Some((hit.id, json!({
-                            "tick":tick,"eguiPass":ctx.cumulative_pass_nr(),"compare":compare,
-                            "point":point.map(|p|[p.x,p.y]),"primaryDown":down,"primaryReleased":released,
-                            "ownerChanged":changed,"priorRegisteredId":prior_pick.map(|old|format!("{:?}",old.id)),
-                            "priorBeforeRunRead":Self::response_trace(prior_read.as_ref()),
-                            "legacyCandidateIds":legacy_ids.iter().map(|id|format!("{id:?}")).collect::<Vec<_>>(),
-                            "legacyQueriedCurrent":legacy_ids.contains(&hit.id),
-                            "currentRegisteredId":format!("{:?}",hit.id),
-                            "currentRegisteredRect":registry.0.iter().find(|(name,_)|name==PICK).map(|(_,r)|[r.left(),r.top(),r.right(),r.bottom()]),
-                            "currentRegisteredLayer":format!("{:?}",hit.layer_id),
-                            "currentRegisteredClip":[hit.interact_rect.left(),hit.interact_rect.top(),hit.interact_rect.right(),hit.interact_rect.bottom()],
-                            "pointInsideCurrentClip":point.is_some_and(|p|hit.interact_rect.contains(p)),
-                            "layerAtPoint":point.and_then(|p|ctx.layer_id_at(p)).map(|layer|format!("{layer:?}")),
-                            "callbackRead":Self::response_trace(response.as_ref()),
-                            "includedFromCurrentRegistry":responses.iter().any(|r|r.id==hit.id)
-                        })));
-                    }
+            if SDK_PICK && let Some(hit) = current_pick {
+                let (point, down, released) = ctx.input(|i| (
+                    i.pointer.latest_pos(), i.pointer.button_down(PointerButton::Primary),
+                    i.pointer.button_released(PointerButton::Primary)));
+                let changed = prior_pick.is_some_and(|old| old.id != hit.id);
+                if changed || down || released {
+                    let response = ctx.read_response(hit.id);
+                    callback_observation = Some((hit.id, json!({
+                        "tick":tick,"eguiPass":ctx.cumulative_pass_nr(),"compare":compare,
+                        "point":point.map(|p|[p.x,p.y]),"primaryDown":down,"primaryReleased":released,
+                        "ownerChanged":changed,"priorRegisteredId":prior_pick.map(|old|format!("{:?}",old.id)),
+                        "priorBeforeRunRead":Self::response_trace(prior_read.as_ref()),
+                        "legacyCandidateIds":legacy_ids.iter().map(|id|format!("{id:?}")).collect::<Vec<_>>(),
+                        "legacyQueriedCurrent":legacy_ids.contains(&hit.id),
+                        "currentRegisteredId":format!("{:?}",hit.id),
+                        "currentRegisteredRect":registry.0.iter().find(|(name,_)|name==PICK).map(|(_,r)|[r.left(),r.top(),r.right(),r.bottom()]),
+                        "currentRegisteredLayer":format!("{:?}",hit.layer_id),
+                        "currentRegisteredClip":[hit.interact_rect.left(),hit.interact_rect.top(),hit.interact_rect.right(),hit.interact_rect.bottom()],
+                        "pointInsideCurrentClip":point.is_some_and(|p|hit.interact_rect.contains(p)),
+                        "layerAtPoint":point.and_then(|p|ctx.layer_id_at(p)).map(|layer|format!("{layer:?}")),
+                        "callbackRead":Self::response_trace(response.as_ref()),
+                        "includedFromCurrentRegistry":responses.iter().any(|r|r.id==hit.id)
+                    })));
                 }
             }
             last = Some((registry, responses, focused, clicked));
@@ -386,17 +382,16 @@ impl Review {
         self.frame(vec![]);
     }
     fn focus_name(&self) -> String {
-        if let Some(response) = &self.focused {
-            if let Some((name, _)) =
+        if let Some(response) = &self.focused
+            && let Some((name, _)) =
                 self.rects.iter().find(|(name, rect)| name.starts_with("flag:") && **rect == response.rect && response.sense.senses_click())
-            {
-                return name.clone();
-            }
+        {
+            return name.clone();
         }
-        if let Some(record) = craft::ui::runtime::focus::focused_rec(&self.ctx) {
-            if let Some((name, _)) = self.hits.iter().find(|(_, hit)| hit.id == record.stop.id) {
-                return name.clone();
-            }
+        if let Some(record) = craft::ui::runtime::focus::focused_rec(&self.ctx)
+            && let Some((name, _)) = self.hits.iter().find(|(_, hit)| hit.id == record.stop.id)
+        {
+            return name.clone();
         }
         self.focused.as_ref().map_or_else(
             || "none".into(),

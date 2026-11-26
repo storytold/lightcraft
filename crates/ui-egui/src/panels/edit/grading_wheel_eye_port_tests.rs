@@ -302,7 +302,7 @@ fn grading_eye_cancelled_pointer_and_keyboard_gestures_never_edit_or_retarget() 
                     h.settle();
                     h.pointer(pos, PointerButton::Primary, false);
                 }
-                _ => unreachable!(),
+                _ => panic!("unknown cancel kind: {cancel}"),
             }
         }
         h.settle();

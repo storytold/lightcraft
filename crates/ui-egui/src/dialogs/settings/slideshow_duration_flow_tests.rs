@@ -108,9 +108,9 @@ impl Fixture {
         egui::pos2(track.right() + 60.0, track.center().y)
     }
 
-    /// Press `id` off its thumb (a press on the track follows the pointer), drag through each of
+    /// Press off the thumb (a press on the track follows the pointer), drag through each of
     /// `through` and let go at the last of them.
-    fn drag(&mut self, id: &str, press: egui::Pos2, through: &[egui::Pos2]) {
+    fn drag(&mut self, press: egui::Pos2, through: &[egui::Pos2]) {
         self.pointer(press, true);
         for at in through {
             let at = *at;
@@ -187,7 +187,7 @@ fn slideshow_duration_release_clamps_the_fade_by_the_value_let_go_of() {
     let mut f = Fixture::new();
     let journal = f.app.session.journal.len();
     // down to the shortest slide and back up past the longest: the fade comes back with it
-    f.drag(SLIDE, f.at(SLIDE, 0.5), &[f.at(SLIDE, 0.25), f.at(SLIDE, 0.0), f.at(SLIDE, 0.5), f.past_end(SLIDE)]);
+    f.drag(f.at(SLIDE, 0.5), &[f.at(SLIDE, 0.25), f.at(SLIDE, 0.0), f.at(SLIDE, 0.5), f.past_end(SLIDE)]);
     let (slide, fade) = f.playback();
     assert!(slide > 3.0, "the gesture was let go of at a slide that allows the original fade: {slide}");
     assert_eq!(fade, 3.0, "the fade a shorter preview clamped is still there when the slide allows it");
@@ -199,7 +199,7 @@ fn slideshow_duration_release_clamps_the_fade_by_the_value_let_go_of() {
 
     // a release at the shortest slide still clamps the fade to it
     let journal = f.app.session.journal.len();
-    f.drag(SLIDE, f.at(SLIDE, 0.5), &[f.at(SLIDE, 0.25), f.at(SLIDE, 0.0)]);
+    f.drag(f.at(SLIDE, 0.5), &[f.at(SLIDE, 0.25), f.at(SLIDE, 0.0)]);
     assert_eq!(f.playback(), (SLIDE_MIN, SLIDE_MIN), "a commit to the shortest slide clamps the fade to it");
     assert_eq!(f.app.session.journal.len(), journal + 1);
     assert_eq!(f.app.session.journal[journal].1, json!({"slideDuration": SLIDE_MIN}));
@@ -214,7 +214,7 @@ fn slideshow_fade_duration_is_clamped_by_the_slide_alone() {
     f.app.session.execute("slideshow.playback", &json!({"slideDuration": 6.0, "fadeDuration": 2.0})).unwrap();
     f.frame(vec![]);
     let journal = f.app.session.journal.len();
-    f.drag(FADE, f.at(FADE, 0.5), &[f.at(FADE, 0.75), f.past_end(FADE)]);
+    f.drag(f.at(FADE, 0.5), &[f.at(FADE, 0.75), f.past_end(FADE)]);
     let (slide, fade) = f.playback();
     assert_eq!(slide, 6.0, "dragging the fade leaves the slide alone");
     assert_eq!(fade, 6.0, "the fade stops at the slide");

@@ -351,7 +351,7 @@ fn activity_controls_port_sdk_owns_controls_and_progress_helpers_are_unchanged()
             &format!("activity:cancel:{}", g.id()),
             egui::Id::unique(("activity-cancel", g.id())),
             egui::accesskit::Role::Button,
-            &crate::i18n::tr("Cancel"),
+            crate::i18n::tr("Cancel"),
             true,
         );
     }
@@ -370,7 +370,7 @@ fn activity_controls_port_stale_cancel_is_quiet_without_touching_other_tasks() {
     let old = format!("activity:cancel:{id}");
     let old_id = egui::Id::unique(("activity-cancel", id));
     h.visible();
-    h.check_owner(&old, old_id, egui::accesskit::Role::Button, &crate::i18n::tr("Cancel"), true);
+    h.check_owner(&old, old_id, egui::accesskit::Role::Button, crate::i18n::tr("Cancel"), true);
     let at = h.rect(&old).center();
     h.frame(vec![egui::Event::PointerMoved(at)], Pass::Real);
     h.frame(vec![pointer_event(at, true)], Pass::Real);

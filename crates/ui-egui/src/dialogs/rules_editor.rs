@@ -100,7 +100,9 @@ fn number_value(ui: &mut egui::Ui, v: &mut Value, field: &str, salt: &str) {
     let whole = matches!(field, "rating" | "iso" | "keywordCount" | "personCount" | "longEdge" | "shortEdge");
     // the range limits dragging; a stored value outside it (a rating of 9 from an agent) is shown
     // as it is, marked by the check, not quietly clamped to something that matches
-    if let Some(n) = controls::number(ui, &format!("field:{salt}"), field_label(field).unwrap_or(field), n, lo, hi, speed, whole) {
+    if let Some(n) =
+        controls::number(ui, &format!("field:{salt}"), field_label(field).unwrap_or(field), n, controls::Span { lo, hi, step: speed, whole })
+    {
         *v = if whole { json!(n.round() as i64) } else { json!(n) };
     }
 }
@@ -161,7 +163,8 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
             };
             let mut n = stored_n.unwrap_or(30.0);
             let mut unit = stored_unit.to_lowercase();
-            let number = controls::number(ui, &format!("field:{salt}-n"), "Value", n, 1.0, 10_000.0, 1.0, true);
+            let number =
+                controls::number(ui, &format!("field:{salt}-n"), "Value", n, controls::Span { lo: 1.0, hi: 10_000.0, step: 1.0, whole: true });
             let options: Vec<_> =
                 ["hours", "days", "weeks", "months", "years"].into_iter().map(|u| (u.to_owned(), crate::i18n::tr(u).to_owned())).collect();
             // Catalog input also accepts singular and differently cased units; drawing preserves them.

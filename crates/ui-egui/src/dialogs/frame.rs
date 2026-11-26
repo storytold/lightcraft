@@ -1,5 +1,5 @@
 use super::export::LABEL_W;
-use super::{BACKDROP_SHOWN, ControlSpec, Dialog, LightcraftApp, Tokens};
+use super::{BACKDROP_SHOWN, Dialog, LightcraftApp, Tokens};
 
 /// A click on the dimmed backdrop around the dialog: it closes the dialog like Esc. Pressed and
 /// released outside the window, so a slider dragged past its edge doesn't close it; a press while a
@@ -99,17 +99,6 @@ pub fn prompt(app: &mut LightcraftApp, title: &str, hint: &str, value: &str, com
         Some(Dialog::TextPrompt { title: title.into(), hint: hint.into(), value: value.into(), command: command.into(), params, key: key.into() });
 }
 
-/// A themed slider row editing `v`; true when it changed.
-pub(super) fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
-    match crate::widgets::slider(ui, spec, *v, true, None).value {
-        Some(n) => {
-            *v = n;
-            true
-        }
-        None => false,
-    }
-}
-
 pub(super) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
@@ -128,18 +117,6 @@ pub(super) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egu
 pub(super) fn trailing_button_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     let h = ui.spacing().interact_size.y.max(24.0);
     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), h), egui::Layout::right_to_left(egui::Align::Center), add);
-}
-
-/// A labelled row of mutually exclusive choice buttons (ids `button:{id}-{index}`).
-pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str)], value: &mut V) {
-    field(ui, label, |ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for (i, (v, l)) in options.iter().enumerate() {
-            if crate::widgets::text_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() {
-                *value = *v;
-            }
-        }
-    });
 }
 
 /// Dialogs that Return confirms with nothing focused (those with text fields confirm from the

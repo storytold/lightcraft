@@ -1,5 +1,5 @@
 use super::rows::tree_open;
-use super::{Icon, LibrarySource, LightcraftApp, json};
+use super::{LibrarySource, LightcraftApp, json};
 
 /// By Date and Keywords count every photo in the library, so choosing a row shows those photos
 /// from All Photos, not from whatever album or folder happened to be open, where they could be

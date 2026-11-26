@@ -27,7 +27,6 @@ use frame::{
     DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_field, escaped_field, field, fit_lists, just_opened,
     only_shows, return_confirms,
 };
-pub(crate) use rename::rename_preview;
 use rename::{person_rename_plan, rename_body, rename_keyword_body, rename_person_body};
 pub(crate) use sam_model::show_model_folder;
 use sam_model::{sam_by_hand, sam_model_body};
@@ -454,7 +453,6 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
 
     use craft::ui::contract::{Bind, Props as _, ShowContainer as _};
     use craft::ui::dialog::Dialog as FrameworkDialog;
-    use craft::ui::runtime::overlay::CloseReason;
 
     let ctx = host.ctx().clone();
     // A caller's measuring run of the whole dialog shows nothing the user can reach, and the dialog's id may open only
@@ -675,6 +673,53 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
     {
         title_bar_handle(&ctx, band, window_rect);
     }
+    settle_dialog(
+        app,
+        &ctx,
+        dlg,
+        Closing {
+            at_start: &at_start,
+            informational,
+            ok_at,
+            confirm,
+            close,
+            raw_blocked,
+            blocked,
+            window: window_rect,
+            title_bar,
+            popup_was_open,
+            closed: output.closed,
+            picked: picked.get(),
+        },
+    );
+}
+
+/// What a pass made of the open dialog: what its body asked for, the window it drew, and what the
+/// framework and the footer reported.
+struct Closing<'a> {
+    at_start: &'a Dialog,
+    informational: bool,
+    ok_at: Option<usize>,
+    confirm: bool,
+    close: bool,
+    raw_blocked: bool,
+    blocked: bool,
+    window: egui::Rect,
+    title_bar: Option<egui::Rect>,
+    popup_was_open: bool,
+    closed: Option<craft::ui::runtime::overlay::CloseReason>,
+    picked: Option<usize>,
+}
+
+/// Applies a pass's input to the open dialog — a backdrop click, Esc, Return or the footer — and
+/// leaves `app.ui.dialog` as it ends: closed, or the draft the body wrote. A dialog opened from
+/// inside this one keeps its place.
+fn settle_dialog(app: &mut LightcraftApp, ctx: &egui::Context, mut dlg: Dialog, closing: Closing<'_>) {
+    use craft::ui::runtime::overlay::CloseReason;
+
+    let Closing { at_start, informational, ok_at, mut confirm, mut close, raw_blocked, blocked, window, title_bar, popup_was_open, closed, picked } =
+        closing;
+    let import = matches!(dlg, Dialog::Import { .. });
     // The startup dialog is recorded once it was presented, not when the logic tick picked it: a host that runs
     // `logic` and quits before a visible frame does not burn the tour, and a crash while it is up still does not
     // reopen it on every launch. A frame whose input a notice owns is not a presentation: the dialog is drawn but
@@ -690,22 +735,22 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("dialog-backdrop-press")));
     } else {
         // (the import review keeps its hand-picked photos however the click lands; the title bar is not the backdrop)
-        if app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(&ctx, window_rect, title_bar, popup_was_open) {
+        if app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(ctx, window, title_bar, popup_was_open) {
             close = true;
         }
-        if escaped_field(&ctx) && !popup_was_open {
+        if escaped_field(ctx) && !popup_was_open {
             close = true;
         }
-        match output.closed {
+        match closed {
             // Escape that closed a popup in the dialog (a dropdown, a date picker's calendar), or a key the shortcuts
             // editor took while recording, leaves the dialog open
-            Some(CloseReason::Escape) if popup_was_open || crate::widgets::escape_taken(&ctx) => {}
+            Some(CloseReason::Escape) if popup_was_open || crate::widgets::escape_taken(ctx) => {}
             // Return with nothing focused in a dialog whose confirm can't take it
             Some(CloseReason::Enter) => confirm |= can_confirm(app, &dlg, informational),
             Some(_) => close = true,
             None => {}
         }
-        match picked.get() {
+        match picked {
             Some(at) if Some(at) == ok_at && !informational => confirm = true,
             // Cancel, or the Close of a dialog that only shows something
             Some(_) => close = true,
@@ -713,17 +758,17 @@ fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
         }
     }
     if confirm {
-        close |= confirmed(app, &ctx, &mut dlg);
+        close |= confirmed(app, ctx, &mut dlg);
     }
     // a dialog opened from inside this one (a button in Settings that shows a licence) takes its place
-    if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
+    if app.ui.dialog.as_ref().is_some_and(|now| *now != *at_start) {
         return;
     }
     if !close && !blocked {
         let frame = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(egui::Id::unique(BACKDROP_SHOWN), frame));
     }
-    if close && matches!(dlg, Dialog::Import { .. }) {
+    if close && import {
         app.renderer.forget_imports();
     }
     app.ui.dialog = if close { None } else { Some(dlg) };
@@ -2058,7 +2103,8 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),
         Dialog::LensDatabase { .. } => crate::lens_db::offer(ui),
         Dialog::RemoveFolder { .. } => remove_folder_body(ui, t, dlg),
-        Dialog::About => unreachable!("About is mounted on the root UI"),
+        // About is mounted on the root UI, not here: the framework shell has no body for it.
+        Dialog::About => {}
         Dialog::Shortcuts => crate::panels::keymap::body(app, ui, t),
         Dialog::ViewOptions => crate::panels::settings::view_options(app, ui, t),
         Dialog::Print => *close |= crate::print_view::body(app, ui, t),

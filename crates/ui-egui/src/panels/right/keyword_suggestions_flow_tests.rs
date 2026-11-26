@@ -1,6 +1,6 @@
 //! Suggestion-only SDK candidate. Original native failure packet remains separate and unchanged.
 use crate::{LightcraftApp, Services, headless::HeadlessView};
-use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Response, vec2};
+use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Response};
 use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -312,12 +312,11 @@ impl Review {
         self.frame(vec![]);
     }
     fn focus_name(&self) -> String {
-        if let Some(response) = &self.focused {
-            if let Some((name, _)) =
+        if let Some(response) = &self.focused
+            && let Some((name, _)) =
                 self.rects.iter().find(|(name, rect)| name.starts_with("kwSuggest:") && **rect == response.rect && response.sense.senses_click())
-            {
-                return name.clone();
-            }
+        {
+            return name.clone();
         }
         if let Some(record) = craft::ui::runtime::focus::focused_rec(&self.ctx) {
             // a text field registers its text part, where egui's focus sits; the framework's focus names its component

@@ -106,7 +106,6 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
         crate::text_field::focus(ui.ctx(), "field:search");
     }
     let before = app.ui.search.clone();
-    let had_focus = crate::text_field::has_focus_id(ui.ctx(), crate::text_field::id("field:search"));
     let carrying = app.ui.dragging_photos.is_some() && ui.input(|i| i.pointer.primary_down());
     let (shown, record) = craft::ui::runtime::inspect::record(ui, crate::text_field::id("field:search").with("inspect"), |ui| {
         let mut field = craft::ui::text::TextField::search(crate::i18n::tr("Search Photos"), Bind::bound(&mut app.ui.search))
