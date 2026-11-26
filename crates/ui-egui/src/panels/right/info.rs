@@ -146,7 +146,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let gps = if gps_mixed { String::new() } else { m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default() };
         let gid = egui::Id::unique("info-gps");
         ui.label(egui::RichText::new("GPS").size(11.5).color(t.text_dim));
-        let mut edit: FieldEdit = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &targets));
+        let mut edit: FieldEdit = draft(ui.ctx(), gid).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &targets));
         let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
         let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
         edit.typed |= edit.text != edit.start;
@@ -474,9 +474,25 @@ fn keep_edit(ui: &egui::Ui, id: egui::Id, edit: &FieldEdit, r: &crate::text_fiel
     let pass = ui.ctx().cumulative_pass_nr();
     if r.editing {
         ui.data_mut(|d| d.insert_temp(id, FieldEdit { seen: pass, ..edit.clone() }));
-    } else if r.ending.is_some() || edit.seen.saturating_add(1) < pass {
+    } else if r.ending.is_some() || !current(edit.seen, pass) {
         ui.data_mut(|d| d.remove::<FieldEdit>(id));
     }
+}
+
+/// Whether an edit last under way in pass `seen` is still the field's in pass `pass`: the pass it was
+/// under way in, and the one after (egui may run a pass again; see [`keep_edit`]). An older draft is
+/// one the panel stopped drawing: it is given up rather than loaded onto another photo with the
+/// photos it edited.
+fn current(seen: u64, pass: u64) -> bool {
+    seen.saturating_add(1) >= pass
+}
+
+/// The edit kept for the field `id`, when it is still the field's ([`current`]). A draft left behind
+/// by a panel that stopped drawing is not this photo's text, so it is not shown (nor committed with
+/// the other photo's `ids`).
+fn draft(ctx: &egui::Context, id: egui::Id) -> Option<FieldEdit> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<FieldEdit>(id)).filter(|edit| current(edit.seen, pass))
 }
 
 /// A labeled metadata text field: the typed text lives in egui memory while focused and is
@@ -489,7 +505,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
     let id = egui::Id::unique(("info-field", key));
     let value = if mixed { "" } else { value };
-    let mut edit: FieldEdit = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| FieldEdit::new(value, mixed, targets));
+    let mut edit: FieldEdit = draft(ui.ctx(), id).unwrap_or_else(|| FieldEdit::new(value, mixed, targets));
     let widget = format!("field:{key}");
     let field = if lines > 1 {
         crate::text_field::TextField::multiline(&widget, &mut edit.text).rows(lines)
@@ -511,3 +527,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
 #[cfg(test)]
 #[path = "info_copyright_tests.rs"]
 mod copyright_tests;
+
+#[cfg(test)]
+#[path = "info_draft_tests.rs"]
+mod draft_tests;
