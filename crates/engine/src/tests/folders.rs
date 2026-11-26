@@ -798,7 +798,7 @@ fn a_date_folder_named_with_different_letter_case_can_be_renamed() {
     }
     let r = s.execute("folder.rename", &json!({"path": flipped.to_string_lossy(), "name": "Beach"})).unwrap();
     assert_eq!(r["relinked"], 1, "the photo inside is relinked");
-    let moved = lib.join("Originals/Beach/a.jpg");
+    let moved = lib.join("Originals").join("Beach").join("a.jpg");
     assert!(moved.is_file(), "renamed on disk under the library's own spelling");
     let paths: Vec<_> = s
         .catalog
@@ -884,7 +884,7 @@ fn a_photo_stored_under_a_differently_cased_library_path_is_relinked() {
     s.browse = Some(crate::Browse { path: dir.0.join("LIB").join("Originals").join("2026-10-16").to_string_lossy().to_string(), subfolders: false });
     let r = s.execute("folder.rename", &json!({"path": day.to_string_lossy(), "name": "Beach"})).unwrap();
     assert_eq!(r["relinked"], 1, "the photo stored under the flipped spelling is relinked");
-    let moved = lib.join("Originals/Beach/a.jpg");
+    let moved = lib.join("Originals").join("Beach").join("a.jpg");
     let paths: Vec<_> = s
         .catalog
         .photos()
@@ -935,7 +935,7 @@ fn a_folder_that_differs_only_in_letter_case_is_left_alone_when_it_is_outside_th
         })
         .collect();
     paths.sort();
-    let moved = dir.0.join("work/Beach/b.jpg");
+    let moved = dir.0.join("work").join("Beach").join("b.jpg");
     let mut expected = vec![photo.to_string_lossy().to_string(), moved.to_string_lossy().to_string()];
     expected.sort();
     assert_eq!(paths, expected, "the photo in trip stays; only the renamed folder is relinked");
