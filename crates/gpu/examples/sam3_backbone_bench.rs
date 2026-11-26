@@ -6,7 +6,7 @@
 //! The model directory is `LIGHTCRAFT_SAM3_DIR`, else `~/.config/lightcraft/models/sam3`. Prints the device and
 //! kernel creation, the weight upload, the first and the warm forward passes, each neck's first run (which builds
 //! it) and warm runs, the CPU forward pass and how far the two outputs are apart. `--app` then times what the app
-//! does per photo, with the model loaded as the app loads it (GPU backbone and necks, the rest in candle on the CPU): encode,
+//! does per photo, with the model loaded as the app loads it (GPU backbone, necks and DETR encoder, the rest in candle on the CPU): encode,
 //! click features, first click, first and second Describe (`--cpu-necks`: with the necks in candle, as before they
 //! ran on the GPU).
 

@@ -15,8 +15,10 @@
 //! `wgsl/sam3_ops.wgsl` (layer norm, RoPE, im2col, the final reorder). All of the dispatches, with their parameters
 //! and bind groups, are built once with the weights; a forward pass uploads the pixels, submits one command buffer
 //! per layer and reads the result back once. No subgroups or shader-f16 needed. The two necks that follow the
-//! backbone run on the same device, built when first asked for (`sam3/neck.rs`). The text detector's heads stay in
-//! candle on the CPU.
+//! backbone run on the same device, built when first asked for (`sam3/neck.rs`).
+//!
+//! The same accelerator runs the text detector's DETR encoder (`sam3/detr.rs`); its weights load on the first text
+//! prompt. The mask decoder stays in candle on the CPU.
 //!
 //! The device is its own (like denoise's and faces'): it respects the same switches as GPU rendering
 //! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, `LIGHTCRAFT_GPU_ADAPTER`, the GPU preference), the crash sentinel
@@ -31,6 +33,7 @@ use bytemuck::Pod;
 use lightcraft_segment::{BACKBONE_PREFIX, BackboneAccel, NeckKind, WeightReader};
 use wgpu::util::DeviceExt;
 
+mod detr;
 mod neck;
 #[cfg(test)]
 mod tests;
@@ -949,6 +952,8 @@ pub struct Sam3Gpu {
     /// Bytes of work buffers on the device.
     work_bytes: u64,
     precision: Precision,
+    /// The detector's DETR encoder, loaded on the first text prompt.
+    detr: detr::Encoder,
     /// The feature pyramids, built on first use.
     necks: neck::Necks,
 }
@@ -1044,8 +1049,9 @@ fn build_inner(dev: &'static Dev, weights: &WeightReader, precision: Precision) 
     }
     g.channels_first(&x, &y, HIDDEN, GRID, WINDOW)?;
     let recorded = g.record();
+    let detr = detr::Encoder::new(weights.clone());
     let necks = neck::Necks::new(weights.clone());
-    Ok(Sam3Gpu { dev, recorded, work: Mutex::new(Work { pixels, out: y, staging }), weight_bytes: ld.bytes, work_bytes, precision, necks })
+    Ok(Sam3Gpu { dev, recorded, work: Mutex::new(Work { pixels, out: y, staging }), weight_bytes: ld.bytes, work_bytes, precision, detr, necks })
 }
 
 /// Run `f`, the work of `stage`, turning a panic into a broken device (with the stage's name).
@@ -1065,6 +1071,11 @@ impl Sam3Gpu {
     /// Bytes of device memory the work buffers take (activations, input, read-back).
     pub fn work_bytes(&self) -> u64 {
         self.work_bytes + (TOKENS * HIDDEN * 4) as u64
+    }
+
+    /// Bytes of device memory the DETR encoder's weights and work buffers take, once a text prompt loaded them.
+    pub fn detr_bytes(&self) -> Option<(u64, u64)> {
+        self.detr.bytes()
     }
 
     fn run(&self, pixels: &[f32]) -> Result<Vec<f32>, String> {
@@ -1103,11 +1114,26 @@ impl BackboneAccel for Sam3Gpu {
         guarded("a SAM 3 neck", || self.necks.run(self.dev, which, backbone, n))
     }
 
+    fn detr_encoder(&self, image: &[f32], pos: &[f32], text: &[f32], valid: &[bool]) -> Result<Vec<f32>, String> {
+        if let Some(why) = broken_reason() {
+            return Err(format!("the GPU is not used any more: {why}"));
+        }
+        if let Some(why) = crate::switched_off() {
+            return Err(why);
+        }
+        let Some(_work) = crate::exit::enter() else { return Err("LightCraft is closing".into()) };
+        guarded("the SAM 3 DETR encoder", || self.detr.run(self.dev, image, pos, text, valid))
+    }
+
     fn closing(&self) -> bool {
         crate::shutting_down()
     }
 
     fn runs_necks(&self) -> bool {
+        true
+    }
+
+    fn runs_detr_encoder(&self) -> bool {
         true
     }
 
