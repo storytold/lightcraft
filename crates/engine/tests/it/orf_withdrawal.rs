@@ -206,11 +206,11 @@ fn unavailable_legacy_orf_is_unchanged_and_retried() {
     assert_eq!(recheck::stale(&x.s.catalog, false).len(), 1);
 }
 
-/// Regression check for the `source_format` review: the extension is the last path
-/// segment, so `next_back()` returns it directly and render keys are unchanged by the
-/// swap from `Iterator::last()`.
+/// The decoder salt of every render family comes from the photo's `format` field, never from its
+/// file name: an ORF photo's keys stay apart from a DNG photo's, and two DNG photos whose paths
+/// differ share a thumbnail key.
 #[test]
-fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity_review_regression_1() {
+fn decoder_keys_come_from_the_photo_format_not_its_path() {
     let mut s = decoder_session("ORF");
     let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
     let keys = decoder_keys(&mut s);
@@ -229,17 +229,15 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
         assert_ne!(a, b, "ORF and DNG render keys must differ");
     }
     // ARW and CR2 both carry decoder_key == 0, so their persistent thumbnail, view and
-    // variant keys differ only through decoder_cache_version: this guards the per-format
-    // version propagation even when the decoder salt is zero.
+    // variant keys differ only through the formats' own decoder revisions: this guards the
+    // per-format version propagation even when the decoder salt is zero.
     let arw = decoder_keys(&mut decoder_session("ARW"));
     let cr2 = decoder_keys(&mut decoder_session("CR2"));
     for i in 0..3 {
-        assert_ne!(arw.1[i], cr2.1[i], "ARW and CR2 persistent key {} must differ by decoder_cache_version", i);
+        assert_ne!(arw.1[i], cr2.1[i], "ARW and CR2 persistent key {} must differ by the formats' decoder revisions", i);
     }
-    // `source_format` reads the path extension, so `decoder_session("DNG")` (path
-    // `same-original.orf`) is keyed as ORF for `decoder_cache_version`. Two photos with
-    // the same format field must share cache keys regardless of path extension; the path
-    // must not salt the decoder cache version.
+    // The format comes from the photo's `format` field (matched ignoring case), not from its path extension: two DNG
+    // photos whose paths differ get the same thumbnail key.
     let mut probe = Session::new();
     let mut probe_photo =
         Photo::new(PhotoId(1), Source::File { path: "same-original.dng".into() }, "same-original.dng", "DNG", 6000, 4000, "2026-01-01");
@@ -250,12 +248,11 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
     assert_eq!(other.1[0], probe_keys.1[0], "cache keys must use the photo's format, not the path extension");
 }
 
-/// Regression check for the `decoder_cache_version` review: the ORF withdrawal invalidation
-/// only needs to salt ORF and the formats whose decoder actually changed, so DNG must stay
-/// at the base version and its persistent render keys must match ordinary JPEG keys
-/// (legacy-key stability), while ARW, CR2 and ORF keep their per-format offsets.
+/// The ORF withdrawal invalidates only the formats whose decoder changed: DNG stays at the base
+/// revision and its persistent render keys match ordinary JPEG keys (legacy-key stability), while
+/// ARW, CR2 and ORF keep their own revisions.
 #[test]
-fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity_review_regression_2() {
+fn each_formats_persistent_keys_differ_from_the_legacy_ones() {
     let jpeg = decoder_keys(&mut decoder_session("JPEG"));
     let dng = decoder_keys(&mut decoder_session("DNG"));
     assert_eq!(dng.1, jpeg.1, "DNG persistent render keys must match ordinary JPEG keys");
@@ -265,20 +262,20 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
     // The first three keys are the persistent render families (thumbnail, loupe view, variant).
     // The fourth is the original file's identity, which no decoder version may change.
     for (a, b) in jpeg.1.iter().zip(&arw.1).take(3) {
-        assert_ne!(a, b, "ARW persistent keys must differ from JPEG's by decoder_cache_version");
+        assert_ne!(a, b, "ARW persistent keys must differ from JPEG's by its decoder revision");
     }
     for (a, b) in jpeg.1.iter().zip(&cr2.1).take(3) {
-        assert_ne!(a, b, "CR2 persistent keys must differ from JPEG's by decoder_cache_version");
+        assert_ne!(a, b, "CR2 persistent keys must differ from JPEG's by its decoder revision");
     }
     for (a, b) in jpeg.1.iter().zip(&orf.1).take(3) {
-        assert_ne!(a, b, "ORF persistent keys must differ from JPEG's by decoder_cache_version");
+        assert_ne!(a, b, "ORF persistent keys must differ from JPEG's by its decoder revision");
     }
     assert_eq!(jpeg.1[3], arw.1[3], "the original file's identity must not change with the decoder version");
 }
 
-/// Regression check for the `decoder_cache_version` review: a format's identity must be in the
-/// key apart from its decoder revision. ARW (offset 1000) and CR2 (offset 1001) are one step
-/// apart, so a one-step ARW revision bump would land on CR2's number; with every other key
+/// A format's identity must be in the key apart from its decoder revision. ARW (offset 1000) and
+/// CR2 (offset 1001) are one step apart, so a one-step ARW revision bump would land on CR2's
+/// number; with every other key
 /// input equal (one photo id, one content hash, one set of settings), the revision number alone
 /// must not be what tells the two formats apart, or the bumped ARW keys would alias CR2's. The
 /// frontend render identities carry no decoder revision at all, so they show whether the format

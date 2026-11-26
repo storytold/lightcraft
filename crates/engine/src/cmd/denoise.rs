@@ -241,11 +241,16 @@ fn activate_install(s: &mut Session, result: &Value, model: Arc<dyn crate::denoi
     s.denoise.touch();
     // The install worker has already loaded and self-tested the model: hand that instance to the refresh instead of
     // letting it load one of its own, so finishing an installation on the frame pump neither reads the model again
-    // nor leaves the instance the worker tested unused.
+    // nor leaves the instance the worker tested unused. Only this model's own file gets it: with `activate` off the
+    // model in use stays another one, and the refresh loads that one from the loader as before.
+    let onnx = dir.join(id).join("model.onnx");
     let tested = model.clone();
-    let loader = std::mem::replace(&mut s.denoise.loader, Arc::new(move |_, _| Ok(tested.clone())));
+    let rest = s.denoise.loader.clone();
+    let loader: crate::denoise::Loader =
+        Arc::new(move |path: &Path, m: &DenoiserManifest| if path == onnx.as_path() { Ok(tested.clone()) } else { rest(path, m) });
+    let previous = std::mem::replace(&mut s.denoise.loader, loader);
     s.denoise_refresh_active(true);
-    s.denoise.loader = loader;
+    s.denoise.loader = previous;
     if let Some(a) = &s.denoise.active
         && a.id == id
     {

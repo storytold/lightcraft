@@ -51,6 +51,28 @@ impl Model for Dim {
     }
 }
 
+/// A stand-in model that says which model it was loaded for, so a test can tell whose instance is in use.
+struct Named {
+    id: String,
+    tiles: Dim,
+}
+
+impl TileRunner for Named {
+    fn run(&self, input: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
+        self.tiles.run(input)
+    }
+}
+
+impl Model for Named {
+    fn runner(&self, _: RunOn, threads: usize) -> (&dyn TileRunner, usize) {
+        (self, threads)
+    }
+
+    fn self_test(&self, _: RunOn) -> Result<Value, String> {
+        Ok(json!({"loaded": self.id}))
+    }
+}
+
 fn dim_loader(runs: &Arc<AtomicUsize>) -> Loader {
     let runs = runs.clone();
     Arc::new(move |_, _| Ok(Arc::new(Dim { runs: runs.clone() }) as Arc<dyn Model>))
@@ -131,7 +153,7 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
 /// Finishing a background model installation on the frame pump keeps the model the install worker already loaded and
 /// self-tested: the pump loads nothing itself, and the photo's next denoise job runs on that same instance.
 #[test]
-fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_model_review_regression_1() {
+fn finishing_a_background_installation_loads_no_second_model() {
     use std::sync::{Mutex, mpsc};
     use std::time::Duration;
     let mut x = setup("install-reuse", false);
@@ -164,7 +186,7 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     let status = x.s.execute("denoise.status", &json!({})).unwrap();
     assert_eq!(status["model"]["id"], "builtin", "the built-in denoiser is in use meanwhile");
     release_tx.send(()).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + denoise_ready_timeout();
     loop {
         x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
         if x.s.execute("denoise.models.downloads", &json!({})).unwrap()["downloads"][0]["state"] == "installed" {
@@ -182,6 +204,33 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     assert_eq!(r["queued"], 0, "{r}");
     assert_eq!(loads.load(Ordering::Relaxed), 1, "the job reuses the loaded model");
     assert!(x.runs.load(Ordering::Relaxed) >= 4, "the stand-in ran the photo's tiles: {}", x.runs.load(Ordering::Relaxed));
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// A model installed with `activate: false` leaves the chosen model in use, and loading the chosen model gets that
+/// model's weights, never the newly installed one's.
+#[test]
+fn installing_a_model_without_activating_it_keeps_the_chosen_model() {
+    let mut x = setup("install-no-activate", false);
+    let runs = x.runs.clone();
+    let loader: Loader =
+        Arc::new(move |_: &Path, m: &DenoiserManifest| Ok(Arc::new(Named { id: m.id.clone(), tiles: Dim { runs: runs.clone() } }) as Arc<dyn Model>));
+    x.s.denoise.loader = loader;
+    let first = model_files(&x.dir, "stand-in");
+    let r = x.s.execute("denoise.models.install", &json!({"path": first.to_string_lossy(), "acknowledged": true})).unwrap();
+    assert_eq!(r["model"], "stand-in", "{r}");
+    // the chosen model's loaded instance is dropped, as choosing where denoise runs does
+    *x.s.denoise.active.as_ref().unwrap().model.lock().unwrap() = None;
+    let second = model_files(&x.dir, "other");
+    let r = x.s.execute("denoise.models.install", &json!({"path": second.to_string_lossy(), "acknowledged": true, "activate": false})).unwrap();
+    assert_eq!(r["model"], "stand-in", "the chosen model stays chosen: {r}");
+    assert_eq!(x.s.denoise.active.as_ref().map(|a| a.id.as_str()), Some("stand-in"));
+    // the photo's next denoise job runs on the chosen model's instance, not the one just installed
+    set_amount(&mut x.s, 100.0);
+    pump_until_ready(&mut x.s, 1);
+    let loaded = x.s.denoise.active.as_ref().unwrap().model.lock().unwrap().as_ref().map(|m| m.self_test(RunOn::Auto).unwrap());
+    assert_eq!(loaded, Some(json!({"loaded": "stand-in"})), "the chosen model's weights, not the installed model's");
     drop(x.s);
     let _ = std::fs::remove_dir_all(x.dir);
 }

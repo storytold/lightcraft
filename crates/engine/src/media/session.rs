@@ -4,11 +4,12 @@ use super::settings_hash::with_process;
 use super::source::{PreviewLoader, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
-/// The upper-case format of `p`'s source, or an empty string for non-file sources.
-fn source_format(p: &Photo) -> String {
+/// The format of `p`'s source, or an empty string for non-file sources. The decoder revision and
+/// the format's identity are looked up ignoring ASCII case.
+fn source_format(p: &Photo) -> &str {
     match &p.source {
-        Source::File { .. } => p.format.to_ascii_uppercase(),
-        _ => String::new(),
+        Source::File { .. } => &p.format,
+        _ => "",
     }
 }
 
@@ -77,7 +78,7 @@ impl crate::Session {
         let source_key = super::quick::source_identity(&p);
         let decoder = super::quick::decoder_key(&p);
         let format = source_format(&p);
-        let identity = super::format_identity(&format);
+        let identity = super::format_identity(format);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
@@ -96,7 +97,7 @@ impl crate::Session {
             ^ lens.rotate_left(37)
             ^ decoder.rotate_left(43)
             ^ identity.rotate_left(47);
-        let revision = super::decoder_revision(&format);
+        let revision = super::decoder_revision(format);
         let salts = KeySalts { decoder, denoise: salt, profile: profile_salt };
         let cache = thumb_bucket.map(|b| (self.media.rendered.clone(), Self::thumb_key(&p, &settings, settings_hash, b, revision, salts)));
         Some(RenderJob {
@@ -128,7 +129,7 @@ impl crate::Session {
     /// bump one format by a step and see what its keys do.
     pub(crate) fn thumb_key(p: &Photo, settings: &DevelopSettings, settings_hash: u64, bucket: usize, revision: u64, salts: KeySalts) -> Hash128 {
         let format = source_format(p);
-        let identity = super::format_identity(&format);
+        let identity = super::format_identity(format);
         let mut k = Hasher128::new();
         k.str(&content_key(p)).u64(settings_hash).u64(bucket as u64).u64(super::cache_version(revision));
         // (the format's own identity, next to its decoder revision: a one-step bump of one
@@ -175,7 +176,7 @@ impl crate::Session {
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
         let decoder = super::quick::decoder_key(&p);
-        let identity = super::format_identity(&source_format(&p));
+        let identity = super::format_identity(source_format(&p));
         job.key = settings.hash64()
             ^ crate::files::hot_pixel_key(settings)
             ^ ((max_w as u64) << 40)
@@ -192,7 +193,7 @@ impl crate::Session {
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
-        Self::variant_key_at(p, settings, edge, profile_salt, super::decoder_revision(&source_format(p)))
+        Self::variant_key_at(p, settings, edge, profile_salt, super::decoder_revision(source_format(p)))
     }
 
     /// [`Self::variant_key`] with the format's decoder revision given: production passes
@@ -200,7 +201,7 @@ impl crate::Session {
     pub(crate) fn variant_key_at(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64, revision: u64) -> Hash128 {
         let format = source_format(p);
         let decoder = super::quick::decoder_key(p);
-        let identity = super::format_identity(&format);
+        let identity = super::format_identity(format);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("variant")
@@ -340,7 +341,7 @@ impl crate::Session {
     /// key, [`Self::variant_key`]): a view rendered before the photo's AI Denoise result was there is
     /// not shown as the denoised one.
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
-        self.view_key_at(p, apply_crop, super::decoder_revision(&source_format(p)))
+        self.view_key_at(p, apply_crop, super::decoder_revision(source_format(p)))
     }
 
     /// [`Self::view_key`] with the format's decoder revision given: production passes
@@ -350,7 +351,7 @@ impl crate::Session {
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let format = source_format(p);
         let decoder = super::quick::decoder_key(p);
-        let identity = super::format_identity(&format);
+        let identity = super::format_identity(format);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("view")
@@ -504,7 +505,7 @@ impl crate::Session {
             .u64(id.0)
             .u64(profile_salt)
             .finish();
-        let identity = super::format_identity(&source_format(&p));
+        let identity = super::format_identity(source_format(&p));
         let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43) ^ identity.rotate_left(47);
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {

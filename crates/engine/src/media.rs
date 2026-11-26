@@ -48,83 +48,60 @@ pub use source::{
     face_edge, thumb_bucket,
 };
 
-/// Cache version for the decoder of one source format: the pipeline version plus a
-/// per-format decoder revision, so a decoder change only invalidates the renders of
-/// photos in that format. Unknown formats get the pipeline version alone. Every render key
-/// also carries [`format_identity`], so two formats whose versions happen to line up stay
-/// apart: a one-step bump of one format's version is not another format's key.
-#[cfg(test)]
-pub(crate) fn decoder_cache_version(format: &str) -> u64 {
-    cache_version(decoder_revision(format))
-}
-
-/// [`decoder_cache_version`] of a decoder at `revision`: the render keys take the revision as a
+/// The cache version of a decoder at `revision`: the render keys take the revision as a
 /// parameter, so a test can bump one format by a step.
 pub(crate) fn cache_version(revision: u64) -> u64 {
     RENDER_CACHE_VERSION.wrapping_add(revision)
 }
 
-/// The decoder revision of one source format, which [`decoder_cache_version`] adds to
+/// The decoder revision of one source format, which [`cache_version`] adds to
 /// [`RENDER_CACHE_VERSION`]. A revision is not an identity: ARW's 1000 and CR2's 1001 are one step
-/// apart, and [`format_identity`] is what keeps a bump of either off the other format's key.
+/// apart, and the format's [`format_identity`] is what keeps a bump of either off the other
+/// format's key.
 pub(crate) fn decoder_revision(format: &str) -> u64 {
-    match format.to_ascii_uppercase().as_str() {
-        "ARW" => 1000,
-        "CR2" => 1001,
-        "CR3" => 1002,
-        "NEF" => 1003,
-        "NRW" => 1004,
-        "DNG" => 0, // base version: DNG decoder unchanged, keep legacy keys stable
-        "RAF" => 1006,
-        "ORF" => 1007,
-        "RW2" => 1008,
-        "PEF" => 1009,
-        "IIQ" => 1010,
-        "MOS" => 1011,
-        "SRW" => 1012,
-        "X3F" => 1013,
-        "GPR" => 1014,
-        "PNG" => 2000,
-        "TIFF" | "TIF" => 2001,
-        "WEBP" => 2002,
-        "HEIC" | "HEIF" => 2003,
-        "GIF" => 2004,
-        "BMP" => 2005,
-        "AVIF" => 2006,
-        "JPEG" | "JPG" => 0,
-        _ => 0,
-    }
+    format_entry(format).0
 }
 
 /// Stable identity of one source format, part of every render key next to the decoder revision
-/// ([`decoder_cache_version`]): the number never changes, so bumping one format's decoder revision
+/// ([`decoder_revision`]): the number never changes, so bumping one format's decoder revision
 /// cannot land on another format's key. DNG, JPEG and unknown formats keep identity 0, which leaves
 /// their keys exactly as they were.
 pub(crate) fn format_identity(format: &str) -> u64 {
-    match format.to_ascii_uppercase().as_str() {
-        "ARW" => 1,
-        "CR2" => 2,
-        "CR3" => 3,
-        "NEF" => 4,
-        "NRW" => 5,
-        "RAF" => 6,
-        "ORF" => 7,
-        "RW2" => 8,
-        "PEF" => 9,
-        "IIQ" => 10,
-        "MOS" => 11,
-        "SRW" => 12,
-        "X3F" => 13,
-        "GPR" => 14,
-        "PNG" => 15,
-        "TIFF" | "TIF" => 16,
-        "WEBP" => 17,
-        "HEIC" | "HEIF" => 18,
-        "GIF" => 19,
-        "BMP" => 20,
-        "AVIF" => 21,
-        _ => 0,
-    }
+    format_entry(format).1
+}
+
+/// One source format's decoder revision and stable identity, from one table so a format cannot get
+/// one without the other. Names are matched ignoring ASCII case; anything not listed is `(0, 0)`.
+fn format_entry(format: &str) -> (u64, u64) {
+    const FORMATS: &[(&str, u64, u64)] = &[
+        ("ARW", 1000, 1),
+        ("CR2", 1001, 2),
+        ("CR3", 1002, 3),
+        ("NEF", 1003, 4),
+        ("NRW", 1004, 5),
+        ("DNG", 0, 0), // base version: DNG decoder unchanged, keep legacy keys stable
+        ("RAF", 1006, 6),
+        ("ORF", 1007, 7),
+        ("RW2", 1008, 8),
+        ("PEF", 1009, 9),
+        ("IIQ", 1010, 10),
+        ("MOS", 1011, 11),
+        ("SRW", 1012, 12),
+        ("X3F", 1013, 13),
+        ("GPR", 1014, 14),
+        ("PNG", 2000, 15),
+        ("TIFF", 2001, 16),
+        ("TIF", 2001, 16),
+        ("WEBP", 2002, 17),
+        ("HEIC", 2003, 18),
+        ("HEIF", 2003, 18),
+        ("GIF", 2004, 19),
+        ("BMP", 2005, 20),
+        ("AVIF", 2006, 21),
+        ("JPEG", 0, 0),
+        ("JPG", 0, 0),
+    ];
+    FORMATS.iter().find(|entry| format.eq_ignore_ascii_case(entry.0)).map_or((0, 0), |&(_, revision, identity)| (revision, identity))
 }
 
 pub struct MediaCache {
@@ -189,19 +166,3 @@ mod thumbnail_hash_tests;
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod compiles_without_syntax_error_test {
-    #[test]
-    fn compiles_without_syntax_error() {
-        // Verify decoder_cache_version returns format-specific versions for cache invalidation
-        let arw_version = super::decoder_cache_version("ARW");
-        let cr2_version = super::decoder_cache_version("CR2");
-        let base_version = super::RENDER_CACHE_VERSION;
-
-        // Different formats must have different decoder versions
-        assert_ne!(arw_version, cr2_version, "ARW and CR2 decoder versions must differ");
-        // Decoder version adds per-format offset to base RENDER_CACHE_VERSION
-        assert_ne!(arw_version, base_version, "Decoder version must differ from base RENDER_CACHE_VERSION");
-    }
-}
