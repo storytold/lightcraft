@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Find missing photos on another drive
+- File ▸ Find Missing Photos on Other Drives looks for each missing photo at the same path on the other drives: another
+  drive letter on Windows, or another disk under /Volumes, /media or /mnt. A library whose drive letter changed, or whose
+  photos are on a copy of the disk, finds them again without searching folder by folder. A file is relinked only when
+  something proves it is the photo: its content matches (the whole-file comparison, on by default, when the library
+  knows it), or both its size and the capture time in its header match. A file that only has the right name, and
+  look-alikes on several drives, are reported as not sure and left for you to confirm, never guessed. The relink is one
+  undo step.
+- After a Lightroom catalog import, the originals it couldn't find are looked for this way automatically. Both are
+  in Settings ▸ General ▸ Missing photos.
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges

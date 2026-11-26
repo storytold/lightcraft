@@ -1405,6 +1405,7 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "file.findMissing" => file_find_missing_command(app, id, p),
+        "file.findMissingOnOtherDrives" => file_find_missing_on_other_drives_command(app, p),
         "photo.tagFromTracklog" => photo_tag_from_tracklog_command(app, ctx, id, p),
         "photo.locate" => photo_locate_command(app, p),
         "file.addFromDevice" => {
@@ -1759,7 +1760,15 @@ fn find_missing_timeout(p: &Value) -> Result<std::time::Duration, String> {
 }
 
 /// The toast for a finished search, and the result it leaves for a caller that waits.
-fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>) {
+fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>, generation: u64) {
+    // a plan is for the library it was made in: another one opened meanwhile has other photos under the same ids
+    let plan = plan.and_then(|plan| {
+        if app.session.library_generation() == generation {
+            Ok(plan)
+        } else {
+            Err(crate::i18n::tr("Another library was opened while Find Missing Photos searched: nothing was relinked").to_string())
+        }
+    });
     // relinked under the session as it is now: photos relinked meanwhile and files
     // now in use are skipped
     let r = plan.and_then(|plan| app.run("library.findMissing", plan.to_json()));
@@ -1849,7 +1858,8 @@ fn file_find_missing_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Re
     };
     app.ui.last_find_missing = None;
     app.ui.last_find_missing_result = None;
-    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, find_missing_done)?;
+    let generation = app.session.library_generation();
+    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, move |app, ctx, plan| find_missing_done(app, ctx, plan, generation))?;
     if !wait {
         return Ok(json!({"background": true}));
     }
@@ -1858,6 +1868,37 @@ fn file_find_missing_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Re
         return Err("Find Missing Photos: search timed out (search continues in the background)".into());
     }
     app.ui.last_find_missing_result.take().unwrap_or_else(|| Err("Find Missing Photos: worker terminated unexpectedly".into()))
+}
+
+/// The `file.findMissingOnOtherDrives {hash?, paths?, wait?, timeout?}` command: every missing photo (with `paths`,
+/// only those at these paths) looked for at the same path on the other drives (`lightcraft_engine::cmd::missing::plan_other_drives`) on a worker thread, and what is
+/// found relinked as one undo step. The full content check follows Settings ▸ Missing photos unless `hash` says.
+pub(crate) fn file_find_missing_on_other_drives_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    const LABEL: &str = "Find Missing Photos on Other Drives";
+    if app.tasks.is_running(LABEL) || app.tasks.is_running("Find Missing Photos") {
+        return Err("Find Missing Photos is already searching".into());
+    }
+    let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false);
+    let timeout = find_missing_timeout(p)?;
+    let verify_hash = p.get("hash").and_then(Value::as_bool).unwrap_or(app.ui.settings.missing_other_drives_hash);
+    let only = lightcraft_engine::cmd::missing::only_paths(p);
+    let candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
+    let work = move || {
+        let roots = lightcraft_engine::cmd::missing::drive_roots();
+        Ok(lightcraft_engine::cmd::missing::plan_other_drives(&candidates, &roots, verify_hash, only.as_ref()))
+    };
+    app.ui.last_find_missing = None;
+    app.ui.last_find_missing_result = None;
+    let generation = app.session.library_generation();
+    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, move |app, ctx, plan| find_missing_done(app, ctx, plan, generation))?;
+    if !wait {
+        return Ok(json!({"background": true}));
+    }
+    let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    if !crate::tasks::wait_for(app, &ctx, LABEL, timeout) {
+        return Err("Find Missing Photos on Other Drives: search timed out (search continues in the background)".into());
+    }
+    app.ui.last_find_missing_result.take().unwrap_or_else(|| Err("Find Missing Photos on Other Drives: worker terminated unexpectedly".into()))
 }
 
 /// The `photo.tagFromTracklog` command.

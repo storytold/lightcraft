@@ -111,6 +111,25 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     );
     #[cfg(not(target_arch = "wasm32"))]
     lens_profiles(app, ui, t);
+    // (last, so the sections above keep their places)
+    heading(ui, t, crate::i18n::tr("Missing photos"));
+    check(
+        ui,
+        "settings.missingOtherDrivesAuto",
+        &mut app.ui.settings.missing_other_drives_auto,
+        "After a Lightroom catalog import, look for its missing photos on the other drives",
+    );
+    check(
+        ui,
+        "settings.missingOtherDrivesHash",
+        &mut app.ui.settings.missing_other_drives_hash,
+        "On other drives, also compare the whole file when the library knows its content (slower)",
+    );
+    hint(
+        ui,
+        t,
+        "A missing photo is looked for at the same path on the other drives (another drive letter, or another disk under /media or /Volumes). A file there is taken when its size and the capture time in its header match; with the whole-file comparison also its content, when the library knows it. Several look-alikes are skipped, never guessed. File ▸ Find Missing Photos on Other Drives runs it any time.",
+    );
 }
 
 /// Lens profiles: whether the lens database is here, a button that downloads it (nothing is fetched without a
