@@ -358,7 +358,14 @@ fn restore_duplicate(
     check: Option<&RestoreCheck>,
     ops: &mut Vec<Op>,
 ) -> Result<(), &'static str> {
-    if reason == "content" {
+    if reason == "path" {
+        if !cfg!(target_arch = "wasm32")
+            && let Some(expected) = photo.content_hash.as_deref()
+            && !has_verified_content(path, Some(expected))
+        {
+            return Err("the file at this deleted photo's path has changed");
+        }
+    } else if reason == "content" {
         let differs = || trashed_file_differs(photo, hash, check);
         let relink = match target {
             RestoreTarget::Decide { format: Some(format) }
@@ -474,15 +481,6 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 match trashed {
                     // (browsing a folder in Local only looks: it never restores)
                     Some(id) if opts.on_deleted == OnDeleted::Restore && !opts.local => {
-                        if reason == "path"
-                            && !cfg!(target_arch = "wasm32")
-                            && let Some(photo) = s.catalog.photo(id)
-                            && let Some(expected) = photo.content_hash.as_deref()
-                            && !has_verified_content(&path, Some(expected))
-                        {
-                            report.failed.push((path, "the file at this deleted photo's path has changed".into()));
-                            continue;
-                        }
                         if !report.restored.contains(&id.0) {
                             let Some(photo) = s.catalog.photo(id) else { continue };
                             match restore_duplicate(photo, &path, reason, hash.as_deref(), &restore, prepared.restore_checks.get(&id), &mut ops) {
