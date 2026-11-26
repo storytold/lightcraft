@@ -2483,6 +2483,7 @@
   "Welcome": "欢迎",
   "Next": "下一步",
   "Get Started": "开始使用",
+  "Keywords and presets apply to new files only, not to photos already in Local": "关键词和预设仅应用于新文件，不适用于已在“本地”中的照片",
   "This album is in a loop, so it shows nothing": "此相册处于循环中，因此不显示任何内容",
   "It tests itself: change its rules (Edit Smart Album…)": "它引用了自身：请更改其规则（编辑智能相册…）",
   "Can't add to an album folder": "无法添加到相册文件夹",

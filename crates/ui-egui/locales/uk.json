@@ -2480,6 +2480,7 @@
   "Welcome": "Ласкаво просимо",
   "Next": "Далі",
   "Get Started": "Почати",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Ключові слова та пресети застосовуються лише до нових файлів, а не до фото, що вже є в «Локальних»",
   "This album is in a loop, so it shows nothing": "Цей альбом потрапив у цикл, тому нічого не показує",
   "It tests itself: change its rules (Edit Smart Album…)": "Він перевіряє сам себе: змініть його правила (Редагувати смарт-альбом…)",
   "Can't add to an album folder": "Не можна додати до теки альбомів",

@@ -2483,6 +2483,7 @@
   "Welcome": "ようこそ",
   "Next": "次へ",
   "Get Started": "始める",
+  "Keywords and presets apply to new files only, not to photos already in Local": "キーワードとプリセットは新しいファイルにのみ適用され、すでにローカルにある写真には適用されません",
   "This album is in a loop, so it shows nothing": "このアルバムは循環しているため、何も表示されません",
   "It tests itself: change its rules (Edit Smart Album…)": "自分自身を条件にしています。条件を変更してください（スマートアルバムを編集…）",
   "Can't add to an album folder": "アルバムフォルダには追加できません",

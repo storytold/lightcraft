@@ -2408,6 +2408,7 @@
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
   "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Słowa kluczowe i ustawienia predefiniowane dotyczą tylko nowych plików, nie zdjęć, które już są w Lokalnych",
   "This album is in a loop, so it shows nothing": "Ten album jest w pętli, więc niczego nie pokazuje",
   "It tests itself: change its rules (Edit Smart Album…)": "Sprawdza samego siebie: zmień jego reguły (Edytuj album inteligentny…)",
   "Can't add to an album folder": "Nie można dodać do folderu albumów",

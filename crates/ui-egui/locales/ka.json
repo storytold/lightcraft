@@ -3742,6 +3742,7 @@
   "Folder name": "საქაღალდის სახელი",
   "Its templates move to User Templates.": "მისი შაბლონები გადავა „მომხმარებლის შაბლონებში“.",
   "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Keywords and presets apply to new files only, not to photos already in Local": "საკვანძო სიტყვები და პრესეტები მხოლოდ ახალ ფაილებზე მოქმედებს და არა იმ ფოტოებზე, რომლებიც უკვე ლოკალშია",
   "This album is in a loop, so it shows nothing": "ეს ალბომი ციკლშია, ამიტომ არაფერს აჩვენებს",
   "It tests itself: change its rules (Edit Smart Album…)": "ის საკუთარ თავს ამოწმებს: შეცვალეთ მისი წესები (სმარტ-ალბომის რედაქტირება…)",
   "Filter settings": "პარამეტრების გაფილტვრა",

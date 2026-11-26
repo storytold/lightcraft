@@ -2530,6 +2530,7 @@
   "Next": "Další",
   "Get Started": "Začít",
   "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Klíčová slova a předvolby se použijí jen u nových souborů, ne u fotografií, které už jsou v Místních souborech",
   "This album is in a loop, so it shows nothing": "Toto album je ve smyčce, a proto nic nezobrazuje",
   "It tests itself: change its rules (Edit Smart Album…)": "Testuje samo sebe: změňte jeho pravidla (Upravit inteligentní album…)",
   "Can't add to an album folder": "Nelze přidat do složky alb",

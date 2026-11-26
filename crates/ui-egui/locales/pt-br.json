@@ -2328,6 +2328,7 @@
   "Welcome": "Bem-vindo",
   "Next": "Próximo",
   "Get Started": "Começar",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Palavras-chave e predefinições valem só para arquivos novos, não para fotos que já estão em Local",
   "This album is in a loop, so it shows nothing": "Este álbum está em um ciclo, então não mostra nada",
   "It tests itself: change its rules (Edit Smart Album…)": "Ele testa a si mesmo: mude as regras dele (Editar álbum inteligente…)",
   "Can't add to an album folder": "Não é possível adicionar a uma pasta de álbuns",

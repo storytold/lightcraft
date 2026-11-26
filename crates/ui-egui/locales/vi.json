@@ -2758,6 +2758,7 @@
   "Folder name": "Tên thư mục",
   "Its templates move to User Templates.": "Các mẫu trong đó sẽ được chuyển vào Mẫu người dùng.",
   "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Từ khóa và cài đặt sẵn chỉ áp dụng cho tệp mới, không áp dụng cho ảnh đã có trong Cục bộ",
   "This album is in a loop, so it shows nothing": "Album này nằm trong một vòng lặp nên không hiển thị gì",
   "It tests itself: change its rules (Edit Smart Album…)": "Album này tự kiểm tra chính nó: hãy đổi quy tắc của nó (Chỉnh sửa album thông minh…)",
   "Filter settings": "Lọc cài đặt",
