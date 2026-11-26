@@ -147,6 +147,19 @@ fn manual_chromatic_aberration_imports_and_stops_reporting() {
     assert_eq!(at("MoireFilter", "On"), ["MoireFilter"], "MoireFilter stays reported: an On/Off string, not an amount");
 }
 
+/// Every metadata-classified field stays out of the unmapped report: the classification says
+/// silently skipped, so the report must not list it as a lost adjustment (#4831 review).
+#[test]
+fn metadata_fields_never_reach_the_unmapped_report() {
+    for f in METADATA_SKIPPED_CRS_FIELDS {
+        let x = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:{f}="abc"/>"#
+        );
+        let warnings = to_partial_report(&props(&x), None, Target::Any, 1.5).1;
+        assert!(warnings.is_empty(), "{f} is metadata but reaches the unmapped report: {warnings:?}");
+    }
+}
+
 /// The grouped notations `docs/xmp-interop.md` writes instead of every field name on its own,
 /// expanded here so the drift guard sees through them.
 const DOC_GROUPS: &[(&str, &[&str])] = &[

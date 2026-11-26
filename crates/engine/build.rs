@@ -16,6 +16,7 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
     if let Err(e) = generate_registry() {
+        // cargo::error fails the build once this script exits: a stale OUT_DIR never compiles
         println!("cargo::error={e}");
     }
     let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();

@@ -478,6 +478,8 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
         .filter(|k| !NON_ADJUSTMENT.contains(k) && !read.contains(*k))
         .map(|k| k.trim_start_matches("crs:").to_string())
         .filter(|k| !quiet(k))
+        // the metadata bucket is silently skipped by classification: the report must agree
+        .filter(|k| !registry::METADATA_SKIPPED_CRS_FIELDS.contains(&k.as_str()))
         .collect();
     unmapped.dedup();
     unmapped.extend(mask_skips);
