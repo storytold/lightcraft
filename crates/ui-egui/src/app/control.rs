@@ -92,17 +92,17 @@ impl LightcraftApp {
         facts.pastes = Some(
             self.pending_gestures
                 .iter()
-                .filter_map(|gesture| {
-                    (gesture.resolved_pass.is_none()
+                .filter(|gesture| {
+                    gesture.resolved_pass.is_none()
                         && gesture.method == "ui.clipboard"
                         && gesture.params.get("action").and_then(Value::as_str) == Some("paste")
-                        && gesture.params.get("text").and_then(Value::as_str).is_none())
-                    .then(|| {
-                        (
-                            std::sync::Arc::downgrade(&gesture.completion),
-                            facts.ready(gesture) && control::check_gesture_numbers(&gesture.method, &gesture.params).is_ok(),
-                        )
-                    })
+                        && gesture.params.get("text").and_then(Value::as_str).is_none()
+                })
+                .map(|gesture| {
+                    (
+                        std::sync::Arc::downgrade(&gesture.completion),
+                        facts.ready(gesture) && control::check_gesture_numbers(&gesture.method, &gesture.params).is_ok(),
+                    )
                 })
                 .collect(),
         );

@@ -720,7 +720,7 @@ fn lens_blur_block(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_de
         for s in LENS_BLUR {
             let v = local_get(a, s.id);
             // a draft or gesture belongs to the photo and mask it began on
-            let out = crate::widgets::slider_salted(ui, s, v, true, None, egui::Id::new((app.session.active(), m.id)));
+            let out = crate::widgets::slider_salted(ui, s, v, true, None, egui::Id::unique((app.session.active(), m.id)));
             apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
         }
     });
@@ -788,7 +788,6 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     let t = Tokens::get(ui.ctx());
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let parent_enabled = ui.is_enabled();
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim)).selectable(false));
@@ -841,12 +840,11 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         track: Track::Plain,
     };
     let enabled = colored && app.ui.mask_overlay;
-    let pins_id;
     // Keep the original row geometry and each interactive response ID. Separate SDK
     // slider/number controls retain the existing track and exact-entry locators.
     let w = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
-    pins_id = ui.next_auto_id();
+    let pins_id = ui.next_auto_id();
     let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(w - 46.0, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);

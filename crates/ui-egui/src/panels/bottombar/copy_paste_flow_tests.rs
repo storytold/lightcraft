@@ -554,10 +554,10 @@ impl Review {
         }
     }
     fn focus_name(&self) -> String {
-        if let Some(record) = craft::ui::runtime::focus::focused_rec(&self.ctx) {
-            if let Some((name, _)) = self.hits.iter().find(|(_, hit)| hit.id == record.stop.id) {
-                return name.clone();
-            }
+        if let Some(record) = craft::ui::runtime::focus::focused_rec(&self.ctx)
+            && let Some((name, _)) = self.hits.iter().find(|(_, hit)| hit.id == record.stop.id)
+        {
+            return name.clone();
         }
         self.focused.as_ref().map_or_else(
             || "none".into(),

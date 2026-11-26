@@ -273,9 +273,7 @@ impl Fixture {
         self.safety();
     }
     fn live_menu_owner(&self) -> Option<egui::Id> {
-        let Some(record) = self.record.as_ref() else {
-            return None;
-        };
+        let record = self.record.as_ref()?;
         let owners = record
             .elements
             .iter()

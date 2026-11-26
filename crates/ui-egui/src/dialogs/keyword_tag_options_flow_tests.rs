@@ -305,12 +305,6 @@ impl KeywordOptions {
         self.app.ui.dialog = Some(crate::panels::keyword_list::edit_dialog(&self.app, path));
         self.idle();
     }
-    fn person(&self) -> bool {
-        match self.app.ui.dialog.as_ref().unwrap() {
-            Dialog::KeywordTag { person, .. } => *person,
-            other => panic!("wrong actual parent: {other:?}"),
-        }
-    }
 }
 
 const FLAGS: [&str; 4] = ["check:keywordIncludeOnExport", "check:keywordExportContaining", "check:keywordExportSynonyms", "check:keywordPerson"];

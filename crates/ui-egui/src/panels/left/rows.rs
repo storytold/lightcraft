@@ -385,7 +385,7 @@ impl Pinned {
         // The count's text starts here: `COUNT_EDGE_ROOM` before the visible edge while the row
         // reaches past it, and right after the name instead when there is no room for both.
         let pinned = (counts.column && rect.right() > visible + 0.5).then(|| {
-            let text = count_text.as_deref().map_or(0.0, &measure);
+            let text = count_text.as_deref().map_or(0.0, measure);
             let after_name = label_left + name_w.min(MIN_COUNT_NAME_ROOM) + NAME_GAP + mark_w + text + COUNT_EDGE_ROOM;
             if after_name > visible && (count_text.is_some() || mark_w > 0.0) {
                 // The count gives way: wholly past the edge, with the name's least room before it.
@@ -401,7 +401,7 @@ impl Pinned {
         if let Some(count_left) = pinned {
             let room = (count_left - mark_w - NAME_GAP - label_left).max(0.0);
             if name_w > room {
-                label = crate::widgets::elide_head(&item.label, room, &measure);
+                label = crate::widgets::elide_head(&item.label, room, measure);
                 cut = true;
             }
             drawn = measure(&label).min(room);
@@ -421,7 +421,7 @@ impl Pinned {
         }
         let count = count_at.and_then(|at| match pinned {
             Some(count_left) => {
-                let width = count_text.as_deref().map_or(0.0, &measure);
+                let width = count_text.as_deref().map_or(0.0, measure);
                 count_text.as_ref().map(|_| Rect::from_x_y_ranges(count_left..=(count_left + width), rect.y_range()))
             }
             None => Some(cells[at].1),
@@ -569,11 +569,6 @@ impl<'a> SideSpec<'a> {
         self.tree = false;
         self
     }
-
-    pub(super) fn build_all(mut self) -> Self {
-        self.build_all = true;
-        self
-    }
 }
 
 /// A row the list showed: where, and where its parts are.
@@ -581,7 +576,6 @@ impl<'a> SideSpec<'a> {
 pub(super) struct SideShown {
     pub key: String,
     pub rect: Rect,
-    pub label: Option<Rect>,
     pub count: Option<Rect>,
 }
 
@@ -862,7 +856,7 @@ fn list_shown<E>(
         if want.is_some_and(|want| item.id.to_lowercase() == *want) {
             ui.scroll_to_rect_animation(row.rect, None, egui::style::ScrollAnimation::none());
         }
-        shown.push(SideShown { key: row.key.clone(), rect: row.rect, label: Some(pinned.label_rect), count: pinned.count });
+        shown.push(SideShown { key: row.key.clone(), rect: row.rect, count: pinned.count });
     }
     shown
 }

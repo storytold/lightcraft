@@ -119,6 +119,9 @@ impl Frames {
     fn frame(&mut self, events: Vec<Event>) {
         self.frame_checked(events, |_, _| {});
     }
+    // The native-settings scope and the ported one draw the same production section, so the two
+    // arms below are the same call on purpose: the flag selects which journey a test names.
+    #[allow(clippy::if_same_then_else, reason = "both scopes draw the same production section on purpose")]
     fn frame_checked(&mut self, events: Vec<Event>, mut after: impl FnMut(&egui::Ui, &LightcraftApp)) {
         self.memory_only();
         self.time += 0.02;

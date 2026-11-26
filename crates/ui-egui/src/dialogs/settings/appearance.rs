@@ -120,12 +120,11 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
                     .nav(NavShape::Flat)
                     .enabled(ui.is_enabled())
                     .show_at(ui, group_rect, &mut body);
-                if let Some(index) = output.output.events.committed().copied().filter(|_| ui.is_enabled()) {
-                    if let Some((next, _)) = options.get(index as usize) {
-                        if *next != *value {
-                            *value = *next;
-                        }
-                    }
+                if let Some(index) = output.output.events.committed().copied().filter(|_| ui.is_enabled())
+                    && let Some((next, _)) = options.get(index as usize)
+                    && *next != *value
+                {
+                    *value = *next;
                 }
                 for (kind, radio_rect) in rows {
                     let row = egui::Rect::from_min_max(

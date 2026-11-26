@@ -101,7 +101,6 @@ impl Fixture {
         let _ = crate::widgets::take_registries(&self.ctx);
         let raw = HeadlessView::raw_input(vec2(1000.0, 800.0), 1.0, f64::from(self.tick) / 60.0, events);
         let app = &mut self.app;
-        let native = self.native;
         let pass = self.pass;
         let output = Drain(self.ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
@@ -123,11 +122,7 @@ impl Fixture {
                         draw(&mut child);
                     }
                 };
-                if native {
-                    (present)();
-                } else {
-                    present();
-                }
+                present();
             });
         }));
         fn text(shape: &egui::Shape, labels: &mut Vec<String>) {

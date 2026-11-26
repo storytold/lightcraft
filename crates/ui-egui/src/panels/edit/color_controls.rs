@@ -259,7 +259,7 @@ pub(super) fn preset(app: &mut LightcraftApp, ui: &mut egui::Ui, mode: WbMode) {
 /// A numeric value in the existing Color section, on its original displayed scale, on the shared develop slider
 /// row (the Kelvin temperature has Lightroom's track there).
 fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &ControlSpec, value: f64, enabled: bool) {
-    let row = crate::widgets::SliderRow { spec, value, enabled, label: None, salt: egui::Id::new(app.session.active()), record: None };
+    let row = crate::widgets::SliderRow { spec, value, enabled, label: None, salt: egui::Id::unique(app.session.active()), record: None };
     let shown = crate::widgets::slider_field(ui, &row);
     if let Some(track) = shown.track
         && let Some(index) = NUMERIC.iter().position(|id| *id == spec.id)
@@ -605,7 +605,7 @@ mod tests {
                         h.app.run("library.select", json!({"ids": [other.0]})).unwrap();
                     }
                     "modal" => h.app.quit_prompt = Some(crate::QuitPrompt::Tasks("A running task needs confirmation".into())),
-                    _ => unreachable!(),
+                    other => panic!("unknown boundary {other}"),
                 }
                 // A hidden logic tick does not consume/cancel the UI's owned interaction.
                 let preview = h.app.session.develop_of(first).unwrap();

@@ -484,11 +484,11 @@ fn text_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) -> bool
                     set(app, json!({"removeText": i}));
                     return app.session.slide_overlays.texts.len() != before;
                 }
-                for (key, label, value, lo, hi, suffix) in [("size", "Size", o.size, 0.01, TEXT_SIZE_MAX / 2.0, "Size")] {
-                    row(ui, t, label, |ui| {
-                        text_row_slider(app, ui, owner, &format!("{name}{suffix}"), label, value, Range { lo, hi, unit: Unit::Percent }, &wrap, key)
-                    });
-                }
+                let (key, label, value, lo, hi, suffix): (&str, &str, f64, f64, f64, &str) =
+                    ("size", "Size", o.size, 0.01, TEXT_SIZE_MAX / 2.0, "Size");
+                row(ui, t, label, |ui| {
+                    text_row_slider(app, ui, owner, &format!("{name}{suffix}"), label, value, Range { lo, hi, unit: Unit::Percent }, &wrap, key)
+                });
                 row(ui, t, "Colour", |ui| {
                     if let Some(color) = super::controls::colour(ui, owner.with("colour"), &format!("{name}Color"), "Colour", o.color) {
                         set(app, wrap(json!({"color": color})));

@@ -907,8 +907,6 @@ pub(crate) fn announce(resp: &egui::Response, name: impl Into<String>) {
 /// What a window with its own title and buttons is, to a screen reader.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modal {
-    /// A dialog with a task (Export, Settings, a name prompt) that stops the rest of the application.
-    Dialog,
     /// One that interrupts to say something that needs an answer (the quit prompt, a library that
     /// couldn't be opened) and stops the rest of the application: an alert dialog (AT-SPI and
     /// Windows tell it from a dialog; macOS reads both alike).
@@ -918,9 +916,9 @@ pub(crate) enum Modal {
 }
 
 /// Announces the window `response` drew as a dialog (an alert dialog for [`Modal::Alert`]), and for
-/// [`Modal::Dialog`] and [`Modal::Alert`] as modal, instead of as a group that carries the title:
-/// the platform's accessibility layer then sees a dialog and that the rest of the application is
-/// blocked while it is open.
+/// [`Modal::Alert`] as modal, instead of as a group that carries the title: the platform's
+/// accessibility layer then sees a dialog and that the rest of the application is blocked while it
+/// is open. [`Modal::Window`] leaves the rest reachable, so it is a dialog that is not modal.
 pub(crate) fn announce_dialog(ctx: &egui::Context, response: &Response, kind: Modal) {
     ctx.accesskit_node_builder(response.id, |node| {
         node.set_role(if kind == Modal::Alert { egui::accesskit::Role::AlertDialog } else { egui::accesskit::Role::Dialog });

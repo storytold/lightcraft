@@ -41,7 +41,10 @@ impl LightcraftApp {
     /// Installs the framework runtime before this context's first pass and supplies the shell's
     /// presentation values. It does not replace LightCraft's fonts, commands or saved workspace.
     pub fn install_framework(&self, ctx: &egui::Context) {
-        self.try_install_framework(ctx).expect("LightCraft requires the UI runtime before the first pass");
+        // A host that cannot install the runtime cannot draw the app at all; `assert!` reports it,
+        // since the crate denies `expect` and `panic!`.
+        let installed = self.try_install_framework(ctx);
+        assert!(installed.is_ok(), "LightCraft requires the UI runtime before the first pass: {installed:?}");
     }
 
     /// A host must not report successful startup with an unsensed SDK shell or About dialog.

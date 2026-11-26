@@ -505,7 +505,7 @@ fn smart_rules_sdk_name_trace_blur_prompt_presentation_and_prompt_escape_separat
                     true,
                 );
             }
-            _ => unreachable!(),
+            other => panic!("unknown scenario {other}"),
         }
         println!(
             "SMART_RULES_NAME_STAGE {}",
