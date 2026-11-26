@@ -180,6 +180,8 @@ pub struct FileFacts {
     pub orientation: Option<lightcraft_geom::Orientation>,
     /// Its XMP sidecar (or a raw's embedded XMP), which a file import merges into the record.
     pub sidecar: Option<crate::sidecar::SidecarData>,
+    /// The raw carries a gain table map ([`crate::media::ProbeInfo::gain_table_map`]).
+    pub gain_table_map: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

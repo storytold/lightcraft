@@ -1338,7 +1338,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.as_shot_wb = duplicate.as_shot_wb;
             p.content_hash = duplicate.content_hash.clone();
             p.embedded_lens = duplicate.embedded_lens.clone();
-            p.gain_table_map = duplicate.gain_table_map;
+            // what the file's own probe says when it was read: the other photo may predate the flag
+            p.gain_table_map = file.map_or(duplicate.gain_table_map, |f| f.gain_table_map);
             p.preview_only = duplicate.preview_only.clone();
             p.preview_checked = duplicate.preview_checked.clone();
             let file = file.cloned().unwrap_or_else(|| {

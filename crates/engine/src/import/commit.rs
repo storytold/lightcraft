@@ -185,7 +185,7 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
 /// capture time, the import defaults, then its XMP sidecar. Returns the sidecar when it said
 /// anything (labels read through the library's label names).
 pub(crate) fn start_from_file(s: &Session, p: &mut Photo, file: FileFacts, now: &str) -> Option<crate::sidecar::SidecarData> {
-    let FileFacts { meta, captured, orientation, sidecar } = file;
+    let FileFacts { meta, captured, orientation, sidecar, .. } = file;
     p.meta = meta;
     p.captured = captured;
     apply_import_defaults(s, p);
@@ -278,9 +278,18 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.embedded_lens = info.embedded_lens.map(Box::new);
                 p.gain_table_map = info.gain_table_map;
                 p.set_preview_only(info.preview_only.clone());
-                if let Some(sc) =
-                    start_from_file(s, &mut p, FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar }, &now)
-                {
+                if let Some(sc) = start_from_file(
+                    s,
+                    &mut p,
+                    FileFacts {
+                        meta: info.meta,
+                        captured: info.captured,
+                        orientation: info.orientation,
+                        sidecar,
+                        gain_table_map: info.gain_table_map,
+                    },
+                    &now,
+                ) {
                     report.sidecars += 1;
                     report.warnings.extend(sc.warnings.into_iter().map(|mut warning| {
                         warning.path = path.clone();

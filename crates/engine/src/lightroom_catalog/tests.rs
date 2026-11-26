@@ -216,6 +216,7 @@ fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() 
                     captured: None,
                     orientation: None,
                     sidecar: None,
+                    gain_table_map: false,
                 })),
             }],
             ..Default::default()
@@ -300,6 +301,52 @@ fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
     assert_eq!(*new.develop, new.camera_defaults(), "{r}");
     assert_eq!((new.develop.wb.temp, new.develop.wb.tint), (5200.0, 4.0), "the file's as-shot white balance");
     assert!(new.develop.optics.lens_profile, "the file's embedded lens corrections are on");
+}
+/// A content duplicate takes whether its raw carries a gain table map from its own file's probe, not
+/// from the photo with the same bytes, which may have been imported before the flag was recorded: its
+/// defaults then turn the camera local tone mapping on.
+#[test]
+fn a_content_duplicate_takes_the_gain_table_map_from_its_own_file() {
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.DNG", |p| {
+        p.format = "DNG".into();
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.as_shot_wb = Some((5200.0, 4.0));
+        // stored before the flag existed
+        p.gain_table_map = false;
+    });
+    let mut data = sample();
+    data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+    data.photos[0].settings.clear();
+    let files = crate::import::ImportReport {
+        duplicates: vec![crate::import::Duplicate {
+            path: "/missing/test.ARW".into(),
+            existing: Some(other.0),
+            reason: "content",
+            existing_deleted: false,
+            file: Some(Box::new(crate::import::FileFacts { gain_table_map: true, ..Default::default() })),
+        }],
+        ..Default::default()
+    };
+    let undo0 = s.undo.len();
+    let r = apply_prepared(
+        &mut s,
+        data,
+        ApplyPrepared {
+            update_existing: false,
+            files,
+            index: &mut ImportIndex::default(),
+            archive_path: None,
+            missing_sources: &HashSet::new(),
+            undo0,
+        },
+    )
+    .unwrap()
+    .report;
+    let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+    assert!(new.gain_table_map, "{r}");
+    assert!(new.develop.profile.camera_local_tone, "the new record's defaults: {r}");
+    assert!(!s.catalog.photo(other).unwrap().gain_table_map, "the other photo is left as it was");
 }
 /// A content duplicate keeps the metadata its file carries (copyright, rights, creator) and the
 /// capture time its file gives it, as a file import of it would, when the catalog doesn't restate
