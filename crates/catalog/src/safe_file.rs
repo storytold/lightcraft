@@ -275,12 +275,8 @@ fn same_content(f: &mut File, data: &[u8]) -> io::Result<bool> {
     }
 }
 
-/// Volume and file number of an opened file on Windows, when the file system supplies both.
 #[cfg(windows)]
-pub fn open_file_id(file: &File) -> Option<(u64, u64)> {
-    let (volume, index) = windows_file_id(file).ok()?;
-    (index != 0).then_some((volume, index))
-}
+pub use lightcraft_wincolor::open_file_id;
 
 /// Do `a` and `b` name the same existing file (through hard links, symlinks, `..`,
 /// case-insensitive names)?
@@ -359,6 +355,21 @@ fn same_file_id(a: (u64, u64), b: (u64, u64), strict: bool) -> io::Result<bool> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn full_windows_file_id_distinguishes_files_with_identical_bytes() {
+        let dir = temp("full-file-id");
+        let original = dir.join("original");
+        let replacement = dir.join("replacement");
+        for path in [&original, &replacement] {
+            fs::write(path, b"same data").unwrap();
+        }
+        let id = |path| open_file_id(&File::open(path).unwrap()).expect("test volume supports file IDs");
+        assert_eq!(id(&original), id(&original));
+        assert_ne!(id(&original), id(&replacement));
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     fn temp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-safe-file-{tag}-{}", std::process::id()));

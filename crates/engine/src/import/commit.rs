@@ -143,6 +143,7 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
     let mut input_hash = None;
     let mut placed = None;
     let mut copy = None;
+    let mut generated_dng = false;
     let mut stored = match how {
         How::Place { name } => match crate::import_move::place(Path::new(&path), &dir, &name) {
             Ok(pl) => {
@@ -154,7 +155,7 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
         },
         How::Copy { name } => match copy_into(&dir, &path, name.as_deref(), info.content_hash.as_deref()) {
             Ok((p, file)) => {
-                copy = Some(CopyOutput::new(file));
+                copy = Some(CopyOutput::new(file, None));
                 p
             }
             Err(e) => return PreparedItem::Failed(path, e),
@@ -173,7 +174,8 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
                     return PreparedItem::Failed(path, format!("could not remove the copied raw at {stored}: {e}; the DNG at {dng} was kept"));
                 }
                 stored = dng;
-                copy = Some(CopyOutput::new(file));
+                copy = Some(CopyOutput::new(file, output.content_hash.as_deref()));
+                generated_dng = true;
                 // Keep input metadata and XMP, but describe the bytes actually stored. The alias
                 // keeps duplicate input raws identifiable until this import is committed.
                 input_hash = info.content_hash.clone().filter(|h| Some(h) != output.content_hash.as_ref());
@@ -191,7 +193,7 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
             Err(e) => log::warn!("import {path}: copy as DNG: {e}"),
         }
     }
-    PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, copy, sidecar, placed }))
+    PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, copy, generated_dng, sidecar, placed }))
 }
 
 fn has_verified_content(path: &str, hash: Option<&str>) -> bool {
@@ -324,6 +326,11 @@ fn ready_duplicate(
     }
 }
 
+fn invalid_generated_output(ready: &ReadyFile) -> bool {
+    ready.generated_dng
+        && !ready.info.content_hash.as_deref().is_some_and(|hash| ready.copy.as_ref().is_some_and(|copy| copy.is_current(&ready.stored, Some(hash))))
+}
+
 fn replacement_is_current(path: &str, hash: Option<&str>, output: Option<&CopyOutput>) -> bool {
     match output {
         Some(copy) => copy.is_current(path, hash),
@@ -340,7 +347,7 @@ fn restore_legacy_dng(photo: &Photo, check: Option<&RestoreCheck>, ops: &mut Vec
     }
     ops.extend(crate::cmd::convert::content_facts_op(photo.id, photo, &info.format, info));
     let camera = if info.meta.camera.is_empty() { &photo.meta.camera } else { &info.meta.camera };
-    ops.extend(crate::cmd::convert::reload_wb_op(photo, info, camera));
+    ops.extend(crate::cmd::convert::reload_wb_op(photo, info, camera, true));
     let lens = crate::cmd::convert::converted_lens(photo, info);
     if lens.as_ref() != photo.embedded_lens.as_deref() {
         ops.push(Op::SetEmbeddedLens { id: photo.id, lens: lens.map(Box::new) });
@@ -407,12 +414,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
     let mut cleanup = Vec::new();
+    let mut unverified_dng_paths = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
     // Current converted outputs, then this batch's additions and input aliases. Keep only the
     // hashes this batch asks about, even for a library of millions of photos.
     let converted_hashes = prepared.items.iter().filter_map(|it| match it {
-        PreparedItem::Ready(r) if r.input_hash.is_some() && !opts.local => r.info.content_hash.as_deref(),
+        PreparedItem::Ready(r) if r.generated_dng && !opts.local => r.info.content_hash.as_deref(),
         _ => None,
     });
     // Local records count only when this same atomic import already promotes them into the library.
@@ -444,6 +452,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     for it in prepared.items {
         let it = match it {
+            PreparedItem::Ready(r) if invalid_generated_output(&r) => {
+                PreparedItem::Failed(r.path, format!("the converted output at {} changed before import", r.stored))
+            }
             PreparedItem::Ready(r) if !opts.local => {
                 ready_duplicate(s, opts, &mut new_hash, &report.restored, &prepared.restore_checks, &mut cleanup, *r)
             }
@@ -469,6 +480,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
                 report.imported.push(id.0);
             }
+            PreparedItem::UnverifiedDngPath { id, path, hash } => unverified_dng_paths.push((id, path, hash)),
             PreparedItem::Duplicate { path, existing, reason, hash, restore, file } => {
                 let existing = existing.or_else(|| {
                     let h = hash.as_ref()?;
@@ -587,6 +599,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     for copy in cleanup {
         copy.remove(s, &prepared.restore_checks, &mut report);
     }
+    report.failed.extend(unverified_dng_paths.into_iter().filter_map(|(id, path, hash)| {
+        let restored_here = s.catalog.photo(id).is_some_and(|photo| {
+            photo.content_hash.is_some() && photo.content_hash == hash && photo.library_file().is_some_and(|source| same_import_file(source, &path))
+        });
+        (!restored_here).then_some((path, "this DNG could not be verified as the deleted photo's original; it was left untouched".into()))
+    }));
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
@@ -794,6 +812,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_in_place_edit_before_capturing_the_dng_stamp_does_not_become_verified() {
+        let dir = crate::tests::TestDir::new("changed-before-dng-stamp");
+        let path = dir.join("output.dng");
+        let bytes = b"verified contents";
+        let hash = lightcraft_preview::hash_bytes(bytes).to_string();
+        let (_, file) = lightcraft_catalog::safe_file::write_new_unique_open(&mut std::iter::once(path.clone()), bytes).unwrap();
+        std::fs::write(&path, b"modified contents").unwrap();
+        let output = CopyOutput::new(file, Some(&hash));
+        assert!(!output.is_current(&path.to_string_lossy(), Some(&hash)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"modified contents");
+    }
+
+    #[test]
     fn review_ordinary_dng_deduplicates_after_a_converted_output() {
         mixed_dng_outputs(true);
     }
@@ -812,7 +843,7 @@ mod tests {
         let hash = lightcraft_preview::hash_bytes(content).to_string();
         std::fs::write(&path, content).unwrap();
         std::fs::write(&copy, content).unwrap();
-        let output = CopyOutput::new(std::fs::File::open(&copy).unwrap());
+        let output = CopyOutput::new(std::fs::File::open(&copy).unwrap(), Some(&hash));
         let mut s = Session::new();
         let id = s.catalog.alloc_photo_id();
         let mut photo = Photo::new(id, Source::File { path: path.clone() }, "retained.dng", "DNG", 1, 1, "");
@@ -849,14 +880,16 @@ mod tests {
                 content_hash: Some(lightcraft_preview::hash_bytes(b"same DNG output").to_string()),
                 ..Default::default()
             };
-            let ready = |path: PathBuf, stored: PathBuf, input_hash| {
+            let ready = |path: PathBuf, stored: PathBuf, input_hash: Option<String>| {
+                let generated_dng = input_hash.is_some();
                 PreparedItem::Ready(Box::new(ReadyFile {
                     path: path.to_string_lossy().into(),
                     stored: stored.to_string_lossy().into(),
                     info: info.clone(),
                     input_hash,
+                    generated_dng,
                     copy: (!same_import_file(&path.to_string_lossy(), &stored.to_string_lossy()))
-                        .then(|| CopyOutput::new(std::fs::File::open(&stored).unwrap())),
+                        .then(|| CopyOutput::new(std::fs::File::open(&stored).unwrap(), info.content_hash.as_deref())),
                     sidecar: None,
                     placed: None,
                 }))

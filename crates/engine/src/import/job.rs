@@ -135,14 +135,31 @@ pub(super) fn restore_stamp(path: &str) -> Option<RestoreStamp> {
 #[derive(Debug)]
 pub(super) struct CopyOutput {
     stamp: Option<RestoreStamp>,
+    #[cfg(unix)]
+    verified_hash: Option<String>,
     #[cfg(windows)]
-    identity: Option<(u64, u64)>,
+    identity: Option<(u64, [u8; 16])>,
 }
 
 impl CopyOutput {
-    pub(super) fn new(file: std::fs::File) -> Self {
+    pub(super) fn new(file: std::fs::File, expected: Option<&str>) -> Self {
+        let stamp = file.metadata().ok().and_then(RestoreStamp::from_metadata);
+        // Publishing an output can change its ctime. Bind the stamp available after publication
+        // to the verified bytes on the worker, before the catalog thread sees the DNG.
+        #[cfg(unix)]
+        let verified_hash = {
+            use std::io::Seek;
+            let mut file = file;
+            expected.filter(|hash| stamp.is_some_and(|stamp| file.rewind().is_ok() && verified_bytes(&file, stamp, hash))).map(str::to_owned)
+        };
+        #[cfg(unix)]
+        let stamp = stamp.filter(|_| expected.is_none() || verified_hash.is_some());
+        #[cfg(not(unix))]
+        let _ = expected;
         Self {
-            stamp: file.metadata().ok().and_then(RestoreStamp::from_metadata),
+            stamp,
+            #[cfg(unix)]
+            verified_hash,
             #[cfg(windows)]
             identity: lightcraft_catalog::safe_file::open_file_id(&file),
         }
@@ -150,22 +167,29 @@ impl CopyOutput {
 
     pub(super) fn is_current(&self, path: &str, expected: Option<&str>) -> bool {
         // In particular, a symlink to the file we wrote is not an output that we own.
-        let Some(stamp) = std::fs::symlink_metadata(path).ok().and_then(RestoreStamp::from_metadata) else { return false };
+        let Some(stamp) = copy_path_stamp(path) else { return false };
         #[cfg(unix)]
         {
-            let _ = expected;
             Some(stamp) == self.stamp
+                && expected.is_none_or(|hash| {
+                    self.verified_hash.as_deref() == Some(hash)
+                        || crate::read_file::open_for_read(path)
+                            .is_ok_and(|file| verified_bytes(&file, stamp, hash) && copy_path_stamp(path) == Some(stamp))
+                })
         }
         #[cfg(windows)]
         {
-            let identity = std::fs::File::open(path).ok().and_then(|f| lightcraft_catalog::safe_file::open_file_id(&f));
+            let Ok(file) = crate::read_file::open_for_read(path) else { return false };
+            let identity = lightcraft_catalog::safe_file::open_file_id(&file);
             // On Windows the last write time can update when the writer closes, and a later
             // writer can restore it. When a content hash is available, check the actual bytes.
             identity.is_some()
                 && identity == self.identity
                 && self.stamp.is_some_and(|old| old.len == stamp.len)
                 && expected.map_or(self.stamp == Some(stamp), |hash| {
-                    crate::cmd::missing::file_hash(path).as_deref() == Some(hash) && restore_stamp(path) == Some(stamp)
+                    verified_bytes(&file, stamp, hash)
+                        && copy_path_stamp(path) == Some(stamp)
+                        && crate::read_file::open_for_read(path).ok().and_then(|f| lightcraft_catalog::safe_file::open_file_id(&f)) == identity
                 })
         }
         #[cfg(not(any(unix, windows)))]
@@ -174,6 +198,17 @@ impl CopyOutput {
             false
         }
     }
+}
+
+fn copy_path_stamp(path: &str) -> Option<RestoreStamp> {
+    std::fs::symlink_metadata(path).ok().and_then(RestoreStamp::from_metadata)
+}
+
+#[cfg(any(unix, windows))]
+fn verified_bytes(file: &std::fs::File, stamp: RestoreStamp, hash: &str) -> bool {
+    use std::io::Read;
+    let file_stamp = || file.metadata().ok().and_then(RestoreStamp::from_metadata);
+    file_stamp() == Some(stamp) && crate::cmd::missing::hash_reader(file.take(stamp.len)).as_deref() == Some(hash) && file_stamp() == Some(stamp)
 }
 
 #[derive(Debug)]
@@ -188,6 +223,13 @@ pub(super) enum PreparedItem {
     /// A Local (browsed) record imported for real; with what its file is now when the file was replaced since it was
     /// browsed (the record is brought up to date).
     Promote(PhotoId, Option<Box<ProbeInfo>>),
+    /// A deleted DNG at its old path with a different hash. A matching input raw can prove that
+    /// the record old versions wrote (with the raw's hash) actually belongs to this DNG.
+    UnverifiedDngPath {
+        id: PhotoId,
+        path: String,
+        hash: Option<String>,
+    },
     Duplicate {
         path: String,
         existing: Option<PhotoId>,
@@ -210,6 +252,7 @@ pub(super) struct ReadyFile {
     /// Copy as DNG's original input identity, only for this job's duplicate lookup.
     pub(super) input_hash: Option<String>,
     pub(super) copy: Option<CopyOutput>,
+    pub(super) generated_dng: bool,
     pub(super) sidecar: Option<crate::sidecar::SidecarData>,
     pub(super) placed: Option<crate::import_move::Placed>,
 }
@@ -255,7 +298,7 @@ impl Prepared {
                 items.push(item);
                 continue;
             };
-            let ReadyFile { path, stored, info, input_hash, copy, sidecar, placed } = *ready;
+            let ReadyFile { path, stored, info, input_hash, copy, generated_dng, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
             let existing_hash = info.content_hash.iter().chain(&input_hash).find_map(|hash| hashes.get(hash).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
@@ -271,7 +314,7 @@ impl Prepared {
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
-                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, copy, sidecar, placed })));
+                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, copy, generated_dng, sidecar, placed })));
             }
         }
         self.items = items;
@@ -505,6 +548,16 @@ impl ImportJob {
         PreparedItem::Promote(id, None)
     }
 
+    fn unverified_dng_path(&self, path: &str, info: &ProbeInfo) -> Option<PhotoId> {
+        let (id, _, _) = self.by_path.get(path)?;
+        let source = self.restore_sources.get(id)?;
+        (!self.opts.local
+            && source.format.eq_ignore_ascii_case("DNG")
+            && info.format.eq_ignore_ascii_case("DNG")
+            && info.content_hash.as_deref() != Some(&source.hash))
+        .then_some(*id)
+    }
+
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
     pub fn prepare_files(&mut self, files: Vec<String>, cancel: &std::sync::atomic::AtomicBool) -> Prepared {
         use std::sync::atomic::Ordering::Relaxed;
@@ -581,6 +634,11 @@ impl ImportJob {
             };
             // (this file's place in the lookups above: files that failed to probe have none)
             let found_sidecar = found.next().flatten();
+            if let Some(id) = self.unverified_dng_path(&path, &info) {
+                self.done.fetch_add(1, Relaxed);
+                plan.slots.push(Slot::Item(PreparedItem::UnverifiedDngPath { id, path, hash: info.content_hash }));
+                continue;
+            }
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
             if !opts.local
                 && let Some(h) = &info.content_hash
@@ -744,6 +802,7 @@ impl ImportJob {
                 info,
                 input_hash: None,
                 copy: None,
+                generated_dng: false,
                 sidecar,
                 placed: None,
             }))));

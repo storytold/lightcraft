@@ -662,6 +662,7 @@ mod prepared_tests {
             info: ProbeInfo { format: "JPG".into(), ..ProbeInfo::default() },
             input_hash: None,
             copy: None,
+            generated_dng: false,
             sidecar: None,
             placed: None,
         };

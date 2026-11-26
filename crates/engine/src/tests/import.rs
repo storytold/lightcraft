@@ -5576,8 +5576,8 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
 fn legacy_copy_as_dng_restores_only_the_matching_converted_sensor() {
     use crate::import::{ImportMode, ImportOptions, Organize};
     use lightcraft_catalog::Op;
-    for replaced in [false, true] {
-        let dir = super::TestDir::new(&format!("legacy-copy-as-dng-restore-{replaced}"));
+    for (replaced, raw_first) in [(false, false), (false, true), (true, false)] {
+        let dir = super::TestDir::new(&format!("legacy-copy-as-dng-restore-{replaced}-{raw_first}"));
         let raw_path = dir.join("source.orf").to_string_lossy().into_owned();
         let raw_bytes = crate::files::tests::sensor_orf();
         std::fs::write(&raw_path, &raw_bytes).unwrap();
@@ -5616,14 +5616,21 @@ fn legacy_copy_as_dng_restores_only_the_matching_converted_sensor() {
             samples[0] ^= 1;
             std::fs::write(&original, lightcraft_raw::write_dng(&other, &Default::default()).unwrap()).unwrap();
         }
-        let report = crate::import::import_with(&mut s, &[raw_path], &ImportOptions::default()).unwrap();
+        let solo = crate::import::import_with(&mut s, std::slice::from_ref(&original), &ImportOptions::default()).unwrap();
+        assert!(solo.imported.is_empty() && solo.restored.is_empty() && solo.failed.len() == 1, "{solo:?}");
+        assert_eq!(s.catalog.photo(id).unwrap(), &before);
+        let paths = if raw_first { [raw_path, original.clone()] } else { [original.clone(), raw_path] };
+        let report = crate::import::import_with(&mut s, &paths, &ImportOptions::default()).unwrap();
+        assert!(report.imported.is_empty());
+        assert_eq!(s.catalog.photos().count(), 1);
         let photo = s.catalog.photo(id).unwrap();
         assert_eq!(file_source_path(photo), original);
         if replaced {
             assert_eq!(photo, &before);
-            assert!(report.restored.is_empty() && report.failed.len() == 1, "{report:?}");
+            assert!(report.restored.is_empty() && report.failed.len() == 2, "{report:?}");
         } else {
             assert_eq!(report.restored, [id.0], "{report:?}");
+            assert!(report.failed.is_empty(), "{report:?}");
             assert_eq!(photo.content_hash, expected);
             assert_eq!(photo.file_size, std::fs::metadata(original).unwrap().len());
             s.execute("edit.undo", &json!({})).unwrap();
@@ -5707,10 +5714,39 @@ fn a_reused_deleted_path_does_not_claim_a_dng_restore() {
     std::fs::write(&old, &other).unwrap();
     let report = crate::import::import_with(&mut s, &[old.clone(), input], &opts).unwrap();
     assert_eq!(report.restored, [id.0], "{report:?}");
+    assert!(report.imported.is_empty() && report.failed.len() == 1, "{report:?}");
     let path = file_source_path(s.catalog.photo(id).unwrap());
     assert_ne!(path, old);
     assert_eq!(std::fs::read(path).unwrap(), wanted);
     assert_eq!(std::fs::read(old).unwrap(), other);
+}
+
+#[test]
+fn a_changed_generated_dng_never_gets_a_new_catalog_record() {
+    use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
+    let dir = super::TestDir::new("dng-changed-before-add");
+    let source = dir.join("source.orf");
+    let destination = dir.join("copies");
+    std::fs::write(&source, crate::files::tests::sensor_orf()).unwrap();
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let mut s = Session::new().with_fs();
+    let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
+    let batch = job.prepare(&[source.to_string_lossy().into_owned()], &std::sync::atomic::AtomicBool::new(false));
+    let output = destination.join("source.dng");
+    let mut bytes = std::fs::read(&output).unwrap();
+    bytes[0] ^= 1;
+    std::fs::write(&output, &bytes).unwrap();
+    let report = commit_prepared(&mut s, &opts, job.now(), batch).unwrap();
+    assert!(report.imported.is_empty() && report.failed.len() == 1, "{report:?}");
+    assert!(s.catalog.is_empty());
+    assert_eq!(std::fs::read(&output).unwrap(), bytes);
+    assert!(source.is_file());
 }
 
 fn file_source_path(p: &lightcraft_catalog::Photo) -> String {

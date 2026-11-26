@@ -112,7 +112,7 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
                         kind: Some(info.kind),
                     });
                     ops.extend(content_facts_op(c.id, c, &info.format, &info));
-                    ops.extend(reload_wb_op(c, &info, &info.meta.camera));
+                    ops.extend(reload_wb_op(c, &info, &info.meta.camera, false));
                     let lens = converted_lens(c, &info);
                     if lens.as_ref() != c.embedded_lens.as_deref() {
                         ops.push(Op::SetEmbeddedLens { id: c.id, lens: lens.map(Box::new) });
