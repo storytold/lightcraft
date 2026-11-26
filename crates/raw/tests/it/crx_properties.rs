@@ -30,6 +30,13 @@
 use lightcraft_raw::{RawData, RawError, RawFormat, RawImage, decode, probe, probe_info};
 use proptest::prelude::*;
 
+/// The header probe can't see what only the samples tell: a full CR3 decode adds the white headroom
+/// it found to `baseline_exposure`. Everything else must match.
+fn without_baseline(mut info: lightcraft_raw::RawInfo) -> lightcraft_raw::RawInfo {
+    info.color.baseline_exposure = 0.0;
+    info
+}
+
 // --- reference entropy coders (mirrors of the decoder's documented bitstream grammar) ---
 
 /// MELCODE run-index table (crx.rs `RUN_EXPONENT`).
@@ -392,7 +399,10 @@ fn track_box(entry: &[u8], offset: u64, size: u32) -> Vec<u8> {
     let mut co64 = vec![0u8; 4];
     co64.extend(1u32.to_be_bytes());
     co64.extend(offset.to_be_bytes());
-    let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
+    // One sample in chunk 1, using sample description 1. The shared parser
+    // deliberately refuses sample access without this mapping.
+    let stsc: Vec<u8> = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect();
+    let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsc", &stsc), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
     box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))))
 }
 
@@ -403,11 +413,10 @@ fn cr3_file(entry: &[u8], sample: &[u8]) -> Vec<u8> {
     // The track length does not depend on the offset value (always a 64-bit field), so it can be
     // measured with a placeholder before the real offset is known.
     let track_len = track_box(entry, 0, sample.len() as u32).len();
-    let offset = (ftyp.len() + 8 + track_len + 7) & !7;
+    let offset = ftyp.len() + 8 + track_len + 8; // moov and mdat headers
     let mut file = ftyp;
     file.extend(box_bytes(b"moov", &track_box(entry, offset as u64, sample.len() as u32)));
-    file.resize(offset, 0);
-    file.extend_from_slice(sample);
+    file.extend(box_bytes(b"mdat", sample));
     file
 }
 
@@ -771,7 +780,7 @@ proptest! {
         assert_eq!((image.width, image.height, image.bits), (tile_w * tile_count, tile_h, 14));
         let RawData::U16(samples) = &image.data else { panic!("u16 sensor data expected") };
         assert_eq!(samples, &fixture.expected, "synthesis after analysis must be exact");
-        assert_eq!(probe_info(&fixture.file).unwrap(), image.info());
+        assert_eq!(without_baseline(probe_info(&fixture.file).unwrap()), without_baseline(image.info()));
     }
 
     /// Property 2 (lossless side): in-range planes decode exactly; a sample outside the CMP1 bit depth
@@ -853,7 +862,14 @@ proptest! {
         let image = decode(&file).unwrap();
         let RawData::U16(samples) = &image.data else { panic!("u16 sensor data expected") };
         assert!(samples.iter().all(|&value| value <= 16383), "adaptive dequantization must stay in the bit depth");
-        assert_eq!(probe_info(&file).unwrap(), image.info());
+        let mut header = probe_info(&file).unwrap();
+        let decoded = image.info();
+        // CR3 headroom is measured from decoded samples; a header-only probe cannot infer
+        // its exposure compensation. Every other metadata field must still agree.
+        assert!(decoded.color.baseline_exposure.is_finite());
+        assert!(decoded.color.baseline_exposure >= header.color.baseline_exposure);
+        header.color.baseline_exposure = decoded.color.baseline_exposure;
+        assert_eq!(header, decoded);
     }
 
     /// Property 4: randomly generated IAD1 fields either decode — with `active_area ⊆ sensor dims` and
@@ -887,7 +903,7 @@ proptest! {
                 "crop outside active area: {:?} in {a:?}",
                 image.crop
             );
-            assert_eq!(probe_info(&file).unwrap(), image.info());
+            assert_eq!(without_baseline(probe_info(&file).unwrap()), without_baseline(image.info()));
         }
     }
 }
@@ -996,7 +1012,7 @@ fn every_qp_value_in_the_supported_band_dequantizes_within_the_bit_depth() {
         let image = decode(&fixture.file).unwrap();
         let RawData::U16(samples) = &image.data else { panic!("u16 sensor data expected") };
         assert!(samples.iter().all(|&sample| sample <= 16383), "QP {value}");
-        assert_eq!(probe_info(&fixture.file).unwrap(), image.info());
+        assert_eq!(without_baseline(probe_info(&fixture.file).unwrap()), without_baseline(image.info()));
         if value == 131 {
             first_hash = sensor_hash(&image);
         }
@@ -1041,7 +1057,7 @@ fn odd_qp_map_height_0x200_decodes_within_range() {
     let image = decode(&fixture.file).unwrap();
     let RawData::U16(samples) = &image.data else { panic!("u16 sensor data expected") };
     assert_eq!(samples, &vec![8592u16; 16 * 12], "step 1 (base 1) keeps the LL3 coefficient exact");
-    assert_eq!(probe_info(&fixture.file).unwrap(), image.info());
+    assert_eq!(without_baseline(probe_info(&fixture.file).unwrap()), without_baseline(image.info()));
 }
 
 /// Adaptive steps on an odd-height map: the coarser bands pair QP rows, averaging the QP values before the
@@ -1065,7 +1081,7 @@ fn odd_height_qp_map_uses_its_last_row_alone() {
     assert_eq!(adaptive, uniform(step(151)), "QP rows 0+1 average to 151 and the unpaired row 2 is 151 alone");
     assert_ne!(adaptive, uniform(step(151) - 1));
     assert_ne!(adaptive, uniform(step(151) + 1));
-    assert_eq!(probe_info(&fixture.file).unwrap(), adaptive.info());
+    assert_eq!(without_baseline(probe_info(&fixture.file).unwrap()), without_baseline(adaptive.info()));
 }
 
 /// A map whose neighbouring cells differ by up to 37 forces symbols past the plain Rice range, so the
@@ -1079,7 +1095,7 @@ fn qp_map_with_large_jumps_uses_the_escape_code() {
     let image = decode(&fixture.file).unwrap();
     let RawData::U16(samples) = &image.data else { panic!("u16 sensor data expected") };
     assert!(samples.iter().all(|&sample| sample <= 16383));
-    assert_eq!(probe_info(&fixture.file).unwrap(), image.info());
+    assert_eq!(without_baseline(probe_info(&fixture.file).unwrap()), without_baseline(image.info()));
 }
 
 /// A QP Rice prefix longer than the 23-zero escape is corrupt data, not an endless read.

@@ -1,3 +1,17 @@
+fn settle_timeout_for_instrumentation(instrumented: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if instrumented { 600 } else { 120 })
+}
+
+fn ui_settle_timeout() -> std::time::Duration {
+    settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn settle_budget_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(settle_timeout_for_instrumentation(false), std::time::Duration::from_secs(120));
+    assert_eq!(settle_timeout_for_instrumentation(true), std::time::Duration::from_secs(600));
+}
+
 mod activity;
 mod album_picker;
 mod album_remove;
@@ -24,6 +38,7 @@ mod dialog_settings;
 mod dialog_settings_text;
 mod dialog_tab;
 mod dialogs;
+mod disk_space;
 mod docking_acceptance;
 mod drop_import;
 mod edit_layout;
@@ -31,13 +46,17 @@ mod empty_library;
 mod error_kinds;
 mod filmstrip;
 mod filmstrip_drag;
+mod find_similar;
 mod focus_point;
 mod folder_drop;
 mod grading;
 mod grid;
+mod grid_badges;
 mod grid_drag;
 mod guided_guides;
 mod histogram_drag;
+mod import_recipe;
+mod import_scan_note;
 mod import_thumbnails;
 mod info_dialogs;
 mod keymap;
@@ -61,7 +80,7 @@ mod masking_layout;
 mod menubar;
 mod merge_preview;
 mod missing_sweep;
-mod model_setup;
+mod mode_dropdowns;
 mod move_folder;
 mod offline;
 mod open_lightroom;
@@ -76,9 +95,12 @@ mod progress;
 mod quit_unsaved;
 mod rating;
 mod recheck;
+mod reduce_motion;
 mod rename_person;
 mod rules_editor;
+mod rules_reorder;
 mod sam_setup;
+mod scan_probes;
 mod scroll;
 mod slider_reset;
 mod slideshow;
@@ -89,11 +111,13 @@ mod sync;
 mod tallies;
 mod temp_slider;
 mod text_prompt;
+mod thumb;
 mod titlebar;
 mod tool_overlay;
 mod unsaved;
 mod view_cost;
 mod wb_selector;
+mod welcome;
 mod zoom;
 mod zoom_keys;
 

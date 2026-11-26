@@ -1,7 +1,7 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
-use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
+use super::types::{Duplicate, FileFacts, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
@@ -181,6 +181,22 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
         }
 }
 
+/// What a new record takes from its file, as a file import gives it: the file's metadata and
+/// capture time, the import defaults, then its XMP sidecar. Returns the sidecar when it said
+/// anything (labels read through the library's label names).
+pub(crate) fn start_from_file(s: &Session, p: &mut Photo, file: FileFacts, now: &str) -> Option<crate::sidecar::SidecarData> {
+    let FileFacts { meta, captured, orientation, sidecar } = file;
+    p.meta = meta;
+    p.captured = captured;
+    apply_import_defaults(s, p);
+    let sc = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default())?;
+    // the photo is upright as the file's own orientation turns it, when the file states one
+    // (after the check above: an orientation alone isn't a sidecar that said something)
+    let sc = crate::sidecar::SidecarData { orientation: orientation.or(sc.orientation), ..sc };
+    crate::sidecar::merge_into(p, &sc, now);
+    Some(sc)
+}
+
 /// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 /// taken back.
@@ -252,23 +268,20 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                         purge.push(*old);
                     }
                 }
-                let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // a copy is catalogued under its new name
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
                 p.kind = info.kind;
                 p.file_size = info.file_size;
-                p.captured = info.captured;
-                p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
-                apply_import_defaults(s, &mut p);
-                if let Some(sc) = &sidecar {
-                    crate::sidecar::merge_into(&mut p, sc, &now);
+                if let Some(sc) =
+                    start_from_file(s, &mut p, FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar }, &now)
+                {
                     report.sidecars += 1;
-                    report.warnings.extend(sc.warnings.iter().cloned().map(|mut warning| {
+                    report.warnings.extend(sc.warnings.into_iter().map(|mut warning| {
                         warning.path = path.clone();
                         warning
                     }));
@@ -288,6 +301,19 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     p.develop = d.clone();
                     p.edited = Some(now.clone());
                     p.history.push(lightcraft_catalog::HistoryStep { label, settings: d });
+                }
+                // the batch-edit recipe goes on top of everything above (sidecar, camera default,
+                // preset): only the controls it names change, through the same specs the sliders use
+                if !opts.recipe.is_empty() {
+                    let mut d = (*p.develop).clone();
+                    for (id, v) in &opts.recipe {
+                        // (`ImportJob::new` refused any id `set` would not write, and `set` clamps to the range)
+                        lightcraft_develop::controls::set(&mut d, id, *v);
+                    }
+                    let d = std::sync::Arc::new(d);
+                    p.develop = d.clone();
+                    p.edited = Some(now.clone());
+                    p.history.push(lightcraft_catalog::HistoryStep { label: "Import adjustments".into(), settings: d });
                 }
                 report.imported.push(id.0);
                 p.local = opts.local;
@@ -323,12 +349,14 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
 }
 
 /// Move, after the commit: save the library, then remove each source whose destination is
-/// still intact. Nothing is removed when the library can't be saved.
+/// still intact. Nothing is removed when the library can't be saved: saved is on disk, not just
+/// handed to the catalog log's thread, which looks at the folder only when it writes (issue #3240),
+/// so the log is flushed first.
 fn finish_moves(s: &mut Session, placed: Vec<crate::import_move::Placed>, log0: usize, report: &mut ImportReport) {
     // (saving here clears the pending ops, so the sidecars `execute` would auto-write are written here)
     let auto: Vec<Op> = if s.xmp.auto_write { s.pending_log.get(log0..).map(<[Op]>::to_vec).unwrap_or_default() } else { Vec::new() };
     let before = s.pending_log.len();
-    if let Err(e) = s.persist() {
+    if let Err(e) = s.persist().and_then(|()| s.flush_log()) {
         for p in placed {
             let reason = format!("the library could not be saved ({e}): the original stays; the photo uses the copy at {}", p.dst.display());
             report.kept.push(Kept { path: p.src.to_string_lossy().to_string(), reason });
