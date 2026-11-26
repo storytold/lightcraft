@@ -16,7 +16,7 @@ fn a_draft_is_the_fields_in_its_own_pass_and_the_next_only() {
     let mut seen: Option<u64> = None;
     let mut observed: Vec<(u64, bool)> = Vec::new();
     for _ in 0..4 {
-        let _ = ctx.run_pass(egui::RawInput::default(), |ctx| {
+        let frame = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let pass = ctx.cumulative_pass_nr();
             if seen.is_none() {
                 // the pass a field was edited in, as `keep_edit` stores it
@@ -25,6 +25,9 @@ fn a_draft_is_the_fields_in_its_own_pass_and_the_next_only() {
             }
             observed.push((pass, draft(ctx, id).is_some()));
         });
+        // A pass hands out a font-atlas delta, and a dropped FullOutput panics on unapplied deltas:
+        // the app's harness applies or clears them, so the test does too.
+        frame.drop_without_applying_deltas();
     }
     let seen = seen.unwrap();
     assert!(observed.len() > 2, "the passes this test needs: {observed:?}");
