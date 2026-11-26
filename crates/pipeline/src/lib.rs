@@ -897,6 +897,11 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     b
 }
 
+/// Whether the photo renders in black & white (treatment, or one of the B&W profiles): it has no Point Color.
+pub fn is_bw(s: &DevelopSettings) -> bool {
+    s.treatment == lightcraft_develop::Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
+}
+
 /// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.
 pub fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

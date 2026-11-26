@@ -3221,6 +3221,49 @@ fn section_eye_switches_a_section_off() {
     assert!(h.app.ui.section_open("light"), "the click didn't fold the section");
 }
 
+/// The Masking panel has a Grain slider (0..100, from 0) that sets the selected mask's local grain.
+#[test]
+fn masking_panel_has_a_grain_slider() {
+    let mut h = demo([1300.0, 2200.0]);
+    let t = Duration::from_secs(10);
+    h.request("ui.set", json!({"view": "detail", "right": "masking"}), t);
+    h.request("engine.execute", json!({"command": "mask.add", "params": {"kind": "radial"}}), t);
+    h.settle(SETTLE);
+    let grain = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().masks[0].adjust.grain;
+    assert_eq!(grain(&h), 0.0);
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "slider:grain"}), t)["ok"], true);
+    h.request("ui.key", json!({"key": "Up", "shift": true}), t);
+    assert!(grain(&h) > 0.0, "{}", grain(&h));
+    h.request("ui.key", json!({"key": "Down", "shift": true}), t);
+    h.request("ui.key", json!({"key": "Down", "shift": true}), t);
+    assert_eq!(grain(&h), 0.0, "the slider stops at 0");
+}
+
+/// Grain Size and Roughness work when only a mask adds grain (Amount 0), and stay off when nothing does.
+#[test]
+fn grain_size_is_enabled_by_local_grain() {
+    let mut h = demo([1300.0, 2600.0]);
+    let t = Duration::from_secs(10);
+    h.app.ui.open_sections = vec!["effects".to_string()];
+    h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
+    h.settle(SETTLE);
+    let size = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().grain.size;
+    let nudge = |h: &mut Headless| {
+        assert_eq!(h.request("ui.hoverWidget", json!({"id": "slider:grain.size"}), t)["ok"], true);
+        h.request("ui.key", json!({"key": "Up"}), t);
+        h.settle(SETTLE);
+    };
+    let before = size(&h);
+    nudge(&mut h);
+    assert_eq!(size(&h), before, "off without any grain");
+    h.request("engine.execute", json!({"command": "mask.add", "params": {"kind": "radial"}}), t);
+    h.request("engine.execute", json!({"command": "mask.adjust", "params": {"values": {"grain": 50}}}), t);
+    h.request("ui.set", json!({"right": "edit"}), t);
+    h.settle(SETTLE);
+    nudge(&mut h);
+    assert_ne!(size(&h), before, "on with a mask's grain");
+}
+
 /// Return commits a tool panel back to Edit; elsewhere it does nothing.
 #[test]
 fn return_commits_the_crop_tool() {

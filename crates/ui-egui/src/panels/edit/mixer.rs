@@ -1,6 +1,9 @@
 use super::curve::set_tat;
-use super::sliders::{control, sub_title};
-use super::{BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, hex, json, paint, register, text_button, vec2};
+use super::sliders::{apply_slider_out, control, sub_title};
+use super::{
+    BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, controls, hex, json, paint, register, slider, text_button,
+    vec2,
+};
 
 // ------------------------------------------------------------------------------ colour mixer
 
@@ -76,23 +79,101 @@ fn oklch_color(l: f64, c: f64, h_deg: f64) -> Color32 {
     Color32::from_rgb(e[0], e[1], e[2])
 }
 
-/// Point Color: swatches of the samples (+ the eyedropper), the selected sample's shifts and range,
-/// and "Visualize range".
-pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
-    let t = Tokens::get(ui.ctx());
-    let n = d.point_colors.len();
-    if app.ui.point_color >= n && n > 0 {
-        app.ui.point_color = n - 1;
+/// What a Point Color block edits: the photo's own samples or one mask's.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum PointTarget {
+    Develop,
+    Mask(u32),
+}
+
+impl PointTarget {
+    /// The eyedropper tool this block arms (`UiState::tool`); the photo click is routed by it.
+    fn tool(self) -> &'static str {
+        match self {
+            Self::Develop => "pointColor",
+            Self::Mask(_) => "maskPointColor",
+        }
     }
-    let sel = app.ui.point_color;
+
+    /// Prefix of the widget ids (`<prefix>Picker`, `<prefix>:<i>`, `<prefix>Delete`).
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Develop => "pointColor",
+            Self::Mask(_) => "maskPointColor",
+        }
+    }
+
+    fn selected(self, app: &LightcraftApp) -> usize {
+        match self {
+            Self::Develop => app.ui.point_color,
+            Self::Mask(_) => app.ui.mask_point_color,
+        }
+    }
+
+    fn select(self, app: &mut LightcraftApp, i: usize) {
+        match self {
+            Self::Develop => app.ui.point_color = i,
+            Self::Mask(_) => app.ui.mask_point_color = i,
+        }
+    }
+
+    /// Set field `k` (`hueShift`, `range`, ...) of sample `sel`.
+    fn set(self, app: &mut LightcraftApp, sel: usize, k: &str, v: f64) -> Result<serde_json::Value, String> {
+        match self {
+            Self::Develop => app.run("develop.set", json!({"control": format!("pointColor.{sel}.{k}"), "value": v})),
+            Self::Mask(id) => app.run("mask.pointColor.set", json!({"id": id, "index": sel, k: v})),
+        }
+    }
+
+    fn delete(self, app: &mut LightcraftApp, sel: usize) {
+        let _ = match self {
+            Self::Develop => app.run("pointColor.delete", json!({"index": sel})),
+            Self::Mask(id) => app.run("mask.pointColor.delete", json!({"id": id, "index": sel})),
+        };
+    }
+}
+
+fn sample_field(p: &lightcraft_develop::PointColor, k: &str) -> f64 {
+    match k {
+        "hueShift" => p.hue_shift,
+        "satShift" => p.sat_shift,
+        "lumShift" => p.lum_shift,
+        "variance" => p.variance,
+        "range" => p.range,
+        "hueRange" => p.hue_range,
+        "satRange" => p.sat_range,
+        _ => p.lum_range,
+    }
+}
+
+/// Point Color of the photo: swatches of the samples (+ the eyedropper), the selected sample's shifts and
+/// range, and "Visualize range".
+pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+    point_color_block(app, ui, PointTarget::Develop, &d.point_colors);
+}
+
+/// Point Color of mask `id`, through the `mask.pointColor.*` commands. No "Visualize range": the overlay
+/// (`Overlay::PointColorRange`) reads the photo's samples only.
+pub(crate) fn mask_point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, samples: &[lightcraft_develop::PointColor]) {
+    point_color_block(app, ui, PointTarget::Mask(id), samples);
+}
+
+fn point_color_block(app: &mut LightcraftApp, ui: &mut egui::Ui, target: PointTarget, samples: &[lightcraft_develop::PointColor]) {
+    let t = Tokens::get(ui.ctx());
+    let n = samples.len();
+    if target.selected(app) >= n && n > 0 {
+        target.select(app, n - 1);
+    }
+    let sel = target.selected(app);
+    let prefix = target.prefix();
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 4 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
-            let active = app.ui.tool == "pointColor";
+            let active = app.ui.tool == target.tool();
             let full = n >= lightcraft_develop::MAX_POINT_COLORS;
             if crate::widgets::icon_button(
                 ui,
-                "pointColorPicker",
+                &format!("{prefix}Picker"),
                 Icon::Picker,
                 vec2(26.0, 26.0),
                 active,
@@ -101,44 +182,51 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
             )
             .clicked()
             {
-                app.ui.tool = if active { String::new() } else { "pointColor".into() };
+                app.ui.tool = if active { String::new() } else { target.tool().into() };
             }
-            for (i, p) in d.point_colors.iter().enumerate() {
+            for (i, p) in samples.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 crate::widgets::announce(&resp, format!("{} {}", crate::i18n::tr("Point Color"), i + 1));
-                register(ui, format!("pointColor:{i}"), r);
+                register(ui, format!("{prefix}:{i}"), r);
                 ui.painter().rect_filled(r.shrink(2.0), 3.0, oklch_color(p.lum, p.chroma, p.hue));
                 if i == sel {
                     ui.painter().rect_stroke(r, 4.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
                 }
                 if resp.clicked() {
-                    app.ui.point_color = i;
+                    target.select(app, i);
                 }
             }
         });
     });
-    if n == 0 {
+    let Some(sample) = samples.get(sel) else {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 8 }).show(ui, |ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Pick a colour on the photo with the eyedropper.")).size(12.0).color(t.text_dim));
         });
         return;
-    }
+    };
+    let field = |app: &mut LightcraftApp, ui: &mut egui::Ui, k: &str| {
+        let Some(spec) = controls::find(&format!("pointColor.{sel}.{k}")) else { return };
+        let out = slider(ui, spec, sample_field(sample, k), true, None);
+        apply_slider_out(app, spec, out, |app, v| target.set(app, sel, k, v));
+    };
     for k in ["hueShift", "satShift", "lumShift", "variance"] {
-        control(app, ui, d, &format!("pointColor.{sel}.{k}"), true);
+        field(app, ui, k);
     }
     sub_title(ui, crate::i18n::tr("Range"));
     for k in ["range", "hueRange", "satRange", "lumRange"] {
-        control(app, ui, d, &format!("pointColor.{sel}.{k}"), true);
+        field(app, ui, k);
     }
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
-            let mut v = app.ui.point_color_visualize;
-            if ui.checkbox(&mut v, crate::i18n::tr("Visualize range")).changed() {
-                app.ui.point_color_visualize = v;
+            if target == PointTarget::Develop {
+                let mut v = app.ui.point_color_visualize;
+                if ui.checkbox(&mut v, crate::i18n::tr("Visualize range")).changed() {
+                    app.ui.point_color_visualize = v;
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "pointColorDelete", crate::i18n::tr("Delete"), false).clicked() {
-                    let _ = app.run("pointColor.delete", json!({"index": sel}));
+                if text_button(ui, &format!("{prefix}Delete"), crate::i18n::tr("Delete"), false).clicked() {
+                    target.delete(app, sel);
                 }
             });
         });
