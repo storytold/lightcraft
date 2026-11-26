@@ -140,6 +140,7 @@
   "New Folder in “{name}”": "Uusi kansio kohteessa ”{name}”",
   "Created folder “{name}” in “{parent}”": "Kansio ”{name}” luotu kohteeseen ”{parent}”",
   "On {have} of {of} selected photos": "{have} / {of} valitulla kuvalla",
+  "A keyword name can't end with an asterisk: “{name}”": "Avainsanan nimi ei voi päättyä tähteen: ”{name}”",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Maalataan ”{k}”: napsauta kuvia lisätäksesi tai poistaaksesi sen · Esc lopettaa",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Liitä kuviin: {n}{:.0} — vain kopioidut asetukset liitetään",
   "Preset: {name}": "Esiasetus: {name}",
