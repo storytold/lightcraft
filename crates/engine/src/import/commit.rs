@@ -192,8 +192,8 @@ fn trashed_file_differs(photo: &Photo, hash: Option<&str>, check: Option<&Restor
     }
     match check {
         Some(check) if check.path == *path && Some(check.hash.as_str()) == hash => check.stamp.is_none() || restore_stamp(path) != check.stamp,
-        // The catalog changed after preparation. Prefer the verified matching input.
-        _ => true,
+        // This photo moved or was deleted after the worker captured the catalog.
+        _ => crate::cmd::missing::file_hash(path).as_deref() != hash,
     }
 }
 
@@ -248,6 +248,7 @@ fn ready_duplicate(
     {
         crate::import_move::rollback(placed);
     }
+    added.extend(ready.input_hash.iter().map(|h| (h.clone(), id)));
     if ready.placed.is_none()
         && !same_path
         && !relocate
@@ -257,7 +258,6 @@ fn ready_duplicate(
     {
         return PreparedItem::Failed(ready.path, format!("could not remove duplicate output {}: {e}", ready.stored));
     }
-    added.extend(ready.input_hash.into_iter().map(|h| (h, id)));
     PreparedItem::Duplicate {
         path: if relocate { ready.stored } else { ready.path },
         existing: Some(id),
@@ -352,6 +352,15 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 match trashed {
                     // (browsing a folder in Local only looks: it never restores)
                     Some(id) if opts.on_deleted == OnDeleted::Restore && !opts.local => {
+                        if reason == "path"
+                            && !cfg!(target_arch = "wasm32")
+                            && let Some(photo) = s.catalog.photo(id)
+                            && let Some(expected) = photo.content_hash.as_deref()
+                            && crate::cmd::missing::file_hash(&path).as_deref() != Some(expected)
+                        {
+                            report.failed.push((path, "the file at this deleted photo's path has changed".into()));
+                            continue;
+                        }
                         if !report.restored.contains(&id.0) {
                             ops.push(Op::SetDeleted { id, deleted: false });
                             let relink = match restore {

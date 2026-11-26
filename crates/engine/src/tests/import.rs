@@ -5475,8 +5475,8 @@ fn assert_copy_as_dng_restores(s: &mut Session, id: PhotoId, paths: &[String], o
 fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
     use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
     use lightcraft_catalog::{Op, Source};
-    for remove_after_preparation in [false, true] {
-        let dir = super::TestDir::new(&format!("copy-dng-restore-batch-{remove_after_preparation}"));
+    for case in if cfg!(unix) { &[0, 1, 2][..] } else { &[0][..] } {
+        let dir = super::TestDir::new(&format!("copy-dng-restore-batch-{case}"));
         let destination = dir.join("copies");
         let source = ["first.nef", "second.nef"].map(|name| dir.join(name).to_string_lossy().into_owned());
         let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
@@ -5501,7 +5501,7 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
         assert_ne!(output, raw);
         session.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
 
-        if remove_after_preparation {
+        if *case != 0 {
             // A new job sees the deleted record and verifies that its old DNG is still intact.
             job = ImportJob::new(&mut session, opts.clone()).unwrap();
         } else {
@@ -5509,8 +5509,17 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
             std::fs::remove_file(&old).unwrap();
         }
         let second = job.prepare(&source[1..], &cancel);
-        if remove_after_preparation {
+        if *case == 1 {
             std::fs::remove_file(&old).unwrap();
+        } else if *case == 2 {
+            use std::io::Write;
+            let mtime = std::fs::metadata(&old).unwrap().modified().unwrap();
+            let mut different = output.clone();
+            different[0] ^= 1;
+            let mut f = std::fs::File::create(&old).unwrap();
+            f.write_all(&different).unwrap();
+            f.set_modified(mtime).unwrap();
+            assert_eq!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
         }
         let r = commit_prepared(&mut session, &opts, job.now(), second).unwrap();
         assert_eq!(r.restored, [id.0], "{r:?}");
@@ -5520,6 +5529,49 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
         assert_eq!(Path::new(path).extension().unwrap(), "dng");
         assert_eq!(std::fs::read(path).unwrap(), output);
         assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&output).to_string()));
+    }
+}
+
+#[test]
+fn a_reused_deleted_path_does_not_claim_a_dng_restore() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::Op;
+    let dir = super::TestDir::new("dng-restore-reused");
+    let input = dir.join("incoming.nef");
+    let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    std::fs::write(&input, raw).unwrap();
+    let destination = dir.join("copies");
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let input = input.to_string_lossy().into_owned();
+    let mut s = Session::new().with_fs();
+    let report = crate::import::import_with(&mut s, std::slice::from_ref(&input), &opts).unwrap();
+    let id = PhotoId(report.imported[0]);
+    let old = file_source_path(s.catalog.photo(id).unwrap());
+    let wanted = std::fs::read(&old).unwrap();
+    s.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+    let mut changed = lightcraft_raw::decode(&wanted).unwrap();
+    let lightcraft_raw::RawData::U16(samples) = &mut changed.data else { panic!("integer fixture") };
+    samples[0] ^= 1;
+    let other = lightcraft_raw::write_dng(&changed, &Default::default()).unwrap();
+    std::fs::write(&old, &other).unwrap();
+    let report = crate::import::import_with(&mut s, &[old.clone(), input], &opts).unwrap();
+    assert_eq!(report.restored, [id.0], "{report:?}");
+    let path = file_source_path(s.catalog.photo(id).unwrap());
+    assert_ne!(path, old);
+    assert_eq!(std::fs::read(path).unwrap(), wanted);
+    assert_eq!(std::fs::read(old).unwrap(), other);
+}
+
+fn file_source_path(p: &lightcraft_catalog::Photo) -> String {
+    match &p.source {
+        lightcraft_catalog::Source::File { path } => path.clone(),
+        _ => panic!("file photo"),
     }
 }
 

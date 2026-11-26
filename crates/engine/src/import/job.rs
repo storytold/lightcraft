@@ -77,15 +77,40 @@ pub struct Prepared {
 pub(super) struct RestoreCheck {
     pub(super) path: String,
     pub(super) hash: String,
-    pub(super) stamp: Option<(u64, std::time::SystemTime)>,
+    pub(super) stamp: Option<RestoreStamp>,
+    // Windows does not expose the file change time through stable Rust. Hold the original
+    // open without write or delete sharing from verification through catalog reconciliation.
+    #[cfg(windows)]
+    _read_guard: Option<std::fs::File>,
 }
 
-pub(super) fn restore_stamp(path: &str) -> Option<(u64, std::time::SystemTime)> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RestoreStamp {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+    #[cfg(windows)]
+    created: u64,
+}
+
+pub(super) fn restore_stamp(path: &str) -> Option<RestoreStamp> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt;
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() {
         return None;
     }
-    Some((meta.len(), meta.modified().ok()?))
+    Some(RestoreStamp {
+        len: meta.len(),
+        modified: meta.modified().ok()?,
+        #[cfg(unix)]
+        identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+        #[cfg(windows)]
+        created: meta.creation_time(),
+    })
 }
 
 #[derive(Debug)]
@@ -190,8 +215,7 @@ impl Prepared {
 }
 
 pub(super) fn normalize_import_path(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    if cfg!(windows) { path.to_lowercase() } else { path }
+    if cfg!(windows) { path.replace('\\', "/").to_lowercase() } else { path.to_owned() }
 }
 
 impl ImportJob {
@@ -338,6 +362,8 @@ impl ImportJob {
         use std::sync::atomic::Ordering::Relaxed;
         for (f, verdict) in files.into_iter().zip(verdicts) {
             match self.by_path.get(f.as_str()).cloned() {
+                // A known deleted path is only a candidate. Its bytes might belong to another photo now.
+                Some((id, _, _)) if !local && self.restore_sources.contains_key(&id) => todo.push(f),
                 Some((id, true, hash)) if !local => match verdict {
                     // ✕ before its size was looked at: nothing is decided about it, so it isn't promoted
                     Some(BrowsedFile::Unchecked) => {}
@@ -657,9 +683,24 @@ impl ImportJob {
             let Some(id) = id else { continue };
             let Some((path, hash)) = self.restore_sources.get(&id) else { continue };
             out.restore_checks.entry(id).or_insert_with(|| {
-                let stamp = restore_stamp(path)
-                    .filter(|stamp| crate::cmd::missing::file_hash(path).as_deref() == Some(hash) && restore_stamp(path) == Some(*stamp));
-                RestoreCheck { path: path.clone(), hash: hash.clone(), stamp }
+                #[cfg(windows)]
+                let read_guard = {
+                    use std::os::windows::fs::OpenOptionsExt;
+                    const FILE_SHARE_READ: u32 = 1;
+                    std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(path).ok()
+                };
+                let stamp = restore_stamp(path);
+                #[cfg(windows)]
+                let stamp = stamp.filter(|_| read_guard.is_some());
+                let stamp =
+                    stamp.filter(|stamp| crate::cmd::missing::file_hash(path).as_deref() == Some(hash) && restore_stamp(path) == Some(*stamp));
+                RestoreCheck {
+                    path: path.clone(),
+                    hash: hash.clone(),
+                    stamp,
+                    #[cfg(windows)]
+                    _read_guard: read_guard,
+                }
             });
         }
     }

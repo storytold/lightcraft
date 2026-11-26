@@ -103,6 +103,9 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
                     });
                     ops.extend(content_facts_op(c.id, c, &info.format, &info));
                     ops.extend(reload_wb_op(c, &info, &info.meta.camera));
+                    if info.embedded_lens.as_ref() != c.embedded_lens.as_deref() {
+                        ops.push(Op::SetEmbeddedLens { id: c.id, lens: info.embedded_lens.clone().map(Box::new) });
+                    }
                 }
                 converted.push(json!({"id": id.0, "path": out, "original": path}));
             }
