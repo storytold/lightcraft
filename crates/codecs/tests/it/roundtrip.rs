@@ -870,8 +870,21 @@ fn pq_png_rejects_short_buffers_and_survives_hostile_samples() {
 }
 
 /// Largest per-channel difference between two linear images.
+#[cfg(feature = "jxl")]
 fn max_diff(a: &lightcraft_raster::Rgb32f, b: &lightcraft_raster::Rgb32f) -> f32 {
     a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max)
+}
+
+#[test]
+#[cfg(not(feature = "jxl"))]
+fn jpeg_xl_disabled_reports_unavailable_codec() {
+    let image = EncodeImage::new(1, 1, 3, Samples::U8(&[17, 23, 83]));
+    let result = encode_jxl(&image, &JxlOptions::default(), &EncodeMeta::default());
+    assert!(matches!(result, Err(Error::Encode(message)) if message.contains("JPEG XL encoding is not included")));
+
+    let jxl_prefix = b"\xff\x0a\0\0";
+    assert_eq!(sniff(jxl_prefix), Some(Format::Jxl));
+    assert!(matches!(decode(jxl_prefix, DecodeOptions::default()), Err(Error::Unsupported(Format::Jxl, _))));
 }
 
 #[test]

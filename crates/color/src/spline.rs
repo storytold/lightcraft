@@ -1,8 +1,10 @@
 //! Curves for tone mapping: monotone cubic Hermite splines (Fritsch–Carlson) and lookup tables.
 //!
-//! Monotone interpolation never overshoots between control points, so a point curve can't invert
-//! tones by accident (a common complaint with natural cubic splines).
+//! `Lut1` is re-exported from `craft_color_transform::curve` (for `compose_len` / `resample` at
+//! `CURVE_N = 1024`), while `MonotoneCurve` preserves the legacy constructor that keeps every
+//! finite control point before sorting (so saved curves with > 1024 points keep their endpoints).
 
+pub use craft_color_transform::curve::{Lut1, MAX_LUT};
 use serde::{Deserialize, Serialize};
 
 /// A curve through control points in `0..1 × 0..1` (x strictly increasing after normalization).
@@ -80,53 +82,14 @@ impl MonotoneCurve {
             + (t3 - t2) * h * self.ms[i + 1]
     }
 
-    /// Sample into a LUT of `n` entries (at least 2) over `0..1`.
+    /// Sample into a LUT of `n` entries (2 to [`MAX_LUT`]) over `0..1`.
     pub fn to_lut(&self, n: usize) -> Lut1 {
-        let n = n.max(2);
+        let n = n.clamp(2, MAX_LUT);
         Lut1 { v: (0..n).map(|i| self.eval(i as f64 / (n - 1) as f64) as f32).collect() }
     }
 
     pub fn points(&self) -> Vec<(f64, f64)> {
         self.xs.iter().copied().zip(self.ys.iter().copied()).collect()
-    }
-}
-
-/// A 1-D lookup table over `0..1` with linear interpolation; inputs outside clamp.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Lut1 {
-    pub v: Vec<f32>,
-}
-
-impl Lut1 {
-    /// At least 2 entries, like [`Lut1::from_fn`].
-    pub fn identity(n: usize) -> Lut1 {
-        Lut1::from_fn(n, |x| x)
-    }
-    /// `f` sampled at `n` evenly spaced points over `0..1` (at least 2).
-    pub fn from_fn(n: usize, f: impl Fn(f32) -> f32) -> Lut1 {
-        let n = n.max(2);
-        Lut1 { v: (0..n).map(|i| f(i as f32 / (n - 1) as f32)).collect() }
-    }
-    /// `v` is public, so a table shorter than 2 entries is read as constant (1) or the identity (0).
-    #[inline]
-    pub fn eval(&self, x: f32) -> f32 {
-        let x = x.clamp(0.0, 1.0);
-        let n = self.v.len();
-        if n < 2 {
-            return self.v.first().copied().unwrap_or(x);
-        }
-        let f = x * (n - 1) as f32;
-        let i = (f as usize).min(n - 2);
-        let t = f - i as f32;
-        self.v[i] + (self.v[i + 1] - self.v[i]) * t
-    }
-    /// `self ∘ inner` (apply `inner` first).
-    pub fn compose(&self, inner: &Lut1) -> Lut1 {
-        Lut1 { v: inner.v.iter().map(|&x| self.eval(x)).collect() }
-    }
-    pub fn is_identity(&self) -> bool {
-        let n = self.v.len();
-        self.v.iter().enumerate().all(|(i, &y)| (y - i as f32 / (n - 1) as f32).abs() < 1e-6)
     }
 }
 
@@ -172,8 +135,25 @@ mod tests {
     fn lut_compose() {
         let a = Lut1::from_fn(1024, |x| x * x);
         let b = Lut1::from_fn(1024, |x| x.sqrt());
-        let c = a.compose(&b);
+        let c = a.compose_len(&b, 1024);
+        assert_eq!(c.v.len(), 1024);
         assert!((c.eval(0.3) - 0.3).abs() < 2e-3);
+        assert_eq!(c.resample(256).v.len(), 256);
+    }
+
+    #[test]
+    fn preserves_control_points_past_1024_before_sorting() {
+        // 1,028 interior points followed by the curve's endpoints after index 1,024:
+        // truncating to the first 1,024 points before sorting would drop (1.0, 0.25).
+        let mut pts: Vec<(f64, f64)> = (1..=1028).map(|i| (i as f64 / 2000.0, 0.8 * (i as f64 / 2000.0))).collect();
+        pts.push((0.0, 0.0));
+        pts.push((1.0, 0.25));
+        let c = MonotoneCurve::new(&pts);
+        assert_eq!(c.points().len(), 1030);
+        assert!((c.eval(1.0) - 0.25).abs() < 1e-12);
+        let lut = c.to_lut(1024);
+        assert_eq!(lut.v.len(), 1024);
+        assert!((lut.eval(1.0) - 0.25).abs() < 1e-6);
     }
 
     #[test]
