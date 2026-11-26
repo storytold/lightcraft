@@ -253,8 +253,10 @@ pub fn check_pipeline(device: &wgpu::Device, build: impl FnOnce(&wgpu::Device)) 
 
 /// The start failed (error or panic) before the window's renderer came up: start the app again,
 /// which then tries the next renderer. `false`: not relaunched (it came up, nothing written to
-/// disk, or the retries are used up).
-pub fn relaunch_after_failure(files: &Files) -> bool {
+/// disk, or the retries are used up). `before_spawn` runs once the decision to retry is made and
+/// before the new process exists, so a resource the new process must own (the Nightly session
+/// lease) is released first.
+pub fn relaunch_after_failure(files: &Files, before_spawn: impl FnOnce()) -> bool {
     if !files.armed() {
         return false;
     }
@@ -263,6 +265,7 @@ pub fn relaunch_after_failure(files: &Files) -> bool {
         return false;
     }
     let Ok(exe) = std::env::current_exe() else { return false };
+    before_spawn();
     log::warn!("window: the renderer failed to start; starting again with the next one");
     std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
@@ -318,7 +321,7 @@ mod tests {
         // nothing written without a settings folder
         let none = Files::new(None);
         none.arm(dx);
-        assert!(!none.armed() && !relaunch_after_failure(&none));
+        assert!(!none.armed() && !relaunch_after_failure(&none, || {}));
         let _ = std::fs::remove_dir_all(&d);
     }
 
