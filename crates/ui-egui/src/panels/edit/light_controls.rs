@@ -114,15 +114,29 @@ pub(crate) fn prepare_keys(app: &LightcraftApp, ctx: &egui::Context, raw: &mut e
     }
 }
 
-/// UI phase only, before the panel reads its DevelopSettings snapshot.
-pub(super) fn apply_pending(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let pending = ctx.data_mut(|data| {
-        let key = egui::Id::unique(NUDGES);
-        let pending = data.get_temp::<Nudges>(key);
-        data.remove::<Nudges>(key);
-        pending
-    });
-    let Some(pending) = pending.filter(|pending| available(app) && app.session.active() == Some(pending.photo)) else { return };
+/// UI phase only, before the panel reads its DevelopSettings snapshot. The nudge lands on the pass that draws
+/// for real: a sizing pass or the SDK's measuring run writes nothing, and the nudge waits for that pass. Where
+/// there is nothing to nudge — the panel is gone, the photo changed, or the Light controls are disabled — the
+/// input is dropped instead of being held for a later pass.
+pub(super) fn apply_pending(app: &mut LightcraftApp, ui: &egui::Ui) {
+    let ctx = ui.ctx();
+    let key = egui::Id::unique(NUDGES);
+    let Some(pending) = ctx.data(|data| data.get_temp::<Nudges>(key)) else { return };
+    if !available(app) || app.session.active() != Some(pending.photo) {
+        // Nothing is nudged in a panel that is gone, or on another photo: the input is dropped.
+        ctx.data_mut(|data| data.remove::<Nudges>(key));
+        return;
+    }
+    if !ui.is_enabled() {
+        // The Light controls can't be edited: the input is dropped rather than kept for a pass that would apply it.
+        ctx.data_mut(|data| data.remove::<Nudges>(key));
+        return;
+    }
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
+        // A measuring run writes no edit: the nudge stays for the pass that draws for real.
+        return;
+    }
+    ctx.data_mut(|data| data.remove::<Nudges>(key));
     for (id, steps) in TONAL.iter().zip(pending.steps) {
         if steps == 0 { continue; }
         let Some(spec) = controls::find(id) else { continue };
@@ -134,7 +148,6 @@ pub(super) fn apply_pending(app: &mut LightcraftApp, ctx: &egui::Context) {
         apply(app, ctx, spec, &event);
     }
 }
-
 
 /// One of the six tonal controls in the existing Light section, on the shared develop slider row. HDR-specific
 /// controls keep their current implementation; this adapter does not alter the section or control specs.
@@ -206,5 +219,118 @@ fn apply(app: &mut LightcraftApp, ctx: &egui::Context, spec: &ControlSpec, event
     };
     if let Err(error) = result {
         app.toast_error(ctx, error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::headless::{Headless, HeadlessView};
+    use crate::{LightcraftApp, Services};
+
+    const SETTLE: Duration = Duration::from_secs(120);
+    const TIMEOUT: Duration = Duration::from_secs(20);
+
+    /// The demo library in Detail with the Edit panel showing and its Light section open.
+    fn light_panel() -> Headless {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+        let id = h.app.session.visible_cloned()[0].0;
+        let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}), TIMEOUT);
+        assert_eq!(r["ok"], true, "{r}");
+        let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), TIMEOUT);
+        assert_eq!(r["ok"], true, "{r}");
+        h.app.ui.open_sections = vec!["light".into()];
+        h.app.ui.folded_sections.clear();
+        h.settle(SETTLE);
+        assert!(available(&h.app), "the Light section is on screen");
+        h
+    }
+
+    /// Queue `steps` nudges on `TONAL[index]`, as the Up or Down key over its row does in the input phase.
+    fn queue(h: &Headless, index: usize, steps: i32) {
+        let photo = h.app.session.active().expect("an active photo");
+        let mut queued = Nudges { photo, steps: [0; 6] };
+        if let Some(slot) = queued.steps.get_mut(index) {
+            *slot = steps;
+        }
+        h.view.ctx.data_mut(|data| data.insert_temp(egui::Id::unique(NUDGES), queued));
+    }
+
+    /// Whether a nudge is still waiting for its pass.
+    fn waiting(h: &Headless) -> bool {
+        h.view.ctx.data(|data| data.get_temp::<Nudges>(egui::Id::unique(NUDGES))).is_some()
+    }
+
+    /// The active photo's Contrast, the control the queued nudge moves.
+    fn contrast(h: &Headless) -> f64 {
+        let photo = h.app.session.active().expect("an active photo");
+        let spec = controls::find("light.contrast").expect("the Contrast control");
+        controls::get(&h.app.session.develop_of(photo).unwrap_or_default(), "light.contrast").unwrap_or(spec.default)
+    }
+
+    /// One pass of the app's own context, handing the panel's `Ui` to `run`.
+    fn pass(h: &mut Headless, time: f64, run: impl FnOnce(&mut LightcraftApp, &mut egui::Ui)) {
+        let ctx = h.view.ctx.clone();
+        let app = &mut h.app;
+        // egui may run the pass again; the body runs once, on the first
+        let mut run = Some(run);
+        let raw = HeadlessView::raw_input(egui::vec2(1400.0, 1000.0), 1.0, time, vec![]);
+        let mut out = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                if let Some(run) = run.take() {
+                    run(&mut *app, ui);
+                }
+            });
+        });
+        out.textures_delta.clear();
+    }
+
+    /// A queued Light nudge is delivered by the pass that draws for real, and by that one only: a sizing pass or
+    /// the SDK's measuring run writes no edit (the nudge waits for the real pass), and a disabled Light section
+    /// drops the input instead of holding it for a later pass.
+    #[test]
+    fn a_light_nudge_lands_only_on_an_enabled_pass_that_draws_for_real() {
+        let mut h = light_panel();
+        let before = contrast(&h);
+        let undo = h.app.session.undo.len();
+        let mut at = h.time() + 0.1;
+        assert_eq!(TONAL[1], "light.contrast", "the second tonal control, the one the nudge moves");
+        for measuring in ["sizing", "measure"] {
+            queue(&h, 1, 1);
+            at += 0.1;
+            pass(&mut h, at, move |app, ui| match measuring {
+                "sizing" => {
+                    let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());
+                    apply_pending(app, &child);
+                }
+                _ => {
+                    let ctx = ui.ctx().clone();
+                    craft::ui::runtime::measure::run(&ctx, || apply_pending(app, ui));
+                }
+            });
+            assert_eq!(contrast(&h), before, "{measuring}: a measuring pass writes no edit");
+            assert_eq!(h.app.session.undo.len(), undo, "{measuring}: and records no undo step");
+            assert!(waiting(&h), "{measuring}: the nudge waits for the pass that draws for real");
+        }
+        // the real pass delivers it, once
+        at += 0.1;
+        pass(&mut h, at, |app, ui| apply_pending(app, ui));
+        let spec = controls::find("light.contrast").expect("the Contrast control");
+        assert_eq!(contrast(&h), crate::widgets::nudged(spec, before, 1.0), "one step over Contrast, on the real pass");
+        assert!(!waiting(&h), "the nudge is consumed exactly once");
+        assert_eq!(h.app.session.undo.len() - undo, 1, "one undo step");
+        // a disabled Light section takes no edit, and the input is dropped rather than replayed later
+        let held = contrast(&h);
+        queue(&h, 1, 1);
+        at += 0.1;
+        pass(&mut h, at, |app, ui| {
+            let _ = ui.add_enabled_ui(false, |ui| apply_pending(app, ui));
+        });
+        assert_eq!(contrast(&h), held, "a disabled Light section writes no edit");
+        assert!(!waiting(&h), "and the input is dropped, not held for a later pass");
+        assert_eq!(h.app.session.undo.len() - undo, 1, "the disabled pass records no undo step");
     }
 }

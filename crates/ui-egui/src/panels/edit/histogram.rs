@@ -91,8 +91,10 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     let plot = Rect::from_min_max(r.min + vec2(0.0, 6.0), pos2(r.right(), r.bottom() - 26.0 - legend));
     // Lightroom Classic's tonal zones (Blacks / Shadows / Exposure / Highlights / Whites across the
     // plot): a drag over one moves its control (the band and the readout show which and how far), a
-    // double-click puts it back to its default, and Shift drags a tenth as far
-    let zone = crate::panels::histogram::interact(app, ui, &resp, plot, id);
+    // double-click puts it back to its default, and Shift drags a tenth as far. Only the pass that draws
+    // for real takes the pointer: a measuring run draws nothing, and the release it saw must not commit the
+    // drag the live pass still holds (`panels::histogram::interact`).
+    let zone = if live { crate::panels::histogram::interact(app, ui, &resp, plot, id) } else { None };
     if let Some(a) = &zone {
         crate::panels::histogram::paint_zone(p, plot, a, &t);
     }

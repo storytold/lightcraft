@@ -2,6 +2,7 @@ use super::{
     Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
     pos2, section_header, vec2,
 };
+use crate::state::InteractionOwner;
 use crate::widgets::slider_salted;
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step, and a typed value, a key
@@ -15,22 +16,45 @@ pub fn apply_slider_out(
 ) {
     if out.cancelled {
         if app.ui.dragging_control.as_deref() == Some(spec.id) {
-            let _ = app.run("develop.cancelInteraction", json!({}));
-            app.ui.dragging_control = None;
+            // Cancel only the interaction this drag began. The control's id names the slider, not the engine's
+            // interaction: an automation client can have begun its own in the middle of the drag
+            // (`develop.beginInteraction` ends the drag's), and that one's settings are not the drag's to restore.
+            if owns_live(app) {
+                let _ = app.run("develop.cancelInteraction", json!({}));
+            }
+            release(app);
         }
         return;
     }
     if out.drag_started {
-        let _ = app.run("develop.beginInteraction", json!({"label": spec.label}));
+        let begun = app.run("develop.beginInteraction", json!({"label": spec.label})).is_ok();
         app.ui.dragging_control = Some(spec.id.to_string());
+        // a begin that failed began no interaction this drag may later end or cancel
+        app.ui.dragging_interaction = if begun { app.session.interaction.as_ref().map(InteractionOwner::of) } else { None };
     }
     if let Some(v) = out.value {
         let _ = set(app, v);
     }
     if out.drag_stopped {
-        let _ = app.run("develop.endInteraction", json!({}));
-        app.ui.dragging_control = None;
+        // As with a cancel: only the drag's own interaction is ended. One another client began in its place is
+        // that client's to finish.
+        if owns_live(app) {
+            let _ = app.run("develop.endInteraction", json!({}));
+        }
+        release(app);
     }
+}
+
+/// Whether the session's live engine interaction is the one the dragged control's slider began. A drag that
+/// recorded no interaction (`None`) has only its control's id to go on, as before.
+fn owns_live(app: &LightcraftApp) -> bool {
+    app.ui.dragging_interaction.as_ref().is_none_or(|owner| owner.is_live(&app.session))
+}
+
+/// The drag is over: it owns no engine interaction any more.
+fn release(app: &mut LightcraftApp) {
+    app.ui.dragging_control = None;
+    app.ui.dragging_interaction = None;
 }
 
 pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool) {

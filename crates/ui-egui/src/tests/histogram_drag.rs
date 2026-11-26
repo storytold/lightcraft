@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::headless::Headless;
+use crate::headless::{Headless, HeadlessView};
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -292,4 +292,52 @@ fn a_drag_dispatches_live_and_commits_on_the_release() {
     assert!(h.app.session.interaction.is_none(), "the release commits the interaction");
     assert!(h.app.ui.dragging_control.is_none(), "and no control is left dragged");
     assert_eq!(h.app.session.undo.len() - before, 1, "the whole drag is one undo step");
+}
+
+/// A measuring run draws but writes nothing: the release it sees leaves the drag open, and the pass that
+/// draws for real still lands the whole drag as one undo step. (Before, the measuring run's own release
+/// check committed the interaction, closing it outside any real pass.)
+#[test]
+fn a_measuring_pass_does_not_finish_the_drag() {
+    let mut h = edit_panel();
+    let id = h.app.session.active().expect("the Edit panel's photo");
+    let hist = rect(&h, "histogram");
+    let from = egui::pos2(hist.left() + hist.width() * 0.5, hist.top() + hist.height() * 0.5);
+    let to = from + egui::vec2(hist.width() * 0.1, 0.0);
+    // a press and its moves with no release: the drag is still going when the frames below run
+    h.app.synthetic.push(egui::Event::PointerMoved(from));
+    h.app.synthetic.push(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    for i in 1..=6 {
+        h.app.synthetic.push(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 6.0)));
+    }
+    for _ in 0..12 {
+        h.step();
+    }
+    assert!(h.app.session.interaction.is_some(), "the drag holds the interaction open");
+    let dragged = value(&h, "light.exposure");
+    assert!(dragged > 0.4, "the draft followed the drag: {dragged}");
+    let undo = h.app.session.undo.len();
+    // the release reaches a measuring run of the histogram before any pass that draws for real
+    let ctx = h.view.ctx.clone();
+    let release = egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE };
+    let raw = HeadlessView::raw_input(egui::vec2(1400.0, 1000.0), 1.0, h.time() + 0.1, vec![release]);
+    let mut out = ctx.run_ui(raw, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+            craft::ui::runtime::measure::run(&ctx, || crate::panels::edit::histogram(&mut h.app, ui, id));
+        });
+    });
+    out.textures_delta.clear();
+    assert!(h.app.session.interaction.is_some(), "a measuring run does not commit the drag");
+    assert_eq!(h.app.session.undo.len(), undo, "and records no undo step");
+    assert_eq!(value(&h, "light.exposure"), dragged, "and leaves the draft where the drag put it");
+    // the pass that draws for real lands the whole drag
+    h.settle(SETTLE);
+    assert!(h.app.session.interaction.is_none(), "the live pass commits the drag");
+    assert!(h.app.ui.dragging_control.is_none(), "and no control is left dragged");
+    assert_eq!(h.app.session.undo.len() - undo, 1, "the whole drag is one undo step");
 }
