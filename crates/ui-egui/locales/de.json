@@ -1652,7 +1652,8 @@
   "Watermark": "Wasserzeichen",
   "Wednesday": "Mittwoch",
   "What's New": "Neuigkeiten",
-  "When rated or hovered": "Bei Bewertung oder unter dem Mauszeiger",
+  "Stars on hover": "Sterne beim Überfahren",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Sterne beim Überfahren: Flaggen und Farbmarkierungen sind immer sichtbar; die Sterne und das Bearbeitet-Zeichen erscheinen, solange ein Foto überfahren oder ausgewählt ist.",
   "White Balance": "Weißabgleich",
   "White Balance Selector": "Weißabgleich-Pipette",
   "White Balance Selector (W)": "Weißabgleich-Pipette (W)",
@@ -3538,5 +3539,10 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Stack — click to expand (S)": "Stapel — Klicken zum Aufklappen (S)",
+  "Stack — click to collapse (S)": "Stapel — Klicken zum Zuklappen (S)",
+  "Virtual copy": "Virtuelle Kopie",
+  "Right-click ▸ Locate Missing File… to find it again.": "Rechtsklick → Fehlende Datei suchen…, um sie wiederzufinden.",
+  "Right-click ▸ Reload from Disk to try again.": "Rechtsklick → Vom Datenträger neu laden, um es erneut zu versuchen."
 }
