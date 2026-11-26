@@ -9,6 +9,7 @@
 //! of decoded source proxies. Rendering is done by [`RenderJob`]s that are `Send` so frontends can
 //! run them off the UI thread.
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Model/cache types remain available without linking the optional inference crate.
 #[cfg(not(feature = "denoise"))]
@@ -28,6 +29,7 @@ pub mod crs_masks;
 pub mod demo;
 pub mod denoise;
 pub mod devices;
+pub mod disk_space;
 pub mod display;
 pub mod doc_path;
 mod errors;
@@ -49,6 +51,7 @@ pub mod lens_profiles;
 pub mod lensfun_download;
 pub mod library;
 mod lightroom_archive;
+pub mod lightroom_backup;
 pub mod lightroom_catalog;
 pub mod lightroom_folder;
 pub mod lightroom_job;
@@ -61,6 +64,7 @@ mod model_download;
 pub mod open_path;
 pub mod originals;
 mod pdf;
+pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -69,6 +73,8 @@ pub mod print_color;
 pub mod print_pdf;
 pub mod profile_refs;
 pub mod proof;
+pub(crate) mod read_file;
+pub mod relocate;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -80,6 +86,7 @@ pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
+mod sync_same;
 pub mod text;
 mod view;
 pub mod walk;
@@ -116,7 +123,7 @@ pub enum EngineError {
     /// The folder (or file) asked for is a Lightroom Classic catalog or part of one, not a
     /// LightCraft library (issue #891): nothing was created or opened. `catalog`: the `.lrcat`
     /// to import with `library.importLightroom`, when one was found.
-    #[error("{} is a Lightroom Classic catalog, not a LightCraft library; import it into a LightCraft library with File ▸ Import Lightroom Catalog…{}", path.display(), catalog.as_ref().map_or(String::new(), |c| format!(" ({})", c.display())))]
+    #[error("{} is a Lightroom Classic catalog, not a LightCraft library; import it into a LightCraft library with File → Import Lightroom Catalog…{}", path.display(), catalog.as_ref().map_or(String::new(), |c| format!(" ({})", c.display())))]
     LightroomCatalog { path: std::path::PathBuf, catalog: Option<std::path::PathBuf> },
     /// The work was cancelled (by the person, an agent or a newer request): not a failure.
     #[error("{0}")]
@@ -137,7 +144,8 @@ pub struct UndoEntry {
     pub label: String,
     pub op: Op,
     /// A folder to rename on disk (`from` → `to`) before `op` is applied: Rename / Move Folder
-    /// (whose `op` relinks the photos inside). Never overwrites; refused when `to` exists. An
+    /// (whose `op` relinks the photos inside; a located folder, `on_disk: false`, renames nothing
+    /// and only follows). Never overwrites; refused when `to` exists. An
     /// empty `to` removes the (empty) folder `from`, an empty `from` creates `to` (Create Folder).
     pub folder: Option<FolderMove>,
     /// Inverses of logged path corrections from a partially failed history step.
@@ -168,16 +176,20 @@ fn single_photo(op: &Op, depth: usize) -> Option<PhotoId> {
     }
 }
 
-/// A folder renamed or moved on disk as part of an undo step.
+/// A folder renamed or moved on disk as part of an undo step, or (`on_disk: false`) a folder
+/// located where it already is, which moves no file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderMove {
     pub from: String,
     pub to: String,
+    /// The step renames the folder on disk. `false` for a folder located where it already is
+    /// (`folder.updateLocation`): only the photos and the view follow, no file is touched.
+    pub on_disk: bool,
 }
 
 impl FolderMove {
     fn reversed(&self) -> Self {
-        Self { from: self.to.clone(), to: self.from.clone() }
+        Self { from: self.to.clone(), to: self.from.clone(), on_disk: self.on_disk }
     }
 }
 
@@ -327,6 +339,8 @@ pub struct Session {
     /// Current time provider (ISO 8601); injectable for tests and wasm.
     pub clock: Box<dyn Fn() -> String + Send>,
     depth: u32,
+    /// [`Session::start_waiting`] is starting tasks (the commands it runs don't start more themselves).
+    starting_waiting: bool,
     /// Selected mask (Masking panel), by mask id.
     pub active_mask: Option<u32>,
     /// AI masks (SAM 3): the model and the last photo prepared for it.
@@ -352,6 +366,9 @@ pub struct Session {
     pub print: print::template::PrintSettings,
     /// Saved print templates (`print.template.*`), persisted in prefs.json.
     pub print_templates: Vec<print::template::PrintTemplate>,
+    /// The Template Browser's folders besides [`print::template::DEFAULT_FOLDER`], sorted by name
+    /// (`print.template.folder.*`), persisted in prefs.json.
+    pub print_template_folders: Vec<String>,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -359,6 +376,8 @@ pub struct Session {
     /// The user's point-curve presets (`curve.*`; built-ins: [`cmd::curves::builtin_presets`]),
     /// persisted in prefs.json.
     pub curve_presets: Vec<cmd::curves::CurvePreset>,
+    /// Imported camera profiles (`.dcp`).
+    pub dcp_profiles: Vec<cmd::dcp_profiles::DcpEntry>,
     /// Mask effect presets (the Masking panel's Effect menu).
     pub mask_effects: Vec<cmd::mask_effects::MaskEffect>,
     /// The effect a new mask of each kind (`brush`, `linear`…) starts with: the one last applied
@@ -395,10 +414,21 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Preparing photos in the background: settings (app-wide and this library's) and the build
+    /// it runs ([`prep`]).
+    pub prep: prep::PrepState,
+    /// The long edge (px) the loupe renders at on this screen, as the frontend last said
+    /// (0: not known). Standard previews are built at least this big, so the loupe can use them.
+    pub loupe_edge: usize,
+    /// Builds that ended and were replaced by the next one before a frontend announced them
+    /// ([`Session::take_unreported_builds`]).
+    unreported_builds: Vec<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
     pub cache_mb: u32,
+    /// The once-per-session alert for a drive running low under the preview cache ([`disk_space`]).
+    pub(crate) disk_alert: disk_space::DiskAlertState,
     /// Slideshow playback settings (`slideshow.playback`; persisted in prefs.json).
     pub slideshow: slideshow::PlaybackSettings,
     /// Slideshow slide layout: Layout, Options and Backdrop (`slideshow.layout`; persisted in
@@ -504,6 +534,7 @@ impl Session {
             media: media::MediaCache::default(),
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
             depth: 0,
+            starting_waiting: false,
             active_mask: None,
             segmenter: segment::Segmenter::default(),
             active_spot: None,
@@ -515,9 +546,11 @@ impl Session {
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
+            print_template_folders: Vec::new(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),
+            dcp_profiles: Vec::new(),
             mask_effects: Vec::new(),
             mask_tool_effects: Default::default(),
             label_sets: Vec::new(),
@@ -533,9 +566,13 @@ impl Session {
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
+            prep: Default::default(),
+            loupe_edge: 0,
+            unreported_builds: Vec::new(),
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
+            disk_alert: Default::default(),
             slideshow: slideshow::PlaybackSettings::default(),
             slide_layout: slide::SlideSettings::default(),
             slide_overlays: slide_overlay::OverlaySettings::default(),
@@ -564,6 +601,15 @@ impl Session {
 
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let r = self.dispatch(id, params, true);
+        // a task this command freed the lane of starts now, not at the next frame
+        self.start_waiting();
+        r
+    }
+
+    /// [`Session::execute`] without starting waiting tasks; `journal`: record the call when the command is journaled
+    /// (not for a task that waited: the call that asked for it is recorded already).
+    fn dispatch(&mut self, id: &str, params: &Value, journal: bool) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // a command that validates the photos a call names isn't held back by the selection
         if !(spec.explicit_targets && cmd::names_photos(params)) {
@@ -571,11 +617,47 @@ impl Session {
         }
         let empty = Value::Object(Default::default());
         let params = if params.is_null() { &empty } else { params };
-        self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
+        self.run_command(id, (journal && spec.journal).then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
             // a shared parameter check ([`Session::targets`]) names the command it ran for
             EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
             e => e,
         })
+    }
+
+    /// A build that ended is replaced by the next one before a frontend announced it: keep it (at most 16; the oldest
+    /// goes first) for [`Session::take_unreported_builds`].
+    pub(crate) fn keep_unreported_build(&mut self, build: std::sync::Arc<cmd::previews::PreviewBuild>) {
+        const KEEP: usize = 16;
+        if self.unreported_builds.len() >= KEEP {
+            self.unreported_builds.remove(0);
+        }
+        self.unreported_builds.push(build);
+    }
+
+    /// The builds that ended and were replaced before a frontend announced them, oldest first, once. The frontend
+    /// announces each (and sets its `reported`) like the current build's end.
+    pub fn take_unreported_builds(&mut self) -> Vec<std::sync::Arc<cmd::previews::PreviewBuild>> {
+        std::mem::take(&mut self.unreported_builds)
+    }
+
+    /// Start the tasks waiting in line whose lane is free ([`crate::activity`]), each by running the command it was
+    /// asked with. One that can't start is logged and the next in line goes on. Every frontend gets this after each
+    /// command; the app also calls it every frame, for a lane that frees while nothing is asked.
+    pub fn start_waiting(&mut self) {
+        if self.depth > 0 || self.starting_waiting {
+            return;
+        }
+        self.starting_waiting = true;
+        // (bounded: each turn takes one task out of a line that is at most this long)
+        for _ in 0..activity::MAX_WAITING {
+            let Some(w) = self.activity.take_ready() else { break };
+            let r = self.dispatch(&w.request.command, &w.request.params, false);
+            self.activity.started();
+            if let Err(e) = r {
+                log::warn!("{}: a task that waited could not start: {e}", w.request.command);
+            }
+        }
+        self.starting_waiting = false;
     }
 
     /// Run `f` as command `id` with what [`Session::execute`] does around every command: the
@@ -614,7 +696,8 @@ impl Session {
             }
         }
         if self.depth == 0 && self.library.is_some() {
-            // Make the command durable before reporting success. When the command's own records
+            // Make the command durable before reporting success (natively: handed to the catalog
+            // log's own thread, which syncs it right after and holds it until it can). When the command's own records
             // can't be appended, it fails with `NotSaved`: the change stays applied in memory and
             // queued, and the next save (any later command, or the frame loop) retries it. Other
             // persistence trouble (a failed compaction, an older queued change still unwritten by
@@ -861,17 +944,19 @@ impl Session {
         rename::validate_sidecars(fs, &entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         // Repair discarded file steps before another path change can stale their exact paths.
         // Unrelated metadata history must remain usable while a sidecar is still unwritable.
-        if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+        // the folder to rename on disk, if the step has one
+        let on_disk = entry.folder.as_ref().filter(|f| f.on_disk);
+        if on_disk.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
             self.repair_sidecars_with(fs).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         }
         rename::retry_sidecars(fs, &mut entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         let op = &entry.op;
         let folder = entry.folder.as_ref();
-        if let Some(f) = folder {
+        if let Some(f) = on_disk {
             cmd::browse::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
         }
         let undo_folder = || {
-            if let Some(f) = folder {
+            if let Some(f) = on_disk {
                 let _ = cmd::browse::folder_on_disk(&f.to, &f.from);
             }
         };
@@ -890,8 +975,10 @@ impl Session {
         }
         match self.apply_catalog(op.clone()) {
             Ok(inv) => {
-                if let Some(f) = folder {
-                    cmd::browse::follow_folder(self, &f.from, &f.to);
+                match folder {
+                    Some(f) if f.on_disk => cmd::browse::follow_folder(self, &f.from, &f.to),
+                    Some(f) => relocate::follow_located(self, &f.from, &f.to),
+                    None => {}
                 }
                 if entry.retry_inverse.is_empty() {
                     Ok(inv)
@@ -946,8 +1033,9 @@ impl Session {
             i.crop_edited |= crop_edited;
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
+        let own_auto = self.own_auto_wb(id, &requested, label);
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &requested, label));
+        ops.extend(self.auto_sync_ops(id, &requested, label, &own_auto));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
@@ -977,7 +1065,7 @@ impl Session {
             photo.height.max(1) as usize,
             &d,
             true,
-            photo.embedded_lens.as_ref(),
+            photo.embedded_lens.as_deref(),
         );
         d.crop.geometry.rect = frame.crop.rect;
         d
@@ -988,18 +1076,18 @@ impl Session {
     /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
     /// (Sync doesn't carry it either), nor history / snapshot restores. Constrain Crop then fits each
     /// photo's own crop: the active photo's fitted crop is never copied over another's.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
-        if !self.auto_sync
-            || self.active() != Some(id)
-            || self.selection.ids.len() < 2
-            || label.starts_with("History:")
-            || label.starts_with("Restore ")
-        {
+    ///
+    /// White balance goes on each photo as the active photo's mode or value on the photo's own
+    /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
+    /// its pixels), a Temp or Tint the same number, only the slider that moved.
+    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
+        if !self.auto_sync_applies(id, label) {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let mut old_json = old.to_json();
-        let mut new_json = new.to_json();
+        // (Remove Hot Pixels, omitted when off, is stated: switching it off is a change)
+        let mut old_json = old.to_json_for_merge();
+        let mut new_json = new.to_json_for_merge();
         // False is omitted from stored profile JSON. Keep it explicit for this comparison so
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
@@ -1016,16 +1104,33 @@ impl Session {
                 return Vec::new();
             }
         }
+        let ainfo = self.source_info(id);
+        let wb_changed = old.wb != new.wb;
         self.selection
             .ids
             .iter()
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
+                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                if wb_changed {
+                    sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
+                }
+                let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
+    }
+
+    /// Auto Sync carries an edit of photo `id` labelled `label` to the other selected photos: it is
+    /// on, `id` is the active photo of a selection of two or more, and the edit is not a History or
+    /// snapshot restore.
+    fn auto_sync_applies(&self, id: PhotoId, label: &str) -> bool {
+        self.auto_sync
+            && self.active() == Some(id)
+            && self.selection.ids.len() >= 2
+            && !label.starts_with("History:")
+            && !label.starts_with("Restore ")
     }
 
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
@@ -1085,7 +1190,7 @@ impl Session {
             p.height.max(1) as usize,
             &d.effective(),
             false,
-            p.embedded_lens.as_ref(),
+            p.embedded_lens.as_deref(),
         ))
     }
 
@@ -1432,6 +1537,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
     }
 }
 
+#[cfg(test)]
+mod lightroom_fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

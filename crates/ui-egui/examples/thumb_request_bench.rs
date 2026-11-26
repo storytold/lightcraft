@@ -113,7 +113,19 @@ fn micro(points: usize, pending: bool) {
             let key = app.session.thumb_job(id, 384).unwrap().key;
             app.renderer.textures.insert(
                 Slot::Thumb(id),
-                Tex { look: None, key, photo: id, tex: texture.clone(), size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+                Tex {
+                    look: None,
+                    key,
+                    photo: id,
+                    tex: texture.clone(),
+                    size: [1, 1],
+                    histogram: None,
+                    ms: 0.0,
+                    quick: None,
+                    pixels: None,
+                    native: None,
+                    slide_photo: None,
+                },
             );
         }
         request_thumb(&mut app, id, 384, 10);
@@ -157,7 +169,7 @@ fn verify_texture(h: &Headless, id: PhotoId) {
     let edge = tex.size[0].max(tex.size[1]);
     assert!([128, 256, 384, 512].contains(&edge), "thumbnail must use a supported size bucket");
     let Source::File { path } = &p.source else { unreachable!() };
-    let (source, info) = h.app.session.media.file_loader.as_ref().unwrap()(path, 512).unwrap();
+    let (source, info) = h.app.session.media.file_loader.as_ref().unwrap()(path, 512, Default::default()).unwrap();
     println!("decode,path={path},raw={},preview_only={:?}", info.raw, p.preview_only);
     if std::env::var_os("REQUIRE_RAW").is_some() {
         assert!(p.preview_only.is_none(), "embedded-preview fallback does not validate RAW decoding");
@@ -195,7 +207,7 @@ fn real() {
         p.kind = probe.kind;
         p.meta = probe.meta;
         p.as_shot_wb = probe.as_shot_wb;
-        p.embedded_lens = probe.embedded_lens;
+        p.embedded_lens = probe.embedded_lens.map(Box::new);
         p.content_hash = probe.content_hash;
         p.preview_only = probe.preview_only;
         lightcraft_engine::import::apply_import_defaults(&session, &mut p);

@@ -280,3 +280,27 @@ fn panoramas_keep_the_photos_resolution_unless_asked() {
     let nan = run(&shots, 800.0, &opts(f64::NAN)).0;
     assert_eq!((nan.image.width, nan.image.height), (full.image.width, full.image.height));
 }
+
+/// Issue #2320: a few wide frames can settle the fitted focal length below the lens's, and a canvas
+/// sized from it holds fewer pixels than the photos. EXIF's focal length sets the native scale.
+#[test]
+fn the_lens_focal_length_sets_the_native_scale() {
+    let e = env();
+    let f = 2000.0; // what the frames were shot with: the fit settles near it
+    let lens = 2400.0; // what EXIF says, on a 4000-pixel long edge
+    let shots = [
+        Shot { yaw: -20.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
+        Shot { yaw: 0.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
+        Shot { yaw: 20.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
+    ];
+    let rs: Vec<M3> = shots.iter().map(|s| rot(s.yaw, s.pitch, s.roll)).collect();
+    let mut frames: Vec<Frame> = shots.iter().zip(&rs).map(|(s, r)| shoot(&e, r, f, 4000, 3000, s.gain)).collect();
+    for frame in &mut frames {
+        frame.metadata.focal_length_35mm = Some(lens / 4000.0 * 36.0);
+    }
+    let res = stitch(frames, &PanoOptions { projection: Projection::Spherical, ..Default::default() }, &no_progress).unwrap();
+    assert_eq!(res.used.len(), 3, "all three frames must connect: {:?}", res.used);
+    assert!((res.focal / lens - 1.0).abs() < 0.01, "output focal {} for a {lens} px lens", res.focal);
+    let mp = (res.image.width * res.image.height) as f64 / 1e6;
+    assert!((mp / res.native_megapixels - 1.0).abs() < 0.02, "canvas {mp} MP for {} MP native", res.native_megapixels);
+}
