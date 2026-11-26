@@ -131,13 +131,14 @@ pub(super) fn apply_pending(app: &mut LightcraftApp, ui: &egui::Ui) {
         ctx.data_mut(|data| data.remove::<Nudges>(key));
         return;
     }
+    // A measuring run writes no edit: the nudge stays for the pass that draws for real. This comes before the
+    // enablement check, because egui's sizing pass is an invisible Ui — and an invisible Ui is a disabled one.
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
+        return;
+    }
     if !ui.is_enabled() {
         // The Light controls can't be edited: the input is dropped rather than kept for a pass that would apply it.
         ctx.data_mut(|data| data.remove::<Nudges>(key));
-        return;
-    }
-    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
-        // A measuring run writes no edit: the nudge stays for the pass that draws for real.
         return;
     }
     ctx.data_mut(|data| data.remove::<Nudges>(key));
@@ -304,11 +305,11 @@ mod tests {
         let mut h = light_panel();
         let before = contrast(&h);
         let undo = h.app.session.undo.len();
-        let mut at = h.time() + 0.1;
+        // the harness's own clock: every pass below runs at the time its next frame would, so no frame steps back
+        let at = h.time();
         assert_eq!(TONAL[1], "light.contrast", "the second tonal control, the one the nudge moves");
         for measuring in ["sizing", "measure"] {
             queue(&h, 1, 1);
-            at += 0.1;
             pass(&mut h, at, move |app, ui| match measuring {
                 "sizing" => {
                     let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());
@@ -324,7 +325,6 @@ mod tests {
             assert!(waiting(&h), "{measuring}: the nudge waits for the pass that draws for real");
         }
         // the real pass delivers it, once
-        at += 0.1;
         pass(&mut h, at, |app, ui| apply_pending(app, ui));
         let spec = controls::find("light.contrast").expect("the Contrast control");
         assert_eq!(contrast(&h), crate::widgets::nudged(spec, before, 1.0), "one step over Contrast, on the real pass");
@@ -333,7 +333,6 @@ mod tests {
         // a disabled Light section takes no edit, and the input is dropped rather than replayed later
         let held = contrast(&h);
         queue(&h, 1, 1);
-        at += 0.1;
         pass(&mut h, at, |app, ui| {
             let _ = ui.add_enabled_ui(false, |ui| apply_pending(app, ui));
         });
