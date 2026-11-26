@@ -1832,6 +1832,37 @@ fn settle_waits_for_file_system_checks() {
     assert_eq!(check(&mut h), Some(true));
 }
 
+/// A file-system check that panics is no pending work for ever: the count drops (so `busy()` and `settle` go on) and the check can be asked again.
+#[test]
+fn a_file_system_check_that_panics_is_not_pending_for_ever() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+    fn panics(_: &str) -> bool {
+        ASKED.fetch_add(1, Ordering::SeqCst);
+        panic!("a listing that dies");
+    }
+    let mut h = demo([800.0, 600.0]);
+    h.settle(SETTLE);
+    let check = |h: &mut Headless| {
+        let raw = HeadlessView::raw_input(h.size, 1.0, 0.0, vec![]);
+        h.view.run(raw, |ui| {
+            let _ = crate::panels::left::fs_cached(ui, "test-panics", "x", 0.0, panics);
+        });
+    };
+    check(&mut h);
+    let t0 = Instant::now();
+    while crate::panels::left::fs_cached_running(&h.view.ctx) > 0 && t0.elapsed() < SETTLE {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(crate::panels::left::fs_cached_running(&h.view.ctx), 0, "the dead check no longer counts as running");
+    check(&mut h);
+    let t0 = Instant::now();
+    while ASKED.load(Ordering::SeqCst) < 2 && t0.elapsed() < SETTLE {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ASKED.load(Ordering::SeqCst), 2, "and it is asked again, not stuck as running");
+}
+
 /// Photo > Rename Photos…: the dialog previews and renames the selection.
 #[test]
 fn rename_dialog_renames_the_selection() {
@@ -3695,6 +3726,98 @@ fn import_review_dialog() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Set a folder's modification time (Windows opens a folder for attributes, with backup semantics).
+fn set_folder_time(dir: &std::path::Path, at: std::time::SystemTime) {
+    #[cfg(windows)]
+    let handle = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().write(true).access_mode(0x100).custom_flags(0x0200_0000).open(dir)
+    };
+    #[cfg(not(windows))]
+    let handle = std::fs::File::open(dir);
+    handle.unwrap().set_modified(at).unwrap();
+}
+
+/// A review's listing belongs to the import that review starts. Given a review that was
+/// cancelled, when a sidecar appears in its folder (the folder's time put back as it was, as a
+/// volume with coarse folder times would show it) and its file is imported another way (a folder
+/// given by name is walked afresh, so only a named file could meet the old listing),
+/// then the sidecar is read.
+#[test]
+fn a_cancelled_reviews_listing_is_not_used_by_another_import() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-import-cancelled-review-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[9, 9, 9, 255]; 64] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(dir.join("a.png"), png).unwrap();
+    // (old enough for the scan to vouch for the folder's time)
+    set_folder_time(&dir, std::time::SystemTime::now() - Duration::from_secs(3600));
+    let services = crate::Services { png: None, ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services), [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.settle(SETTLE);
+    h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "the review is open");
+    assert!(h.app.review_listed.is_some(), "the review holds its listing");
+    h.request("ui.dialog.cancel", json!({}), t);
+    assert!(h.app.review_listed.is_none(), "cancelling the review drops the listing");
+    let was = std::fs::metadata(&dir).unwrap().modified().unwrap();
+    std::fs::write(
+        dir.join("a.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    set_folder_time(&dir, was);
+    let r = h.request("engine.execute", json!({"command": "library.import", "params": {"paths": [dir.join("a.png").to_string_lossy()]}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let p = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").expect("imported");
+    assert_eq!(p.rating, 4, "the sidecar that appeared after the review is read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A review waiting behind the open one keeps its own listing. Given a review that is open, when
+/// another scan finishes (it waits for the dialog to close), then the open review still holds the
+/// folders its own scan listed, and the waiting one's are kept for when it opens.
+#[test]
+fn a_waiting_reviews_listing_does_not_replace_the_open_ones() {
+    let make = |tag: &str| {
+        let dir = std::env::temp_dir().join(format!("lc-ui-import-waiting-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[9, 9, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join("a.png"), png).unwrap();
+        set_folder_time(&dir, std::time::SystemTime::now() - Duration::from_secs(3600));
+        dir
+    };
+    let (first, second) = (make("first"), make("second"));
+    let services = crate::Services { png: None, ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services), [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [first.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+    let listed = |h: &Headless| format!("{:?}", h.app.review_listed);
+    assert!(listed(&h).contains("-first-"), "the open review holds its own listing: {}", listed(&h));
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [second.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.step_until(SETTLE, |h| h.app.scan.is_none());
+    h.settle(SETTLE);
+    assert!(h.app.review_pending.is_some(), "the second review waits behind the open one");
+    assert!(listed(&h).contains("-first-") && !listed(&h).contains("-second-"), "the open review keeps its listing: {}", listed(&h));
+    // cancelled, the first review makes room for the waiting one, which brings its own listing
+    h.request("ui.dialog.cancel", json!({}), t);
+    h.step_until(SETTLE, |h| h.app.review_pending.is_none());
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "the waiting review opens");
+    assert!(listed(&h).contains("-second-") && !listed(&h).contains("-first-"), "it holds its own listing: {}", listed(&h));
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
+}
+
 /// The import review offers what to do with files that are in Recently Deleted (issues #298,
 /// #706): they are checked, to be restored, by default; Leave them unchecks them; confirming
 /// restores the photo (with its edits) or, with Import as new, imports the file afresh.
@@ -4053,6 +4176,12 @@ fn import_copy_renames_into_destination() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The instant this machine reads as the tests' clock time: an undated file takes the file's
+/// date in the host's zone, so a fixed epoch would file it on the day before west of UTC.
+fn filed_at() -> u64 {
+    lightcraft_engine::import::local_instant("2026-01-14T05:58:48").and_then(|s| u64::try_from(s).ok()).unwrap_or(0)
+}
+
 /// Import review, Copy, Folders → Custom template…: the default `{date:%Y}/{date:%Y%m%d}`
 /// files copies under `2026/20260114/`, the example line shows the full destination, and a
 /// template that would climb out of the destination is refused.
@@ -4065,13 +4194,10 @@ fn import_copy_into_a_custom_folder_template() {
     let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40, 3, 9, 255]; 64] };
     let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(src.join("IMG_01.png"), png).unwrap();
-    // undated files are filed by the file's date (2026-01-14T05:58:48)
-    std::fs::File::options()
-        .write(true)
-        .open(src.join("IMG_01.png"))
-        .unwrap()
-        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
-        .unwrap();
+    // Undated files are filed by the file's date, read in the host's zone (issue #2284), so
+    // the file is pinned to the instant this machine reads as 2026-01-14T05:58:48.
+    let when = std::time::UNIX_EPOCH + Duration::from_secs(filed_at());
+    std::fs::File::options().write(true).open(src.join("IMG_01.png")).unwrap().set_modified(when).unwrap();
     let dest_s = dest.to_string_lossy().to_string();
     let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
     let mut session = lightcraft_engine::Session::with_demo().with_fs();
@@ -4124,12 +4250,8 @@ fn import_move_into_a_folder_template() {
         let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40 + i, 3, 9, 255]; 64] };
         let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(src.join(format!("IMG_0{i}.png")), png).unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(src.join(format!("IMG_0{i}.png")))
-            .unwrap()
-            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
-            .unwrap();
+        let when = std::time::UNIX_EPOCH + Duration::from_secs(filed_at());
+        std::fs::File::options().write(true).open(src.join(format!("IMG_0{i}.png"))).unwrap().set_modified(when).unwrap();
     }
     let dest_s = dest.to_string_lossy().to_string();
     let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };

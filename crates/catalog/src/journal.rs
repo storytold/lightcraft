@@ -65,6 +65,7 @@
 //! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //! | 13 | Lens Blur | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
+//! | 14 | bursts arranged by hand in Assisted Culling | `Analysis.rank` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -89,7 +90,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -512,7 +513,9 @@ impl Journal {
                     report.stale += 1;
                 }
                 Some((seq, op)) if j.seq.checked_add(1) == Some(seq) => {
-                    if catalog.apply(op).is_err() {
+                    // (a batch that was only partly taken back when it was applied is logged as it was: replaying it is
+                    // not damage, see `Catalog::replay_op`)
+                    if catalog.replay_op(op).is_err() {
                         report.failed += 1;
                     } else {
                         report.replayed += 1;

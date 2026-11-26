@@ -81,6 +81,11 @@ pub fn library_state(dir: &Path) -> std::io::Result<bool> {
 /// The default library location: `$LIGHTCRAFT_LIBRARY` if set, else `~/Pictures/LightCraft Library`
 /// (`%USERPROFILE%\Pictures\LightCraft Library` on Windows).
 pub fn default_dir() -> Option<PathBuf> {
+    // A Nightly profile opens its own library: an inherited LIGHTCRAFT_LIBRARY could otherwise point
+    // Nightly's catalog at Stable's library (the launch-profile validator refuses that variable too).
+    if let Some(root) = crate::config::profile_root() {
+        return Some(root.join("Library"));
+    }
     if let Some(p) = std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
@@ -291,6 +296,8 @@ struct PrefsFile {
     export_presets: Vec<crate::export::ExportPreset>,
     /// Print templates.
     print_templates: Vec<crate::print::template::PrintTemplate>,
+    /// Print Template Browser folders, empty ones included.
+    print_template_folders: Vec<String>,
     /// Metadata presets.
     metadata_presets: Vec<crate::cmd::metadata::MetadataPreset>,
     /// Filter presets.
@@ -602,6 +609,11 @@ impl Session {
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
         self.catalog = catalog;
+        // nor do tasks waiting in line carry over: they name the old library's photos and folders
+        let dropped = self.activity.library_changed();
+        if dropped > 0 {
+            log::info!("library: {dropped} task(s) waiting in line were dropped with the old library");
+        }
         // (nothing of the list the last library showed is this one's)
         self.refresh_view();
         self.library_generation = crate::LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -630,6 +642,8 @@ impl Session {
         // (the built-ins are looked up first); it gets a name of its own instead
         self.rename_shadowing_export_presets();
         self.print_templates = prefs.print_templates;
+        self.print_template_folders = prefs.print_template_folders;
+        crate::print::template::tidy_folders(&mut self.print_template_folders, &mut self.print_templates);
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;
         self.curve_presets = prefs.curve_presets;
@@ -744,6 +758,13 @@ impl Session {
                 lib.forgot_local = Some(plan);
             }
         }
+        // keywords read whole from a list a line long (before they were split) become one each
+        let journaled = self.pending_log.len();
+        if (self.split_multiline_keywords() > 0 || self.pending_log.len() > journaled)
+            && let Err(e) = self.persist()
+        {
+            log::error!("library: {e}");
+        }
         // smart previews written by an older camera-look fit are brought up to date in the background
         #[cfg(not(target_arch = "wasm32"))]
         if on_disk {
@@ -754,6 +775,68 @@ impl Session {
         self.disk_alert.reset();
         self.check_disk_space(true);
         Ok(())
+    }
+
+    /// Photos whose keywords hold line breaks (a camera preset's whole keyword list read as one
+    /// keyword by an earlier version) get one keyword a line, journaled, not an undo step. Returns
+    /// how many photos changed. A listed keyword with line breaks hands its options to the names it
+    /// splits into (a name listed already keeps its own, but is left out of export when either was),
+    /// and with automatic XMP writing on, the repaired photos' sidecars are written as a command's are.
+    pub fn split_multiline_keywords(&mut self) -> usize {
+        let breaks = |k: &str| k.contains(['\r', '\n', '\u{2028}', '\u{2029}']);
+        let log_start = self.pending_log.len();
+        let listed: Vec<(String, lightcraft_catalog::keywords::KeywordInfo)> =
+            self.catalog.listed_keywords().filter(|k| breaks(&k.path)).map(|k| (k.path.clone(), k.info.clone())).collect();
+        for (path, info) in listed {
+            let mut ops = Vec::new();
+            for (i, name) in lightcraft_catalog::keywords::from_file(std::slice::from_ref(&path), &[]).into_iter().enumerate() {
+                // where new keywords go stays one keyword: the first name it splits into, listed already or not
+                let parent = info.new_keywords_inside && i == 0;
+                let moved = match self.catalog.keyword_info(&name) {
+                    Some(kept) => {
+                        let mut kept = kept.clone();
+                        kept.include_on_export &= info.include_on_export;
+                        kept.new_keywords_inside |= parent;
+                        kept
+                    }
+                    None => lightcraft_catalog::keywords::KeywordInfo { new_keywords_inside: parent, ..info.clone() },
+                };
+                ops.push(lightcraft_catalog::Op::SetKeyword { path: name, info: Some(moved) });
+            }
+            ops.push(lightcraft_catalog::Op::SetKeyword { path, info: None });
+            for op in ops {
+                match self.catalog.apply(op.clone()) {
+                    Ok(_) => self.pending_log.push(op),
+                    Err(e) => log::warn!("split keywords: {e}"),
+                }
+            }
+        }
+        let fix: Vec<(lightcraft_catalog::PhotoId, lightcraft_catalog::Meta)> = self
+            .catalog
+            .photos()
+            .filter(|p| p.meta.keywords.iter().any(|k| breaks(k)))
+            .map(|p| {
+                let mut meta = p.meta.clone();
+                meta.keywords = lightcraft_catalog::keywords::from_file(&meta.keywords, &[]);
+                (p.id, meta)
+            })
+            .collect();
+        let n = fix.len();
+        for (id, meta) in fix {
+            let op = lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) };
+            match self.catalog.apply(op.clone()) {
+                Ok(_) => self.pending_log.push(op),
+                Err(e) => log::warn!("split keywords: {e}"),
+            }
+        }
+        if n > 0 {
+            log::info!("split the line-separated keywords of {n} photo(s) into one keyword a line");
+        }
+        // not run through a command, so the sidecars are written here, as after a command
+        if self.xmp.auto_write && self.pending_log.len() > log_start {
+            self.auto_write_sidecars_since(log_start);
+        }
+        n
     }
 
     /// Write pending ops to the log (fsynced, or handed to the log's own thread natively), compact when due, and save changed presets.
@@ -952,6 +1035,7 @@ impl Session {
             last_merge: self.last_merge.clone(),
             export_presets: self.export_presets.clone(),
             print_templates: self.print_templates.clone(),
+            print_template_folders: self.print_template_folders.clone(),
             metadata_presets: self.metadata_presets.clone(),
             filter_presets: self.filter_presets.clone(),
             curve_presets: self.curve_presets.clone(),

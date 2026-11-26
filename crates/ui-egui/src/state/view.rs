@@ -19,7 +19,7 @@ pub enum ViewMode {
 }
 
 /// The right-hand tool/panel shown next to the tool strip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RightPanel {
     #[default]
@@ -35,9 +35,17 @@ pub enum RightPanel {
     Info,
     /// The profile browser (part of Edit).
     Profiles,
+    /// Assisted Culling's bursts, to arrange by hand (Window ▸ Bursts).
+    Bursts,
 }
 
 impl RightPanel {
+    /// A tool that takes the panel's place while it is used (Crop, Remove, Masking, Red Eye): on
+    /// closing, the panel shown before it comes back ([`UiState::leave_tool`]).
+    pub fn is_tool(self) -> bool {
+        matches!(self, RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
+    }
+
     pub fn is_edit_tool(self) -> bool {
         matches!(self, RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
     }

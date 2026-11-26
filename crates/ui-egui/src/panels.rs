@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod bottombar;
+pub mod bursts;
 pub mod chips;
 pub mod compare;
 pub mod crop_overlay;
@@ -27,6 +28,7 @@ pub mod profiles;
 pub mod right;
 pub mod second;
 pub mod slideshow;
+pub mod spot_outline;
 pub mod strip;
 pub mod topbar;
 pub mod unnamed;
@@ -39,6 +41,7 @@ pub use crate::dialogs::faces;
 pub use crate::dialogs::keymap;
 pub use crate::dialogs::rules_editor;
 pub use crate::dialogs::rules_editor::rules_move;
+pub use crate::dialogs::rules_editor::rules_reorder;
 pub use crate::dialogs::settings;
 pub use crate::dialogs::settings::slide_layout;
 pub use crate::dialogs::settings::slide_overlays;

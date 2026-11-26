@@ -123,13 +123,7 @@ pub(crate) fn section_drop_before(placed: &[PlacedSection], y: f32) -> Option<Si
 /// sidebar moves it there (`view.sidebarMoveSection`), releasing elsewhere or Esc leaves it.
 pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSection]) {
     let Some(dragged) = app.ui.dragging_section else { return };
-    let (released, pos, esc) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
-    if esc {
-        // the drag's Esc, not also a dialog's or a view's
-        crate::widgets::take_escape(ui.ctx());
-        app.ui.dragging_section = None;
-        return;
-    }
+    let (released, pos) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos()));
     let view = ui.clip_rect();
     let Some(pos) = pos.filter(|p| view.contains(*p)) else {
         if released {
@@ -356,12 +350,12 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: false, parent: None, include_selected: true });
     }
     if ui.button(crate::i18n::tr("Create Smart Album…")).clicked() {
-        app.ui.dialog = Some(crate::state::Dialog::SmartRules {
-            id: None,
-            name: String::new(),
-            rules: lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
-            parent: None,
-        });
+        app.ui.dialog = Some(crate::state::Dialog::smart_rules(
+            None,
+            String::new(),
+            lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
+            None,
+        ));
     }
     if ui.button(crate::i18n::tr("Create Smart Album from Filter…")).clicked() {
         app.ui.dialog = Some(crate::state::Dialog::NewSmartAlbum { name: String::new(), parent: None });
@@ -379,7 +373,7 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// How many library photos have no file (Local browse records are not checked; see
-/// `cmd::missing::checked_path`). Checking stats every file, which on a network share takes
+/// `Photo::library_file`). Checking stats every file, which on a network share takes
 /// seconds, so it runs on a worker thread: the count shown is the last finished one, refreshed
 /// at most every 5 s, and at once (after the running check) when the catalog changed. The first
 /// count and a recount after a catalog change are pending sidebar work

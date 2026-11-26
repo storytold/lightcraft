@@ -20,6 +20,9 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
+/// The clock these tests run on; an undated file is pinned to it too (see `write_png`).
+const CLOCK: &str = "2026-01-14T05:58:48";
+
 /// A small procedural PNG (distinct per seed).
 fn write_png(path: &Path, seed: u8) {
     let (w, h) = (48usize, 32usize);
@@ -28,8 +31,10 @@ fn write_png(path: &Path, seed: u8) {
     let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
-    // undated files take the file's date: the tests' clock time (2026-01-14T05:58:48)
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    // Undated files take the file's date, read in the host's zone (issue #2284), so the file is
+    // pinned to the instant this machine reads as the tests' clock time rather than to a fixed one.
+    let secs = crate::import::local_instant(CLOCK).and_then(|s| u64::try_from(s).ok()).unwrap_or(0);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
@@ -57,7 +62,8 @@ fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Opti
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
     // Keep the same known file-date fallback as write_png, distinct from the regression timestamp.
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    let secs = crate::import::local_instant(CLOCK).and_then(|s| u64::try_from(s).ok()).unwrap_or(0);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
@@ -1631,6 +1637,168 @@ fn assisted_culling_burst_limits_are_adjustable() {
         assert!(s.execute("photo.analyze", &p).is_err(), "{bad} must be refused");
     }
     assert_eq!(s.commits(), undo_before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A box blur of radius `r`: the larger `r`, the lower the focus score.
+fn soften(img: &lightcraft_raster::Rgb32f, r: usize) -> lightcraft_raster::Rgb32f {
+    let (w, h) = (img.width, img.height);
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let (mut acc, mut n) = ([0f32; 3], 0.0);
+            for yy in y.saturating_sub(r)..(y + r + 1).min(h) {
+                for xx in x.saturating_sub(r)..(x + r + 1).min(w) {
+                    let c = img.data[yy * w + xx];
+                    acc = [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]];
+                    n += 1.0;
+                }
+            }
+            out.data[y * w + x] = acc.map(|v| v / n);
+        }
+    }
+    out
+}
+
+/// Write a linear image as an sRGB PNG.
+fn save_png(img: &lightcraft_raster::Rgb32f, path: &std::path::Path) {
+    let data: Vec<[u8; 4]> = img
+        .data
+        .iter()
+        .map(|c| {
+            let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+            [e(c[0]), e(c[1]), e(c[2]), 255]
+        })
+        .collect();
+    let png = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: img.width, height: img.height, data }),
+        &Default::default(),
+    )
+    .unwrap();
+    std::fs::write(path, png).unwrap();
+}
+
+/// Assisted culling with `stackGroups` (#2277): each burst becomes one collapsed stack with its
+/// sharpest photo on top, an unrelated photo stays loose, analysis and stack are one undo step,
+/// and a second run neither makes another stack nor splits the existing one.
+#[test]
+fn assisted_culling_stacks_each_burst_best_on_top() {
+    let dir = temp_dir("cull-stack");
+    let scene = lightcraft_scenes::demo_library()[0].render(480, 320);
+    let save = |img: &lightcraft_raster::Rgb32f, name: &str| save_png(img, &dir.join(name));
+    save(&soften(&scene, 3), "a_soft.png");
+    save(&scene, "b_sharp.png");
+    save(&soften(&scene, 6), "c_softer.png");
+    save(&lightcraft_scenes::demo_library()[7].render(480, 320), "d_other.png");
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png", "d_other.png"].iter().enumerate() {
+        let id = by_name(&s, n);
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+    }
+    let (soft, sharp, softer, other) =
+        (by_name(&s, "a_soft.png"), by_name(&s, "b_sharp.png"), by_name(&s, "c_softer.png"), by_name(&s, "d_other.png"));
+    // a photo named twice is measured and stacked once
+    let mut twice = ids.clone();
+    twice.push(sharp.0);
+    s.selection = crate::Selection { ids: vec![soft, sharp, softer, other], active: Some(soft) };
+    let r = s.execute("photo.analyze", &json!({"ids": twice, "stackGroups": true})).unwrap();
+    assert_eq!((r["stacks"].clone(), r["groups"].clone()), (json!(1), json!(1)), "{r}");
+    // the active photo went into the collapsed stack: its top takes over, the loose photo stays selected
+    assert_eq!(s.selection.active, Some(sharp));
+    assert!(s.selection.ids.contains(&other) && s.selection.ids.contains(&sharp) && !s.selection.ids.contains(&soft), "{:?}", s.selection.ids);
+    let st = s.catalog.stack_of(sharp).unwrap().clone();
+    assert!(st.collapsed && st.top() == sharp, "the sharpest photo tops the stack");
+    let mut members = st.photos.clone();
+    members.sort();
+    let mut want = vec![soft, sharp, softer];
+    want.sort();
+    assert_eq!(members, want);
+    assert!(s.catalog.stack_of(other).is_none(), "the unrelated photo stays loose");
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_some_and(|a| a.best));
+    // one undo step removes the stack and the analysis together
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stacks().next().is_none());
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_none());
+    // without `stackGroups` nothing is stacked
+    let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["stacks"], 0, "{r}");
+    assert!(s.catalog.stacks().next().is_none());
+    s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(s.catalog.stacks().count(), 1);
+    // a second run leaves the stack as it is
+    let before = s.catalog.stack_of(sharp).unwrap().clone();
+    let commits = s.commits();
+    let r = s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(r["stacks"], 0, "{r}");
+    assert_eq!(s.catalog.stacks().count(), 1);
+    assert_eq!(s.catalog.stack_of(sharp).unwrap(), &before);
+    assert!(s.commits() > commits);
+    // a burst partly stacked already: the loose photos are stacked among themselves when two remain
+    let mut s2 = Session::new().with_fs();
+    s2.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png", "d_other.png"].iter().enumerate() {
+        let id = by_name(&s2, n);
+        s2.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+    }
+    let (soft, sharp, softer, other) =
+        (by_name(&s2, "a_soft.png"), by_name(&s2, "b_sharp.png"), by_name(&s2, "c_softer.png"), by_name(&s2, "d_other.png"));
+    let ids: Vec<u64> = [soft, sharp, softer, other].iter().map(|p| p.0).collect();
+    s2.execute("stack.group", &json!({"ids": [soft.0, other.0]})).unwrap();
+    let r = s2.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(r["stacks"], 1, "{r}");
+    assert!(s2.catalog.stack_of(soft).unwrap().photos.contains(&other), "the existing stack is untouched");
+    let st = s2.catalog.stack_of(sharp).unwrap();
+    assert!(st.top() == sharp && st.photos.len() == 2 && st.photos.contains(&softer));
+    // a non-boolean value is refused before anything changes
+    let n = s2.commits();
+    assert!(s2.execute("photo.analyze", &json!({"ids": ids, "stackGroups": "yes"})).is_err());
+    assert_eq!(s2.commits(), n);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Assisted culling with `stackGroups` (#2277): two bursts make two stacks in one undo step, and a
+/// deleted photo is measured but left out of its burst's stack, even when it is the sharpest.
+#[test]
+fn assisted_culling_stacks_two_bursts_and_leaves_deleted_photos_out() {
+    let dir = temp_dir("cull-stack-two");
+    let (one, two) = (lightcraft_scenes::demo_library()[0].render(480, 320), lightcraft_scenes::demo_library()[7].render(480, 320));
+    let files = [
+        ("a_soft.png", soften(&one, 3), "10:00:00"),
+        ("b_sharp.png", one.clone(), "10:00:01"),
+        ("c_softer.png", soften(&one, 6), "10:00:02"),
+        ("d_sharp.png", two.clone(), "10:05:00"),
+        ("e_soft.png", soften(&two, 4), "10:05:01"),
+    ];
+    for (name, img, _) in &files {
+        save_png(img, &dir.join(name));
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    for (name, _, at) in &files {
+        let id = by_name(&s, name);
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T{at}")) }).unwrap();
+    }
+    let [soft, sharp, softer, d, e] = files.map(|f| by_name(&s, f.0));
+    let ids: Vec<u64> = [soft, sharp, softer, d, e].iter().map(|p| p.0).collect();
+    s.commit("t", lightcraft_catalog::Op::SetDeleted { id: sharp, deleted: true }).unwrap();
+    let n = s.commits();
+    let r = s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!((r["groups"].clone(), r["stacks"].clone()), (json!(2), json!(2)), "{r}");
+    assert_eq!(s.commits(), n + 1, "analysis and both stacks are one undo step");
+    // the deleted photo is measured, but its burst is stacked from the other two
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_some());
+    assert!(s.catalog.stack_of(sharp).is_none(), "a deleted photo is never stacked");
+    let st = s.catalog.stack_of(soft).unwrap();
+    assert!(st.collapsed && st.top() == soft && st.photos.len() == 2 && st.photos.contains(&softer), "{st:?}");
+    let st = s.catalog.stack_of(d).unwrap();
+    assert!(st.collapsed && st.top() == d && st.photos.len() == 2 && st.photos.contains(&e), "{st:?}");
+    // one undo removes both stacks
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stacks().next().is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3355,6 +3523,295 @@ fn presets_apply_the_imported_profile_they_name() {
     s.execute("develop.profile", &json!({"id": "lc.vivid", "amount": 100})).unwrap();
     assert_eq!(apply(&mut s, "Portra Soft").profile.id, "lc.vivid");
     let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_xmp_rating_and_label() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-xmp-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="5" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("photo.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("photo.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 5);
+    assert_eq!(p.flag, lightcraft_catalog::Flag::None);
+    assert_eq!(p.label, Some(lightcraft_catalog::ColorLabel::Blue));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_exif_rating() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-exif-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() });
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("exif_rating.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("exif_rating.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 3);
+    assert_eq!(p.flag, lightcraft_catalog::Flag::None);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_rejected_rating() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-rejected-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // Case 1: EXIF rating -1
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(-1), ..Default::default() });
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("exif_rejected.jpg"), &bytes).unwrap();
+
+    // Case 2: XMP rating -1
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="-1"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("xmp_rejected.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+    let exif_p = s.catalog.photos().find(|p| p.file_name == "exif_rejected.jpg").unwrap();
+    assert_eq!(exif_p.rating, 0);
+    assert_eq!(exif_p.flag, lightcraft_catalog::Flag::Reject);
+
+    let xmp_p = s.catalog.photos().find(|p| p.file_name == "xmp_rejected.jpg").unwrap();
+    assert_eq!(xmp_p.rating, 0);
+    assert_eq!(xmp_p.flag, lightcraft_catalog::Flag::Reject);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_xmp_png_and_webp() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, encode_png, encode_webp_lossless};
+    let src = temp_dir("embedded-xmp-png-webp-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // PNG with embedded XMP rating and label
+    let png_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    let png_meta = EncodeMeta { xmp: Some(png_xmp), ..Default::default() };
+    let png_bytes = encode_png(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), &png_meta).unwrap();
+    std::fs::write(src.join("embedded.png"), &png_bytes).unwrap();
+
+    // WebP with embedded XMP rating and label
+    let webp_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let webp_meta = EncodeMeta { xmp: Some(webp_xmp), ..Default::default() };
+    let webp_bytes = encode_webp_lossless(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), &webp_meta).unwrap();
+    std::fs::write(src.join("embedded.webp"), &webp_bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+
+    let png_photo = s.catalog.photos().find(|p| p.file_name == "embedded.png").unwrap();
+    assert_eq!(png_photo.rating, 4);
+    assert_eq!(png_photo.label, Some(ColorLabel::Red));
+
+    let webp_photo = s.catalog.photos().find(|p| p.file_name == "embedded.webp").unwrap();
+    assert_eq!(webp_photo.rating, 2);
+    assert_eq!(webp_photo.label, Some(ColorLabel::Blue));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_exif_rating_when_xmp_has_unrelated_rating_text() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("exif-rating-unrelated-xmp-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(5), ..Default::default() });
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><exif:ISOSpeedRatings><rdf:Seq><rdf:li>100</rdf:li></rdf:Seq></exif:ISOSpeedRatings><dc:description><rdf:Alt><rdf:li xml:lang="x-default">Rating guide mentioning xmp:Rating</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { exif: Some(&exif), xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("iso_and_desc_rating.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("iso_and_desc_rating.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 5);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_rendered_file_ignores_embedded_develop_settings() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-rendered-develop-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // A JPEG with embedded XMP containing rating and crs:Exposure2012="+1.00"
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="3" crs:Exposure2012="+1.00"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("rendered_with_crs.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("rendered_with_crs.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    // Rating is imported from embedded XMP
+    assert_eq!(p.rating, 3);
+    // Develop settings from embedded XMP are ignored for rendered files (already baked into pixels)
+    assert_eq!(p.develop.light.exposure, 0.0);
+    assert_eq!(p.develop, std::sync::Arc::new(p.camera_defaults()));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_embedded_metadata_and_field_specific_sidecar_precedence() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-sidecar-precedence-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // Case 1: JPEG with embedded Rating 4 and Label Blue, external sidecar with only Label Red
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes1 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("partial.jpg"), &bytes1).unwrap();
+    let partial_sidecar = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("partial.xmp"), partial_sidecar).unwrap();
+
+    // Case 2: JPEG with embedded Rating 4 and Label Blue, without sidecar
+    let px2 = [129u8; 40 * 30 * 3];
+    let bytes2 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px2)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("no_sidecar.jpg"), &bytes2).unwrap();
+
+    // Case 3: JPEG with embedded Rating 4 and Label Blue, complete sidecar override with Rating 1 and Label Red
+    let px3 = [130u8; 40 * 30 * 3];
+    let bytes3 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px3)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("complete.jpg"), &bytes3).unwrap();
+    let complete_sidecar = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="1" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("complete.xmp"), complete_sidecar).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 3);
+
+    let partial_p = s.catalog.photos().find(|p| p.file_name == "partial.jpg").unwrap();
+    assert_eq!(partial_p.rating, 4);
+    assert_eq!(partial_p.label, Some(ColorLabel::Red));
+
+    let no_sidecar_p = s.catalog.photos().find(|p| p.file_name == "no_sidecar.jpg").unwrap();
+    assert_eq!(no_sidecar_p.rating, 4);
+    assert_eq!(no_sidecar_p.label, Some(ColorLabel::Blue));
+
+    let complete_p = s.catalog.photos().find(|p| p.file_name == "complete.jpg").unwrap();
+    assert_eq!(complete_p.rating, 1);
+    assert_eq!(complete_p.label, Some(ColorLabel::Red));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_partial_sidecar_override_with_rendered_develop() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-sidecar-rendered-develop-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // JPEG with embedded Rating 4, Label Blue, and crs:Exposure2012="+2.00"
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="4" xmp:Label="Blue" crs:Exposure2012="+2.00"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("photo.jpg"), &bytes).unwrap();
+
+    // Sidecar overriding Label to Red and explicitly setting Exposure to +1.00 (no rating tag)
+    let sidecar_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Label="Red" crs:Exposure2012="+1.00"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("photo.xmp"), sidecar_xmp).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("photo.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    // Rating 4 from embedded is kept
+    assert_eq!(p.rating, 4);
+    // Label Red from sidecar overrides Blue
+    assert_eq!(p.label, Some(ColorLabel::Red));
+    // External sidecar's develop settings apply; embedded exposure +2 stays suppressed
+    assert_eq!(p.develop.light.exposure, 1.0);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_raw_with_embedded_develop_and_partial_sidecar() {
+    use lightcraft_catalog::ColorLabel;
+    let src = temp_dir("raw-embedded-develop-sidecar-test");
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="2" xmp:Label="Blue" crs:Exposure2012="+1.50"/></rdf:RDF></x:xmpmeta>"#;
+
+    // Case 1: Raw with embedded develop + rating + label, external sidecar has only Label Red
+    write_raw_with_xmp(&src.join("raw1.NEF"), xmp, 1);
+    let sidecar1 = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("raw1.xmp"), sidecar1).unwrap();
+
+    // Case 2: Raw with embedded develop, external sidecar overrides develop settings to Exposure +0.50 and Rating 5
+    write_raw_with_xmp(&src.join("raw2.NEF"), xmp, 2);
+    let sidecar2 = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="5" crs:Exposure2012="+0.50"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("raw2.xmp"), sidecar2).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+
+    let p1 = s.catalog.photos().find(|p| p.file_name == "raw1.NEF").unwrap();
+    assert_eq!(p1.rating, 2, "rating from embedded XMP is preserved");
+    assert_eq!(p1.label, Some(ColorLabel::Red), "label is overridden by external sidecar");
+    assert_eq!(p1.develop.light.exposure, 1.5, "raw keeps embedded develop when sidecar provides none");
+
+    let p2 = s.catalog.photos().find(|p| p.file_name == "raw2.NEF").unwrap();
+    assert_eq!(p2.rating, 5, "rating is overridden by external sidecar");
+    assert_eq!(p2.label, Some(ColorLabel::Blue), "label from embedded XMP is preserved");
+    assert_eq!(p2.develop.light.exposure, 0.5, "external sidecar develop overrides embedded develop");
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one,
+/// optionally with an embedded XMP packet in tag 700.
+fn write_raw_with_xmp(path: &Path, xmp: &str, seed: u8) {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let px: Vec<u8> = (0..48 * 32).flat_map(|i| [(i % 251) as u8, 91, seed]).collect();
+    let j = encode_jpeg(&EncodeImage::new(48, 32, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    let xmp_bytes = xmp.as_bytes();
+    let xmp_off = 8 + 2 + 36 + 4;
+    let jpeg_off = xmp_off + xmp_bytes.len();
+    let mut f = b"II*\0\x08\0\0\0\x03\0".to_vec();
+    for (tag, v) in [(513u16, jpeg_off as u32), (514, j.len() as u32)] {
+        f.extend_from_slice(&tag.to_le_bytes());
+        f.extend_from_slice(&[4, 0, 1, 0, 0, 0]);
+        f.extend_from_slice(&v.to_le_bytes());
+    }
+    f.extend_from_slice(&700u16.to_le_bytes());
+    f.extend_from_slice(&[1, 0]);
+    f.extend_from_slice(&(xmp_bytes.len() as u32).to_le_bytes());
+    f.extend_from_slice(&(xmp_off as u32).to_le_bytes());
+    f.extend_from_slice(&[0, 0, 0, 0]);
+    f.extend_from_slice(xmp_bytes);
+    f.extend_from_slice(&j);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, f).unwrap();
 }
 
 /// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one.

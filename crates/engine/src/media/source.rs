@@ -1,9 +1,12 @@
 use super::{Arc, DcpProfile, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
+/// 87: a lens database's vignetting correction reaches the look fit only in the share the camera JPEG shows
+/// (#3943, which had reserved 83: taken after 86, so a later bump counting up from here can't meet an older cache).
+/// 86: pushed shadows keep the camera profile's colour and tone (#2092).
+/// 85: raw decoding keeps negative channels (#2278).
 /// 84: full-size raw demosaic runs on the white-balanced mosaic with a clip mask (#1328).
-/// 83 is reserved by open #3943.
-pub const RENDER_CACHE_VERSION: u64 = 84;
+pub const RENDER_CACHE_VERSION: u64 = 87;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
