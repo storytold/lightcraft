@@ -1,7 +1,7 @@
 //! Source-only preparation. Run under separately admitted parent QA; never draw the full app or Find Subject.
 use super::*;
 use crate::headless::HeadlessView;
-use crate::widgets::{WidgetHit, take_registries};
+use crate::widgets::{WidgetHit, register, take_registries};
 use egui::{Event, Key, Modifiers, PointerButton, Ui};
 use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 

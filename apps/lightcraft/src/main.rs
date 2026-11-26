@@ -732,7 +732,7 @@ mod tests;
 fn native_exit_drains_the_final_owned_output_before_shutdown() {
     if std::env::var_os("LIGHTCRAFT_TEST_COMPLETION_EXIT").is_some() {
         let ctx = egui::Context::default();
-        let mut inner = LightcraftApp::new(Session::new(), Services::default());
+        let inner = LightcraftApp::new(Session::new(), Services::default());
         inner.install_framework(&ctx);
         let mut app = App(inner, PrefsWriter::default(), Some(HostWindow { ctx: ctx.clone(), textures: None }), NightlyExit::none());
         for _ in 0..3 {
