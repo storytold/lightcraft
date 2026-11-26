@@ -331,6 +331,67 @@ fn replacement_is_current(path: &str, hash: Option<&str>, output: Option<&CopyOu
     }
 }
 
+fn restore_legacy_dng(photo: &Photo, check: Option<&RestoreCheck>, ops: &mut Vec<Op>) -> Option<()> {
+    let Source::File { path } = &photo.source else { return None };
+    let check = check.filter(|check| check.path == *path && photo.content_hash.as_deref() == Some(check.hash.as_str()))?;
+    let info = check.legacy_dng.as_ref()?;
+    if check.stamp != restore_stamp(path) && !has_verified_content(path, info.content_hash.as_deref()) {
+        return None;
+    }
+    ops.extend(crate::cmd::convert::content_facts_op(photo.id, photo, &info.format, info));
+    let camera = if info.meta.camera.is_empty() { &photo.meta.camera } else { &info.meta.camera };
+    ops.extend(crate::cmd::convert::reload_wb_op(photo, info, camera));
+    let lens = crate::cmd::convert::converted_lens(photo, info);
+    if lens.as_ref() != photo.embedded_lens.as_deref() {
+        ops.push(Op::SetEmbeddedLens { id: photo.id, lens: lens.map(Box::new) });
+    }
+    Some(())
+}
+
+/// Append a duplicate's Restore only after verifying the file it will reference.
+fn restore_duplicate(
+    photo: &Photo,
+    path: &str,
+    reason: &str,
+    hash: Option<&str>,
+    target: &RestoreTarget,
+    check: Option<&RestoreCheck>,
+    ops: &mut Vec<Op>,
+) -> Result<(), &'static str> {
+    if reason == "content" {
+        let differs = || trashed_file_differs(photo, hash, check);
+        let relink = match target {
+            RestoreTarget::Decide { format: Some(format) }
+                if !cfg!(target_arch = "wasm32")
+                    && photo.format.eq_ignore_ascii_case("DNG")
+                    && !format.is_empty()
+                    && !format.eq_ignore_ascii_case("DNG") =>
+            {
+                restore_legacy_dng(photo, check, ops).ok_or("the existing DNG could not be verified against this raw; the photo stays deleted")?;
+                false
+            }
+            RestoreTarget::Decide { .. } => differs(),
+            RestoreTarget::Keep if differs() => return Err("the original changed before Restore; the duplicate output was kept"),
+            RestoreTarget::Keep => false,
+            RestoreTarget::Relink(_) => true,
+        };
+        if relink {
+            let copy = match target {
+                RestoreTarget::Relink(copy) => copy.as_ref(),
+                _ => None,
+            };
+            if matches!(&photo.source, Source::File { path: existing } if same_import_file(existing, path))
+                || !replacement_is_current(path, hash, copy)
+            {
+                return Err("the replacement file changed before Restore");
+            }
+            ops.push(crate::cmd::missing::relink_op(photo.id, path));
+        }
+    }
+    ops.push(Op::SetDeleted { id: photo.id, deleted: false });
+    Ok(())
+}
+
 /// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 /// taken back.
@@ -424,33 +485,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                         }
                         if !report.restored.contains(&id.0) {
                             let Some(photo) = s.catalog.photo(id) else { continue };
-                            let differs = || trashed_file_differs(photo, hash.as_deref(), prepared.restore_checks.get(&id));
-                            let relink = match &restore {
-                                RestoreTarget::Relink(_) => true,
-                                RestoreTarget::Keep if differs() => {
-                                    report.failed.push((path, "the original changed before Restore; the duplicate output was kept".into()));
-                                    continue;
-                                }
-                                RestoreTarget::Keep => false,
-                                RestoreTarget::Decide => reason == "content" && differs(),
-                            };
-                            if relink {
-                                let copy = match &restore {
-                                    RestoreTarget::Relink(copy) => copy.as_ref(),
-                                    _ => None,
-                                };
-                                if matches!(&photo.source, Source::File { path: existing } if same_import_file(existing, &path))
-                                    || !replacement_is_current(&path, hash.as_deref(), copy)
-                                {
-                                    report.failed.push((path, "the replacement file changed before Restore".into()));
-                                    continue;
-                                }
-                                if !s.catalog.photos().any(|p| p.id != id && matches!(&p.source, Source::File { path: held } if *held == path)) {
-                                    ops.push(crate::cmd::missing::relink_op(id, &path));
-                                }
+                            match restore_duplicate(photo, &path, reason, hash.as_deref(), &restore, prepared.restore_checks.get(&id), &mut ops) {
+                                Ok(()) => report.restored.push(id.0),
+                                Err(reason) => report.failed.push((path, reason.into())),
                             }
-                            ops.push(Op::SetDeleted { id, deleted: false });
-                            report.restored.push(id.0);
                         }
                     }
                     _ => {

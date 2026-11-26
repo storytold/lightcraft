@@ -45,7 +45,7 @@ pub struct ImportJob {
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     /// Paths of deleted duplicates, captured before the worker starts.
-    restore_sources: HashMap<PhotoId, (String, String)>,
+    restore_sources: HashMap<PhotoId, RestoreSource>,
     pub(super) probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
@@ -74,10 +74,18 @@ pub struct Prepared {
 }
 
 #[derive(Debug)]
+struct RestoreSource {
+    path: String,
+    hash: String,
+    format: String,
+}
+
+#[derive(Debug)]
 pub(super) struct RestoreCheck {
     pub(super) path: String,
     pub(super) hash: String,
     pub(super) stamp: Option<RestoreStamp>,
+    pub(super) legacy_dng: Option<Box<ProbeInfo>>,
     // Windows does not expose the file change time through stable Rust. Hold the original
     // open without write or delete sharing from verification through catalog reconciliation.
     #[cfg(windows)]
@@ -170,7 +178,7 @@ impl CopyOutput {
 
 #[derive(Debug)]
 pub(super) enum RestoreTarget {
-    Decide,
+    Decide { format: Option<String> },
     Keep,
     Relink(Option<CopyOutput>),
 }
@@ -259,7 +267,7 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
-                    restore: RestoreTarget::Decide,
+                    restore: RestoreTarget::Decide { format: Some(info.format) },
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
@@ -272,6 +280,29 @@ impl Prepared {
 
 pub(super) fn normalize_import_path(path: &str) -> String {
     if cfg!(windows) { path.replace('\\', "/").to_lowercase() } else { path.to_owned() }
+}
+
+/// Older Copy as DNG records kept the input hash. Repair the record only when the input still
+/// has that hash and the DNG still contains the input's sensor samples.
+fn probe_legacy_dng(path: &str, input: &str, hash: &str) -> Option<ProbeInfo> {
+    use crate::read_file::{MAX_MEDIA_BYTES, read_regular};
+    let input_len = std::fs::metadata(input).ok()?.len();
+    let dng_len = std::fs::metadata(path).ok()?.len();
+    let weight = usize::try_from(input_len.saturating_add(dng_len)).unwrap_or(usize::MAX).saturating_mul(6);
+    let _permit = crate::memory::work_gate().acquire(weight);
+    let bytes = read_regular(input, MAX_MEDIA_BYTES).ok()?;
+    if lightcraft_preview::hash_bytes(&bytes).to_string() != hash {
+        return None;
+    }
+    let source = lightcraft_raw::decode(&bytes).ok()?;
+    drop(bytes);
+    let bytes = read_regular(path, MAX_MEDIA_BYTES).ok()?;
+    let dng = lightcraft_raw::decode(&bytes).ok()?;
+    if dng.format != lightcraft_raw::RawFormat::Dng || source.cfa != dng.cfa || !crate::cmd::convert::same_raw_samples(&source, &dng) {
+        return None;
+    }
+    drop((source, dng));
+    crate::files::probe_bytes(path, &bytes).ok()
 }
 
 impl ImportJob {
@@ -397,7 +428,7 @@ impl ImportJob {
                     && self.opts.on_deleted == OnDeleted::Restore
                     && let Source::File { path } = &p.source
                 {
-                    self.restore_sources.insert(p.id, (path.clone(), h.clone()));
+                    self.restore_sources.insert(p.id, RestoreSource { path: path.clone(), hash: h.clone(), format: p.format.clone() });
                 }
             }
         }
@@ -441,7 +472,7 @@ impl ImportJob {
                         existing: Some(id),
                         reason: "path",
                         hash: None,
-                        restore: RestoreTarget::Decide,
+                        restore: RestoreTarget::Decide { format: None },
                         file: None,
                     });
                     self.done.fetch_add(1, Relaxed);
@@ -458,7 +489,14 @@ impl ImportJob {
         // (here or in a previous batch) counts as the library's from then on
         if let Some(h) = &hash {
             if let Some(existing) = self.by_hash.get(h) {
-                return PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, restore: RestoreTarget::Decide, file: None };
+                return PreparedItem::Duplicate {
+                    path: f,
+                    existing: *existing,
+                    reason: "content",
+                    hash,
+                    restore: RestoreTarget::Decide { format: None },
+                    file: None,
+                };
             }
             self.by_hash.insert(h.clone(), Some(id));
         }
@@ -627,7 +665,7 @@ impl ImportJob {
                     existing,
                     reason: "content",
                     hash: Some(hash),
-                    restore: RestoreTarget::Decide,
+                    restore: RestoreTarget::Decide { format: Some(info.format) },
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 }));
                 continue;
@@ -740,15 +778,15 @@ impl ImportJob {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            let id = match item {
-                PreparedItem::Duplicate { existing, reason: "content", hash: Some(hash), .. } => {
-                    existing.or_else(|| self.by_hash.get(hash).copied().flatten())
-                }
-                PreparedItem::Ready(r) => r.info.content_hash.as_ref().and_then(|hash| self.by_hash.get(hash).copied().flatten()),
-                _ => None,
+            let (id, incoming) = match item {
+                PreparedItem::Duplicate {
+                    path, existing, reason: "content", hash: Some(hash), restore: RestoreTarget::Decide { format }, ..
+                } => (existing.or_else(|| self.by_hash.get(hash).copied().flatten()), format.as_deref().map(|format| (path.as_str(), format))),
+                PreparedItem::Ready(r) => (r.info.content_hash.as_ref().and_then(|hash| self.by_hash.get(hash).copied().flatten()), None),
+                _ => (None, None),
             };
             let Some(id) = id else { continue };
-            let Some((path, hash)) = self.restore_sources.get(&id) else { continue };
+            let Some(RestoreSource { path, hash, format }) = self.restore_sources.get(&id) else { continue };
             out.restore_checks.entry(id).or_insert_with(|| {
                 #[cfg(windows)]
                 let read_guard = {
@@ -759,12 +797,26 @@ impl ImportJob {
                 let stamp = restore_stamp(path);
                 #[cfg(windows)]
                 let stamp = stamp.filter(|_| read_guard.is_some());
-                let stamp =
-                    stamp.filter(|stamp| crate::cmd::missing::file_hash(path).as_deref() == Some(hash) && restore_stamp(path) == Some(*stamp));
+                let mut legacy_dng = None;
+                let stamp = stamp.filter(|stamp| {
+                    if crate::cmd::missing::file_hash(path).as_deref() == Some(hash) {
+                        return restore_stamp(path) == Some(*stamp);
+                    }
+                    if format.eq_ignore_ascii_case("DNG")
+                        && let Some((input, input_format)) = incoming
+                        && !input_format.is_empty()
+                        && !input_format.eq_ignore_ascii_case("DNG")
+                        && !cfg!(target_arch = "wasm32")
+                    {
+                        legacy_dng = probe_legacy_dng(path, input, hash).filter(|_| restore_stamp(path) == Some(*stamp)).map(Box::new);
+                    }
+                    legacy_dng.is_some()
+                });
                 RestoreCheck {
                     path: path.clone(),
                     hash: hash.clone(),
                     stamp,
+                    legacy_dng,
                     #[cfg(windows)]
                     _read_guard: read_guard,
                 }

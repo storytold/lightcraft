@@ -45,14 +45,7 @@ pub(crate) fn write_dng_with(
     let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: (!packet.is_empty()).then_some(packet), ..Default::default() })
         .map_err(|e| e.to_string())?;
     let back = lightcraft_raw::decode(&dng).map_err(|e| format!("{path}: the DNG written for it doesn't decode ({e}); the raw is kept"))?;
-    let same = match (&back.data, &raw.data) {
-        (lightcraft_raw::RawData::U16(a), lightcraft_raw::RawData::U16(b)) => a == b,
-        (lightcraft_raw::RawData::F32(a), lightcraft_raw::RawData::F32(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
-        }
-        _ => false,
-    };
-    if (back.width, back.height, back.cpp) != (raw.width, raw.height, raw.cpp) || !same {
+    if !same_raw_samples(&raw, &back) {
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
     drop((raw, back));
@@ -61,6 +54,23 @@ pub(crate) fn write_dng_with(
     let (out, file) = lightcraft_catalog::safe_file::write_new_unique_open(&mut dng_names(path), &dng)
         .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
     Ok((out.to_string_lossy().to_string(), info, file))
+}
+
+pub(crate) fn same_raw_samples(a: &lightcraft_raw::RawImage, b: &lightcraft_raw::RawImage) -> bool {
+    if (a.width, a.height, a.cpp) != (b.width, b.height, b.cpp) {
+        return false;
+    }
+    match (&a.data, &b.data) {
+        (lightcraft_raw::RawData::U16(a), lightcraft_raw::RawData::U16(b)) => a == b,
+        (lightcraft_raw::RawData::F32(a), lightcraft_raw::RawData::F32(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn converted_lens(photo: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<lightcraft_develop::EmbeddedLens> {
+    info.embedded_lens.or_else(|| photo.embedded_lens.as_deref().copied().filter(|lens| lens.source == lightcraft_develop::LensSource::Database))
 }
 
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
@@ -103,8 +113,9 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
                     });
                     ops.extend(content_facts_op(c.id, c, &info.format, &info));
                     ops.extend(reload_wb_op(c, &info, &info.meta.camera));
-                    if info.embedded_lens.as_ref() != c.embedded_lens.as_deref() {
-                        ops.push(Op::SetEmbeddedLens { id: c.id, lens: info.embedded_lens.clone().map(Box::new) });
+                    let lens = converted_lens(c, &info);
+                    if lens.as_ref() != c.embedded_lens.as_deref() {
+                        ops.push(Op::SetEmbeddedLens { id: c.id, lens: lens.map(Box::new) });
                     }
                 }
                 converted.push(json!({"id": id.0, "path": out, "original": path}));

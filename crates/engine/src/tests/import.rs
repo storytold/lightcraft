@@ -5304,6 +5304,8 @@ fn convert_to_dng_refreshes_copy_classification_and_undo_redo() {
         .unwrap();
     s.catalog.apply(Op::SetAsShotWb { id: copy, wb: None }).unwrap();
     s.catalog.apply(Op::SetEmbeddedLens { id: copy, lens: Some(Box::default()) }).unwrap();
+    let database_lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: parent, lens: Some(Box::new(database_lens)) }).unwrap();
     s.execute("develop.set", &json!({"ids": [copy.0], "control": "light.exposure", "value": 0.4})).unwrap();
     let before = s.catalog.photo(copy).unwrap().clone();
     let parent_before = s.catalog.photo(parent).unwrap().clone();
@@ -5319,7 +5321,8 @@ fn convert_to_dng_refreshes_copy_classification_and_undo_redo() {
         assert_eq!((photo.kind, photo.format.as_str()), (MediaKind::Raw, "DNG"), "known DNG output is always raw");
         assert_eq!(photo.source, output);
         assert_eq!(photo.as_shot_wb, output_info.as_shot_wb, "every relinked record uses the generated DNG's As Shot facts");
-        assert_eq!(photo.embedded_lens.as_deref(), output_info.embedded_lens.as_ref());
+        let lens = output_info.embedded_lens.as_ref().or((id == parent).then_some(&database_lens));
+        assert_eq!(photo.embedded_lens.as_deref(), lens);
     }
     assert_eq!(s.catalog.photo(independent).unwrap(), &independent_before);
     let after = s.catalog.photo(copy).unwrap().clone();
@@ -5493,7 +5496,7 @@ fn assert_copy_as_dng_restores(s: &mut Session, id: PhotoId, paths: &[String], o
 fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
     use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
     use lightcraft_catalog::{Op, Source};
-    for case in if cfg!(unix) { &[0, 1, 2, 3][..] } else { &[0][..] } {
+    for case in if cfg!(unix) { &[0, 1, 2, 3, 4][..] } else { &[0][..] } {
         let dir = super::TestDir::new(&format!("copy-dng-restore-batch-{case}"));
         let destination = dir.join("copies");
         let source = ["first.nef", "second.nef"].map(|name| dir.join(name).to_string_lossy().into_owned());
@@ -5542,6 +5545,15 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
             let mtime = std::fs::metadata(&old).unwrap().modified().unwrap();
             std::fs::File::options().write(true).open(&old).unwrap().set_modified(mtime - std::time::Duration::from_secs(60)).unwrap();
             assert_ne!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
+        } else if *case == 4 {
+            let mtime = std::fs::metadata(&old).unwrap().modified().unwrap();
+            let incoming = dir.join("incoming.dng");
+            let mut changed = output.clone();
+            changed[0] ^= 1;
+            std::fs::write(&incoming, changed).unwrap();
+            std::fs::File::options().write(true).open(&incoming).unwrap().set_modified(mtime).unwrap();
+            std::fs::rename(&incoming, &old).unwrap();
+            assert_eq!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
         }
         let r = commit_prepared(&mut session, &opts, job.now(), second).unwrap();
         assert_eq!(r.restored, [id.0], "{r:?}");
@@ -5554,6 +5566,68 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
         if *case == 3 {
             assert_eq!(path, &old, "a new modification time alone does not move the restored photo");
             assert_eq!(copy_dng_output_names(&destination).len(), 1);
+        } else if *case == 4 {
+            assert_ne!(path, &old, "a different file with the same mtime is not the original");
+        }
+    }
+}
+
+#[test]
+fn legacy_copy_as_dng_restores_only_the_matching_converted_sensor() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::Op;
+    for replaced in [false, true] {
+        let dir = super::TestDir::new(&format!("legacy-copy-as-dng-restore-{replaced}"));
+        let raw_path = dir.join("source.orf").to_string_lossy().into_owned();
+        let raw_bytes = crate::files::tests::sensor_orf();
+        std::fs::write(&raw_path, &raw_bytes).unwrap();
+        let mut s = Session::new().with_fs();
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(dir.join("copies").to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let report = crate::import::import_with(&mut s, std::slice::from_ref(&raw_path), &opts).unwrap();
+        let id = PhotoId(report.imported[0]);
+        let photo = s.catalog.photo(id).unwrap();
+        let original = file_source_path(photo);
+        let expected = photo.content_hash.clone();
+        assert_eq!(photo.format, "DNG");
+        let raw_hash = Some(lightcraft_preview::hash_bytes(&raw_bytes).to_string());
+        assert_ne!(expected, raw_hash);
+        s.catalog
+            .apply(Op::SetContent {
+                id,
+                width: photo.width,
+                height: photo.height,
+                file_size: raw_bytes.len() as u64,
+                content_hash: raw_hash,
+                preview_only: None,
+                preview_checked: String::new(),
+            })
+            .unwrap();
+        s.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+        let before = s.catalog.photo(id).unwrap().clone();
+        if replaced {
+            let mut other = lightcraft_raw::decode(&std::fs::read(&original).unwrap()).unwrap();
+            let lightcraft_raw::RawData::U16(samples) = &mut other.data else { panic!("integer fixture") };
+            samples[0] ^= 1;
+            std::fs::write(&original, lightcraft_raw::write_dng(&other, &Default::default()).unwrap()).unwrap();
+        }
+        let report = crate::import::import_with(&mut s, &[raw_path], &ImportOptions::default()).unwrap();
+        let photo = s.catalog.photo(id).unwrap();
+        assert_eq!(file_source_path(photo), original);
+        if replaced {
+            assert_eq!(photo, &before);
+            assert!(report.restored.is_empty() && report.failed.len() == 1, "{report:?}");
+        } else {
+            assert_eq!(report.restored, [id.0], "{report:?}");
+            assert_eq!(photo.content_hash, expected);
+            assert_eq!(photo.file_size, std::fs::metadata(original).unwrap().len());
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.catalog.photo(id).unwrap(), &before);
         }
     }
 }
