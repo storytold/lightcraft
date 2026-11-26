@@ -103,6 +103,7 @@ mod rules_editor;
 mod sam_setup;
 mod scan_probes;
 mod scroll;
+mod slider_cancel;
 mod slider_reset;
 mod slideshow;
 mod solo_sections;

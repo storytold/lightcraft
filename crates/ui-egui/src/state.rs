@@ -185,6 +185,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// The engine interaction the dragged control's slider began (`panels::edit::apply_slider_out`), so its
+    /// cancel reaches that interaction and not one another client began in its place.
+    #[serde(skip)]
+    pub dragging_interaction: Option<InteractionOwner>,
     /// Alt (Option on macOS) is held this frame: a dragged Edit slider shows its temporary
     /// preview ([`lightcraft_pipeline::Overlay::for_control`]).
     #[serde(skip)]
@@ -453,6 +457,7 @@ impl Default for UiState {
             unnamed_focus: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            dragging_interaction: None,
             alt_held: false,
             external_edits: Vec::new(),
             was_focused: true,
@@ -645,6 +650,36 @@ impl UiState {
 fn lenient_ids<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
     Ok(value.as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect())
+}
+
+/// The engine interaction a UI gesture began, so the gesture cancels only that one. An automation client can
+/// begin its own interaction in the middle of a drag (`develop.beginInteraction` ends the drag's); cancelling by
+/// the control's id alone would then restore the client's settings instead of the drag's, and close its edit.
+#[derive(Clone, Debug)]
+pub struct InteractionOwner {
+    photo: lightcraft_catalog::PhotoId,
+    label: String,
+    /// The settings the interaction began from. The interaction never replaces them, and holding a clone keeps
+    /// their address from being reused, so two interactions are told apart by where they hold them.
+    original: std::sync::Arc<lightcraft_develop::DevelopSettings>,
+}
+
+impl InteractionOwner {
+    /// The owner of `interaction`, for the gesture that began it.
+    pub fn of(interaction: &lightcraft_engine::Interaction) -> Self {
+        Self { photo: interaction.photo, label: interaction.label.clone(), original: interaction.original.clone() }
+    }
+
+    /// Whether `interaction` is the one this owner began.
+    pub fn owns(&self, interaction: &lightcraft_engine::Interaction) -> bool {
+        interaction.photo == self.photo && interaction.label == self.label && std::sync::Arc::ptr_eq(&interaction.original, &self.original)
+    }
+
+    /// Whether the session's live interaction is this one. `false` once another client replaced it, so the
+    /// gesture that began it has nothing left to cancel.
+    pub fn is_live(&self, session: &lightcraft_engine::Session) -> bool {
+        session.interaction.as_ref().is_some_and(|interaction| self.owns(interaction))
+    }
 }
 
 /// The navigation/document/modal/panel state a gesture was admitted under. The same automation
