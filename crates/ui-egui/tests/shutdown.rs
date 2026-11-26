@@ -10,7 +10,14 @@ use lightcraft_ui_egui::{LightcraftApp, Services};
 
 #[test]
 fn shutdown_leaves_no_render_worker_running() {
-    let services = Services { png: None, ..Default::default() };
+    // what the host was told about jobs holding the machine awake
+    let told = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Option<String>>::new()));
+    let sink = told.clone();
+    let keep_awake: lightcraft_ui_egui::KeepAwakeFn = Box::new(move |reason| sink.borrow_mut().push(reason.map(str::to_owned)));
+    let badges = std::rc::Rc::new(std::cell::RefCell::new(Vec::<usize>::new()));
+    let badge_sink = badges.clone();
+    let dock_badge: lightcraft_ui_egui::DockBadgeFn = Box::new(move |count| badge_sink.borrow_mut().push(count));
+    let services = Services { png: None, keep_awake: Some(keep_awake), dock_badge: Some(dock_badge), ..Default::default() };
     let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), services), [1200.0, 760.0], 1.0);
     // frames until the grid's thumbnails are being rendered on the workers
     let t0 = Instant::now();
@@ -19,8 +26,15 @@ fn shutdown_leaves_no_render_worker_running() {
         h.step();
     }
     assert!(!lightcraft_engine::gpu::shutting_down());
+    // a job is running when the app quits: the hold on the machine ends with it
+    let _job = h.app.session.activity.start("export", "Exporting", lightcraft_engine::activity::Cancel::Yes);
+    h.step();
+    assert_eq!(told.borrow().last(), Some(&Some("Exporting".to_string())));
+    assert_eq!(badges.borrow().last(), Some(&1));
 
     assert!(h.app.shutdown(Duration::from_secs(120)), "the jobs that were running ended in time");
+    assert_eq!(told.borrow().last(), Some(&None), "quitting lets go of the hold");
+    assert_eq!(badges.borrow().last(), Some(&0), "quitting clears the Dock badge");
     assert_eq!(h.app.renderer.live_workers(), 0);
     assert_eq!(h.app.renderer.queued(), 0, "jobs that had not started are dropped");
     assert!(lightcraft_engine::gpu::shutting_down());
@@ -30,6 +44,8 @@ fn shutdown_leaves_no_render_worker_running() {
     for _ in 0..3 {
         h.step();
     }
+    assert_eq!(told.borrow().last(), Some(&None), "the job still runs, but the window does not take the hold again");
+    assert_eq!(badges.borrow().last(), Some(&0), "nor the badge");
     assert_eq!(h.app.renderer.live_workers(), 0);
     assert_eq!(h.app.renderer.queued(), 0);
 
