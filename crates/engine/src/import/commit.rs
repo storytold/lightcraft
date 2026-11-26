@@ -364,16 +364,22 @@ fn restore_legacy_dng(photo: &Photo, check: Option<&RestoreCheck>, ops: &mut Vec
     Some(())
 }
 
+struct DuplicateSource<'a> {
+    path: &'a str,
+    reason: &'a str,
+    hash: Option<&'a str>,
+}
+
 /// Append a duplicate's Restore only after verifying the file it will reference.
 fn restore_duplicate(
+    s: &Session,
     photo: &Photo,
-    path: &str,
-    reason: &str,
-    hash: Option<&str>,
+    source: DuplicateSource<'_>,
     target: &RestoreTarget,
     check: Option<&RestoreCheck>,
     ops: &mut Vec<Op>,
 ) -> Result<(), &'static str> {
+    let DuplicateSource { path, reason, hash } = source;
     if reason == "path" {
         if !cfg!(target_arch = "wasm32")
             && let Some(expected) = photo.content_hash.as_deref()
@@ -408,11 +414,60 @@ fn restore_duplicate(
             {
                 return Err("the replacement file changed before Restore");
             }
-            ops.push(crate::cmd::missing::relink_op(photo.id, path));
+            let held = s.catalog.photos().any(|p| p.id != photo.id && matches!(&p.source, Source::File { path: own } if own == path));
+            if held {
+                // A matching browsed twin can restore a catalog record whose original is offline,
+                // but the twin must keep its own path. Keep changed originals and unavailable
+                // generated replacements in the trash instead of pointing at different bytes.
+                let missing = matches!(&photo.source, Source::File { path: original }
+                    if std::fs::metadata(original).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound));
+                if !missing || !matches!(target, RestoreTarget::Decide { .. }) {
+                    return Err("the matching file already belongs to another photo; the photo stays deleted");
+                }
+            } else {
+                ops.push(crate::cmd::missing::relink_op(photo.id, path));
+            }
         }
     }
     ops.push(Op::SetDeleted { id: photo.id, deleted: false });
     Ok(())
+}
+
+fn promotion_hash<'a>(s: &'a Session, id: PhotoId, fresh: Option<&'a ProbeInfo>) -> Option<&'a str> {
+    let photo = s.catalog.photo(id).filter(|p| !p.deleted)?;
+    match fresh {
+        Some(info) if photo.local => info.content_hash.as_deref(),
+        _ => photo.content_hash.as_deref(),
+    }
+}
+
+fn promote_photo(s: &Session, id: PhotoId, fresh: Option<&ProbeInfo>, ops: &mut Vec<Op>) {
+    if !s.catalog.photo(id).is_some_and(|p| p.local && !p.deleted) {
+        return;
+    }
+    if let Some(info) = fresh {
+        let targets = s.catalog.photos().filter(|p| p.id == id || p.copy_of == Some(id)).map(|p| p.id);
+        crate::cmd::convert::reload_ops(&s.catalog, id, info, ops, &mut Vec::new(), targets, |target| target == id);
+    }
+    ops.push(Op::SetLocal { id, local: false });
+}
+
+/// Record hashes a transfer can match, using the new content for browsed files that will be promoted.
+fn prepared_hashes(s: &Session, opts: &ImportOptions, items: &[PreparedItem]) -> HashMap<String, PhotoId> {
+    let converted = items.iter().filter_map(|it| match it {
+        PreparedItem::Ready(r) if r.generated_dng && !opts.local => r.info.content_hash.as_deref(),
+        _ => None,
+    });
+    let mut hashes =
+        super::scan::library_hashes(s.catalog.photos().filter(|p| !(p.local || p.deleted && opts.on_deleted == OnDeleted::Fresh)), converted);
+    for item in items {
+        if let PreparedItem::Promote(id, fresh) = item
+            && let Some(hash) = promotion_hash(s, *id, fresh.as_deref())
+        {
+            hashes.entry(hash.to_owned()).or_insert(*id);
+        }
+    }
+    hashes
 }
 
 /// Deleted records that Fresh can replace, indexed by their last known hash and path.
@@ -444,23 +499,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
     // Current converted outputs, then this batch's additions and input aliases. Keep only the
     // hashes this batch asks about, even for a library of millions of photos.
-    let converted_hashes = prepared.items.iter().filter_map(|it| match it {
-        PreparedItem::Ready(r) if r.generated_dng && !opts.local => r.info.content_hash.as_deref(),
-        _ => None,
-    });
-    // Local records count only when this same atomic import already promotes them into the library.
-    let promoted: std::collections::HashSet<_> = prepared
-        .items
-        .iter()
-        .filter_map(|it| match it {
-            PreparedItem::Promote(id, _) => Some(*id),
-            _ => None,
-        })
-        .collect();
-    let mut new_hash = super::scan::library_hashes(
-        s.catalog.photos().filter(|p| (!p.local || promoted.contains(&p.id)) && !(p.deleted && opts.on_deleted == OnDeleted::Fresh)),
-        converted_hashes,
-    );
+    let mut new_hash = prepared_hashes(s, opts, &prepared.items);
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
     let (trash_hash, trash_path) = fresh_replacement_targets(s, opts.on_deleted);
     let mut purge: Vec<PhotoId> = Vec::new();
@@ -477,18 +516,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         };
         match it {
             PreparedItem::Promote(id, fresh) => {
-                // the file was replaced since it was browsed: the record takes what it is now before it joins the library
-                if let Some(info) = &fresh {
-                    let targets = s.catalog.photos().filter(|p| p.id == id || p.copy_of == Some(id)).map(|p| p.id);
-                    crate::cmd::convert::reload_ops(&s.catalog, id, info, &mut ops, &mut Vec::new(), targets, |target| target == id);
-                }
-                if s.catalog.photo(id).is_some_and(|p| p.local) {
-                    ops.push(Op::SetLocal { id, local: false });
-                }
+                promote_photo(s, id, fresh.as_deref(), &mut ops);
                 // "Import as new": a trashed photo with the same content is replaced, as for a new file
-                let content =
-                    fresh.as_ref().and_then(|i| i.content_hash.clone()).or_else(|| s.catalog.photo(id).and_then(|p| p.content_hash.clone()));
-                if let Some(old) = content.as_ref().and_then(|h| trash_hash.get(h))
+                let content = promotion_hash(s, id, fresh.as_deref());
+                if let Some(old) = content.and_then(|h| trash_hash.get(h))
                     && purged.insert(*old)
                 {
                     purge.push(*old);
@@ -510,7 +541,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     Some(id) if opts.on_deleted == OnDeleted::Restore && !opts.local => {
                         if !report.restored.contains(&id.0) {
                             let Some(photo) = s.catalog.photo(id) else { continue };
-                            match restore_duplicate(photo, &path, reason, hash.as_deref(), &restore, prepared.restore_checks.get(&id), &mut ops) {
+                            let source = DuplicateSource { path: &path, reason, hash: hash.as_deref() };
+                            match restore_duplicate(s, photo, source, &restore, prepared.restore_checks.get(&id), &mut ops) {
                                 Ok(()) => report.restored.push(id.0),
                                 Err(reason) => report.failed.push((path, reason.into())),
                             }

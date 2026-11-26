@@ -5227,6 +5227,46 @@ fn followup_copy_as_dng_deduplicates_against_a_pending_local_promotion() {
     copy_as_dng_with_local_match(true);
 }
 
+#[test]
+fn copy_as_dng_compares_a_replaced_browsed_file_using_its_fresh_hash() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    for updated_matches in [false, true] {
+        let dir = super::TestDir::new(&format!("copy-dng-fresh-browse-{updated_matches}"));
+        let raw = dir.join("source.orf");
+        std::fs::write(&raw, crate::files::tests::sensor_orf()).unwrap();
+        let (encoded, _, _) = crate::cmd::convert::write_dng_with(None, &raw.to_string_lossy(), String::new()).unwrap();
+        let dng = std::fs::read(encoded).unwrap();
+        let mut changed = lightcraft_raw::decode(&dng).unwrap();
+        let lightcraft_raw::RawData::U16(samples) = &mut changed.data else { panic!("integer fixture") };
+        samples[0] ^= 1;
+        let mut different = lightcraft_raw::write_dng(&changed, &Default::default()).unwrap();
+        different.resize(different.len().max(dng.len()) + 16, 0);
+        let (before, after) = if updated_matches { (&different, &dng) } else { (&dng, &different) };
+        let local_path = dir.join("browsed.dng").to_string_lossy().into_owned();
+        std::fs::write(&local_path, before).unwrap();
+        let mut s = Session::new().with_fs();
+        let browsed =
+            crate::import::import_with(&mut s, std::slice::from_ref(&local_path), &ImportOptions { local: true, ..Default::default() }).unwrap();
+        let local = PhotoId(browsed.imported[0]);
+        std::fs::write(&local_path, after).unwrap();
+        let destination = dir.join("copies");
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(destination.to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let report = crate::import::import_with(&mut s, &[raw.to_string_lossy().into_owned(), local_path], &opts).unwrap();
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!((report.imported.len(), report.duplicates.len()), (if updated_matches { 1 } else { 2 }, usize::from(updated_matches)));
+        let promoted = s.catalog.photo(local).unwrap();
+        assert!(promoted.in_library());
+        assert_eq!(promoted.content_hash, Some(lightcraft_preview::hash_bytes(after).to_string()));
+        assert_eq!(copy_dng_output_names(&destination).len(), usize::from(!updated_matches));
+    }
+}
+
 fn copy_as_dng_with_local_match(promote: bool) {
     use crate::import::{ImportMode, ImportOptions, Organize};
     use lightcraft_catalog::Source;

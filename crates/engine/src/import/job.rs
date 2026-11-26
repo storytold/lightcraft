@@ -39,9 +39,8 @@ pub struct ImportJob {
     pub(super) library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
     pub(super) by_path: HashMap<String, (PhotoId, bool, Option<String>)>,
-    /// path → the size the record of a browsed (Local) file has: a file of another size has been replaced since
-    /// it was browsed ([`super::files::browsed_files_changed`])
-    local_sizes: HashMap<String, u64>,
+    /// path → the recorded size and format of a browsed (Local) file
+    local_files: HashMap<String, (u64, String)>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     /// Paths of deleted duplicates, captured before the worker starts.
@@ -382,7 +381,7 @@ impl ImportJob {
             copy_root,
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
-            local_sizes: HashMap::new(),
+            local_files: HashMap::new(),
             by_hash: HashMap::new(),
             restore_sources: HashMap::new(),
             probe: s.media.file_probe.clone(),
@@ -459,7 +458,7 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local, p.content_hash.clone()));
                 if p.local {
-                    self.local_sizes.insert(path.clone(), p.file_size);
+                    self.local_files.insert(path.clone(), (p.file_size, p.format.clone()));
                 }
             }
             // (a copy that was only browsed in Local isn't in the library)
@@ -483,13 +482,18 @@ impl ImportJob {
     fn sort_by_library(
         &mut self,
         files: Vec<String>,
-        verdicts: Vec<Option<BrowsedFile>>,
-        local: bool,
+        cancel: &std::sync::atomic::AtomicBool,
         out: &mut Prepared,
-        changed: &mut HashMap<String, PhotoId>,
-        todo: &mut Vec<String>,
-    ) {
+    ) -> (Vec<String>, HashMap<String, PhotoId>) {
         use std::sync::atomic::Ordering::Relaxed;
+        let local = self.opts.local;
+        let is_browsed = |f: &String| !local && matches!(self.by_path.get(f.as_str()), Some((_, true, _)));
+        let browsed: Vec<(&str, u64)> =
+            files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_files.get(f.as_str()).map_or(0, |(size, _)| *size))).collect();
+        let mut looked_at = browsed_files_changed(&browsed, cancel).into_iter();
+        let verdicts: Vec<Option<BrowsedFile>> = files.iter().map(|f| is_browsed(f).then(|| looked_at.next()).flatten()).collect();
+        let mut todo = Vec::new();
+        let mut changed = HashMap::new();
         for (f, verdict) in files.into_iter().zip(verdicts) {
             match self.by_path.get(f.as_str()).cloned() {
                 // A known deleted path is only a candidate. Its bytes might belong to another photo now.
@@ -523,6 +527,7 @@ impl ImportJob {
                 None => todo.push(f),
             }
         }
+        (todo, changed)
     }
 
     /// A browsed file this import brings into the library (its size unchanged): a duplicate of a library photo with
@@ -532,12 +537,13 @@ impl ImportJob {
         // (here or in a previous batch) counts as the library's from then on
         if let Some(h) = &hash {
             if let Some(existing) = self.by_hash.get(h) {
+                let format = self.local_files.get(&f).map(|(_, format)| format.clone());
                 return PreparedItem::Duplicate {
                     path: f,
                     existing: *existing,
                     reason: "content",
                     hash,
-                    restore: RestoreTarget::Decide { format: None },
+                    restore: RestoreTarget::Decide { format },
                     file: None,
                 };
             }
@@ -567,17 +573,7 @@ impl ImportJob {
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), ..Default::default() };
-        let mut todo = Vec::new();
-        // browsed files replaced since: probed again with `todo`, their records brought up to date as they join the library
-        let mut changed: HashMap<String, PhotoId> = HashMap::new();
-        // the sizes of the browsed files this import would promote, looked at together before they are decided one by one
-        // (a file promoted in an earlier batch isn't asked about again; one path twice in a batch is, and its second answer is unused)
-        let is_browsed = |f: &String| !opts.local && matches!(self.by_path.get(f.as_str()), Some((_, true, _)));
-        let browsed: Vec<(&str, u64)> =
-            files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_sizes.get(f.as_str()).copied().unwrap_or(0))).collect();
-        let mut looked_at = browsed_files_changed(&browsed, cancel).into_iter();
-        let verdicts: Vec<Option<BrowsedFile>> = files.iter().map(|f| is_browsed(f).then(|| looked_at.next()).flatten()).collect();
-        self.sort_by_library(files, verdicts, opts.local, &mut out, &mut changed, &mut todo);
+        let (todo, mut changed) = self.sort_by_library(files, cancel, &mut out);
 
         // files a preceding scan already probed are not read again (a network share is slow to read),
         // as long as they are still there, as they were: a file gone or changed since is probed again
