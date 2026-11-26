@@ -74,7 +74,7 @@ impl TextEncoder {
             let h = l.ln1.forward(&x)?;
             x = (&x + l.attn.forward(&h, &h, &h, Some(&bias))?)?;
             let h = l.ln2.forward(&x)?;
-            x = (&x + l.mlp.forward(&h)?)?;
+            x = l.mlp.forward_add(&h, &x)?;
         }
         Ok(self.final_ln.forward(&x)?)
     }

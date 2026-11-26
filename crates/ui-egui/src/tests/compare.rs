@@ -306,7 +306,7 @@ fn compare_zoom_window_tracks_the_zoomed_pane() {
         photo.height.max(1) as usize,
         &photo.develop,
         true,
-        photo.embedded_lens.as_ref(),
+        photo.embedded_lens.as_deref(),
     );
     let aspect = frame.aspect() as f32;
     let native = crate::panels::detail::output_px(&frame);

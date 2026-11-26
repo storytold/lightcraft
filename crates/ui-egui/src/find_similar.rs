@@ -73,7 +73,7 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         End::Found(answer) => {
             let n = answer["photos"].as_array().map_or(0, Vec::len);
             app.ui.view = crate::state::ViewMode::PhotoGrid;
-            app.toast(ctx, crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n));
+            app.toast(ctx, crate::i18n::tr_format!("{n} similar photo{} · View → Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n));
         }
         // (whoever stopped it knows; a search of another library has nothing to say about this one)
         End::Dropped(_) => {}
