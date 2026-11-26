@@ -77,46 +77,21 @@ pub enum ChromaSubsampling {
     S420,
 }
 
-const XMP_NS: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
-
 /// The APP segments [`encode_jpeg`] writes for `meta` (marker byte, payload): JFIF density, EXIF,
 /// XMP and the ICC profile in chunks, in that order.
 pub(crate) fn jpeg_app_segments(meta: &EncodeMeta) -> Result<Vec<(u8, Vec<u8>)>> {
-    let mut segs: Vec<(u8, Vec<u8>)> = Vec::new();
-    let ppi = meta.ppi.filter(|p| *p > 0).map_or([0u8, 0, 1, 0, 1], |p| {
-        let [hi, lo] = p.to_be_bytes();
-        [1, hi, lo, hi, lo]
-    });
-    segs.push((0xE0, [&b"JFIF\0\x01\x02"[..], &ppi, &[0, 0]].concat()));
-    if let Some(exif) = meta.exif {
-        if exif.len() > 65_527 {
-            return Err(Error::Encode("EXIF larger than one APP1 segment (64 KiB)".into()));
-        }
-        segs.push((0xE1, [&b"Exif\0\0"[..], exif].concat()));
-    }
-    if let Some(xmp) = meta.xmp {
-        segs.push((0xE1, xmp_segment(xmp)?));
-    }
-    if let Some(icc) = meta.icc {
-        // ICC.1 Annex B.4: "ICC_PROFILE\0", 1-based chunk number, chunk count
-        let chunks: Vec<&[u8]> = icc.chunks(65_519).collect();
-        if chunks.len() > 255 {
-            return Err(Error::Encode("ICC profile too large for JPEG".into()));
-        }
-        for (i, c) in chunks.iter().enumerate() {
-            segs.push((0xE2, [&b"ICC_PROFILE\0"[..], &[i as u8 + 1, chunks.len() as u8], c].concat()));
-        }
-    }
-    Ok(segs)
+    craft_image_codecs::raw_metadata::jpeg_segments(craft_image_codecs::raw_metadata::JpegMetadata {
+        exif: meta.exif,
+        xmp: meta.xmp,
+        icc: meta.icc,
+        ppi: meta.ppi,
+    })
+    .map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// An APP1 XMP payload (namespace + packet), refusing packets larger than one segment.
 pub(crate) fn xmp_segment(xmp: &str) -> Result<Vec<u8>> {
-    let seg = [XMP_NS, xmp.as_bytes()].concat();
-    if seg.len() > 65_533 {
-        return Err(Error::Encode("XMP larger than one APP1 segment (extended XMP not supported)".into()));
-    }
-    Ok(seg)
+    craft_image_codecs::raw_metadata::jpeg_xmp(xmp).map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// Encode baseline JPEG (8-bit; alpha is dropped). `quality` 1..=100.
@@ -174,27 +149,9 @@ pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
     let ic_opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
     let mut out = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Png, &ic_opts).map_err(|e| Error::Encode(e.to_string()))?;
     if let Some(exif) = meta.exif {
-        replace_png_exif_chunk(&mut out, exif);
+        craft_image_codecs::raw_metadata::replace_png_exif(&mut out, exif).map_err(|e| Error::Encode(e.to_string()))?;
     }
     Ok(out)
-}
-
-/// Replace the `eXIf` chunk in an encoded PNG so caller-supplied EXIF (including non-1
-/// orientation tags) is preserved verbatim.
-fn replace_png_exif_chunk(png: &mut Vec<u8>, exif: &[u8]) {
-    let mut p = 8usize;
-    while let Some(len_bytes) = png.get(p..p + 4) {
-        let len = u32::from_be_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
-        let end = p.saturating_add(12).saturating_add(len);
-        if end > png.len() {
-            break;
-        }
-        if png.get(p + 4..p + 8) == Some(b"eXIf") {
-            png.splice(p..end, png_chunk(*b"eXIf", exif));
-            return;
-        }
-        p = end;
-    }
 }
 
 /// TIFF compression.
@@ -251,34 +208,9 @@ pub fn encode_webp_lossless(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<
     let ic_opts = craft_image_codecs::EncodeOptions { webp_lossless: true, ..Default::default() };
     let mut out = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::WebP, &ic_opts).map_err(|e| Error::Encode(e.to_string()))?;
     if let Some(exif) = meta.exif {
-        replace_webp_exif_chunk(&mut out, exif);
+        craft_image_codecs::raw_metadata::replace_webp_exif(&mut out, exif).map_err(|e| Error::Encode(e.to_string()))?;
     }
     Ok(out)
-}
-
-/// Replace the `EXIF` RIFF chunk payload in a WebP file so caller-supplied EXIF (including
-/// non-1 orientation tags) is preserved verbatim.
-fn replace_webp_exif_chunk(webp: &mut Vec<u8>, exif: &[u8]) {
-    let mut p = 12usize;
-    while let Some(h) = webp.get(p..p.saturating_add(8)) {
-        let size = u32::from_le_bytes([h[4], h[5], h[6], h[7]]) as usize;
-        let end = p.saturating_add(8).saturating_add(size);
-        let padded_end = end.saturating_add(size & 1);
-        if &h[0..4] == b"EXIF" && padded_end <= webp.len() {
-            let mut replacement = Vec::with_capacity(8 + exif.len() + (exif.len() & 1));
-            replacement.extend_from_slice(b"EXIF");
-            replacement.extend_from_slice(&(exif.len() as u32).to_le_bytes());
-            replacement.extend_from_slice(exif);
-            if exif.len() & 1 == 1 {
-                replacement.push(0);
-            }
-            webp.splice(p..padded_end, replacement);
-            let riff_size = (webp.len().saturating_sub(8)) as u32;
-            webp[4..8].copy_from_slice(&riff_size.to_le_bytes());
-            return;
-        }
-        p = padded_end;
-    }
 }
 
 /// Encode AVIF (sRGB, 4:4:4, 10-bit AV1) with `ravif` (rav1e). 8-bit samples are widened by the
@@ -410,22 +342,6 @@ pub fn encode_png_pq(width: u32, height: u32, rgb: &[f32], meta: &EncodeMeta) ->
     craft_image_codecs::encode_png_pq(&image, &options).map_err(|e| Error::Encode(e.to_string()))
 }
 
-fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(12 + data.len());
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(&kind);
-    out.extend_from_slice(data);
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in &out[4..] {
-        crc ^= u32::from(b);
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
-        }
-    }
-    out.extend_from_slice(&(!crc).to_be_bytes());
-    out
-}
-
 #[cfg(test)]
 mod hlg_tests {
     use super::*;
@@ -464,5 +380,148 @@ mod hlg_tests {
         let m = EncodeMeta::default();
         assert!(encode_avif_hdr(4, 4, &[0.5; 10], 80, 10, &m, HdrTransfer::Hlg).is_err());
         assert!(encode_avif_hdr(0, 4, &[], 80, 10, &m, HdrTransfer::Hlg).is_err());
+    }
+
+    #[test]
+    fn jpeg_app_segments_order_and_webp_riff_padding_parity() {
+        let exif = b"II*\0\x08\0\0\0\0\0\0\0\0\0\x01"; // 15 bytes (odd)
+        let meta = EncodeMeta { ppi: Some(300), exif: Some(exif), xmp: Some("<x/>"), icc: Some(b"icc") };
+        let segs = jpeg_app_segments(&meta).unwrap();
+        let markers: Vec<u8> = segs.iter().map(|(m, _)| *m).collect();
+        assert_eq!(markers, vec![0xE0, 0xE1, 0xE1, 0xE2]);
+        assert!(segs[0].1.starts_with(b"JFIF\0"));
+        assert!(segs[1].1.starts_with(b"Exif\0\0II*"));
+        assert!(segs[2].1.starts_with(b"http://ns.adobe.com/xap/1.0/\0<x/>"));
+        assert!(segs[3].1.starts_with(b"ICC_PROFILE\0"));
+
+        let px = [10u8, 20, 30, 255];
+        let img = EncodeImage::new(1, 1, 4, Samples::U8(&px));
+        let webp = encode_webp_lossless(&img, &EncodeMeta { exif: Some(exif), ..Default::default() }).unwrap();
+        assert_eq!(&webp[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(webp[4..8].try_into().unwrap()) as usize + 8, webp.len());
+        let pos = webp.windows(4).position(|w| w == b"EXIF").expect("EXIF chunk");
+        let chunk_len = u32::from_le_bytes(webp[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        assert_eq!(chunk_len, exif.len());
+        assert_eq!(chunk_len % 2, 1);
+        assert_eq!(webp[pos + 8 + chunk_len], 0, "odd WebP EXIF chunk must be zero-padded");
+        let padded_end = pos + 8 + chunk_len + 1;
+        assert!(padded_end <= webp.len());
+        assert_eq!(crate::sniff(&webp), Some(crate::Format::WebP));
+        let header = crate::read_header(&webp).unwrap();
+        assert_eq!((header.width, header.height, header.orientation), (1, 1, 1));
+        let decoded = crate::decode(&webp, crate::DecodeOptions::default()).unwrap();
+        assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()));
+    }
+
+    #[test]
+    fn jpeg_export_preserves_app_order_original_exif_and_orientation() {
+        let pixels = [10u8, 120, 230].repeat(4);
+        let img = EncodeImage::new(2, 2, 3, Samples::U8(&pixels));
+        let exif = crate::exif::minimal_exif(6);
+        let xmp = "<xmp/>";
+        let icc = b"icc-profile";
+        let meta = EncodeMeta { ppi: Some(300), exif: Some(&exif), xmp: Some(xmp), icc: Some(icc) };
+        let jpeg = encode_jpeg(&img, 90, ChromaSubsampling::S444, &meta).unwrap();
+
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+        let mut pos = 2usize;
+        let mut apps = Vec::new();
+        while pos + 4 <= jpeg.len() && jpeg[pos] == 0xFF {
+            let marker = jpeg[pos + 1];
+            if marker == 0xDA || marker == 0xD9 {
+                break;
+            }
+            let len = u16::from_be_bytes([jpeg[pos + 2], jpeg[pos + 3]]) as usize;
+            let payload = &jpeg[pos + 4..pos + 2 + len];
+            if (0xE0..=0xEF).contains(&marker) {
+                apps.push((marker, payload));
+            }
+            pos += 2 + len;
+        }
+        let markers: Vec<u8> = apps.iter().map(|(m, _)| *m).collect();
+        assert_eq!(markers, vec![0xE0, 0xE1, 0xE1, 0xE2]);
+        assert!(apps[0].1.starts_with(b"JFIF\0"));
+        assert_eq!(apps[1].1, [b"Exif\0\0".as_slice(), exif.as_slice()].concat());
+        assert_eq!(apps[2].1, [b"http://ns.adobe.com/xap/1.0/\0".as_slice(), xmp.as_bytes()].concat());
+        assert_eq!(apps[3].1, [b"ICC_PROFILE\0\x01\x01".as_slice(), icc.as_slice()].concat());
+
+        assert_eq!(crate::sniff(&jpeg), Some(crate::Format::Jpeg));
+        let header = crate::read_header(&jpeg).unwrap();
+        assert_eq!((header.format, header.width, header.height, header.orientation), (crate::Format::Jpeg, 2, 2, 6));
+        let decoded = crate::decode(&jpeg, crate::DecodeOptions::default()).unwrap();
+        assert_eq!(decoded.orientation, 6);
+        assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()));
+        assert_eq!(decoded.xmp.as_deref(), Some(xmp));
+        assert_eq!(decoded.icc.as_deref(), Some(icc.as_slice()));
+    }
+
+    #[test]
+    fn png_export_preserves_original_exif_orientation_and_crc() {
+        let pixels = [10u8, 120, 230, 80, 40, 20];
+        let img = EncodeImage::new(2, 1, 3, Samples::U8(&pixels));
+        let exif = crate::exif::minimal_exif(6);
+        let xmp = "<xmp/>";
+        let meta = EncodeMeta { exif: Some(&exif), xmp: Some(xmp), ..Default::default() };
+        let png = encode_png(&img, &meta).unwrap();
+
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let mut chunks = &png[8..];
+        let mut exif_chunks = 0usize;
+        while !chunks.is_empty() {
+            let len = u32::from_be_bytes(chunks[..4].try_into().unwrap()) as usize;
+            let (chunk, rest) = chunks.split_at(12 + len);
+            if &chunk[4..8] == b"eXIf" {
+                assert_eq!(&chunk[8..8 + len], exif.as_slice());
+                let mut crc = 0xFFFF_FFFFu32;
+                for &b in &chunk[4..8 + len] {
+                    crc ^= u32::from(b);
+                    for _ in 0..8 {
+                        crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                    }
+                }
+                assert_eq!(&chunk[8 + len..12 + len], &(!crc).to_be_bytes());
+                exif_chunks += 1;
+            }
+            chunks = rest;
+        }
+        assert_eq!(exif_chunks, 1);
+
+        assert_eq!(crate::sniff(&png), Some(crate::Format::Png));
+        let header = crate::read_header(&png).unwrap();
+        assert_eq!((header.format, header.width, header.height, header.orientation), (crate::Format::Png, 2, 1, 6));
+        let decoded = crate::decode(&png, crate::DecodeOptions::default()).unwrap();
+        assert_eq!((decoded.width, decoded.height), (2, 1));
+        assert_eq!(decoded.orientation, 6);
+        assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()));
+        assert_eq!(decoded.xmp.as_deref(), Some(xmp));
+        assert_eq!(decoded.to_srgb8().data, [[10, 120, 230, 255], [80, 40, 20, 255]]);
+    }
+
+    #[test]
+    fn metadata_and_encoder_error_limits_unchanged() {
+        let ok_exif = vec![0u8; 65_527];
+        assert!(jpeg_app_segments(&EncodeMeta { exif: Some(&ok_exif), ..Default::default() }).is_ok());
+        let too_big_exif = vec![0u8; 65_528];
+        assert!(jpeg_app_segments(&EncodeMeta { exif: Some(&too_big_exif), ..Default::default() }).is_err());
+
+        let ok_xmp = "a".repeat(65_504);
+        assert!(xmp_segment(&ok_xmp).is_ok());
+        let too_big_xmp = "a".repeat(65_505);
+        assert!(xmp_segment(&too_big_xmp).is_err());
+        assert!(jpeg_app_segments(&EncodeMeta { xmp: Some(&too_big_xmp), ..Default::default() }).is_err());
+
+        let too_big_icc = vec![0u8; 255 * 65_519 + 1];
+        assert!(jpeg_app_segments(&EncodeMeta { icc: Some(&too_big_icc), ..Default::default() }).is_err());
+
+        let u16_img = EncodeImage::new(1, 1, 3, Samples::U16(&[0; 3]));
+        assert!(encode_jpeg(&u16_img, 85, ChromaSubsampling::S444, &EncodeMeta::default()).is_err());
+        assert!(encode_webp_lossless(&u16_img, &EncodeMeta::default()).is_err());
+
+        let f32_img = EncodeImage::new(1, 1, 3, Samples::F32(&[0.0; 3]));
+        assert!(encode_png(&f32_img, &EncodeMeta::default()).is_err());
+
+        let wide_pixels = vec![0u8; (u16::MAX as usize + 1) * 3];
+        let wide_img = EncodeImage::new(u16::MAX as u32 + 1, 1, 3, Samples::U8(&wide_pixels));
+        assert!(encode_jpeg(&wide_img, 85, ChromaSubsampling::S444, &EncodeMeta::default()).is_err());
     }
 }
