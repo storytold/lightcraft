@@ -198,6 +198,7 @@ fn dock_tab_keeps_activation_keys_and_global_command_remains_reachable() {
     let mut h = app();
     h.app.run("app.setShortcut", json!({"id":"panel.crop","shortcut":"K"})).unwrap();
     dock(&mut h, json!({"operation":"move","panel":"tools","target":"library","zone":"center"}));
+    let before = h.app.ui.right;
     h.app.run("panel.crop", json!({})).unwrap();
     h.step();
     // The test chooses the renderer's actual registered tab, rather than an arbitrary focus owner.
@@ -207,7 +208,9 @@ fn dock_tab_keeps_activation_keys_and_global_command_remains_reachable() {
     key(&mut h, egui::Key::Enter);
     assert_eq!(h.app.ui.right, RightPanel::Crop, "Enter activates the tab without tool.done");
     key(&mut h, egui::Key::K);
-    assert_eq!(h.app.ui.right, RightPanel::None, "the global crop toggle is reachable from tab focus");
+    // toggled off, Crop gives back the panel it took the place of (KEY-INFO / UiState::toggle_panel)
+    assert_eq!(h.app.ui.right, before, "the global crop toggle is reachable from tab focus");
+    assert_ne!(before, RightPanel::Crop);
 }
 
 #[test]
