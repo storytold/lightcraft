@@ -1939,6 +1939,9 @@
   "Not saved": "未保存",
   "A folder is being synchronized": "正在同步文件夹",
   "Wait for the import to finish": "请等待导入完成",
+  "Filter settings": "筛选设置",
+  "No setting matches what is typed.": "没有与输入内容匹配的设置。",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "请尝试一个词或词的一部分：会搜索标签页和分区的名称、标签和说明。",
   "Appearance": "外观",
   "Appearance Mode": "外观模式",
   "Sync with System": "与系统同步",
@@ -2497,5 +2500,11 @@
   "Stack — click to collapse (S)": "堆叠 — 单击折叠 (S)",
   "Virtual copy": "虚拟副本",
   "Right-click ▸ Locate Missing File… to find it again.": "右键单击 → 定位缺失的文件…，即可重新找到它。",
-  "Right-click ▸ Reload from Disk to try again.": "右键单击 → 从磁盘重新读取，即可重试。"
+  "Right-click ▸ Reload from Disk to try again.": "右键单击 → 从磁盘重新读取，即可重试。",
+  "Album name (empty outside an album view)": "相册名称（在相册视图外为空）",
+  "Export date (YYYYMMDD)": "导出日期 (YYYYMMDD)",
+  "Export time (HHMM)": "导出时间 (HHMM)",
+  "Insert variable": "插入变量",
+  "Insert…": "插入…",
+  "none  ({album}, {date}, {hour})": "无  ({album}, {date}, {hour})"
 }

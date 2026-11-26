@@ -1874,6 +1874,9 @@
   "Not saved": "Не сохранено",
   "A folder is being synchronized": "Папка синхронизируется",
   "Wait for the import to finish": "Дождитесь завершения импорта",
+  "Filter settings": "Фильтр настроек",
+  "No setting matches what is typed.": "Нет настроек, соответствующих введённому.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Попробуйте одно слово или его часть: поиск ведётся по названиям вкладок и разделов, подписям и пояснениям.",
   "Appearance": "Оформление",
   "Appearance Mode": "Режим оформления",
   "Sync with System": "Как в системе",
@@ -2704,5 +2707,11 @@
   "Stack — click to collapse (S)": "Стопка — щёлкните, чтобы свернуть (S)",
   "Virtual copy": "Виртуальная копия",
   "Right-click ▸ Locate Missing File… to find it again.": "Щёлкните правой кнопкой → Указать отсутствующий файл…, чтобы найти его снова.",
-  "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку."
+  "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку.",
+  "Album name (empty outside an album view)": "Название альбома (пусто вне просмотра альбома)",
+  "Export date (YYYYMMDD)": "Дата экспорта (YYYYMMDD)",
+  "Export time (HHMM)": "Время экспорта (HHMM)",
+  "Insert variable": "Вставить переменную",
+  "Insert…": "Вставить…",
+  "none  ({album}, {date}, {hour})": "нет  ({album}, {date}, {hour})"
 }

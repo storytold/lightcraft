@@ -2446,6 +2446,9 @@
   "Folder name": "Nama folder",
   "Its templates move to User Templates.": "Templatnya dipindahkan ke Templat pengguna.",
   "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Filter settings": "Filter pengaturan",
+  "No setting matches what is typed.": "Tidak ada pengaturan yang cocok dengan yang diketik.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Coba satu kata atau sebagiannya: yang dicari adalah nama tab dan bagian, label, serta penjelasan.",
   "A smart album's rules choose its photos: change them with Edit Smart Album…": "Aturan album pintar menentukan fotonya: ubah dengan Edit album pintar…",
   "Add keywords in the Keyword List": "Tambahkan kata kunci di Daftar kata kunci",
   "Already on these photos": "Sudah ada pada foto ini",
@@ -2470,5 +2473,11 @@
   "Stack — click to expand (S)": "Tumpukan — klik untuk meluaskan (S)",
   "Stars on hover": "Bintang saat kursor di atas",
   "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Bintang saat kursor di atas: bendera dan label warna selalu tampil; bintang dan tanda telah diedit muncul saat kursor berada di atas foto atau foto dipilih.",
-  "Virtual copy": "Salinan virtual"
+  "Virtual copy": "Salinan virtual",
+  "Album name (empty outside an album view)": "Nama album (kosong di luar tampilan album)",
+  "Export date (YYYYMMDD)": "Tanggal ekspor (YYYYMMDD)",
+  "Export time (HHMM)": "Waktu ekspor (HHMM)",
+  "Insert variable": "Sisipkan variabel",
+  "Insert…": "Sisipkan…",
+  "none  ({album}, {date}, {hour})": "tidak ada  ({album}, {date}, {hour})"
 }

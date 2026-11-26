@@ -2267,6 +2267,9 @@
   "End Slideshow": "Zakończ pokaz slajdów",
   "Contact Sheet PDF…": "Arkusz stykowy PDF…",
   "Edit in PhotoCraft": "Edytuj w PhotoCraft",
+  "Filter settings": "Filtruj ustawienia",
+  "No setting matches what is typed.": "Żadne ustawienie nie pasuje do wpisanego tekstu.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Wpisz jedno słowo lub jego część: przeszukiwane są nazwy kart i sekcji, etykiety oraz objaśnienia.",
   "Edit in Other Editor": "Edytuj w innym edytorze",
   "Open Original in Other Editor (RAW, no copy)": "Otwórz oryginał w innym edytorze (RAW, bez kopii)",
   "Save Current Settings as New Effect Preset…": "Zapisz bieżące ustawienia jako nowe ustawienie wstępne efektu…",
@@ -2423,5 +2426,11 @@
   "Stack — click to collapse (S)": "Stos — kliknij, aby zwinąć (S)",
   "Virtual copy": "Kopia wirtualna",
   "Right-click ▸ Locate Missing File… to find it again.": "Kliknij prawym przyciskiem → Znajdź brakujący plik…, aby go odnaleźć ponownie.",
-  "Right-click ▸ Reload from Disk to try again.": "Kliknij prawym przyciskiem → Wczytaj ponownie z dysku, aby spróbować jeszcze raz."
+  "Right-click ▸ Reload from Disk to try again.": "Kliknij prawym przyciskiem → Wczytaj ponownie z dysku, aby spróbować jeszcze raz.",
+  "Album name (empty outside an album view)": "Nazwa albumu (pusta poza widokiem albumu)",
+  "Export date (YYYYMMDD)": "Data eksportu (YYYYMMDD)",
+  "Export time (HHMM)": "Czas eksportu (HHMM)",
+  "Insert variable": "Wstaw zmienną",
+  "Insert…": "Wstaw…",
+  "none  ({album}, {date}, {hour})": "brak  ({album}, {date}, {hour})"
 }
