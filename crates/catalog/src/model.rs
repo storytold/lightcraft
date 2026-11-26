@@ -310,7 +310,7 @@ pub struct Photo {
     /// Lens corrections embedded in the file (DNG `WarpRectilinear` / `FixVignetteRadial`), applied when
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub embedded_lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,6 +355,20 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// Set when the person arranged this photo's burst by hand (Window ▸ Bursts, or
+    /// `photo.moveToBurst`): its place in [`Analysis::group`], 0 being the pick, or `Some(0)` for
+    /// a photo taken out of every burst. Culling run again keeps such a photo's burst, place and
+    /// pick (unless asked to regroup). `None` while the burst is as culling made it; left out of the
+    /// catalog JSON then, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+}
+
+impl Analysis {
+    /// Whether the person placed this photo by hand (see [`Analysis::rank`]).
+    pub fn by_hand(&self) -> bool {
+        self.rank.is_some()
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting
@@ -574,6 +588,18 @@ impl Photo {
     /// In the library: not deleted and not only browsed (Local).
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
+    }
+    /// The file Missing Photos checks for this photo, if it is in scope: a library photo (not in
+    /// Recently Deleted, not a Local-only record seen while browsing a folder) whose original is a
+    /// file. Browse records are out of scope on purpose: browsing can leave tens of thousands of
+    /// them in the catalog, they never show in library views (Missing Photos included), and a
+    /// folder that is gone is simply not browsed again. The sidebar count, the Missing Photos view,
+    /// `library.missing` and Find Missing Photos all use this one rule.
+    pub fn library_file(&self) -> Option<&str> {
+        match &self.source {
+            Source::File { path } if self.in_library() => Some(path),
+            _ => None,
+        }
     }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
