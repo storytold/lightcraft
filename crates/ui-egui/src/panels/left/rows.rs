@@ -629,20 +629,45 @@ fn window(ui: &egui::Ui, total: usize, top: f32, height: f32, reveal: Option<usi
     from..to.max(from)
 }
 
+/// How tall a list's rows are: the last one it showed, or [`ROW_HEIGHT`] before the first. `salt`
+/// tells one list's rows from another's.
+pub(super) fn row_height(ui: &egui::Ui, salt: &str) -> f32 {
+    ui.data(|d| d.get_temp::<f32>(egui::Id::unique(("side-row-height", salt.to_owned())))).unwrap_or(ROW_HEIGHT).max(1.0)
+}
+
+/// Remember how tall the row a list showed first is, for [`row_height`] and for the room a windowed
+/// list stands in for the rows it left out.
+pub(super) fn note_row_height(ui: &egui::Ui, salt: &str, height: f32) {
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique(("side-row-height", salt.to_owned())), height));
+}
+
+/// The rows of a list of `total` to build this pass, and the room the rest stand in as plain space
+/// above and below them: all of them for a list of [`WINDOW_FROM`] rows or fewer, the ones in view (a
+/// row below, and `reveal`'s neighbourhood) for a longer one.
+///
+/// The rows left out are space above and below the list, not rows of it: a list that measured their
+/// whole height would pass the framework's size guard (32,768 points) with a few thousand keywords
+/// (issue #1011) or a By Date tree of expanded months, and stop showing — its disclosure triangles
+/// with it. The room they take is kept, so the panel still scrolls to them and they are built once
+/// they are in view.
+pub(super) fn rows_in_view(ui: &egui::Ui, total: usize, height: f32, reveal: Option<usize>) -> (std::ops::Range<usize>, f32, f32) {
+    if total <= WINDOW_FROM {
+        return (0..total, 0.0, 0.0);
+    }
+    let built = window(ui, total, ui.cursor().top(), height, reveal);
+    (built.clone(), built.start as f32 * height, (total - built.end) as f32 * height)
+}
+
 /// The rows a list builds: all of them, or (for a long list) the ones in view with a filler as tall
 /// as the rest standing in for the others. The rows left out keep their `source:` names for the
 /// control channel, at where they would be.
 fn built_rows(ui: &egui::Ui, rows: Vec<SideRow>, salt: &str, want: Option<&String>) -> (Vec<SideRow>, f32, f32) {
     let total = rows.len();
-    let height_id = egui::Id::unique(("side-row-height", salt.to_owned()));
-    let height = ui.data(|d| d.get_temp::<f32>(height_id)).unwrap_or(ROW_HEIGHT).max(1.0);
+    let height = row_height(ui, salt);
     let top = ui.cursor().top();
     let reveal = want.and_then(|want| rows.iter().position(|row| row.id.to_lowercase() == *want));
-    let built = window(ui, total, top, height, reveal);
+    let (built, above, below) = rows_in_view(ui, total, height, reveal);
     let shown: Vec<SideRow> = rows[built.clone()].to_vec();
-    // The rows left out are plain space above and below the list, not rows of it: a list that measured their whole
-    // height would pass the framework's size guard (32,768 points) with a few thousand keywords and stop showing.
-    let (above, below) = (built.start as f32 * height, (total - built.end) as f32 * height);
     let (left, width) = (ui.cursor().left(), ui.available_width());
     for (at, row) in rows.iter().enumerate().filter(|(at, row)| !built.contains(at) && row.register) {
         register(ui, format!("source:{}", row.id), Rect::from_min_size(pos2(left, top + at as f32 * height), vec2(width, height)));
@@ -781,8 +806,7 @@ fn side_list_rows(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> 
         return SideOut::default();
     }
     if let Some(first) = out.shown.iter().find(|row| source.rows[source.index[&row.key]].fill.is_none()) {
-        let height_id = egui::Id::unique(("side-row-height", salt.to_owned()));
-        ui.data_mut(|d| d.insert_temp(height_id, first.rect.height()));
+        note_row_height(ui, salt, first.rect.height());
     }
     let shown = list_shown(ui, &out, &source, selected, want.as_ref(), counts);
     let mut events = list_events(&out, &source);
