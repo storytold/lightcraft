@@ -81,6 +81,9 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
             status.map(|_| ()).map_err(|e| e.to_string())
         })),
         reveal: Some(Box::new(|path: &str| {
+            if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+                return super::platform::linux_reveal_one(path);
+            }
             let status = if cfg!(target_os = "macos") {
                 std::process::Command::new("open").args(["-R", path]).status()
             } else if cfg!(target_os = "windows") {
@@ -93,6 +96,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
                 .map_err(|e| e.to_string())
                 .and_then(|s| if s.success() || cfg!(target_os = "windows") { Ok(()) } else { Err(format!("reveal failed: {s}")) })
         })),
+        reveal_many: if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            Some(Box::new(|paths: &[String]| super::platform::linux_reveal_files(paths)))
+        } else {
+            None
+        },
         pick_files: Some(Box::new(|| {
             file_dialog()
                 .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS)

@@ -16,7 +16,12 @@ pub type PngEncode = Box<dyn Fn(&lightcraft_raster::Rgba8) -> Vec<u8>>;
 pub type PickFolder = Box<dyn FnMut() -> Option<String>>;
 
 /// Reveal a file in the system file manager (Finder / Explorer / the folder on Linux).
+/// Single path: a file to select, or a folder to open.
 pub type RevealFn = Box<dyn FnMut(&str) -> Result<(), String>>;
+
+/// Reveal several files at once (Linux `FileManager1.ShowItems` selects them in one window).
+/// None where the host only reveals one path via [`Services::reveal`].
+pub type RevealManyFn = Box<dyn FnMut(&[String]) -> Result<(), String>>;
 
 /// Open a URL in the user's browser.
 pub type OpenUrlFn = Box<dyn FnMut(&str) -> Result<(), String>>;
@@ -102,6 +107,8 @@ pub struct Services {
     pub png: Option<PngEncode>,
     /// Show a file in the system file manager (desktop only).
     pub reveal: Option<RevealFn>,
+    /// Show several files at once (desktop only, Linux).
+    pub reveal_many: Option<RevealManyFn>,
     /// The host's current log file (`<settings>/logs/lightcraft.log`), which Help ▸ Open Log
     /// Folder reveals (#260). None where no log is kept: the web, `--memory`, `LIGHTCRAFT_NO_PREFS`.
     pub log_file: Option<String>,

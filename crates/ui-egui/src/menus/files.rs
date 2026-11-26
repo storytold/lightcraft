@@ -60,16 +60,43 @@ pub(super) fn open_log_folder(app: &mut LightcraftApp) -> Result<Value, String> 
     Ok(json!({"path": path}))
 }
 
-/// Reveal the active photo's original in the system file manager.
-pub(super) fn show_in_finder(app: &mut LightcraftApp) -> Result<Value, String> {
-    let id = app.session.active().ok_or("no photo selected")?;
-    let path = match app.session.catalog.photo(id).map(|p| p.source.clone()) {
-        Some(lightcraft_engine::catalog::Source::File { path }) => path,
-        _ => return Err("this photo has no file (demo scene)".into()),
-    };
+/// Reveal the selected photos' originals in the system file manager (issue #4652).
+/// `{ids}` / `{id}` or, when omitted, the selection: on hosts with `reveal_many` (Linux
+/// `FileManager1.ShowItems`) every file is selected in one window, otherwise the active photo
+/// is revealed as before (macOS `open -R`, Windows `explorer /select`).
+pub(super) fn show_in_finder(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let ids = app.session.targets(p).map_err(|e| e.to_string())?;
+    if ids.is_empty() {
+        return Err("no photo selected".into());
+    }
+    let mut paths = Vec::new();
+    for id in &ids {
+        if let Some(lightcraft_engine::catalog::Source::File { path }) = app.session.catalog.photo(*id).map(|photo| photo.source.clone()) {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        return Err("none of the selected photos has a file (demo scene)".into());
+    }
+    if let Some(reveal_many) = app.services.reveal_many.as_mut() {
+        reveal_many(&paths)?;
+        let first = paths.first().cloned().unwrap_or_default();
+        return Ok(json!({"path": first, "paths": paths}));
+    }
+    let active_path = app
+        .session
+        .active()
+        .and_then(|id| app.session.catalog.photo(id))
+        .and_then(|photo| match &photo.source {
+            lightcraft_engine::catalog::Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .filter(|active| paths.contains(active))
+        .or_else(|| paths.into_iter().next())
+        .ok_or("no photo selected")?;
     let reveal = app.services.reveal.as_mut().ok_or("not available here")?;
-    reveal(&path)?;
-    Ok(json!({"path": path}))
+    reveal(&active_path)?;
+    Ok(json!({"path": active_path}))
 }
 
 /// The folder the active photo was imported from, as the sidebar's Folders section counts it (a
