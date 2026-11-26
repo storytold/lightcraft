@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod bottombar;
+pub mod bursts;
 pub mod chips;
 pub mod compare;
 pub mod crop_overlay;
