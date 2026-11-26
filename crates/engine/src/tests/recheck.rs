@@ -165,6 +165,20 @@ fn reload_without_a_file_reader_preserves_verified_facts() {
 }
 
 #[test]
+fn reload_reports_file_read_errors_while_a_target_is_current() {
+    use crate::cmd::reload;
+    let mut x = library("unreadable-source");
+    let before = x.s.catalog.photo(x.id).unwrap().clone();
+    x.s.media.file_probe = Some(std::sync::Arc::new(|_| Err("drive offline".into())));
+    let result = x.s.execute("photo.reload", &json!({"id": x.id.0})).unwrap();
+    assert_eq!(result["failed"], json!([{"id": x.id.0, "path": x.file.to_string_lossy(), "error": "drive offline"}]));
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
+    let items = reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap();
+    x.s.commit("Delete", Op::SetDeleted { id: x.id, deleted: true }).unwrap();
+    assert!(reload::apply(&mut x.s, items, vec![Err("drive offline".into())]).unwrap().failed.is_empty());
+}
+
+#[test]
 fn rejected_recheck_does_not_supersede_an_older_reload() {
     use crate::cmd::reload;
     let mut x = checked_orf("rejected-batch");

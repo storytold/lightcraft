@@ -179,18 +179,30 @@ pub fn probe(
     r
 }
 
-/// What Reload checked successfully and what it changed.
+/// What Reload read, changed, or couldn't read.
 #[derive(Debug, Default)]
 pub struct Reloaded {
     pub reloaded: Vec<PhotoId>,
     /// Current targets whose probes succeeded, including photos whose facts were unchanged.
     pub checked: Vec<PhotoId>,
+    pub failed: Vec<ReadFailure>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ReadFailure {
+    pub id: PhotoId,
+    pub path: String,
+    pub error: String,
 }
 
 impl Reloaded {
-    /// `{reloaded: [ids]}`; accepted probes are internal notification bookkeeping.
+    /// `{reloaded: [ids], failed?: [{id, path, error}]}`.
     pub fn to_json(&self) -> Value {
-        json!({"reloaded": self.reloaded.iter().map(|i| i.0).collect::<Vec<_>>()})
+        let mut value = json!({"reloaded": self.reloaded});
+        if !self.failed.is_empty() {
+            value["failed"] = json!(self.failed);
+        }
+        value
     }
 }
 
@@ -201,11 +213,22 @@ impl Reloaded {
 pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result<ProbeInfo, String>>) -> Result<Reloaded> {
     let mut ops = Vec::new();
     let mut out = Reloaded::default();
-    let mut results: Vec<_> = items.into_iter().zip(results).filter_map(|(item, info)| info.ok().map(|info| (item, info))).collect();
+    let mut results: Vec<_> = items.into_iter().zip(results).collect();
     include_same_file_copies(&s.catalog, results.iter_mut().map(|(item, _)| item));
     let mut accepted = Vec::new();
     for (mut item, info) in results {
         let Some(id) = item.current_representative(s) else { continue };
+        let info = match info {
+            Ok(info) => info,
+            Err(error) => {
+                out.failed.extend(item.metadata_targets.into_iter().filter(|id| item.source_targets.contains(id)).map(|id| ReadFailure {
+                    id,
+                    path: item.path.clone(),
+                    error: error.clone(),
+                }));
+                continue;
+            }
+        };
         let selected: HashSet<_> = std::mem::take(&mut item.metadata_targets).into_iter().collect();
         crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.reloaded, item.source_targets.iter().copied(), |id| {
             selected.contains(&id)

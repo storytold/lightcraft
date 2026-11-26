@@ -59,12 +59,16 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
             .collect();
         let mut cleared = 0;
         let mut still_preview_only = false;
+        let mut read_error = None;
         // as the command: one undo step, the durable save and the automatic XMP sidecar write
         if let Err(e) = app.session.execute_fn("photo.reload", |s| {
             let out = reload::apply(s, items, results)?;
             cleared = out.reloaded.iter().filter(|id| preview_only.contains(id) && s.catalog.photo(**id).is_some_and(|ph| ph.develops_raw())).count();
             still_preview_only =
                 out.checked.iter().any(|id| preview_only.contains(id) && s.catalog.photo(*id).is_some_and(|ph| ph.preview_only.is_some()));
+            if count == 1 && preview_only.len() == 1 {
+                read_error = out.failed.iter().find(|failure| preview_only.contains(&failure.id)).map(|failure| failure.error.clone());
+            }
             Ok(out.to_json())
         }) {
             return app.toast_error(ctx, e.to_string());
@@ -73,6 +77,9 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
         // (a raw that did decode before the stop is still reported)
         if stopped.load(std::sync::atomic::Ordering::Relaxed) && cleared == 0 {
             return;
+        }
+        if let Some(error) = read_error {
+            return app.toast_error(ctx, crate::i18n::tr_format!("Could not read this photo. {error}", error = error));
         }
         let message = match (count, preview_only.len(), cleared) {
             (1, 1, 1) => crate::i18n::tr("This raw is now developed from its raw data").to_string(),

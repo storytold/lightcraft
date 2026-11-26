@@ -293,11 +293,16 @@ pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, 
     match app.run("photo.reload", json!({"ids": [id.0]})) {
         Err(e) => app.toast_error(ctx, e),
         Ok(r) if r["background"] == true => {}
-        // nothing to read in the background (a photo without a file): answered in place
-        Ok(_) if app.session.catalog.photo(id).is_some_and(|p| p.preview_only.is_none()) => {
-            app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data"))
+        Ok(r) => {
+            // No background work was started: the engine answered in place.
+            if let Some(error) = r["failed"][0]["error"].as_str() {
+                app.toast_error(ctx, crate::i18n::tr_format!("Could not read this photo. {error}", error = error));
+            } else if app.session.catalog.photo(id).is_some_and(|p| p.preview_only.is_none()) {
+                app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data"));
+            } else {
+                app.toast(ctx, crate::i18n::tr("This raw variant still can't be decoded"));
+            }
         }
-        Ok(_) => app.toast(ctx, crate::i18n::tr("This raw variant still can't be decoded")),
     }
 }
 

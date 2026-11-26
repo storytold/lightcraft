@@ -183,11 +183,14 @@ fn a_negative_reload_notice_requires_an_accepted_probe_even_when_unchanged() {
         assert!(crate::tasks::wait(&mut app, &egui::Context::default(), Duration::from_secs(10)));
         assert_eq!(app.session.catalog.photo(id).unwrap(), &before);
         assert_eq!(app.session.undo.len(), undo, "none of these Reloads changes the catalog");
-        assert_eq!(
-            app.ui.toast.as_ref().map(|(text, _, _)| text.as_str()),
-            (case == "unchanged").then_some("This raw variant still can't be decoded"),
-            "{case}"
-        );
+        let notice = app.ui.toast.as_ref().map(|(text, _, _)| text.as_str());
+        match case {
+            "unreadable" => {
+                assert!(notice.is_some_and(|text| text.starts_with("Could not read this photo.") && text.contains("preview.dng")), "{notice:?}")
+            }
+            "unchanged" => assert_eq!(notice, Some("This raw variant still can't be decoded")),
+            _ => assert_eq!(notice, None, "{case}"),
+        }
     }
 }
 
