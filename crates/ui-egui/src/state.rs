@@ -33,9 +33,6 @@ pub struct UiState {
     pub docking_version: u32,
     #[serde(default = "crate::i18n::default_language")]
     pub language: crate::i18n::Locale,
-    /// The Build Previews run last announced (its identity, finished?).
-    #[serde(skip)]
-    pub preview_build_seen: Option<(usize, bool)>,
     /// Saving the library is failing (announced with a toast; the top bar shows a warning until
     /// a later save succeeds).
     #[serde(skip)]
@@ -143,6 +140,9 @@ pub struct UiState {
     /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
     #[serde(skip)]
     pub cull_burst: Option<(f32, f32)>,
+    /// Whether Assisted Culling stacked its bursts the last time it was confirmed (this session).
+    #[serde(skip)]
+    pub cull_stack: bool,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -395,7 +395,6 @@ impl Default for UiState {
             docking: None,
             docking_version: crate::docking::DOCKING_VERSION,
             language: crate::i18n::default_language(),
-            preview_build_seen: None,
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             luminance_map_restore: None,
@@ -446,6 +445,7 @@ impl Default for UiState {
             person_from: None,
             last_person: None,
             cull_burst: None,
+            cull_stack: false,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
