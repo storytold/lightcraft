@@ -39,7 +39,6 @@ enum Probe {
 struct PaintedText {
     text: String,
     rect: Rect,
-    clip: Rect,
 }
 fn drain(mut output: egui::FullOutput) {
     output.textures_delta.clear();
@@ -185,14 +184,14 @@ impl Fixture {
             }
             final_registry = registry;
         });
-        fn texts(shape: &egui::Shape, clip: Rect, out: &mut Vec<PaintedText>) {
+        fn texts(shape: &egui::Shape, out: &mut Vec<PaintedText>) {
             match shape {
                 egui::Shape::Text(text) => {
-                    out.push(PaintedText { text: text.galley.job.text.clone(), rect: Rect::from_min_size(text.pos, text.galley.size()), clip })
+                    out.push(PaintedText { text: text.galley.job.text.clone(), rect: Rect::from_min_size(text.pos, text.galley.size()) })
                 }
                 egui::Shape::Vec(shapes) => {
                     for shape in shapes {
-                        texts(shape, clip, out);
+                        texts(shape, out);
                     }
                 }
                 _ => {}
@@ -200,7 +199,7 @@ impl Fixture {
         }
         self.texts.clear();
         for shape in &output.shapes {
-            texts(&shape.shape, shape.clip_rect, &mut self.texts);
+            texts(&shape.shape, &mut self.texts);
         }
         self.panel = panel;
         self.record = final_record;
@@ -335,7 +334,7 @@ impl Fixture {
             assert!(owners.insert(hit.id), "one owner per row");
             let painted: Vec<_> = self.texts.iter().filter(|text| text.text == crate::i18n::tr(label) && rect.expand(1.0).intersects(text.rect)).collect();
             assert_eq!(painted.len(), 1, "full localized label is painted once: {name}; texts={:?}", self.texts);
-            assert!(painted[0].clip.expand(1.0).contains_rect(painted[0].rect), "localized label must not be clipped: {name} {:?}", painted[0]);
+            assert!(rect.expand(1.0).contains_rect(painted[0].rect), "the whole localized label sits in its row: {name} {:?} {rect:?}", painted[0]);
             if index > 0 {
                 assert!(rect.top() >= self.rect(&locator(index - 1)).bottom() - 1.0, "rows keep their order: {name}");
             }
