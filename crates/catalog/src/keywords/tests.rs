@@ -209,6 +209,36 @@ fn creating_a_keyword_lists_it_and_can_tag_photos() {
     assert!(c.create_keyword_ops(" | ", KeywordInfo::default(), &[]).is_err());
 }
 
+/// A new keyword's name can't end in `*` at any level, which marks a keyword only some of the
+/// selected photos have; an asterisk inside a name is allowed. Levels the library already has,
+/// as a sidecar or catalog wrote them, are accepted as they are.
+#[test]
+fn a_new_keyword_name_cannot_end_in_an_asterisk() {
+    assert!(!valid_name("travel*") && !valid_name("places | rome* ") && valid_name("a*b"));
+    for name in ["a*", "a | b*", "*", "a *"] {
+        assert!(!valid_name(name), "{name}");
+    }
+    let (mut c, ids) = lib(&[&["places|italy"], &[]]);
+    for name in ["travel*", "places|rome*", "travel *|rome", "a*", "a | b*", "*", "a *"] {
+        let err = c.create_keyword_ops(name, KeywordInfo::default(), &[ids[1]]).unwrap_err();
+        assert!(err.to_string().contains("can't end in “*”"), "{name}: {err}");
+    }
+    assert!(c.edit_keyword_ops("places|italy", "Italy*", KeywordInfo::default()).is_err());
+    let op = c.create_keyword_ops("a*b", KeywordInfo::default(), &[]).unwrap();
+    c.apply(op).unwrap();
+    assert!(c.has_keyword("a*b"));
+    // read from a file: kept, and it can be named again
+    assert_eq!(from_file(&["travel*".to_string()], &["old*|rome".to_string()]), ["old*|rome", "travel*"]);
+    let (mut c, ids) = lib(&[&["travel*", "old*|rome"], &[]]);
+    assert!(c.check_keyword_name("travel*").is_ok() && c.check_keyword_name("old*|rome").is_ok());
+    let op = c.create_keyword_ops("old*|milan", KeywordInfo::default(), &[ids[1]]).unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(kws(&c, ids[1]), ["old*|milan"]);
+    let op = c.edit_keyword_ops("travel*", "TRAVEL*", KeywordInfo::default()).unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(kws(&c, ids[0]), ["TRAVEL*", "old*|rome"]);
+}
+
 /// Moving a keyword nests it inside another (or takes it to the top level), with its children,
 /// on photos and in the list. It can't go inside itself or one of its children, and moving it
 /// where it already is changes nothing.
@@ -556,6 +586,17 @@ fn the_keyword_list_is_written_as_tab_indented_text() {
     assert_eq!(c.keyword_list_text().text, "beach\nEvents\n\tWeddings\n[Places]\n\tLisbon\n\t\t{Lisboa}\n");
 }
 
+/// The path budget the reader enforces holds for the writer too: a keyword past it, and its
+/// subtree, is named unwritable instead of making a file `keyword.import` rejects.
+#[test]
+fn the_keyword_list_written_stays_within_the_path_budget() {
+    let (c, _) = lib(&[&["Places|Lisbon", "beach"], &["Events|Weddings"]]);
+    let file = c.keyword_list_text_within(17);
+    assert_eq!(file.text, "beach\nEvents\nPlaces\n");
+    assert_eq!(file.unwritable, ["Events|Weddings", "Places|Lisbon"]);
+    assert_eq!(c.keyword_list_text().unwritable, Vec::<String>::new());
+}
+
 /// Reading a list gives each keyword's path and attributes: what was written comes back, and a
 /// file from elsewhere (Windows line ends, a byte-order mark, blank lines) reads too.
 #[test]
@@ -764,4 +805,48 @@ fn keyword_tree_caps_a_keyword_at_the_list_depth() {
     let (c, _) = lib(&[&[joined.as_str()]]);
     let deepest = tree_paths(&c.keyword_tree()).iter().map(|(p, _)| p.split(SEP).count()).max().unwrap_or(0);
     assert_eq!(deepest, MAX_LEVELS);
+}
+
+/// A keyword list file spells each keyword's whole path, so one long keyword with many short ones
+/// inside it expands into far more than its own size: past `MAX_LIST_PATH_BYTES` it is refused
+/// with the line where that happened, instead of growing without bound (CWE-400).
+#[test]
+fn a_list_whose_paths_expand_past_the_budget_is_refused() {
+    let parent = "p".repeat(1 << 20);
+    let children = MAX_LIST_PATH_BYTES / parent.len() + 2;
+    let mut text = format!("{parent}\n");
+    for i in 0..children {
+        text.push_str(&format!("\tc{i}\n"));
+    }
+    let err = parse_keyword_list(&text).unwrap_err().to_string();
+    assert!(err.contains("full paths come to more than"), "{err}");
+    // a list within the budget still reads
+    let ok = parse_keyword_list(&format!("{parent}\n\tchild\n")).unwrap();
+    assert_eq!(ok.len(), 2);
+    assert_eq!(ok[1].0, format!("{parent}|child"));
+}
+
+/// Many synonyms joining a keyword the library has, its export and its keyword list file each keep
+/// every spelling once, in order, without a search of the growing list per synonym (CWE-407).
+#[test]
+fn many_synonyms_are_gathered_once_each_in_order() {
+    const N: usize = 40_000;
+    let mut c = Catalog::new();
+    c.apply(Op::SetKeyword { path: "travel".into(), info: Some(with_synonyms(&["Trip"])) }).unwrap();
+    let mut incoming: Vec<String> = (0..N).map(|i| format!("syn{i}")).collect();
+    incoming.push("TRIP".into());
+    incoming.push("SYN7".into());
+    let started = std::time::Instant::now();
+    let (op, added, updated) = c.import_keywords_ops(&[("travel".into(), KeywordInfo { synonyms: incoming, ..KeywordInfo::default() })]);
+    c.apply(op).unwrap();
+    assert_eq!((added, updated), (0, 1));
+    let synonyms = c.keyword_info("travel").unwrap().synonyms.clone();
+    assert_eq!(synonyms.len(), N + 1);
+    assert_eq!(synonyms[0], "Trip");
+    assert_eq!(synonyms[8], "syn7");
+    let exported = c.export_keywords(&["travel".into()]);
+    assert_eq!(exported.flat.len(), N + 2);
+    let file = c.keyword_list_text();
+    assert_eq!(file.text.lines().count(), N + 2);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
 }

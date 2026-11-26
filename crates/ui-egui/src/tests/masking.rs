@@ -2155,3 +2155,157 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
 }
+
+/// Lens Blur Brush Refinement: Focus / Blur pick a brush that paints on the photo from the Edit
+/// panel (one `lensBlur.brushStroke` per drag, with the brush's settings); ⌥ erases; Reset clears.
+#[test]
+fn lens_blur_focus_and_blur_brushes_paint_on_the_photo() {
+    // (`panel.edit` toggles the panel, which a session opens on: set it instead)
+    let mut h = detail("panel.masking");
+    // tall enough for the Lens Blur section under the closed sections
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 1400}), T)["ok"], true);
+    let r = h.request("ui.set", json!({"right": "edit", "openSections": ["lensBlur"], "histogram": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // off: the brushes don't paint
+    click(&mut h, "button:lensBlurFocus");
+    assert_eq!(h.app.ui.tool, "", "no brush while the blur is off");
+    click(&mut h, "check:lensBlur.enabled");
+    assert!(develop(&h).lens_blur.enabled);
+    click(&mut h, "button:lensBlurFocus");
+    assert_eq!(h.app.ui.tool, "lensBlurFocus");
+    h.app.ui.lens_blur_brush_amount = 60.0;
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.3, "y": 0.5}, {"kind": "drag", "x": 0.4, "y": 0.5}, {"kind": "drag", "x": 0.5, "y": 0.5}, {"kind": "up", "x": 0.5, "y": 0.5}]),
+    );
+    let b = develop(&h).lens_blur;
+    assert_eq!(b.focus_strokes.len(), 1, "{b:?}");
+    assert!(b.focus_strokes[0].points.len() >= 2 && b.focus_strokes[0].density == 60.0 && b.blur_strokes.is_empty());
+    assert!((b.focus_strokes[0].size - h.app.ui.brush_size as f64).abs() < 1e-6, "the shared brush's size");
+    click(&mut h, "button:lensBlurBlur");
+    assert_eq!(h.app.ui.tool, "lensBlurBlur");
+    brush_at(&mut h, 0.6, 0.4);
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.7, "y": 0.4}, {"kind": "up", "x": 0.7, "y": 0.4}], "alt": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let b = develop(&h).lens_blur;
+    assert_eq!(b.blur_strokes.len(), 2);
+    assert!(!b.blur_strokes[0].erase && b.blur_strokes[1].erase, "⌥ erases");
+    click(&mut h, "button:lensBlurBrushReset");
+    let b = develop(&h).lens_blur;
+    assert!(b.focus_strokes.is_empty() && b.blur_strokes.is_empty());
+    // switching the blur off puts the brush down
+    click(&mut h, "check:lensBlur.enabled");
+    assert_eq!(h.app.ui.tool, "");
+    h.settle(SETTLE);
+}
+
+/// Lens Blur focus shape: without a focus mask a button per shape sets it; with one they're gone.
+#[test]
+fn lens_blur_shape_buttons_pick_the_focus_shape() {
+    use lightcraft_develop::FocusShape;
+    let mut h = detail("panel.masking");
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 1400}), T)["ok"], true);
+    let r = h.request("ui.set", json!({"right": "edit", "openSections": ["lensBlur"], "histogram": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    click(&mut h, "check:lensBlur.enabled");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Auto);
+    click(&mut h, "lensBlurShape:wide");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Wide);
+    click(&mut h, "lensBlurShape:tall");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Tall);
+    click(&mut h, "lensBlurShape:auto");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Auto);
+    // a focus mask: the shape is the mask's, no buttons
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    let id = develop(&h).masks[0].id;
+    exec(&mut h, "develop.merge", json!({"settings": {"lens_blur": {"focus_mask": id}}}));
+    let r = h.request("ui.set", json!({"right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.clickWidget", json!({"id": "lensBlurShape:round"}), T);
+    assert_eq!(r["ok"], false, "no shape buttons with a focus mask: {r}");
+    h.settle(SETTLE);
+}
+
+/// While Apply is off the focus controls don't respond; on, Move & Resize drags the fixed shape on
+/// the photo (one undo step per drag) and a shape button puts it back in the middle.
+#[test]
+fn lens_blur_focus_controls_follow_apply_and_the_shape_moves() {
+    use lightcraft_develop::FocusShape;
+    let mut h = detail("panel.masking");
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 1400}), T)["ok"], true);
+    let r = h.request("ui.set", json!({"right": "edit", "openSections": ["lensBlur"], "histogram": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // off: shape buttons, Find Subject and In Focus are inert
+    let before = develop(&h).lens_blur;
+    click(&mut h, "lensBlurShape:wide");
+    click(&mut h, "button:lensBlurFindSubject");
+    click(&mut h, "dropdown:lensBlurFocus");
+    let r = h.request("ui.clickWidget", json!({"id": "lensBlurFocus:subject"}), T);
+    assert_eq!(r["ok"], false, "the In Focus menu doesn't open: {r}");
+    assert_eq!(develop(&h).lens_blur, before, "nothing changes while Apply is off");
+    // on: a round shape, then Move & Resize
+    click(&mut h, "check:lensBlur.enabled");
+    click(&mut h, "lensBlurShape:round");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Round);
+    click(&mut h, "button:lensBlurEditShape");
+    assert_eq!(h.app.ui.tool, "lensBlurShape");
+    // drag the middle of the photo (the shape's centre) to the right
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.55, "y": 0.5}, {"kind": "drag", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}]),
+    );
+    let a = develop(&h).lens_blur.area.expect("moved");
+    assert!(a.center.x > 0.57 && (a.center.y - 0.5).abs() < 0.02, "{a:?}");
+    assert!((a.rx - 0.22).abs() < 1e-9 && (a.ry - 0.22).abs() < 1e-9, "same size");
+    // one drag, one undo step
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(develop(&h).lens_blur.area.is_none(), "{:?}", develop(&h).lens_blur.area);
+    exec(&mut h, "edit.redo", json!({}));
+    assert!(develop(&h).lens_blur.area.is_some());
+    // the preset button puts it back in the middle
+    click(&mut h, "lensBlurShape:round");
+    assert!(develop(&h).lens_blur.area.is_none());
+    // switching the blur off puts the tool down
+    click(&mut h, "check:lensBlur.enabled");
+    assert_eq!(h.app.ui.tool, "");
+    h.settle(SETTLE);
+}
+
+/// A mask's Lens Blur is a block of its own under the mask's sliders: which side it blurs, its
+/// sliders, an eye that switches it off (its controls then inert) and a header that folds it.
+#[test]
+fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
+    let mut h = detail("panel.masking");
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 3200}), T)["ok"], true);
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    h.settle(SETTLE);
+    let adjust = |h: &Headless| develop(h).masks[0].adjust;
+    // the block's own sliders, not one more in the list
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "section:maskLensBlur"));
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "slider:lens_blur_transition"));
+    // blurring the outside starts with a visible amount
+    click(&mut h, "button:maskLensBlurSide-outside");
+    let a = adjust(&h);
+    assert!(a.lens_blur_outside && a.lens_blur == 50.0, "{a:?}");
+    let r = h.request("ui.clickWidget", json!({"id": "slider:lens_blur_boost", "fx": 0.6}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(adjust(&h).lens_blur_boost > 30.0, "{:?}", adjust(&h));
+    // the eye (shown over the header) switches it off and keeps the values
+    h.request("ui.hoverWidget", json!({"id": "section:maskLensBlur"}), T);
+    h.settle(SETTLE);
+    click(&mut h, "sectionEye:maskLensBlur");
+    let off = adjust(&h);
+    assert!(off.lens_blur_off && off.lens_blur == 50.0 && off.lens_blur_outside, "{off:?}");
+    // off: its controls don't respond
+    click(&mut h, "button:maskLensBlurSide-inside");
+    assert_eq!(adjust(&h), off);
+    // on again
+    click(&mut h, "sectionEye:maskLensBlur");
+    assert!(!adjust(&h).lens_blur_off);
+    // the header folds it
+    click(&mut h, "section:maskLensBlur");
+    assert!(h.app.ui.section_folded("maskLensBlur"));
+    click(&mut h, "section:maskLensBlur");
+    assert!(!h.app.ui.section_folded("maskLensBlur"));
+    h.settle(SETTLE);
+}
