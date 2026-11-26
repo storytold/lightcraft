@@ -543,6 +543,11 @@
   itself".
 - Esc gives up a drag of photos, as it already did for albums, sidebar sections and keywords: that press ends the drag and does nothing else
   (it does not also close a dialog, leave full screen or light back on). A drag started before entering full screen or a slideshow now ends with the mouse button, so Esc works there again.
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved in an older catalog format upgrades it, and versions that don't know the new format can't
+  open it afterward. In the desktop app, the library as it was is now kept beside it (`catalog.snap.v<format>-<seq>`,
+  `catalog.log.v<format>-<seq>`), and LightCraft says where once: to go back, see `docs/catalog-persistence.md`. A
+  library that can't be kept is not upgraded. The browser build keeps no copy (it always runs the newest version).
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
