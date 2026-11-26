@@ -171,6 +171,12 @@
 - Importing a backup of a catalog you already imported no longer adds every collection a second time: collections
   are matched by the catalog's own id, which its backups keep, instead of by the catalog file's path.
 
+## 2026-11-04
+### Remote SAM worker recovers from accept errors
+- A transient connection-accept error is logged and retried after a short pause, so one failed accept no longer
+  stops the remote Metal worker (#2574). Startup validation and bind failures still report an error.
+### Reference View's empty state paints on every platform
+- Its instruction now uses the supported menu arrow symbol, avoiding a missing-glyph panic while the view is drawn.
 ## 2026-10-30
 
 ### Lightroom catalogs with a print inside a collection import their collections
@@ -404,6 +410,14 @@
   and listed no window. macOS also adds its own window items there: Fill, Center, Move & Resize and Full Screen Tile
   on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
 
+
+## 2026-10-26
+
+### Panels come back as they were
+- Close Masking, Crop, Remove or Red Eye and the panel you came from is there again, at the same width and scroll
+  position, and the photo doesn't move; if the panel was hidden, it stays hidden. Pressing a panel key a second time
+  (I for Info, M for Masking, C for Crop, H for Remove) or its tool-strip button puts back exactly what the right
+  column showed before: Edit → I → I is Edit again, Masks → I → I is Masks, and a closed panel stays closed.
 
 ## 2026-10-25
 
