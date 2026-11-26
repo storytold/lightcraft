@@ -2493,8 +2493,8 @@
   "Right-click ▸ Locate Missing File… to find it again.": "右键单击 → 定位缺失的文件…，即可重新找到它。",
   "Right-click ▸ Reload from Disk to try again.": "右键单击 → 从磁盘重新读取，即可重试。",
   "Album name (empty outside an album view)": "相册名称（在相册视图外为空）",
-  "Export date, UTC (YYYYMMDD)": "导出日期，UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "导出时间，UTC (HHMM)",
+  "Export date (YYYYMMDD)": "导出日期 (YYYYMMDD)",
+  "Export time (HHMM)": "导出时间 (HHMM)",
   "Insert variable": "插入变量",
   "Insert…": "插入…",
   "none  ({album}, {date}, {hour})": "无  ({album}, {date}, {hour})"

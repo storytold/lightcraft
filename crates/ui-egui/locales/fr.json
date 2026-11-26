@@ -3677,8 +3677,8 @@
   "Right-click ▸ Locate Missing File… to find it again.": "Clic droit → Localiser le fichier manquant… pour le retrouver.",
   "Right-click ▸ Reload from Disk to try again.": "Clic droit → Recharger depuis le disque pour réessayer.",
   "Album name (empty outside an album view)": "Nom de l'album (vide hors vue d'album)",
-  "Export date, UTC (YYYYMMDD)": "Date d'export, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Heure d'export, UTC (HHMM)",
+  "Export date (YYYYMMDD)": "Date d'export (YYYYMMDD)",
+  "Export time (HHMM)": "Heure d'export (HHMM)",
   "Insert variable": "Insérer une variable",
   "Insert…": "Insérer…",
   "none  ({album}, {date}, {hour})": "aucun  ({album}, {date}, {hour})"

@@ -3761,8 +3761,8 @@
   "Right-click ▸ Locate Missing File… to find it again.": "მარჯვენა დაწკაპუნება → დაკარგული ფაილის მოძებნა… ფაილის ხელახლა საპოვნელად.",
   "Right-click ▸ Reload from Disk to try again.": "მარჯვენა დაწკაპუნება → დისკიდან ხელახლა ჩატვირთვა, ხელახლა საცდელად.",
   "Album name (empty outside an album view)": "ალბომის სახელი (ცარიელია ალბომის ხედის გარეთ)",
-  "Export date, UTC (YYYYMMDD)": "ექსპორტის თარიღი, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "ექსპორტის დრო, UTC (HHMM)",
+  "Export date (YYYYMMDD)": "ექსპორტის თარიღი (YYYYMMDD)",
+  "Export time (HHMM)": "ექსპორტის დრო (HHMM)",
   "Insert variable": "ცვლადის ჩასმა",
   "Insert…": "ჩასმა…",
   "none  ({album}, {date}, {hour})": "არცერთი  ({album}, {date}, {hour})"

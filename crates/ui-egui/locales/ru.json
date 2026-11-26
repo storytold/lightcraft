@@ -2700,8 +2700,8 @@
   "Right-click ▸ Locate Missing File… to find it again.": "Щёлкните правой кнопкой → Указать отсутствующий файл…, чтобы найти его снова.",
   "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку.",
   "Album name (empty outside an album view)": "Название альбома (пусто вне просмотра альбома)",
-  "Export date, UTC (YYYYMMDD)": "Дата экспорта, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Время экспорта, UTC (HHMM)",
+  "Export date (YYYYMMDD)": "Дата экспорта (YYYYMMDD)",
+  "Export time (HHMM)": "Время экспорта (HHMM)",
   "Insert variable": "Вставить переменную",
   "Insert…": "Вставить…",
   "none  ({album}, {date}, {hour})": "нет  ({album}, {date}, {hour})"

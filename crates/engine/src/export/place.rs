@@ -132,7 +132,8 @@ pub fn clean_album_name(album: &str) -> String {
 /// text (such as `{date}` or `{hour}`) is never double-expanded.
 ///
 /// - `album`: the active album name, cleaned with [`clean_album_name`]; `None` expands `{album}` to `""`.
-/// - `now`: the UTC timestamp for `{date}` (YYYYMMDD) and `{hour}` (HHMM); `None` uses current UTC time.
+/// - `now`: the local date and time for `{date}` (YYYYMMDD) and `{hour}` (HHMM), as the person's clock shows it
+///   ([`local_now`]); `None` uses the time now.
 /// - Unknown tokens are left unchanged. The result passes through [`clean_subfolder`].
 ///
 /// E.g. `"{album}/{date}_{hour}"` with album `"Vacation"` produces `"Vacation/20261107_0230"`.
@@ -142,11 +143,7 @@ pub fn expand_subfolder(template: &str, album: Option<&str>, now: Option<chrono:
     if template.is_empty() || !template.contains('{') {
         return clean_subfolder(template);
     }
-    let now = now.unwrap_or_else(|| {
-        let since = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
-        let secs = i64::try_from(since.as_secs()).unwrap_or(i64::MAX);
-        chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.naive_utc()).unwrap_or_default()
-    });
+    let now = now.or_else(local_now).unwrap_or_default();
     let date_str = now.format("%Y%m%d").to_string();
     let hour_str = now.format("%H%M").to_string();
     let album_str = album.map(clean_album_name).unwrap_or_default();
@@ -154,6 +151,16 @@ pub fn expand_subfolder(template: &str, album: Option<&str>, now: Option<chrono:
     let res = template.replace("{date}", &date_str).replace("{hour}", &hour_str).replace("{album}", &album_str);
 
     clean_subfolder(&res)
+}
+
+/// The date and time now on the person's clock, for `{date}` and `{hour}`: the host's zone, with the offset in force
+/// now ([`crate::import::local_civil`]; the web build has no zone to read and uses UTC). A folder named by its
+/// export date is named by the day the person exported on, not by UTC's, which is the next or the previous day
+/// for part of every day away from UTC.
+pub(super) fn local_now() -> Option<chrono::NaiveDateTime> {
+    let since = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
+    let secs = i64::try_from(since.as_secs()).unwrap_or(i64::MAX);
+    chrono::NaiveDateTime::parse_from_str(&crate::import::local_civil(secs), "%Y-%m-%dT%H:%M:%S").ok()
 }
 
 impl<'a> Placer<'a> {

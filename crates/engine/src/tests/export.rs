@@ -307,6 +307,21 @@ fn clean_album_name_sanitizes_reserved_names_and_illegal_chars() {
     assert_eq!(clean_album_name("com¹.backup"), "com¹_.backup");
 }
 
+/// `{date}` and `{hour}` are the person's local date and time (the host's zone), not UTC's: an evening export west
+/// of UTC, or a morning one east of it, goes to that day's folder.
+#[test]
+fn subfolder_date_and_hour_are_local_time() {
+    use crate::export::expand_subfolder;
+    let secs = i64::try_from(web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap().as_secs()).unwrap();
+    let local = crate::import::local_civil(secs);
+    let expected = format!("{}/{}", local.get(..10).unwrap().replace('-', ""), local.get(11..16).unwrap().replace(':', ""));
+    let got = expand_subfolder("{date}/{hour}", None, None);
+    // (a minute may turn between the two readings)
+    let next = crate::import::local_civil(secs + 60);
+    let later = format!("{}/{}", next.get(..10).unwrap().replace('-', ""), next.get(11..16).unwrap().replace(':', ""));
+    assert!(got == expected || got == later, "{got} is not the local {expected}");
+}
+
 #[test]
 fn expand_subfolder_variables_and_ordering() {
     use crate::export::expand_subfolder;

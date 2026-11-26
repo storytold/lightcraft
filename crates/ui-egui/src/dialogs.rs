@@ -1795,10 +1795,10 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
                 if ui.selectable_label(false, "{album}").on_hover_text(crate::i18n::tr("Album name (empty outside an album view)")).clicked() {
                     chosen = Some("{album}");
                 }
-                if ui.selectable_label(false, "{date}").on_hover_text(crate::i18n::tr("Export date, UTC (YYYYMMDD)")).clicked() {
+                if ui.selectable_label(false, "{date}").on_hover_text(crate::i18n::tr("Export date (YYYYMMDD)")).clicked() {
                     chosen = Some("{date}");
                 }
-                if ui.selectable_label(false, "{hour}").on_hover_text(crate::i18n::tr("Export time, UTC (HHMM)")).clicked() {
+                if ui.selectable_label(false, "{hour}").on_hover_text(crate::i18n::tr("Export time (HHMM)")).clicked() {
                     chosen = Some("{hour}");
                 }
             });

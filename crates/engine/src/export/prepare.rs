@@ -101,9 +101,8 @@ pub fn prepare_export(
 /// [`prepare_export`] for each of `ids` in order (`{seq}` = position, from 1).
 pub fn prepare_batch(session: &mut crate::Session, ids: &[lightcraft_catalog::PhotoId], o: &ExportOptions) -> Result<Vec<PreparedExport>, String> {
     let guard = std::sync::Arc::new(session.original_guard());
-    let since = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
-    let secs = i64::try_from(since.as_secs()).unwrap_or(i64::MAX);
-    let now = chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.naive_utc());
+    // the whole batch goes to one dated folder: the time is read once
+    let now = super::place::local_now();
     let album_name = match session.source {
         crate::LibrarySource::Album(aid) => session.catalog.album(aid).map(|a| a.name.clone()),
         _ => None,

@@ -75,7 +75,7 @@ pub struct ExportOptions {
     /// A specific folder for the whole batch, or each photo's own folder.
     pub destination_mode: DestinationMode,
     /// Created inside the destination folder (empty = none). Supports `{album}`, `{date}`
-    /// (YYYYMMDD, UTC) and `{hour}` (HHMM, UTC) variables, expanded during batch preparation
+    /// (YYYYMMDD) and `{hour}` (HHMM, both in local time) variables, expanded during batch preparation
     /// once per batch using the active album view (or empty outside an album view). Presets store
     /// the raw template.
     pub subfolder: String,
