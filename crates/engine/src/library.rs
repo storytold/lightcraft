@@ -607,6 +607,9 @@ impl Session {
         // what its log's thread was handed reach the file before the new journal reads it. When
         // that can't be written, the open fails and the current library stays open with what its
         // thread holds (retried): read now, the files would miss it (review of #3557).
+        if self.library.is_some() && !self.pending_log.is_empty() {
+            self.persist()?;
+        }
         if let Some(old) = self.library.as_mut() {
             if let Err(e) = old.journal.wait() {
                 log::error!("library: {e}");
