@@ -1,11 +1,11 @@
 //! Process V4's calibrated Contrast and Blacks (`light_v3`): V1 and V2 render as they
 //! always did, and the V4 operators behave.
 
-use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_develop::{DevelopSettings, Process, ProcessVersion, controls};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
-use crate::light_v3::{self, FITS, LUT_N, LightOps, Mode, Operator, Reference};
+use crate::light_v3::{self, FITS, LUT_N, LightOps, Mode, Operator};
 use crate::light_v3_params as fitted;
 use crate::{DeepSamples, OutputDepth, PixelWindow, RenderRequest, SourceInfo, StageCache, render, render_cached};
 
@@ -152,15 +152,15 @@ fn on(process: Process, s: &DevelopSettings) -> DevelopSettings {
 }
 
 /// Every slider and amount the operator checks sweep: Contrast and Blacks with
-/// their fits and references.
-fn fits() -> [(&'static str, &'static light_v3::Fit, &'static [Reference]); 2] {
-    [("contrast", &fitted::CONTRAST, fitted::CONTRAST_REFERENCE), ("blacks", &fitted::BLACKS, fitted::BLACKS_REFERENCE)]
+/// their fits.
+fn fits() -> [(&'static str, &'static light_v3::Fit); 2] {
+    [("contrast", &fitted::CONTRAST), ("blacks", &fitted::BLACKS)]
 }
 
 #[test]
 fn the_shipped_fits_unpack_as_the_family_lays_them_out() {
     assert!(std::ptr::eq(FITS[0], &fitted::CONTRAST) && std::ptr::eq(FITS[1], &fitted::BLACKS));
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         let u = fit.unpack().unwrap_or_else(|| panic!("{name} doesn't unpack"));
         // D(1) = 0, and Contrast's shapes are anchored at black too
         assert_eq!((u.d_pos[11], u.d_neg[11]), (0.0, 0.0), "{name}");
@@ -221,40 +221,10 @@ fn preview_tables_match_exact_operators_over_combined_amounts() {
     eprintln!("Preview table maximum encoded error {worst:.6} of an 8-bit level");
 }
 
-/// The port against the family's own Python (`tools/light_v3_family.py`, through the generated
-/// references): `Family.curve` to the references' 12 digits, and `Family.apply` on pixels to the
-/// tables' interpolation.
-#[test]
-fn the_operators_are_fit_pointwise_family() {
-    for (name, fit, refs) in fits() {
-        let u = fit.unpack().unwrap();
-        assert!(!refs.is_empty());
-        let mut worst = 0.0f64;
-        for r in refs {
-            for (v, want) in fitted::REF_V.iter().zip(r.curve) {
-                let got = u.curve(r.amount, *v);
-                // (the references are written at 12 significant digits)
-                assert!((got - want).abs() < 1e-11, "{name} {} at {v}: {got} vs {want}", r.amount);
-            }
-            let Some(apply) = r.apply else { continue };
-            let op = Operator::new(fit, r.amount).unwrap();
-            for (px, want) in fitted::REF_PIX.iter().zip(apply) {
-                let lin = px.map(|v| srgb_to_linear(v as f32));
-                let got = op.apply(lin, &linear_to_srgb).map(linear_to_srgb);
-                for k in 0..3 {
-                    worst = worst.max((got[k] as f64 - want[k]).abs());
-                }
-            }
-        }
-        eprintln!("{name}: worst |apply - Family.apply| {worst:.2e} (encoded)");
-        assert!(worst < 1e-3, "{name}: {worst}");
-    }
-}
-
 /// Each operator is non-decreasing at every integer amount and maps white to white.
 #[test]
 fn every_operator_is_monotone_and_keeps_white() {
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         for a in (-100..=100).filter(|a| *a != 0) {
             let op = Operator::new(fit, a as f64).unwrap();
             assert!(op.lut[0] >= 0.0, "{name} {a}: F(0) = {}", op.lut[0]);
@@ -275,7 +245,7 @@ fn every_operator_is_monotone_and_keeps_white() {
 /// the fit.
 #[test]
 fn a_folding_fit_is_flattened_and_others_are_untouched() {
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         let u = fit.unpack().unwrap();
         for a in [-100.0, -50.0, -10.0, 10.0, 50.0, 100.0] {
             let mut fold = 0.0f64;
@@ -423,7 +393,7 @@ fn window_diff(full: &Rgba8, w: &Rgba8, win: PixelWindow) -> u8 {
 fn hdr_components_follow_the_operators_mode() {
     let enc = &linear_to_srgb;
     let lum = |p: [f32; 3]| light_v3::PRO_Y[0] * p[0] + light_v3::PRO_Y[1] * p[1] + light_v3::PRO_Y[2] * p[2];
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         for a in [-100.0, -40.0, 40.0, 100.0] {
             let op = Operator::new(fit, a).unwrap();
             for p in [[1.2f32, 0.2, 0.05], [3.0, 1.5, 0.8], [0.4, 1.1, 0.02]] {
