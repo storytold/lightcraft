@@ -76,7 +76,7 @@ impl PreviewBuild {
     }
 
     pub fn running(&self) -> bool {
-        !self.finished.load(Ordering::Relaxed)
+        !self.finished.load(Ordering::Acquire)
     }
 
     pub(crate) fn ended_cancelled(&self) -> bool {
@@ -102,7 +102,8 @@ impl PreviewBuild {
         // Cancellation may already have closed the outcome. Worker completion is a separate event:
         // it always releases waiters, but never changes which outcome won.
         let _ = self.terminal.compare_exchange(Self::RUNNING, outcome, Ordering::SeqCst, Ordering::SeqCst);
-        self.finished.store(true, Ordering::Relaxed);
+        // Publish the terminal outcome and final counters before a reader observes completion.
+        self.finished.store(true, Ordering::Release);
     }
 
     /// The user is at photo `id`, moving `backward` or forward: build from there on.

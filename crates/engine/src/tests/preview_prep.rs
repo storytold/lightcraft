@@ -303,6 +303,7 @@ fn editing_builds_the_view_by_the_library_rows_scope() {
     let (mut s, root, ids) = library("prep-develop", 4);
     s.execute("prefs.setBackgroundPrep", &json!({"settings": {"develop": {"scope": "onScreen"}, "library": {"scope": "marked"}}})).unwrap();
     s.execute("photo.rate", &json!({"ids": [ids[1].0], "rating": 3})).unwrap();
+    let hold = crate::prep::TestHold::new();
     let mode = crate::prep::Mode::Develop;
     for id in &ids {
         s.prep_tick(mode, Some(*id), false);
@@ -310,6 +311,7 @@ fn editing_builds_the_view_by_the_library_rows_scope() {
     let b = s.preview_build.clone().expect("the Library row asks for the view while editing");
     assert_eq!(b.total, 1, "only the marked photos, as the Library row says");
     b.cancel.store(true, Ordering::Relaxed);
+    drop(hold);
     // its workers stop before their library is removed under them
     assert!(wait_finished(&b), "a cancelled build stops");
     s.prep_tick(mode, Some(ids[0]), false);
