@@ -334,6 +334,7 @@ fn services(
         pick_folder: None,
         // the browser reports prefers-color-scheme to egui
         system_theme: None,
+        keep_awake: None,
     }
 }
 
