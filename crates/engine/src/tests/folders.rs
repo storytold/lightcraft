@@ -728,7 +728,7 @@ fn a_date_folder_inside_the_library_can_be_renamed_but_the_librarys_own_folders_
     assert_eq!(r["relinked"], 1, "the photo inside is relinked");
     assert!(lib.join("Originals/Beach").is_dir(), "the imported date folder is renamed");
     assert!(!Path::new(&day).exists());
-    let moved = lib.join("Originals/Beach/a.jpg");
+    let moved = lib.join("Originals").join("Beach").join("a.jpg");
     assert_eq!(paths(&s), [moved.to_string_lossy().to_string()], "the catalog follows the photo");
     assert!(moved.is_file());
     s.execute("edit.undo", &json!({})).unwrap();

@@ -1,3 +1,4 @@
+use super::albums::refuse_photos;
 use super::dates::browse_all_photos;
 use super::rows::{INDENT_STEP, Inside, Row, Said, out_of_sight, tree_inside, tree_open, tree_toggle};
 use super::{Icon, KeywordNode, LightcraftApp, json};
@@ -24,6 +25,13 @@ pub(super) fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[
 fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: &str, indent: f32, open_id: Option<egui::Id>, open: &mut bool) {
     let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
     let resp = Row::new(id, Icon::Tag, &n.name).count(Some(n.count)).selected(sel).indent(indent).show(app, ui);
+    refuse_photos(
+        app,
+        ui,
+        &resp,
+        crate::i18n::tr("Add keywords in the Keyword List"),
+        crate::i18n::tr("Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there"),
+    );
     if let Some(k) = open_id {
         // (no keyword inside it has keywords of its own: there is nothing inside it to say of)
         let inside = if n.children.iter().any(|c| !c.children.is_empty()) { Inside::OpensAndFolds } else { Inside::Alone };
