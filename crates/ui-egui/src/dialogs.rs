@@ -1009,7 +1009,8 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                 for (n, v) in list {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
-                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap());
+                    // values (serial numbers, lens names) are copied out of here; the field names are not
+                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap().selectable(true));
                     ui.end_row();
                 }
             });
