@@ -186,6 +186,9 @@ pub(super) fn source_metadata_key(p: &Photo) -> u64 {
     if kelvin && wb.is_none() {
         key.str("kelvin-white-balance");
     }
+    if kelvin && p.fitted_look() {
+        key.str("legacy-relative-white-balance");
+    }
     if let Some(lens) = &p.embedded_lens {
         key.str("lens").str(&format!("{lens:?}"));
     }

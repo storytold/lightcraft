@@ -5108,6 +5108,7 @@ fn relink_uses_the_replacement_cameras_white_balance_scale() {
         info.meta.camera = "SONY ILCA-99M2".into();
         if path.ends_with("replacement.arw") {
             info.meta.lens = "Replacement lens".into();
+            info.meta.lens_make = "Replacement maker".into();
         }
         Ok(info)
     }));
@@ -5116,8 +5117,47 @@ fn relink_uses_the_replacement_cameras_white_balance_scale() {
     assert!(photo.develops_raw() && !photo.relative_wb());
     assert_eq!(photo.as_shot_wb, Some((4300.0, 7.0)));
     assert_eq!(photo.meta.lens, "Replacement lens");
+    assert_eq!(photo.meta.lens_make, "Replacement maker");
     s.execute("photo.relink", &json!({"id": id.0, "path": original.to_string_lossy()})).unwrap();
-    assert_eq!(s.catalog.photo(id).unwrap().meta.lens, "Replacement lens", "an empty probe preserves the stored lens");
+    let meta = &s.catalog.photo(id).unwrap().meta;
+    assert_eq!((meta.lens.as_str(), meta.lens_make.as_str()), ("Replacement lens", "Replacement maker"));
+}
+
+#[test]
+fn relink_keeps_a_missing_white_balance_measurement_only_for_the_same_content() {
+    use lightcraft_catalog::{MediaKind, Op};
+    let dir = super::TestDir::new("relink-missing-wb");
+    let original = dir.join("original.dng");
+    let moved = dir.join("moved.dng");
+    let other = dir.join("other.dng");
+    let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    for path in [&original, &moved, &other] {
+        std::fs::write(path, &raw).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let measured = Some((4300.0, 7.0));
+    s.commit("Set as shot", Op::SetAsShotWb { id, wb: measured }).unwrap();
+    let old = s.catalog.photo(id).unwrap().clone();
+    s.media.file_probe = Some(std::sync::Arc::new(move |path| {
+        let changed = path.ends_with("other.dng");
+        Ok(crate::media::ProbeInfo {
+            kind: MediaKind::Raw,
+            format: "DNG".into(),
+            width: old.width,
+            height: old.height,
+            file_size: old.file_size,
+            content_hash: if changed { Some("replacement-content".into()) } else { old.content_hash.clone() },
+            ..Default::default()
+        })
+    }));
+    s.execute("photo.relink", &json!({"path": moved.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().as_shot_wb, measured, "identical contents retain their measured fallback");
+    s.execute("photo.relink", &json!({"path": other.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().as_shot_wb, None);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().as_shot_wb, measured);
 }
 
 #[test]
@@ -5161,9 +5201,7 @@ fn reload_repairs_old_source_classification_without_replacing_edits() {
         old.kind = if raw { MediaKind::Image } else { MediaKind::Raw };
         old.format = if raw { "JPEG" } else { "ORF" }.into();
         old.preview_checked = old.preview_stamp(&old.preview_only);
-        if !raw {
-            old.as_shot_wb = Some((4300.0, 7.0));
-        }
+        old.as_shot_wb = Some((4300.0, 7.0));
         s.catalog.apply(Op::RemovePhoto { id }).unwrap();
         s.catalog.apply(Op::AddPhoto { photo: Box::new(old) }).unwrap();
         let before = s.catalog.photo(id).unwrap().clone();
@@ -5171,9 +5209,7 @@ fn reload_repairs_old_source_classification_without_replacing_edits() {
         let repaired = s.catalog.photo(id).unwrap().clone();
         assert_eq!((repaired.kind, &repaired.format, &repaired.preview_checked), (correct.kind, &correct.format, &correct.preview_checked));
         assert_eq!((repaired.develop.clone(), repaired.meta.clone()), (before.develop.clone(), before.meta.clone()));
-        if !raw {
-            assert_eq!(repaired.as_shot_wb, None);
-        }
+        assert_eq!(repaired.as_shot_wb, correct.as_shot_wb);
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.catalog.photo(id).unwrap(), &before);
         s.execute("edit.redo", &json!({})).unwrap();

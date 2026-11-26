@@ -526,6 +526,27 @@ fn undo_and_redo_only_invalidate_pending_reloads_for_source_names() {
     assert_eq!(reload::apply(&mut x.s, items, vec![Ok(probe)]).unwrap().checked, [id]);
 }
 
+#[test]
+fn undo_of_exposure_metadata_rejects_a_pending_reload() {
+    use crate::cmd::reload;
+    let mut x = checked_orf("undo-exposure");
+    let id = x.id;
+    let mut meta = x.s.catalog.photo(id).unwrap().meta.clone();
+    let old = meta.exposure_time;
+    meta.shutter = "0.4 s".into();
+    meta.exposure_time = Some(0.4);
+    x.s.commit("Correct shutter", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    let items = reload::plan(&mut x.s, &json!({"id": id.0})).unwrap();
+    let mut probe = reload::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    probe.meta.shutter = "0.4 s".into();
+    probe.meta.exposure_time = Some(0.4);
+    x.s.execute("edit.undo", &json!({})).unwrap();
+    assert!(reload::apply(&mut x.s, items, vec![Ok(probe.clone())]).unwrap().checked.is_empty());
+    assert_eq!(x.s.catalog.photo(id).unwrap().meta.exposure_time, old);
+    let new = reload::plan(&mut x.s, &json!({"id": id.0})).unwrap();
+    assert_eq!(reload::apply(&mut x.s, new, vec![Ok(probe)]).unwrap().checked, [id]);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_stamp_only_recheck_keeps_the_face_scan() {

@@ -299,6 +299,24 @@ pub(crate) fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft
     ops
 }
 
+/// A change to any metadata field a pending file probe could write back.
+pub(crate) fn source_metadata_changed(old: &lightcraft_catalog::Meta, new: &lightcraft_catalog::Meta) -> bool {
+    old.camera != new.camera
+        || old.make != new.make
+        || old.lens != new.lens
+        || old.lens_make != new.lens_make
+        || old.shutter != new.shutter
+        || old.exposure_time != new.exposure_time
+        || old.focal_mm != new.focal_mm
+        || old.aperture != new.aperture
+        || old.iso != new.iso
+        || old.flash != new.flash
+        || old.exposure_bias != new.exposure_bias
+        || old.serial_number != new.serial_number
+        || old.gps != new.gps
+        || old.focus != new.focus
+}
+
 /// Repair only the shutter data an old import wrote, keeping independently edited metadata.
 fn repair_legacy_shutter(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
     if m.exposure_time.is_none()
@@ -339,18 +357,22 @@ pub(crate) fn lens_ops(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog:
 }
 
 /// Evaluate white balance using the source classification the same batch will apply.
-pub(crate) fn reload_wb_op(ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo, camera: &str) -> Option<Op> {
+pub(crate) fn reload_wb_op(ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo, camera: &str, same_path: bool) -> Option<Op> {
     let (kind, format) = if info.format.is_empty() { (ph.kind, ph.format.as_str()) } else { (info.kind, info.format.as_str()) };
     let (wb, mode) = if kind == lightcraft_catalog::MediaKind::Raw && info.preview_only.is_none() {
+        let same_source = match (super::missing::stored_hash(ph), info.content_hash.as_deref()) {
+            (Some(old), Some(new)) => old == new,
+            _ => same_path && (info.file_size == 0 || ph.file_size == 0 || ph.file_size == info.file_size),
+        };
         let inferred = lightcraft_catalog::relative_wb_camera(format, camera);
         let relative = if !info.meta.camera.is_empty() {
             lightcraft_catalog::relative_wb_camera(format, &info.meta.camera)
-        } else if format.eq_ignore_ascii_case(&ph.format) {
+        } else if same_source && format.eq_ignore_ascii_case(&ph.format) {
             ph.source_relative_wb.unwrap_or(inferred)
         } else {
             inferred
         };
-        let previous = ph.as_shot_wb.filter(|_| ph.relative_wb() == relative);
+        let previous = ph.as_shot_wb.filter(|_| same_source && ph.relative_wb() == relative);
         let measured = info.as_shot_wb.filter(|(t, tint)| !relative && t.is_finite() && tint.is_finite());
         (measured.or(previous), (relative != inferred).then_some(relative))
     } else if info.format.is_empty() {
@@ -396,7 +418,7 @@ pub(crate) fn reload_ops(
                 _ => None,
             })
             .unwrap_or(&c.meta.camera);
-        let wb = reload_wb_op(c, info, camera);
+        let wb = reload_wb_op(c, info, camera, true);
         let before = ops.len();
         ops.extend(content_op(c.id, c, info).into_iter().chain(metadata).chain(lens_ops(c.id, c, info)).chain(wb));
         if ops.len() != before {
@@ -566,6 +588,26 @@ mod tests {
         s.execute("edit.undo", &json!({})).unwrap();
         assert!(s.catalog.photo(id).unwrap().relative_wb());
         assert_eq!(old.source_key, s.render_job(id, 32, 32, false, true).unwrap().source_key);
+    }
+
+    #[test]
+    fn reclassification_changes_the_render_identity_for_legacy_white_balance() {
+        let id = PhotoId(1);
+        let mut s = Session::new();
+        let source = Source::File { path: "/source.dng".into() };
+        let mut photo = Photo::new(id, source.clone(), "source.dng", "ARW", 8, 8, "");
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        photo.meta.camera = "SONY ILCA-99M2".into();
+        photo.as_shot_wb = Some((4300.0, 7.0));
+        photo.content_hash = Some("same bytes".into());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let before = s.render_job(id, 32, 32, false, true).unwrap();
+        assert!(crate::media::source_info(s.catalog.photo(id).unwrap()).legacy_relative_wb);
+        s.catalog.apply(Op::Relink { id, file_name: "source.dng".into(), source, format: Some("DNG".into()), kind: None }).unwrap();
+        let after = s.render_job(id, 32, 32, false, true).unwrap();
+        assert!(!crate::media::source_info(s.catalog.photo(id).unwrap()).legacy_relative_wb);
+        assert_ne!(before.source_key, after.source_key);
+        assert_ne!(before.key, after.key);
     }
 
     /// Reload fills camera fields a photo lacks (a CR3 imported before CR3 metadata was read) and keeps

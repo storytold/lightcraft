@@ -141,14 +141,17 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
         let camera = if info.meta.camera.is_empty() { &ph.meta.camera } else { &info.meta.camera };
         let make = if info.meta.make.is_empty() { &ph.meta.make } else { &info.meta.make };
         let lens = if info.meta.lens.is_empty() { &ph.meta.lens } else { &info.meta.lens };
-        if *camera != ph.meta.camera || *make != ph.meta.make || *lens != ph.meta.lens {
+        let lens_make = if info.meta.lens_make.is_empty() { &ph.meta.lens_make } else { &info.meta.lens_make };
+        if *camera != ph.meta.camera || *make != ph.meta.make || *lens != ph.meta.lens || *lens_make != ph.meta.lens_make {
             let mut meta = ph.meta.clone();
             meta.camera.clone_from(camera);
             meta.make.clone_from(make);
             meta.lens.clone_from(lens);
+            meta.lens_make.clone_from(lens_make);
             ops.push(Op::SetMeta { id, meta: Box::new(meta) });
         }
-        ops.extend(crate::cmd::convert::reload_wb_op(ph, &info, camera));
+        let same_path = matches!(&ph.source, Source::File { path } if *path == abs);
+        ops.extend(crate::cmd::convert::reload_wb_op(ph, &info, camera, same_path));
         if info.embedded_lens.as_ref() != ph.embedded_lens.as_deref() {
             ops.push(Op::SetEmbeddedLens { id, lens: info.embedded_lens.map(Box::new) });
         }

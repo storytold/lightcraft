@@ -792,12 +792,10 @@ impl Session {
                 | Op::SetAsShotWb { id, .. }
                 | Op::SetSourceWb { id, .. }
                 | Op::SetEmbeddedLens { id, .. } => invalidated.push(*id),
-                Op::SetMeta { id, meta }
-                    if self
-                        .catalog
-                        .photo(*id)
-                        .is_some_and(|p| p.meta.camera != meta.camera || p.meta.make != meta.make || p.meta.lens != meta.lens) =>
-                {
+                Op::SetMeta { id, meta } if self.catalog.photo(*id).is_some_and(|p| cmd::convert::source_metadata_changed(&p.meta, meta)) => {
+                    invalidated.push(*id);
+                }
+                Op::SetCaptured { id, captured } if self.catalog.photo(*id).is_some_and(|p| p.captured != *captured) => {
                     invalidated.push(*id);
                 }
                 Op::AddPhoto { photo } => invalidated.push(photo.id),
