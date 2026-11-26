@@ -475,3 +475,34 @@ fn defringe_amounts_past_the_sliders_act_as_their_end() {
     assert_eq!(at(1e300, 1.0).data, at(20.0, 1.0).data);
     assert_eq!(at(f64::MAX, 1e300).data.len(), 800, "a huge scale too");
 }
+
+#[test]
+fn the_min_max_filter_matches_a_brute_force_scan_and_is_linear_in_its_radius() {
+    let (w, h) = (37, 23);
+    let mut p = Plane::new(w, h);
+    for (i, v) in p.data.iter_mut().enumerate() {
+        *v = ((i * 7919) % 101) as f32 / 101.0;
+    }
+    for r in [0, 1, 2, 5, 22, 40] {
+        for max in [false, true] {
+            let got = min_filter(&p, r, max);
+            for y in 0..h {
+                for x in 0..w {
+                    let mut m = p.data[y * w + x];
+                    for yy in y.saturating_sub(r)..=(y + r).min(h - 1) {
+                        for xx in x.saturating_sub(r)..=(x + r).min(w - 1) {
+                            let v = p.data[yy * w + xx];
+                            m = if max { m.max(v) } else { m.min(v) };
+                        }
+                    }
+                    assert_eq!(got.data[y * w + x], m, "r {r} max {max} at {x},{y}");
+                }
+            }
+        }
+    }
+    // a radius as wide as a large output: was ~4 L³ comparisons
+    let big = Plane::new(2000, 2000);
+    let t = std::time::Instant::now();
+    let _ = min_filter(&big, 2000, true);
+    assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
+}

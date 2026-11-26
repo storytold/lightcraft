@@ -432,8 +432,9 @@ fn copies_from_a_local_folder_mirror_and_checks_the_hash() {
     let dst = tmp("local-dst");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("model.bin"), payload()).unwrap();
-    // a bare absolute path and a file:// URL are both mirrors
-    let m = mirrors(Some(src.to_str().unwrap()), None, &[]);
+    // a bare absolute path and a file:// URL are both mirrors (passed as a default, which is not split on spaces
+    // or commas the way the environment's list is: the temp folder may hold either)
+    let m = mirrors(None, None, &[src.to_str().unwrap()]);
     assert_eq!(m, vec![format!("file://{}", src.display())]);
     let (r, prog) = run(&[pinned()], &m, &dst, &AtomicBool::new(false));
     r.unwrap();
@@ -459,15 +460,28 @@ fn copies_from_a_local_folder_mirror_and_checks_the_hash() {
     let dir_spec = FileSpec { name: "dir.bin", size: None, sha256: None, max: 10 };
     let (r, _) = run(&[dir_spec], &[format!("file://{}", src.display())], &dst2, &AtomicBool::new(false));
     assert!(r.is_err());
+    for d in [&src, &dst, &bad, &dst2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }
 
 #[test]
 fn file_urls_are_percent_decoded_but_bare_paths_keep_their_percent_signs() {
-    let bare = mirrors(Some("/models/50%20off"), None, &[]);
+    // (absolute on every platform: `/models/…` has no drive on Windows, where it is not an absolute path)
+    let percent = std::env::temp_dir().join("50%20off");
+    let bare = mirrors(None, None, &[percent.to_str().unwrap()]);
     assert_eq!(bare.len(), 1);
-    assert_eq!(local_path(&bare[0]), Some(std::path::PathBuf::from("/models/50%20off")));
-    assert_eq!(local_path("file:///models/my%20sam3"), Some(std::path::PathBuf::from("/models/my sam3")));
+    assert_eq!(local_path(&bare[0]), Some(percent));
+    let spaced = std::env::temp_dir().join("my sam3");
+    assert_eq!(local_path(&format!("file://{}", spaced.to_str().unwrap().replace(' ', "%20"))), Some(spaced));
     for hostile in ["file:///x%", "file:///x%2", "file:///x%zz", "file:///x%ff", "file:///x%0a"] {
         assert_eq!(local_path(hostile), None, "{hostile}");
     }
+}
+
+#[test]
+fn names_differing_only_in_case_are_one_file() {
+    let spec = |name| FileSpec { name, size: Some(1), sha256: None, max: 1 };
+    assert!(super::validate_files(&[spec("Model.bin")]).is_ok());
+    assert!(super::validate_files(&[spec("Model.bin"), spec("model.BIN")]).is_err());
 }

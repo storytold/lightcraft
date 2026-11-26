@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-24 · **Change:** minor (German: interface strings and formats messages reviewed, terms fixed in localization-de.md; German form of address: *du*; Indonesian and Finnish interface catalogs added; Italian: every interface string translated, native-speaker corrections; Vietnamese shipped; previously minor: de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-13 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 How far each interface language is from `full`. How to add or maintain a language is in
 [localization.md](localization.md); per-language notes are in `localization-<code>.md`
@@ -35,7 +35,11 @@ go beyond the target.
 Script support is checked against the code: `language_table!` in `crates/ui-egui/src/i18n.rs` lists
 scripts `Latn`, `Cyrl`, `Hans`, `Hant`, `Jpan` only. The UI is egui, which has no bidirectional layout
 and no complex-script shaping, so Arabic (RTL, joining) and Devanagari (conjuncts, reordering) cannot
-render correctly today.
+render correctly today. File and folder names in other scripts get glyphs from the craft-fonts faces after
+Inter (Arabic, Thai, Hebrew, CJK). egui shapes each run of one face with harfrust, so a Hebrew
+word reads right to left, but nothing reorders the runs: the space between words comes from Inter,
+so the words of a right-to-left name, and mixed Hebrew and Latin text, stay in logical order, left
+to right (#1915).
 
 Native-speaker review: no catalog has had a full formal review; German's interface strings and formats messages have (2026-10-24, What's New not). Several catalogs have edits from community
 contributors whose commits only touch that language (ja, zh-hans, zh-hant, fr, de, ru, uk, pt-br);

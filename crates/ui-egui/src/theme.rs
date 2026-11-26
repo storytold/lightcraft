@@ -412,6 +412,25 @@ pub fn current(ctx: &egui::Context) -> Option<ThemeKind> {
     ctx.data(|d| d.get_temp::<ThemeKind>(theme_id()))
 }
 
+/// Windows only: tell the window its theme again, the first time it has focus. A first theme that
+/// reaches a focused window as it comes up changes the title's colour but not the caption's, so
+/// with LightCraft dark on a light system the title is white on a light caption (it looks blank),
+/// and light on dark is dark on dark, until focus next moves (#3381). The same command repaints
+/// the caption once the window is up. A window that opens without focus shows the right colours
+/// from the start.
+pub fn refresh_window_on_first_focus(ctx: &egui::Context) {
+    let done = egui::Id::unique("lightcraft-window-theme-refreshed");
+    if !cfg!(target_os = "windows") || !ctx.input(|i| i.focused) || ctx.data(|d| d.get_temp::<bool>(done)).is_some() {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(done, true));
+    let theme = match ctx.theme() {
+        egui::Theme::Dark => egui::SystemTheme::Dark,
+        egui::Theme::Light => egui::SystemTheme::Light,
+    };
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(theme));
+}
+
 /// Style `ctx` with the default theme.
 pub fn apply(ctx: &egui::Context) {
     apply_kind(ctx, ThemeKind::default());
@@ -461,6 +480,7 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     ctx.set_visuals_of(egui::Theme::Dark, v.clone());
     ctx.set_visuals_of(egui::Theme::Light, v);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+    let animation_time = crate::motion::animation_time(crate::motion::reduced(ctx));
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
@@ -469,7 +489,10 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.0));
         s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
         s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
-        s.animation_time = 0.08;
+        s.animation_time = animation_time;
+        // Captions and headings are not text to select (#1885); text meant for copying opts in
+        // with `Label::selectable(true)`.
+        s.interaction.selectable_labels = false;
     });
 }
 
@@ -506,6 +529,51 @@ mod tests {
         }
     }
 
+    /// The `SetTheme(Light)` commands one frame of `ctx` sends the window, with or without
+    /// [`refresh_window_on_first_focus`] in it.
+    #[cfg(target_os = "windows")]
+    fn light_theme_commands(ctx: &egui::Context, focused: bool, refresh: bool) -> usize {
+        let raw = egui::RawInput { focused, ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| {
+            if refresh {
+                refresh_window_on_first_focus(ui.ctx());
+            }
+        });
+        out.textures_delta.clear();
+        let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        commands.iter().filter(|c| matches!(c, egui::ViewportCommand::SetTheme(egui::SystemTheme::Light))).count()
+    }
+
+    /// #3381: egui sends the theme with the first frame, and the window hears it once more the
+    /// first time it has focus, not on every later focus.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_window_hears_its_theme_again_the_first_time_it_has_focus() {
+        let ctx = egui::Context::default();
+        apply_kind(&ctx, ThemeKind::Silver);
+        let sent = |focused: bool| light_theme_commands(&ctx, focused, true);
+        assert_eq!(sent(false), 1, "egui's own, with the first frame");
+        assert_eq!(sent(false), 0, "no focus yet");
+        assert_eq!(sent(true), 1, "the first frame with focus");
+        assert_eq!(sent(true), 0, "still focused");
+        assert_eq!(sent(false), 0, "focus lost");
+        assert_eq!(sent(true), 0, "focus back: Windows repaints this by itself");
+    }
+
+    /// #3381: a window that has focus from its very first frame hears the theme once more in that
+    /// frame, on top of egui's own command. (In the app the first frame never gets here: `ui`
+    /// returns before the fonts are ready, so egui's command always goes a frame earlier.)
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_window_focused_from_its_first_frame_hears_its_theme_again_in_that_frame() {
+        let first_frame = |refresh: bool| {
+            let ctx = egui::Context::default();
+            apply_kind(&ctx, ThemeKind::Silver);
+            light_theme_commands(&ctx, true, refresh)
+        };
+        assert_eq!(first_frame(true), first_frame(false) + 1);
+    }
+
     /// Every theme scrolls 100 points a wheel notch, and a zoom notch stays egui's stock ~1.22x
     /// (`exp(40 / 200)`) instead of growing with the longer scroll.
     #[test]
@@ -519,24 +587,79 @@ mod tests {
         }
     }
 
+    /// Drag the pointer across `label` from end to end, press Copy, and return what egui copied.
+    fn drag_and_copy(label: impl Fn() -> egui::Label) -> Option<String> {
+        let ctx = egui::Context::default();
+        apply_kind(&ctx, ThemeKind::default());
+        let frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut rect = egui::Rect::NOTHING;
+            let mut out = ctx.run_ui(input, |ui| rect = ui.add(label()).rect);
+            out.textures_delta.clear();
+            (out.platform_output.commands, rect)
+        };
+        let (_, rect) = frame(vec![]);
+        let (from, to) = (rect.left_center() + egui::vec2(1.0, 0.0), rect.right_center() - egui::vec2(1.0, 0.0));
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let mut commands = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![button(to, false)],
+            vec![egui::Event::Copy],
+        ] {
+            commands.extend(frame(events).0);
+        }
+        commands.into_iter().find_map(|c| if let egui::OutputCommand::CopyText(text) = c { Some(text) } else { None })
+    }
+
+    /// #1885: a panel caption is not text to select, as in Lightroom; text a dialog offers for
+    /// copying (a path) opts in and still copies.
+    #[test]
+    fn static_labels_cannot_be_drag_selected_but_opted_in_text_can() {
+        assert_eq!(drag_and_copy(|| egui::Label::new("Exposure")), None, "a plain label was selected and copied");
+        assert_eq!(drag_and_copy(|| egui::Label::new("/Users/me/Pictures").selectable(true)).as_deref(), Some("/Users/me/Pictures"));
+    }
+
     /// #736: the release input must carry Thai, not silently skip the check with an older pin.
     /// Exercise the Thai characters of the reported folder name through every egui family.
     #[test]
     fn thai_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Thai", "Studio34 ถ่ายภาพงานแต่งงาน");
+    }
+
+    /// #1915: Hebrew folder names drew as boxes. The release input carries Noto Sans Hebrew, and
+    /// every egui family reaches it (letters, final forms, maqaf, geresh and gershayim, niqqud).
+    /// No ₪ here: Inter and Hack draw it before the Hebrew face, and Hack also holds monospace's
+    /// replacement glyph, where `has_glyph` answers false (the engine test checks ₪ in the face).
+    #[test]
+    fn hebrew_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Hebr", "תמונות טנזניה 2024 ךםןףץ ־ ׳ ״ שָׁלוֹם");
+    }
+
+    /// The craft-fonts face for `script` is in every UI family and draws the non-ASCII
+    /// characters of `name` in each of them.
+    fn folder_name_has_glyphs_in_every_ui_family(script: &str, name: &str) {
         if lightcraft_engine::CRAFT_FONTS.is_empty() {
             lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        let thai = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers("Thai")).expect("font input includes Thai");
+        let face = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers(script)).unwrap_or_else(|| panic!("font input includes {script}"));
         set_language(Locale::En);
         let definitions = font_definitions(lightcraft_engine::CRAFT_FONTS);
-        let name = craft_font_name(thai);
-        assert!(definitions.font_data.contains_key(&name));
+        let face_name = craft_font_name(face);
+        assert!(definitions.font_data.contains_key(&face_name));
         // (The strong family has the face's heavier twin instead when it is a variable font.)
-        let strong = format!("{name} strong");
+        let strong = format!("{face_name} strong");
         for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
             let names = definitions.families.get(&family).expect("UI font family");
-            assert!(names.contains(&name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {name}");
+            assert!(names.contains(&face_name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {face_name}");
         }
         let ctx = egui::Context::default();
         ctx.set_fonts(definitions);
@@ -545,10 +668,10 @@ mod tests {
         ctx.fonts_mut(|fonts| {
             for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
                 let id = FontId::new(13.0, family);
-                // Check the Thai portion; egui 0.36's has_glyph reports false for characters
+                // Check the non-ASCII portion; egui 0.36's has_glyph reports false for characters
                 // in the replacement glyph's own face (including normal monospace Latin).
-                for ch in "Studio34 ถ่ายภาพงานแต่งงาน".chars().filter(|ch| !ch.is_ascii()) {
-                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch}");
+                for ch in name.chars().filter(|ch| !ch.is_ascii()) {
+                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch} (U+{:04X})", ch as u32);
                 }
             }
         });
