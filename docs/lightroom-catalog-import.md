@@ -62,7 +62,14 @@ is also available through `library.importLightroom {"status":true}` during that 
 
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, virtual copies and mapped develop
-settings are imported. Missing originals remain catalogued for relinking, count as added records and are reported
+settings are imported. A Rotate Left / Right made in Lightroom carries over: the catalog keeps one
+orientation, the file's own turned by it, so the import compares it with the file's own orientation and gives the
+photo the difference as its own rotation, virtual copies from their master's file. Each photo keeps its file's
+orientation from when its file was read (an import or a folder browse, catalog format v13), so a browsed photo, a
+virtual copy made in Lightroom later and a re-import get the same turn without reading the file again. A photo the
+library already had with edits of its own keeps its rotation, and the catalog's crop and masks go into the frame it
+shows in. A photo whose file orientation isn't known (an offline original, a raw shown from its preview, a photo
+catalogued before v13) keeps the catalog's orientation as the file's. Missing originals remain catalogued for relinking, count as added records and are reported
 separately from failures reading files that are present. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.

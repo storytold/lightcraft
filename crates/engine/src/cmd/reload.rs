@@ -35,16 +35,22 @@ pub struct Tickets {
 }
 
 /// The photos `p` targets (`ids`, else the selection) that have a file, under a new ticket. No
-/// file-system calls.
+/// file-system calls. A virtual copy is listed as the photo it was copied from when the two share
+/// the file: the file is re-read once, and [`apply`] brings that photo and all its copies up to
+/// date, so none keeps what the file was before.
 pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
     let ids = s.targets(p)?;
     s.reload_tickets.last = s.reload_tickets.last.saturating_add(1);
     let ticket = s.reload_tickets.last;
+    let mut seen = std::collections::HashSet::new();
     Ok(ids
         .into_iter()
-        .filter_map(|id| match s.catalog.photo(id).map(|ph| &ph.source) {
-            Some(Source::File { path }) => Some(Item { id, path: path.clone(), ticket }),
-            _ => None,
+        .filter_map(|id| {
+            let ph = s.catalog.photo(id)?;
+            let Source::File { path } = &ph.source else { return None };
+            let master = ph.copy_of.filter(|m| s.catalog.photo(*m).is_some_and(|mp| matches!(&mp.source, Source::File { path: q } if q == path)));
+            let id = master.unwrap_or(id);
+            seen.insert(id).then(|| Item { id, path: path.clone(), ticket })
         })
         .collect())
 }
@@ -111,4 +117,59 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
 /// `{reloaded: [ids]}`.
 pub fn to_json(reloaded: &[PhotoId]) -> Value {
     json!({"reloaded": reloaded.iter().map(|i| i.0).collect::<Vec<_>>()})
+}
+
+#[cfg(test)]
+mod tests {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use serde_json::json;
+
+    use super::plan;
+    use crate::Session;
+
+    /// A session holding `photos` as `(id, path, copy_of)`; `path: None` is a photo with no file.
+    fn session(photos: &[(u64, Option<&str>, Option<u64>)]) -> Session {
+        let mut s = Session::new();
+        for (id, path, copy_of) in photos {
+            let source = match path {
+                Some(p) => Source::File { path: (*p).into() },
+                None => Source::Demo { scene: 1 },
+            };
+            let mut ph = Photo::new(PhotoId(*id), source, "x.jpg", "JPEG", 60, 40, "2026-10-06T00:00:00");
+            ph.copy_of = copy_of.map(PhotoId);
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        }
+        s
+    }
+
+    fn planned(s: &mut Session, ids: &[u64]) -> Vec<(u64, String)> {
+        plan(s, &json!({"ids": ids})).unwrap().into_iter().map(|i| (i.id.0, i.path)).collect()
+    }
+
+    /// A virtual copy that shares its master's file is re-read as the master, once, even when both
+    /// (or only the copy) are asked for.
+    #[test]
+    fn a_copy_sharing_the_file_is_planned_as_its_master_once() {
+        let mut s = session(&[(1, Some("/a.jpg"), None), (2, Some("/a.jpg"), Some(1)), (3, Some("/a.jpg"), Some(1))]);
+        assert_eq!(planned(&mut s, &[1, 2, 3]), vec![(1, "/a.jpg".to_string())]);
+        assert_eq!(planned(&mut s, &[2]), vec![(1, "/a.jpg".to_string())], "the copy alone reloads through its master");
+        assert_eq!(planned(&mut s, &[3, 2]), vec![(1, "/a.jpg".to_string())]);
+    }
+
+    /// A copy linked to a file of its own is re-read as itself, beside its master.
+    #[test]
+    fn a_copy_with_its_own_file_is_planned_as_itself() {
+        let mut s = session(&[(1, Some("/a.jpg"), None), (2, Some("/b.jpg"), Some(1))]);
+        assert_eq!(planned(&mut s, &[1, 2]), vec![(1, "/a.jpg".to_string()), (2, "/b.jpg".to_string())]);
+        assert_eq!(planned(&mut s, &[2]), vec![(2, "/b.jpg".to_string())]);
+    }
+
+    /// A copy whose master is gone from the library, or has no file, is re-read as itself.
+    #[test]
+    fn a_copy_without_a_master_on_file_is_planned_as_itself() {
+        let mut s = session(&[(2, Some("/a.jpg"), Some(1)), (3, None, None), (4, Some("/c.jpg"), Some(3))]);
+        assert_eq!(planned(&mut s, &[2]), vec![(2, "/a.jpg".to_string())], "master removed");
+        assert_eq!(planned(&mut s, &[4]), vec![(4, "/c.jpg".to_string())], "master has no file");
+        assert!(planned(&mut s, &[3, 99]).is_empty(), "no file, no photo: nothing to read");
+    }
 }

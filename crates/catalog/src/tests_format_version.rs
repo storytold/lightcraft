@@ -97,6 +97,67 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A v13 library (before photos kept their file's own orientation), written out by hand as v13
+/// wrote it: no `file_orientation` in the snapshot's photos nor in a logged `setContent`. It opens
+/// with no orientation on any photo, so a Lightroom catalog import treats them as before, and is
+/// rewritten in the current format, where a photo given one keeps it across a reload.
+#[test]
+fn v13_photo_loads_without_a_file_orientation_and_is_upgraded() {
+    let photo = |id: u64, name: &str, w: u32, h: u32| {
+        format!(
+            r#"{{"id":{id},"source":{{"type":"file","path":"/p/{name}"}},"file_name":"{name}","format":"JPEG","width":{w},"height":{h},"file_size":10,"imported":"2026-01-01","develop":{{}},"content_hash":"h{id}"}}"#
+        )
+    };
+    let catalog = format!(
+        r#"{{"photos":{{"1":{},"2":{}}},"albums":{{}},"next_photo":3,"next_album":1}}"#,
+        photo(1, "a.jpg", 160, 120),
+        photo(2, "b.jpg", 160, 120)
+    );
+    // the file of photo 2 was turned on disk and reloaded under v13: new size, no orientation field
+    let body = r#"{"op":"setContent","id":2,"width":120,"height":160,"file_size":11,"content_hash":"h2b"}"#;
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!(
+            "{{\"format\":\"lightcraft-catalog\",\"version\":13,\"seq\":1,\"catalog\":{catalog}}}
+"
+        )
+        .into_bytes(),
+    );
+    m.set(
+        LOG,
+        format!(
+            "{{\"seq\":2,\"crc\":{},\"op\":{body}}}
+",
+            crc32fast::hash(body.as_bytes())
+        )
+        .into_bytes(),
+    );
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.upgraded_from), (1, Some(13)));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    let (a, b) = (loaded.photo(PhotoId(1)).unwrap(), loaded.photo(PhotoId(2)).unwrap());
+    assert_eq!((a.file_orientation, b.file_orientation), (None, None));
+    assert_eq!((b.width, b.height, b.file_size, b.content_hash.as_deref()), (120, 160, 11, Some("h2b")), "the logged reload applied");
+    // in the current format an orientation is written and read back
+    let op = Op::SetContent {
+        id: PhotoId(2),
+        width: 120,
+        height: 160,
+        file_size: 11,
+        content_hash: Some("h2b".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+        file_orientation: Some(lightcraft_geom::Orientation::Rotate90),
+    };
+    j.append(std::slice::from_ref(&op)).unwrap();
+    drop(j);
+    let (_, reopened, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert_eq!(reopened.photo(PhotoId(2)).unwrap().file_orientation, Some(lightcraft_geom::Orientation::Rotate90));
+    assert_eq!(reopened.photo(PhotoId(1)).unwrap().file_orientation, None);
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -238,9 +299,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: Lens Blur in develop settings and mask adjustments (v12: `Catalog.grids` and `SegMask.grid`; v11: `EmbeddedLens.source`;
-    /// v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 13;
+    /// v14: `Photo.file_orientation` (v13: Lens Blur in develop settings and mask adjustments; v12: `Catalog.grids` and
+    /// `SegMask.grid`; v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 14;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

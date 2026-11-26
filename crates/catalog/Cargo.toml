@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 lightcraft-develop = { workspace = true }
+lightcraft-geom = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-raw = { workspace = true }
 serde = { workspace = true }
@@ -25,6 +26,5 @@ winapi-util = { workspace = true }
 
 [dev-dependencies]
 dhat = { workspace = true }
-lightcraft-geom = { workspace = true }
 lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
