@@ -196,20 +196,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Standard padded base64 (for an image returned in the reply).
-fn base64(bytes: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [chunk.first().copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
-        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
-        let at = |shift: u32| A.get((n >> shift) as usize & 63).copied().unwrap_or(b'=') as char;
-        out.push(at(18));
-        out.push(at(12));
-        out.push(if chunk.len() > 1 { at(6) } else { '=' });
-        out.push(if chunk.len() > 2 { at(0) } else { '=' });
-    }
-    out
-}
+use craft_mime::transfer::base64;
 
 // ------------------------------------------------------------------------------- templates
 
@@ -379,7 +366,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Slideshow Playback Settings",
             [],
             None,
-            "{slideDuration?: seconds (0.5–120), fadeDuration?: seconds (0 = cut; at most 10 and the slide duration), fadeColor?: \"#rrggbb\"|[r,g,b]|null (fade through a colour instead of crossfading), randomOrder?: bool, repeat?: bool, preparePreviews?: bool (render the next slides before they are due), manual?: bool (manual slideshow: a slide stays up until ← or → changes it)} — omitted keys keep their value, {} reads them; saved with the library → {slideDuration, fadeDuration, fadeColor, randomOrder, repeat, preparePreviews, manual}",
+            "{slideDuration?: seconds (0.5–120), fadeDuration?: seconds (0 = cut; at most 10 and the slide duration), fadeColor?: \"#rrggbb\"|[r,g,b]|null (fade through a colour instead of crossfading), randomOrder?: bool, repeat?: bool, preparePreviews?: bool (render the next slides before they are due), manual?: bool (manual slideshow: a slide stays up until ← or → changes it), panAndZoom?: bool (each photo moves and zooms slowly over its slide, on its own path), panAndZoomAmount?: 0 (low) to 1 (high)} — omitted keys keep their value, {} reads them; saved with the library → {slideDuration, fadeDuration, fadeColor, randomOrder, repeat, preparePreviews, manual, panAndZoom, panAndZoomAmount}",
             always,
             playback
         ),
@@ -510,4 +497,17 @@ pub fn specs() -> Vec<CommandSpec> {
             export_status
         ),
     ]
+}
+
+#[cfg(test)]
+mod shared_base64_parity {
+    #[test]
+    fn image_reply_bytes_keep_standard_padding_and_no_wrap() {
+        for (input, want) in
+            [(b"".as_slice(), ""), (b"f".as_slice(), "Zg=="), (b"fo".as_slice(), "Zm8="), (b"foo".as_slice(), "Zm9v"), (&[251, 255, 255], "+///")]
+        {
+            assert_eq!(super::base64(input), want);
+        }
+        assert!(!super::base64(&[255; 256]).contains(['\r', '\n']));
+    }
 }
