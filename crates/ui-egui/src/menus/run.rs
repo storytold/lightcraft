@@ -1311,7 +1311,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
+            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, stack_groups: app.ui.cull_stack, burst_gap, similarity });
             Ok(Value::Null)
         }
         "app.whatsNew" => {
@@ -1663,12 +1663,11 @@ fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> 
         .and_then(Value::as_u64)
         .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)).filter(|a| a.is_smart()).cloned());
     app.ui.dialog = Some(match album {
-        Some(a) => Dialog::SmartRules {
-            id: Some(a.id.0),
-            name: a.name.clone(),
+        Some(a) => Dialog::smart_rules(
+            Some(a.id.0),
+            a.name.clone(),
             // older rules read as they always matched (RuleSet::upgrade)
-            rules: a
-                .smart
+            a.smart
                 .as_ref()
                 .and_then(|f| f.rule_set.clone())
                 .map(|mut r| {
@@ -1676,14 +1675,14 @@ fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> 
                     r
                 })
                 .unwrap_or_default(),
-            parent: None,
-        },
-        None => Dialog::SmartRules {
-            id: None,
-            name: p.get("name").and_then(Value::as_str).unwrap_or("").into(),
-            rules: lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
-            parent: parent_param(p),
-        },
+            None,
+        ),
+        None => Dialog::smart_rules(
+            None,
+            p.get("name").and_then(Value::as_str).unwrap_or("").into(),
+            lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
+            parent_param(p),
+        ),
     });
     Ok(Value::Null)
 }
@@ -1958,7 +1957,7 @@ fn import_luts(app: &mut LightcraftApp, lut_paths: &[&String], news: &mut Import
             let profiles = v["imported"].as_array().map_or(0, Vec::len);
             if profiles > 0 {
                 news.parts.push(crate::i18n::tr_format!(
-                    "Imported {profiles} profile{} (Profile browser ▸ their groups)",
+                    "Imported {profiles} profile{} (Profile browser → their groups)",
                     crate::i18n::plural_s(profiles),
                     profiles = profiles
                 ));
