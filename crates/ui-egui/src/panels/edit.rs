@@ -1,6 +1,8 @@
 //! The Edit panel: histogram, Auto/B&W, profile, and the Light / Color / Effects / Detail / Optics
 //! sections, built from the engine's control specs.
 
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use egui::epaint::{Mesh, Vertex};
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -17,11 +19,15 @@ use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register, section_header, slider, text_button};
 
+mod color_controls;
+pub(crate) use color_controls::{frame_begin as color_frame_begin, prepare_keys as prepare_color_keys};
 mod curve;
 mod grading;
 mod hdr_flow;
 mod histogram;
 mod lens_blur;
+mod light_controls;
+pub(crate) use light_controls::prepare_keys as prepare_light_keys;
 mod mixer;
 mod sliders;
 
@@ -34,11 +40,150 @@ pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
 use lens_blur::lens_blur;
 use mixer::{mixer, point_color};
-use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
+use sliders::{hdr_row, header_buttons, profile_menu, quick_develop, reset_tip, section};
+
+/// The source-info gate and existing merge command stay at the original photo's row.
+/// A binding proposes only this pass's bool; no UI copy of the develop value is kept.
+fn camera_local_tone_checkbox(ui: &mut egui::Ui, owner: PhotoId, current: bool) -> Option<bool> {
+    use craft::behavior::Proposal;
+    use craft::ui::contract::Sizing;
+
+    let key = "check:profile.cameraLocalTone";
+    let label = crate::i18n::tr("Camera local tone mapping");
+    let tooltip = crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it");
+    let checkbox = || {
+        Checkbox::new(Bind::given(current))
+            .id_salt(("camera-local-tone", owner))
+            .label(label.to_owned())
+            .tooltip(tooltip.to_owned())
+            .sizing(Sizing::FillWidth)
+    };
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        // Measurement must not mount a live target or consume an old owner's release.
+        let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+        let size = checkbox().measure_in(&child, Proposal::Ideal);
+        ui.allocate_exact_size(size, egui::Sense::hover());
+        return None;
+    }
+    let shown = checkbox().show(ui);
+    // The SDK's interaction rectangle includes the whole localized label, not just its mark.
+    crate::widgets::register_response(key, shown.response.interact_rect, &shown.response);
+    shown.events.committed().copied().filter(|on| ui.is_enabled() && *on != current)
+}
+
+/// One-shot SDK proposals: develop.merge remains the only owner of the photo value.
+fn optics_checkbox(ui: &mut egui::Ui, key: &str, label: &str, value: bool) -> Option<bool> {
+    let shown = Checkbox::new(Bind::given(value)).id_salt(key).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return None;
+    }
+    crate::widgets::register_response(key, shown.response.rect, &shown.response);
+    shown.events.committed().copied().filter(|on| ui.is_enabled() && *on != value)
+}
+
+fn optics_checkboxes(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings) -> bool {
+    if let Some(ca) = optics_checkbox(ui, "check:optics.removeCA", "Remove Chromatic Aberration", d.optics.remove_ca) {
+        let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
+    }
+    let mut lp = d.optics.lens_profile;
+    if let Some(on) = optics_checkbox(ui, "check:optics.lensProfile", "Enable Lens Corrections", lp) {
+        lp = on;
+        let ok = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"})).is_ok();
+        // Only a successfully enabled target may enter the existing deferred lookup path.
+        if ok && lp {
+            let without = crate::lens_db::to_look_up(&app.session, id);
+            app.ui.lens_lookup_ids.extend(without);
+        }
+    }
+    lp
+}
+
+/// One real radio arena owns the complete localized style labels; the engine still owns every edit.
+fn vignette_style(
+    app: &LightcraftApp,
+    ui: &mut egui::Ui,
+    owner: PhotoId,
+    current: lightcraft_develop::VignetteStyle,
+) -> Option<lightcraft_develop::VignetteStyle> {
+    use craft::behavior::{NavShape, Proposal};
+    use craft::ui::choice::{Radio, RadioGroup};
+    use craft::ui::contract::ShowContainer as _;
+    use lightcraft_develop::VignetteStyle as V;
+
+    let styles = [
+        (V::HighlightPriority, "Highlight", "highlightPriority"),
+        (V::ColorPriority, "Color", "colorPriority"),
+        (V::PaintOverlay, "Paint", "paintOverlay"),
+    ];
+    let active = styles.iter().position(|(style, _, _)| *style == current);
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let interactive = real && ui.is_enabled() && app.session.active() == Some(owner);
+    let picked = egui::Frame::NONE
+        .inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 })
+        .show(ui, |ui| {
+            if !interactive {
+                ui.disable();
+            }
+            let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0)).max(1.0);
+            let cell_width = ((width - 8.0) / 3.0).max(1.0);
+            let mut activated = None;
+            let mut body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    for (index, (_, label, key)) in styles.iter().enumerate() {
+                        ui.allocate_ui_with_layout(egui::vec2(cell_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.set_min_width(cell_width);
+                            ui.set_max_width(cell_width);
+                            let response = Radio::new(index as u8)
+                                .id_salt(("vignette-style-choice", owner, key))
+                                .label(crate::i18n::tr(label).to_owned())
+                                .show(ui);
+                            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                                // rect is the mark; the actual SDK interaction rectangle includes its whole label.
+                                crate::widgets::register_response(format!("button:vignetteStyle-{key}"), response.interact_rect, &response);
+                                // The original action also runs when its current style is genuinely reactivated.
+                                // Read that real response, never infer activation from a changed binding or focus.
+                                if interactive && response.enabled() && response.clicked() {
+                                    activated = Some(index);
+                                }
+                            }
+                        });
+                    }
+                });
+            };
+            let selected = active.unwrap_or_default() as u8;
+            let child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY)))
+                    .sizing_pass()
+                    .invisible(),
+            );
+            let size = RadioGroup::new(crate::i18n::tr("Vignette").to_owned(), Bind::given(selected))
+                .id_salt(("vignette-style", owner))
+                .nav(NavShape::Flat)
+                .enabled(interactive)
+                .measure_in(&child, Proposal::Ideal, &mut body);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size.y.max(24.0)), egui::Sense::hover());
+            if !real {
+                // External SDK measurement can use a non-sizing egui Ui. Allocate, but never mount members.
+                return None;
+            }
+            let shown = RadioGroup::new(crate::i18n::tr("Vignette").to_owned(), Bind::given(selected))
+                .id_salt(("vignette-style", owner))
+                .nav(NavShape::Flat)
+                .enabled(interactive)
+                .show_at(ui, rect, &mut body);
+            shown.output.events.committed().copied().map(usize::from).or(activated)
+        })
+        .inner;
+    if interactive && app.session.active() == Some(owner) { picked.and_then(|index| styles.get(index).map(|(style, _, _)| *style)) } else { None }
+}
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    light_controls::apply_pending(app, ui);
+    color_controls::apply_pending(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     // a raw shown from its embedded JPEG (preview only) gets the rendered-file white balance scale
@@ -117,8 +262,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             // content, and the sliders below would run past its edge
             let max = ui.available_width() - 28.0 - ui.spacing().item_spacing.x;
             let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max);
-            let below = r.rect.bottom();
-            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d, below));
+            // a speculative pass (egui sizing, an SDK measure) shows no menu: its rows would claim the real run's ids
+            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                use craft::ui::contract::ShowContainer as _;
+                use craft::ui::contract::overlay::Trigger;
+                craft::ui::menu::Menu::new(crate::i18n::tr("Profile").to_owned())
+                    .id_salt(("profile-menu", app.session.active()))
+                    .opened_by(&r, Trigger::Click)
+                    .show(ui, |ui, _| profile_menu(app, ui, &d));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(
                     ui,
@@ -130,6 +282,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     crate::i18n::tr("Browse Profiles"),
                 )
                 .clicked()
+                    // a measuring run of the panel (the framework sizes it before placing it) never acts
+                    && !ui.is_sizing_pass()
+                    && !craft::ui::runtime::measure::active(ui.ctx())
                 {
                     let _ = app.run("panel.profiles", json!({}));
                 }
@@ -144,10 +299,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // Lightroom Classic does, on as the camera does
     if app.session.source_info(id).local_tone.is_some() {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
-            let mut on = d.profile.camera_local_tone;
-            let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
-            crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
-            if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
+            if let Some(on) = camera_local_tone_checkbox(ui, id, d.profile.camera_local_tone) {
                 let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
         });
@@ -157,7 +309,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "light", "Light", |app, ui, d| {
         hdr_row(app, ui, d, id);
         for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
-            control(app, ui, d, c, true);
+            light_controls::control(app, ui, d, c, true);
         }
         ui.add_space(6.0);
         if d.hdr.enabled {
@@ -186,18 +338,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
-                let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
-                egui::Popup::menu(&r).show(|ui| {
-                    for m in WbMode::ALL {
-                        if m == WbMode::Custom {
-                            continue;
-                        }
-                        if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
-                            let mode = serde_json::to_value(m).unwrap_or_default();
-                            let _ = app.run("develop.wb", json!({"mode": mode}));
-                        }
-                    }
-                });
+                color_controls::preset(app, ui, d.wb.mode);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let active = app.ui.tool == "wbPicker";
                     if crate::widgets::icon_button(
@@ -221,17 +362,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 });
             });
         });
-        if raw {
-            control(app, ui, d, "wb.temp", true);
-            control(app, ui, d, "wb.tint", true);
-        } else {
-            let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
-            apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
-            let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
-            apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
-        }
-        control(app, ui, d, "color.vibrance", true);
-        control(app, ui, d, "color.saturation", true);
+        color_controls::values(app, ui, d, raw);
+        color_controls::adjustment(app, ui, d, "color.vibrance");
+        color_controls::adjustment(app, ui, d, "color.saturation");
         ui.add_space(6.0);
         let open = app.ui.flyout_open("mixer");
         if flyout_row(ui, "mixer", if crate::is_bw(d) { "B&W Mixer" } else { "Color Mixer" }, Icon::Radial, open).clicked() {
@@ -263,25 +396,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, c, true);
         }
         sub_title(ui, crate::i18n::tr("Vignette"));
-        {
-            use lightcraft_develop::VignetteStyle as V;
-            let styles = [
-                (V::HighlightPriority, "Highlight", "highlightPriority"),
-                (V::ColorPriority, "Color", "colorPriority"),
-                (V::PaintOverlay, "Paint", "paintOverlay"),
-            ];
-            let items: Vec<(&str, &str)> = styles.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = styles.iter().position(|(v, _, _)| *v == d.vignette.style);
-            let mut chosen = None;
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
-                chosen = crate::widgets::segmented(ui, "vignetteStyle", &items, active, 3);
-            });
-            if let Some(i) = chosen {
-                let _ = app.run(
-                    "develop.merge",
-                    serde_json::json!({"settings": {"vignette": {"style": serde_json::to_value(styles[i].0).unwrap_or_default()}}}),
-                );
-            }
+        if let Some(style) = vignette_style(app, ui, id, d.vignette.style) {
+            let _ =
+                app.run("develop.merge", serde_json::json!({"settings": {"vignette": {"style": serde_json::to_value(style).unwrap_or_default()}}}));
         }
         for c in ["vignette.amount", "vignette.midpoint", "vignette.feather", "vignette.roundness", "vignette.highlights"] {
             let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
@@ -324,20 +441,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
         let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
-            let mut ca = d.optics.remove_ca;
-            if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
-            }
-            let mut lp = d.optics.lens_profile;
-            if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
-                let ok = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"})).is_ok();
-                // ticked on photos without a profile: look their lenses up again (a database that arrived
-                // since they were imported may know them now)
-                if ok && lp {
-                    let without = crate::lens_db::to_look_up(&app.session, id);
-                    app.ui.lens_lookup_ids.extend(without);
-                }
-            }
+            let lp = optics_checkboxes(app, ui, id, d);
             if lp && let Some(p) = app.session.catalog.photo(id).cloned() {
                 let text = crate::lens_db::readout(app, &p);
                 if !text.is_empty() {
@@ -397,3 +501,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let _ = app.run("develop.reset", json!({}));
     }
 }
+
+#[cfg(test)]
+#[path = "optics_checkbox_port_tests.rs"]
+mod optics_checkbox_port_tests;
+
+#[cfg(test)]
+mod vignette_style_flow_tests;
+
+#[cfg(test)]
+#[path = "edit/camera_local_tone_flow_tests.rs"]
+mod camera_local_tone_flow_tests;

@@ -286,12 +286,120 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
     key.map(|k| (m, k))
 }
 
+/// The framework's own window keys LightCraft's keymap gives to its commands: Classic's F6 hides the filmstrip, so
+/// the framework's pane move (F6 / Shift+F6) and menu-bar key (F10) are unbound wherever a LightCraft binding or
+/// alias uses the same key. Without this the key stage takes the press for the pane move and the app never sees it.
+pub(crate) fn framework_commands(keymap: &Keymap) -> craft::ui::runtime::commands::CommandInput {
+    use craft::ui::runtime::commands::{CommandInput, CommandSet as _, NavCommand};
+    let uses = |sc: &str| {
+        let chord = parse(sc);
+        chord.is_some()
+            && (bindable().iter().any(|b| binding(keymap, b.id, b.default).and_then(parse) == chord)
+                || ALIASES.iter().any(|(alias, _, _)| parse(alias) == chord))
+    };
+    let unbound: Vec<&'static str> = [(NavCommand::NextPane, "F6"), (NavCommand::PreviousPane, "Shift+F6"), (NavCommand::FocusMenuBar, "F10")]
+        .into_iter()
+        .filter(|(_, sc)| uses(sc))
+        .map(|(command, _)| command.id())
+        .collect();
+    // One `Arc` per unbound set: the runtime rebuilds its keymap only when the `Arc` changes.
+    static LAST: std::sync::Mutex<Option<(Vec<&'static str>, std::sync::Arc<craft::keymap::Overrides>)>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let overrides = match last.as_ref() {
+        Some((held, overrides)) if *held == unbound => std::sync::Arc::clone(overrides),
+        _ => {
+            let mut overrides = craft::keymap::Overrides::default();
+            for id in &unbound {
+                let _ = overrides.insert(*id, Vec::new());
+            }
+            let overrides = std::sync::Arc::new(overrides);
+            *last = Some((unbound, std::sync::Arc::clone(&overrides)));
+            overrides
+        }
+    };
+    CommandInput::new().overrides(overrides)
+}
+
+/// Takes the Escape (`Intent::Cancel`) the runtime routed to the focused framework stop this pass and that stop left
+/// untaken, when `owns` says the stop is the caller's (a menu opener, or a field that leaves an Escape it has no use
+/// for), so the caller can act on it.
+pub(crate) fn take_focused_cancel(ctx: &egui::Context, owns: impl FnOnce(&craft::ui::runtime::focus::StopRec) -> bool) -> bool {
+    use craft::ui::runtime::keys::{Intent, intents_of, settle};
+    if craft::ui::runtime::measure::active(ctx) {
+        return false;
+    }
+    let Some(rec) = craft::ui::runtime::focus::focused_rec(ctx).filter(|rec| owns(rec)) else { return false };
+    let mut intents = intents_of(ctx, Some(rec.stop.id), false);
+    let took = intents.take(Intent::Cancel);
+    if took {
+        settle(ctx, Some(rec.stop.id), &intents);
+    }
+    took
+}
+
+/// Whether this pass's Escape closes a menu `opener` opened and holds open itself (`Trigger::Manual` with a bound open
+/// state), drawn on `menu_layer` last pass: the runtime routed it to the opener (the keyboard stayed on the button) or
+/// to a row of the menu, and nothing took it; or no framework stop holds the keyboard and the Escape is still in egui's
+/// input. Call it after showing the menu, which takes the Escape it handles itself.
+pub(crate) fn opener_menu_escape(ctx: &egui::Context, opener: egui::Id, menu_layer: Option<egui::LayerId>) -> bool {
+    if craft::ui::runtime::measure::active(ctx) {
+        return false;
+    }
+    let in_menu = |id: egui::Id| menu_layer.is_some_and(|layer| ctx.read_response(id).is_some_and(|response| response.layer_id == layer));
+    take_focused_cancel(ctx, |rec| rec.stop.id == opener || rec.stop.root == opener || in_menu(rec.stop.id))
+        || (craft::ui::runtime::focus::focused_rec(ctx).is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)))
+}
+
+/// Where [`note_clipboard`] keeps the host's clipboard events until the shortcut pass reads them.
+fn clipboard_id() -> egui::Id {
+    egui::Id::unique("lightcraft-shortcuts-clipboard-events")
+}
+
+/// Keeps the host's clipboard events (`Copy`, `Cut`, `Paste`) of `raw` for this pass's shortcuts. The framework's
+/// key stage takes them out of egui's input before any UI runs: a focused stop that lists the edit gets it as an
+/// edit command, and with nothing (or a control that lists no edit) focused the event becomes the ⌘C / ⌘X / ⌘V
+/// chord of the framework's own keymap, which LightCraft's keymap never sees. Called last in the app's raw input
+/// hook, after the synthetic events are injected and a prompt's filter ran.
+pub(crate) fn note_clipboard(ctx: &egui::Context, raw: &egui::RawInput) {
+    let clips: Vec<egui::Event> =
+        raw.events.iter().filter(|e| matches!(e, egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_))).cloned().collect();
+    if clips.is_empty() {
+        return;
+    }
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<egui::Event>>(clipboard_id()).extend(clips));
+}
+
+/// The clipboard events [`note_clipboard`] kept since the last shortcut pass (taken first in [`handle`]), minus those a focused framework stop
+/// takes as its edit command (a field's paste is the field's, not Paste Settings).
+fn take_clipboard(ctx: &egui::Context) -> Vec<egui::Event> {
+    let clips = ctx.data_mut(|d| d.remove_temp::<Vec<egui::Event>>(clipboard_id())).unwrap_or_default();
+    let Some(rec) = craft::ui::runtime::focus::focused_rec(ctx) else { return clips };
+    let edits = rec.stop.keys.edits;
+    clips
+        .into_iter()
+        .filter(|e| {
+            let command = match e {
+                egui::Event::Copy => craft::behavior::EditCommand::Copy,
+                egui::Event::Cut => craft::behavior::EditCommand::Cut,
+                _ => craft::behavior::EditCommand::Paste,
+            };
+            !edits.contains(command)
+        })
+        .collect()
+}
+
 fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
+    matches_with(i, &[], m, k)
+}
+
+/// [`matches`] over the input's events and `extra`: the clipboard events the runtime routed to the window as edit
+/// commands (it keeps them from the raw input when no framework component takes them).
+fn matches_with(i: &egui::InputState, extra: &[egui::Event], m: Modifiers, k: Key) -> bool {
     // the windowing layer turns ⌘C / ⌘X / ⌘V (with any other modifiers held) and the keyboard's
     // Copy / Cut / Paste keys into these on Windows and Linux (macOS's menu bar takes them first);
     // without ⌘/Ctrl held they came from a key that is the plain command (Windows' ⇧Insert pastes)
     let clipboard = if i.modifiers.command { i.modifiers } else { Modifiers::COMMAND };
-    i.events.iter().any(|e| {
+    i.events.iter().chain(extra).any(|e| {
         let (key, physical_key, modifiers) = match e {
             egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => (key, physical_key, modifiers),
             egui::Event::Copy => (&Key::C, &None, &clipboard),
@@ -334,6 +442,17 @@ fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static 
 /// Content widgets keep keyboard ownership, including text fields and arrow-driven sliders.
 /// Dock chrome owns activation, traversal, resizing and cancellation; its other keys reach commands.
 fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    // A framework stop keeps the keys it uses (the runtime takes them); only one that types owns the rest.
+    if craft::ui::runtime::focus::focused_rec(ctx).is_some() {
+        // A focused control that doesn't type still owns activation and navigation (Enter, Space, Tab and the
+        // arrows: a host target reads them from egui's input too); its letters and Escape stay the app's.
+        return crate::text_field::typing(ctx)
+            || ctx.input(|input| {
+                [Key::Enter, Key::Space, Key::Tab, Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown]
+                    .iter()
+                    .any(|key| input.key_pressed(*key))
+            });
+    }
     if !ctx.egui_wants_keyboard_input() {
         // Escape drops egui focus before shortcuts run; keep the numeric edit's whole input batch.
         return ctx.input(|input| input.key_pressed(Key::Escape))
@@ -349,26 +468,68 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
             [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Space].iter().any(|key| input.key_pressed(*key))
         });
     }
-    let chrome =
-        app.ui.docking.as_ref().is_some_and(|workspace| {
-            craft_ui::docking::DockArea::new(egui::Id::unique("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout)
-        });
-    if !chrome {
-        return true;
+    // (dock tabs and dividers are framework stops now, handled above)
+    true
+}
+
+/// The digits an Alt chord of the app's can use (the keyword set keys ⌥0–⌥9, and what the keymap binds there).
+const ALT_DIGITS: [(Key, &str); 10] = [
+    (Key::Num0, "Alt+0"),
+    (Key::Num1, "Alt+1"),
+    (Key::Num2, "Alt+2"),
+    (Key::Num3, "Alt+3"),
+    (Key::Num4, "Alt+4"),
+    (Key::Num5, "Alt+5"),
+    (Key::Num6, "Alt+6"),
+    (Key::Num7, "Alt+7"),
+    (Key::Num8, "Alt+8"),
+    (Key::Num9, "Alt+9"),
+];
+
+fn alt_digit_owner() -> egui::Id {
+    egui::Id::unique("lc-alt-digit-shortcuts")
+}
+
+/// Holds the Alt+digit chords for the app, every pass the app's shortcuts are live. The runtime turns a digit typed with
+/// Alt alone into Alt-code entry (⌥0 then types nothing, and the shortcut never sees the key) unless a component claims
+/// the chord; a held chord reaches the app instead, and `handle` reads it back. A text field, dialog or shortcut
+/// recording keeps its own digits, so nothing is held while they own the keyboard.
+pub(crate) fn hold_alt_digits(app: &LightcraftApp, ctx: &egui::Context) {
+    let owned = app.ui.dialog.is_some()
+        || crate::panels::notices::blocks_input(app)
+        || crate::panels::library_problem::blocks_dialog_input(app)
+        || app.recording_shortcut.is_some()
+        || app.ui.name_edit.is_some()
+        || keyboard_owned(app, ctx);
+    if owned {
+        return;
     }
-    ctx.input(|input| {
-        [Key::Enter, Key::Space, Key::Tab, Key::Escape, Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown]
-            .iter()
-            .any(|key| input.key_pressed(*key))
-    })
+    for (_, text) in ALT_DIGITS {
+        if let Ok(chord) = craft::keymap::Chord::parse(text) {
+            craft::ui::runtime::keys::capture(ctx, alt_digit_owner(), chord);
+        }
+    }
 }
 
 /// Dispatch the global shortcut pass. It yields while a dialog, prompt, blocking library window,
 /// text field, name edit or shortcut recording owns input, then fires saved command bindings,
 /// aliases and fixed photo keys, respecting native menu ownership and open popups.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // Alt+digit presses the runtime held back for the app (see `hold_alt_digits`) come back as ordinary key events,
+    // so the bindings below read them like any other key.
+    for (key, text) in ALT_DIGITS {
+        if let Ok(chord) = craft::keymap::Chord::parse(text)
+            && craft::ui::runtime::keys::take_claimed(ctx, alt_digit_owner(), chord)
+        {
+            let modifiers = Modifiers { alt: true, ..Modifiers::NONE };
+            ctx.input_mut(|i| i.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }));
+        }
+    }
     // Space held over a tool ends when the key is up, whoever has the keyboard by then
     crate::space_hand::tick(app, ctx);
+    // the host's clipboard events of this pass, read now whoever has the keyboard: one a dialog or field had must
+    // not fire later
+    let clips = take_clipboard(ctx);
     if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
         app.recording_shortcut = None;
     }
@@ -388,7 +549,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
-    let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
+    let (mut fire, aliased, h_press) = pressed_commands(app, ctx, clips);
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
     }
@@ -413,8 +574,32 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// The keys pressed this frame: the commands to fire, the aliases (command and params) to run, and
 /// whether an unmodified H that no keymap assignment has claimed was pressed (the Masking panel's
 /// pin toggle, see `handle`).
-fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
+fn pressed_commands(
+    app: &LightcraftApp,
+    ctx: &egui::Context,
+    clips: Vec<egui::Event>,
+) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
     let mut fire: Vec<String> = Vec::new();
+    // An Escape no framework component took reaches the app as the window's Cancel (the runtime keeps the raw key):
+    // the app's own Escape bindings (View ▸ Back and the like) read it there, last in the pass.
+    // While a framework popup (a menu, a dropdown) is open the Escape is the popup's: the runtime lends the focused
+    // row's unused Escape to the window, so taking it here, before the popup is drawn, would leave the menu open.
+    let popup_owns_escape = craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Keys);
+    let window_escape =
+        !popup_owns_escape && craft::ui::runtime::keys::with_window_intents(ctx, false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
+    // The same for the clipboard events the runtime routed to the window as edit commands.
+    let mut window_edits: Vec<egui::Event> = clips;
+    craft::ui::runtime::keys::with_window_intents(ctx, false, |w| {
+        while let Some(edit) = w.take_edit() {
+            match edit {
+                craft::behavior::EditCommand::Copy => window_edits.push(egui::Event::Copy),
+                craft::behavior::EditCommand::Cut => window_edits.push(egui::Event::Cut),
+                craft::behavior::EditCommand::Paste => window_edits.push(egui::Event::Paste(String::new())),
+                _ => {}
+            }
+        }
+        !window_edits.is_empty()
+    });
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&'static str, serde_json::Value)> = Vec::new();
@@ -428,7 +613,10 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     let taken: Vec<(Modifiers, Key)> = saved_keys(keymap).map(|(_, k)| k).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
-    let popup_open = egui::Popup::is_any_open(ctx);
+    // (the in-window menu bar's menus are the framework's, not egui popups)
+    let popup_open = egui::Popup::is_any_open(ctx)
+        || craft::ui::menu::bar::is_open(ctx)
+        || craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Keys);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
     let popup_open = popup_open || app.text_focus;
     ctx.input(|i| {
@@ -449,7 +637,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
-                && matches(i, m, k)
+                && (matches_with(i, &window_edits, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 if id == "view.zoomToggle" && k == Key::Space {
@@ -468,7 +656,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && !(k == Key::Escape && popup_open)
                 && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
-                && matches(i, m, k)
+                && (matches_with(i, &window_edits, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
             }

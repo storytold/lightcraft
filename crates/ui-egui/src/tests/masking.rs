@@ -1270,11 +1270,11 @@ fn local_folder_listed_twice_opens_and_closes_each_row() {
 fn geometry_slider_drag_marks_the_grid() {
     let mut h = detail("panel.crop");
     let spec = lightcraft_develop::controls::find("geometry.vertical").unwrap();
-    let start = crate::widgets::SliderOut { value: None, drag_started: true, drag_stopped: false, reset: false };
+    let start = crate::widgets::SliderOut { drag_started: true, ..Default::default() };
     crate::panels::edit::apply_slider_out(&mut h.app, spec, start, |_, _| Ok(serde_json::Value::Null));
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some("geometry.vertical"));
     h.step();
-    let stop = crate::widgets::SliderOut { value: None, drag_started: false, drag_stopped: true, reset: false };
+    let stop = crate::widgets::SliderOut { drag_stopped: true, ..Default::default() };
     crate::panels::edit::apply_slider_out(&mut h.app, spec, stop, |_, _| Ok(serde_json::Value::Null));
     assert!(h.app.ui.dragging_control.is_none());
     h.settle(SETTLE);
@@ -1918,8 +1918,9 @@ fn a_selected_develop_slider_accepts_wheel_nudges() {
     h.request("ui.key", json!({"key": "ArrowUp"}), T);
     assert!(develop(&h).light.exposure > before_leaving, "keyboard adjustment survives leaving the slider");
 
-    // Scroll back to the top, then explicitly select it again to re-enable wheel nudges.
-    h.request("ui.move", json!({"x": panel.right() - 8.0, "y": panel.center().y}), T);
+    // Scroll back to the top, then explicitly select it again to re-enable wheel nudges. (`panel:right_panel` spans the
+    // whole dock column, whose group pads its scrolling body by 8 pt: the wheel goes 16 pt in, over the body's bar.)
+    h.request("ui.move", json!({"x": panel.right() - 16.0, "y": panel.center().y}), T);
     h.request("ui.scroll", json!({"dy": 600.0}), T);
     for _ in 0..40 {
         h.step();

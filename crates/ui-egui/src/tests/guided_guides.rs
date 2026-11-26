@@ -281,7 +281,10 @@ fn a_press_on_a_menu_over_a_guide_selects_nothing() {
     let r = h.request("ui.click", json!({"x": line.x - 30.0, "y": line.y - 30.0, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(h.view.ctx.any_popup_open(), "the context menu is open over the photo");
+    assert!(
+        craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any),
+        "the context menu is open over the photo"
+    );
     let img = h.app.image_rect.expect("the photo on screen");
     let (lx, ly) = ((line.x - img.left()) / img.width(), (line.y - img.top()) / img.height());
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": lx, "y": ly}, {"kind": "up", "x": lx, "y": ly}]}), T);
@@ -310,7 +313,10 @@ fn a_press_on_a_menu_over_an_endpoint_moves_nothing() {
     let r = h.request("ui.click", json!({"x": end.x - 30.0, "y": end.y - 30.0, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(h.view.ctx.any_popup_open(), "the context menu is open over the photo");
+    assert!(
+        craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any),
+        "the context menu is open over the photo"
+    );
     let img = h.app.image_rect.expect("the photo on screen");
     let (ex, ey) = ((end.x - img.left()) / img.width(), (end.y - img.top()) / img.height());
     let r = h.request(
@@ -344,7 +350,10 @@ fn a_press_that_leaves_the_menu_in_one_frame_draws_nothing() {
     let r = h.request("ui.click", json!({"x": end.x - 30.0, "y": end.y - 30.0, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(h.view.ctx.any_popup_open(), "the context menu is open over the photo");
+    assert!(
+        craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any),
+        "the context menu is open over the photo"
+    );
     // one batch: go down 1px inside the menu, then straight off it to bare photo, far below
     // both guides, and release there — the current pointer never sees the menu again
     let img = h.app.image_rect.expect("the photo on screen");

@@ -1,12 +1,18 @@
 use super::appearance::appearance;
 use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
+use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json};
 
 // ---------------------------------------------------------------------------------- Interface
 
 /// The monitor profile (`app.displayProfile`): previews are shown through the display's ICC
 /// profile, so wide-gamut and calibrated displays show colours as they are.
 pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    monitor_profile_sdk(app, ui, t);
+}
+
+fn monitor_profile_sdk(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     heading(ui, t, crate::i18n::tr("Monitor profile"));
     let current = app.renderer.display().cloned();
     let screen = current.as_ref().is_some_and(|d| d.path == crate::SCREEN_PROFILE);
@@ -22,18 +28,27 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_display_profile.is_some();
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose Profile…")));
-        register(ui, "button:settingsDisplayProfile", r.rect);
-        if r.clicked()
+        let r =
+            craft::ui::buttons::Button::new(crate::i18n::tr("Choose Profile…").to_owned()).id_salt("settingsDisplayProfile").enabled(can).show(ui);
+        if real {
+            crate::widgets::register_response("button:settingsDisplayProfile", r.response.rect, &r.response);
+        }
+        if real
+            && ui.is_enabled()
+            && can
+            && r.clicked()
             && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
         {
             app.ui.settings.display_profile = path;
         }
         // with no profile chosen, previews follow the screen's own profile where the host knows it
         let none = if app.services.screen_profile.is_some() { crate::i18n::tr("Use Screen Profile") } else { crate::i18n::tr("Use sRGB") };
-        let r = ui.add_enabled(!app.ui.settings.display_profile.is_empty(), egui::Button::new(none));
-        register(ui, "button:settingsDisplayProfileNone", r.rect);
-        if r.clicked() {
+        let enabled = !app.ui.settings.display_profile.is_empty();
+        let r = craft::ui::buttons::Button::new(none.to_owned()).id_salt("settingsDisplayProfileNone").enabled(enabled).show(ui);
+        if real {
+            crate::widgets::register_response("button:settingsDisplayProfileNone", r.response.rect, &r.response);
+        }
+        if real && ui.is_enabled() && enabled && r.clicked() {
             app.ui.settings.display_profile.clear();
         }
         if !can {
@@ -131,27 +146,69 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         let lines = if n == 1 { &mut app.ui.settings.loupe_info.info1 } else { &mut app.ui.settings.loupe_info.info2 };
         for (i, line) in lines.iter_mut().enumerate() {
             let id = format!("viewOptionsInfo{n}Line{}", i + 1);
-            let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
-                for f in F::ALL {
-                    let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-                    let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
-                    register(ui, format!("button:{id}-{key}"), r.rect);
-                    if r.clicked() {
-                        *line = *f;
+            let name = crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label()));
+            use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+            use craft::ui::menu::{Menu, MenuItem};
+
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
+            if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+                continue;
+            }
+            // the closed box of a dropdown (the value at the start, the chevron at the end), as main's combo was
+            let face = crate::widgets::menu_field(ui, rect, ("view-options-line", &id), &name, crate::i18n::tr(line.label()));
+            crate::widgets::register_response(format!("combo:{id}"), rect, &face);
+            // A value menu retains the existing semantic option locators, unlike indexed
+            // Select rows. Only activation commits; navigating or dismissing edits nothing.
+            let mut picked = None;
+            // The SDK's external Click opener is pointer-press-only. Let the production
+            // button's actual activation (pointer, keyboard or AT) own the toggle instead.
+            // Stale state expires when this field leaves the presented subtree.
+            let pass = ui.ctx().cumulative_pass_nr();
+            let slot = face.id.with("menu-open");
+            let mut open = ui
+                .data(|data| data.get_temp::<(u64, bool)>(slot))
+                .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
+                .is_some_and(|(_, open)| open);
+            if ui.is_enabled() && craft::ui::contract::clicked(&face) {
+                open = !open;
+            }
+            Menu::new(name).id_salt(("view-options-menu", &id)).values().opened_by(&face, Trigger::Manual).open(Bind::bound(&mut open)).show(
+                ui,
+                |ui, _| {
+                    for f in F::ALL {
+                        let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                        let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+                        // These are literal translated captions, not mnemonic-marked menu text.
+                        let caption = crate::i18n::tr(f.label()).replace('&', "&&");
+                        let row = MenuItem::new(caption).id_salt((&id, &key)).entry_checked(line == f);
+                        let row = if line == f { row.default_stop() } else { row };
+                        let row = row.show(ui);
+                        if !measuring {
+                            crate::widgets::register_response(format!("button:{id}-{key}"), row.response.rect, &row.response);
+                            if ui.is_enabled() && row.ran {
+                                picked = Some(*f);
+                            }
+                        }
                     }
-                }
-            });
-            crate::widgets::name_combo(
-                &r.response,
-                &crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label())),
+                },
             );
-            register(ui, format!("combo:{id}"), r.response.rect);
+            ui.data_mut(|data| data.insert_temp(slot, (pass, open)));
+            if ui.is_enabled()
+                && let Some(field) = picked
+            {
+                *line = field;
+            }
         }
-        let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
-        register(ui, format!("button:viewOptionsDefaults{n}"), r.rect);
-        if r.clicked() {
-            *lines = defaults;
+        use craft::ui::buttons::Button;
+        use craft::ui::contract::{Props as _, Show as _};
+        let r = Button::new(crate::i18n::tr("Use Defaults").to_owned()).id_salt(("view-options-defaults", n)).enabled(*lines != defaults).show(ui);
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            crate::widgets::register_response(format!("button:viewOptionsDefaults{n}"), r.response.rect, &r.response);
+            if ui.is_enabled() && *lines != defaults && r.clicked() {
+                *lines = defaults;
+            }
         }
+
         // one Info at most shows briefly: ticking one unticks the other
         let info = if n == 1 { I::Basic } else { I::Exposure };
         let mut briefly = app.ui.settings.loupe_info.briefly == info;
@@ -163,21 +220,62 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
     check(ui, "viewOptions.loupeMessages", &mut app.ui.settings.loupe_messages, "Show message when loading or rendering photos");
 }
 
+#[cfg(test)]
+#[path = "loupe_view_options_flow_tests.rs"]
+mod loupe_view_options_flow_tests;
+
 // ----------------------------------------------------------------------------------- Slideshow
 
 /// A playback duration slider (`slider:{id}`). While it is dragged the value changes in memory
 /// (the slideshow reads it); letting go saves it through `slideshow.playback`.
-pub(super) fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, range: std::ops::RangeInclusive<f64>) {
-    let mut v = value;
-    let r = ui.add(egui::Slider::new(&mut v, range).logarithmic(key == "slideDuration").suffix(" s").max_decimals(1));
-    register(ui, format!("slider:{id}"), r.rect);
-    if r.changed()
-        && let Ok(next) = app.session.slideshow.merged(&json!({ key: v }))
-    {
-        app.session.slideshow = next;
-    }
-    if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        let _ = app.run("slideshow.playback", json!({ key: v }));
+///
+/// A preview is worked out from the settings the gesture began with, not from the last preview:
+/// a slide shorter than the fade clamps the fade, and playing that back onto the clamped settings
+/// would keep the fade short for good, even when Escape gives the slide back or the gesture is let
+/// go at a slide that allows the longer fade again.
+pub(super) fn duration_slider(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    key: &str,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+) {
+    use super::controls::{self, Shape, Step};
+    let shape = Shape { label, lo: *range.start(), hi: *range.end(), unit: "s", step: 0.1, log: key == "slideDuration" };
+    // the settings the gesture began with, kept for its previews and its save
+    let start_key = controls::owner(id).with("gesture-start");
+    let held = |ui: &egui::Ui| ui.data(|d| d.get_temp::<lightcraft_engine::slideshow::PlaybackSettings>(start_key));
+    for step in controls::slider(ui, controls::owner(id), id, &shape, value) {
+        match step {
+            Step::Begin(_) => {
+                let start = app.session.slideshow.clone();
+                ui.data_mut(|d| d.insert_temp(start_key, start));
+            }
+            Step::Preview(v) => {
+                let start = held(ui).unwrap_or_else(|| {
+                    // a gesture whose Begin this pass did not see: the settings as they are now
+                    let start = app.session.slideshow.clone();
+                    ui.data_mut(|d| d.insert_temp(start_key, start.clone()));
+                    start
+                });
+                if let Ok(next) = start.merged(&json!({ key: v })) {
+                    app.session.slideshow = next;
+                }
+            }
+            Step::Save(v) => {
+                // The command merges into the settings in memory: give it the settings the gesture
+                // began with, so only the duration let go of changes, and the other one is clamped
+                // by that final value alone (the command merges, saves and records).
+                let start = held(ui).unwrap_or_else(|| app.session.slideshow.clone());
+                app.session.slideshow = start;
+                let _ = app.run("slideshow.playback", json!({ key: v }));
+            }
+            // The gesture is over, saved or given back: nothing of it waits for the next change, so
+            // a later one-pass change can't write its old settings back over what was changed since.
+            Step::End => ui.data_mut(|d| d.remove::<lightcraft_engine::slideshow::PlaybackSettings>(start_key)),
+        }
     }
 }
 
@@ -219,3 +317,7 @@ pub fn display_profile(app: &mut LightcraftApp, p: &Value) -> Result<Value, Stri
         None => json!({"path": null, "description": "sRGB (no display profile)"}),
     })
 }
+
+#[cfg(test)]
+#[path = "display_profile_flow_tests.rs"]
+mod display_profile_flow_tests;

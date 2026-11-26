@@ -86,7 +86,7 @@ fn temp_png(name: &str) -> std::path::PathBuf {
 
 /// Bind a pending request to the geometry/library generation a real issue would have used.
 fn issue_into_slot(ctx: &egui::Context, shot: &mut PendingShot, issued: ShotGeometry, library: u64) -> egui::ScreenshotCallback {
-    let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, egui::ViewportId::ROOT, MAX_SHOT_BYTES);
+    let (slot, callback) = craft::ui::runtime::windows::ScreenshotSlot::detached(ctx, egui::ViewportId::ROOT, MAX_SHOT_BYTES);
     shot.slot = Some(slot);
     shot.sent_at_ms = Some(0.0);
     shot.issued = Some(issued);
@@ -529,6 +529,7 @@ impl egui::DroppedFile for TestDropped {
 #[test]
 fn one_synthetic_batch_until_a_completed_pass_and_drops_wait_for_the_ui_phase() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     app.fonts_ready = true;
     app.synthetic.push(egui::Event::PointerMoved(egui::pos2(4.0, 4.0)));
@@ -647,21 +648,23 @@ fn text_field_inherits_ime_delete_surrounding_bytes_exactly() {
     // `ImeEvent::DeleteSurroundingBytes`; the app's `TextField` wraps the built-in `TextEdit`,
     // so it must apply the range exactly (not extend it to a grapheme cluster).
     let ctx = egui::Context::default();
+    // (the framework's runtime routes the input method's events to the field that has its focus)
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let id = crate::text_field::id("ime-bytes");
     let mut text = String::from("abc");
     let pass = |events: Vec<egui::Event>, text: &mut String| {
         let raw =
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))), events, ..Default::default() };
         frame(&ctx, raw, |ui| {
-            ui.memory_mut(|memory| memory.request_focus(id));
+            crate::text_field::focus(ui.ctx(), "ime-bytes");
             let _ = crate::text_field::TextField::singleline("ime-bytes", text).show(ui);
         });
     };
     pass(vec![], &mut text);
     pass(vec![], &mut text);
-    let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+    let mut state = egui::text_edit::TextEditState::load(&ctx, crate::text_field::text_id(id)).unwrap_or_default();
     state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(3))));
-    state.store(&ctx, id);
+    state.store(&ctx, crate::text_field::text_id(id));
     pass(vec![egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 2, after_bytes: 0 })], &mut text);
     assert_eq!(text, "a", "the reported UTF-8 range is deleted exactly");
 
@@ -669,9 +672,9 @@ fn text_field_inherits_ime_delete_surrounding_bytes_exactly() {
     let mut text = String::from("aé🙂z");
     pass(vec![], &mut text);
     pass(vec![], &mut text);
-    let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+    let mut state = egui::text_edit::TextEditState::load(&ctx, crate::text_field::text_id(id)).unwrap_or_default();
     state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(3)))); // after 🙂
-    state.store(&ctx, id);
+    state.store(&ctx, crate::text_field::text_id(id));
     pass(vec![egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 4, after_bytes: 0 })], &mut text);
     assert_eq!(text, "aéz", "the whole emoji is removed without touching the combining-free neighbours");
 }
@@ -679,21 +682,23 @@ fn text_field_inherits_ime_delete_surrounding_bytes_exactly() {
 #[test]
 fn text_field_ime_commit_replaces_the_selection() {
     let ctx = egui::Context::default();
+    // (the framework's runtime routes the input method's events to the field that has its focus)
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let id = crate::text_field::id("ime-commit");
     let mut text = String::from("abc");
     let pass = |events: Vec<egui::Event>, text: &mut String| {
         let raw =
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))), events, ..Default::default() };
         frame(&ctx, raw, |ui| {
-            ui.memory_mut(|memory| memory.request_focus(id));
+            crate::text_field::focus(ui.ctx(), "ime-commit");
             let _ = crate::text_field::TextField::singleline("ime-commit", text).show(ui);
         });
     };
     pass(vec![], &mut text);
     pass(vec![], &mut text);
-    let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+    let mut state = egui::text_edit::TextEditState::load(&ctx, crate::text_field::text_id(id)).unwrap_or_default();
     state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(2))));
-    state.store(&ctx, id);
+    state.store(&ctx, crate::text_field::text_id(id));
     pass(vec![egui::Event::Ime(egui::ImeEvent::Commit("é".into()))], &mut text);
     assert_eq!(text, "éc", "the committed text replaces the selected range once");
 }
@@ -1022,6 +1027,7 @@ fn a_gesture_cancels_when_the_view_changes_before_the_fresh_layout() {
 #[test]
 fn a_widget_gesture_cancels_if_its_target_moves_between_resolution_and_the_press() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
@@ -2028,6 +2034,7 @@ fn a_discarded_layout_does_not_publish_its_widget_registry() {
 #[test]
 fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     // a headless host never gains the first-run tour: its modal would sit over the passes this
     // test drives (screenshot tests elsewhere in this file need the host not headless)
@@ -2059,6 +2066,7 @@ fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
 #[test]
 fn a_delivered_gesture_may_change_the_state_it_acted_on() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     // a headless host never gains the first-run tour: its modal would take the dialog this
     // delivered gesture opens (screenshot tests elsewhere in this file need the host not
@@ -2091,6 +2099,7 @@ fn a_delivered_gesture_may_change_the_state_it_acted_on() {
 #[test]
 fn a_gesture_cancels_when_the_view_changes_before_its_batch_is_injected() {
     let ctx = egui::Context::default();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut app = app();
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
@@ -2149,17 +2158,26 @@ fn hidden_paint_requests_only_queued_shots_not_issued_ones() {
 
 #[test]
 fn disclosure_rows_publish_expanded_not_toggled() {
+    // the framework's runtime builds the header's accessibility node
     let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx);
     ctx.enable_accesskit();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
     let mut seen = Vec::new();
-    frame(&ctx, raw(egui::vec2(400.0, 300.0)), |ui| {
-        let (resp, _) = crate::widgets::section_header(ui, "test-section", "Light", true, None);
-        seen.push(ui.ctx().accesskit_node_builder(resp.id, |node| node.is_expanded()).flatten());
-    });
-    frame(&ctx, raw(egui::vec2(400.0, 300.0)), |ui| {
-        let (resp, _) = crate::widgets::section_header(ui, "test-section", "Light", false, None);
-        seen.push(ui.ctx().accesskit_node_builder(resp.id, |node| node.is_expanded()).flatten());
-    });
+    for open in [true, false] {
+        let mut expanded = None;
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(raw(egui::vec2(400.0, 300.0)), |ui| {
+                let _ = crate::widgets::section_header(ui, "test-section", "Light", open, None);
+            });
+            output.textures_delta.clear();
+            if let Some(update) = output.platform_output.accesskit_update.take() {
+                expanded = update.nodes.iter().find(|(_, node)| node.label() == Some("Light")).map(|(_, node)| node.is_expanded());
+            }
+        }
+        seen.push(expanded.flatten());
+    }
     assert_eq!(seen, vec![Some(true), Some(false)], "the disclosure reports Expanded, not Toggled");
 }
 

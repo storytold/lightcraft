@@ -7,12 +7,14 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props, Show};
+
+use egui::{Align2, Color32, Rect, RichText, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::theme::Tokens;
-use crate::widgets::register;
 
 /// One unnamed face: which photo and region, the box to show it by, and a suggested name.
 #[derive(Clone, Debug, PartialEq)]
@@ -127,6 +129,8 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let mut submit: Option<String> = None;
     let mut clear = false;
+    // Measuring must not publish targets or apply an action before the real pass.
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     ui.horizontal(|ui| {
         ui.add_space(super::people::PAD - 4.0);
         let n = selected.len();
@@ -135,7 +139,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let field = crate::text_field::TextField::singleline("field:unnamedName", &mut app.ui.unnamed_name).hint(hint).width(240.0).show(ui);
         let edit = &field.response;
         if std::mem::take(&mut app.ui.unnamed_focus) {
-            edit.request_focus();
+            crate::text_field::focus_id(ui.ctx(), edit.id);
         }
         let typed = app.ui.unnamed_name.trim().to_string();
         let chosen = if typed.is_empty() { suggested.clone().unwrap_or_default() } else { typed.clone() };
@@ -143,14 +147,18 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             submit = Some(chosen.clone());
         }
         let label = if n == 1 { "Name face".to_string() } else { format!("Name {n} faces") };
-        let b = ui.add_enabled(!chosen.is_empty(), egui::Button::new(label));
-        register(ui, "unnamed:name", b.rect);
-        if b.clicked() {
+        let b = Button::new(label).id_salt("unnamed:name").enabled(!chosen.is_empty()).show(ui);
+        if real {
+            crate::widgets::register_response("unnamed:name", b.response.rect, &b.response);
+        }
+        if real && b.clicked() {
             submit = Some(chosen);
         }
-        let c = ui.button(crate::i18n::tr("Clear"));
-        register(ui, "unnamed:clear", c.rect);
-        clear = c.clicked() || field.cancelled();
+        let c = Button::new(crate::i18n::tr("Clear")).id_salt("unnamed:clear").show(ui);
+        if real {
+            crate::widgets::register_response("unnamed:clear", c.response.rect, &c.response);
+        }
+        clear = real && (c.clicked() || field.cancelled());
     });
     // the people already named, matching what is typed (a click names the faces)
     let typed = app.ui.unnamed_name.trim().to_lowercase();
@@ -161,9 +169,11 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.add_space(super::people::PAD - 4.0);
                 for p in matching {
-                    let b = ui.add(egui::Button::new(RichText::new(p.as_str()).color(t.text_label)).frame(false));
-                    register(ui, format!("unnamed:pick:{p}"), b.rect);
-                    if b.clicked() {
+                    let b = Button::new(p.clone()).id_salt(("unnamed-pick", p)).variant(craft::theme::Variant::GHOST).show(ui);
+                    if real {
+                        crate::widgets::register_response(format!("unnamed:pick:{p}"), b.response.rect, &b.response);
+                    }
+                    if real && b.clicked() {
                         submit = Some(p.clone());
                     }
                 }
@@ -185,6 +195,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// The heading of the section, at `at`, and what it says about where the faces come from.
 pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, at: egui::Pos2, right: f32) {
     let t = Tokens::get(ui.ctx());
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let count = if list.total > list.faces.len() { format!("{} of {}", list.faces.len(), list.total) } else { list.total.to_string() };
     let p = ui.painter();
     p.text(at, Align2::LEFT_CENTER, "Unnamed faces", t.semibold(15.0), t.text);
@@ -203,17 +214,21 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
     p.text(pos2(at.x, at.y + 24.0), Align2::LEFT_CENTER, sub, t.font(12.0), t.text_dim);
     if !list.ready && list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(at.x, at.y + 38.0), vec2(120.0, 22.0));
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr("Open Settings")));
-        register(ui, "unnamed:openSettings", b.rect);
-        if b.clicked() {
+        let b = Button::new(crate::i18n::tr("Open Settings")).id_salt("unnamed:openSettings").show_at(ui, r);
+        if real {
+            crate::widgets::register_response("unnamed:openSettings", b.response.rect, &b.response);
+        }
+        if real && b.clicked() {
             let _ = app.run("app.settings", json!({"tab": "faces"}));
         }
     } else if !list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
         let all = app.ui.unnamed_selected.len() == list.faces.len();
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })));
-        register(ui, "unnamed:selectAll", b.rect);
-        if b.clicked() {
+        let b = Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })).id_salt("unnamed:selectAll").show_at(ui, r);
+        if real {
+            crate::widgets::register_response("unnamed:selectAll", b.response.rect, &b.response);
+        }
+        if real && b.clicked() {
             app.ui.unnamed_selected.clear();
             if !all {
                 app.ui.unnamed_selected.extend(list.faces.iter().map(|f| (f.photo, f.index)));
@@ -228,16 +243,30 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
     let t = Tokens::get(ui.ctx());
     let key = (f.photo, f.index);
     let selected = app.ui.unnamed_selected.contains(&key);
-    let resp = ui.interact(r, egui::Id::unique(("unnamed-face", f.photo, f.index)), Sense::click());
-    crate::widgets::announce_selected(&resp, crate::i18n::tr("Unnamed face"), selected);
-    register(ui, format!("unnamed-face:{}:{}", f.photo, f.index), r);
+    let host = super::detail::host::target(
+        ui,
+        ("unnamed-face", f.photo, f.index),
+        r,
+        super::detail::host::Target::new(crate::i18n::tr("Unnamed face")).selected(selected),
+    );
+    let real = super::detail::host::live(ui);
+    if real {
+        crate::widgets::register_response(format!("unnamed-face:{}:{}", f.photo, f.index), r, &host);
+    }
     // a suggested name along the bottom: a click accepts it for this face (added after the tile, so it wins there)
     let strip = Rect::from_min_max(pos2(r.left(), r.bottom() - 20.0), r.right_bottom());
-    let accept = f.suggestion.as_ref().map(|_| ui.interact(strip, egui::Id::unique(("unnamed-accept", f.photo, f.index)), Sense::click()));
-    if let Some(a) = &accept {
-        register(ui, format!("unnamed-accept:{}:{}", f.photo, f.index), a.rect);
+    let accept = f.suggestion.as_ref().map(|who| {
+        super::detail::host::target(
+            ui,
+            ("unnamed-accept", f.photo, f.index),
+            strip,
+            super::detail::host::Target::new(format!("Name this face {who}")).tooltip(format!("Name this face {who}")),
+        )
+    });
+    if real && let Some(a) = &accept {
+        crate::widgets::register_response(format!("unnamed-accept:{}:{}", f.photo, f.index), strip, a);
     }
-    let hovered = resp.hovered() || accept.as_ref().is_some_and(|a| a.hovered());
+    let hovered = host.hovered() || accept.as_ref().is_some_and(|a| a.hovered());
     let p = ui.painter();
     p.rect_filled(r, 3.0, t.canvas);
     if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.view, (r.width() * ppp).ceil() as usize)
@@ -262,22 +291,26 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
         p.text(pos2(r.left() + 5.0, strip.center().y), Align2::LEFT_CENTER, format!("{label}?"), t.font(11.5), Color32::from_gray(225));
     }
     if let (Some(a), Some(who)) = (&accept, &f.suggestion)
-        && a.clone().on_hover_text(format!("Name this face {who}")).clicked()
+        && a.clicked()
     {
         name(app, &[key], who);
         return;
     }
     // a double click opens the photo, as in the grid; its second click must not undo the first one's selection
-    if resp.double_clicked() {
+    if host.double_clicked() {
         let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
         let _ = app.run("view.detail", json!({}));
         // Escape comes back to the faces
         app.ui.person_from = Some((None, f.photo));
-    } else if resp.clicked() {
+    } else if host.clicked() {
         let shift = ui.input(|i| i.modifiers.shift);
         click(app, list, i, shift);
     }
 }
+
+#[cfg(test)]
+#[path = "unnamed_faces_port_tests.rs"]
+mod unnamed_faces_port_tests;
 
 #[cfg(test)]
 mod tests {

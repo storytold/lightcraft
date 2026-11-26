@@ -115,17 +115,17 @@ fn the_headless_host_has_a_clipboard() {
         (ViewportCommand::RequestCopy, egui::Event::Copy),
         (ViewportCommand::RequestCut, egui::Event::Cut),
     ] {
+        // (the event is the next frame's input; the framework's key stage then takes clipboard events out of egui's
+        // input as edit commands, so the host's side is what is checked)
         view.run(raw(), |ui| ui.ctx().send_viewport_cmd(command.clone()));
-        let mut seen = vec![];
-        view.run(raw(), |ui| seen = ui.input(|i| i.events.clone()));
-        assert!(seen.contains(&event), "{command:?}: {seen:?}");
+        assert!(view.owed.contains(&event), "{command:?}: {:?}", view.owed);
+        view.run(raw(), |_| {});
+        assert!(view.owed.is_empty(), "delivered once");
     }
     // an empty clipboard pastes nothing, as a desktop host does
     view.clipboard.clear();
     view.run(raw(), |ui| ui.ctx().send_viewport_cmd(ViewportCommand::RequestPaste));
-    let mut seen = vec![];
-    view.run(raw(), |ui| seen = ui.input(|i| i.events.clone()));
-    assert!(!seen.iter().any(|e| matches!(e, egui::Event::Paste(_))), "{seen:?}");
+    assert!(!view.owed.iter().any(|e| matches!(e, egui::Event::Paste(_))), "{:?}", view.owed);
 }
 
 #[test]
@@ -255,6 +255,28 @@ fn control_resize_rounds_in_native_points_after_a_fractional_zoom_out() {
     assert_eq!(h.app.headless_screenshot(&main, true).unwrap().size, [122, 122]);
 }
 
+/// The offscreen capture draws the window as it is: with its theme, its sizes and its language. `fork_into` copies
+/// the memory the controls are laid out from, but not the frame input the window sets each pass, so the shadow
+/// installs the window's own input instead of drawing the framework's fallback root (light, default sizes, English).
+#[test]
+fn a_headless_capture_draws_with_the_windows_own_theme_and_language() {
+    let mut h = demo([1200.0, 800.0]);
+    h.app.ui.settings.gpu = false;
+    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Dark;
+    h.app.ui.language = crate::i18n::Locale::Fr;
+    h.settle(SETTLE);
+    let main = h.view.ctx.clone();
+    assert!(crate::theme::current(&main).is_some_and(|kind| kind.is_dark()), "the window draws dark, so its framework controls must too");
+    assert!(h.app.headless_screenshot(&main, true).is_some(), "the capture renders");
+    let shadow = h.app.shadow.as_ref().expect("the capture keeps its shadow");
+    let window = craft::ui::runtime::env::Env::of_root(&main);
+    let capture = craft::ui::runtime::env::Env::of_root(&shadow.ctx);
+    assert_eq!(capture.view().mode(), window.view().mode(), "the capture draws the framework's controls in the window's mode");
+    let french = crate::i18n::framework_host(crate::i18n::Locale::Fr).expect("French has the framework's words");
+    let host = capture.view().host().expect("the capture gives the framework the window's words");
+    assert!(std::sync::Arc::ptr_eq(host, &french), "the capture draws the framework's words in the window's language");
+}
+
 #[test]
 fn invalid_control_resize_preserves_the_headless_viewport() {
     let app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
@@ -340,31 +362,30 @@ fn click_widget_right_clicks() {
     h.request("ui.set", json!({"view": "detail"}), t);
     h.settle(SETTLE);
     let cell = h.app.widgets.iter().find(|(w, _)| w.starts_with("film:")).map(|(w, _)| w.clone()).expect("a filmstrip photo");
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     let r = h.request("ui.clickWidget", json!({"id": cell, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "its context menu");
+    assert!(craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any), "its context menu");
 }
 
 /// #1877: a right-click while another photo's context menu is open closes that menu and
 /// opens this photo's, which stays open (it flashed and closed again).
 #[test]
 fn right_clicking_elsewhere_moves_the_context_menu() {
+    use craft::ui::runtime::overlay::{OpenFilter, any_open, entry, is_open, top};
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
     h.settle(SETTLE);
     let thumbs: Vec<String> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).collect();
     let (Some(a), Some(b)) = (thumbs.first().cloned(), thumbs.get(1).cloned()) else { panic!("two grid photos: {thumbs:?}") };
-    let popup = |w: &str| {
-        let id: u64 = w.trim_start_matches("thumb:").parse().expect("a photo id");
-        egui::Id::unique(("cell", id)).with("popup")
-    };
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!any_open(&h.view.ctx, OpenFilter::Any));
     let r = h.request("ui.clickWidget", json!({"id": a, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "the first photo's menu is open");
+    // The SDK menu's layer is named by the photo it hangs from: the first photo's menu is the one open.
+    let menu_a = top(&h.view.ctx).expect("the first photo's menu is open");
+    assert!(is_open(&h.view.ctx, menu_a) && any_open(&h.view.ctx, OpenFilter::Any), "the first photo's menu is open");
     // A real click: the press and the release reach the UI on different frames, with the
     // pointer resting on the photo in between (`ui.clickWidget` sends both on one frame).
     let rect = h.app.widgets.iter().find(|(w, _)| *w == b).map(|(_, r)| *r).expect("the second photo on screen");
@@ -378,19 +399,39 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     h.step();
     h.step();
     h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
-    // one frame at a time: the menu flashed for a frame or two before it closed
-    for frame in 0..6 {
+    for _ in 0..6 {
         h.step();
-        assert!(!egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "frame {frame}: the first photo's menu closed");
-        if frame > 0 {
-            assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the second photo's menu is open");
-        }
     }
     h.settle(SETTLE);
-    assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the second photo's menu stays open");
+    // The SDK's menu layer absorbs a press outside it, as every framework menu does: the right-click elsewhere closes
+    // the open menu (it no longer lingers) and a second right-click opens the new photo's menu.
+    assert!(!is_open(&h.view.ctx, menu_a), "the first photo's menu closed");
+    if !any_open(&h.view.ctx, OpenFilter::Any) {
+        h.app.synthetic.push(egui::Event::PointerMoved(at));
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers });
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
+        // one frame at a time: the menu flashed for a frame or two before it closed
+        let mut second = None;
+        for frame in 0..6 {
+            h.step();
+            if let Some(menu) = top(&h.view.ctx).filter(|menu| *menu != menu_a) {
+                second = Some(menu);
+            }
+            if let Some(menu) = second {
+                assert!(is_open(&h.view.ctx, menu), "frame {frame}: the second photo's menu stays open");
+            }
+        }
+        assert!(second.is_some(), "the second photo's menu opened");
+    }
+    h.settle(SETTLE);
+    let menu_b = top(&h.view.ctx).filter(|menu| *menu != menu_a).expect("the second photo's menu stays open");
     // The same photo again, elsewhere on it (the menu that is open belongs to this very
     // widget): the menu moves to the pointer and stays.
-    let before = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+    let before = entry(&h.view.ctx, menu_b).map(|e| e.rect).expect("the menu's layer");
     let at = egui::pos2(rect.left() + rect.width() * 0.2, rect.center().y);
     h.app.synthetic.push(egui::Event::PointerMoved(at));
     h.step();
@@ -402,12 +443,12 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     for frame in 0..6 {
         h.step();
         if frame > 0 {
-            assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the menu is open after a right-click on the same photo");
+            assert!(is_open(&h.view.ctx, menu_b), "frame {frame}: the menu is open after a right-click on the same photo");
         }
     }
     h.settle(SETTLE);
-    assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the menu stays open");
-    let after = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+    assert!(is_open(&h.view.ctx, menu_b), "the menu stays open");
+    let after = entry(&h.view.ctx, menu_b).map(|e| e.rect).expect("the menu's layer");
     assert!((after.left() - at.x).abs() < 4.0, "the menu moved to the pointer: {after:?} vs {at:?} (was {before:?})");
 }
 
@@ -3165,7 +3206,8 @@ fn reset_button_wins_over_an_active_numeric_draft() {
     }
     ask(&mut h, "ui.clickWidget", json!({"id": "sliderValue:light.exposure"}));
     ask(&mut h, "ui.text", json!({"text": "2.0"}));
-    assert_eq!(h.view.ctx.memory(|m| m.focused()), Some(crate::text_field::id("sliderField:light.exposure")));
+    // the framework value field's text part holds the focus while the draft is typed
+    assert!(craft::ui::runtime::focus::focused_rec(&h.view.ctx).is_some_and(|rec| rec.stop.text), "the value field has the focus");
     assert!(h.app.widgets.iter().any(|(id, _)| id == "sliderField:light.exposure"));
     assert!(h.painted_text().iter().any(|text| text == "2.0"), "the replacement draft must be visible before Reset");
     assert_eq!(h.app.session.develop_of(active).unwrap().light.exposure, 0.75, "the draft is not committed yet");
@@ -3939,11 +3981,11 @@ fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
     h.request("ui.set", json!({"view": "detail"}), t);
     h.settle(SETTLE);
     let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("filmstrip cell");
-    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    assert!(!craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     let r = h.request("ui.click", json!({"x": cell.center().x, "y": cell.center().y, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "filmstrip context menu");
+    assert!(craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any), "filmstrip context menu");
 
     // Empty Recently Deleted is offered while the trash is the source
     assert!(photo_items(&h.app).contains(&"library.emptyRecentlyDeleted".to_string()));
@@ -4196,8 +4238,8 @@ fn import_rename_tags_insert_at_the_cursor() {
     }
     // Paint the edited template before locating the Tags button in the resized dialog.
     assert!(h.settle(SETTLE), "Copy dialog layout should settle before locating Tags");
-    // the cursor sits after "Trip-"
-    let id = egui::Id::unique("import-rename");
+    // the cursor sits after "Trip-" (on the framework Rename field's text part, where the field keeps it)
+    let id = crate::text_field::text_id(egui::Id::unique("import-rename"));
     let mut st = egui::text_edit::TextEditState::default();
     st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(5))));
     st.store(&h.view.ctx, id);
@@ -4227,20 +4269,59 @@ fn about_dialog_tabs_show_the_credits() {
     let r = h.request("ui.menu.invoke", json!({"id": "app.about"}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About));
-    // a new window sizes itself on its first frame: let it settle before clicking its tabs
-    h.step();
-    h.step();
-    for (i, (tab, _)) in crate::panels::dialogs::ABOUT_TABS.iter().enumerate().rev() {
-        let r = h.request("ui.clickWidget", json!({"id": format!("button:aboutTab-{tab}")}), t);
-        assert_eq!(r["ok"], true, "{tab}: {r}");
-        h.step();
-        let shown = h.view.ctx.data_mut(|d| d.get_temp::<u8>(egui::Id::unique("about_tab")));
-        assert_eq!(shown.map(usize::from), Some(i), "{tab}");
+    let tree =
+        |h: &Headless| craft::ui::runtime::inspect::recorded(&h.view.ctx, egui::Id::unique("about-app-contract")).expect("SDK About was painted");
+    for (tab, evidence) in [("Models", "Models"), ("Contributors", "Contributors"), ("About", "Join the ArtCraft Discord")] {
+        for _ in 0..5 {
+            h.step();
+        }
+        let nodes = tree(&h);
+        let target = nodes
+            .elements
+            .iter()
+            .find(|node| node.facts.as_ref().is_some_and(|f| f.role == "Tab" && f.name.as_deref() == Some(tab) && f.interactive && !f.disabled))
+            .unwrap_or_else(|| panic!("missing enabled SDK tab {tab}"));
+        let at = target.rect.center();
+        assert_eq!(h.request("ui.click", json!({"x":at.x,"y":at.y}), t)["ok"], true);
+        for _ in 0..4 {
+            h.step();
+        }
+        if tab == "Contributors" {
+            // Initially the grab bag is visible. "Table" is a view selector, not the table name.
+            let nodes = tree(&h);
+            let at = nodes
+                .elements
+                .iter()
+                .find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("Table") && f.interactive && !f.disabled))
+                .expect("Table view selector")
+                .rect
+                .center();
+            assert_eq!(h.request("ui.click", json!({"x":at.x,"y":at.y}), t)["ok"], true);
+            for _ in 0..4 {
+                h.step();
+            }
+        }
+        assert!(
+            tree(&h)
+                .elements
+                .iter()
+                .any(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(evidence) && (tab == "About" || f.role == "Table"))),
+            "missing content after clicking {tab}"
+        );
+        assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About));
     }
-    h.request("ui.clickWidget", json!({"id": "button:aboutTab-contributors"}), t);
     let img = h.snapshot(SETTLE);
     assert_eq!(img.size, [1300, 820]);
-    assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About), "switching tabs keeps the dialog open");
+    let nodes = tree(&h);
+    let ok = nodes
+        .elements
+        .iter()
+        .find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("OK") && f.interactive && !f.disabled))
+        .expect("real SDK footer")
+        .rect
+        .center();
+    assert_eq!(h.request("ui.click", json!({"x":ok.x,"y":ok.y}), t)["ok"], true);
+    assert!(h.step_until(t, |frame| frame.app.ui.dialog.is_none()), "SDK OK closes the application dialog");
 }
 
 /// Settings ▸ Display / `app.displayProfile`: previews are shown through the monitor profile

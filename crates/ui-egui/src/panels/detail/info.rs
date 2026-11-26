@@ -1,5 +1,5 @@
 use super::geometry::focus_box;
-use super::{Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Stroke, Tokens, json, pos2, register, register_geometry, vec2};
+use super::{Color32, LightcraftApp, PhotoId, Pos2, Rect, Stroke, Tokens, json, pos2, register, register_geometry, vec2};
 
 /// Draw the camera's focus box over a photo drawn in `img` (View ▸ Focus Point): green corner
 /// brackets with a dark keyline, the way cameras show their AF frame, never smaller than 14 pt.
@@ -186,9 +186,15 @@ pub(super) fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
     let inset = FILTER_PILL_INSET;
     let w = (g.size().x + 40.0).min((canvas.width() - 2.0 * inset).max(60.0));
     let r = Rect::from_min_size(canvas.min + vec2(inset, inset), vec2(w, FILTER_PILL_HEIGHT));
-    let resp = ui.interact(r, egui::Id::unique("loupe-filter-pill"), Sense::click());
-    crate::widgets::announce(&resp, crate::i18n::tr("Filters"));
-    register(ui, "loupe:filters", r);
+    let resp = super::host::target(
+        ui,
+        "loupe-filter-pill",
+        r,
+        super::host::Target::new(crate::i18n::tr("Filters")).tooltip(crate::i18n::tr("Click to clear these filters")),
+    );
+    if super::host::live(ui) {
+        crate::widgets::register_response("loupe:filters", r, &resp);
+    }
     p.rect_filled(r, 10.0, Color32::from_black_alpha(if resp.hovered() { 225 } else { 185 }));
     let text_clip = Rect::from_min_max(r.min, pos2(r.right() - 24.0, r.max.y));
     p.with_clip_rect(text_clip).galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, Color32::from_gray(225));
@@ -196,14 +202,14 @@ pub(super) fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
     let cross = Stroke::new(1.3, if resp.hovered() { Color32::WHITE } else { Color32::from_gray(190) });
     p.line_segment([c - vec2(m, m), c + vec2(m, m)], cross);
     p.line_segment([c - vec2(m, -m), c + vec2(m, -m)], cross);
-    if resp.on_hover_text(crate::i18n::tr("Click to clear these filters")).clicked() {
+    if resp.clicked() {
         let _ = app.run("library.clearFilter", json!({}));
     }
 }
 
 /// A small "Camera preview" label at the top right of the photo while the loupe shows the camera's
 /// embedded JPEG (widget `loupe:cameraPreview`), with what that means on hover.
-pub(super) fn camera_preview_badge(ui: &egui::Ui, canvas: Rect, over: Rect) {
+pub(super) fn camera_preview_badge(ui: &mut egui::Ui, canvas: Rect, over: Rect) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter_at(canvas);
     let text = crate::i18n::tr("Camera preview");
@@ -215,8 +221,7 @@ pub(super) fn camera_preview_badge(ui: &egui::Ui, canvas: Rect, over: Rect) {
     p.galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, Color32::from_gray(225));
     register(ui, "loupe:cameraPreview", r);
     let tip = crate::i18n::tr("The camera's own JPEG, shown until LightCraft has rendered the raw. Judge colour and tone on the rendered photo.");
-    let resp = ui.interact(r, egui::Id::unique("camera-preview-badge"), Sense::hover()).on_hover_text(tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{text}: {tip}")));
+    super::host::target(ui, "camera-preview-badge", r, super::host::Target::new(format!("{text}: {tip}")).hover_only().tooltip(tip));
 }
 
 /// A raw shown from its embedded JPEG (issue #10): a pill at the canvas' top centre saying so;
@@ -232,7 +237,12 @@ pub(super) fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str) {
     crate::icons::paint(&p, Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(15.0, 15.0)), crate::icons::Icon::Info, t.caution);
     p.galley(pos2(r.left() + 29.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
     register(ui, "notice:previewOnly:loupe", r);
-    ui.interact(r, egui::Id::unique("preview-only-pill"), Sense::hover()).on_hover_text(crate::widgets::preview_only_explanation(reason));
+    super::host::target(
+        ui,
+        "preview-only-pill",
+        r,
+        super::host::Target::new(crate::i18n::tr("Preview only")).hover_only().tooltip(crate::widgets::preview_only_explanation(reason)),
+    );
 }
 
 /// One line of the info overlay for `photo`; `None` when the field is None or the photo has
@@ -328,7 +338,7 @@ pub(crate) fn loupe_pill(ui: &egui::Ui, canvas: Rect, over: Rect, navigator: Opt
 /// the error on hover and for screen readers.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn failed_pill(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     app: &LightcraftApp,
     photo: &lightcraft_catalog::Photo,
     canvas: Rect,
@@ -340,8 +350,7 @@ pub(crate) fn failed_pill(
     let offline = matches!(&photo.source, lightcraft_catalog::Source::File { path } if app.session.media.availability.is_offline(path));
     let text = crate::i18n::tr(if offline { "Original offline · no smart preview" } else { "This photo can't be opened" });
     let r = loupe_pill(ui, canvas, over, navigator, id, text, true);
-    let resp = ui.interact(r, egui::Id::unique(("render-failed", id)), Sense::hover()).on_hover_text(error);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{text}: {error}")));
+    super::host::target(ui, ("render-failed", id), r, super::host::Target::new(format!("{text}: {error}")).hover_only().tooltip(error));
 }
 
 pub(super) fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {

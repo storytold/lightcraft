@@ -15,13 +15,17 @@ fn grid() -> Harness<'static, LightcraftApp> {
     app.headless_host = true;
     app.ui.view = ViewMode::PhotoGrid;
     app.ui.right = RightPanel::None;
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    // the framework runtime routes keys and AccessKit actions; it installs before the first pass, as the app's host does
+    let mut h = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     h
 }

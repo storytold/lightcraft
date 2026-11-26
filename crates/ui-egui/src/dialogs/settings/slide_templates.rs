@@ -9,6 +9,12 @@
 //! update it with the current settings, rename, export or delete it; a built-in to export it.
 //! Every action goes through a `slideshow.templates.*` command.
 
+use craft::theme::Variant;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Divider;
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::runtime::env::Label;
 use egui::{RichText, Sense, Stroke, vec2};
 use lightcraft_engine::slide_template::{PREVIOUS, SlideLook, Template};
 use serde_json::json;
@@ -17,7 +23,7 @@ use crate::LightcraftApp;
 use crate::panels::settings::{heading, hint};
 use crate::text_field::TextField;
 use crate::theme::Tokens;
-use crate::widgets::{register, register_response};
+use crate::widgets::register_response;
 
 /// The user templates list is at most this tall (it scrolls past it).
 const USER_LIST_H: f32 = 180.0;
@@ -33,6 +39,19 @@ pub fn hovered(ctx: &egui::Context) -> Option<String> {
 
 fn set_hovered(ctx: &egui::Context, id: Option<String>) {
     ctx.data_mut(|d| d.insert_temp(hovered_key(), id));
+}
+
+fn menu_target_key() -> egui::Id {
+    egui::Id::unique("settingsSlideshowTemplateMenuTarget")
+}
+
+/// The template whose menu is open (its row keeps its preview while the pointer is in the menu).
+fn menu_target(ctx: &egui::Context) -> Option<String> {
+    ctx.data(|d| d.get_temp::<Option<String>>(menu_target_key())).flatten()
+}
+
+fn set_menu_target(ctx: &egui::Context, id: Option<String>) {
+    ctx.data_mut(|d| d.insert_temp(menu_target_key(), id));
 }
 
 /// What a row is doing: being renamed (with the text so far), or waiting for a delete to be confirmed.
@@ -94,83 +113,121 @@ fn apply(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, name: &str) {
 fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Template, current: bool, hovered: &mut Option<String>) {
     let ctx = ui.ctx().clone();
     let name = shown_name(tpl);
-    if let Some(Pending::Rename(id, mut text)) = pending(&ctx).filter(|p| matches!(p, Pending::Rename(id, _) if *id == tpl.id)) {
-        let r = TextField::singleline("field:slideshowTemplateRename", &mut text)
-            .width(ui.available_width().clamp(80.0, 260.0))
-            .select_on_focus(true)
-            .show(ui);
-        if !r.editing && r.ending.is_none() {
-            r.response.request_focus();
-        }
-        if r.committed() {
-            set_pending(&ctx, None);
-            if text.trim() != tpl.name {
-                act(app, &ctx, "slideshow.templates.rename", json!({"id": id, "name": text}), |_| String::new());
-            }
-        } else if r.cancelled() {
-            set_pending(&ctx, None);
-        } else {
-            set_pending(&ctx, Some(Pending::Rename(id, text)));
-        }
-        return;
+    if let Some(Pending::Rename(id, text)) = pending(&ctx).filter(|p| matches!(p, Pending::Rename(id, _) if *id == tpl.id)) {
+        rename_row(app, ui, &ctx, tpl, id, text);
+    } else if pending(&ctx) == Some(Pending::Delete(tpl.id.clone())) {
+        delete_row(app, ui, t, &ctx, tpl, &name);
+    } else {
+        plain_row(app, ui, t, &ctx, tpl, &name, current, hovered);
     }
-    if pending(&ctx) == Some(Pending::Delete(tpl.id.clone())) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(crate::i18n::tr_format!("Delete “{name}”?", name = name)).color(t.caution));
-            if crate::widgets::text_button(ui, "slideshowTemplateDeleteConfirm", "Delete", false).clicked() {
-                set_pending(&ctx, None);
-                act(app, &ctx, "slideshow.templates.delete", json!({"id": tpl.id}), |_| String::new());
-            }
-            if crate::widgets::text_button(ui, "slideshowTemplateDeleteCancel", "Cancel", false).clicked() {
-                set_pending(&ctx, None);
-            }
-        });
-        return;
-    }
-    let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
-    register_response(format!("template:{}", tpl.id), rect, &resp);
-    if resp.hovered() || resp.context_menu_opened() {
-        *hovered = Some(tpl.id.clone());
-    }
-    let p = ui.painter();
-    if resp.hovered() {
-        p.rect_filled(rect, 3.0, t.hover);
-    }
-    if current {
-        p.rect_stroke(rect.shrink(0.5), 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-    }
-    let colour = if current { t.text } else { t.text_label };
-    p.text(rect.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, &name, t.font(12.0), colour);
-    if resp.clicked() {
-        apply(app, &ctx, &tpl.id, &name);
-    }
-    crate::widgets::context_menu(&resp, |ui| menu(app, ui, tpl, &name));
 }
 
-/// A menu entry registered as `button:{id}`.
+/// The row of a template being renamed: its name in a text field.
+fn rename_row(app: &mut LightcraftApp, ui: &mut egui::Ui, ctx: &egui::Context, tpl: &Template, id: String, mut text: String) {
+    let r = TextField::singleline("field:slideshowTemplateRename", &mut text)
+        .width(ui.available_width().clamp(80.0, 260.0))
+        .select_on_focus(true)
+        .show(ui);
+    if !r.editing && r.ending.is_none() {
+        crate::text_field::focus_id(ctx, r.response.id);
+    }
+    if r.committed() {
+        set_pending(ctx, None);
+        if text.trim() != tpl.name {
+            act(app, ctx, "slideshow.templates.rename", json!({"id": id, "name": text}), |_| String::new());
+        }
+    } else if r.cancelled() {
+        set_pending(ctx, None);
+    } else {
+        set_pending(ctx, Some(Pending::Rename(id, text)));
+    }
+}
+
+/// The row of a template whose delete waits to be confirmed.
+fn delete_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ctx: &egui::Context, tpl: &Template, name: &str) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(crate::i18n::tr_format!("Delete “{name}”?", name = name)).color(t.caution));
+        if crate::widgets::text_button(ui, "slideshowTemplateDeleteConfirm", "Delete", false).clicked() {
+            set_pending(ctx, None);
+            act(app, ctx, "slideshow.templates.delete", json!({"id": tpl.id}), |_| String::new());
+        }
+        if crate::widgets::text_button(ui, "slideshowTemplateDeleteCancel", "Cancel", false).clicked() {
+            set_pending(ctx, None);
+        }
+    });
+}
+
+/// A template's ordinary row: a framework button painted with its name, a Tab stop that acts on Enter and
+/// Space, with a menu that opens on a right-click or the menu key.
+#[allow(clippy::too_many_arguments)]
+fn plain_row(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    ctx: &egui::Context,
+    tpl: &Template,
+    name: &str,
+    current: bool,
+    hovered: &mut Option<String>,
+) {
+    let w = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+    if !super::controls::live(ui) {
+        return;
+    }
+    let face = Button::new(name.replace('&', "&&"))
+        .id_salt(("settings-template", tpl.id.as_str()))
+        .painted(Label::Empty)
+        .variant(Variant::GHOST)
+        .show_at(ui, rect);
+    let resp = face.response.clone();
+    register_response(format!("template:{}", tpl.id), rect, &resp);
+    if resp.hovered() || menu_target(ctx).as_deref() == Some(tpl.id.as_str()) {
+        *hovered = Some(tpl.id.clone());
+    }
+    if resp.secondary_clicked() {
+        set_menu_target(ctx, Some(tpl.id.clone()));
+    }
+    let painter = ui.painter();
+    if current {
+        painter.rect_stroke(rect.shrink(0.5), 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+    }
+    let colour = if current { t.text } else { t.text_label };
+    painter.text(rect.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, name, t.font(12.0), colour);
+    if ui.is_enabled() && face.clicked() {
+        apply(app, ctx, &tpl.id, name);
+    }
+    let shown = Menu::context(crate::i18n::tr("Slideshow template"), &resp)
+        .id_salt(("settings-template-menu", tpl.id.as_str()))
+        .show(ui, |ui, _| menu(app, ui, tpl, name));
+    if shown.output.closed.is_some() && menu_target(ctx).as_deref() == Some(tpl.id.as_str()) {
+        set_menu_target(ctx, None);
+    }
+}
+
+/// A menu entry registered as `button:{id}`; true when it ran (which closes the menu).
 fn item(ui: &mut egui::Ui, id: &str, label: &str, enabled: bool) -> bool {
-    let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
-    register(ui, format!("button:{id}"), r.rect);
-    r.clicked()
+    let shown = MenuItem::new(crate::i18n::tr(label).to_owned()).id_salt(("settings-template-item", id)).enabled(enabled).show(ui);
+    if !super::controls::live(ui) {
+        return false;
+    }
+    register_response(format!("button:{id}"), shown.response.rect, &shown.response);
+    enabled && ui.is_enabled() && shown.ran
 }
 
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, tpl: &Template, name: &str) {
     let ctx = ui.ctx().clone();
     if item(ui, "slideshowTemplateApply", "Apply", true) {
         apply(app, &ctx, &tpl.id, name);
-        ui.close();
     }
     let user = !tpl.builtin && tpl.id != PREVIOUS;
     if user {
         if item(ui, "slideshowTemplateUpdate", "Update with Current Settings", true) {
             let n = name.to_string();
             act(app, &ctx, "slideshow.templates.update", json!({"id": tpl.id}), |_| crate::i18n::tr_format!("Updated {name}", name = n));
-            ui.close();
         }
         if item(ui, "slideshowTemplateRename", "Rename…", true) {
             set_pending(&ctx, Some(Pending::Rename(tpl.id.clone(), tpl.name.clone())));
-            ui.close();
         }
     }
     if tpl.id != PREVIOUS && item(ui, "slideshowTemplateExport", "Export…", app.services.save_slideshow_template.is_some()) {
@@ -180,13 +237,11 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, tpl: &Template, name: &str) 
                 crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default())
             });
         }
-        ui.close();
     }
     if user {
-        ui.separator();
+        Divider::horizontal().show(ui);
         if item(ui, "slideshowTemplateDelete", "Delete", true) {
             set_pending(&ctx, Some(Pending::Delete(tpl.id.clone())));
-            ui.close();
         }
     }
 }

@@ -1,269 +1,112 @@
-use super::albums::pointer_over_row;
-use super::local::{is_builtin_place, same_folder, subfolders};
-use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
-use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
+use std::collections::HashMap;
 
-/// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
-/// subfolders. In the tree that holds the folder being browsed (`reveal`), the folders on the
-/// way down to it open whenever the browsed folder changes, so it shows highlighted in place.
-/// `transient`: a top-level row listed for this session only (it offers Keep in Local).
-/// `place`: the top-level folder this tree hangs from. A folder can be listed in more than one
-/// tree (Pictures on its own and inside Home): each row opens and closes by itself, and their
-/// triangles have ids of their own, else the copy drawn last takes the other's clicks (#1093).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn folder_tree(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    place: &str,
-    name: &str,
-    path: &str,
-    indent: f32,
-    current: Option<&str>,
-    reveal: bool,
-    transient: bool,
+use super::albums::pointer_over_row;
+use super::local::same_folder;
+use super::rows::{
+    LIBFOLDER_REVEALED, MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, submenu, tree_open,
+};
+use super::{FolderNode, LibrarySource, LightcraftApp, Rect, Tokens, json, vec2};
+
+/// What a Folders row stands for, by the row's key.
+struct Meta<'a> {
+    node: &'a FolderNode,
+    open_id: egui::Id,
+    open: bool,
+}
+
+/// The rows of `nodes` and, for the open ones, of the folders inside them.
+fn flatten<'a>(
+    app: &LightcraftApp,
+    ui: &egui::Ui,
+    nodes: &'a [FolderNode],
+    depth: usize,
+    rows: &mut Vec<SideRow>,
+    meta: &mut HashMap<String, Meta<'a>>,
 ) {
-    let open_id = egui::Id::unique(("folder-open", place.to_string(), path.to_string()));
-    let sel = current.is_some_and(|c| same_folder(c, path));
-    let on_the_way = !sel && current.is_some_and(|c| lightcraft_catalog::query::folder_within(c, path));
-    let mut open = tree_open(ui, open_id, false);
-    if reveal && on_the_way {
-        // opened once per browsed folder: collapsing it again afterwards sticks
-        let revealed_id = egui::Id::unique(("folder-revealed", place.to_string(), path.to_string()));
-        let target = current.map(str::to_string);
-        if ui.data(|d| d.get_temp::<Option<String>>(revealed_id)) != Some(target.clone()) {
-            open = true;
-            set_tree_open(ui, open_id, true);
-            ui.data_mut(|d| d.insert_temp(revealed_id, target));
+    for n in nodes {
+        let key = lightcraft_catalog::query::folder_key(&n.path);
+        let open_id = egui::Id::unique(("libfolder-open", key));
+        // a disk starts open, and so does a folder that holds nothing itself and leads to one
+        // folder (`Users` → `me`): the first row where the library branches is what you look for
+        let leads_on = n.own == 0 && n.children.len() == 1;
+        let open = tree_open(ui, open_id, n.volume || leads_on);
+        // a row whose path would cover other disks' photos too only opens and closes
+        let name = if n.selectable { n.name.clone() } else { crate::i18n::tr("This Computer").to_string() };
+        let id = format!("libfolder:{}", n.path);
+        // the label is said with the name, as it is shown beside it
+        let spoken = match n.label {
+            Some(l) => format!("{name}, {}", crate::i18n::color_label(&app.session.catalog, l)),
+            None => name.clone(),
+        };
+        let tip = if n.children.is_empty() { n.path.clone() } else { format!("{} ({})", n.path, crate::i18n::tr("includes the folders inside it")) };
+        let mut row = SideRow::new(id.clone(), "folder", name)
+            .spoken(spoken)
+            .count(Some(n.count))
+            .depth(depth)
+            .mark(n.label.map(crate::theme::label_color))
+            .tip(tip);
+        if !n.children.is_empty() {
+            row = row.group(open, format!("libraryFolderToggle:{}", n.path));
         }
-    }
-    if !out_of_sight(app, ui, &format!("local:{path}"), name, None, indent, false) {
-        // at the tree's own indent, as in Albums and Folders: the triangle sits in the gutter and the
-        // icon lines up with the rows above
-        let resp = Row::new(&format!("local:{path}"), Icon::Folder, name).selected(sel).indent(indent).show(app, ui).on_hover_text(path);
-        let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"), name);
-        if !tr.clicked()
-            && resp.clicked()
-            && let Err(e) = app.run("library.browse", json!({"path": path}))
-        {
-            app.toast(ui.ctx(), e);
-        }
-        crate::widgets::context_menu(&resp, |ui| {
-            // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
-            let library = app.caches.folder_tree(&app.session.catalog);
-            let held = library_node_for(&library, path);
-            if (transient || indent > 0.0)
-                && ui
-                    .button(crate::i18n::tr(if transient { "Keep in Local" } else { "Add to Local" }))
-                    .on_hover_text(crate::i18n::tr("List this folder in Local from now on"))
-                    .clicked()
-            {
-                let _ = app.run("local.addRoot", json!({"path": path}));
-                ui.close();
-            }
-            if indent == 0.0
-                && ui
-                    .button(crate::i18n::tr("Remove from Local"))
-                    .on_hover_text(crate::i18n::tr("Hides this shortcut only; the folder and its photos stay as they are"))
-                    .clicked()
-            {
-                let _ = app.run("local.hide", json!({"path": path}));
-                ui.close();
-            }
-            // a built-in place is one of the computer's own folders under a translated label (Home is
-            // the user's whole home): Local offers no Rename or Move for it (the other items stay)
-            if !(indent == 0.0 && is_builtin_place(app, path)) {
-                if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                        title: crate::i18n::tr_format!("Rename “{name}”", name = name),
-                        hint: "Folder name (renamed on disk; its photos follow)".into(),
-                        value: name.to_string(),
-                        command: "folder.rename".into(),
-                        params: json!({"path": path}),
-                        key: "name".into(),
-                    });
-                }
-                move_folder_item(app, ui, path);
-            }
-            if app.services.reveal.is_some()
-                && ui.button(crate::i18n::tr(crate::menus::reveal_label())).clicked()
-                && let Some(f) = app.services.reveal.as_mut()
-            {
-                let _ = f(path);
-            }
-            if let Some(held) = &held {
-                synchronize_item(app, ui, &held.0, &held.1);
-            }
-        });
-    }
-    if open && indent < INDENT_STEP * 8.0 {
-        for (n, p) in subfolders(ui, path).iter() {
-            folder_tree(app, ui, place, n, p, indent + INDENT_STEP, current, reveal, false);
+        rows.push(row);
+        meta.insert(id, Meta { node: n, open_id, open });
+        if open && !n.children.is_empty() && depth < MAX_DEPTH {
+            flatten(app, ui, &n.children, depth + 1, rows, meta);
         }
     }
 }
 
-pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
-    crate::widgets::context_menu(resp, |ui| {
-        if a.folder {
-            // the same commands as File ▸ New…, aimed at this folder
-            crate::widgets::menu_button(ui, crate::i18n::tr("New"), |ui| {
-                for (label, command) in [
-                    ("Create Album…", "dialog.newAlbum"),
-                    ("Create Smart Album…", "dialog.smartAlbum"),
-                    ("Create Smart Album from Filter…", "dialog.newSmartAlbum"),
-                    ("Create Folder…", "dialog.newFolder"),
-                ] {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
-                        let _ = app.run(command, json!({"parent": a.id.0}));
-                        ui.close();
-                    }
-                }
-            });
-            if app.session.catalog.album_children_are_ordered(Some(a.id))
-                && ui.button(crate::i18n::tr("Sort Contents A–Z")).on_hover_text(crate::i18n::tr("Go back to listing them by name")).clicked()
-            {
-                let _ = app.run("album.sort", json!({"parent": a.id.0}));
-                ui.close();
-            }
-            ui.separator();
-        }
-        if !a.folder && !a.is_smart() {
-            let local_only = crate::panels::grid::local_only(app, &app.session.selected());
-            let b = ui
-                .add_enabled(!local_only, egui::Button::new(crate::i18n::tr("Add Selected Photos")))
-                .on_disabled_hover_text(crate::panels::grid::albums_hint());
-            if b.clicked() {
-                match app.run("album.addPhotos", json!({"id": a.id.0})) {
-                    Ok(r) => crate::panels::grid::toast_skipped(app, ui.ctx(), &r),
-                    Err(e) => app.toast(ui.ctx(), e),
+pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[FolderNode]) {
+    let mut rows = Vec::new();
+    let mut meta = HashMap::new();
+    flatten(app, ui, nodes, 0, &mut rows, &mut meta);
+    let selected = meta
+        .iter()
+        .find(|(_, m)| {
+            m.node.selectable
+                && app.session.source == LibrarySource::LibraryFolder
+                && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &m.node.path))
+        })
+        .map(|(key, _)| key.clone());
+    let spec = SideSpec::new("folders", crate::i18n::tr("Folders"), app.ui.show_counts).selected(selected.as_deref());
+    let out = side_list(ui, spec, rows);
+    let mut request = None;
+    for event in &out.events {
+        match event {
+            SideEvent::Open { key, open } => {
+                if let Some(m) = meta.get(key) {
+                    set_tree_open(ui, m.open_id, *open);
                 }
             }
-            // File ▸ Import's ways in; the import review opens with this album chosen
-            let menu = crate::widgets::menu_button(ui, crate::i18n::tr("Import"), |ui| {
-                let mut entry = |ui: &mut egui::Ui, label: String, widget: String, command: &str, params: serde_json::Value| {
-                    let r = ui.button(label);
-                    crate::widgets::register(ui, widget, r.rect);
-                    if r.clicked() {
-                        if let Err(e) = app.run(command, params) {
-                            app.toast(ui.ctx(), e);
-                        }
-                        ui.close();
-                    }
-                };
-                for (label, command, widget) in [
-                    ("Import Photos…", "file.addPhotos", "button:albumImportPhotos"),
-                    ("Import from Folder…", "file.addFolder", "button:albumImportFolder"),
-                ] {
-                    entry(ui, crate::i18n::tr(label).into(), widget.into(), command, json!({"album": a.id.0}));
-                }
-                // like File ▸ Import from Device: one entry per camera or card found
-                let device = crate::widgets::menu_button(ui, crate::i18n::tr("Import from Device"), |ui| {
-                    let devices = lightcraft_engine::devices::devices();
-                    if devices.is_empty() {
-                        ui.add_enabled(false, egui::Button::new(crate::i18n::tr("No Camera or Card Found")));
-                    }
-                    for (i, d) in devices.into_iter().enumerate() {
-                        let params = json!({"path": d.path, "album": a.id.0});
-                        entry(ui, format!("{}…", d.name), format!("button:albumImportDevice:{i}"), "file.addFromDevice", params);
-                    }
-                });
-                crate::widgets::register(ui, "button:albumImportDevice", device.response.rect);
-            });
-            crate::widgets::register(ui, "button:albumImport", menu.response.rect);
-        }
-        if !a.folder && !a.is_smart() {
-            let is_target = app.session.target_album == Some(a.id) || (app.session.target_album.is_none() && a.quick);
-            if !is_target && ui.button(crate::i18n::tr("Set as Target Album (B adds to it)")).clicked() {
-                let _ = app.run("album.setTarget", json!({"id": if a.quick { serde_json::Value::Null } else { json!(a.id.0) }}));
-            }
-            if is_target && !a.quick && ui.button(crate::i18n::tr("Stop Using as Target Album")).clicked() {
-                let _ = app.run("album.setTarget", json!({"id": null}));
-            }
-        }
-        if a.quick && ui.button(crate::i18n::tr("Clear Quick Collection")).clicked() {
-            let _ = app.run("album.clearQuick", json!({}));
-        }
-        if a.is_smart() && ui.button(crate::i18n::tr("Edit Smart Album…")).clicked() {
-            // the same editor as `dialog.smartAlbum` (older smart albums keep their filter fields;
-            // it works on the rule set, upgraded)
-            let _ = app.run("dialog.smartAlbum", json!({"id": a.id.0}));
-        }
-        if a.is_smart() && ui.button(crate::i18n::tr("Update Rules from Current Filter")).clicked() {
-            // refused when the view would make the album test itself: say why
-            if let Err(e) = app.run("album.setRules", json!({"id": a.id.0, "fromView": true})) {
-                app.toast(ui.ctx(), e);
-            }
-        }
-        if !a.folder {
-            // export: show the album, select its photos, then the dialog / a preset
-            let show_all = |app: &mut LightcraftApp| {
-                let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
-                let _ = app.run("library.selectAll", json!({}));
-            };
-            let has_photos = app.session.catalog.album_count(a.id) > 0;
-            if ui.add_enabled(has_photos, egui::Button::new(crate::i18n::tr("Export Album…"))).clicked() {
-                show_all(app);
-                let _ = app.run("dialog.export", json!({}));
-            }
-            ui.add_enabled_ui(has_photos, |ui| {
-                crate::widgets::menu_button(ui, crate::i18n::tr("Export Album with Preset"), |ui| {
-                    for (p, _) in app.session.all_export_presets() {
-                        if ui.button(&p.name).clicked() {
-                            show_all(app);
-                            if let Err(e) = app.run("app.export", json!({"preset": p.name, "background": true})) {
-                                app.toast(ui.ctx(), e);
-                            }
-                        }
-                    }
-                });
-            });
-            ui.separator();
-        }
-        // move into another folder (not into itself or one of its own subfolders)
-        let mut folders: Vec<(u64, String)> =
-            app.session.catalog.albums().filter(|f| f.folder && !is_within(app, f.id, a.id)).map(|f| (f.id.0, f.name.clone())).collect();
-        folders.sort_by_key(|(_, n)| n.to_lowercase());
-        crate::widgets::menu_button(ui, crate::i18n::tr("Move to"), |ui| {
-            if ui.add_enabled(a.parent.is_some(), egui::Button::new(crate::i18n::tr("Top Level"))).clicked() {
-                let _ = app.run("album.move", json!({"id": a.id.0, "parent": null}));
-            }
-            for (fid, name) in &folders {
-                if ui.add_enabled(a.parent.map(|p| p.0) != Some(*fid), egui::Button::new(name)).clicked() {
-                    let _ = app.run("album.move", json!({"id": a.id.0, "parent": fid}));
+            SideEvent::Activate(key) => {
+                let Some(m) = meta.get(key) else { continue };
+                if m.node.selectable {
+                    // a source like an album or a Local folder: it replaces what the grid showed
+                    let _ = app.run("library.source", json!({"kind": "libraryFolder", "path": m.node.path}));
+                } else {
+                    set_tree_open(ui, m.open_id, !m.open);
                 }
             }
-        });
-        if ui.button(crate::i18n::tr("Rename…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::RenameAlbum { id: a.id.0, name: a.name.clone() });
-        }
-        let delete = ui.button(crate::i18n::tr("Delete"));
-        register(ui, format!("albumDelete:{}", a.id.0), delete.rect);
-        let delete =
-            delete.on_hover_text(crate::i18n::tr("Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this."));
-        if delete.clicked() {
-            if let Err(e) = app.run("album.delete", json!({"id": a.id.0})) {
-                app.toast(ui.ctx(), e);
+            SideEvent::Menu { key, at } => {
+                // (the startup disk has no menu)
+                if meta.get(key).is_some_and(|m| !(m.node.volume && m.node.path == "/")) {
+                    request = Some((key.clone(), MenuAt::Point(*at)));
+                }
             }
-            ui.close();
+        }
+    }
+    if app.ui.dragging_photos.is_some() {
+        for row in &out.shown {
+            if let Some(m) = meta.get(&row.key) {
+                folder_drop_target(app, ui, row.rect, m.node, m.open_id, &mut m.open.clone());
+            }
+        }
+    }
+    host_menu(ui, "folders", crate::i18n::tr("Folder"), out.response.as_ref(), request, |ui, key| {
+        if let Some(m) = meta.get(key) {
+            row_menu(app, ui, m.node);
         }
     });
-}
-
-/// Whether `id` is `ancestor` or lies inside it.
-pub(super) fn is_within(app: &LightcraftApp, id: lightcraft_catalog::AlbumId, ancestor: lightcraft_catalog::AlbumId) -> bool {
-    let mut cur = Some(id);
-    let mut guard = 0;
-    while let Some(c) = cur {
-        if c == ancestor {
-            return true;
-        }
-        cur = app.session.catalog.album(c).and_then(|x| x.parent);
-        guard += 1;
-        if guard > 64 {
-            break;
-        }
-    }
-    false
 }
 
 // "Folders" (drawn in `show`): where on disk the library's photos were imported from, with photo counts (see
@@ -305,61 +148,6 @@ pub(crate) fn folder_row_of<'a>(tree: &'a [FolderNode], dir: &str) -> Option<&'a
         .find_map(|n| if same_folder(&n.path, dir) { Some(n) } else { folder_row_of(&n.children, dir) })
 }
 
-pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[FolderNode], indent: f32) {
-    for n in nodes {
-        let key = lightcraft_catalog::query::folder_key(&n.path);
-        let open_id = egui::Id::unique(("libfolder-open", key.clone()));
-        // a disk starts open, and so does a folder that holds nothing itself and leads to one
-        // folder (`Users` → `me`): the first row where the library branches is what you look for
-        let leads_on = n.own == 0 && n.children.len() == 1;
-        let mut open = tree_open(ui, open_id, n.volume || leads_on);
-        // a row whose path would cover other disks' photos too only opens and closes
-        let name = if n.selectable { n.name.clone() } else { crate::i18n::tr("This Computer").to_string() };
-        let id = format!("libfolder:{}", n.path);
-        if !out_of_sight(app, ui, &id, &name, Some(n.count), indent, n.label.is_some()) {
-            folder_row(app, ui, n, &id, &name, indent, open_id, &mut open);
-        }
-        if open && !n.children.is_empty() {
-            folder_rows(app, ui, &n.children, indent + INDENT_STEP);
-        }
-    }
-}
-
-/// One drawn row of [`folder_rows`], shown as `name`; `open_id` and `open` are its triangle's.
-#[allow(clippy::too_many_arguments)]
-fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &str, name: &str, indent: f32, open_id: egui::Id, open: &mut bool) {
-    let sel = n.selectable
-        && app.session.source == LibrarySource::LibraryFolder
-        && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path));
-    // the label is said with the name, as it is shown beside it
-    let spoken = match n.label {
-        Some(l) => format!("{name}, {}", crate::i18n::color_label(&app.session.catalog, l)),
-        None => name.to_string(),
-    };
-    let mark = n.label.map(crate::theme::label_color);
-    let resp = Row::new(id, Icon::Folder, name).spoken(&spoken).count(Some(n.count)).selected(sel).indent(indent).mark(mark).show(app, ui);
-    folder_drop_target(app, ui, &resp, n, open_id, open);
-    let mut toggled = false;
-    if !n.children.is_empty() {
-        let tr = tree_toggle(ui, &resp, indent, open_id, open, format!("libraryFolderToggle:{}", n.path), name);
-        toggled = tr.clicked();
-        // the triangle sits on the row and takes its clicks: the menu opens from it too
-        row_menu(app, &tr, n);
-    }
-    let tip = if n.children.is_empty() { n.path.clone() } else { format!("{} ({})", n.path, crate::i18n::tr("includes the folders inside it")) };
-    let resp = resp.on_hover_text(tip);
-    if resp.clicked() && !toggled {
-        if n.selectable {
-            // a source like an album or a Local folder: it replaces what the grid showed
-            let _ = app.run("library.source", json!({"kind": "libraryFolder", "path": n.path}));
-        } else {
-            *open = !*open;
-            set_tree_open(ui, open_id, *open);
-        }
-    }
-    row_menu(app, &resp, n);
-}
-
 /// How long photos dragged over a closed Folders row wait before it opens, so a folder inside it
 /// can be reached.
 const SPRING_OPEN_SECONDS: f64 = 0.7;
@@ -369,10 +157,10 @@ const SPRING_OPEN_SECONDS: f64 = 0.7;
 /// they will go, as the same gesture onto an album only adds them to it. Held over a closed row,
 /// it opens. Photos that can't go there leave it dark (a row covering several disks; Local photos,
 /// not in the library) and a release says why; photos already there say so.
-fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, n: &FolderNode, open_id: egui::Id, open: &mut bool) {
+fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, n: &FolderNode, open_id: egui::Id, open: &mut bool) {
     let Some(ids) = app.ui.dragging_photos.clone() else { return };
     // only where the row can be seen: not scrolled out of the sidebar or beneath the pinned header
-    if !pointer_over_row(ui, resp.rect) {
+    if !pointer_over_row(ui, rect) {
         return;
     }
     spring_open(ui, n, open_id, open);
@@ -414,7 +202,7 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         return;
     }
     let t = Tokens::get(ui.ctx());
-    ui.painter().rect_stroke(resp.rect.shrink2(vec2(8.0, 1.0)), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(rect.shrink2(vec2(8.0, 1.0)), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     if released {
         app.ui.dragging_photos = None;
         // a drop moves files on disk: asked first (as Lightroom Classic does), unless the person
@@ -496,39 +284,31 @@ fn move_photos_here(app: &mut LightcraftApp, ctx: &egui::Context, ids: Option<&[
     }
 }
 
-/// The context menu of a Folders row: a folder's own, a disk's (remove it), none for the
-/// startup disk.
-fn row_menu(app: &mut LightcraftApp, resp: &egui::Response, n: &FolderNode) {
+/// The context menu of a Folders row: a folder's own, a disk's (remove it).
+fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode) {
     if !n.volume {
-        folder_menu_for_library(app, resp, n);
-    } else if n.path != "/" {
-        crate::widgets::context_menu(resp, |ui| {
-            folder_label_menu(app, ui, n);
-            locate_missing_item(app, ui, n);
-            synchronize_item(app, ui, n, &n.name);
-            ui.separator();
-            if ui
-                .button(crate::i18n::tr("Remove Disk from Library…"))
-                .on_hover_text(crate::i18n::tr("Moves every photo imported from this disk to Recently Deleted; no file is touched"))
-                .clicked()
-            {
-                app.ui.dialog = Some(crate::state::Dialog::RemoveFolder { path: n.path.clone(), name: n.name.clone(), count: n.count, disk: true });
-                ui.close();
-            }
-        });
+        folder_menu_for_library(app, ui, n);
+        return;
+    }
+    folder_label_menu(app, ui, n);
+    locate_missing_item(app, ui, n);
+    synchronize_item(app, ui, n, &n.name);
+    rule(ui);
+    if entry("disk", crate::i18n::tr("Remove Disk from Library…"))
+        .tip(crate::i18n::tr("Moves every photo imported from this disk to Recently Deleted; no file is touched"))
+        .show(ui)
+    {
+        app.ui.dialog = Some(crate::state::Dialog::RemoveFolder { path: n.path.clone(), name: n.name.clone(), count: n.count, disk: true });
     }
 }
 
 /// Locate Missing Files… of a Folders row: choose where this folder moved, then let the existing
 /// background finder relink only this folder's photos (including the folders inside it).
 fn locate_missing_item(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode) {
-    let r = ui.button(crate::i18n::tr("Locate Missing Files…"));
-    register(ui, "folderLocateMissing", r.rect);
-    if r.clicked() {
-        if let Err(e) = app.run("file.findMissing", json!({"within": n.path})) {
-            app.toast(ui.ctx(), e);
-        }
-        ui.close();
+    if entry("folder", crate::i18n::tr("Locate Missing Files…")).widget("folderLocateMissing").show(ui)
+        && let Err(e) = app.run("file.findMissing", json!({"within": n.path}))
+    {
+        app.toast(ui.ctx(), e);
     }
 }
 
@@ -536,7 +316,7 @@ fn locate_missing_item(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNod
 /// the Folders row for that very folder, else (a folder above rows) the folder itself, as a folder
 /// holding other folders. `None` when no library photo lies in `path` or inside it. Reads the
 /// cached Folders tree only; the disk is not touched.
-fn library_node_for(tree: &[FolderNode], path: &str) -> Option<(FolderNode, String)> {
+pub(super) fn library_node_for(tree: &[FolderNode], path: &str) -> Option<(FolderNode, String)> {
     use lightcraft_catalog::query::folder_within;
     fn exact<'a>(tree: &'a [FolderNode], path: &str) -> Option<&'a FolderNode> {
         tree.iter().find_map(|n| if same_folder(&n.path, path) { Some(n) } else { exact(&n.children, path) })
@@ -581,18 +361,15 @@ fn can_move_folder(app: &LightcraftApp) -> Result<(), String> {
 /// shared folder dialog, off the UI thread where the host has one (issue #3140: a dialog on the UI
 /// thread froze the window); `folder.move` then runs when it closes ([`crate::pick::poll`]).
 /// Disabled while a library dialog is up ([`can_move_folder`]).
-fn move_folder_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
+pub(super) fn move_folder_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
     if app.services.pick_folder.is_none() && app.services.picker.is_none() {
         return;
     }
-    let r = ui.add_enabled(can_move_folder(app).is_ok(), egui::Button::new(crate::i18n::tr("Move Folder To…")));
-    register(ui, "folderMoveTo", r.rect);
-    if !r.clicked() {
+    if !entry("folder", crate::i18n::tr("Move Folder To…")).enabled(can_move_folder(app).is_ok()).widget("folderMoveTo").show(ui) {
         return;
     }
     if let Err(e) = can_move_folder(app) {
         app.toast(ui.ctx(), e);
-        ui.close();
         return;
     }
     let req = crate::pick::PickRequest::folder(crate::i18n::tr("Move Folder To…"));
@@ -607,99 +384,89 @@ fn move_folder_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
             Ok(None) => {}
         }
     }
-    ui.close();
 }
 
 /// Synchronize Folder… of a Folders row (widget `folderSynchronize`): opens its dialog, which
 /// scans the folder in the background.
-fn synchronize_item(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, name: &str) {
-    let r = ui
-        .button(crate::i18n::tr("Synchronize Folder…"))
-        .on_hover_text(crate::i18n::tr("Find photos added to or missing from this folder on disk, and XMP sidecars changed by other apps"));
-    crate::widgets::register(ui, "folderSynchronize", r.rect);
-    if r.clicked() {
-        // a disk, or a folder holding disks, was chosen as such
-        if let Err(e) = crate::sync::open(app, &n.path, name, n.volume || !n.selectable) {
-            app.toast(ui.ctx(), e);
-        }
-        ui.close();
+pub(super) fn synchronize_item(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, name: &str) {
+    let run = entry("folder", crate::i18n::tr("Synchronize Folder…"))
+        .tip(crate::i18n::tr("Find photos added to or missing from this folder on disk, and XMP sidecars changed by other apps"))
+        .widget("folderSynchronize")
+        .show(ui);
+    // a disk, or a folder holding disks, was chosen as such
+    if run && let Err(e) = crate::sync::open(app, &n.path, name, n.volume || !n.selectable) {
+        app.toast(ui.ctx(), e);
     }
 }
 
 /// Set Color Label ▸ of a Folders row (`folder.label`; the submenu is widget `folderLabelMenu`,
 /// its colours `folderLabel:<colour>`).
 fn folder_label_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode) {
-    let menu = crate::widgets::menu_button(ui, crate::i18n::tr("Set Color Label"), |ui| {
+    submenu(ui, crate::i18n::tr("Set Color Label"), Some("folderLabelMenu"), true, |ui, menu| {
         if let Some(l) = crate::panels::grid::label_items(app, ui, n.label, "folderLabel") {
             if let Err(e) = app.run("folder.label", json!({"path": n.path, "label": crate::panels::grid::label_param(l)})) {
                 app.toast(ui.ctx(), e);
             }
-            ui.close();
+            menu.request_close();
         }
     });
-    register(ui, "folderLabelMenu", menu.response.rect);
 }
 
 /// The context menu of a folder row: the folder's disk actions (the same as Local's, photos
 /// follow) and taking its photos out of the library.
-fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &FolderNode) {
+fn folder_menu_for_library(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode) {
     let path = n.path.as_str();
     let name = std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     // what dialogs call it: the last two names, so same-named folders are told apart
     let label = lightcraft_catalog::folders::folder_label(path);
-    crate::widgets::context_menu(resp, |ui| {
-        if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                title: crate::i18n::tr_format!("Rename “{name}”", name = label),
-                hint: "Folder name (renamed on disk; its photos follow)".into(),
-                value: name.clone(),
-                command: "folder.rename".into(),
-                params: json!({"path": path}),
-                key: "name".into(),
-            });
-            ui.close();
-        }
-        move_folder_item(app, ui, path);
-        if ui.button(crate::i18n::tr("New Folder on Disk…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                title: crate::i18n::tr_format!("New Folder in “{name}”", name = label),
-                hint: "Folder name (created on disk)".into(),
-                value: String::new(),
-                command: "folder.create".into(),
-                params: json!({"parent": path}),
-                key: "name".into(),
-            });
-            ui.close();
-        }
-        let selected = app.session.selection.ids.len();
-        if selected > 0
-            && ui
-                .button(crate::i18n::tr("Move Selected Photos Here"))
-                .on_hover_text(crate::i18n::tr("Moves the files and their XMP sidecars into this folder; never overwrites"))
-                .clicked()
-        {
-            let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog), path);
-            move_photos_here(app, ui.ctx(), None, path, &name);
-            ui.close();
-        }
-        if app.services.reveal.is_some()
-            && ui.button(crate::i18n::tr(crate::menus::reveal_label())).clicked()
-            && let Some(f) = app.services.reveal.as_mut()
-        {
-            let _ = f(path);
-            ui.close();
-        }
-        folder_label_menu(app, ui, n);
-        locate_missing_item(app, ui, n);
-        synchronize_item(app, ui, n, &label);
-        ui.separator();
-        if ui
-            .button(crate::i18n::tr("Remove from Library…"))
-            .on_hover_text(crate::i18n::tr("Moves the photos imported from this folder to Recently Deleted; no file is touched"))
-            .clicked()
-        {
-            app.ui.dialog = Some(crate::state::Dialog::RemoveFolder { path: path.to_string(), name: label.clone(), count: n.count, disk: false });
-            ui.close();
-        }
-    });
+    if entry("folder", crate::i18n::tr("Rename Folder…")).show(ui) {
+        app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+            title: crate::i18n::tr_format!("Rename “{name}”", name = label),
+            hint: "Folder name (renamed on disk; its photos follow)".into(),
+            value: name.clone(),
+            command: "folder.rename".into(),
+            params: json!({"path": path}),
+            key: "name".into(),
+        });
+    }
+    move_folder_item(app, ui, path);
+    if entry("folder", crate::i18n::tr("New Folder on Disk…")).show(ui) {
+        app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+            title: crate::i18n::tr_format!("New Folder in “{name}”", name = label),
+            hint: "Folder name (created on disk)".into(),
+            value: String::new(),
+            command: "folder.create".into(),
+            params: json!({"parent": path}),
+            key: "name".into(),
+        });
+    }
+    if !app.session.selection.ids.is_empty()
+        && entry("folder", crate::i18n::tr("Move Selected Photos Here"))
+            .tip(crate::i18n::tr("Moves the files and their XMP sidecars into this folder; never overwrites"))
+            .show(ui)
+    {
+        let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog), path);
+        move_photos_here(app, ui.ctx(), None, path, &name);
+    }
+    reveal_item(app, ui, path);
+    folder_label_menu(app, ui, n);
+    locate_missing_item(app, ui, n);
+    synchronize_item(app, ui, n, &label);
+    rule(ui);
+    if entry("folder", crate::i18n::tr("Remove from Library…"))
+        .tip(crate::i18n::tr("Moves the photos imported from this folder to Recently Deleted; no file is touched"))
+        .show(ui)
+    {
+        app.ui.dialog = Some(crate::state::Dialog::RemoveFolder { path: path.to_string(), name: label.clone(), count: n.count, disk: false });
+    }
+}
+
+/// Show in Finder / Explorer, where the host can.
+pub(super) fn reveal_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
+    if app.services.reveal.is_some()
+        && entry("folder", crate::i18n::tr(crate::menus::reveal_label())).show(ui)
+        && let Some(f) = app.services.reveal.as_mut()
+    {
+        let _ = f(path);
+    }
 }

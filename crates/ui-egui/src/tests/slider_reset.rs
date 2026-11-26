@@ -149,3 +149,64 @@ fn a_typed_value_still_applies_after_a_reset() {
     assert_eq!(value(&h, "light.exposure"), 0.5);
     assert_eq!(h.app.session.undo.len() - undo, 1, "one undo step");
 }
+
+/// A settled frame of the Edit panel is laid out once: the slider rows are measured in a measuring run and shown at
+/// the room they take, so the shell's framework body finds nothing it did not keep and asks for no second pass.
+#[test]
+fn a_settled_edit_panel_frame_takes_one_pass() {
+    let mut h = edit_panel();
+    for _ in 0..20 {
+        h.step();
+    }
+    let passes = h.view.ctx.cumulative_pass_nr();
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(h.view.ctx.cumulative_pass_nr() - passes, 10, "one pass a frame with the sliders shown");
+}
+
+/// Every egui "Double use of widget ID" warning painted this frame, with where it sits.
+fn id_clash_warnings(h: &Headless) -> Vec<(String, egui::Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Text(t) => {
+                let text = t.galley.text();
+                if text.contains("use of widget ID") {
+                    out.push((text.to_string(), t.pos));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.view.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The Edit panel, with its Profile row and the Light sliders, paints no egui warning about two widgets sharing an
+/// id (the warning paints over the panel), with a profile whose amount row shows and after its menu opened and closed.
+#[test]
+fn the_edit_panel_has_no_widget_id_clashes() {
+    let mut h = edit_panel();
+    let check = |h: &Headless, when: &str| {
+        let clashes = id_clash_warnings(h);
+        let near = |p: egui::Pos2| h.app.widgets.iter().filter(|(_, r)| r.expand(6.0).contains(p)).map(|(w, _)| w.clone()).collect::<Vec<_>>();
+        let said: Vec<_> = clashes.iter().map(|(t, p)| format!("{t} at {p:?} near {:?}", near(*p))).collect();
+        assert!(clashes.is_empty(), "{when}: {said:#?}");
+    };
+    h.step();
+    check(&h, "at rest");
+    ask(&mut h, "ui.clickWidget", json!({"id": "dropdown:profile"}));
+    for _ in 0..4 {
+        h.step();
+    }
+    check(&h, "with the profile menu open");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    for _ in 0..4 {
+        h.step();
+    }
+    check(&h, "after the menu closed");
+}

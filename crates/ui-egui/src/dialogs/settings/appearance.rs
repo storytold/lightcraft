@@ -65,41 +65,98 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
                 });
                 let shown = options.iter().find(|(v, _)| v == value).or(options.first()).map(|(_, k)| *k).unwrap_or_default();
                 theme_preview(ui, shown, inner);
-                for (v, kind) in options {
-                    let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 24.0));
-                    let hovered = ui.ctx().pointer_hover_pos().is_some_and(|p| row.contains(p));
-                    ui.horizontal(|ui| {
-                        let r = ui.radio_value(value, *v, crate::i18n::tr(kind.label()));
-                        register(ui, format!("radio:theme-{}", kind.id()), r.rect);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let favorite = favorites.iter().any(|id| id == kind.id());
-                            let r = ui
-                                .add_visible(favorite || hovered, egui::Button::new("").min_size(egui::vec2(24.0, 24.0)).frame(false))
-                                .on_hover_text(crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }));
-                            r.widget_info(|| {
-                                egui::WidgetInfo::labeled(
-                                    egui::Role::Button,
-                                    true,
-                                    format!(
-                                        "{}: {}",
-                                        crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }),
-                                        crate::i18n::tr(kind.label())
-                                    ),
-                                )
-                            });
-                            register(ui, format!("button:themeFavorite-{}", kind.id()), r.rect);
-                            if favorite || hovered {
-                                crate::rating::paint_star(ui.painter(), r.rect.shrink(4.0), favorite, if favorite { t.accent } else { t.text_dim });
-                            }
-                            if r.clicked() {
-                                if favorite {
-                                    favorites.retain(|id| id != kind.id());
-                                } else {
-                                    favorites.push(kind.id().into());
-                                }
+                let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                if !real {
+                    // Preserve card/preview geometry, but speculative rows have no live owner or alias.
+                    for _ in options {
+                        ui.allocate_exact_size(egui::vec2(inner, 24.0), egui::Sense::hover());
+                    }
+                    return;
+                }
+                use craft::behavior::{NavShape, Proposal};
+                use craft::theme::Variant;
+                use craft::ui::buttons::Button;
+                use craft::ui::choice::{Radio, RadioGroup};
+                use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+                use craft::ui::runtime::env::Label;
+                // Only radios belong to the family's roving arena. Favorite buttons are siblings,
+                // so arrows never select a star and Tab can still acquire each visible action.
+                let selected = options.iter().position(|(candidate, _)| candidate == value).unwrap_or(0) as u8;
+                let radio_width = (inner - 24.0 - ui.spacing().item_spacing.x).max(24.0);
+                let mut rows = Vec::with_capacity(options.len());
+                let mut body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
+                    ui.set_min_width(radio_width);
+                    ui.set_max_width(radio_width);
+                    for (index, (_, kind)) in options.iter().enumerate() {
+                        ui.allocate_ui_with_layout(egui::vec2(radio_width, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let response = Radio::new(index as u8)
+                                .id_salt(("settings-theme-choice", title, kind.id()))
+                                .label(crate::i18n::tr(kind.label()).to_owned())
+                                .show(ui);
+                            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                                crate::widgets::register_response(format!("radio:theme-{}", kind.id()), response.interact_rect, &response);
+                                rows.push((*kind, response.interact_rect));
                             }
                         });
-                    });
+                    }
+                };
+                let child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(radio_width, f32::INFINITY)))
+                        .sizing_pass()
+                        .invisible(),
+                );
+                let group = || {
+                    RadioGroup::new(crate::i18n::tr(title).to_owned(), Bind::given(selected))
+                        .id_salt(("settings-theme-family", title))
+                        .nav(NavShape::Flat)
+                        .enabled(ui.is_enabled())
+                };
+                let size = group().measure_in(&child, Proposal::Ideal, &mut body);
+                let (area, _) = ui.allocate_exact_size(egui::vec2(inner, size.y.max(24.0)), egui::Sense::hover());
+                let group_rect = egui::Rect::from_min_size(area.min, egui::vec2(radio_width, area.height()));
+                let output = RadioGroup::new(crate::i18n::tr(title).to_owned(), Bind::given(selected))
+                    .id_salt(("settings-theme-family", title))
+                    .nav(NavShape::Flat)
+                    .enabled(ui.is_enabled())
+                    .show_at(ui, group_rect, &mut body);
+                if let Some(index) = output.output.events.committed().copied().filter(|_| ui.is_enabled())
+                    && let Some((next, _)) = options.get(index as usize)
+                    && *next != *value
+                {
+                    *value = *next;
+                }
+                for (kind, radio_rect) in rows {
+                    let row = egui::Rect::from_min_max(
+                        egui::pos2(area.left(), radio_rect.center().y - 12.0),
+                        egui::pos2(area.right(), radio_rect.center().y + 12.0),
+                    );
+                    let hovered = ui.ctx().pointer_hover_pos().is_some_and(|point| row.contains(point));
+                    let favorite = favorites.iter().any(|id| id == kind.id());
+                    let rect = egui::Rect::from_min_size(egui::pos2(area.right() - 24.0, radio_rect.center().y - 12.0), egui::vec2(24.0, 24.0));
+                    let alias = format!("button:themeFavorite-{}", kind.id());
+                    if favorite || hovered {
+                        let action = crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" });
+                        let name = format!("{}: {}", action, crate::i18n::tr(kind.label()));
+                        let out = Button::new(name)
+                            .id_salt(("settings-theme-favorite", title, kind.id()))
+                            .painted(Label::Empty)
+                            .variant(Variant::GHOST)
+                            .tooltip(action.to_owned())
+                            .show_at(ui, rect);
+                        crate::widgets::register_response(alias, out.response.interact_rect, &out.response);
+                        crate::rating::paint_star(ui.painter(), rect.shrink(4.0), favorite, if favorite { t.accent } else { t.text_dim });
+                        if out.clicked() && ui.is_enabled() {
+                            if favorite {
+                                favorites.retain(|id| id != kind.id());
+                            } else {
+                                favorites.push(kind.id().into());
+                            }
+                        }
+                    } else {
+                        // Retain the existing hidden slot alias for physical hover acquisition only.
+                        register(ui, alias, rect);
+                    }
                 }
             });
         });
@@ -225,3 +282,7 @@ fn theme_preview(ui: &mut egui::Ui, kind: crate::theme::ThemeKind, width: f32) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "appearance_theme_cards_sdk_flow_tests.rs"]
+mod theme_cards_sdk_flow_tests;

@@ -10,7 +10,13 @@ use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
+use crate::widgets::{divider, icon_button, one_line, register, text_button};
+
+#[path = "mask_controls.rs"]
+pub(in crate::panels) mod controls;
+use controls::{Fill, Hit, measuring};
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::menu::{Menu, MenuItem};
 
 const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, step: f64, decimals: u8, track: Track) -> ControlSpec {
     ControlSpec { id, label, section: Section::Light, min, max, default: 0.0, step, decimals, track }
@@ -117,10 +123,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let (cols, tile, size) = tile_layout(ui.available_width(), widest);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
-                let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
-                crate::widgets::announce(&resp, crate::i18n::tr(label));
-                register(ui, format!("maskNew:{kind}"), r);
-                ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.inset });
+                let (_, r) = ui.allocate_space(vec2(tile, 52.0));
+                let resp = Hit::new(&format!("maskNew:{kind}"), crate::i18n::tr(label)).fill(Fill::new(t.inset, t.hover, 4.0)).show_at(ui, r);
                 paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
                 // (cut short only in a panel too narrow for the label: the full name on hover)
                 let label = crate::i18n::tr(label);
@@ -194,7 +198,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // mask list
     egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
+            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label)).selectable(false));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let on = app.ui.mask_overlay;
                 if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
@@ -221,14 +225,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if let Some((rid, name)) = app.ui.renaming_mask.as_mut().filter(|(rid, _)| *rid == m.id) {
                 // inline rename: Enter (or leaving the field) commits, Escape cancels
                 let rid = *rid;
-                let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()).id_salt(("maskRename", rid)));
-                register(ui, format!("maskRename:{rid}"), r.rect);
-                if !r.has_focus() && !r.lost_focus() {
-                    r.request_focus();
+                let widget = format!("maskRename:{rid}");
+                let r = crate::text_field::TextField::singleline(&widget, name).width(f32::INFINITY).select_on_focus(true).show(ui);
+                // a field that just appeared takes the keyboard at once
+                if !r.editing && r.ending.is_none() {
+                    crate::text_field::focus_id(ui.ctx(), r.response.id);
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if r.cancelled() {
                     app.ui.renaming_mask = None;
-                } else if r.lost_focus() {
+                } else if r.committed() {
                     let name = name.trim().to_string();
                     app.ui.renaming_mask = None;
                     if !name.is_empty() && name != m.name {
@@ -237,20 +242,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 continue;
             }
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-            crate::widgets::announce_selected(&resp, m.name.clone(), Some(m.id) == app.session.active_mask);
-            register(ui, format!("mask:{}", m.id), r);
-            ui.painter().rect_filled(
-                r,
-                4.0,
-                if sel {
-                    t.tool_active
-                } else if resp.hovered() {
-                    t.hover.gamma_multiply(0.7)
-                } else {
-                    t.chrome
-                },
-            );
+            let (_, r) = ui.allocate_space(vec2(ui.available_width(), 30.0));
+            let plate = if sel { Fill::new(t.tool_active, t.tool_active, 4.0) } else { Fill::new(t.chrome, t.hover.gamma_multiply(0.7), 4.0) };
+            let resp = Hit::new(&format!("mask:{}", m.id), m.name.clone()).fill(plate).selected(sel).show_at(ui, r);
             let icon = m.components.first().map(|c| kind_label(&c.shape).1).unwrap_or(Icon::Mask);
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
             // a long name is cut short (with …) before the eye, the full name on hover
@@ -265,9 +259,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
             if ui.rect_contains_pointer(r) || !m.visible {
                 let er = Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(22.0, 22.0));
-                register(ui, format!("maskVisible:{}", m.id), er);
-                let eye = ui.interact(er, egui::Id::unique(("maskVisible", m.id)), Sense::click());
-                crate::widgets::announce_selected(&eye, crate::i18n::tr("Show mask"), m.visible);
+                let eye = Hit::new(&format!("maskVisible:{}", m.id), crate::i18n::tr("Show mask")).selected(m.visible).show_at(ui, er);
                 paint(
                     ui.painter(),
                     er.shrink(3.0),
@@ -284,16 +276,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if resp.double_clicked() {
                 app.ui.renaming_mask = Some((m.id, m.name.clone()));
             }
-            crate::widgets::context_menu(&resp, |ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
+            // (the framework's secondary click and Shift+F10; carrying photos opens nothing)
+            if !measuring(ui) && !crate::widgets::carrying(ui.ctx()) {
+                Menu::context(m.name.clone(), &resp.response)
+                    .id_salt(("mask-context-menu", m.id))
+                    .show(ui, |ui, _| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
+            }
             if sel {
                 // right under the selected mask: ＋ adds to it, − takes away from it (any mask
                 // type; Describe… opens its field here)
                 ui.horizontal(|ui| {
                     ui.add_space(30.0);
                     let plus = text_button(ui, &format!("maskPlus:{}", m.id), "+", false).on_hover_text(crate::i18n::tr("Add to this mask"));
-                    egui::Popup::menu(&plus).show(|ui| component_menu(app, ui, "add"));
+                    opener_menu(ui, &plus, ("maskPlus", m.id), "Add to this mask", |ui| component_menu(app, ui, "add", ("maskPlus", m.id)));
                     let minus = text_button(ui, &format!("maskMinus:{}", m.id), "−", false).on_hover_text(crate::i18n::tr("Subtract from this mask"));
-                    egui::Popup::menu(&minus).show(|ui| component_menu(app, ui, "subtract"));
+                    opener_menu(ui, &minus, ("maskMinus", m.id), "Subtract from this mask", |ui| {
+                        component_menu(app, ui, "subtract", ("maskMinus", m.id))
+                    });
                 });
                 describe_field(app, ui, false);
             }
@@ -323,14 +322,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 };
                 if let Some((_, _, name)) = app.ui.renaming_component.as_mut().filter(|(mid, k, _)| *mid == m.id && *k == i) {
                     // inline rename: Enter (or leaving the field) commits, Escape cancels
-                    let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width() - 30.0).id_salt(("compRename", m.id, i)));
-                    register(ui, format!("componentRename:{i}"), r.rect);
-                    if !r.has_focus() && !r.lost_focus() {
-                        r.request_focus();
+                    let widget = format!("componentRename:{i}");
+                    let r = crate::text_field::TextField::singleline(&widget, name)
+                        .width((ui.available_width() - 30.0).max(1.0))
+                        .select_on_focus(true)
+                        .show(ui);
+                    // a field that just appeared takes the keyboard at once
+                    if !r.editing && r.ending.is_none() {
+                        crate::text_field::focus_id(ui.ctx(), r.response.id);
                     }
-                    if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                    if r.cancelled() {
                         app.ui.renaming_component = None;
-                    } else if r.lost_focus() {
+                    } else if r.committed() {
                         let name = name.trim().to_string();
                         app.ui.renaming_component = None;
                         if Some(&name) != c.name.as_ref() {
@@ -341,21 +344,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 // a long name is cut short (with …) before the options button, not past the panel
                 let text = format!("{op}{label}{}", if c.invert { crate::i18n::tr(" (inverted)") } else { "" });
-                let room = (ui.available_width() - 30.0).max(0.0);
-                let resp = ui.scope(|ui| {
-                    ui.set_max_width(room);
-                    ui.add(egui::Label::new(text).truncate().sense(Sense::click()))
-                });
-                let resp = resp.inner;
-                register(ui, format!("component:{i}"), resp.rect);
+                let room = (ui.available_width() - crate::widgets::text_button_size(ui, "…") - ui.spacing().item_spacing.x).max(0.0);
+                let ink = ui.visuals().text_color();
+                let galley = one_line(ui.painter(), &text, egui::TextStyle::Body.resolve(ui.style()), ink, room);
+                let (_, name_rect) = ui.allocate_space(galley.size());
+                let resp = Hit::new(&format!("component:{i}"), text.clone()).show_at(ui, name_rect);
+                ui.painter().galley(name_rect.min, galley, ink);
                 if resp.double_clicked() {
                     app.ui.renaming_component = Some((m.id, i, label.clone()));
                 }
-                crate::widgets::context_menu(&resp, |ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let more = ui.small_button("…").on_hover_text(crate::i18n::tr("Component options"));
-                    register(ui, format!("button:componentMenu{i}"), more.rect);
-                    egui::Popup::menu(&more).show(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
+                    let more = text_button(ui, &format!("componentMenu{i}"), "…", false).on_hover_text(crate::i18n::tr("Component options"));
+                    component_row_popup(app, ui, &resp, &more, m.id, i, &label, m.components.len());
                 });
             });
             range_controls(app, ui, i, &c.shape);
@@ -365,11 +365,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             let add = text_button(ui, "maskAddComp", crate::i18n::tr("Add"), false);
-            egui::Popup::menu(&add).show(|ui| component_menu(app, ui, "add"));
+            opener_menu(ui, &add, "maskAddComp", "Add", |ui| component_menu(app, ui, "add", "maskAddComp"));
             let sub = text_button(ui, "maskSubComp", crate::i18n::tr("Subtract"), false);
-            egui::Popup::menu(&sub).show(|ui| component_menu(app, ui, "subtract"));
+            opener_menu(ui, &sub, "maskSubComp", "Subtract", |ui| component_menu(app, ui, "subtract", "maskSubComp"));
             let int = text_button(ui, "maskIntComp", crate::i18n::tr("Intersect"), false);
-            egui::Popup::menu(&int).show(|ui| component_menu(app, ui, "intersect"));
+            opener_menu(ui, &int, "maskIntComp", "Intersect", |ui| component_menu(app, ui, "intersect", "maskIntComp"));
             if text_button(ui, "maskInvert", crate::i18n::tr("Invert"), m.invert).clicked() {
                 let _ = app.run("mask.invert", json!({}));
             }
@@ -387,8 +387,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // (Lens Blur has its own block below)
     for s in LOCAL.iter().filter(|s| s.id != "lens_blur") {
         let v = local_get(&m.adjust, s.id);
-        let out = slider(ui, s, v, true, None);
-        apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
+        mask_local_scalar(app, ui, (id, m.id), s, v);
     }
     let amt = ControlSpec {
         id: "amount",
@@ -401,8 +400,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         decimals: 0,
         track: Track::Plain,
     };
-    let out = slider(ui, &amt, m.adjust.amount, true, None);
-    apply_slider_out(app, &amt, out, |app, v| app.run("mask.adjust", json!({"values": {"amount": v}})));
+    mask_local_scalar(app, ui, (id, m.id), &amt, m.adjust.amount);
     let refine = ControlSpec {
         id: "refine",
         label: "Refine Edges",
@@ -414,12 +412,273 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         decimals: 0,
         track: Track::Plain,
     };
-    let out = slider(ui, &refine, m.refine, true, None);
-    apply_slider_out(app, &refine, out, |app, v| app.run("mask.refine", json!({"value": v})));
+    mask_local_scalar(app, ui, (id, m.id), &refine, m.refine);
     divider(ui);
     lens_blur_block(app, ui, &m);
     ui.add_space(30.0);
     let _ = Stroke::NONE;
+}
+
+/// LightCraft's shortcut gate lets a focused develop slider keep only its arrow keys; the framework may put
+/// the focus on an arena root rather than the slider's own id, so adopt the root the focus is on.
+fn note_focused_slider(ctx: &egui::Context, slider: egui::Id) {
+    if let Some(focused) = craft::ui::runtime::focus::focused_rec(ctx)
+        && focused.stop.id == slider
+        && !focused.stop.text
+    {
+        crate::widgets::note_slider_focus(ctx, focused.stop.root);
+    }
+}
+
+/// Only the selected mask's seventeen local adjustments, Amount and Refine use this binding.
+/// Scalar keys belong to the SDK's real composite row; no app key handler or hover proxy routes them.
+fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoId, u32), spec: &ControlSpec, current: f64) {
+    use craft::behavior::{EditEvent, NumberCodec, Reader};
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::form::SliderField;
+    use craft::ui::runtime::env::{WheelScope, with_env};
+    use craft::ui::runtime::keys::{ScalarKeyPolicy, ScalarKeyTrigger};
+
+    #[derive(Clone, Copy)]
+    struct Visit {
+        owner: (u64, PhotoId, u32),
+        revision: u64,
+        epoch: u64,
+        pass: u64,
+        enabled: bool,
+        editing: bool,
+    }
+    fn set(app: &mut LightcraftApp, spec: &ControlSpec, value: f64) -> Result<serde_json::Value, String> {
+        if spec.id == "refine" { app.run("mask.refine", json!({"value":value})) } else { app.run("mask.adjust", json!({"values":{spec.id:value}})) }
+    }
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    // A structural action earlier in this parent may have retired its cloned mask. Never bind it to a replacement.
+    if !real || app.session.active() != Some(target.0) || app.session.active_mask != Some(target.1) {
+        ui.allocate_space(vec2(ui.available_width(), Tokens::get(ui.ctx()).slider_row_h));
+        return;
+    }
+    let owner = (app.session.library_generation(), target.0, target.1);
+    let pass = ui.ctx().cumulative_pass_nr();
+    let enabled = ui.is_enabled();
+    let key = ui.scope_id().with(("mask-local-visit", spec.id));
+    let revision = app.session.catalog.revision;
+    let marker = format!("mask-local:{}", spec.id);
+    let mut visit = ui.data(|data| data.get_temp::<Visit>(key)).unwrap_or(Visit { owner, revision, epoch: 0, pass, enabled, editing: false });
+    let foreign = visit.owner != owner || visit.revision != revision;
+    let retired = visit.pass != pass && visit.pass.checked_add(1) != Some(pass);
+    if foreign || retired || visit.enabled != enabled {
+        if visit.editing && app.ui.dragging_control.as_deref() == Some(marker.as_str()) {
+            // Do not restore an old snapshot across another mask/photo/revision. End that owned interaction;
+            // a same-document disable can cancel safely. A missing pass also retires pending SDK proposals.
+            let command = if foreign { "develop.endInteraction" } else { "develop.cancelInteraction" };
+            let _ = app.run(command, json!({}));
+            app.ui.dragging_control = None;
+        }
+        visit = Visit { owner, revision: app.session.catalog.revision, epoch: visit.epoch.wrapping_add(1), pass, enabled, editing: false };
+    }
+    let id = ui.scope_id().with(("mask-local", owner, spec.id, visit.epoch));
+    let number_spec = *spec;
+    let nudge = crate::widgets::nudge_unit(spec);
+    let policy = ScalarKeyPolicy::new(nudge).model_step(spec.step).shift_factor(5.0).trigger(ScalarKeyTrigger::HoveredOrFocused);
+    let mut control = SliderField::new(crate::i18n::tr(spec.label).to_owned(), Bind::given(current).reset(spec.default), spec.min..=spec.max)
+        .id(id)
+        .step(spec.step)
+        .wheel_step(nudge)
+        .key_policy(policy)
+        .pointer_model_step(spec.step)
+        .pointer_modifiers(craft::ui::value_drag::DragModifiers::new(Some(craft::ui::value_drag::DragModifier::Shift), None))
+        .fill(false)
+        .enabled(enabled)
+        .number_codec(
+            NumberCodec::new(Reader::new(), usize::from(spec.decimals)).parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
+        );
+    if let Some(face) = mask_local_track::face(spec.track) {
+        control = control.track_face(face);
+    }
+    // (inset like the other rows of the panel, so the label and the value box lie inside it)
+    let (out, record) = craft::ui::runtime::inspect::record(ui, id.with("record"), |ui| {
+        egui::Frame::NONE
+            .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 0 })
+            .show(ui, |ui| with_env(ui, |env| env.wheel = Some(WheelScope::Directional), |ui| control.show(ui)))
+            .inner
+    });
+    // Name the row's real parts from what the framework recorded: the owners of the track, the value and the caption,
+    // also for an arena child with no egui response of its own and for a row scrolled out of the panel (which then
+    // keeps its place, with the response of the whole row as its hit).
+    if let Some(record) = record {
+        let focused = craft::ui::runtime::focus::focused_rec(ui.ctx());
+        for (index, element) in record.elements.iter().enumerate() {
+            let Some(facts) = &element.facts else { continue };
+            if element.component == "MenuItem" {
+                continue;
+            }
+            let prefixes: &[&str] = match facts.role.as_str() {
+                "Slider" => &["slider"],
+                "SpinButton" => &["sliderValue", "sliderField"],
+                _ => continue,
+            };
+            let rect = record.stop_rect(index).unwrap_or(element.rect);
+            let response = ui.ctx().read_response(element.id).unwrap_or_else(|| {
+                let mut response = out.response.clone();
+                response.id = element.id;
+                response.rect = rect;
+                response.interact_rect = rect.intersect(ui.clip_rect());
+                response
+            });
+            if prefixes[0] == "slider"
+                && let Some(focus) = focused.as_ref().filter(|focus| focus.stop.id == element.id && !focus.stop.text)
+            {
+                crate::widgets::note_slider_focus(ui.ctx(), focus.stop.root);
+            }
+            for prefix in prefixes {
+                crate::widgets::register_response(format!("{prefix}:{}", spec.id), rect, &response);
+                crate::widgets::register_response(format!("{prefix}:maskLocal:{}", spec.id), rect, &response);
+            }
+        }
+    }
+    crate::widgets::register_geometry(ui.ctx(), format!("sliderRow:maskLocal:{}", spec.id), out.response.rect);
+    // The composite's typing proposal is local until Commit. Pointer scrubs and wheel runs remain live.
+    let live = ui.input(|input| input.pointer.primary_down() || input.events.iter().any(|event| matches!(event, egui::Event::MouseWheel { .. })));
+    if enabled {
+        let mut pending: Option<f64> = None;
+        for event in &out.events {
+            match event {
+                EditEvent::Begin { .. } if live => {
+                    if app.run("develop.beginInteraction", json!({"label":spec.label})).is_ok() {
+                        app.ui.dragging_control = Some(marker.clone());
+                        visit.editing = true;
+                    }
+                }
+                EditEvent::Update { value, .. } if visit.editing && value.is_finite() => {
+                    let _ = set(app, spec, *value);
+                }
+                EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } if after.is_finite() && !visit.editing => {
+                    // Typed commits and a step of the editor can arrive together (the pending text, then its
+                    // nudge): they are one edit of this row, so only the last value is set, as one Undo step.
+                    pending = Some(*after);
+                }
+                EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } if after.is_finite() => {
+                    let actual = app.session.develop_of(target.0).and_then(|settings| {
+                        settings
+                            .masks
+                            .iter()
+                            .find(|mask| mask.id == target.1)
+                            .map(|mask| if spec.id == "refine" { mask.refine } else { local_get(&mask.adjust, spec.id) })
+                    });
+                    if actual.is_some_and(|value| (value - *after).abs() > 1e-12) {
+                        let _ = set(app, spec, *after);
+                    }
+                    let _ = app.run("develop.endInteraction", json!({}));
+                    app.ui.dragging_control = None;
+                    visit.editing = false;
+                }
+                EditEvent::Cancel { .. } if visit.editing => {
+                    let _ = app.run("develop.cancelInteraction", json!({}));
+                    app.ui.dragging_control = None;
+                    visit.editing = false;
+                }
+                _ => {}
+            }
+        }
+        if let Some(after) = pending {
+            let actual = app.session.develop_of(target.0).and_then(|settings| {
+                settings
+                    .masks
+                    .iter()
+                    .find(|mask| mask.id == target.1)
+                    .map(|mask| if spec.id == "refine" { mask.refine } else { local_get(&mask.adjust, spec.id) })
+            });
+            if actual.is_some_and(|value| (value - after).abs() > 1e-12) {
+                let _ = set(app, spec, after);
+            }
+        }
+    }
+    visit.revision = app.session.catalog.revision;
+    visit.pass = pass;
+    ui.data_mut(|data| data.insert_temp(key, visit));
+}
+
+/// A display-only SDK track face, using the app's existing WB/gradient palette and SDK contrast cues.
+mod mask_local_track {
+    use craft::behavior::{Input, Metrics, Sense};
+    use craft::theme::Contrast;
+    use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role, Styled as _};
+    use craft::ui::primitives::PaintShape;
+    use craft::ui::style::{ComponentStyle, DataColor, StyleCx, TrackLook};
+    use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
+    use lightcraft_develop::Track;
+    pub(super) fn face(track: Track) -> Option<craft::ui::value_drag::TrackFace<'static>> {
+        let stops = match track {
+            Track::Temp => vec!["#193961", "#47566a", "#60666d", "#70705b", "#737339", "#75742a"],
+            Track::Tint => vec!["#246123", "#2c552c", "#394739", "#4a3d4c", "#6b336b", "#872c87"],
+            Track::Rainbow => vec!["#aa0000", "#aaaa00", "#009900", "#00aaaa", "#0044cc", "#aa0077", "#aa0000"],
+            Track::Gradient { from, to } => vec![from, to],
+            _ => return None,
+        };
+        Some(craft::ui::value_drag::TrackFace::new(Face { common: Common::new(), stops: stops.into_iter().map(crate::widgets::hex).collect() }))
+    }
+    #[derive(Clone, Debug, PartialEq, ComponentStyle)]
+    pub(super) struct FaceStyle {
+        #[style(metrics)]
+        metrics: Metrics,
+        track: TrackLook,
+        high_contrast: bool,
+    }
+    #[derive(Clone, Component)]
+    #[component(unregistered)]
+    struct Face {
+        #[common]
+        common: Common,
+        stops: Vec<Color32>,
+    }
+    impl Component for Face {
+        const ROLE: Role = Role::None;
+        const INPUT: Input = Input::Display;
+        const PARTS: bool = false;
+        const STOPS: bool = false;
+        const OVERLAYS: bool = false;
+        const SHOWS_LABEL: bool = false;
+        type Style = FaceStyle;
+        type Output = Response;
+        fn style(cx: &StyleCx<'_>, _: FaceStyleKey) -> FaceStyle {
+            FaceStyle { metrics: Metrics::new(), track: cx.track(), high_contrast: cx.contrast() == Contrast::High }
+        }
+        fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+            Vec2::splat(cx.style.track.thickness)
+        }
+        fn sense(&self) -> Sense {
+            Sense::empty()
+        }
+        fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+            let track = &cx.style.track;
+            let rect = track.groove(cx.rect);
+            let draw = ui.draw();
+            if cx.style.high_contrast || cx.state().is_disabled() {
+                draw.fill(&PaintShape::Rect(rect, CornerRadius::same((track.thickness / 2.0).round() as u8)), cx.resolve(&track.unfilled));
+                return;
+            }
+            let segments = self.stops.len().saturating_sub(1);
+            if segments == 0 {
+                return;
+            }
+            for i in 0..48 {
+                let a = i as f32 / 48.0;
+                let b = (i + 1) as f32 / 48.0;
+                let position = if cx.flow.is_rtl() { 1.0 - a } else { a };
+                let along = position * segments as f32;
+                let index = (along.floor() as usize).min(segments.saturating_sub(1));
+                if let (Some(from), Some(to)) = (self.stops.get(index), self.stops.get(index + 1)) {
+                    let color = crate::widgets::lerp(*from, *to, along - index as f32);
+                    let strip =
+                        Rect::from_min_max(pos2(rect.left() + rect.width() * a, rect.top()), pos2(rect.left() + rect.width() * b, rect.bottom()));
+                    draw.data_fill(&PaintShape::Rect(strip, CornerRadius::ZERO), DataColor::new(color));
+                }
+            }
+        }
+        fn finish(self, cx: Cx<'_, Self>) -> Response {
+            cx.response.clone()
+        }
+    }
 }
 
 /// The mask's Lens Blur block (`section:maskLensBlur`): a header that folds it and whose eye
@@ -460,7 +719,8 @@ fn lens_blur_block(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_de
         });
         for s in LENS_BLUR {
             let v = local_get(a, s.id);
-            let out = slider(ui, s, v, true, None);
+            // a draft or gesture belongs to the photo and mask it began on
+            let out = crate::widgets::slider_salted(ui, s, v, true, None, egui::Id::unique((app.session.active(), m.id)));
             apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
         }
     });
@@ -478,29 +738,39 @@ fn menu_label(source: &str) -> &str {
     crate::i18n::tr(source)
 }
 
+/// One row of a framework menu: whether it ran this pass (a click, Enter or Space). A row runs
+/// nothing while the menu is only being measured, and the names it publishes are `maskMenu:{key}`.
+fn menu_run(ui: &mut egui::Ui, scope: impl std::hash::Hash + std::fmt::Debug, key: &str, label: &str, enabled: bool) -> bool {
+    let enabled = enabled && ui.is_enabled();
+    let shown = MenuItem::new(menu_label(label).to_owned()).id_salt(("mask-menu", scope, key)).enabled(enabled).show(ui);
+    if measuring(ui) {
+        return false;
+    }
+    crate::widgets::register_response(format!("maskMenu:{key}"), shown.response.rect, &shown.response);
+    enabled && shown.ran
+}
+
 /// The right-click menu of a mask in the Masks list.
 fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, visible: bool, index: usize, count: usize) {
-    let mut run = |ui: &mut egui::Ui, label: &str, enabled: bool, cmd: &str, p: serde_json::Value| {
-        if ui.add_enabled(enabled, egui::Button::new(menu_label(label))).clicked() {
+    use craft::ui::display::Divider;
+    let mut run = |ui: &mut egui::Ui, key: &str, label: &str, enabled: bool, cmd: &str, p: serde_json::Value| {
+        if menu_run(ui, id, key, label, enabled) {
             let _ = app.run(cmd, p);
-            ui.close();
         }
     };
-    run(ui, "Duplicate Mask", true, "mask.duplicate", json!({"id": id}));
-    run(ui, "Duplicate and Invert Mask", true, "mask.duplicate", json!({"id": id, "invert": true}));
-    run(ui, "Invert Mask", true, "mask.invert", json!({"id": id}));
-    run(ui, if visible { "Hide Mask" } else { "Show Mask" }, true, "mask.visible", json!({"id": id}));
-    ui.separator();
-    run(ui, "Move Up", index > 0, "mask.move", json!({"id": id, "delta": -1}));
-    run(ui, "Move Down", index + 1 < count, "mask.move", json!({"id": id, "delta": 1}));
-    ui.separator();
-    if ui.button(crate::i18n::tr("Rename…")).clicked() {
+    run(ui, "duplicate", "Duplicate Mask", true, "mask.duplicate", json!({"id": id}));
+    run(ui, "duplicateInvert", "Duplicate and Invert Mask", true, "mask.duplicate", json!({"id": id, "invert": true}));
+    run(ui, "invert", "Invert Mask", true, "mask.invert", json!({"id": id}));
+    run(ui, "visible", if visible { "Hide Mask" } else { "Show Mask" }, true, "mask.visible", json!({"id": id}));
+    Divider::horizontal().show(ui);
+    run(ui, "moveUp", "Move Up", index > 0, "mask.move", json!({"id": id, "delta": -1}));
+    run(ui, "moveDown", "Move Down", index + 1 < count, "mask.move", json!({"id": id, "delta": 1}));
+    Divider::horizontal().show(ui);
+    if menu_run(ui, id, "rename", "Rename…", true) {
         app.ui.renaming_mask = Some((id, name.to_string()));
-        ui.close();
     }
-    if ui.button(crate::i18n::tr("Delete Mask")).clicked() {
+    if menu_run(ui, id, "delete", "Delete Mask", true) {
         let _ = app.run("mask.delete", json!({"id": id}));
-        ui.close();
     }
 }
 
@@ -509,32 +779,50 @@ pub const OVERLAY_COLORS: [[u8; 3]; 5] = [[230, 30, 40], [40, 200, 70], [40, 110
 
 /// How the selected mask is shown: overlay mode, colour, opacity, pins.
 fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    use craft::ui::choice::{Checkbox, Swatch};
+    use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+    use craft::ui::pickers::Select;
+    use craft::ui::text::NumberField;
+    use craft::ui::value_drag::Slider;
     use lightcraft_pipeline::MaskView;
+
     let t = Tokens::get(ui.ctx());
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
-        let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
-        egui::Popup::menu(&r).show(|ui| {
-            for v in MaskView::ALL {
-                if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
-                    let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
-                }
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim)).selectable(false));
+        // Reserve the original dropdown's size and automatic response ID. The SDK owns
+        // its list, real focus, proposals and cancellation; only a pick runs the command.
+        let g = one_line(ui.painter(), menu_label(view.label()), t.font(12.5), t.text_label, f32::INFINITY);
+        let (id, rect) = ui.allocate_space(vec2(g.size().x + 44.0, g.size().y.max(20.0)));
+        let entries: Vec<_> = MaskView::ALL.into_iter().map(|v| Entry::new(v.name().to_owned(), menu_label(v.label()))).collect();
+        let out = Select::new(crate::i18n::tr("Overlay"), Bind::given(view.name().to_owned()), &entries).id(id).enabled(real).show_at(ui, rect);
+        if real {
+            crate::widgets::register_response("dropdown:maskOverlayMode", out.response.rect, &out.response);
+            if ui.is_enabled()
+                && let Some(mode) = out.events.committed()
+            {
+                let _ = app.run("view.maskOverlayMode", json!({"mode": mode}));
             }
-        });
+        }
     });
     let colored = matches!(view, MaskView::Color | MaskView::ColorOnBw);
     if colored {
         ui.horizontal(|ui| {
             for c in OVERLAY_COLORS {
-                let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                crate::widgets::announce(&resp, format!("{} #{:02x}{:02x}{:02x}", crate::i18n::tr("Overlay color"), c[0], c[1], c[2]));
-                register(ui, format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]), r);
-                ui.painter().rect_filled(r.shrink(2.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
-                if app.ui.mask_overlay_color == c {
-                    ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
-                }
-                if resp.clicked() {
+                let name = format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+                let label = format!("{} #{:02x}{:02x}{:02x}", crate::i18n::tr("Overlay color"), c[0], c[1], c[2]);
+                let clicked = {
+                    let (id, rect) = ui.allocate_space(vec2(18.0, 18.0));
+                    // Palette bytes are encoded sRGB, not linear-light colour values.
+                    let color = craft::theme::Srgba::rgb(c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0);
+                    let out = Swatch::new(label, color).id(id).selected(app.ui.mask_overlay_color == c).enabled(real).show_at(ui, rect);
+                    if real {
+                        crate::widgets::register_response(name, out.response.rect, &out.response);
+                    }
+                    out.clicked
+                };
+                if real && ui.is_enabled() && clicked {
                     let _ = app.run("view.maskOverlayColor", json!({"color": c}));
                 }
             }
@@ -551,22 +839,262 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         decimals: 0,
         track: Track::Plain,
     };
-    let out = slider(ui, &spec, app.ui.mask_overlay_opacity as f64, colored && app.ui.mask_overlay, None);
-    if let Some(v) = out.value {
-        app.ui.mask_overlay_opacity = v as f32;
+    let enabled = colored && app.ui.mask_overlay;
+    // Keep the original row geometry and each interactive response ID. Separate SDK
+    // slider/number controls retain the existing track and exact-entry locators.
+    let w = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
+    let pins_id = ui.next_auto_id();
+    let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(w - 46.0, 18.0));
+    let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
+    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+    // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+    let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
+    let id = ui.scope_id().with(spec.id);
+    let mut value = app.ui.mask_overlay_opacity as f64;
+    let label = Hit::new("maskOverlayOpacityLabel", crate::i18n::tr_format!("Reset {name}", name = crate::i18n::tr("Opacity")))
+        .id(id.with("label"))
+        .enabled(real && enabled)
+        .show_at(ui, label_hit);
+    let label = if enabled && real {
+        label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = crate::i18n::tr("Opacity")))
+    } else {
+        label
+    };
+    ui.painter().text(
+        label_rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        crate::i18n::tr("Opacity"),
+        t.font(12.5),
+        if enabled { t.text_label } else { t.text_disabled },
+    );
+    let out = Slider::new(Bind::bound(&mut value).reset(spec.default), spec.min..=spec.max)
+        .id(id)
+        .label(crate::i18n::tr("Opacity"))
+        .step(spec.step)
+        .enabled(real && enabled)
+        .show_at(ui, track_rect);
+    note_focused_slider(ui.ctx(), out.response.id);
+    let field = NumberField::new(
+        crate::i18n::tr_format!("{name} value", name = crate::i18n::tr("Opacity")),
+        Bind::given(Some(value)).reset(Some(spec.default)),
+    )
+    .id(id.with("value"))
+    .range(spec.min..=spec.max)
+    .step(spec.step)
+    // A display suffix alone does not teach NumberField to parse percent text.
+    // Percent has factor 1 here: both bare 63 and 63% keep the host's 0..100 units.
+    .unit_kind(craft::ui::runtime::env::UnitKind::Percent)
+    .unit("%")
+    .snap_typed(true)
+    .fixed_decimals(0)
+    .commit_decimals(0)
+    .enabled(real && enabled)
+    .show_at(ui, value_rect);
+    if real {
+        crate::widgets::register_response("sliderLabel:ui.maskOverlayOpacity", label.rect, &label);
+        crate::widgets::register_response("slider:ui.maskOverlayOpacity", out.response.rect, &out.response);
+        crate::widgets::register_response("sliderValue:ui.maskOverlayOpacity", field.response.rect, &field.response);
+        crate::widgets::register_response("sliderField:ui.maskOverlayOpacity", field.response.rect, &field.response);
+        if enabled && ui.is_enabled() {
+            if label.double_clicked() {
+                value = spec.default;
+            } else if let Some(Some(next)) = field.events.committed() {
+                // The original exact-entry field applies only on Return/blur, unlike
+                // the live track. A proposal is not a committed per-view edit.
+                value = *next;
+            }
+            // Opacity has always been a per-view value, not a develop command or
+            // history entry. Local binding isolates speculative slider passes.
+            if value.is_finite() {
+                app.ui.mask_overlay_opacity = value as f32;
+            }
+        }
     }
     let mut pins = app.ui.mask_pins;
-    if ui.checkbox(&mut pins, crate::i18n::tr("Show Pins")).changed() {
+    let changed = {
+        let out = Checkbox::new(Bind::given(pins)).id(pins_id).label(crate::i18n::tr("Show Pins")).enabled(real).show(ui);
+        if real {
+            crate::widgets::register_response("check:maskPins", out.response.rect, &out.response);
+        }
+        if let Some(next) = out.events.committed() {
+            pins = *next;
+            true
+        } else {
+            false
+        }
+    };
+    if real && ui.is_enabled() && changed {
         let _ = app.run("view.maskPins", json!({"show": pins}));
     }
     if app.ui.mask_pins {
+        // The existing shared tool overlay preference remains owned by the crop/tool lane.
         super::right::tool_overlay_options(app, ui);
     }
 }
 
+#[cfg(test)]
+#[path = "mask_overlay_options_flow_tests.rs"]
+mod mask_overlay_options_flow_tests;
+
 /// Controls for a range component: the selected range (two handles over a dark → light bar),
 /// Smoothness, and Show Luminance Map; colour ranges get Refine.
 fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape: &MaskShape) {
+    // Keep this adapter local: other panels and the custom two-handle input have their own owners.
+    fn scalar(
+        app: &mut LightcraftApp,
+        ui: &mut egui::Ui,
+        comp: usize,
+        spec: &ControlSpec,
+        value: f64,
+        mut set: impl FnMut(&mut LightcraftApp, f64) -> Result<serde_json::Value, String>,
+    ) {
+        use craft::behavior::{EditEvent, NumberCodec, Reader};
+        use craft::ui::contract::{Bind, Props as _, Show as _};
+        use craft::ui::{text::NumberField, value_drag::Slider};
+
+        #[derive(Clone, Copy)]
+        struct Visit {
+            owner: (u64, Option<PhotoId>, Option<u32>),
+            revision: u64,
+            epoch: u64,
+            editing: bool,
+        }
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        let owner = (app.session.library_generation(), app.session.active(), app.session.active_mask);
+        let key = ui.scope_id().with(("mask-range-visit", comp, spec.id));
+        let revision = app.session.catalog.revision;
+        let mut visit = ui.data(|d| d.get_temp::<Visit>(key)).unwrap_or(Visit { owner, revision, epoch: 0, editing: false });
+        if visit.owner != owner || visit.revision != revision {
+            // A foreign document/structural edit gives the slot a fresh SDK identity. Do not
+            // cancel an old engine snapshot over a later edit; finish it without replaying input.
+            if real && visit.editing && app.ui.dragging_control.as_deref() == Some(spec.id) {
+                let _ = app.run("develop.endInteraction", json!({}));
+                app.ui.dragging_control = None;
+            }
+            visit = Visit { owner, revision: app.session.catalog.revision, epoch: visit.epoch.wrapping_add(1), editing: false };
+        }
+        let t = Tokens::get(ui.ctx());
+        let width = ui.available_width();
+        let (row, _) = ui.allocate_exact_size(vec2(width, t.slider_row_h), Sense::hover());
+        let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(width - 46.0, 18.0));
+        let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
+        let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
+        let id = ui.scope_id().with(("mask-range", owner, comp, spec.id, visit.epoch));
+        let enabled = real && ui.is_enabled();
+        let caption = crate::i18n::tr(spec.label);
+        let label = Hit::new(&format!("maskRangeLabel:{comp}:{}", spec.id), crate::i18n::tr_format!("Reset {name}", name = caption))
+            .id(id.with("label"))
+            .enabled(enabled)
+            .show_at(ui, label_hit);
+        let label = label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = caption));
+        ui.painter().text(
+            label_rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            caption,
+            t.font(12.5),
+            if enabled { t.text_label } else { t.text_disabled },
+        );
+        let track = Slider::new(Bind::given(value).reset(spec.default), spec.min..=spec.max)
+            .id(id)
+            .label(caption)
+            .step(spec.step)
+            .enabled(enabled)
+            .show_at(ui, track_rect);
+        note_focused_slider(ui.ctx(), track.response.id);
+        let number_spec = *spec;
+        let field = NumberField::new(crate::i18n::tr_format!("{name} value", name = caption), Bind::given(Some(value)).reset(Some(spec.default)))
+            .id(id.with("value"))
+            .range(spec.min..=spec.max)
+            .step(spec.step)
+            .codec(
+                NumberCodec::new(Reader::new(), usize::from(spec.decimals)).parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
+            )
+            .snap_typed(true)
+            .fixed_decimals(usize::from(spec.decimals))
+            .commit_decimals(usize::from(spec.decimals))
+            .enabled(enabled)
+            .show_at(ui, value_rect);
+        if !real {
+            return;
+        }
+        for (prefix, response) in
+            [("slider", &track.response), ("sliderValue", &field.response), ("sliderField", &field.response), ("sliderLabel", &label)]
+        {
+            // Keep legacy aliases and additionally disambiguate repeated component controls.
+            crate::widgets::register_response(format!("{prefix}:{}", spec.id), response.rect, response);
+            crate::widgets::register_response(format!("{prefix}:maskRange:{comp}:{}", spec.id), response.rect, response);
+        }
+        fn apply<T>(
+            app: &mut LightcraftApp,
+            spec: &ControlSpec,
+            event: &EditEvent<T>,
+            editing: &mut bool,
+            live_begin: bool,
+            number: impl Fn(&T) -> Option<f64>,
+            set: &mut impl FnMut(&mut LightcraftApp, f64) -> Result<serde_json::Value, String>,
+        ) {
+            match event {
+                EditEvent::Begin { .. } if live_begin => {
+                    let _ = app.run("develop.beginInteraction", json!({"label":spec.label}));
+                    app.ui.dragging_control = Some(spec.id.to_owned());
+                    *editing = true;
+                }
+                EditEvent::Update { value, .. } if *editing => {
+                    if let Some(value) = number(value).filter(|value| value.is_finite()) {
+                        let _ = set(app, value);
+                    }
+                }
+                EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
+                    let after = number(after).filter(|value| value.is_finite());
+                    if let Some(value) = after {
+                        let _ = set(app, value);
+                    }
+                    if *editing {
+                        // Clearing an optional field is not a numeric zero. A live edit
+                        // with no final value restores its snapshot; a draft does nothing.
+                        let end = if after.is_some() { "develop.endInteraction" } else { "develop.cancelInteraction" };
+                        let _ = app.run(end, json!({}));
+                        app.ui.dragging_control = None;
+                        *editing = false;
+                    }
+                }
+                EditEvent::Cancel { .. } if *editing => {
+                    let _ = app.run("develop.cancelInteraction", json!({}));
+                    app.ui.dragging_control = None;
+                    *editing = false;
+                }
+                _ => {}
+            }
+        }
+        if enabled {
+            for event in &track.events {
+                apply(app, spec, event, &mut visit.editing, true, |value| Some(*value), &mut set);
+            }
+            // Typing drafts stay local until commit, as in the original native field.
+            // A pointer scrub or wheel run does begin a live engine interaction and keeps one Undo step.
+            let live_number = ui.input(|i| i.pointer.primary_down() || i.events.iter().any(|event| matches!(event, egui::Event::MouseWheel { .. })));
+            for event in &field.events {
+                apply(app, spec, event, &mut visit.editing, live_number, |value| *value, &mut set);
+            }
+            if label.double_clicked() {
+                let _ = set(app, spec.default);
+                if visit.editing {
+                    let _ = app.run("develop.endInteraction", json!({}));
+                    visit.editing = false;
+                    app.ui.dragging_control = None;
+                }
+            }
+        } else if visit.editing {
+            let _ = app.run("develop.cancelInteraction", json!({}));
+            app.ui.dragging_control = None;
+            visit.editing = false;
+        }
+        visit.revision = app.session.catalog.revision;
+        ui.data_mut(|d| d.insert_temp(key, visit));
+    }
     let t = Tokens::get(ui.ctx());
     let update = |app: &mut LightcraftApp, shape: MaskShape| {
         let _ = app.run("mask.update", json!({"component": comp, "shape": shape}));
@@ -576,9 +1104,8 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             ui.label(egui::RichText::new(crate::i18n::tr("Select Luminance Range")).color(t.text_dim).size(11.5));
             let (lo, hi) = (*lo, *hi);
             let w = ui.available_width().min(240.0);
-            let (rect, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click_and_drag());
-            crate::widgets::announce(&resp, crate::i18n::tr("Select Luminance Range"));
-            register(ui, format!("lumRange:{comp}"), rect);
+            let (_, rect) = ui.allocate_space(vec2(w, 18.0));
+            let resp = Hit::new(&format!("lumRange:{comp}"), crate::i18n::tr("Select Luminance Range")).drag(true).show_at(ui, rect);
             let p = ui.painter();
             // dark → light ramp, the selected span outlined
             let n = 24;
@@ -611,6 +1138,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                     ui.data_mut(|d| d.insert_temp(handle_id, nearer_low(origin.x)));
                 }
                 let _ = app.run("develop.beginInteraction", json!({"label": "Luminance Range"}));
+                ui.data_mut(|d| d.insert_temp(handle_id.with("begun"), true));
             }
             if (resp.dragged() || resp.clicked())
                 && let Some(pos) = resp.interact_pointer_pos()
@@ -621,8 +1149,11 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 let (nlo, nhi) = if low { (v.min((hi - 0.01).max(0.0)), hi) } else { (lo, v.max((lo + 0.01).min(1.0))) };
                 update(app, MaskShape::LuminanceRange { lo: nlo, hi: nhi, lo_feather: *lo_feather, hi_feather: *hi_feather });
             }
-            if resp.drag_stopped() {
-                ui.data_mut(|d| d.remove::<bool>(handle_id));
+            if resp.drag_ended() && ui.data(|d| d.get_temp::<bool>(handle_id.with("begun"))).is_some() {
+                ui.data_mut(|d| {
+                    d.remove::<bool>(handle_id);
+                    d.remove::<bool>(handle_id.with("begun"));
+                });
                 let _ = app.run("develop.endInteraction", json!({}));
             }
             // Smoothness: both falloffs at once
@@ -638,15 +1169,30 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 track: Track::Plain,
             };
             let cur = ((lo_feather + hi_feather) / 2.0 / 0.5 * 100.0).clamp(0.0, 100.0);
-            let out = slider(ui, &smooth, cur, true, None);
-            apply_slider_out(app, &smooth, out, |app, v| {
+            scalar(app, ui, comp, &smooth, cur, |app, v| {
                 let f = v / 100.0 * 0.5;
                 app.run("mask.update", json!({"component": comp, "shape": MaskShape::LuminanceRange { lo, hi, lo_feather: f, hi_feather: f }}))
             });
             let mut map = app.ui.mask_overlay && app.ui.mask_overlay_mode == "colorOnBw";
-            let r = ui.checkbox(&mut map, crate::i18n::tr("Show Luminance Map"));
-            register(ui, format!("check:lumMap{comp}"), r.rect);
-            if r.changed() {
+            let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+            let changed = {
+                use craft::ui::contract::{Bind, Props as _, Show as _};
+                let out = craft::ui::choice::Checkbox::new(Bind::given(map))
+                    .id_salt(("luminance-map", app.session.library_generation(), app.session.active(), app.session.active_mask, comp))
+                    .label(crate::i18n::tr("Show Luminance Map"))
+                    .enabled(real)
+                    .show(ui);
+                if real {
+                    crate::widgets::register_response(format!("check:lumMap{comp}"), out.response.rect, &out.response);
+                }
+                if let Some(next) = out.events.committed() {
+                    map = *next;
+                    true
+                } else {
+                    false
+                }
+            };
+            if real && ui.is_enabled() && changed {
                 // the luminance map: the photo in black & white with the selected range tinted
                 if map {
                     app.ui.luminance_map_restore = Some((app.ui.mask_overlay, app.ui.mask_overlay_mode.clone()));
@@ -672,9 +1218,8 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 decimals: 0,
                 track: Track::Centered,
             };
-            let out = slider(ui, &spec, *edge, true, None);
             let base = shape.clone();
-            apply_slider_out(app, &spec, out, |app, v| {
+            scalar(app, ui, comp, &spec, *edge, |app, v| {
                 let mut s = base.clone();
                 if let MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } = &mut s {
                     *edge = v.clamp(-100.0, 100.0);
@@ -709,9 +1254,8 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 decimals: 0,
                 track: Track::Plain,
             };
-            let out = slider(ui, &spec, *refine, true, None);
             let samples = samples.clone();
-            apply_slider_out(app, &spec, out, |app, v| {
+            scalar(app, ui, comp, &spec, *refine, |app, v| {
                 app.run("mask.update", json!({"component": comp, "shape": MaskShape::ColorRange { samples: samples.clone(), refine: v }}))
             });
         }
@@ -719,42 +1263,196 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
     }
 }
 
-/// The right-click / "…" menu of one component of the selected mask.
-fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
-    let mut run = |ui: &mut egui::Ui, text: &str, p: serde_json::Value| {
-        if ui.button(menu_label(text)).clicked() {
-            let mut p = p;
-            p["id"] = json!(mask);
-            p["component"] = json!(k);
-            let _ = app.run("mask.component", p);
-            ui.close();
-        }
-    };
-    run(ui, "Invert", json!({"action": "invert"}));
-    run(ui, &crate::i18n::tr_format!("Duplicate \"{label}\"", label = label), json!({"action": "duplicate"}));
-    if k > 0 {
-        crate::widgets::menu_button(ui, crate::i18n::tr("Mode"), |ui| {
-            for (op, text) in [("add", "Add"), ("subtract", "Subtract"), ("intersect", "Intersect")] {
-                run(ui, text, json!({"action": "op", "op": op}));
+#[cfg(test)]
+#[path = "mask_range_controls_flow_tests.rs"]
+mod mask_range_controls_flow_tests;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ComponentMenuTarget {
+    library: u64,
+    photo: Option<PhotoId>,
+    revision: u64,
+    mask: u32,
+    component: usize,
+}
+
+impl ComponentMenuTarget {
+    fn current(app: &LightcraftApp, mask: u32, component: usize) -> Self {
+        Self { library: app.session.library_generation(), photo: app.session.active(), revision: app.session.catalog.revision, mask, component }
+    }
+    fn live(self, app: &LightcraftApp) -> bool {
+        self == Self::current(app, self.mask, self.component)
+            && app.session.active_mask == Some(self.mask)
+            && self
+                .photo
+                .and_then(|id| app.session.develop_of(id))
+                .is_some_and(|d| d.masks.iter().any(|m| m.id == self.mask && m.components.get(self.component).is_some()))
+    }
+    fn key(self) -> (u64, Option<PhotoId>, u64, u32, usize) {
+        (self.library, self.photo, self.revision, self.mask, self.component)
+    }
+}
+
+enum ComponentRowAction {
+    Command(serde_json::Value),
+    Rename,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn component_row_popup(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    row: &egui::Response,
+    more: &egui::Response,
+    mask: u32,
+    k: usize,
+    label: &str,
+    count: usize,
+) {
+    use craft::ui::contract::{Props as _, ShowContainer as _, Trigger};
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    let target = ComponentMenuTarget::current(app, mask, k);
+    if row.secondary_clicked() && crate::widgets::carrying(ui.ctx()) {
+        return;
+    }
+    let owner_key = ui.scope_id().with(("mask-component-captured-owner", row.id, more.id));
+    let mut captured = ui.data(|d| d.get_temp::<ComponentMenuTarget>(owner_key)).unwrap_or(target);
+    let interactive = captured == target && captured.live(app);
+    let mut pending = None;
+    let mut targets = Vec::new();
+    let mut body_layer = None;
+    // Keep SDK-owned opener state: an explicit false open binding bypasses opener triggers.
+    // This id belongs to the opener slot, not the target currently occupying that row.
+    let shown = craft::ui::menu::Menu::context(crate::i18n::tr("Component options"), row)
+        .opened_by(more, Trigger::Click)
+        .id_salt(("mask-component-menu", row.id, more.id))
+        .show(ui, |ui, menu| {
+            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                body_layer = Some(ui.layer_id());
+            }
+            ui.add_enabled_ui(interactive, |ui| {
+                pending = component_row_menu(app, ui, captured, label, count, &mut targets);
+            });
+            if pending.is_some() {
+                menu.request_close();
             }
         });
+    let opening = craft::ui::runtime::overlay::opening(ui.ctx(), shown.output.response.id);
+    let active = body_layer.and_then(|layer| egui::AreaState::load(ui.ctx(), layer.id)).is_some_and(|state| state.interactable);
+    if opening && body_layer.is_some() {
+        // Only the SDK's genuine open transition establishes a new document owner.
+        captured = target;
+        ui.data_mut(|d| d.insert_temp(owner_key, captured));
+    } else if !interactive && active {
+        craft::ui::runtime::overlay::request_close(ui.ctx(), shown.output.response.id, craft::ui::runtime::overlay::CloseReason::Requested);
     }
-    crate::widgets::menu_button(ui, crate::i18n::tr("Intersect with"), |ui| component_menu(app, ui, "intersect"));
-    crate::widgets::menu_button(ui, crate::i18n::tr("Subtract"), |ui| component_menu(app, ui, "subtract"));
-    ui.separator();
-    if ui.button(crate::i18n::tr("Rename…")).clicked() {
-        app.ui.renaming_component = Some((mask, k, label.to_string()));
-        ui.close();
+    #[cfg(test)]
+    {
+        let receipt = format!(
+            "pass={} context_clicked={} options_pressed={} options_clicked={} body={body_layer:?} sdk_id={:?} opening={opening} active={active} interactive={interactive} captured={:?} target={:?}",
+            ui.ctx().cumulative_pass_nr(),
+            row.secondary_clicked(),
+            more.is_pointer_button_down_on(),
+            more.clicked(),
+            shown.output.response.id,
+            captured.key(),
+            target.key()
+        );
+        ui.data_mut(|d| d.insert_temp(egui::Id::unique(("mask-component-opener-diagnostic", mask, k)), receipt));
+    }
+
+    // A closing/fading body may still paint. Only CURRENT interactable real layers publish
+    // automation or app effects; query after the menu has updated its AreaState.
+    for (name, response) in targets {
+        if interactive && egui::AreaState::load(ui.ctx(), response.layer_id.id).is_some_and(|state| state.interactable) {
+            crate::widgets::register_response(name, response.rect, &response);
+        }
+    }
+    if let Some((action, layer)) = pending
+        && ui.is_enabled()
+        && interactive
+        && !opening
+        && captured.live(app)
+        && egui::AreaState::load(ui.ctx(), layer.id).is_some_and(|state| state.interactable)
+    {
+        match action {
+            ComponentRowAction::Command(p) => {
+                let _ = app.run("mask.component", p);
+            }
+            ComponentRowAction::Rename => {
+                app.ui.renaming_component = Some((mask, k, label.to_owned()));
+            }
+        }
+    }
+}
+
+fn component_action(ui: &mut egui::Ui, target: ComponentMenuTarget, key: &str, text: &str, targets: &mut Vec<(String, egui::Response)>) -> bool {
+    let (mask, k) = (target.mask, target.component);
+    use craft::ui::contract::{Props as _, Show as _};
+    let out = craft::ui::menu::MenuItem::new(menu_label(text).to_owned())
+        .id_salt(("mask-component-action", target.key(), key))
+        .enabled(ui.is_enabled())
+        .show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    let ran = ui.is_enabled() && out.ran;
+    targets.push((format!("maskComponent:{mask}:{k}:{key}"), out.response));
+    ran
+}
+
+/// The right-click / "…" action body. The host owns lifetime, target identity and dispatch.
+fn component_row_menu(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    target: ComponentMenuTarget,
+    label: &str,
+    count: usize,
+    targets: &mut Vec<(String, egui::Response)>,
+) -> Option<(ComponentRowAction, egui::LayerId)> {
+    use craft::ui::display::Divider;
+    let (mask, k) = (target.mask, target.component);
+    let mut action = None;
+    for (key, text) in
+        [("invert", crate::i18n::tr("Invert").to_owned()), ("duplicate", crate::i18n::tr_format!("Duplicate \"{label}\"", label = label))]
+    {
+        if component_action(ui, target, key, &text, targets) {
+            action = Some((ComponentRowAction::Command(json!({"id":mask,"component":k,"action":key})), ui.layer_id()));
+        }
+    }
+    if k > 0 {
+        let head = Menu::submenu_row_enabled(ui, crate::i18n::tr("Mode"), ui.is_enabled(), |ui, _| {
+            for (op, text) in [("add", "Add"), ("subtract", "Subtract"), ("intersect", "Intersect")] {
+                if component_action(ui, target, op, text, targets) {
+                    action = Some((ComponentRowAction::Command(json!({"id":mask,"component":k,"action":"op","op":op})), ui.layer_id()));
+                }
+            }
+        });
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            targets.push((format!("maskComponent:{mask}:{k}:mode"), head.response));
+        }
+    }
+    // Keep the existing component-creation menus and their model/download policy unchanged.
+    for (label, op) in [("Intersect with", "intersect"), ("Subtract", "subtract")] {
+        Menu::submenu_row_enabled(ui, crate::i18n::tr(label), ui.is_enabled(), |ui, _| {
+            component_menu(app, ui, op, ("mask-component-row", op, target.key()))
+        });
+    }
+    Divider::horizontal().show(ui);
+    if component_action(ui, target, "rename", crate::i18n::tr("Rename…"), targets) {
+        action = Some((ComponentRowAction::Rename, ui.layer_id()));
     }
     let del = if count == 1 {
         crate::i18n::tr_format!("Delete \"{label}\" (and the mask)", label = label)
     } else {
         crate::i18n::tr_format!("Delete \"{label}\"", label = label)
     };
-    if ui.button(del).clicked() {
-        let _ = app.run("mask.component", json!({"id": mask, "component": k, "action": "delete"}));
-        ui.close();
+    if component_action(ui, target, "delete", &del, targets) {
+        action = Some((ComponentRowAction::Command(json!({"id":mask,"component":k,"action":"delete"})), ui.layer_id()));
     }
+    action
 }
 
 /// Whether the SAM 3 model is missing in a build that could use it: then the download is
@@ -840,6 +1538,7 @@ fn enter_submits(working: bool, lost_focus: bool, enter_pressed: bool) -> bool {
 
 /// The Describe field: type what to select ("sky", "the red car") and press Return.
 fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
+    use craft::ui::buttons::Button;
     let Some((op, mut text)) = app.ui.describe.clone() else { return };
     // a new mask's field sits under the tiles; one that combines, under the selected mask
     if (op == "new") != new_mask {
@@ -853,28 +1552,36 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     };
     ui.label(crate::i18n::tr(prompt));
     let mut submit = false;
+    let mut cancelled = false;
     // the (translated) Select button is placed first, at the right; the field takes what is left
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let seg = &app.session.segmenter;
         let working = segmenter_working(seg.analyzing(), seg.busy(), seg.detail_busy(), app.ui.detail_due.is_some());
-        if crate::button::Button::new("Select").small().busy(working).widget("button:maskDescribeGo").show(ui).clicked() {
-            submit = true;
+        let go = Button::new(crate::i18n::tr("Select").to_owned())
+            .id(egui::Id::unique("button:maskDescribeGo"))
+            .size(craft::theme::ControlSize::Sm)
+            .loading(working)
+            .show(ui);
+        if !measuring(ui) {
+            crate::widgets::register_response("button:maskDescribeGo", go.response.rect, &go.response);
+            if ui.is_enabled() && go.clicked() {
+                submit = true;
+            }
         }
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut text)
-                .hint_text(crate::i18n::tr("e.g. sky · the red car · car, road"))
-                .desired_width(ui.available_width()),
-        );
-        register(ui, "maskDescribe", r.rect);
-        if !r.has_focus() && !r.lost_focus() && text.is_empty() {
-            r.request_focus();
+        let r = crate::text_field::TextField::singleline("maskDescribe", &mut text)
+            .hint(crate::i18n::tr("e.g. sky · the red car · car, road"))
+            .width(ui.available_width())
+            .show(ui);
+        if !r.editing && r.ending.is_none() && text.is_empty() {
+            crate::text_field::focus_id(ui.ctx(), r.response.id);
         }
         // Enter is the Select button: nothing starts while the segmenter is working
-        if enter_submits(working, r.lost_focus(), ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+        if enter_submits(working, r.ending.is_some(), r.ending == Some(crate::text_field::Ending::Return)) {
             submit = true;
         }
+        cancelled = r.cancelled();
     });
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if cancelled || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.ui.describe = None;
         return;
     }
@@ -893,15 +1600,80 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     }
 }
 
-fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
-    let b = ui.button(crate::i18n::tr("Object"));
-    register(ui, format!("maskComp:{op}:object"), b.rect);
-    if b.clicked() {
+/// The menu a button opens: the framework's, opened by the button's own activation (the pointer, a long
+/// press and the keyboard alike) and closed by Escape, a click away or a pick. `key` tells this opener's
+/// menu from the others'. Nothing is drawn while only measuring.
+fn opener_menu(
+    ui: &mut egui::Ui,
+    opener: &crate::widgets::TextButtonOutput,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    mut body: impl FnMut(&mut egui::Ui),
+) {
+    use craft::ui::contract::{Bind, Trigger};
+    if measuring(ui) {
+        return;
+    }
+    // The open state lives here, a pass at a time: a menu whose opener stops drawing closes.
+    let pass = ui.ctx().cumulative_pass_nr();
+    let open_id = opener.response.id.with("mask-opener-menu-open");
+    let mut open = ui
+        .data(|d| d.get_temp::<(u64, bool)>(open_id))
+        .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
+        .is_some_and(|(_, open)| open);
+    // Escape closes it while the keyboard is still on the button, outside the menu: a long press opens it there, and
+    // the button has no use for the Escape the runtime hands it.
+    let opener_id = opener.response.id;
+    // The button's own activation (pointer, long release, keyboard) toggles it; Manual, as the presets menu does, so
+    // the menu's pointer trigger does not toggle it a second time.
+    if opener.clicked() {
+        open = !open;
+    }
+    let layer_id = open_id.with("layer");
+    let menu_layer = ui.data(|d| d.get_temp::<egui::LayerId>(layer_id));
+    Menu::new(crate::i18n::tr(label).to_owned())
+        .id_salt(("mask-opener-menu", key))
+        .opened_by(&opener.response, Trigger::Manual)
+        .open(Bind::bound(&mut open))
+        .show(ui, |ui, _| {
+            // the rows' layer, so a later Escape on a row is known to be this menu's
+            if !measuring(ui) {
+                ui.data_mut(|d| d.insert_temp(layer_id, ui.layer_id()));
+            }
+            body(ui)
+        });
+    // after the menu, which takes the Escape it handles itself: one left untaken closes it (next pass)
+    if open && crate::shortcuts::opener_menu_escape(ui.ctx(), opener_id, menu_layer) {
+        open = false;
+    }
+    ui.data_mut(|d| {
+        if open {
+            d.insert_temp(open_id, (pass, true));
+        } else {
+            d.remove::<(u64, bool)>(open_id);
+        }
+    });
+}
+
+/// The choices of a component menu: Object, Describe… and the shapes. `scope` tells this menu's
+/// rows from those of the other menus with the same `op`.
+fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str, scope: impl std::hash::Hash + std::fmt::Debug + Copy) {
+    let item = |ui: &mut egui::Ui, kind: &str, label: &str| -> bool {
+        let enabled = ui.is_enabled();
+        let shown = MenuItem::new(label.to_owned()).id_salt(("mask-comp", scope, op, kind)).enabled(enabled).show(ui);
+        if measuring(ui) {
+            return false;
+        }
+        // (a menu fading out after it closed publishes nothing)
+        if crate::widgets::on_live_layer(&shown.response) {
+            crate::widgets::register_response(format!("maskComp:{op}:{kind}"), shown.response.rect, &shown.response);
+        }
+        enabled && shown.ran
+    };
+    if item(ui, "object", crate::i18n::tr("Object")) {
         start_object(app, ui.ctx(), op);
     }
-    let b = ui.button(crate::i18n::tr("Describe…"));
-    register(ui, format!("maskComp:{op}:prompt"), b.rect);
-    if b.clicked() {
+    if item(ui, "prompt", crate::i18n::tr("Describe…")) {
         start_describe(app, op);
     }
     for (kind, label) in [
@@ -916,9 +1688,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         if kind == "brush" && op == "intersect" {
             continue;
         }
-        let b = ui.button(menu_label(label));
-        register(ui, format!("maskComp:{op}:{kind}"), b.rect);
-        if b.clicked() {
+        if item(ui, kind, menu_label(label)) {
             if kind == "brush" {
                 let _ = app.run("tool.brush", json!({"op": op}));
             } else {
@@ -929,7 +1699,146 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
 }
 
 fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+
+    fn check(ui: &mut egui::Ui, owner: (u64, Option<PhotoId>, Option<u32>), name: &str, label: &str, hint: &str, value: &mut bool) {
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        let next = {
+            let out = craft::ui::choice::Checkbox::new(Bind::given(*value))
+                .id_salt(("mask-brush", owner, name))
+                .label(crate::i18n::tr(label).to_owned())
+                .enabled(real)
+                .show(ui);
+            if real {
+                crate::widgets::register_response(format!("check:{name}"), out.response.rect, &out.response);
+            }
+            out.response.clone().on_hover_text(crate::i18n::tr(hint));
+            out.events.committed().copied()
+        };
+        if real
+            && ui.is_enabled()
+            && let Some(next) = next
+        {
+            *value = next;
+        }
+    }
+
+    // View preferences have no engine gesture or Undo. Keep exact typing commit-only,
+    // while actual slider/value scrubs update live and Cancel restores their prior value.
+    fn scalar(app: &LightcraftApp, ui: &mut egui::Ui, spec: &ControlSpec, current: f64) -> Option<f64> {
+        use craft::behavior::{EditEvent, NumberCodec, Reader};
+        use craft::ui::{text::NumberField, value_drag::Slider};
+
+        #[derive(Clone, Copy)]
+        struct Visit {
+            owner: (u64, Option<PhotoId>, Option<u32>),
+            revision: u64,
+            epoch: u64,
+            pass: u64,
+            enabled: bool,
+            number_start: Option<f64>,
+        }
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        let owner = (app.session.library_generation(), app.session.active(), app.session.active_mask);
+        let revision = app.session.catalog.revision;
+        let pass = ui.ctx().cumulative_pass_nr();
+        let enabled = real && ui.is_enabled();
+        let key = ui.scope_id().with(("mask-brush-visit", spec.id));
+        let mut visit = ui.data(|data| data.get_temp::<Visit>(key)).unwrap_or(Visit { owner, revision, epoch: 0, pass, enabled, number_start: None });
+        let adjacent = visit.pass == pass || visit.pass.checked_add(1) == Some(pass);
+        if visit.owner != owner || visit.revision != revision || visit.enabled != enabled || !adjacent {
+            // A different target, hidden visit or disabled scope must not revive a pending draft.
+            visit = Visit { owner, revision, epoch: visit.epoch.wrapping_add(1), pass, enabled, number_start: None };
+        }
+        visit.pass = pass;
+        let t = Tokens::get(ui.ctx());
+        let width = ui.available_width();
+        let (row, _) = ui.allocate_exact_size(vec2(width, t.slider_row_h), Sense::hover());
+        let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(width - 46.0, 18.0));
+        let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
+        let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
+        let id = ui.scope_id().with(("mask-brush", owner, spec.id, visit.epoch));
+        let caption = crate::i18n::tr(spec.label);
+        let label = Hit::new(&format!("maskBrushLabel:{}", spec.id), crate::i18n::tr_format!("Reset {name}", name = caption))
+            .id(id.with("label"))
+            .enabled(enabled)
+            .show_at(ui, label_hit);
+        let label = label.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = caption));
+        ui.painter().text(
+            label_rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            caption,
+            t.font(12.5),
+            if enabled { t.text_label } else { t.text_disabled },
+        );
+        let mut value = current;
+        let track = Slider::new(Bind::bound(&mut value).reset(spec.default), spec.min..=spec.max)
+            .id(id)
+            .label(caption)
+            .step(spec.step)
+            .enabled(enabled)
+            .show_at(ui, track_rect);
+        note_focused_slider(ui.ctx(), track.response.id);
+        let number_spec = *spec;
+        let field = NumberField::new(crate::i18n::tr_format!("{name} value", name = caption), Bind::given(Some(current)).reset(Some(spec.default)))
+            .id(id.with("value"))
+            .range(spec.min..=spec.max)
+            .step(spec.step)
+            .codec(
+                NumberCodec::new(Reader::new(), usize::from(spec.decimals)).parse_with(move |text| crate::widgets::typed_value(&number_spec, text)),
+            )
+            .snap_typed(true)
+            .fixed_decimals(usize::from(spec.decimals))
+            .commit_decimals(usize::from(spec.decimals))
+            .enabled(enabled)
+            .show_at(ui, value_rect);
+        if !real {
+            return None;
+        }
+        for (prefix, response) in
+            [("slider", &track.response), ("sliderValue", &field.response), ("sliderField", &field.response), ("sliderLabel", &label)]
+        {
+            crate::widgets::register_response(format!("{prefix}:{}", spec.id), response.rect, response);
+        }
+        if enabled {
+            let live_number =
+                ui.input(|input| input.pointer.primary_down() || input.events.iter().any(|event| matches!(event, egui::Event::MouseWheel { .. })));
+            for event in &field.events {
+                match event {
+                    EditEvent::Begin { .. } => visit.number_start = live_number.then_some(current),
+                    EditEvent::Update { value: Some(next), .. } if visit.number_start.is_some() => value = *next,
+                    EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
+                        if let Some(next) = after {
+                            value = *next;
+                        } else if let Some(before) = visit.number_start {
+                            // An absent numeric value is not zero and does not clear a brush preference.
+                            value = before;
+                        }
+                        visit.number_start = None;
+                    }
+                    EditEvent::Cancel { .. } => {
+                        if let Some(before) = visit.number_start.take() {
+                            value = before;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if label.double_clicked() {
+                value = spec.default;
+                visit.number_start = None;
+            }
+        } else {
+            visit.number_start = None;
+        }
+        ui.data_mut(|data| data.insert_temp(key, visit));
+        (enabled && value.is_finite() && value != current).then_some(value.clamp(spec.min, spec.max))
+    }
+
     let t = Tokens::get(ui.ctx());
+    let owner = (app.session.library_generation(), app.session.active(), app.session.active_mask);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 0 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Brush")).font(t.semibold(13.0)));
@@ -940,22 +1849,8 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 app.ui.brush_erase = true;
             }
         });
-        let mut auto = app.ui.brush_auto_mask;
-        if ui
-            .checkbox(&mut auto, crate::i18n::tr("Auto Mask"))
-            .on_hover_text(crate::i18n::tr("Paint only areas like the one under the brush"))
-            .changed()
-        {
-            app.ui.brush_auto_mask = auto;
-        }
-        let mut pressure = app.ui.brush_pressure;
-        if ui
-            .checkbox(&mut pressure, crate::i18n::tr("Pen Pressure"))
-            .on_hover_text(crate::i18n::tr("A pen's pressure sets the size and flow of the brush"))
-            .changed()
-        {
-            app.ui.brush_pressure = pressure;
-        }
+        check(ui, owner, "brushAutoMask", "Auto Mask", "Paint only areas like the one under the brush", &mut app.ui.brush_auto_mask);
+        check(ui, owner, "brushPressure", "Pen Pressure", "A pen's pressure sets the size and flow of the brush", &mut app.ui.brush_pressure);
     });
     for (id, label, min, max, get) in [
         ("ui.brushSize", "Size", 1.0, 100.0, (app.ui.brush_size * 400.0) as f64),
@@ -963,8 +1858,7 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("ui.brushFlow", "Flow", 1.0, 100.0, app.ui.brush_flow as f64),
     ] {
         let s = ControlSpec { id, label, section: Section::Light, min, max, default: min, step: 1.0, decimals: 0, track: Track::Plain };
-        let out = slider(ui, &s, get, true, None);
-        if let Some(v) = out.value {
+        if let Some(v) = scalar(app, ui, &s, get) {
             match id {
                 "ui.brushSize" => app.ui.brush_size = (v / 400.0) as f32,
                 "ui.brushFeather" => app.ui.brush_feather = v as f32,
@@ -973,6 +1867,10 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mask_brush_settings_flow_tests.rs"]
+mod mask_brush_settings_flow_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1024,3 +1922,11 @@ mod tests {
         assert_eq!(tile_layout(f32::NAN, long).0, 2);
     }
 }
+
+#[cfg(test)]
+#[path = "mask_component_actions_flow_tests.rs"]
+mod mask_component_actions_flow_tests;
+
+#[cfg(test)]
+#[path = "mask_local_consumer_flow_tests.rs"]
+mod mask_local_consumer_flow_tests;

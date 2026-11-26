@@ -1,5 +1,6 @@
+use super::completion::Snapshot;
 use super::{
-    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, monotonic_ms, panels, pick, recheck, shortcuts,
+    LightcraftApp, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, monotonic_ms, panels, pick, recheck, shortcuts,
     slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
 use crate::startup;
@@ -293,6 +294,7 @@ impl LightcraftApp {
         if self.fonts_ready && !updates_ui::blocks_input(self) {
             shortcuts::handle(self, ctx);
         }
+        panels::edit::color_frame_begin(self, ctx);
     }
 
     /// Lights Out: veil everything but the photo (the loupe's image, or the grid / Compare /
@@ -373,16 +375,40 @@ impl LightcraftApp {
             self.next_widget_hits.clear();
             return;
         }
-        self.widgets = std::mem::take(&mut self.next_widgets);
-        self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        let mut body = self.presentation_snapshot(ctx);
+        body.gestures.pastes = None; // legacy direct body completion retains its existing command sink
+        self.apply_ui_completion(ctx, body);
+    }
+
+    pub(super) fn presentation_snapshot(&mut self, ctx: &egui::Context) -> Snapshot {
+        Snapshot {
+            widgets: std::mem::take(&mut self.next_widgets),
+            hits: std::mem::take(&mut self.next_widget_hits),
+            image: self.image_rect,
+            ui_time: ctx.input(|i| i.time),
+            hidden: ctx.input(|i| i.viewport().visible() == Some(false)),
+            gestures: self.completion_gestures(ctx, self.layout_epoch.wrapping_add(1), self.ui_passes.wrapping_add(1)),
+            notice: panels::notices::capture_completion(self),
+            library: panels::library_problem::capture_completion(self),
+        }
+    }
+    pub(super) fn apply_ui_completion(&mut self, ctx: &egui::Context, body: Snapshot) {
+        self.widgets = body.widgets;
+        self.widget_hits = body.hits;
+        self.image_rect = body.image;
         // a frame without the loupe (grid, Compare, Survey, slideshow…) ends the loupe's step timing
-        self.loupe_timing.end_frame(ctx.input(|i| i.time));
-        panels::notices::finish_ui_pass(self, ctx);
-        panels::library_problem::finish_ui_pass(self, ctx);
-        self.ui_passes = self.ui_passes.wrapping_add(1);
-        self.layout_epoch = self.layout_epoch.wrapping_add(1);
-        self.resolve_pending_gestures(ctx);
-        self.reply_delivered_gestures();
+        self.loupe_timing.end_frame(body.ui_time);
+        panels::notices::apply_completion(self, body.notice);
+        panels::library_problem::apply_completion(self, body.library);
+        self.ui_passes = body.gestures.passes;
+        self.layout_epoch = body.gestures.epoch;
+        if body.gestures.pastes.is_none() {
+            self.resolve_pending_gestures(ctx);
+            self.reply_delivered_gestures();
+        } else {
+            self.resolve_gestures_at(ctx, &body.gestures);
+            self.reply_gestures_at(body.gestures.now_ms);
+        }
         if self.pointer_cleanup {
             // A canceled press may be discovered by a timeout after the synthetic queue emptied;
             // nothing else may ask for the frame that applies its cancellation.
@@ -394,6 +420,7 @@ impl LightcraftApp {
     pub(super) fn draw_window(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let t0 = monotonic_ms();
+        panels::notices::begin_draw(self);
         panels::library_problem::begin_draw(self);
         // A command or shortcut drawn before this can create the window after `ui_pass`; catch it
         // here before any panel draws with the still-focused background text field.
@@ -426,7 +453,15 @@ impl LightcraftApp {
         }
         #[cfg(test)]
         self.library_passes.push(panels::library_problem::LibraryPass::Background);
-        panels::dialogs::prepare(self, ui);
+        // Disable a separate background UI for About and Save Effect; their SDK dialogs mount on the enabled root.
+        let mut about_background;
+        let background = if matches!(self.ui.dialog, Some(crate::state::Dialog::About | crate::state::Dialog::SaveEffect { .. })) {
+            about_background = ui.new_child(egui::UiBuilder::new().id_salt("about-background").max_rect(ui.max_rect()));
+            &mut about_background
+        } else {
+            &mut *ui
+        };
+        panels::dialogs::prepare(self, background);
         // Freeze this frame's notice barrier before `notices::show` can dismiss a prompt: the same
         // click or key must never be acted on again by the dialog drawn after it.
         let notice_blocks = panels::notices::blocks_input(self);
@@ -442,8 +477,12 @@ impl LightcraftApp {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
-                .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
+                .show(background, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
             panels::second::show(self, &ctx);
+            panels::dialogs::show_root(self, ui, notice_blocks);
+            updates_ui::show(self, &ctx);
+            panels::library_problem::show(self, &ctx, notice_blocks);
+            // (the prompt last, above every other modal of the pass)
             if notice_blocks {
                 panels::notices::restore_prompt_pointer(self, &ctx);
             }
@@ -451,9 +490,6 @@ impl LightcraftApp {
             if notice_blocks {
                 panels::notices::hide_background_pointer(&ctx);
             }
-            panels::dialogs::show(self, &ctx, notice_blocks);
-            updates_ui::show(self, &ctx);
-            panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
             drop_overlay::show(self, &ctx);
             if notice_blocks {
@@ -465,16 +501,16 @@ impl LightcraftApp {
             self.end_frame(&ctx, t0);
             return;
         }
-        // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
-        // right panels and left panel run to the bottom; the bottom bar sits between them).
-        panels::topbar::show(self, ui);
-        panels::library_problem::banner(self, ui);
-        panels::strip::show(self, ui);
-        // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
-        let chrome = theme::Tokens::get(&ctx).chrome;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        // The framework allocates the real title/search bar, tool rail and workspace regions.
+        // The saved docking model still owns all panel placement inside that workspace.
+        super::shell::show(self, background);
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
+        panels::dialogs::show_root(self, ui, notice_blocks);
+        updates_ui::show(self, &ctx);
+        panels::library_problem::show(self, &ctx, notice_blocks);
+        // The prompt is shown after every other modal of the pass: the framework makes the last modal shown the one
+        // that takes the window's hits, and the prompt stands above whatever dialog it covers.
         if notice_blocks {
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
@@ -482,9 +518,6 @@ impl LightcraftApp {
         if notice_blocks {
             panels::notices::hide_background_pointer(&ctx);
         }
-        panels::dialogs::show(self, &ctx, notice_blocks);
-        updates_ui::show(self, &ctx);
-        panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
@@ -506,7 +539,7 @@ impl LightcraftApp {
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
         (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
-        self.text_focus = ctx.egui_wants_keyboard_input();
+        self.text_focus = crate::text_field::typing(&ctx);
         self.end_frame(&ctx, t0);
     }
 }

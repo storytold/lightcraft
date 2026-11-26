@@ -1,5 +1,160 @@
 use super::json;
 
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::{Shade, Text};
+use craft::ui::layout_components::Stack;
+use craft::ui::runtime::env::ThemeScope;
+use craft::ui::text::NumberField;
+use craft::ui::value_drag::Slider;
+
+use crate::LightcraftApp;
+use crate::state::Dialog;
+use crate::theme::Tokens;
+
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn register(ui: &egui::Ui, id: &str, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+/// A normal drag range and a separate exact-entry range: rendering must not squeeze
+/// typed similarity values (including 0 and 1) back into the track's 0.70–0.99.
+fn number(ui: &mut egui::Ui, id: &str, label: &str, value: &mut f32, similarity: bool) {
+    let mut current = f64::from(*value);
+    let (drag, typed, step, decimals) = if similarity { (0.70..=0.99, 0.0..=1.0, 0.001, 3) } else { (0.0..=80.0, 0.0..=80.0, 1.0, 0) };
+    ui.horizontal(|ui| {
+        // Keep the historical field id on the real slider hit target. The exact
+        // editor remains immediately after the track for existing typed-entry clients.
+        let width = ui.spacing().slider_width;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
+        let slider =
+            Slider::new(Bind::bound(&mut current), drag).id_salt((id, "track")).label(crate::i18n::tr(label).to_owned()).step(step).show_at(ui, rect);
+        register(ui, &format!("slider:{id}"), &slider.response);
+        let mut exact = Some(current);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(68.0, 24.0), egui::Sense::hover());
+        let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut exact))
+            .id_salt((id, "number"))
+            .range(typed)
+            .step(step)
+            .snap_typed(true)
+            .commit_decimals(decimals)
+            .fixed_decimals(decimals)
+            .show_at(ui, rect);
+        register(ui, &format!("value:{id}"), &shown.response);
+        register(ui, id, &slider.response);
+        if let Some(exact) = exact.filter(|v| v.is_finite()) {
+            current = exact;
+        }
+        Text::new(crate::i18n::tr(label).to_owned()).show(ui);
+    });
+    if !measuring(ui) {
+        *value = current as f32;
+    }
+}
+
+/// The burst gap: a logarithmic track over its usual 1 s – 10 min, and its written value right of it.
+fn gap(ui: &mut egui::Ui, burst_gap: &mut f32) {
+    gap_control(ui, "field:cullGap", "value:cullGap", crate::i18n::tr("Burst: shots at most this far apart"), burst_gap, 1.0..=600.0, true);
+}
+
+/// A time gap in seconds: a logarithmic track over `track`, and its written value ("90 s", "1 h 30 min", "1 day") to
+/// read or type, from none to a day whatever the track covers. `name` names the track, `value_name` the value
+/// field; `caption` repeats the label after them.
+pub(crate) fn gap_control(
+    ui: &mut egui::Ui,
+    name: &str,
+    value_name: &str,
+    label: &str,
+    value: &mut f32,
+    track: std::ops::RangeInclusive<f64>,
+    caption: bool,
+) {
+    let burst_gap = value;
+    let mut current = f64::from(*burst_gap);
+    ui.horizontal(|ui| {
+        let width = ui.spacing().slider_width;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
+        let mut on_track = current.clamp(*track.start(), *track.end());
+        let shown_on_track = on_track;
+        let slider = Slider::new(Bind::bound(&mut on_track), track.clone())
+            .id_salt((name, "track"))
+            .label(label.to_owned())
+            .scale(craft::ui::value_drag::SliderScale::Log)
+            .show_at(ui, rect);
+        register(ui, name, &slider.response);
+        if !measuring(ui) && on_track != shown_on_track {
+            current = on_track.round();
+        }
+        // The written value: what is typed is read when it is committed; while it is edited the draft stays.
+        let draft_id = egui::Id::unique((value_name, "draft"));
+        let mut text: String = ui.data(|d| d.get_temp(draft_id)).unwrap_or_else(|| fmt_gap(current));
+        let field = crate::text_field::TextField::singleline(value_name, &mut text).label(label).width(80.0).select_on_focus(true).show(ui);
+        if !measuring(ui) {
+            if field.committed()
+                && let Some(typed) = parse_gap(&text)
+            {
+                current = typed.clamp(0.0, 86400.0);
+            }
+            if field.editing {
+                ui.data_mut(|d| d.insert_temp(draft_id, text));
+            } else {
+                ui.data_mut(|d| d.remove::<String>(draft_id));
+            }
+        }
+        if caption {
+            Text::new(label.to_owned()).show(ui);
+        }
+    });
+    if !measuring(ui) {
+        *burst_gap = current as f32;
+    }
+}
+
+/// Production culling controls; the parent dialog still owns Cancel/OK and modality.
+pub(super) fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, dlg: &mut Dialog) {
+    let Dialog::Cull { reject_below, pick_best, burst_gap, similarity } = dlg else { return };
+    let n = app.session.selection.ids.len();
+    let scope = if n > 1 {
+        crate::i18n::tr_format!("the {n} selected photos", n = n)
+    } else {
+        crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len())
+    };
+    let kind = crate::theme::current(ui.ctx()).unwrap_or_else(|| app.ui.settings.theme(app.system_theme(ui.ctx())));
+    let mode = if kind.is_dark() { craft::theme::Mode::Dark } else { craft::theme::Mode::Light };
+    Stack::new().theme(ThemeScope::new().mode(mode)).show(ui, |ui, _| {
+        Text::new(crate::i18n::tr_format!(
+            "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).",
+            scope = scope
+        ))
+        .show(ui);
+        ui.add_space(6.0);
+        number(ui, "field:cullReject", "Reject below focus", reject_below, false);
+        Text::new(crate::i18n::tr(if *reject_below > 0.0 {
+            "Blurry photos below the score are flagged as rejects."
+        } else {
+            "0: nothing is rejected."
+        }))
+        .shade(Shade::Muted)
+        .show(ui);
+        let shown =
+            Checkbox::new(Bind::bound(pick_best)).id_salt("cull-pick-best").label(crate::i18n::tr("Pick the sharpest photo of each burst")).show(ui);
+        register(ui, "check:cullPick", &shown.response);
+        ui.add_space(6.0);
+        gap(ui, burst_gap);
+        number(ui, "field:cullSimilar", "Burst: how alike (loose … strict)", similarity, true);
+        clamp_cull_burst(burst_gap, similarity);
+        Text::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).shade(Shade::Muted).show(ui);
+        Text::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots."))
+            .shade(Shade::Muted)
+            .show(ui);
+    });
+}
+
 /// Apply a dialog's action (also used by `ui.dialog.confirm`).
 /// What [`fmt_gap`] writes, read back: `90`, `90 s`, `1 min 30 s`, `2 h 5 min`, `1 day`
 /// (units `s`, `min`, `h`, `day`, each optional after a plain number of seconds).
@@ -199,3 +354,7 @@ mod cull_dialog_tests {
         assert_eq!(burst(&h), (1800.0, 1.0));
     }
 }
+
+#[cfg(test)]
+#[path = "cull_wave110_tests.rs"]
+mod wave110_tests;

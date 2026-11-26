@@ -16,7 +16,6 @@ pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_folders_e
 pub use run::{parse_rgb, run_ui_command};
 pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_commands};
 
-pub mod menu_level;
 pub mod menubar;
 
 /// (id, label, shortcut, menu path)

@@ -1,4 +1,100 @@
 use super::LightcraftApp;
+use super::frame::{field, just_opened};
+use crate::state::Dialog;
+use crate::theme::Tokens;
+use craft::ui::buttons::Button;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::runtime::focus::{self, FocusTarget};
+use craft::ui::text::{NumberField, TextField};
+
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn register(ui: &egui::Ui, id: &str, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+/// A preset button at its whole width (the dialog widens to the row rather than cutting the last one to an
+/// ellipsis). The active preset shows as the framework's toggle button pressed on (its own selected look: a plain
+/// `Button` given `selected` reports it to assistive technology but paints no on state). Any press applies the preset,
+/// the active one's too.
+fn button(ui: &mut egui::Ui, id: &str, label: &str, selected: bool) -> bool {
+    use craft::ui::buttons::ToggleButton;
+    let make = || ToggleButton::new(crate::i18n::tr(label).to_owned(), Bind::given(selected)).id_salt(id);
+    let size = make().measure_in(ui, craft::behavior::Proposal::Ideal);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size.x.ceil(), size.y.max(24.0)), egui::Sense::hover());
+    let shown = make().show_at(ui, rect);
+    register(ui, &format!("button:{id}"), &shown.response);
+    !measuring(ui) && shown.events.committed().is_some()
+}
+
+fn tags_toggle(ui: &mut egui::Ui) -> bool {
+    let key = egui::Id::unique(("renameTemplate", "tags-open"));
+    let mut open = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    let shown = Button::new(crate::i18n::tr("Tags").to_owned()).id_salt("renameTemplateTags").selected(open).show(ui);
+    let clicked = !measuring(ui) && shown.clicked();
+    let response = shown.response.on_hover_text(crate::i18n::tr("Show the template tags; click one to insert it"));
+    register(ui, "button:renameTemplateTags", &response);
+    if clicked {
+        open = !open;
+        ui.ctx().data_mut(|d| d.insert_temp(key, open));
+    }
+    open
+}
+
+fn start_field(ui: &mut egui::Ui, start: &mut u32) {
+    let mut value = Some(f64::from(*start));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(96.0_f32.min(ui.available_width().max(1.0)), 24.0), egui::Sense::hover());
+    let shown = NumberField::new(crate::i18n::tr("Start at"), Bind::bound(&mut value))
+        .id_salt("renameStart")
+        .range(0.0..=999_999.0)
+        .step(1.0)
+        .snap_typed(true)
+        .commit_decimals(0)
+        .fixed_decimals(0)
+        .show_at(ui, rect);
+    register(ui, "field:renameStart", &shown.response);
+    if !measuring(ui)
+        && let Some(value) = value.filter(|v| v.is_finite())
+    {
+        *start = value.round().clamp(0.0, 999_999.0) as u32;
+    }
+}
+
+/// Same single-field dialog contract as frame::dialog_field, with an SDK-owned editor.
+fn name_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str) -> bool {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
+    // recorded, so the field's edit menu items (`{id}:paste` …) are registered while that menu is open
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique(("name-field-inspect", id)), |ui| {
+        TextField::new(crate::i18n::tr(hint).to_owned(), Bind::bound(value))
+            .id_salt(id)
+            .placeholder(crate::i18n::tr(hint).to_owned())
+            .limit(None)
+            .select_on_focus()
+            .submits()
+            .show_at(ui, rect)
+    });
+    register(ui, id, &shown.response);
+    if !measuring(ui) {
+        crate::text_field::register_field(ui, id, &shown.response, record.as_deref());
+    }
+    if !measuring(ui)
+        && ui.is_enabled()
+        && (just_opened(ui, id)
+            || (!shown.response.has_focus()
+                && !shown.submitted
+                && !shown.escaped
+                && shown.left_by_tab.is_none()
+                && ui.memory(|m| m.focused().is_none())))
+    {
+        focus::request(ui.ctx(), FocusTarget::Id(shown.response.id));
+    }
+    !measuring(ui) && shown.submitted
+}
 
 /// Rows the Rename dialog previews.
 pub(super) const RENAME_PREVIEW_ROWS: usize = 6;
@@ -94,3 +190,132 @@ pub(super) fn person_rename_plan(cat: &lightcraft_catalog::Catalog, from: &str, 
     // a case-only change is the same person, not a merge
     PersonRenamePlan { faces, needs_merge: needs_merge && from_key != to_key, block }
 }
+
+/// The body of the Rename dialog.
+pub(super) fn rename_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
+    let Dialog::Rename { template, start } = dlg else { return };
+    let n = app.session.selected().len();
+    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
+    // The template is the framework's text field; a tag from the Tags list goes in at its caret.
+    let template_id = egui::Id::unique("rename-template");
+    let tags_open = field(ui, "Template", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let mut open = false;
+        super::frame::trailing_button_row(ui, |ui| {
+            open = tags_toggle(ui);
+            let width = ui.available_width();
+            crate::import::template_field(ui, "field:renameTemplate", crate::i18n::tr("Template"), template, template_id, "{name}", width);
+        });
+        open
+    });
+    if tags_open {
+        crate::import::tag_help(ui, "renameTemplate", template, template_id);
+    }
+    crate::import::unknown_tags_warning(ui, template);
+    field(ui, "Presets", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (i, (label, tpl)) in
+            [("Name", "{name}"), ("Date–Name", "{date}_{name}"), ("Title–Seq", "{title}-{seq:3}"), ("Custom–Seq", "Photo-{seq:3}")].iter().enumerate()
+        {
+            if button(ui, &format!("renamePreset-{i}"), label, template == tpl) {
+                *template = tpl.to_string();
+            }
+        }
+    });
+    field(ui, "Start at", |ui| start_field(ui, start));
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…",
+        ))
+        .color(t.text_dim),
+    );
+    let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize);
+    match &preview {
+        Some(rows) => {
+            egui::Grid::new("rename-preview").num_columns(3).spacing([8.0, 2.0]).show(ui, |ui| {
+                for pl in rows {
+                    ui.label(egui::RichText::new(&pl.from).color(t.text_dim));
+                    let (arrow, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                    crate::icons::paint(ui.painter(), arrow, crate::icons::Icon::ChevronRight, t.text_dim);
+                    ui.label(egui::RichText::new(&pl.to).color(t.text));
+                    ui.end_row();
+                }
+            });
+        }
+        None => {
+            ui.horizontal(|ui| {
+                crate::progress::spinner(ui, 12.0);
+                ui.label(egui::RichText::new(crate::i18n::tr("Checking names…")).color(t.text_dim));
+            });
+        }
+    }
+    let more = total.saturating_sub(RENAME_PREVIEW_ROWS);
+    if more > 0 {
+        ui.label(egui::RichText::new(crate::i18n::tr_format!("… and {more} more", more = more)).color(t.text_dim));
+    }
+}
+
+/// The body of the RenamePerson dialog.
+pub(super) fn rename_person_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut Dialog) {
+    let Dialog::RenamePerson { from, to, merge } = dlg else { return };
+    let submitted = name_field(ui, "field:personName", to, "Name");
+    let plan = person_rename_plan(&app.session.catalog, from, to);
+    if !plan.needs_merge {
+        *merge = false;
+    }
+    if submitted && plan.block.is_none() && (!plan.needs_merge || *merge) {
+        *confirm = true;
+    }
+    if let Some(why) = plan.block {
+        ui.label(egui::RichText::new(crate::i18n::tr(why)).color(t.caution));
+    } else {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "Renames {n} face{} across the library. The files are not changed.",
+                if plan.faces == 1 { "" } else { "s" },
+                n = plan.faces
+            ))
+            .color(t.text_dim),
+        );
+    }
+    if plan.needs_merge {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
+                to = to.trim()
+            ))
+            .color(t.caution),
+        );
+        let shown =
+            Checkbox::new(Bind::bound(merge)).id_salt("personMerge").label(crate::i18n::tr("Combine with the existing person").to_owned()).show(ui);
+        register(ui, "check:personMerge", &shown.response);
+    }
+}
+
+/// The body of the RenameKeyword dialog.
+pub(super) fn rename_keyword_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut Dialog) {
+    let Dialog::RenameKeyword { from, to } = dlg else { return };
+    let n = app.caches.dialog_count(&app.session.catalog, ("renameKeyword", from.as_str()), || {
+        app.session.catalog.photos().filter(|p| p.meta.keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(k, from))).count()
+    });
+    if name_field(ui, "field:keywordName", to, "New name") {
+        *confirm = true;
+    }
+    ui.label(
+        egui::RichText::new(crate::i18n::tr_format!(
+            "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.",
+            if n == 1 { "" } else { "s" },
+            from = from,
+            n = n
+        ))
+        .color(t.text_dim),
+    );
+}
+
+#[cfg(test)]
+#[path = "rename_wave110_tests.rs"]
+mod rename_wave110_tests;
+
+#[cfg(test)]
+#[path = "rename_preview_flow_tests.rs"]
+mod rename_preview_flow_tests;

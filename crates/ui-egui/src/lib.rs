@@ -78,7 +78,6 @@ pub use dialogs::merge;
 pub use dialogs::print_view;
 pub use dialogs::slideshow_export;
 pub use dialogs::updates_ui;
-pub use menus::menu_level;
 pub use menus::menubar;
 pub use state::UiState;
 pub use widgets::album_picker;
@@ -504,6 +503,8 @@ impl ShotGeometry {
 /// A synthetic-input control request waiting for a fresh layout and for its last event to be
 /// consumed by a completed UI pass.
 struct PendingGesture {
+    /// Stable presentation-completion identity and own-output claim, never semantic payload.
+    completion: std::sync::Arc<std::sync::atomic::AtomicU8>,
     method: String,
     params: Value,
     reply: Sender<ControlResponse>,
@@ -550,7 +551,7 @@ struct PendingShot {
     /// Bytes this request reserves until it is drained or cancelled.
     reserved: usize,
     /// The one-shot completion slot; only the app owns the strong reference.
-    slot: Option<craft_ui::capture::CaptureSlot>,
+    slot: Option<craft::ui::runtime::windows::ScreenshotSlot>,
     /// The geometry and document generation the issued command was bound to.
     issued: Option<ShotGeometry>,
     /// Library generation at issue (a different library changed mid-capture).

@@ -1,6 +1,6 @@
 use super::display::duration_slider;
 use super::widgets::{check, choices, heading, hint, row};
-use super::{LightcraftApp, Tokens, Value, json, register};
+use super::{LightcraftApp, Tokens, Value, json};
 
 /// The Slideshow tab: the slide preview, then the settings, in one column the width of the page
 /// (the page scrolls; a column beside the preview would be wider than the window). Without
@@ -25,21 +25,43 @@ pub(super) fn slideshow_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
 
 /// Export: PDF, JPEG sequence or video of the slideshow (View ▸ Export Slideshow…).
 fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use craft::ui::buttons::Button as FrameworkButton;
+    use craft::ui::contract::{Props as _, Show as _};
     heading(ui, t, crate::i18n::tr("Export"));
     let running = app.session.slideshow_export.as_ref().is_some_and(|r| r.running());
+    #[cfg(test)]
+    let mut controls = Vec::new();
     ui.horizontal_wrapped(|ui| {
+        // Both routes draw normally during a speculative pass, but neither may dispatch.
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        let enabled = real && ui.is_enabled() && !running;
         for (id, label, format) in [
             ("slideshowExportPdf", "Export PDF…", "pdf"),
             ("slideshowExportJpeg", "Export JPEG…", "jpeg"),
             ("slideshowExportVideo", "Export Video…", "video"),
         ] {
-            let r = ui.add_enabled(!running, egui::Button::new(crate::i18n::tr(label)));
-            register(ui, format!("button:{id}"), r.rect);
-            if r.clicked() {
+            let (response, clicked) = {
+                let output =
+                    FrameworkButton::new(crate::i18n::tr(label).to_owned()).id_salt(("slideshow-export-launcher", id)).enabled(enabled).show(ui);
+                let clicked = output.clicked();
+                (output.response, clicked)
+            };
+            if real {
+                crate::widgets::register_response(format!("button:{id}"), response.rect, &response);
+            }
+            #[cfg(test)]
+            controls.push(json!({"alias":format!("button:{id}"),"format":format,"real":real,"enabled":enabled,
+                "responseId":format!("{:?}",response.id),"rect":format!("{:?}",response.rect),"clicked":clicked}));
+            if enabled && clicked {
                 let _ = app.run("dialog.slideshowExport", json!({"format": format}));
             }
         }
     });
+    #[cfg(test)]
+    {
+        let receipt = json!({"frame":ui.ctx().cumulative_frame_nr(),"pass":ui.ctx().cumulative_pass_nr(),"controls":controls});
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("slideshow-launcher-current-controls"), receipt));
+    }
     hint(ui, t, crate::i18n::tr("The photos in view as slides, with the settings above. Progress shows in the activity stack."));
 }
 
@@ -53,10 +75,10 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     hint(ui, t, crate::i18n::tr("A manual slideshow shows each slide until → or ← changes it. Exports still use the slide duration."));
     row(ui, t, crate::i18n::tr("Slide duration"), |ui| {
-        duration_slider(app, ui, "slideshowSlide", "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX)
+        duration_slider(app, ui, "slideshowSlide", "Slide duration", "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX)
     });
     row(ui, t, crate::i18n::tr("Fade duration"), |ui| {
-        duration_slider(app, ui, "slideshowFade", "fadeDuration", s.fade_duration, 0.0..=FADE_MAX.min(s.slide_duration))
+        duration_slider(app, ui, "slideshowFade", "Fade duration", "fadeDuration", s.fade_duration, 0.0..=FADE_MAX.min(s.slide_duration))
     });
     hint(ui, t, crate::i18n::tr("A slide stays up for its duration, its fade in included. A fade of 0 cuts."));
     row(ui, t, crate::i18n::tr("Fade"), |ui| {
@@ -84,13 +106,10 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let _ = app.run("slideshow.playback", json!({"fadeColor": c}));
         }
         if f == Fade::Color
-            && let Some(mut c) = s.fade_color
+            && let Some(c) = s.fade_color
+            && let Some(c) = super::controls::colour(ui, super::controls::owner("slideshowFadeColor"), "slideshowFadeColor", "Fade colour", c)
         {
-            let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-            register(ui, "button:slideshowFadeColor", r.rect);
-            if r.changed() {
-                let _ = app.run("slideshow.playback", json!({"fadeColor": c}));
-            }
+            let _ = app.run("slideshow.playback", json!({"fadeColor": c}));
         }
     });
     let mut v = s.random_order;
@@ -118,3 +137,11 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         crate::i18n::tr("Slideshow in the View menu plays the photos in view from the selected one. These settings are saved with the library."),
     );
 }
+
+#[cfg(test)]
+#[path = "slideshow_export_launcher_candidate_flow_tests.rs"]
+mod slideshow_export_launcher_candidate_flow_tests;
+
+#[cfg(test)]
+#[path = "slideshow_duration_flow_tests.rs"]
+mod slideshow_duration_flow_tests;

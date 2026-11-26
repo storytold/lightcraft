@@ -3,7 +3,7 @@
 
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft::ui::contract::MemoProps)]
 pub enum Icon {
     Sidebar,
     Back,

@@ -1,6 +1,6 @@
 //! The top bar: sidebar toggle, back/forward, search, filter, and the right-hand icons.
 
-use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Rect, pos2, vec2};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -13,6 +13,12 @@ use crate::widgets::{icon_button, register};
 fn window_handle(ui: &mut egui::Ui, bar: Rect) {
     register(ui, "region:titlebar", bar);
     let resp = craft_window::title_bar::empty_area(ui, bar);
+    // A floating dock panel lying over the bar takes the press there, so the window may not move from under it (the
+    // empty area asks egui's layers, which do not hold the framework's floating windows).
+    if ui.ctx().pointer_hover_pos().is_some_and(|p| bar.contains(p) && crate::docking::floating_window_at(ui.ctx(), p)) {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("title_bar_window_movable"), (pass, false)));
+    }
     crate::widgets::announce(&resp, crate::i18n::tr("Title bar"));
 }
 
@@ -92,40 +98,37 @@ fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
     });
 }
 
-/// The centred search field with its placeholder and focus ring.
-fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect) {
-    // search field (centred on the window)
-    let id = crate::text_field::id("field:search");
+/// The centred search field: the framework's search field (glyph, placeholder, clear part, focus ring).
+/// The library filters as the text changes.
+fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rect) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
     if std::mem::take(&mut app.ui.focus_search) {
-        ui.memory_mut(|m| m.request_focus(id));
+        crate::text_field::focus(ui.ctx(), "field:search");
     }
-    let focused = ui.memory(|m| m.has_focus(id));
-    ui.painter().rect(
-        sr,
-        4.0,
-        if focused { t.canvas } else { t.field },
-        Stroke::new(1.0, if focused { t.accent } else { t.field_border }),
-        StrokeKind::Inside,
-    );
-    let mut child =
-        ui.new_child(egui::UiBuilder::new().max_rect(sr.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    let empty = app.ui.search.is_empty();
-    if empty && !focused {
-        let g = child.painter().layout_no_wrap(crate::i18n::tr("Search Photos").into(), t.font(13.5), t.text_dim);
-        let w = g.size().x + 24.0;
-        let x0 = sr.center().x - w / 2.0;
-        paint(child.painter(), Rect::from_min_size(pos2(x0, sr.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
-        child.painter().galley(pos2(x0 + 24.0, sr.center().y - g.size().y / 2.0), g, t.text_dim);
+    let before = app.ui.search.clone();
+    let carrying = app.ui.dragging_photos.is_some() && ui.input(|i| i.pointer.primary_down());
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, crate::text_field::id("field:search").with("inspect"), |ui| {
+        let mut field = craft::ui::text::TextField::search(crate::i18n::tr("Search Photos"), Bind::bound(&mut app.ui.search))
+            .id(crate::text_field::id("field:search"))
+            .placeholder(crate::i18n::tr("Search Photos"))
+            .limit(None);
+        // A right-click while photos are carried (the primary button held) opens no Cut / Copy / Paste menu: the
+        // field's own menu is asked for and none is given.
+        if carrying {
+            field = field.own_context_menu();
+        }
+        field.show_at(ui, sr)
+    });
+    crate::text_field::register_field(ui, "field:search", &shown.response, record.as_deref());
+    // Escape (which clears the text) and Return leave the field, so the next key is a shortcut again. An Escape in the
+    // empty field is one the field leaves untaken (it goes on to the host): it lets go of the field too, and does
+    // nothing else.
+    let field = crate::text_field::id("field:search");
+    let left_escape = !shown.escaped && crate::shortcuts::take_focused_cancel(ui.ctx(), |rec| rec.stop.id == field || rec.stop.root == field);
+    if shown.escaped || shown.submitted || left_escape {
+        crate::text_field::blur(ui.ctx(), "field:search");
     }
-    let resp = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
-        .label(crate::i18n::tr("Search Photos"))
-        .frame(false)
-        .width(sr.width() - 20.0)
-        .font(t.font(13.5))
-        .text_color(t.text)
-        .show(&mut child)
-        .response;
-    if resp.changed() {
+    if app.ui.search != before {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));
     }
@@ -135,37 +138,75 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect
 fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect) {
     // filter icon right of the search field
     let fr = Rect::from_center_size(pos2(sr.right() + 22.0, sr.center().y), vec2(28.0, 28.0));
-    let fresp = ui.interact(fr, egui::Id::unique("filter-btn"), Sense::click());
-    crate::widgets::announce(&fresp, crate::i18n::tr("Filters"));
-    register(ui, "icon:filter", fr);
     let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
-    paint(
-        ui.painter(),
-        fr.shrink(6.0),
-        Icon::Filter,
-        if filtering {
-            t.accent
-        } else if fresp.hovered() {
-            t.text
-        } else {
-            t.icon
-        },
-    );
     // badge: how many filters are on, even with the filter bar closed
     let active = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog).len();
-    if active > 0 {
+    let tip = if active > 0 {
+        crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
+    } else {
+        crate::i18n::tr("Filter bar").into()
+    };
+    let accent = if filtering { Some(t.accent) } else { None };
+    let (fresp, live) =
+        bar_icon(ui, fr, ("top", "filter"), "icon:filter", Icon::Filter, 16, accent.unwrap_or(t.icon), accent.unwrap_or(t.text), &tip);
+    if live && active > 0 {
         let c = fr.right_top() + vec2(-3.0, 8.0);
         ui.painter().circle_filled(c, 7.0, t.accent);
         ui.painter().text(c, Align2::CENTER_CENTER, active.to_string(), t.semibold(9.5), t.canvas);
     }
-    let fresp = fresp.on_hover_text(if active > 0 {
-        crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
-    } else {
-        crate::i18n::tr("Filter bar").into()
-    });
-    if fresp.clicked() {
+    if fresp.is_some_and(|r| craft::ui::contract::clicked(&r)) {
         let _ = app.run("view.filterBar", json!({}));
     }
+}
+
+/// A top-bar icon on the framework's icon button: LightCraft's own vector artwork inside the SDK's face, so sensing,
+/// keyboard activation, focus ring and accessibility come from the framework. `rest` and `hover` are the ink colours.
+/// Returns the response (`None` while only measuring) and whether the pass is a live one.
+#[allow(clippy::too_many_arguments)]
+fn bar_icon(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id: (&str, &str),
+    automation: &str,
+    icon: Icon,
+    side: u8,
+    rest: egui::Color32,
+    hover: egui::Color32,
+    tip: &str,
+) -> (Option<egui::Response>, bool) {
+    use craft::ui::buttons::IconButton;
+    use craft::ui::contract::{Props as _, Show as _};
+    use craft::ui::primitives::IconSpec;
+
+    let id = egui::Id::unique(id);
+    let tip = crate::i18n::tr(tip);
+    let (label, hint) = split_key_hint(tip);
+    // egui resolves hover from the prior pass's geometry before drawing this pass.
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    let glyph = BarGlyph { icon, ink: if hovered { hover } else { rest }, side };
+    let mut button = IconButton::new(IconSpec::glyph(&glyph)).id(id).label(label.to_owned());
+    if !tip.is_empty() {
+        button = button.tooltip(tip.to_owned());
+    }
+    if let Some(hint) = hint {
+        button = button.description(hint.to_owned());
+    }
+    let shown = button.show_at(ui, rect);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return (None, false);
+    }
+    crate::widgets::register_response(automation, rect, &shown.response);
+    (Some(shown.response), true)
+}
+
+/// A tooltip that ends in its key hint ("Import Photos… (⌘⇧I)") is a label and a hint; the label is the accessible
+/// name and the hint its description. The Japanese and Traditional Chinese catalogs use full-width brackets.
+fn split_key_hint(tip: &str) -> (&str, Option<&str>) {
+    let split =
+        tip.strip_suffix(')').and_then(|body| body.rsplit_once(" (")).or_else(|| tip.strip_suffix('）').and_then(|body| body.rsplit_once('（')));
+    let Some((label, hint)) = split else { return (tip, None) };
+    let label = label.trim_end();
+    if label.is_empty() || hint.is_empty() { (tip, None) } else { (label, Some(hint)) }
 }
 
 /// The right-side action icons; returns the x where the next icon would go.
@@ -194,28 +235,16 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
             continue;
         }
         let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
-        let tip = crate::i18n::tr(tip);
-        let resp = ui.interact(r, egui::Id::unique(("top", id)), Sense::click());
-        let name = crate::widgets::accessible_label(&resp, tip);
-        let resp = resp.on_hover_text(tip);
-        crate::widgets::announce(&resp, name);
-        register(ui, format!("icon:{id}"), r);
-        let colour = if warn {
-            t.caution
-        } else if resp.hovered() {
-            t.text
-        } else {
-            t.icon
-        };
-        paint(ui.painter(), r.shrink(5.0), icon, colour);
-        if warn {
+        let (rest, hover) = if warn { (t.caution, t.caution) } else { (t.icon, t.text) };
+        let (resp, live) = bar_icon(ui, r, ("top", id), &format!("icon:{id}"), icon, 18, rest, hover, tip);
+        if live && warn {
             let c = r.right_top() + vec2(-5.0, 6.0);
             ui.painter().circle_filled(c, 6.0, t.reject);
             ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
             register(ui, "indicator:unsaved", r);
         }
         // a refusal says why (Import while a Lightroom catalog is coming in)
-        if resp.clicked()
+        if resp.is_some_and(|resp| craft::ui::contract::clicked(&resp))
             && !cmd.is_empty()
             && let Err(e) = app.run(cmd, json!({}))
         {
@@ -226,41 +255,103 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
     x
 }
 
+/// LightCraft's original vector artwork at its own point size; the SDK owns the button and its focus ring.
+#[derive(craft::ui::contract::MemoProps)]
+struct BarGlyph {
+    icon: Icon,
+    ink: egui::Color32,
+    side: u8,
+}
+
+impl craft::ui::primitives::Glyph for BarGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, _: egui::Color32, _: bool) {
+        paint(painter, Rect::from_center_size(rect.center(), vec2(f32::from(self.side), f32::from(self.side))), self.icon, self.ink);
+    }
+}
+
 /// The appearance icon at `x`, with its theme-favourites menu.
 fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rect, x: f32) {
-    // Appearance Mode: a click steps Auto → Light → Dark → Auto; the icon shows the mode
+    use craft::ui::buttons::IconButton;
+    use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+    use craft::ui::menu::{Menu, MenuItem};
+    use craft::ui::primitives::IconSpec;
+
     let (icon, mode) = appearance_icon(app.ui.settings.appearance_mode);
     let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+    let id = egui::Id::unique(("top", "appearance"));
     let tip = format!("{}: {}", crate::i18n::tr("Appearance Mode"), crate::i18n::tr(mode));
-    let resp = ui.interact(r, egui::Id::unique(("top", "appearance")), Sense::click()).on_hover_text(tip.clone());
-    crate::widgets::announce(&resp, tip.clone());
-    register(ui, "icon:appearance", r);
-    paint(ui.painter(), r.shrink(5.0), icon, if resp.hovered() { t.text } else { t.icon });
-    if resp.clicked() {
+    // egui resolves hover from the prior pass's geometry before drawing this pass.
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    let glyph = BarGlyph { icon, ink: if hovered { t.text } else { t.icon }, side: 18 };
+    let anchor = IconButton::new(IconSpec::glyph(&glyph)).id(id).label(tip.clone()).tooltip(tip).show_at(ui, r);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    let resp = &anchor.response;
+    crate::widgets::register_response("icon:appearance", r, resp);
+    // SDK primary activation includes keyboard and accessibility. Its rewritten CLICKED flag
+    // is not egui's secondary-click flag. Read the *same* registered widget for that verdict;
+    // this does not create another hit target or consume/replay an event.
+    let secondary = ui.ctx().read_response(id).is_some_and(|raw| raw.enabled() && raw.secondary_clicked());
+    let primary = anchor.clicked();
+    if primary {
         let _ = app.run("view.appearance", json!({}));
     }
-    crate::widgets::context_menu(&resp, |ui| {
-        let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
-        register(ui, "menu:appearanceSettings", settings.rect);
-        if settings.clicked() {
-            let _ = app.run("app.settings", json!({"tab": "interface"}));
-            ui.close();
-        }
-        let favorites = app.ui.settings.favorite_themes.clone();
-        for dark in [false, true] {
-            let group: Vec<_> =
-                crate::theme::ThemeKind::ALL.iter().filter(|k| k.is_dark() == dark && favorites.iter().any(|id| id == k.id())).collect();
-            if !group.is_empty() {
-                ui.separator();
-            }
-            for kind in group {
-                let r = ui.selectable_label(app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind, crate::i18n::tr(kind.label()));
-                register(ui, format!("menu:themeFavorite-{}", kind.id()), r.rect);
-                if r.clicked() {
-                    let _ = app.run("view.theme", json!({"theme": kind.id()}));
-                    ui.close();
+    let enabled = ui.is_enabled();
+    let key = resp.id.with("appearance-menu-open");
+    let mut open = ui.ctx().data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+    // Only a click won by the icon may open the menu, not an arbitrary release over it.
+    // The menu and its opener now share the SDK focus registry.
+    if secondary && crate::widgets::carrying(ui.ctx()) {
+        return;
+    }
+    if secondary && enabled {
+        open = true;
+    } else if primary {
+        open = false;
+    }
+    let shown = Menu::context(crate::i18n::tr("Appearance Mode").to_owned(), resp).id_salt("appearance-context").open(Bind::bound(&mut open)).show(
+        ui,
+        |ui, _| {
+            let live = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+            let row = MenuItem::new(crate::i18n::tr("Appearance Settings…").to_owned()).id_salt("menu:appearanceSettings").enabled(enabled).show(ui);
+            if live {
+                crate::widgets::register_response("menu:appearanceSettings", row.response.rect, &row.response);
+                if row.ran {
+                    let _ = app.run("app.settings", json!({"tab": "interface"}));
                 }
             }
+            let favorites = &app.ui.settings.favorite_themes;
+            let selected = app.ui.settings.theme(app.system_theme(ui.ctx()));
+            let mut choice = None;
+            for dark in [false, true] {
+                let mut first = true;
+                for kind in crate::theme::ThemeKind::ALL.iter().filter(|kind| kind.is_dark() == dark && favorites.iter().any(|id| id == kind.id())) {
+                    if first {
+                        craft::ui::display::Divider::horizontal().show(ui);
+                        first = false;
+                    }
+                    let id = format!("menu:themeFavorite-{}", kind.id());
+                    let row =
+                        MenuItem::new(crate::i18n::tr(kind.label()).to_owned()).id_salt(kind.id()).check(selected == *kind).enabled(enabled).show(ui);
+                    if live {
+                        crate::widgets::register_response(id, row.response.rect, &row.response);
+                        if row.ran {
+                            choice = Some(kind.id());
+                        }
+                    }
+                }
+            }
+            if let Some(theme) = choice {
+                let _ = app.run("view.theme", json!({"theme": theme}));
+            }
+        },
+    );
+    ui.ctx().data_mut(|data| {
+        if open && shown.output.closed.is_none() {
+            data.insert_temp(key, true);
+        } else {
+            data.remove::<bool>(key);
         }
     });
 }
@@ -287,3 +378,7 @@ fn unsaved_tip(n: usize, e: &str) -> String {
         n = n
     )
 }
+
+#[cfg(test)]
+#[path = "appearance_settings_menu_port_tests.rs"]
+mod appearance_settings_menu_port_tests;

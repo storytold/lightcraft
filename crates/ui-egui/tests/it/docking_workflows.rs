@@ -1,5 +1,5 @@
 //! Real library/tool panel moves preserve the selected tool and saved arrangement.
-use craft_ui::docking::{DockArea, Hit, Node, Side};
+use craft::behavior::dock::{DockEdge, Node};
 use egui::{Event, Modifiers, PointerButton, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use lightcraft_ui_egui::{LightcraftApp, Services, UiState, docking::Panel, state::RightPanel};
@@ -16,13 +16,18 @@ fn harness(state: Option<UiState>, width: f32, scale: f32) -> Harness<'static, L
         app.ui.left_panel = true;
         app.ui.right = RightPanel::Edit;
     }
-    let mut h = Harness::builder().with_size(vec2(width, 900.0)).with_pixels_per_point(scale).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = Harness::builder()
+        .with_size(vec2(width, 900.0))
+        .with_pixels_per_point(scale)
+        // the framework runtime (docking, keys, AccessKit) installs before the first pass, as the app's host does
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(8);
     h
 }
@@ -70,20 +75,21 @@ fn real_drag_float_close_reopen_and_state_reload_keep_photo_tool_mode() {
     let source = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools").rect().center();
     let target = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Library").rect().center();
     drag(&mut h, source, target);
-    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout.location(&Panel::Tools).unwrap().anchor, Some(Panel::Library));
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout().location(&Panel::Tools).unwrap().anchor, Some(Panel::Library));
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools").click_button(PointerButton::Secondary);
     h.run_steps(3);
-    h.get_by_label("Float panel").click();
+    // The framework dock's group menu: "Float" and "Close" rows.
+    h.get_by_role_and_label(egui::accesskit::Role::MenuItem, "Float").click();
     h.run_steps(5);
-    let rect = h.state().ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect;
+    let rect = h.state().ui.docking.as_ref().unwrap().layout().floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect;
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools").click_button(PointerButton::Secondary);
     h.run_steps(3);
-    h.get_by_label("Close panel").click();
+    h.get_by_role_and_label(egui::accesskit::Role::MenuItem, "Close").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.right, RightPanel::None);
     h.state_mut().ui.right = RightPanel::Crop;
     h.run_steps(4);
-    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect, rect);
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout().floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect, rect);
     let saved = serde_json::to_string(&h.state().ui).unwrap();
     let expected = serde_json::to_value(&h.state().ui.docking).unwrap();
     let mut reloaded = harness(Some(serde_json::from_str(&saved).unwrap()), 1400.0, 1.0);
@@ -105,9 +111,12 @@ fn dragging_a_group_by_its_bar_moves_the_whole_group() {
     h.run_steps(4);
     h.state_mut().run("ui.dock", json!({"operation":"move","panel":"presets","target":"tools","zone":"center"})).unwrap();
     h.run_steps(6);
-    let bar = DockArea::<Panel>::hit_rects(&h.ctx, egui::Id::unique("lightcraft-docking"))
-        .into_iter()
-        .find_map(|(hit, rect)| matches!(hit, Hit::DragBar(Panel::Tools | Panel::Presets)).then_some(rect))
+    // The framework names each group's drag bar "Move tab group"; the Tools and Presets group is the
+    // one in the end dock, furthest from the window's start edge.
+    let bar = h
+        .query_all_by_label("Move tab group")
+        .map(|node| node.rect())
+        .max_by(|a, b| a.center().x.total_cmp(&b.center().x))
         .expect("the Tools and Presets group draws its drag bar");
     let target = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Library").rect().center();
     drag(&mut h, bar.center(), target);
@@ -119,12 +128,12 @@ fn dragging_a_group_by_its_bar_moves_the_whole_group() {
 
 /// The start dock's columns from the window edge inwards, each as its groups' panels.
 fn start_dock(h: &Harness<'_, LightcraftApp>) -> Vec<Vec<Vec<Panel>>> {
-    let layout = &h.state().ui.docking.as_ref().unwrap().layout;
+    let layout = h.state().ui.docking.as_ref().unwrap().layout();
     let mut nodes: Vec<_> = layout.root.iter().collect();
     while let Some(node) = nodes.pop() {
         match node {
             Node::Split { first, second, .. } => nodes.extend([&**first, &**second]),
-            Node::Dock { side: Side::Start, columns } => {
+            Node::Dock { side: DockEdge::Start, columns, .. } => {
                 return columns.iter().map(|column| column.groups.iter().map(|group| group.panels.clone()).collect()).collect();
             }
             _ => {}

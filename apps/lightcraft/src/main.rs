@@ -93,7 +93,13 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, Option<WindowTextures>, NightlyExit, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(LightcraftApp, PrefsWriter, Option<HostWindow>, NightlyExit, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+
+/// Host ownership, not a Context retained by its own plugin; the legacy `None` constructor remains valid.
+struct HostWindow {
+    ctx: egui::Context,
+    textures: Option<WindowTextures>,
+}
 
 /// What the exit path must finish: the Nightly session record (if this window owns it) and whether
 /// the window ever showed its owner the interruption notice.
@@ -185,6 +191,7 @@ impl eframe::App for App {
         egui::Color32::from_rgb(12, 12, 12).to_normalized_gamma_f32()
     }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.0.drain_ui_completions(ctx);
         #[cfg(target_os = "macos")]
         if let Some(m) = self.4.as_mut()
             && m.update(&mut self.0, ctx)
@@ -202,20 +209,23 @@ impl eframe::App for App {
     /// Forwards the host's raw-input pass to the app's hook before egui processes it, keeping
     /// modal/prompt input barriers and queued synthetic or dropped input ahead of the panels.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.0.drain_ui_completions(ctx);
         self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
         // the GPU renderer adopted the window's device: its renders can be drawn as they are
-        if self.2.is_some()
-            && lightcraft_engine::gpu::on_window_device()
-            && let Some(t) = self.2.take()
+        if lightcraft_engine::gpu::on_window_device()
+            && let Some(t) = self.2.as_mut().and_then(|window| window.textures.take())
         {
             self.0.renderer.set_screen_textures(Box::new(t));
         }
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(window) = &self.2 {
+            self.0.drain_ui_completions(&window.ctx);
+        }
         // (a size the window was just given is remembered too)
         self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
         if let Err(e) = self.1.save(&self.0) {
@@ -565,6 +575,7 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                app.try_install_framework(&cc.egui_ctx)?;
                 // Nightly is updated by the Launcher, never by the app's own release feed.
                 if !nightly {
                     app.set_startup_update_check(true);
@@ -659,7 +670,7 @@ fn main() -> eframe::Result {
                 Ok(Box::new(App(
                     app,
                     writer,
-                    window_textures,
+                    Some(HostWindow { ctx: cc.egui_ctx.clone(), textures: window_textures }),
                     NightlyExit { session: session_state_in_callback, notice_shown: notice_shown_in_callback },
                     #[cfg(target_os = "macos")]
                     menu,
@@ -714,3 +725,34 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests;
+
+/// Source-only regression declaration: the real exit seam must drain before save/shutdown.
+#[cfg(all(test, not(target_os = "macos")))]
+#[test]
+fn native_exit_drains_the_final_owned_output_before_shutdown() {
+    if std::env::var_os("LIGHTCRAFT_TEST_COMPLETION_EXIT").is_some() {
+        let ctx = egui::Context::default();
+        let inner = LightcraftApp::new(Session::new(), Services::default());
+        inner.install_framework(&ctx);
+        let mut app = App(inner, PrefsWriter::default(), Some(HostWindow { ctx: ctx.clone(), textures: None }), NightlyExit::none());
+        for _ in 0..3 {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.0.logic(ui.ctx());
+                app.0.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        }
+        app.0.widgets.clear(); // make the last pending publication observable at the actual exit seam
+        eframe::App::on_exit(&mut app, None);
+        assert!(!app.0.widgets.is_empty(), "exit failed to take the final body snapshot");
+        return;
+    }
+    // Shutdown is process-global: isolate it just like the existing native on_exit tests.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "native_exit_drains_the_final_owned_output_before_shutdown", "--nocapture"])
+        .env("LIGHTCRAFT_TEST_COMPLETION_EXIT", "1")
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+}

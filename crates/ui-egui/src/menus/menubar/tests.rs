@@ -445,7 +445,8 @@ fn find_missing_and_locate() {
 }
 
 // Regression test for #49: the in-window menu headings (File, Edit, ...) sat only egui's default
-// 8 px apart, too close to read or aim at.
+// 8 px apart, too close to read or aim at. The framework bar's titles pad their captions on both
+// sides, so they are targets with room around the caption and no overlap.
 #[test]
 fn in_window_menu_headings_are_spaced_apart() {
     let mut a = app();
@@ -457,7 +458,10 @@ fn in_window_menu_headings_are_spaced_apart() {
     let titles: Vec<_> = ["File", "Edit", "View", "Photo", "Window", "Help"].iter().map(|t| rect(&format!("menu:{t}"))).collect();
     for pair in titles.windows(2) {
         let gap = pair[1].left() - pair[0].right();
-        assert!(gap >= 24.0 - 0.5, "headings {:?} and {:?} are only {gap} px apart", pair[0], pair[1]);
+        assert!(gap >= -0.5, "headings {:?} and {:?} overlap by {} px", pair[0], pair[1], -gap);
+    }
+    for title in &titles {
+        assert!(title.width() >= 30.0 && title.height() >= 20.0, "{title:?} is a target with room around its caption");
     }
 }
 

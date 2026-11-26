@@ -8,6 +8,9 @@
 //! size and SHA-256), installs it, starts using it and switches recognition on, with no further question. "Open
 //! page" opens the model's own page in the browser for anything else.
 
+use craft::ui::buttons::{Button, Link};
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -15,6 +18,46 @@ use crate::LightcraftApp;
 use crate::panels::settings::{check, heading, hint};
 use crate::theme::Tokens;
 use crate::widgets::register;
+
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn control_response(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+struct FaceButton {
+    response: egui::Response,
+    activated: bool,
+}
+
+impl FaceButton {
+    fn clicked(&self) -> bool {
+        self.activated
+    }
+
+    fn on_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.response = self.response.on_hover_text(text);
+        self
+    }
+}
+
+/// SDK activation stays intact through tooltip chains; the app retains its automation ids.
+fn face_button(ui: &mut egui::Ui, id: &str, label: &str, enabled: bool) -> FaceButton {
+    let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(("faces", id)).enabled(enabled).show(ui);
+    control_response(ui, id, &shown.response);
+    FaceButton { activated: !measuring(ui) && shown.clicked(), response: shown.response }
+}
+
+/// Browser dispatch belongs to Services, not a second SDK URL-opening action.
+fn face_link(ui: &mut egui::Ui, id: &str, label: &str) -> bool {
+    let shown = Link::new(crate::i18n::tr(label).to_owned()).id_salt(("faces", id)).show(ui);
+    control_response(ui, id, &shown.response);
+    !measuring(ui) && shown.clicked()
+}
 
 /// How hard the background scan may work (the engine's `faces.pump` pace), from what the user is doing: nothing new
 /// while they drag, type or scroll; one photo at a time while they are around or the window is minimized; half the
@@ -155,8 +198,7 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(crate::i18n::tr(message)).font(t.font(12.5)).color(t.text_dim));
-            let r = ui.button(crate::i18n::tr(button));
-            register(ui, "faces:setup", r.rect);
+            let r = face_button(ui, "faces:setup", button, true);
             if r.clicked() {
                 take_step(app, ui.ctx(), step);
             }
@@ -169,9 +211,7 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
     heading(ui, t, "Processor");
     let mut cpu = gpu["cpuOnly"].as_bool().unwrap_or(false);
-    let r = ui.checkbox(&mut cpu, crate::i18n::tr("Run face models on the CPU only"));
-    register(ui, "check:settings.facesCpuOnly", r.rect);
-    if r.changed() {
+    if check(ui, "settings.facesCpuOnly", &mut cpu, "Run face models on the CPU only") {
         match app.run("faces.gpu", json!({"cpuOnly": cpu})) {
             Ok(_) => app.caches.faces_epoch += 1,
             Err(e) => app.toast(ui.ctx(), e),
@@ -254,11 +294,21 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // (issue #678), so it can only be switched off, with the hint below saying what to do first
     let usable =
         list["embedder"].as_str().is_some_and(|id| list["models"].as_array().into_iter().flatten().any(|m| m["id"] == id && m["installed"] == true));
-    let r = ui
-        .add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
-        .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."));
-    register(ui, "check:settings.facesEnabled", r.rect);
-    if r.changed() {
+    let can_toggle = on || (runtime && usable);
+    let toggle =
+        Checkbox::new(Bind::given(on)).id_salt("settings.facesEnabled").label(crate::i18n::tr("Recognise faces (experimental)")).enabled(can_toggle);
+    // The SDK resolves its own disabled state; raw egui response flags need not mirror it.
+    // Use an ordinary tooltip only while disabled, without adding a disabled focus stop.
+    let toggle = if can_toggle && ui.is_enabled() { toggle } else { toggle.tooltip(crate::i18n::tr("Choose a model below (Use) to start.")) };
+    let toggle = toggle.show(ui);
+    control_response(ui, "check:settings.facesEnabled", &toggle.response);
+    if !measuring(ui)
+        && ui.is_enabled()
+        && can_toggle
+        && let Some(&next) = toggle.events.committed()
+        && next != on
+    {
+        on = next;
         match app.run("faces.enable", json!({"enabled": on})) {
             Ok(_) => app.caches.faces_epoch += 1,
             Err(e) => app.toast(ui.ctx(), e),
@@ -290,8 +340,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         let can = app.services.pick_model_file.is_some();
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Add a model file…")));
-        register(ui, "faces:addModel", r.rect);
+        let r = face_button(ui, "faces:addModel", "Add a model file…", can);
         if r.clicked() {
             let _ = app.run("dialog.faceModel", json!({}));
         }
@@ -387,15 +436,13 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    let r = ui.button(crate::i18n::tr("Remove"));
-                    register(ui, format!("faces:remove:{id}"), r.rect);
+                    let r = face_button(ui, &format!("faces:remove:{id}"), "Remove", true);
                     if r.clicked() {
                         let _ = app.run("faces.models.remove", json!({"id": id}));
                         app.caches.faces_epoch += 1;
                     }
                     if !selected && !detector {
-                        let r = ui.button("Use");
-                        register(ui, format!("faces:use:{id}"), r.rect);
+                        let r = face_button(ui, &format!("faces:use:{id}"), "Use", true);
                         if r.clicked() {
                             let _ = app.run("faces.models.select", json!({"id": id}));
                             app.caches.faces_epoch += 1;
@@ -404,8 +451,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                 } else {
                     match dl_state {
                         Some("running") => {
-                            let r = ui.button(crate::i18n::tr("Cancel"));
-                            register(ui, format!("faces:cancelDownload:{id}"), r.rect);
+                            let r = face_button(ui, &format!("faces:cancelDownload:{id}"), "Cancel", true);
                             if r.clicked() {
                                 let _ = app.run("faces.models.downloadCancel", json!({"id": id}));
                                 app.caches.faces_dl_watch.retain(|w| w != &id);
@@ -415,10 +461,9 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         Some("done") => {}
                         _ => {
                             if let Some(url) = m["source"].as_str() {
-                                let r = ui.button(crate::i18n::tr("Open page")).on_hover_text(crate::i18n::tr(
+                                let r = face_button(ui, &format!("faces:get:{id}"), "Open page", true).on_hover_text(crate::i18n::tr(
                                     "Opens the model's own page in your browser, to read about it or get the file yourself.",
                                 ));
-                                register(ui, format!("faces:get:{id}"), r.rect);
                                 if r.clicked() {
                                     open_page(app, url);
                                 }
@@ -430,8 +475,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                     mb(m["sizeBytes"].as_u64()),
                                     if detector { "" } else { ", starts using it" }
                                 );
-                                let r = ui.button(label).on_hover_text(tip);
-                                register(ui, format!("faces:download:{id}"), r.rect);
+                                let r = face_button(ui, &format!("faces:download:{id}"), label, true).on_hover_text(tip);
                                 if r.clicked() {
                                     open_download_dialog(app, m);
                                 }
@@ -503,12 +547,10 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
             ui.add(egui::Label::new(RichText::new(format!("•  {a}")).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
     }
-    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
-        let r = ui.link("Open the model's page");
-        register(ui, "faceModel:page", r.rect);
-        if r.clicked() {
-            open_page(app, url);
-        }
+    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str())
+        && face_link(ui, "faceModel:page", "Open the model's page")
+    {
+        open_page(app, url);
     }
     ui.add_space(4.0);
     check(ui, "faceModel.accept", accepted, "I have read these terms and accept them for my own use");
@@ -646,19 +688,34 @@ pub fn name_editor(
 ) -> Editor {
     let t = Tokens::get(ctx);
     let mut outcome = Editor::Open;
+    // The field let go of the keyboard with no ending of its own (see below).
+    let mut let_go = false;
     let opening = edit.fresh;
     let shown = egui::Area::new(egui::Id::unique("face-name-editor")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(230.0);
-            let r = ui.add(egui::TextEdit::singleline(&mut edit.text).hint_text("Name").desired_width(220.0));
-            register(ui, "field:faceName", r.rect);
-            if edit.fresh {
-                r.request_focus();
-                edit.fresh = false;
+            // the app's own field: it reads how the edit ended (Return, Esc, or the focus going elsewhere)
+            let was_editing = crate::text_field::was_editing(ui.ctx(), "field:faceName");
+            let r = crate::text_field::TextField::singleline("field:faceName", &mut edit.text)
+                .hint(crate::i18n::tr("Name"))
+                .width(220.0)
+                .begin_edit(edit.fresh)
+                .show(ui);
+            if !measuring(ui) {
+                if edit.fresh && r.editing {
+                    edit.fresh = false;
+                }
+                match r.ending {
+                    Some(crate::text_field::Ending::Return) => outcome = Editor::Submit(edit.text.trim().to_string()),
+                    Some(crate::text_field::Ending::Escape) => outcome = Editor::Cancel,
+                    // Esc with nothing typed has no edit to cancel: the field just lets go of the keyboard
+                    // with no ending (a click or Tab away reports its own ending), so a box that was being
+                    // edited a pass ago and is not now has been dismissed.
+                    None if was_editing && !r.editing && !edit.fresh => let_go = true,
+                    _ => {}
+                }
             }
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                outcome = Editor::Submit(edit.text.trim().to_string());
-            }
+
             let typed = edit.text.trim().to_lowercase();
             let mut offered: Vec<(String, Option<f32>)> = candidates.iter().take(3).map(|(n, s)| (n.clone(), Some(*s))).collect();
             if !typed.is_empty() {
@@ -676,23 +733,44 @@ pub fn name_editor(
                     Some(s) => format!("{name}   {:.0}%", (s * 100.0).max(0.0)),
                     None => name.clone(),
                 };
-                let b = ui.add(egui::Button::new(RichText::new(label).color(t.text_label)).frame(false).min_size(egui::vec2(220.0, 0.0)));
-                register(ui, format!("faceName:pick:{name}"), b.rect);
-                if b.clicked() {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
+                let b = Button::new(label).id_salt(("face-name-pick", &name)).variant(craft::theme::Variant::GHOST).show_at(ui, rect);
+                control_response(ui, format!("faceName:pick:{name}"), &b.response);
+                if !measuring(ui) && b.clicked() {
                     outcome = Editor::Submit(name);
                 }
             }
             if let Some(label) = setup.short() {
-                let b = ui.add(egui::Button::new(RichText::new(crate::i18n::tr(label)).font(t.font(12.0)).color(t.accent)).frame(false));
-                register(ui, "faces:setup", b.rect);
-                if b.clicked() {
+                let b = Link::new(crate::i18n::tr(label).to_owned()).id_salt("face-name-setup").show(ui);
+                control_response(ui, "faces:setup", &b.response);
+                if !measuring(ui) && b.clicked() {
                     outcome = Editor::Setup;
                 }
             }
             ui.label(RichText::new(crate::i18n::tr("Enter to confirm, Esc to cancel")).font(t.font(11.0)).color(t.text_dim));
         });
     });
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // A press on the box's own buttons (the offer to set recognition up, a suggestion) takes the keyboard from the field
+    // first: that is not a dismissal, the button's release follows.
+    let pressed_inside = ctx.input(|i| i.pointer.primary_down() && i.pointer.interact_pos().is_some_and(|p| shown.response.rect.contains(p)));
+    if let_go && !pressed_inside && matches!(outcome, Editor::Open) {
+        outcome = Editor::Cancel;
+    }
+    // Esc closes the box wherever the keyboard is, as the native box did: also once a Return has ended the field's edit
+    // (the field then reports no ending of its own) and before the field has the keyboard.
+    // A frame's later passes (the framework reruns a pass it discards) see no events: the Esc holds for its frame.
+    let escaped_in = egui::Id::unique("face-name-editor-escaped");
+    let frame = ctx.cumulative_frame_nr();
+    // (the framework's key stage turns an Escape into a Cancel and takes the key event: `escape_mods` names that one)
+    if craft::ui::runtime::keys::escape_mods(ctx).is_some()
+        || ctx.input(|i| {
+            i.key_pressed(egui::Key::Escape)
+                || i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, repeat: false, .. }))
+        })
+    {
+        ctx.data_mut(|d| d.insert_temp(escaped_in, frame));
+    }
+    if matches!(outcome, Editor::Open) && ctx.data(|d| d.get_temp::<u64>(escaped_in)) == Some(frame) {
         outcome = Editor::Cancel;
     }
     // a click anywhere else closes it (not on the frame it opened, which is the click that opened it)
@@ -819,6 +897,10 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(120));
 }
+
+#[cfg(test)]
+#[path = "faces_port110_tests.rs"]
+mod faces_port110_tests;
 
 #[cfg(test)]
 mod tests {

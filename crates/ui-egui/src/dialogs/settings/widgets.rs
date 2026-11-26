@@ -89,9 +89,22 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 
 /// A checkbox addressable as `check:{id}`; true when toggled.
 pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
-    let r = ui.checkbox(value, crate::i18n::tr(label));
-    register(ui, format!("check:{id}"), r.rect);
-    r.changed()
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+
+    let out = Checkbox::new(Bind::given(*value)).id_salt(("settings-check", id)).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    crate::widgets::register_response(format!("check:{id}"), out.response.rect, &out.response);
+    if let Some(&on) = out.events.committed()
+        && ui.is_enabled()
+        && on != *value
+    {
+        *value = on;
+        return true;
+    }
+    false
 }
 
 /// Mutually exclusive buttons (`button:{id}-{index}`).

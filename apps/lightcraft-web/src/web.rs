@@ -537,7 +537,7 @@ impl WebApp {
     /// Construct the web app from the boot options: install originals and open the library from
     /// browser storage (a read failure starts an empty session and a blocking `LibraryProblem`),
     /// load the stored UI state, start render workers and the optional benchmark.
-    fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Result<Self, String> {
         let Boot { opts, backend, files, index, lib_dir, bridge, load_error } = boot;
         let originals = Originals::default();
         let t = perf_now();
@@ -595,6 +595,7 @@ impl WebApp {
         let frozen = Rc::new(Cell::new(read_failed));
         let services = services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone(), bridge.clone());
         let mut app = LightcraftApp::new(session, services).with_chinese_font(chinese_font);
+        app.try_install_framework(&cc.egui_ctx)?;
         let ui_written = files.get("ui.json").unwrap_or_default();
         // an arrangement from an older docking version starts again from the default
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
@@ -638,7 +639,7 @@ impl WebApp {
             }
         }
         let origin = lightcraft_ui_egui::monotonic_ms();
-        WebApp {
+        Ok(WebApp {
             app,
             originals,
             files,
@@ -654,7 +655,7 @@ impl WebApp {
             last_save: 0.0,
             ui_written,
             bridge,
-        }
+        })
     }
 
     /// What the page framing LightCraft sent since the last frame: photos to add (as if dropped
@@ -1007,7 +1008,7 @@ pub fn start(chinese_font: Vec<u8>) {
         };
         let boot = boot(opts, bridge.clone()).await;
         let runner = eframe::WebRunner::new();
-        let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font))))).await;
+        let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font)?)))).await;
         match r {
             Ok(()) => {
                 if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_loading")) {

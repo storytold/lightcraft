@@ -1,6 +1,12 @@
 //! The bottom bar: view modes, sort, rating/flags pill, copy/paste settings, zoom and view toggles.
 
-use egui::{Align2, Rect, Sense, pos2, vec2};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::controls::disclosure::DisclosureGlyph;
+use craft::ui::display::Divider;
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::value_drag::Slider;
+use egui::{Rect, pos2, vec2};
 use lightcraft_catalog::Flag;
 use serde_json::json;
 
@@ -8,7 +14,7 @@ use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::state::{ViewMode, Zoom};
 use crate::theme::Tokens;
-use crate::widgets::{icon_button, register};
+use crate::widgets::icon_button;
 
 const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
@@ -41,11 +47,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             }
                         }
                         ui.add_space(10.0);
-                        let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
-                        ui.painter().rect_filled(sep, 0.0, t.button_border);
+                        // a rule of its own size: one that fills its row would take part in sizing the row
+                        let (rule, _) = ui.allocate_exact_size(vec2(1.0, 22.0), egui::Sense::hover());
+                        Divider::vertical().id_salt("view-sort-rule").show_at(ui, rule);
                         ui.add_space(10.0);
                         let sort = icon_button(ui, "sort", Icon::Sort, vec2(30.0, 30.0), false, true, "Sort");
-                        egui::Popup::menu(&sort).show(|ui| sort_menu(app, ui));
+                        let sort_enabled = ui.is_enabled();
+                        sort_menu(app, ui, &sort.response, sort_enabled);
                     } else {
                         let current_icon = VIEW_MODES.iter().find(|(_, _, mode, _)| *mode == app.ui.view).map_or(Icon::More, |(_, icon, _, _)| *icon);
                         let more = icon_button(ui, "viewOptions", current_icon, vec2(40.0, 32.0), true, true, "View");
@@ -55,21 +63,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             Icon::ChevronDown,
                             t.text,
                         );
-                        egui::Popup::menu(&more).show(|ui| {
-                            for &(id, _, mode, label) in VIEW_MODES {
-                                if ui.selectable_label(app.ui.view == mode, crate::i18n::tr(label)).clicked() {
-                                    let _ = app.run(&format!("view.{id}"), json!({}));
-                                    ui.close();
-                                }
-                            }
-                            ui.separator();
-                            crate::widgets::menu_button(ui, crate::i18n::tr("Sort"), |ui| sort_menu(app, ui));
-                            if compact_zoom && matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
-                                crate::widgets::menu_button(ui, crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100), |ui| {
-                                    click_zoom_menu(app, ui)
-                                });
-                            }
-                        });
+                        let sort_enabled = ui.is_enabled();
+                        view_menu(app, ui, &more.response, compact_zoom, sort_enabled);
                     }
                 })
                 .response
@@ -114,29 +109,55 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     pill_ui.add_space(6.0);
     let flag = active.as_ref().map(|p| p.flag).unwrap_or_default();
     for (id, icon, f) in [("unflag", Icon::Circle, Flag::None), ("pick", Icon::FlagPick, Flag::Pick), ("reject", Icon::FlagReject, Flag::Reject)] {
-        let (r, resp) = pill_ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-        crate::widgets::announce_selected(
-            &resp,
-            crate::i18n::tr(match f {
-                Flag::None => "Unflagged",
-                Flag::Pick => "Pick",
-                Flag::Reject => "Reject",
-            }),
-            flag == f,
-        );
-        register(&pill_ui, format!("flag:{id}"), r);
+        let generation = app.session.library_generation();
+        let active = app.session.active();
+        let selection = app.session.selected();
+        let culling = crate::panels::compare::culling(app);
+        let owner = egui::Id::unique(("lc-bottom-flag", id, generation, active, &selection, culling));
+        // Keep the original allocation slot; the flag's sensing belongs to the framework button.
+        let (_, rect) = pill_ui.allocate_space(vec2(22.0, 22.0));
+        let real = !pill_ui.is_sizing_pass() && !craft::ui::runtime::measure::active(pill_ui.ctx());
+        let enabled = pill_ui.is_enabled();
+        let hovered = pill_ui.ctx().read_response(owner).is_some_and(|response| response.hovered());
+        // lit while the photo carries the flag; the unflag circle never lights
         let on = flag == f && f != Flag::None;
-        let c = if on {
-            if f == Flag::Reject { t.reject } else { t.pick }
-        } else if resp.hovered() {
-            t.text
-        } else {
-            t.icon
+        let glyph = FlagGlyph {
+            // the Pick button shows the flag the photo carries: filled while it is a pick
+            icon: if on && f == Flag::Pick { Icon::FlagPickFilled } else { icon },
+            ink: if on {
+                if f == Flag::Reject { t.reject } else { t.pick }
+            } else if hovered {
+                t.text
+            } else {
+                t.icon
+            },
         };
-        // the Pick button shows the flag the photo carries: filled while it is a pick
-        let icon = if on && f == Flag::Pick { Icon::FlagPickFilled } else { icon };
-        paint(pill_ui.painter(), r.shrink(3.0), icon, c);
-        if resp.clicked() {
+        let label = crate::i18n::tr(match f {
+            Flag::None => "Unflagged",
+            Flag::Pick => "Pick",
+            Flag::Reject => "Reject",
+        });
+        // A measuring press must never arm a later real release: disable before framework sensing.
+        let shown = craft::ui::buttons::IconButton::new(craft::ui::primitives::IconSpec::glyph(&glyph))
+            .id(owner)
+            .label(label)
+            // (the unflag circle never lights: it stands for no flag, not a flag the photo carries)
+            .selected(on)
+            .enabled(real && enabled)
+            .show_at(&mut pill_ui, rect);
+        if real {
+            crate::widgets::register_response(format!("flag:{id}"), shown.response.rect, &shown.response);
+        }
+        if real
+            && enabled
+            && pill_ui.is_visible()
+            && pill_ui.clip_rect().intersects(shown.response.rect)
+            && shown.clicked()
+            && app.session.library_generation() == generation
+            && app.session.active() == active
+            && app.session.selected() == selection
+            && crate::panels::compare::culling(app) == culling
+        {
             let mut params = json!({"flag": match f { Flag::Pick => "pick", Flag::Reject => "reject", Flag::None => "none" }});
             crate::panels::compare::target_active(app, &mut params);
             let _ = app.run("photo.flag", params);
@@ -147,30 +168,95 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
         return;
     }
     let copy_r = Rect::from_min_size(pos2(pill.right() + 10.0, pill.top()), vec2(copy_width, 30.0));
-    let cresp = ui.interact(copy_r, egui::Id::unique("copy-settings"), Sense::click());
-    crate::widgets::announce(&cresp, label.to_string());
-    register(ui, "button:copySettings", copy_r);
-    ui.painter().rect_filled(copy_r, 15.0, if cresp.hovered() { t.hover } else { t.canvas });
-    ui.painter().text(copy_r.center(), Align2::CENTER_CENTER, label, t.font(13.0), if active.is_some() { t.text_label } else { t.text_disabled });
-    if cresp.clicked() && active.is_some() {
+    let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
+    settings_transfer_sdk(app, ui, &t, copy_r, gear_r, label, active.is_some());
+}
+
+// A held transfer belongs to its library, active source, ordered selection, view context,
+// clipboard contents and chosen groups. Hash the existing values, not a fabricated UI epoch.
+fn settings_transfer_owner(app: &LightcraftApp) -> egui::Id {
+    egui::Id::unique((
+        "lc-bottom-settings-transfer",
+        app.session.library_generation(),
+        app.session.active(),
+        app.session.selected(),
+        crate::panels::compare::culling(app),
+        &app.session.clipboard,
+        &app.session.copy_groups,
+    ))
+}
+
+fn settings_transfer_sdk(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, copy_r: Rect, gear_r: Rect, label: &str, can_copy: bool) {
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let enabled = ui.is_enabled();
+    let has_clip = app.session.clipboard.is_some();
+    let mut context = settings_transfer_owner(app);
+    // Disable before sensing: a measuring/sizing press must not arm an ordinary release.
+    let primary = craft::ui::buttons::Button::new(label.to_owned())
+        .id(context.with("primary"))
+        .variant(craft::theme::Variant::GHOST)
+        .enabled(real && enabled && can_copy)
+        .show_at(ui, copy_r);
+    crate::widgets::register_response("button:copySettings", primary.response.rect, &primary.response);
+    if real
+        && enabled
+        && can_copy
+        && ui.is_visible()
+        && ui.clip_rect().intersects(primary.response.rect)
+        && primary.clicked()
+        && settings_transfer_owner(app) == context
+    {
+        // Paste remains selection-wide in Compare. Do not use Pick's target_active adapter.
         let _ = if has_clip { app.run("develop.paste", json!({})) } else { app.run("develop.copy", json!({})) };
         let msg = if has_clip { "Settings pasted" } else { "Edit settings copied" };
         app.toast(ui.ctx(), crate::i18n::tr(msg));
+        context = settings_transfer_owner(app);
     }
-    let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
-    let gresp = ui.interact(gear_r, egui::Id::unique("copy-gear"), Sense::click());
-    crate::widgets::announce(&gresp, crate::i18n::tr("Copy Settings…"));
-    register(ui, "icon:copyGear", gear_r);
-    ui.painter().rect_filled(gear_r, 15.0, if gresp.hovered() { t.hover } else { t.canvas });
-    paint(ui.painter(), gear_r.shrink(7.0), Icon::Gear, t.icon);
-    if gresp.clicked() {
+    let glyph = SettingsGearGlyph { ink: t.icon };
+    let gear = craft::ui::buttons::IconButton::new(craft::ui::primitives::IconSpec::glyph(&glyph))
+        .id(context.with("gear"))
+        .label(crate::i18n::tr("Copy Settings…"))
+        // Keep the native gear's policy: it does not itself require an active photo.
+        .enabled(real && enabled)
+        .show_at(ui, gear_r);
+    crate::widgets::register_response("icon:copyGear", gear.response.rect, &gear.response);
+    if real
+        && enabled
+        && ui.is_visible()
+        && ui.clip_rect().intersects(gear.response.rect)
+        && gear.clicked()
+        && settings_transfer_owner(app) == context
+    {
         let _ = app.run("dialog.copySettings", json!({}));
+    }
+}
+
+// Only the app's existing glyph ink/geometry is local; the SDK owns all interaction.
+#[derive(craft::ui::contract::MemoProps)]
+struct SettingsGearGlyph {
+    ink: egui::Color32,
+}
+impl craft::ui::primitives::Glyph for SettingsGearGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, _: egui::Color32, _: bool) {
+        paint(painter, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::Gear, self.ink);
+    }
+}
+
+// Preserve LightCraft's flag drawings (outlined, or filled for a pick) inside the public SDK
+// IconButton. This glyph has no sensing, event handling, component state or command binding.
+#[derive(craft::ui::contract::MemoProps)]
+struct FlagGlyph {
+    icon: Icon,
+    ink: egui::Color32,
+}
+impl craft::ui::primitives::Glyph for FlagGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, _: egui::Color32, _: bool) {
+        paint(painter, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), self.icon, self.ink);
     }
 }
 
 /// The right-hand group (zoom, view toggles or thumbnail size); returns its left edge.
 fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zoom: bool) -> f32 {
-    let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(Rect::from_min_max(pos2((full.right() - 360.0).max(full.left()), full.top()), full.right_bottom()))
@@ -213,100 +299,129 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             Zoom::Fill => "Fill".to_string(),
             Zoom::Percent(p) => format!("{p:.0}%"),
         };
-        let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label);
-        egui::Popup::menu(&zr).show(|ui| {
-            for (label, z) in [
-                ("Fit", Zoom::Fit),
-                ("Fill", Zoom::Fill),
-                ("50%", Zoom::Percent(50.0)),
-                ("100%", Zoom::Percent(100.0)),
-                ("200%", Zoom::Percent(200.0)),
-                ("400%", Zoom::Percent(400.0)),
-            ] {
-                if ui.selectable_label(app.ui.zoom == z, crate::i18n::tr(label)).clicked() {
-                    app.ui.zoom = z;
-                    app.ui.pan = (0.5, 0.5);
+        let zr = dropdown_face(&mut child, "zoom", crate::i18n::tr(&zoom_label));
+        let mut zoom_pick = None;
+        if !measuring(&child) {
+            Menu::new(crate::i18n::tr("Zoom")).id_salt("zoom-menu").values().opened_by(&zr, Trigger::Click).show(&mut child, |ui, _| {
+                for (label, z) in [
+                    ("Fit", Zoom::Fit),
+                    ("Fill", Zoom::Fill),
+                    ("50%", Zoom::Percent(50.0)),
+                    ("100%", Zoom::Percent(100.0)),
+                    ("200%", Zoom::Percent(200.0)),
+                    ("400%", Zoom::Percent(400.0)),
+                ] {
+                    if value_row(ui, ("zoom", label), crate::i18n::tr(label), app.ui.zoom == z) {
+                        zoom_pick = Some(z);
+                    }
                 }
-            }
-        });
+            });
+        }
+        if let Some(z) = zoom_pick {
+            app.ui.zoom = z;
+            app.ui.pan = (0.5, 0.5);
+        }
         if !compact_zoom {
             child.add_space(6.0);
-            let cz = crate::widgets::dropdown(
-                &mut child,
-                "clickZoom",
-                &crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100),
-                t.font(13.0),
-                t.text_label,
-            );
-            egui::Popup::menu(&cz).show(|ui| click_zoom_menu(app, ui));
+            let cz = dropdown_face(&mut child, "clickZoom", &crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100));
+            let mut ratio = None;
+            Menu::new(crate::i18n::tr("Click zoom")).id_salt("click-zoom-menu").values().opened_by(&cz, Trigger::Click).show(&mut child, |ui, _| {
+                ratio = click_zoom_rows(app.ui.click_zoom, ui);
+            });
+            if let Some(ratio) = ratio {
+                let _ = app.run("view.clickZoom", json!({"ratio": ratio}));
+            }
         }
     } else {
         // thumbnail size slider
-        let (r, resp) = child.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
         let (min, max) = (crate::state::THUMB_SIZE_MIN, crate::state::THUMB_SIZE_MAX);
-        // screen readers: a slider with its value and range, which Increment / Decrement (VoiceOver's
-        // Ctrl-Option-Up / Down) and the arrow keys move one step, as the Edit panel's sliders do
-        resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(app.ui.thumb_size), crate::i18n::tr("Thumbnail size")));
-        child.ctx().accesskit_node_builder(resp.id, |node| {
-            node.set_min_numeric_value(f64::from(min));
-            node.set_max_numeric_value(f64::from(max));
-            node.set_numeric_value_step(f64::from(crate::state::THUMB_SIZE_STEP));
-            node.add_action(egui::accesskit::Action::Increment);
-            node.add_action(egui::accesskit::Action::Decrement);
-        });
-        register(&child, "slider:thumbSize", r);
-        let (inc, dec) = crate::widgets::accessibility_nudge(&child, &resp);
-        let (up, down) = if resp.has_focus() {
-            // ↑ and ↓ step the size instead of moving the focus to the thumbnail above
-            child.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
-            let keys = child.input_mut(|i| {
-                (i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp), i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown))
-            });
-            if keys.0 || keys.1 {
-                // egui picked the neighbour to focus from this same key before the lock above could apply (the
-                // first arrow after Tab): cancel that move
-                child.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        let (rect, _) = child.allocate_exact_size(vec2(110.0, 20.0), egui::Sense::hover());
+        let mut size = f64::from(app.ui.thumb_size);
+        // The framework slider is the screen readers' slider with its value and range, which Increment /
+        // Decrement and the arrow keys move one step.
+        let shown = Slider::new(Bind::bound(&mut size), f64::from(min)..=f64::from(max))
+            .id_salt("thumb-size")
+            .label(crate::i18n::tr("Thumbnail size"))
+            // a key or a screen reader's nudge moves one step from the current size, not to a grid anchored at the minimum
+            .key_policy(craft::ui::runtime::keys::ScalarKeyPolicy::new(f64::from(crate::state::THUMB_SIZE_STEP)))
+            .wheel_step(f64::from(crate::state::THUMB_SIZE_STEP))
+            .show_at(&mut child, rect);
+        if !measuring(&child) {
+            crate::widgets::register_response("slider:thumbSize", rect, &shown.response);
+            if child.is_enabled() && size as f32 != app.ui.thumb_size {
+                app.ui.thumb_size = (size as f32).clamp(min, max);
             }
-            keys
-        } else {
-            (false, false)
-        };
-        if inc || up {
-            app.ui.thumb_size = (app.ui.thumb_size + crate::state::THUMB_SIZE_STEP).min(max);
-        } else if dec || down {
-            app.ui.thumb_size = (app.ui.thumb_size - crate::state::THUMB_SIZE_STEP).max(min);
-        }
-        let p = child.painter();
-        let y = r.center().y;
-        p.line_segment([pos2(r.left(), y), pos2(r.right(), y)], egui::Stroke::new(2.0, t.track));
-        if resp.has_focus() {
-            crate::widgets::focus_ring(p, r, &t);
-        }
-        let f = (app.ui.thumb_size - min) / (max - min);
-        let x = r.left() + f * r.width();
-        p.rect_filled(Rect::from_center_size(pos2(x, y), vec2(3.0, 14.0)), 1.0, t.thumb_hover);
-        if let Some(pp) = resp.interact_pointer_pos()
-            && (resp.dragged() || resp.clicked())
-        {
-            app.ui.thumb_size = min + ((pp.x - r.left()) / r.width()).clamp(0.0, 1.0) * (max - min);
         }
     }
     if child.min_rect().width() > 0.0 { child.min_rect().left() } else { full.right() }
 }
 
-fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    for pct in crate::state::CLICK_ZOOMS {
-        if ui.selectable_label(app.ui.click_zoom == pct, format!("{}:1", pct / 100)).clicked() {
-            let _ = app.run("view.clickZoom", json!({"ratio": pct / 100}));
-        }
-    }
+/// Whether this pass draws nothing the user can reach: a sizing or measuring run publishes no
+/// automation names and runs no command.
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
 }
 
-fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+/// A dropdown face: the framework push button showing `text` and the menu chevron, published as
+/// `dropdown:<id>`. The caller hangs a framework menu from the returned response.
+fn dropdown_face(ui: &mut egui::Ui, id: &str, text: &str) -> egui::Response {
+    let mut button = Button::new(text.to_owned())
+        .id_salt(("bottom-dropdown", id))
+        .variant(craft::theme::Variant::GHOST)
+        // small, so the zoom group is as narrow as main's and the centre keeps its Copy Edit Settings beside Presets
+        .size(craft::theme::ControlSize::Sm)
+        .trailing_icon(DisclosureGlyph::dropdown());
+    // The face takes the room it measures and is shown there. Shown in the flow, a framework body that measures the
+    // shell's window first does not find it in what it kept, and asks for another pass every frame.
+    // (measured as a measuring run: a measure in a real run is checked against the body's kept transcript, which holds
+    // no face of ours)
+    let ctx = ui.ctx().clone();
+    let size = craft::ui::runtime::measure::run(&ctx, || button.measure_in(ui, craft::behavior::Proposal::Ideal));
+    let (_, room) = ui.allocate_space(size);
+    let shown = button.show_at(ui, room);
+    if !measuring(ui) {
+        crate::widgets::register_response(format!("dropdown:{id}"), shown.response.rect, &shown.response);
+    }
+    shown.response
+}
+
+/// One row of a value menu: radio-marked while `checked`, the lead when the menu opens. True when the row ran.
+fn value_row(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, caption: &str, checked: bool) -> bool {
+    let row = MenuItem::new(caption.replace('&', "&&")).id_salt(salt).entry_checked(checked);
+    let row = if checked { row.default_stop() } else { row };
+    let out = row.show(ui);
+    !measuring(ui) && out.ran
+}
+
+/// The click-zoom ratios as value rows; the command that sets the one that ran.
+fn click_zoom_rows(current: u32, ui: &mut egui::Ui) -> Option<serde_json::Value> {
+    let mut ran = None;
+    for pct in crate::state::CLICK_ZOOMS {
+        if value_row(ui, ("click-zoom", pct), &format!("{}:1", pct / 100), current == pct) {
+            ran = Some(json!({"ratio": pct / 100}));
+        }
+    }
+    ran
+}
+
+/// One checked sort option in the Sort menu. The framework owns its focus and hit target.
+fn sort_choice(ui: &mut egui::Ui, id: &str, label: &str, checked: bool, enabled: bool) -> bool {
+    let measuring = measuring(ui);
+    let row = MenuItem::new(crate::i18n::tr(label).replace('&', "&&")).id_salt(id).entry_checked(checked).enabled(enabled && !measuring).show(ui);
+    if measuring {
+        return false;
+    }
+    crate::widgets::register_response(id, row.response.rect, &row.response);
+    enabled && row.ran
+}
+
+/// The rows of the Sort menu: what to sort by, direction and date groups. The row that ran is
+/// left in `pick` for the caller to dispatch once the menu is drawn.
+fn sort_rows(app: &LightcraftApp, ui: &mut egui::Ui, enabled: bool, pick: &mut Option<(&'static str, serde_json::Value)>) {
     use lightcraft_catalog::GroupBy;
     use lightcraft_catalog::SortKey::*;
     let cur = app.session.sort;
-    ui.label(egui::RichText::new(crate::i18n::tr("Sort by")).weak());
+    MenuItem::heading(crate::i18n::tr("Sort by")).show(ui);
     for (label, key, k) in [
         ("Capture Date", CaptureDate, "captureDate"),
         ("Import Date", ImportDate, "importDate"),
@@ -316,33 +431,36 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("File Size", FileSize, "fileSize"),
         ("Random", Random, "random"),
     ] {
-        if ui.selectable_label(cur.key == key, crate::i18n::tr(label)).clicked() {
-            let _ = app.run("library.sort", json!({"key": k}));
+        if sort_choice(ui, &format!("sort:key:{k}"), label, cur.key == key, enabled) {
+            *pick = Some(("library.sort", json!({"key": k})));
         }
     }
-    if cur.key == Random && ui.button(crate::i18n::tr("Reshuffle")).clicked() {
-        let _ = app.run("library.shuffle", json!({}));
+    if cur.key == Random {
+        let row = MenuItem::new(crate::i18n::tr("Reshuffle")).id_salt("sort-reshuffle").enabled(enabled).show(ui);
+        if !measuring(ui) && enabled && row.ran {
+            *pick = Some(("library.shuffle", json!({})));
+        }
     }
     // a view that holds its photos shows what matches now when asked to
     if app.session.hold_view {
-        let r = ui.button(crate::i18n::tr("Refresh View"));
-        crate::widgets::register(ui, "button:refreshView", r.rect);
-        if r.clicked() {
-            let _ = app.run("library.refresh", json!({}));
+        let row = MenuItem::new(crate::i18n::tr("Refresh View")).id_salt("sort-refresh-view").enabled(enabled).show(ui);
+        if !measuring(ui) {
+            crate::widgets::register_response("button:refreshView", row.response.rect, &row.response);
+            if enabled && row.ran {
+                *pick = Some(("library.refresh", json!({})));
+            }
         }
     }
-    ui.separator();
+    Divider::horizontal().show(ui);
     // a shuffle has no direction worth choosing
-    ui.add_enabled_ui(cur.key != Random, |ui| {
-        if ui.selectable_label(cur.key != Random && cur.ascending, crate::i18n::tr("Ascending")).clicked() {
-            let _ = app.run("library.sort", json!({"ascending": true}));
-        }
-        if ui.selectable_label(cur.key != Random && !cur.ascending, crate::i18n::tr("Descending")).clicked() {
-            let _ = app.run("library.sort", json!({"ascending": false}));
-        }
-    });
-    ui.separator();
-    ui.label(egui::RichText::new(crate::i18n::tr("Group by date")).weak());
+    if sort_choice(ui, "sort:ascending", "Ascending", cur.key != Random && cur.ascending, enabled && cur.key != Random) {
+        *pick = Some(("library.sort", json!({"ascending": true})));
+    }
+    if sort_choice(ui, "sort:descending", "Descending", cur.key != Random && !cur.ascending, enabled && cur.key != Random) {
+        *pick = Some(("library.sort", json!({"ascending": false})));
+    }
+    Divider::horizontal().show(ui);
+    MenuItem::heading(crate::i18n::tr("Group by date")).show(ui);
     for (label, g, k) in [
         ("Automatic", GroupBy::Auto, "auto"),
         ("Day", GroupBy::Day, "day"),
@@ -350,9 +468,59 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("Year", GroupBy::Year, "year"),
         ("None", GroupBy::None, "none"),
     ] {
-        if ui.selectable_label(cur.group == g, crate::i18n::tr(label)).clicked() {
-            let _ = app.run("library.sort", json!({"group": k}));
+        if sort_choice(ui, &format!("sort:group:{k}"), label, cur.group == g, enabled) {
+            *pick = Some(("library.sort", json!({"group": k})));
         }
+    }
+}
+
+/// The Sort menu hanging from the Sort button `opener`.
+fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, opener: &egui::Response, enabled: bool) {
+    // A measuring or sizing run shows no layer: its rows would claim the menu's ids a second time in the pass.
+    if measuring(ui) {
+        return;
+    }
+    let mut pick = None;
+    Menu::new(crate::i18n::tr("Sort")).id_salt("sort-menu").opened_by(opener, Trigger::Click).show(ui, |ui, _| {
+        sort_rows(app, ui, enabled, &mut pick);
+    });
+    if let Some((command, params)) = pick {
+        let _ = app.run(command, params);
+    }
+}
+
+/// The compact bar's View menu hanging from the view button `opener`: the view modes, then Sort and
+/// (when it is not on the bar) Click zoom as submenus.
+fn view_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, opener: &egui::Response, compact_zoom: bool, enabled: bool) {
+    if measuring(ui) {
+        return;
+    }
+    let mut pick: Option<(&'static str, serde_json::Value)> = None;
+    let mut view = None;
+    Menu::new(crate::i18n::tr("View")).id_salt("view-options-menu").opened_by(opener, Trigger::Click).show(ui, |ui, _| {
+        for &(id, _, mode, label) in VIEW_MODES {
+            let row = MenuItem::new(crate::i18n::tr(label).replace('&', "&&")).id_salt(("view-mode", id)).check(app.ui.view == mode).enabled(enabled);
+            let out = row.show(ui);
+            if !measuring(ui) && enabled && out.ran {
+                view = Some(id);
+            }
+        }
+        Divider::horizontal().show(ui);
+        Menu::submenu_row_enabled(ui, crate::i18n::tr("Sort"), enabled, |ui, _| sort_rows(app, ui, enabled, &mut pick));
+        if compact_zoom && matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
+            let label = crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100);
+            Menu::submenu_row_enabled(ui, label, enabled, |ui, _| {
+                if let Some(params) = click_zoom_rows(app.ui.click_zoom, ui) {
+                    pick = Some(("view.clickZoom", params));
+                }
+            });
+        }
+    });
+    if let Some(id) = view {
+        let _ = app.run(&format!("view.{id}"), json!({}));
+    }
+    if let Some((command, params)) = pick {
+        let _ = app.run(command, params);
     }
 }
 
@@ -469,6 +637,8 @@ mod visual_regressions {
                     if !ready {
                         crate::theme::install_fonts(ui.ctx());
                         crate::theme::apply(ui.ctx());
+                        // the framework menus need the runtime installed, as the app does at startup
+                        app.install_framework(ui.ctx());
                         ready = true;
                         return;
                     }
@@ -494,15 +664,16 @@ mod visual_regressions {
             harness.key_press(egui::Key::Space);
             harness.run_steps(3);
             let mut people_focused = false;
+            // the menu's rows are one roving group: the arrow keys move through them
             for _ in 0..20 {
-                harness.key_press(egui::Key::Tab);
+                harness.key_press(egui::Key::ArrowDown);
                 harness.run_steps(3);
                 people_focused = harness.get_by_label("People").is_focused();
                 if people_focused {
                     break;
                 }
             }
-            assert!(people_focused, "Tab reaches People at {scale}x");
+            assert!(people_focused, "ArrowDown reaches People at {scale}x");
             harness.key_press(egui::Key::Space);
             harness.run_steps(3);
             assert_eq!(harness.state().ui.view, ViewMode::People, "keyboard activation dispatches the view command");
@@ -553,3 +724,15 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bottombar/sort_popup_external_20261119.rs"]
+mod sort_popup_external_20261119;
+
+#[cfg(test)]
+#[path = "bottombar/pick_flow_tests.rs"]
+mod pick_flow_tests;
+
+#[cfg(test)]
+#[path = "bottombar/copy_paste_flow_tests.rs"]
+mod copy_paste_flow_tests;

@@ -6,30 +6,28 @@ use serde_json::json;
 use crate::LightcraftApp;
 use crate::state::Dialog;
 use crate::theme::Tokens;
-use lightcraft_engine::export::{ExportOptions, Resize};
 
 mod confirm;
 mod cull;
 mod export;
 mod frame;
+mod keyword_set;
 mod rename;
 mod sam_model;
+mod save_effect;
 
 pub(crate) use confirm::album_entries;
 pub use confirm::confirm_dialog;
 pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap};
+use export::group_checklist;
 pub(crate) use export::preset_lzw_note;
-use export::{
-    LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
-    group_checklist, tiff_lzw_note, watermark_preview,
-};
+pub(crate) use frame::field_escape_closes;
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened, num,
-    only_shows, return_confirms, trailing_button_row,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_field, escaped_field, field, fit_lists, just_opened,
+    only_shows, return_confirms,
 };
-pub(crate) use rename::rename_preview;
-use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
+use rename::{person_rename_plan, rename_body, rename_keyword_body, rename_person_body};
 pub(crate) use sam_model::show_model_folder;
 use sam_model::{sam_by_hand, sam_model_body};
 use slideshow_export::slideshow_export_body;
@@ -198,198 +196,579 @@ fn welcome_body(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, page: &mut u
     });
 }
 
-/// The import review and Settings keep window ids of their own, so the size each is given
-/// doesn't carry over to the other dialogs.
-fn window_id(dialog: &Dialog) -> egui::Id {
-    egui::Id::unique(match dialog {
-        Dialog::Import { .. } => "lightcraft-import-dialog",
-        Dialog::Print => "lightcraft-print-dialog",
-        Dialog::Settings { .. } => "lightcraft-settings-dialog",
-        _ => "lightcraft-dialog",
-    })
+/// The framework dialog of each kind of dialog: its id names its layer, its placement and its footer, so the
+/// keyboard's place doesn't carry from a dialog to the one it opens. Each Keyword caller keeps its own, as before.
+fn dialog_id(dialog: &Dialog) -> egui::Id {
+    let keyword_caller = match dialog {
+        Dialog::KeywordTag { editing, parent, .. } => Some((editing.clone(), parent.clone())),
+        _ => None,
+    };
+    egui::Id::unique(("lightcraft.dialog", std::mem::discriminant(dialog), keyword_caller))
 }
 
-/// Block the underlying panels from the first frame, before the window establishes its modal
-/// layer. Close background menus on entry; popups subsequently opened inside the dialog stay usable.
+/// The egui layer the framework shows the dialog `id` on: the overlay host shows a layer container's `Area` under
+/// the runtime sub-id "area" of the container's id, in the foreground tier of a modal. The prompt and library
+/// windows name it before they are drawn, for the control channel's barrier.
+pub(crate) fn framework_dialog_layer(id: egui::Id) -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Foreground, craft::ui::runtime::memory::sub(id, "area"))
+}
+
+/// Whether a popup (a menu, a dropdown, a list) is open above the open dialog: the layer that takes the keys is not
+/// the dialog's own modal layer, as of the last pass. Tests read it where they read "no overlay is open" before the
+/// dialog was one.
+pub(crate) fn popup_open(ctx: &egui::Context) -> bool {
+    use craft::ui::runtime::overlay;
+    overlay::top(ctx).and_then(|id| overlay::entry(ctx, id)).is_some_and(|entry| !entry.rank.is_modal())
+}
+
+/// A parent `Ui` for a framework dialog, which mounts its own layer: a plain `Ui` over the window on the background
+/// layer. Unlike an `egui::Area`, it never has a first-frame sizing pass, so a dialog is real from the frame it
+/// opens in.
+pub(crate) fn host_ui<R>(ctx: &egui::Context, id: egui::Id, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let mut ui = egui::Ui::new(ctx.clone(), id, egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.content_rect()));
+    add(&mut ui)
+}
+
+/// Block the underlying panels from the first frame, before the dialog's modal layer is recorded. Close background
+/// menus on entry only; popups subsequently opened inside the dialog stay usable.
 pub(crate) fn prepare(app: &LightcraftApp, ui: &mut egui::Ui) {
     let Some(dialog) = &app.ui.dialog else { return };
     ui.disable();
-    let layer = egui::LayerId::new(egui::Order::Middle, window_id(dialog));
-    if ui.ctx().memory(|m| m.top_modal_layer()) != Some(layer) {
+    // The framework owns each dialog's layer. Comparing it to egui's modal layer would close the dialog's own menus
+    // on every pass, so the entry is noted by pass instead.
+    let key = dialog_id(dialog).with("prepared");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let previous = ui.data_mut(|data| data.get_temp::<u64>(key));
+    if previous.is_none_or(|previous| previous != pass && previous.checked_add(1) != Some(pass)) {
         egui::Popup::close_all(ui.ctx());
+        // the framework's menus, dropdowns and lists too: the dialog's own layer is not a popup and stays
+        craft::ui::runtime::overlay::close_popups(ui.ctx());
+    }
+    ui.data_mut(|data| data.insert_temp(key, pass));
+}
+
+/// The width a dialog first takes (its content may be wider).
+fn dialog_width(dlg: &Dialog) -> f32 {
+    match dlg {
+        Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
+        Dialog::SmartRules { .. } => 680.0,
+        Dialog::AllMetadata { .. } => 620.0,
+        Dialog::Print => 1100.0,
+        Dialog::FaceModel { .. } => 460.0,
+        Dialog::LightroomCatalog { .. } => 440.0,
+        Dialog::LightroomDestination { .. } => 480.0,
+        Dialog::Welcome { .. } => 460.0,
+        Dialog::LensDatabase { .. } => 440.0,
+        Dialog::ManageEffects { .. } => 560.0,
+        // its format row on one line (#780): 615 wide with the dialog's padding, as before
+        Dialog::Export { .. } => 599.2,
+        _ => 380.0,
     }
 }
 
 /// Draw the open dialog. `blocked` is true when a quit prompt or settings notice was on screen at
-/// the start of this frame: the dialog is still drawn (its state is preserved), but none of its raw
-/// keyboard/backdrop handling may act. The caller freezes `blocked` for the whole frame so the
-/// click or key that dismisses the prompt cannot also reach the dialog drawn after it. The
-/// blocking library-problem/launch-list window gets the same raw-input treatment while it is
-/// actually on screen over this dialog; ordinary dialogs without that window keep their normal
-/// Escape and outside-click behaviour.
+/// the start of this frame: the dialog is still drawn (its state is preserved), but it takes no input
+/// and none of its closes act. The caller freezes `blocked` for the whole frame so the click or key
+/// that dismisses the prompt cannot also reach the dialog drawn after it. The blocking
+/// library-problem/launch-list window gets the same treatment while it is actually on screen over
+/// this dialog.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
+    // When the pointer was last released: a dialog that a click opened waits out a double click before its title-bar
+    // handle (`title_bar_handle`) takes presses.
+    if ctx.input(|i| i.pointer.any_released()) {
+        let now = ctx.input(|i| i.time);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("lightcraft.dialog.last-release"), now));
+    }
+    let Some(dlg) = &app.ui.dialog else {
+        // the next dialog shown is a new one, whichever it is
+        ctx.data_mut(|d| d.remove::<egui::Id>(egui::Id::unique("lightcraft.dialog.shown-id")));
+        return;
+    };
+    if save_effect::active(app, ctx) {
+        return save_effect::show(app, ctx, blocked);
+    }
+    // Only show_root has the enabled root Ui required by the SDK About dialog.
+    if matches!(dlg, Dialog::About) {
+        return;
+    }
+    if matches!(dlg, Dialog::KeywordSet { .. }) {
+        let raw_blocked = blocked || crate::panels::library_problem::blocks_dialog_input(app);
+        keyword_set::show(app, ctx, raw_blocked);
+        return;
+    }
+    // The framework dialog mounts its own modal layer; this area only gives it a parent `Ui` (the root `Ui` is
+    // disabled under a dialog by `prepare`).
+    host_ui(ctx, egui::Id::unique("lightcraft.dialog.host"), |ui| {
+        craft::ui::runtime::overlay::stack_place(ctx, STACK_DIALOG, egui::Id::unique("lightcraft.dialog"), || shell(app, ui, blocked));
+    });
+}
+
+/// The places on the window's dialog stack, bottom first: the framework stacks the modal layers shown at them in this
+/// order, whichever appeared or was pressed last. The app's dialog, then the blocking library window, then a quit
+/// prompt or settings notice.
+pub(crate) const STACK_DIALOG: usize = 0;
+pub(crate) const STACK_LIBRARY: usize = 1;
+pub(crate) const STACK_PROMPT: usize = 2;
+
+/// Test support: one pass of a dialog harness drawn as `draw_window` draws it while the quit prompt may cover the
+/// dialog. A new prompt's creation pass shows only the prompt and is run again (`shield_pass`); later passes draw the
+/// dialog under the prompt's barrier (`show` gets whether the prompt blocks it) and the prompt above it. The caller
+/// runs `notices::filter_raw_input` on the frame's raw input first, as `raw_input_hook` does.
+#[cfg(test)]
+pub(crate) fn show_under_prompt(app: &mut LightcraftApp, ctx: &egui::Context, show: impl FnOnce(&mut LightcraftApp, bool)) {
+    use crate::panels::notices;
+    notices::begin_draw(app);
+    if ctx.current_pass_index() == 0 {
+        notices::prepare_ui_pass(app, ctx);
+    }
+    if notices::shield_pass(app, ctx) {
+        notices::show(app, ctx);
+        ctx.request_discard("notice: shield the prompt's creation frame");
+        return;
+    }
+    let blocks = notices::blocks_input(app);
+    show(app, blocks);
+    if blocks {
+        notices::restore_prompt_pointer(app, ctx);
+    }
+    notices::show(app, ctx);
+    if blocks {
+        notices::hide_background_pointer(ctx);
+        notices::restore_prompt_pointer(app, ctx);
+    }
+}
+
+/// A framework button in a dialog body, registered as `name` with its real response. True when it was clicked in a
+/// real run.
+fn dialog_button(ui: &mut egui::Ui, name: &str, label: &str) -> bool {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(("lc-dialog-button", name)).show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    crate::widgets::register_response(name, shown.response.rect, &shown.response);
+    ui.is_enabled() && shown.clicked()
+}
+
+/// A framework checkbox in a dialog body, registered as `name`; a measuring run edits nothing.
+fn dialog_check(ui: &mut egui::Ui, name: &str, label: &str, value: &mut bool) {
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let mut draft = *value;
+    let shown = Checkbox::new(Bind::bound(&mut draft)).id_salt(("lc-dialog-check", name)).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    crate::widgets::register_response(name, shown.response.interact_rect, &shown.response);
+    if ui.is_enabled() {
+        *value = draft;
+    }
+}
+
+/// One button of a framework dialog footer drawn by the app: its shown label, its automation name, whether it can be
+/// used and whether it has the accent fill.
+pub(crate) struct FooterSpec {
+    pub label: String,
+    pub name: String,
+    pub enabled: bool,
+    pub primary: bool,
+}
+
+/// Draws `buttons` in a framework dialog's footer at their natural size (their labels are never cut short), in the
+/// order given, each registered under its automation name with its real response. Returns the index of the one
+/// clicked in a real run.
+pub(crate) fn footer_buttons(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, buttons: &[FooterSpec]) -> Option<usize> {
+    footer_button_responses(ui, salt, buttons).0
+}
+
+/// [`footer_buttons`], with each button's response in a real run (none in a measuring run).
+pub(crate) fn footer_button_responses(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, buttons: &[FooterSpec]) -> (Option<usize>, Vec<egui::Response>) {
+    use craft::theme::Variant;
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let salt = egui::Id::unique(salt);
+    let mut clicked = None;
+    let mut responses = Vec::new();
+    for (at, button) in buttons.iter().enumerate() {
+        let shown = Button::new(button.label.clone())
+            .id_salt((salt, button.name.as_str()))
+            .enabled(button.enabled)
+            .variant(if button.primary { Variant::PRIMARY } else { Variant::SECONDARY })
+            .show(ui);
+        if real {
+            crate::widgets::register_response(button.name.clone(), shown.response.rect, &shown.response);
+            if button.enabled && ui.is_enabled() && (shown.clicked() || crate::widgets::same_pass_click(&shown.response)) {
+                clicked = Some(at);
+            }
+            responses.push(shown.response.clone());
+        }
+    }
+    (clicked, responses)
+}
+
+/// The footer of the generic dialog: Cancel and the confirm, the confirm on the right with Cancel to its left (macOS
+/// and GNOME's order), filled with the accent when it is the dialog's primary action.
+struct Footer {
+    buttons: Vec<FooterSpec>,
+    ok: Option<usize>,
+    informational: bool,
+    primary: bool,
+}
+
+impl Footer {
+    /// Cancel (none in a dialog that only shows something) and the confirm (none when it has no label).
+    fn of(app: &LightcraftApp, dlg: &Dialog) -> Footer {
+        let informational = is_informational(dlg);
+        let sam = SamState::of(app);
+        let primary = !informational && confirm_style(dlg) == ConfirmStyle::Primary;
+        let mut footer = Footer { buttons: Vec::new(), ok: None, informational, primary };
+        if !informational {
+            let label = crate::i18n::tr(cancel_label(dlg, &sam)).to_string();
+            footer.buttons.push(FooterSpec { label, name: "button:dialogCancel".into(), enabled: true, primary: false });
+        }
+        let ok = ok_label(app, dlg, informational, &sam);
+        if !ok.is_empty() {
+            let enabled = can_confirm(app, dlg, informational);
+            footer.ok = Some(footer.buttons.len());
+            footer.buttons.push(FooterSpec {
+                label: crate::i18n::tr(&ok).to_string(),
+                name: "button:dialogOk".into(),
+                enabled,
+                primary: primary && enabled,
+            });
+        }
+        footer
+    }
+}
+
+/// The generic dialog in one framework `Dialog`: the body is `dialog_content`, the footer the Cancel/confirm pair,
+/// Escape and Enter are the framework's, and the open state is `app.ui.dialog`.
+/// The framework dialog's padding on both sides of its body, together.
+const DIALOG_PADDING: f32 = 16.0;
+
+fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
+    use std::cell::Cell;
+
+    use craft::ui::contract::{Bind, Props as _, ShowContainer as _};
+    use craft::ui::dialog::Dialog as FrameworkDialog;
+
+    let ctx = host.ctx().clone();
+    // A caller's measuring run of the whole dialog shows nothing the user can reach, and the dialog's id may open only
+    // one stage a pass: the real run of the same pass shows it.
+    // A press made in such a run is not the dialog's: until it is released, the dialog takes no input, so the release
+    // of that press cannot click what lies under it.
+    let speculative_id = egui::Id::unique("lightcraft.dialog.speculative-press");
+    if craft::ui::runtime::measure::active(&ctx) {
+        if ctx.input(|i| i.pointer.any_pressed()) {
+            ctx.data_mut(|d| d.insert_temp(speculative_id, true));
+        }
+        return;
+    }
+    let speculative = ctx.data(|d| d.get_temp::<bool>(speculative_id)).unwrap_or(false);
+    let released = ctx.input(|i| i.pointer.any_released());
+    let held = speculative && (released || ctx.input(|i| i.pointer.any_down()));
+    if speculative && (released || !held) {
+        ctx.data_mut(|d| d.remove_temp::<bool>(speculative_id));
+    }
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
     let at_start = dlg.clone();
-    let library_blocks = crate::panels::library_problem::blocks_dialog_input(app);
-    let raw_blocked = blocked || library_blocks;
-    // Esc with a popup open in the dialog (a dropdown, a date picker's calendar) closes the popup
-    // only: claimed before the dialog is drawn, since the popup is gone once it has handled the key
-    if !raw_blocked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && egui::Popup::is_any_open(ctx) {
-        crate::widgets::take_escape(ctx);
-    }
-    let t = Tokens::get(ctx);
+    let mut raw_blocked = blocked || held || crate::panels::library_problem::blocks_dialog_input(app);
+    let real = !host.is_sizing_pass() && !craft::ui::runtime::measure::active(&ctx);
+    let t = Tokens::get(&ctx);
     let screen = ctx.content_rect();
-    // The backdrop is an area below the dialog window (a bare `Middle` layer painter would be
-    // painted after every area — i.e. over the dialog too). Like a macOS sheet, the dialog leaves
-    // the integrated title bar lit: the window buttons the OS draws over it do not dim.
     let title_bar = title_bar_band(app);
-    egui::Area::new(egui::Id::unique("dialog-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
-        let screen = below_title_bar(screen, title_bar);
-        ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
-    });
-    let mut close = false;
-    let mut confirm = false;
-    // Return presses OK in a dialog without a text field of its own (Lightroom's default button);
-    // a widget that has the keyboard focus (a text field, a button or checkbox reached with Tab)
-    // takes Return itself. Consumed before the dialog is drawn, so nothing else sees it too.
-    if !raw_blocked
-        && return_confirms(&dlg)
-        && ctx.memory(|m| m.focused().is_none())
-        && !egui::Popup::is_any_open(ctx)
-        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-    {
-        confirm = true;
-    }
     let title = dialog_title(app, &dlg);
-    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
-    // The import review can be resized (its photo grid takes the room); it keeps a window id of its
-    // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
-    // rather than growing the window when the options below the grid get taller (e.g. Copy).
+    // The import review can be resized (its photo grid takes the room).
     let import = matches!(dlg, Dialog::Import { .. });
     // The Print dialog sizes itself to the window and scrolls its settings column on its own.
     let print = matches!(dlg, Dialog::Print);
-    let window_id = window_id(&dlg);
-    // Every other dialog fits the window (#781): its options scroll when they don't, and the title
-    // bar and the button row stay outside the scroll area. The room they take is measured on the
-    // previous frame (a guess on the first one).
-    let chrome_id = window_id.with("chrome");
-    let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(DIALOG_CHROME_GUESS);
     // Settings keeps its top edge, and the widest it has been, while tabs of different sizes are shown, so its tab
     // row stays where it is (centred like the others, the row jumped with each tab's height)
     let settings = matches!(dlg, Dialog::Settings { .. });
     let top = (screen.height() * 0.08).clamp(DIALOG_SCREEN_MARGIN, 96.0);
+    // Every dialog fits the window (#781): the framework scrolls a body that doesn't. Settings is never taller than
+    // `body_max`, so its tab bar stays put and its pages scroll by themselves.
+    let id = dialog_id(&dlg);
+    // The dialog's title bar, padding and footer as measured last time it was shown (never less than the guess).
+    let chrome_id = id.with("chrome");
+    let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(DIALOG_CHROME_GUESS).max(DIALOG_CHROME_GUESS);
     let body_max =
         if settings { screen.height() - top - DIALOG_SCREEN_MARGIN - chrome } else { screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - chrome }
             .max(DIALOG_MIN_BODY);
-    let widest_id = window_id.with("widest");
+    // A press held from before this dialog was shown (on the dialog it replaced, or on the window under it) is not
+    // this dialog's either: its release must not land on what this dialog put under the pointer.
+    let shown_id = egui::Id::unique("lightcraft.dialog.shown-id");
+    let replaced = ctx.data(|d| d.get_temp::<egui::Id>(shown_id)) != Some(id);
+    ctx.data_mut(|d| d.insert_temp(shown_id, id));
+    let now = ctx.input(|i| i.time);
+    let delay = ctx.options(|o| o.input_options.max_double_click_delay);
+    if replaced {
+        // opened by a click (released just now): the first half of a possible double click
+        let clicked = ctx.data(|d| d.get_temp::<f64>(egui::Id::unique("lightcraft.dialog.last-release"))).is_some_and(|at| now - at <= delay);
+        ctx.data_mut(|d| d.insert_temp(shown_id.with("at"), if clicked { now } else { f64::NEG_INFINITY }));
+    }
+    // A click that opened the dialog may be the first of a double click: the bar's handle waits out that double click,
+    // so its second half is not taken as a double click on the bar (which zooms the window).
+    let settled = now - ctx.data(|d| d.get_temp::<f64>(shown_id.with("at"))).unwrap_or(f64::NEG_INFINITY) > delay;
+    if replaced && ctx.input(|i| i.pointer.any_down() && !i.pointer.any_pressed()) {
+        ctx.data_mut(|d| d.insert_temp(speculative_id, true));
+        raw_blocked = true;
+    }
+    let widest_id = id.with("widest");
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
+    // (the body's width: the dialog's padding comes on top of it)
+    let room = screen.width() - 2.0 * DIALOG_SCREEN_MARGIN - DIALOG_PADDING;
+    let width = dialog_width(&dlg).min(room).max(widest).max(1.0);
+    // As the old window did, the dialog starts at its width and grows to what its content needs, never to the
+    // window's: a field that fills the width it is given fills the dialog's.
+    let grown_id = id.with("grown");
+    let grown = ctx.data(|d| d.get_temp::<f32>(grown_id)).unwrap_or(0.0).min(room);
+    let max_width = width.max(grown);
+    // before the dialog: drawing it closes a dropdown the key or click lands outside of
+    let popup_was_open = egui::Popup::is_any_open(&ctx) || popup_open(&ctx);
+    let mut footer = Footer::of(app, &dlg);
+    let (informational, ok_at) = (footer.informational, footer.ok);
+    // The backdrop dims the window under the dialog. Like a macOS sheet, the dialog leaves the integrated title bar
+    // lit: the window buttons the OS draws over it do not dim. It is an area below the dialog's layer.
+    if real {
+        egui::Area::new(egui::Id::unique("dialog-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(false).show(&ctx, |ui| {
+            ui.painter().rect_filled(below_title_bar(screen, title_bar), 0.0, egui::Color32::from_black_alpha(crate::theme::SCRIM_ALPHA));
+        });
+    }
+    // What the body leaves the confirm this pass: the footer's state follows the draft the body just wrote.
+    let can_now: Cell<Option<bool>> = Cell::new(None);
+    let shown_layer: Cell<Option<egui::LayerId>> = Cell::new(None);
+    let picked: Cell<Option<usize>> = Cell::new(None);
+    let mut open = true;
+    let mut confirm = false;
+    let mut close = false;
     let mut content_w = 0.0f32;
-    let mut body_h = None;
-    // before the window: drawing it closes a dropdown the click lands outside of
-    let popup_was_open = egui::Popup::is_any_open(ctx);
-    let shown = egui::Window::new(crate::i18n::tr(&title))
-        .id(window_id)
-        .collapsible(false)
-        .resizable(import)
-        .vscroll(import)
-        .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
-        .frame(frame)
-        .anchor(if settings { egui::Align2::CENTER_TOP } else { egui::Align2::CENTER_CENTER }, [0.0, if settings { top } else { 0.0 }])
-        .min_width(widest)
-        .default_width(match dlg {
-            Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
-            Dialog::SmartRules { .. } => 680.0,
-            Dialog::AllMetadata { .. } => 620.0,
-            Dialog::Print => 1100.0,
-            Dialog::FaceModel { .. } => 460.0,
-            Dialog::LightroomCatalog { .. } => 440.0,
-            Dialog::LightroomDestination { .. } => 480.0,
-            Dialog::Welcome { .. } => 460.0,
-            Dialog::LensDatabase { .. } => 440.0,
-            Dialog::ManageEffects { .. } => 560.0,
-            _ => 380.0,
+    let mut content_h = 0.0f32;
+    let mut dialog = FrameworkDialog::new(crate::i18n::tr(&title).to_owned())
+        .id(id)
+        .opened(Bind::bound(&mut open))
+        .enabled(!raw_blocked)
+        .closable(false)
+        // The dialog's own name field takes the focus when it opens (`dialog_field`); a dialog without one opens with
+        // nothing focused, so the first Tab reaches its first control, as before.
+        .initial_focus(craft::ui::runtime::focus::Initial::Keep);
+    if !footer.buttons.is_empty() {
+        let (buttons, can_now, picked) = (&mut footer.buttons, &can_now, &picked);
+        let (ok, primary) = (footer.ok, footer.primary);
+        let salt = id;
+        dialog = dialog.footer(move |ui, _| {
+            // the confirm follows the draft the body just wrote
+            if let (Some(at), Some(can)) = (ok, can_now.get())
+                && let Some(button) = buttons.get_mut(at)
+            {
+                button.enabled = can;
+                button.primary = primary && can;
+            }
+            if let Some(at) = footer_buttons(ui, salt, &buttons[..]) {
+                picked.set(Some(at));
+            }
+        });
+    }
+    // Every dialog may take the window less its margins (#781), as the old window did, rather than the framework's
+    // share of it: Settings' pages and the Print layout are as wide as they were.
+    let share = craft::ui::contract::overlay::ViewportShare::new(
+        (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.width().max(1.0)).clamp(0.5, 1.0),
+        (1.0 - 2.0 * DIALOG_SCREEN_MARGIN / screen.height().max(1.0)).clamp(0.5, 1.0),
+    );
+    // The app dims the window under the dialog itself ("dialog-dim" above), leaving the integrated title bar lit like a
+    // macOS sheet: the framework's own scrim would dim the bar too.
+    dialog = dialog
+        .backdrop(craft::ui::runtime::overlay::Backdrop::None)
+        .overlay(|overlay| overlay.fit(craft::ui::contract::overlay::OverlayFit::ContentCapped(share)));
+    // Return presses OK in a dialog without a text field of its own (Lightroom's default button); a dialog with a
+    // field confirms from the field.
+    dialog = dialog.close_on_enter(return_confirms(&dlg));
+    if import {
+        dialog = dialog.resizable(true).overlay(|overlay| overlay.size(egui::vec2(crate::import::DIALOG_SIZE[0], crate::import::DIALOG_SIZE[1])));
+    }
+    if settings {
+        dialog = dialog.first_place(egui::pos2(screen.center().x, screen.top() + top), egui::Align2::CENTER_TOP);
+    }
+    // A covered dialog takes no keys: its focused field must not read the Escape or the typing meant for what covers it.
+    let withheld: Vec<egui::Event> = if raw_blocked {
+        ctx.input_mut(|input| {
+            let (keys, rest) = std::mem::take(&mut input.events)
+                .into_iter()
+                .partition(|event| matches!(event, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Ime(_) | egui::Event::Paste(_)));
+            input.events = rest;
+            keys
         })
-        .show(ctx, |ui| {
-            // Disabled, not skipped: the dialog keeps its layout and state, but a raw event in the
-            // first prompt frame cannot toggle a checkbox or press a button underneath it. The
-            // blocking library window gets the same treatment: it owns input while it is on screen,
-            // so the dialog behind it must not take focus or accept typed text either.
-            if raw_blocked {
-                ui.disable();
+    } else {
+        Vec::new()
+    };
+    let output = dialog
+        .show(host, |ui, _| {
+            let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+            if real {
+                shown_layer.set(Some(ui.layer_id()));
+            }
+            if import {
+                // The review is as large as its window (it can be resized): its body takes the width the dialog gives
+                // it, less the scroll bar's gutter while it scrolls; a width of its own would run under the clip.
+                // It sizes its photo grid to the room the window's body has, not to the endless height of a scrolling
+                // body; the body itself still scrolls what goes on below (an opened recipe).
+                let window_h = ctx.data(|d| d.get_temp::<f32>(id.with("window-height"))).unwrap_or(crate::import::DIALOG_SIZE[1]);
+                let room = (window_h - chrome).min(body_max).max(DIALOG_MIN_BODY);
+                crate::import::note_body_room(ui, room);
+            } else {
+                ui.set_min_width(width);
+                ui.set_max_width(max_width);
             }
             ui.spacing_mut().item_spacing.y = 8.0;
-            body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
-                dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg)
-            });
-            ui.add_space(4.0);
-            // the confirm on the right with Cancel to its left (macOS and GNOME's order), filled with
-            // the accent when it is the dialog's primary action. The row spans the width the window
-            // gives its content this frame (its default width, or its content's if wider), so it
-            // reaches the edge without widening the window.
-            let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
-            let row_h = ui.spacing().interact_size.y;
-            ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                button_row(app, ui, &dlg, &mut close, &mut confirm);
-            });
+            // (the import review and Print size their own lists to the dialog)
+            fit_lists(ui, !import && !print, body_max, |ui| dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg));
             if import {
                 crate::import::note_dialog_bottom(ui);
             }
-            content_w = ui.min_rect().width();
-        });
+            if real {
+                content_w = ui.min_rect().width();
+                content_h = ui.min_rect().height();
+            }
+            can_now.set(Some(can_confirm(app, &dlg, informational)));
+        })
+        .output;
+    if !withheld.is_empty() {
+        ctx.input_mut(|input| input.events.extend(withheld));
+    }
+    if !real {
+        return;
+    }
+    // The window's hit belongs to the dialog's own layer, where its controls are.
+    let layer = shown_layer.get().unwrap_or_else(|| framework_dialog_layer(id));
+    // The dialog's own rect is its layer's: the area the overlay host shows it in.
+    let window_rect = ctx.memory(|m| m.area_rect(layer.id)).unwrap_or(output.response.rect);
+    let mut window = output.response.clone();
+    window.layer_id = layer;
+    window.rect = window_rect;
+    window.interact_rect = window_rect;
+    crate::widgets::register_response("dialog:window", window.rect, &window);
+    if import && ctx.data(|d| d.get_temp::<f32>(id.with("window-height"))).is_none_or(|h| (h - window_rect.height()).abs() > 0.5) {
+        ctx.data_mut(|d| d.insert_temp(id.with("window-height"), window_rect.height()));
+        ctx.request_repaint();
+    }
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
-    if let Some(w) = &shown {
-        // (the import review keeps its hand-picked photos however the click lands)
-        if !raw_blocked && app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(ctx, w.response.rect, title_bar, popup_was_open) {
+    // The chrome round a body shown whole (not scrolled by the dialog): what the window takes beyond its body.
+    let measured_chrome = window_rect.height() - content_h;
+    if content_h > 0.0 && content_h <= body_max && measured_chrome > chrome + 0.5 && measured_chrome < screen.height() / 2.0 {
+        ctx.data_mut(|d| d.insert_temp(chrome_id, measured_chrome));
+        ctx.request_repaint();
+    }
+    // Grown once: content that fills whatever width it is given would otherwise widen the dialog every frame.
+    if content_w > max_width + 0.5 && ctx.data(|d| d.get_temp::<f32>(grown_id)).is_none() {
+        ctx.data_mut(|d| d.insert_temp(grown_id, content_w));
+        ctx.request_repaint();
+    }
+    if !popup_was_open
+        && settled
+        && let Some(band) = title_bar
+    {
+        title_bar_handle(&ctx, band, window_rect);
+    }
+    settle_dialog(
+        app,
+        &ctx,
+        dlg,
+        Closing {
+            at_start: &at_start,
+            informational,
+            ok_at,
+            confirm,
+            close,
+            raw_blocked,
+            blocked,
+            window: window_rect,
+            title_bar,
+            popup_was_open,
+            closed: output.closed,
+            picked: picked.get(),
+        },
+    );
+}
+
+/// What a pass made of the open dialog: what its body asked for, the window it drew, and what the
+/// framework and the footer reported.
+struct Closing<'a> {
+    at_start: &'a Dialog,
+    informational: bool,
+    ok_at: Option<usize>,
+    confirm: bool,
+    close: bool,
+    raw_blocked: bool,
+    blocked: bool,
+    window: egui::Rect,
+    title_bar: Option<egui::Rect>,
+    popup_was_open: bool,
+    closed: Option<craft::ui::runtime::overlay::CloseReason>,
+    picked: Option<usize>,
+}
+
+/// Applies a pass's input to the open dialog — a backdrop click, Esc, Return or the footer — and
+/// leaves `app.ui.dialog` as it ends: closed, or the draft the body wrote. A dialog opened from
+/// inside this one keeps its place.
+fn settle_dialog(app: &mut LightcraftApp, ctx: &egui::Context, mut dlg: Dialog, closing: Closing<'_>) {
+    use craft::ui::runtime::overlay::CloseReason;
+
+    let Closing { at_start, informational, ok_at, mut confirm, mut close, raw_blocked, blocked, window, title_bar, popup_was_open, closed, picked } =
+        closing;
+    let import = matches!(dlg, Dialog::Import { .. });
+    // The startup dialog is recorded once it was presented, not when the logic tick picked it: a host that runs
+    // `logic` and quits before a visible frame does not burn the tour, and a crash while it is up still does not
+    // reopen it on every launch. A frame whose input a notice owns is not a presentation: the dialog is drawn but
+    // cannot be used, so the recording waits for a pass where the dialog actually takes input.
+    if !raw_blocked && matches!(at_start, Dialog::Welcome { .. } | Dialog::WhatsNew) {
+        app.ui.record_startup_dialog_seen();
+    }
+    if raw_blocked {
+        confirm = false;
+        close = false;
+        // A press made under the prompt or library window must not be remembered as a backdrop press for a release
+        // that arrives after that covering window goes away.
+        ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("dialog-backdrop-press")));
+    } else {
+        // (the import review keeps its hand-picked photos however the click lands; the title bar is not the backdrop)
+        if app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(ctx, window, title_bar, popup_was_open) {
             close = true;
-        } else if raw_blocked {
-            // A press made under the prompt or library window must not be remembered as a
-            // backdrop press for a release that arrives after that covering window goes away.
-            ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("dialog-backdrop-press")));
+        }
+        if escaped_field(ctx) && !popup_was_open {
+            close = true;
+        }
+        match closed {
+            // Escape that closed a popup in the dialog (a dropdown, a date picker's calendar), or a key the shortcuts
+            // editor took while recording, leaves the dialog open
+            Some(CloseReason::Escape) if popup_was_open || crate::widgets::escape_taken(ctx) => {}
+            // Return with nothing focused in a dialog whose confirm can't take it
+            Some(CloseReason::Enter) => confirm |= can_confirm(app, &dlg, informational),
+            Some(_) => close = true,
+            None => {}
+        }
+        match picked {
+            Some(at) if Some(at) == ok_at && !informational => confirm = true,
+            // Cancel, or the Close of a dialog that only shows something
+            Some(_) => close = true,
+            None => {}
         }
     }
-    if let Some(w) = shown {
-        crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Dialog);
-        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
-        if let Some(body_h) = body_h {
-            let measured = (w.response.rect.height() - body_h).max(0.0);
-            if (measured - chrome).abs() > 0.5 {
-                ctx.data_mut(|d| d.insert_temp(chrome_id, measured));
-                ctx.request_repaint();
-            }
-        }
-        ctx.move_to_top(w.response.layer_id);
-        crate::widgets::register_response("dialog:window", w.response.rect, &w.response);
-        if let Some(band) = title_bar {
-            title_bar_handle(ctx, band, w.response.rect);
-        }
-        // The startup dialog is recorded once it was presented, not when the logic tick picked
-        // it: a host that runs `logic` and quits before a visible frame does not burn the tour,
-        // and a crash while it is up still does not reopen it on every launch. A frame whose
-        // input a notice owns is not a presentation: the dialog is drawn but cannot be used, so
-        // the recording waits for a pass where the dialog actually takes input.
-        if !raw_blocked && matches!(at_start, Dialog::Welcome { .. } | Dialog::WhatsNew) {
-            app.ui.record_startup_dialog_seen();
-        }
-    }
-    // (while the shortcuts editor records a key, it takes Esc itself to cancel; an open popup in
-    // the dialog, such as a date picker's calendar, takes it to close itself)
-    if !raw_blocked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !crate::widgets::escape_taken(ctx) {
-        close = true;
-    }
-    if !raw_blocked && confirm {
+    if confirm {
         close |= confirmed(app, ctx, &mut dlg);
     }
     // a dialog opened from inside this one (a button in Settings that shows a licence) takes its place
-    if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
+    if app.ui.dialog.as_ref().is_some_and(|now| *now != *at_start) {
         return;
     }
     if !close && !blocked {
         let frame = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(egui::Id::unique(BACKDROP_SHOWN), frame));
     }
-    if close && matches!(dlg, Dialog::Import { .. }) {
+    if close && import {
         app.renderer.forget_imports();
     }
     app.ui.dialog = if close { None } else { Some(dlg) };
@@ -419,14 +798,22 @@ fn below_title_bar(screen: egui::Rect, band: Option<egui::Rect>) -> egui::Rect {
 fn title_bar_handle(ctx: &egui::Context, band: egui::Rect, dialog: egui::Rect) {
     // (egui lifts an area that wasn't there the frame before above the rest: a handle drawn again as the pointer leaves
     // the dialog would sit over an open dropdown and take the press meant for its item)
-    if egui::Popup::is_any_open(ctx) || ctx.pointer_hover_pos().is_some_and(|p| dialog.contains(p)) {
+    if ctx.pointer_hover_pos().is_some_and(|p| dialog.contains(p) && band.contains(p)) {
+        // The pointer is on the dialog where it reaches into the bar: a press there is the dialog's, so the window
+        // may not move. (The bar's own empty area cannot tell: a framework modal is not a `Middle` panel over it.)
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("title_bar_window_movable"), (pass, false)));
+    }
+    if egui::Popup::is_any_open(ctx) || popup_open(ctx) || ctx.pointer_hover_pos().is_some_and(|p| dialog.contains(p)) {
         return;
     }
     let sides =
         if band.intersects(dialog) { [(band.min.x, dialog.min.x), (dialog.max.x, band.max.x)] } else { [(band.min.x, band.max.x), (0.0, 0.0)] };
     for (i, (from, to)) in sides.into_iter().enumerate().filter(|(_, (from, to))| to - from > 1.0) {
         let part = egui::Rect::from_x_y_ranges(from..=to, band.y_range());
-        egui::Area::new(egui::Id::unique("dialog-title-bar").with(i)).order(egui::Order::Foreground).fixed_pos(part.min).show(ctx, |ui| {
+        // (above the order the framework's dialogs are in: it lists its layers above every other area of their order,
+        // and egui gives the layers under its modal no hits)
+        egui::Area::new(egui::Id::unique("dialog-title-bar").with(i)).order(egui::Order::Tooltip).fixed_pos(part.min).show(ctx, |ui| {
             craft_window::title_bar::empty_area(ui, part);
         });
     }
@@ -654,49 +1041,6 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     !rename_blocked && (informational || (!waiting && !bad_rules))
 }
 
-/// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
-fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
-    let informational = is_informational(dlg);
-    let sam = SamState::of(app);
-    let cancel = cancel_label(dlg, &sam);
-    let ok = ok_label(app, dlg, informational, &sam);
-    let ok = ok.as_str();
-    let can_confirm = can_confirm(app, dlg, informational);
-    let primary = !informational && can_confirm && confirm_style(dlg) == ConfirmStyle::Primary;
-    use crate::button::{Button, Kind};
-    // (each kind of dialog its own buttons: the keyboard's place doesn't carry from a
-    // dialog to the one it opens)
-    let kind = std::mem::discriminant(dlg);
-    let cancel_button = Button::new(cancel).widget("button:dialogCancel").id_salt(kind).min_width(72.0);
-    let ok_button = Button::new(ok)
-        .kind(if primary { Kind::Primary } else { Kind::Secondary })
-        .enabled(can_confirm)
-        .widget("button:dialogOk")
-        .id_salt(kind)
-        .min_width(72.0);
-    // (Cancel first, then the confirm: the keyboard goes through them as the eye does)
-    let gap = ui.spacing().item_spacing.x;
-    let mut buttons_w = 0.0;
-    if !informational {
-        buttons_w += cancel_button.desired_size(ui).x + gap;
-    }
-    if !ok.is_empty() {
-        buttons_w += ok_button.desired_size(ui).x;
-    }
-    ui.add_space((ui.available_width() - buttons_w).max(0.0));
-    if !informational && cancel_button.show(ui).clicked() {
-        *close = true;
-    }
-    let r = (!ok.is_empty()).then(|| ok_button.show(ui));
-    if r.is_some_and(|r| r.clicked()) {
-        if informational {
-            *close = true;
-        } else {
-            *confirm = true;
-        }
-    }
-}
-
 /// Say where a folder made on disk is: the new folder holds no photos yet, so the Folders list may not show it.
 /// Shared by the dialog's button and `ui.dialog.confirm`.
 pub(crate) fn toast_created_folder(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &Dialog, made: &serde_json::Value) {
@@ -815,14 +1159,15 @@ pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
 fn auto_stack_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::AutoStack { gap } = dlg else { return };
     ui.label(egui::RichText::new(crate::i18n::tr("Stack photos taken within this time of each other:")).color(t.text_label));
-    let r = ui.add(
-        egui::Slider::new(gap, 0.0..=86400.0)
-            .logarithmic(true)
-            .smallest_positive(1.0)
-            .custom_formatter(|v, _| crate::panels::dialogs::fmt_gap(v))
-            .custom_parser(crate::panels::dialogs::parse_gap),
+    cull::gap_control(
+        ui,
+        "slider:autoStackGap",
+        "value:autoStackGap",
+        crate::i18n::tr("Stack photos taken within this time of each other:"),
+        gap,
+        1.0..=86400.0,
+        false,
     );
-    crate::widgets::named(r, crate::i18n::tr("Stack photos taken within this time of each other:"));
     let preview = app.session.execute("stack.auto", &json!({"gap": *gap, "preview": true})).unwrap_or_default();
     let scope = if app.session.selection.ids.len() > 1 { "the selected photos" } else { "the photos in view" };
     ui.label(
@@ -842,62 +1187,7 @@ fn auto_stack_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: 
 
 /// The body of the Cull dialog.
 fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::Cull { reject_below, pick_best, burst_gap, similarity } = dlg else { return };
-    let n = app.session.selection.ids.len();
-    let scope = if n > 1 {
-        crate::i18n::tr_format!("the {n} selected photos", n = n)
-    } else {
-        crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len())
-    };
-    ui.label(
-        egui::RichText::new(crate::i18n::tr_format!(
-            "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).",
-            scope = scope
-        ))
-        .color(t.text_label),
-    );
-    ui.add_space(6.0);
-    let r = ui.add(egui::Slider::new(reject_below, 0.0..=80.0).text(crate::i18n::tr("Reject below focus")).step_by(1.0));
-    crate::widgets::register(ui, "field:cullReject", r.rect);
-    ui.label(
-        egui::RichText::new(crate::i18n::tr(if *reject_below > 0.0 {
-            "Blurry photos below the score are flagged as rejects."
-        } else {
-            "0: nothing is rejected."
-        }))
-        .color(t.text_dim),
-    );
-    let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
-    crate::widgets::register(ui, "check:cullPick", r.rect);
-    ui.add_space(6.0);
-    // the sliders drag over the usual range; their value fields take whatever
-    // `photo.analyze` accepts (a gap of 0 s to a day, a similarity of 0 to 1)
-    let r = ui.add(
-        egui::Slider::new(burst_gap, 1.0..=600.0)
-            .logarithmic(true)
-            .smallest_positive(1.0)
-            .clamping(egui::SliderClamping::Never)
-            .text(crate::i18n::tr("Burst: shots at most this far apart"))
-            .custom_formatter(|v, _| crate::panels::dialogs::fmt_gap(v))
-            .custom_parser(crate::panels::dialogs::parse_gap),
-    );
-    crate::widgets::register(ui, "field:cullGap", r.rect);
-    let r = ui.add(
-        egui::Slider::new(similarity, 0.70..=0.99)
-            .clamping(egui::SliderClamping::Never)
-            .text(crate::i18n::tr("Burst: how alike (loose … strict)"))
-            // a typed 0.995 is kept (whole hundredths would round it to 1.00)
-            .step_by(0.001)
-            .min_decimals(2)
-            .max_decimals(3),
-    );
-    crate::widgets::register(ui, "field:cullSimilar", r.rect);
-    clamp_cull_burst(burst_gap, similarity);
-    ui.label(egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
-    ui.label(
-        egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots."))
-            .color(t.text_dim),
-    );
+    cull::body(app, ui, t, dlg);
 }
 
 /// The body of the WhatsNew dialog.
@@ -949,7 +1239,7 @@ fn system_info_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             ui.end_row();
         }
     });
-    if ui.button(crate::i18n::tr("Copy to Clipboard")).clicked() {
+    if dialog_button(ui, "button:systemInfoCopy", "Copy to Clipboard") {
         let text: String = rows.iter().map(|(k, v)| format!("{k}: {v}\n")).collect();
         ui.ctx().copy_text(text);
     }
@@ -959,11 +1249,11 @@ fn system_info_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::AllMetadata { title, rows, search } = dlg else { return };
     ui.label(egui::RichText::new(title.as_str()).color(t.text_label));
-    let r = crate::widgets::named(
-        ui.add(egui::TextEdit::singleline(search).hint_text(crate::i18n::tr("Filter fields")).desired_width(f32::INFINITY)),
-        crate::i18n::tr("Filter fields"),
-    );
-    crate::widgets::register(ui, "field:metadataSearch", r.rect);
+    crate::text_field::TextField::singleline("field:metadataSearch", search)
+        .hint(crate::i18n::tr("Filter fields"))
+        .label(crate::i18n::tr("Filter fields"))
+        .width(f32::INFINITY)
+        .show(ui);
     let q = search.trim().to_lowercase();
     let keep = |n: &str, v: &str| q.is_empty() || n.to_lowercase().contains(&q) || v.to_lowercase().contains(&q);
     let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -1006,13 +1296,27 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 }
 
 /// The body of the SmartRules dialog.
-fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
+fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, close: &mut bool, dlg: &mut Dialog) {
     let Dialog::SmartRules { id, name, rules, .. } = dlg else { return };
-    let r = crate::widgets::named(
-        ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY)),
-        crate::i18n::tr("Name"),
-    );
-    crate::widgets::register(ui, "field:smartName", r.rect);
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
+    let eligible = real && ui.is_enabled() && ui.is_visible() && ui.clip_rect().intersects(rect);
+    let shown = craft::ui::text::TextField::new(crate::i18n::tr("Name").to_owned(), Bind::bound(name))
+        .id_salt("field:smartName")
+        .placeholder(crate::i18n::tr("Name").to_owned())
+        // A covering legacy prompt freezes the draft, including gesture-cancel restores.
+        // Disabled presentation alone can still produce an SDK Cancel on the old focus.
+        .read_only(!ui.is_enabled())
+        .limit(None)
+        .show_at(ui, rect);
+    if real {
+        crate::widgets::register_response("field:smartName", shown.response.rect, &shown.response);
+    }
+    // Only this plain Name opts into the observed legacy one-Escape whole-draft close.
+    // No programmatic draft-revert/completion path is installed here: public `escaped`
+    // also covers Escape-reason Revert and must not be treated as proof of a physical key.
+    *close |= eligible && shown.escaped;
     ui.add_space(6.0);
     // the folder an album made from a folder view carries is not in the editor, but it counts
     let folder = id
@@ -1068,6 +1372,54 @@ fn new_smart_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, 
     );
 }
 
+/// A framework number field over a whole number, `suffix` written after it (" d"), registered as `name`.
+fn whole_number(ui: &mut egui::Ui, name: &str, label: &str, value: &mut i32, range: std::ops::RangeInclusive<i32>, suffix: &str) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::text::NumberField;
+    let mut exact = Some(f64::from(*value));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(72.0, 24.0), egui::Sense::hover());
+    let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut exact))
+        .id_salt(("lc-whole-number", name))
+        .range(f64::from(*range.start())..=f64::from(*range.end()))
+        .step(1.0)
+        .snap_typed(true)
+        .commit_decimals(0)
+        .fixed_decimals(0)
+        .show_at(ui, rect);
+    if !suffix.trim().is_empty() {
+        ui.label(suffix.trim());
+    }
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    crate::widgets::register_response(name, rect, &shown.response);
+    if let Some(v) = exact.filter(|v| v.is_finite()) {
+        *value = (v.round() as i64).clamp(i64::from(*range.start()), i64::from(*range.end())) as i32;
+    }
+}
+
+/// A framework number field over a decimal value with `decimals` places, stepping by `step`, registered as `name`.
+fn decimal_number(ui: &mut egui::Ui, name: &str, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f64>, step: f64, decimals: usize) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::text::NumberField;
+    let mut exact = Some(f64::from(*value));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(80.0, 24.0), egui::Sense::hover());
+    let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut exact))
+        .id_salt(("lc-decimal-number", name))
+        .range(range)
+        .step(step)
+        .commit_decimals(decimals)
+        .fixed_decimals(decimals)
+        .show_at(ui, rect);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
+    crate::widgets::register_response(name, rect, &shown.response);
+    if let Some(v) = exact.filter(|v| v.is_finite()) {
+        *value = v as f32;
+    }
+}
+
 /// The body of the CaptureTime dialog.
 fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::CaptureTime { mode, time, days, hours, minutes, zone } = dlg else { return };
@@ -1083,21 +1435,24 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
     let params = match mode.as_str() {
         "set" => {
             field(ui, "New time", |ui| {
-                let r = ui.add(egui::TextEdit::singleline(time).hint_text("2026-09-30 14:05:00").desired_width(f32::INFINITY));
-                crate::widgets::register(ui, "field:captureTime", r.rect);
+                crate::text_field::TextField::singleline("field:captureTime", time)
+                    .hint("2026-09-30 14:05:00")
+                    .label(crate::i18n::tr("New time"))
+                    .width(f32::INFINITY)
+                    .show(ui);
             });
             json!({"time": time})
         }
         "shift" => {
             field(ui, "Shift", |ui| {
-                ui.add(egui::DragValue::new(days).suffix(" d"));
-                ui.add(egui::DragValue::new(hours).suffix(" h"));
-                ui.add(egui::DragValue::new(minutes).suffix(" min"));
+                whole_number(ui, "field:captureDays", "Days", days, -36_500..=36_500, " d");
+                whole_number(ui, "field:captureHours", "Hours", hours, -100_000..=100_000, " h");
+                whole_number(ui, "field:captureMinutes", "Minutes", minutes, -1_000_000..=1_000_000, " min");
             });
             json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60})
         }
         _ => {
-            field(ui, "Hours", |ui| ui.add(egui::DragValue::new(zone).range(-26.0..=26.0).speed(0.25).fixed_decimals(2)));
+            field(ui, "Hours", |ui| decimal_number(ui, "field:captureZone", "Hours", zone, -26.0..=26.0, 0.25, 2));
             json!({"hours": zone})
         }
     };
@@ -1133,18 +1488,36 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
 }
 
 /// The body of the LabelNames dialog.
-fn label_names_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::LabelNames { names, save_as } = dlg else { return };
-    names.resize(5, String::new());
-    // start from a set
+fn label_names_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) -> bool {
+    let Dialog::LabelNames { names, save_as } = dlg else {
+        return false;
+    };
+    // Six local inputs only: speculative/disabled edits never publish to the actual draft.
+    let mut candidate_names = names.clone();
+    let mut candidate_save_as = save_as.clone();
+    candidate_names.resize(5, String::new());
+    let mut escaped = false;
     let sets = lightcraft_engine::cmd::manage::label_sets_json(&app.session);
     field(ui, "Set", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        for set in sets["sets"].as_array().into_iter().flatten() {
-            let name = set["name"].as_str().unwrap_or_default();
-            if crate::widgets::text_button(ui, &format!("labelSet-{name}"), name, false).clicked() {
-                *names = set["names"].as_array().into_iter().flatten().map(|n| n.as_str().unwrap_or_default().to_string()).collect();
+        let mut choices = |ui: &mut egui::Ui| {
+            for set in sets["sets"].as_array().into_iter().flatten() {
+                let name = set["name"].as_str().unwrap_or_default();
+                if crate::widgets::text_button(ui, &format!("labelSet-{name}"), name, false).clicked() {
+                    candidate_names = set["names"].as_array().into_iter().flatten().map(|n| n.as_str().unwrap_or_default().to_string()).collect();
+                }
             }
+        };
+        if craft::ui::runtime::measure::active(ui.ctx()) && !ui.is_sizing_pass() {
+            // A context-side measuring run alone is not an egui sizing Ui. Use the
+            // supported sizing-only presentation so no live SDK press can begin.
+            let mut sizing =
+                ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).layout(*ui.layout()).sizing_pass().invisible());
+            choices(&mut sizing);
+            ui.advance_cursor_after_rect(sizing.min_rect());
+        } else {
+            // Actual enabled/disabled parents and an existing sizing Ui stay unchanged.
+            choices(ui);
         }
     });
     for (i, l) in lightcraft_catalog::ColorLabel::ALL.iter().enumerate() {
@@ -1152,19 +1525,11 @@ fn label_names_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
         field(ui, &colour, |ui| {
             let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
             ui.painter().circle_filled(r.center(), 6.0, crate::panels::grid::label_color(*l));
-            let te = crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(&mut names[i]).hint_text(colour.as_str()).desired_width(f32::INFINITY)),
-                crate::i18n::tr(&colour),
-            );
-            crate::widgets::register(ui, format!("field:labelName-{}", colour.to_lowercase()), te.rect);
+            escaped |= label_name_field(ui, &format!("field:labelName-{}", colour.to_lowercase()), &colour, &mut candidate_names[i], &colour);
         });
     }
     field(ui, "Save as set", |ui| {
-        let te = crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(save_as).hint_text(crate::i18n::tr("Optional name")).desired_width(f32::INFINITY)),
-            crate::i18n::tr("Save as set"),
-        );
-        crate::widgets::register(ui, "field:labelSetName", te.rect);
+        escaped |= label_name_field(ui, "field:labelSetName", "Save as set", &mut candidate_save_as, crate::i18n::tr("Optional name"));
     });
     ui.label(
         egui::RichText::new(crate::i18n::tr(
@@ -1172,125 +1537,36 @@ fn label_names_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
         ))
         .color(t.text_dim),
     );
+    if ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+        *names = candidate_names;
+        *save_as = candidate_save_as;
+    }
+    escaped
 }
 
-/// The body of the Rename dialog.
-fn rename_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::Rename { template, start } = dlg else { return };
-    let n = app.session.selected().len();
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
-    let template_id = egui::Id::unique("rename-template");
-    let tags_open = field(ui, "Template", |ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let w = crate::import::tag_field_width(ui);
-        let r = crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(template).id(template_id).hint_text("{name}").desired_width(w)),
-            crate::i18n::tr("Template"),
-        );
-        crate::widgets::register(ui, "field:renameTemplate", r.rect);
-        crate::import::tag_toggle(ui, "renameTemplate")
-    });
-    if tags_open {
-        crate::import::tag_help(ui, "renameTemplate", template, template_id);
+fn label_name_field(ui: &mut egui::Ui, alias: &str, label: &str, value: &mut String, hint: &str) -> bool {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::text::TextField;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
+    let eligible = ui.is_enabled()
+        && ui.is_visible()
+        && ui.clip_rect().intersects(rect)
+        && !ui.is_sizing_pass()
+        && !craft::ui::runtime::measure::active(ui.ctx());
+    // Return belongs to this field, but LabelNames has never confirmed from a raw input.
+    // Deliberately do not forward submitted to the generic dialog's confirmation flag.
+    let shown = TextField::new(crate::i18n::tr(label).to_owned(), Bind::bound(value))
+        .id_salt(alias)
+        .placeholder(hint.to_owned())
+        .limit(None)
+        .submits()
+        .show_at(ui, rect);
+    if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+        crate::widgets::register_response(alias, shown.response.rect, &shown.response);
     }
-    crate::import::unknown_tags_warning(ui, template);
-    field(ui, "Presets", |ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for (i, (label, tpl)) in
-            [("Name", "{name}"), ("Date–Name", "{date}_{name}"), ("Title–Seq", "{title}-{seq:3}"), ("Custom–Seq", "Photo-{seq:3}")].iter().enumerate()
-        {
-            if crate::widgets::text_button(ui, &format!("renamePreset-{i}"), label, template == tpl).clicked() {
-                *template = tpl.to_string();
-            }
-        }
-    });
-    field(ui, "Start at", |ui| ui.add(egui::DragValue::new(start).range(0..=999_999)));
-    ui.label(
-        egui::RichText::new(crate::i18n::tr(
-            "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…",
-        ))
-        .color(t.text_dim),
-    );
-    let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize);
-    match &preview {
-        Some(rows) => {
-            egui::Grid::new("rename-preview").num_columns(3).spacing([8.0, 2.0]).show(ui, |ui| {
-                for pl in rows {
-                    ui.label(egui::RichText::new(&pl.from).color(t.text_dim));
-                    let (arrow, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                    crate::icons::paint(ui.painter(), arrow, crate::icons::Icon::ChevronRight, t.text_dim);
-                    ui.label(egui::RichText::new(&pl.to).color(t.text));
-                    ui.end_row();
-                }
-            });
-        }
-        None => {
-            ui.horizontal(|ui| {
-                crate::progress::spinner(ui, 12.0);
-                ui.label(egui::RichText::new(crate::i18n::tr("Checking names…")).color(t.text_dim));
-            });
-        }
-    }
-    let more = total.saturating_sub(RENAME_PREVIEW_ROWS);
-    if more > 0 {
-        ui.label(egui::RichText::new(crate::i18n::tr_format!("… and {more} more", more = more)).color(t.text_dim));
-    }
-}
-
-/// The body of the RenamePerson dialog.
-fn rename_person_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut Dialog) {
-    let Dialog::RenamePerson { from, to, merge } = dlg else { return };
-    let submitted = dialog_field(ui, "field:personName", to, "Name");
-    let plan = person_rename_plan(&app.session.catalog, from, to);
-    if !plan.needs_merge {
-        *merge = false;
-    }
-    if submitted && plan.block.is_none() && (!plan.needs_merge || *merge) {
-        *confirm = true;
-    }
-    if let Some(why) = plan.block {
-        ui.label(egui::RichText::new(crate::i18n::tr(why)).color(t.caution));
-    } else {
-        ui.label(
-            egui::RichText::new(crate::i18n::tr_format!(
-                "Renames {n} face{} across the library. The files are not changed.",
-                if plan.faces == 1 { "" } else { "s" },
-                n = plan.faces
-            ))
-            .color(t.text_dim),
-        );
-    }
-    if plan.needs_merge {
-        ui.label(
-            egui::RichText::new(crate::i18n::tr_format!(
-                "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
-                to = to.trim()
-            ))
-            .color(t.caution),
-        );
-        let r = ui.checkbox(merge, crate::i18n::tr("Combine with the existing person"));
-        crate::widgets::register(ui, "check:personMerge", r.rect);
-    }
-}
-
-/// The body of the RenameKeyword dialog.
-fn rename_keyword_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut Dialog) {
-    let Dialog::RenameKeyword { from, to } = dlg else { return };
-    let n = app.caches.dialog_count(&app.session.catalog, ("renameKeyword", from.as_str()), || {
-        app.session.catalog.photos().filter(|p| p.meta.keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(k, from))).count()
-    });
-    if dialog_field(ui, "field:keywordName", to, "New name") {
-        *confirm = true;
-    }
-    ui.label(
-        egui::RichText::new(crate::i18n::tr_format!(
-            "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.",
-            if n == 1 { "" } else { "s" },
-            from = from,
-            n = n
-        ))
-        .color(t.text_dim),
-    );
+    // Like the existing Smart Name consumer, this plain field has no programmatic
+    // revert or completion path. Preserve its observed one-Escape whole-dialog close.
+    eligible && shown.escaped
 }
 
 /// The body of the MergeKeywords dialog.
@@ -1312,8 +1588,14 @@ fn merge_keywords_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, c
         .collect();
     ui.horizontal_wrapped(|ui| {
         for k in options {
-            if ui.add(egui::Button::new(egui::RichText::new(&k).color(t.text_label)).corner_radius(10.0)).clicked() {
-                *into = k;
+            use craft::ui::contract::{Props as _, Show as _};
+            // a keyword chip: a small framework button named by the keyword
+            let chip = craft::ui::buttons::Button::new(k.clone()).id_salt(("keywordIntoChip", &k)).size(craft::theme::ControlSize::Sm).show(ui);
+            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                crate::widgets::register_response(format!("button:keywordInto-{k}"), chip.response.rect, &chip.response);
+                if chip.clicked() {
+                    *into = k;
+                }
             }
         }
     });
@@ -1321,29 +1603,80 @@ fn merge_keywords_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, c
 
 /// The body of the NewAlbum dialog.
 fn new_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, confirm: &mut bool, dlg: &mut Dialog) {
-    let Dialog::NewAlbum { name, folder, include_selected, .. } = dlg else { return };
-    if dialog_field(ui, "field:albumName", name, "Name") {
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    // Respect an explicit native presentation scope without changing the
+    // installed generic dialog's supported-SDK default.
+    let Dialog::NewAlbum { name, folder, include_selected, .. } = dlg else {
+        return;
+    };
+    if new_album_name_field(ui, name) {
         *confirm = true;
     }
-    // as in Lightroom, the option is only there when something is selected
     if !*folder && !app.session.selected().is_empty() {
         ui.add_space(6.0);
-        let r = ui.checkbox(include_selected, crate::i18n::tr("Include selected photos"));
-        crate::widgets::register(ui, "check:albumIncludeSelected", r.rect);
+        let mut candidate_include = *include_selected;
+        let shown = Checkbox::new(Bind::bound(&mut candidate_include))
+            .id_salt("albumIncludeSelected")
+            .label(crate::i18n::tr("Include selected photos").to_owned())
+            .show(ui);
+        if ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            *include_selected = candidate_include;
+        }
+        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+            crate::widgets::register_response("check:albumIncludeSelected", shown.response.rect, &shown.response);
+        }
     }
+}
+
+// Keep the established single-field dialog contract local to this workflow:
+// initial select-all, native/SDK Tab ownership, submit and refusal refocus.
+fn new_album_name_field(ui: &mut egui::Ui, value: &mut String) -> bool {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::runtime::focus::{self, FocusTarget};
+    use craft::ui::text::TextField;
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
+    let shown = TextField::new(crate::i18n::tr("Name").to_owned(), Bind::bound(value))
+        .id_salt("field:albumName")
+        .placeholder(crate::i18n::tr("Name").to_owned())
+        .limit(None)
+        .select_on_focus()
+        .submits()
+        .show_at(ui, rect);
+    if real {
+        crate::widgets::register_response("field:albumName", shown.response.rect, &shown.response);
+    }
+    if real
+        && ui.is_enabled()
+        && (just_opened(ui, "field:albumName")
+            || (!shown.response.has_focus()
+                && !shown.submitted
+                && !shown.escaped
+                && shown.left_by_tab.is_none()
+                && ui.memory(|memory| memory.focused().is_none())))
+    {
+        focus::request(ui.ctx(), FocusTarget::Id(shown.response.id));
+    }
+    real && ui.is_enabled() && shown.submitted
 }
 
 /// The body of the PasteSettings dialog.
 fn paste_settings_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::PasteSettings { groups } = dlg else { return };
     let n = app.session.selected().len();
-    ui.label(
-        egui::RichText::new(crate::i18n::tr_format!(
-            "Paste into {n} photo{} — only settings that were copied are pasted",
-            if n == 1 { "" } else { "s" },
-            n = n
-        ))
-        .color(t.text_dim),
+    // (not selectable: a selectable label senses clicks, and the framework's measuring run lays it out once more at
+    // another place in the same pass, which egui reports as the same widget id used twice)
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "Paste into {n} photo{} — only settings that were copied are pasted",
+                if n == 1 { "" } else { "s" },
+                n = n
+            ))
+            .color(t.text_dim),
+        )
+        .selectable(false),
     );
     group_checklist(ui, "pasteGroup", groups);
 }
@@ -1357,20 +1690,34 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
     let pages = n.div_ceil(options.columns * options.rows);
     ui.label(contact_sheet_summary(n, pages));
     field(ui, "Paper", |ui| {
-        let c = crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
-            ui.selectable_value(&mut options.paper, "a4".into(), "A4");
-            ui.selectable_value(&mut options.paper, "letter".into(), crate::i18n::tr("Letter"));
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
+        let entries = [
+            craft::ui::contract::Entry::new("a4".to_owned(), "A4".to_owned()),
+            craft::ui::contract::Entry::new("letter".to_owned(), crate::i18n::tr("Letter").to_owned()),
+        ];
+        if let Some(paper) = crate::widgets::select(
+            ui,
+            "combo:contactSheetPaper",
+            crate::i18n::tr("Paper"),
+            options.paper.clone(),
+            &entries,
+            Some(options.paper.clone()),
+            None,
+        ) {
+            options.paper = paper;
+        }
     });
-    ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
+    dialog_check(ui, "check:contactSheetLandscape", "Landscape", &mut options.landscape);
     field(ui, "Columns", |ui| {
-        ui.add(egui::DragValue::new(&mut options.columns).range(1..=8));
+        let mut columns = options.columns as i32;
+        whole_number(ui, "field:contactSheetColumns", "Columns", &mut columns, 1..=8, "");
+        options.columns = columns.clamp(1, 8) as usize;
     });
     field(ui, "Rows", |ui| {
-        ui.add(egui::DragValue::new(&mut options.rows).range(1..=10));
+        let mut rows = options.rows as i32;
+        whole_number(ui, "field:contactSheetRows", "Rows", &mut rows, 1..=10, "");
+        options.rows = rows.clamp(1, 10) as usize;
     });
-    ui.checkbox(&mut options.captions, crate::i18n::tr("Filename captions"));
+    dialog_check(ui, "check:contactSheetCaptions", "Filename captions", &mut options.captions);
     ui.label(crate::i18n::tr("150 dpi · sRGB · current edits · fit without cropping"));
     ui.label(crate::i18n::tr("Choose a PDF destination after confirming. Print the PDF from your viewer."));
 }
@@ -1380,454 +1727,9 @@ fn contact_sheet_summary(n: usize, pages: usize) -> String {
     crate::i18n::tr_format!("{n} selected photo{} · {pages} page{}", crate::i18n::plural_s(n), crate::i18n::plural_s(pages), n = n, pages = pages)
 }
 
-/// The body of the Export dialog.
+/// Export keeps the established dialog chrome and confirmation authority.
 fn export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } = dlg else { return };
-    let n = app.session.selection.ids.len().max(1);
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
-    export_preset_row(app, ui, opts, full_size, resize, limit_kb);
-    ui.add_space(4.0);
-    export_format_rows(ui, t, opts);
-    export_color_rows(ui, t, opts);
-    export_quality_rows(ui, opts, limit_kb);
-    if opts.format.is_rendered() {
-        export_size(ui, full_size, resize, &mut opts.ppi);
-        export_output_rows(app, ui, opts, *full_size, *resize);
-    }
-    ui.add_space(4.0);
-    export_naming_rows(ui, opts);
-    export_destination_rows(app, ui, t, opts, dir);
-    export_save_preset_row(app, ui, opts, *full_size, resize, *limit_kb, preset_name);
-}
-
-/// Export dialog: load a built-in or saved set of options.
-fn export_preset_row(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    opts: &mut ExportOptions,
-    full_size: &mut bool,
-    resize: &mut Resize,
-    limit_kb: &mut u32,
-) {
-    // Preset: load a built-in or saved set of options into the dialog
-    field(ui, "Preset", |ui| {
-        let mut chosen = None;
-        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).show_ui(ui, |ui| {
-            let mut builtin = true;
-            for (p, b) in app.session.all_export_presets() {
-                if builtin && !b {
-                    ui.separator();
-                }
-                builtin = b;
-                let r = ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b));
-                let r = match preset_lzw_note(&p.params) {
-                    Some(note) => r.on_hover_text(crate::i18n::tr(note)),
-                    None => r,
-                };
-                if r.clicked() {
-                    chosen = Some(p.name);
-                }
-            }
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Preset"));
-        crate::widgets::register(ui, "combo:exportPreset", c.response.rect);
-        if let Some(name) = chosen
-            && let Ok(params) = app.session.export_params(&json!({"preset": name}))
-        {
-            let o = lightcraft_engine::export::ExportOptions::from_json(&params);
-            *full_size = o.resize.is_none();
-            *resize = o.resize.unwrap_or_default();
-            *limit_kb = o.limit_kb.unwrap_or(0);
-            *opts = o;
-        }
-    });
-}
-
-/// Export dialog: the format, its variants and the bit depth.
-fn export_format_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
-    use lightcraft_engine::export::ExportFormat as F;
-    let before = opts.format;
-    // "Rendered DNG" is a DNG option (below), not a format of its own in this list
-    let mut shown = if opts.format == F::RenderedDng { F::Dng } else { opts.format };
-    choices(
-        ui,
-        "Format",
-        "exportFormat",
-        &[
-            (F::Jpeg, "JPEG"),
-            (F::Png, "PNG"),
-            (F::Tiff, "TIFF"),
-            (F::Psd, "PSD"),
-            (F::Webp, "WebP"),
-            (F::Avif, "AVIF"),
-            (F::Jxl, "JPEG XL"),
-            (F::Dng, "DNG"),
-            (F::Original, "Original files"),
-        ],
-        &mut shown,
-    );
-    if shown != opts.format && !(shown == F::Dng && opts.format == F::RenderedDng) {
-        opts.format = shown;
-    }
-    if matches!(opts.format, F::Dng | F::RenderedDng) {
-        choices(ui, "DNG of", "exportDngKind", &[(F::Dng, "Raw data"), (F::RenderedDng, "Rendered photo")], &mut opts.format);
-    }
-    if !opts.format.is_rendered() {
-        let note = if opts.format == F::Dng {
-            "Raw photos as DNG, with the edits embedded. Size, color and output options don't apply."
-        } else {
-            "The original files, unchanged, each with an XMP sidecar holding its edits."
-        };
-        ui.label(egui::RichText::new(note).color(t.text_dim));
-    }
-    if opts.format != before {
-        // each format starts at its own default depth (TIFF 16-bit, others 8-bit)
-        opts.bit_depth = None;
-    }
-    let rendered = opts.format.is_rendered();
-    let depths = lightcraft_engine::export::ExportOptions::bit_depths(opts.format);
-    if rendered && depths.len() > 1 {
-        let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(depths[0].0);
-        choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
-        opts.bit_depth = Some(bd);
-    }
-}
-
-/// Export dialog: HDR output and the color space it implies (or the choice of one).
-fn export_color_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
-    use lightcraft_engine::export::ExportFormat as F;
-    let rendered = opts.format.is_rendered();
-    if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif | F::Png | F::Jxl) {
-        let tip = crate::i18n::tr(
-            "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float",
-        );
-        ui.checkbox(&mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
-        if opts.hdr && !opts.hdr_output() {
-            ui.label(egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
-        }
-        if opts.hdr && opts.format == F::Avif {
-            use lightcraft_engine::export::HdrCurve as H;
-            choices(ui, "HDR curve", "exportHdrCurve", &[(H::Pq, "PQ"), (H::Hlg, "HLG")], &mut opts.hdr_transfer);
-        }
-    }
-    if !rendered {
-    } else if opts.format == F::Avif && opts.hdr {
-        let label = if opts.hdr_transfer == lightcraft_engine::export::HdrCurve::Hlg {
-            crate::i18n::tr("Color space: Rec. 2020 HLG (HDR AVIF)")
-        } else {
-            crate::i18n::tr("Color space: Rec. 2020 PQ (HDR AVIF)")
-        };
-        ui.label(egui::RichText::new(label).color(t.text_dim));
-    } else if opts.format == F::Png && opts.hdr {
-        ui.label(egui::RichText::new(crate::i18n::tr("Color space: Rec. 2020 PQ, 16-bit (HDR PNG)")).color(t.text_dim))
-            .on_hover_text(crate::i18n::tr("Viewers that don't read the PNG cICP chunk show PQ values as sRGB: flat and washed out. For a picture that looks right everywhere, use JPEG (gain map)."));
-    } else if opts.format == F::Jxl && opts.hdr {
-        ui.label(egui::RichText::new(crate::i18n::tr("Color space: Rec. 2020 PQ (HDR JPEG XL)")).color(t.text_dim));
-    } else if opts.format == F::Avif {
-        ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
-    } else {
-        use lightcraft_engine::export::OutputSpace as C;
-        choices(
-            ui,
-            "Color space",
-            "exportColorSpace",
-            &[(C::Srgb, "sRGB"), (C::DisplayP3, "P3"), (C::AdobeRgb, "Adobe RGB"), (C::ProPhoto, "ProPhoto"), (C::Rec2020, "Rec.2020")],
-            &mut opts.color_space,
-        );
-        if opts.effective_space() != opts.color_space {
-            let note = "Lossy JPEG XL writes Adobe RGB and ProPhoto as Rec. 2020; choose Lossless to keep them.";
-            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
-        }
-    }
-}
-
-/// Export dialog: quality and the other options of a lossy or JPEG XL file.
-fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &mut u32) {
-    use lightcraft_engine::export::ExportFormat as F;
-    if opts.format == F::Jxl {
-        let tip = "Mathematically lossless: every pixel is kept exactly (larger files)";
-        ui.checkbox(&mut opts.jxl_lossless, crate::i18n::tr("Lossless")).on_hover_text(crate::i18n::tr(tip));
-    }
-    if matches!(opts.format, F::Jpeg | F::Avif) || (opts.format == F::Jxl && !opts.jxl_lossless) {
-        let mut q = opts.quality as f64;
-        if num(ui, &QUALITY, &mut q) {
-            opts.quality = q as u8;
-        }
-    }
-    if opts.format == F::Jxl {
-        use lightcraft_engine::export::JxlEffort as E;
-        choices(ui, "Effort", "exportJxlEffort", &[(E::Fast, "Fast"), (E::Normal, "Normal")], &mut opts.jxl_effort);
-        let tip = "Shows a coarse version first and refines it as the file loads";
-        ui.checkbox(&mut opts.jxl_progressive, crate::i18n::tr("Progressive")).on_hover_text(crate::i18n::tr(tip));
-    }
-    if opts.format == F::Jpeg {
-        let mut k = *limit_kb as f64;
-        if num(ui, &LIMIT_KB, &mut k) {
-            *limit_kb = k as u32;
-        }
-    }
-}
-
-/// Export dialog: sharpening, metadata and the watermark of a rendered photo.
-fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions, full_size: bool, resize: Resize) {
-    use lightcraft_engine::export::{MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
-    choices(
-        ui,
-        "Sharpen",
-        "exportSharpen",
-        &[(S::None, "None"), (S::Screen, "Screen"), (S::Matte, "Matte"), (S::Glossy, "Glossy")],
-        &mut opts.sharpen,
-    );
-    if opts.sharpen != S::None {
-        choices(ui, "Amount", "exportSharpenAmount", &[(A::Low, "Low"), (A::Standard, "Standard"), (A::High, "High")], &mut opts.sharpen_amount);
-    }
-    choices(
-        ui,
-        "Metadata",
-        "exportMetadata",
-        &[(M::All, "All"), (M::AllExceptCamera, "No camera"), (M::Copyright, "Copyright"), (M::None, "None")],
-        &mut opts.metadata,
-    );
-    if !matches!(opts.metadata, M::None | M::Copyright) {
-        ui.checkbox(&mut opts.remove_location, crate::i18n::tr("Remove location info"));
-    }
-    export_watermark(app, ui, opts, full_size, resize);
-}
-
-/// Export dialog: the watermark switch, its preview and its settings.
-fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions, full_size: bool, resize: Resize) {
-    let mut wm_on = opts.watermark.is_some();
-    if ui.checkbox(&mut wm_on, crate::i18n::tr("Watermark")).changed() {
-        opts.watermark = wm_on.then(|| lightcraft_engine::export::Watermark { text: "© ".into(), ..Default::default() });
-    }
-    let wm_shown = opts.watermark.clone();
-    if let Some(wm) = &wm_shown {
-        watermark_preview(app, ui, wm, (!full_size).then_some(resize));
-    }
-    if let Some(wm) = &mut opts.watermark {
-        // text, or a graphic (a logo with transparency)
-        let mut graphic = !wm.image.is_empty() || ui.data(|d| d.get_temp::<bool>(egui::Id::unique("wm-graphic"))).unwrap_or(false);
-        let before = graphic;
-        choices(ui, "Style", "exportWmStyle", &[(false, "Text"), (true, "Graphic")], &mut graphic);
-        if graphic != before {
-            ui.data_mut(|d| d.insert_temp(egui::Id::unique("wm-graphic"), graphic));
-            if !graphic {
-                wm.image.clear();
-            }
-        }
-        if graphic {
-            field(ui, "Graphic", |ui| {
-                trailing_button_row(ui, |ui| {
-                    if app.services.pick_files.is_some()
-                        && crate::widgets::text_button(ui, "exportWmChoose", crate::i18n::tr("Choose…"), false).clicked()
-                        && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next())
-                    {
-                        wm.image = f;
-                    }
-                    crate::widgets::named(
-                        ui.add(egui::TextEdit::singleline(&mut wm.image).hint_text("logo.png").desired_width(ui.available_width())),
-                        crate::i18n::tr("Image"),
-                    );
-                });
-            });
-            let mut width = wm.image_width as f64 * 100.0;
-            if num(ui, &WM_IMAGE_WIDTH, &mut width) {
-                wm.image_width = (width / 100.0) as f32;
-            }
-        } else {
-            choices(
-                ui,
-                app.ui.language.tr("Text direction"),
-                "exportWmOrientation",
-                &[(false, app.ui.language.tr("Horizontal text")), (true, app.ui.language.tr("Vertical text"))],
-                &mut wm.vertical,
-            );
-            field(ui, "Text", |ui| {
-                crate::widgets::named(
-                    ui.add(
-                        egui::TextEdit::multiline(&mut wm.text)
-                            .desired_rows(2)
-                            .hint_text(crate::i18n::tr("© Your Name"))
-                            .desired_width(f32::INFINITY),
-                    ),
-                    crate::i18n::tr("Text"),
-                )
-            });
-        }
-        choices(ui, "Position", "exportWmAnchor", &WM_POSITIONS, &mut wm.anchor);
-        choices(ui, "Rotate", "exportWmRotation", &[(0u16, "0°"), (90, "90°"), (180, "180°"), (270, "270°")], &mut wm.rotation);
-        let mut size = wm.size as f64 * 100.0;
-        if !graphic && num(ui, &WM_SIZE, &mut size) {
-            wm.size = (size / 100.0) as f32;
-        }
-        let mut op = wm.opacity as f64 * 100.0;
-        if num(ui, &WM_OPACITY, &mut op) {
-            wm.opacity = (op / 100.0) as f32;
-        }
-        // like Lightroom Classic: a margin from the side edges and one from the top and bottom
-        // edges, each unused (greyed) when the position is centred along that axis
-        use lightcraft_engine::export::Anchor as P;
-        let across = !matches!(wm.anchor, P::Top | P::Center | P::Bottom);
-        if let Some(v) = crate::widgets::slider(ui, &WM_INSET_X, wm.inset_x as f64 * 100.0, across, None).value {
-            wm.inset_x = (v / 100.0) as f32;
-        }
-        let down = !matches!(wm.anchor, P::Left | P::Center | P::Right);
-        if let Some(v) = crate::widgets::slider(ui, &WM_INSET_Y, wm.inset_y as f64 * 100.0, down, None).value {
-            wm.inset_y = (v / 100.0) as f32;
-        }
-        if !graphic {
-            ui.checkbox(&mut wm.shadow, crate::i18n::tr("Shadow"));
-        }
-    }
-    if opts.watermark != wm_shown {
-        // the preview above was drawn with the old settings
-        ui.ctx().request_repaint();
-    }
-}
-
-/// Export dialog: compression and the file name.
-fn export_naming_rows(ui: &mut egui::Ui, opts: &mut ExportOptions) {
-    use lightcraft_engine::export::ExportFormat as F;
-    if opts.format == F::Tiff {
-        use lightcraft_engine::export::TiffCompression as Z;
-        choices(ui, "Compression", "exportTiffCompression", &[(Z::None, "None"), (Z::Lzw, "LZW"), (Z::Deflate, "ZIP")], &mut opts.tiff_compression);
-        // issue #2882: LZW stays as picked, with a note on what it costs
-        if let Some(note) = tiff_lzw_note(opts) {
-            let t = Tokens::get(ui.ctx());
-            let r = ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
-            crate::widgets::register(ui, "note:exportTiffLzw", r.rect);
-        }
-    }
-    if opts.format == F::Dng {
-        use lightcraft_engine::export::DngCompression as Z;
-        choices(
-            ui,
-            "Compression",
-            "exportDngCompression",
-            &[(Z::Lossless, "Lossless"), (Z::Deflate, "ZIP"), (Z::Uncompressed, "None"), (Z::Lossy, "Lossy")],
-            &mut opts.dng_compression,
-        );
-    }
-    let naming_id = egui::Id::unique("export-naming");
-    let tags_open = field(ui, "File name", |ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let w = crate::import::tag_field_width(ui);
-        crate::widgets::named(
-            ui.add(
-                egui::TextEdit::singleline(&mut opts.naming)
-                    .id(naming_id)
-                    .hint_text("{name}-{seq}  ·  {date}  ·  {title}  ·  {folder}")
-                    .desired_width(w),
-            ),
-            crate::i18n::tr("File name"),
-        );
-        crate::import::tag_toggle(ui, "exportNaming")
-    });
-    if tags_open {
-        crate::import::tag_help(ui, "exportNaming", &mut opts.naming, naming_id);
-    }
-    crate::import::unknown_tags_warning(ui, &opts.naming);
-    if opts.naming.contains("{seq") {
-        let mut v = opts.start_number as f64;
-        if num(ui, &START_NUMBER, &mut v) {
-            opts.start_number = v as u32;
-        }
-    }
-}
-
-/// Export dialog: where the files go and what happens when one exists.
-fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions, dir: &mut String) {
-    // like Lightroom Classic's Export To: one folder, or each photo's own folder (not on
-    // the web, where originals live in the browser's storage, not in folders)
-    use lightcraft_engine::export::DestinationMode as D;
-    if !cfg!(target_arch = "wasm32") || opts.destination_mode != D::SpecificFolder {
-        choices(
-            ui,
-            "Export to",
-            "exportDestinationMode",
-            &[(D::SpecificFolder, "Specific folder"), (D::SameAsOriginal, "Same folder as original photo")],
-            &mut opts.destination_mode,
-        );
-    }
-    if opts.destination_mode == D::SpecificFolder {
-        field(ui, "Folder", |ui| {
-            trailing_button_row(ui, |ui| {
-                if app.services.pick_folder.is_some()
-                    && crate::widgets::text_button(ui, "exportChooseFolder", crate::i18n::tr("Choose…"), false).clicked()
-                    && let Some(pick) = app.services.pick_folder.as_mut()
-                    && let Some(d) = pick()
-                {
-                    *dir = d;
-                }
-                crate::widgets::named(ui.add(egui::TextEdit::singleline(dir).desired_width(ui.available_width())), crate::i18n::tr("Folder"));
-            });
-        });
-    }
-    field(ui, "Subfolder", |ui| {
-        crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(&mut opts.subfolder).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY)),
-            crate::i18n::tr("Subfolder"),
-        )
-    });
-    use lightcraft_engine::export::Conflict as K;
-    choices(ui, "If file exists", "exportConflict", &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")], &mut opts.conflict);
-    export_apple_photos_rows(ui, t, opts);
-}
-
-/// Export dialog, after export: Apple Photos imports the files written (macOS only).
-#[cfg(target_os = "macos")]
-fn export_apple_photos_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
-    let r = ui.checkbox(&mut opts.add_to_photos, crate::i18n::tr("Add to Apple Photos"));
-    crate::widgets::register(ui, "exportAddToPhotos", r.rect);
-    if opts.add_to_photos {
-        field(ui, "Album", |ui| {
-            crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(&mut opts.photos_album).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY)),
-                crate::i18n::tr("Album"),
-            )
-        });
-        ui.label(
-            egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos.")).size(11.0).color(t.text_dim),
-        );
-    }
-}
-
-/// Nowhere to add them: a setting carried over from a Mac is dropped, not refused.
-#[cfg(not(target_os = "macos"))]
-fn export_apple_photos_rows(_ui: &mut egui::Ui, _t: &Tokens, opts: &mut ExportOptions) {
-    opts.add_to_photos = false;
-}
-
-/// Export dialog: save the options as a preset.
-fn export_save_preset_row(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    opts: &ExportOptions,
-    full_size: bool,
-    resize: &Resize,
-    limit_kb: u32,
-    preset_name: &mut String,
-) {
-    ui.add_space(4.0);
-    field(ui, "Save preset", |ui| {
-        trailing_button_row(ui, |ui| {
-            let named = !preset_name.trim().is_empty();
-            if crate::widgets::text_button(ui, "exportSavePreset", crate::i18n::tr("Save"), false).clicked() && named {
-                let params = export_dialog_params(opts, full_size, resize, limit_kb);
-                match app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params})) {
-                    Ok(_) => {
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Saved export preset “{}”", preset_name.trim()));
-                        preset_name.clear();
-                    }
-                    Err(e) => app.toast(ui.ctx(), e),
-                }
-            }
-            crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(preset_name).hint_text(crate::i18n::tr("Preset name")).desired_width(ui.available_width())),
-                crate::i18n::tr("Preset name"),
-            );
-        });
-    });
+    export::export_body(app, ui, t, dlg);
 }
 
 /// The body of the KeywordTag dialog.
@@ -1848,90 +1750,116 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     else {
         return;
     };
-    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Name")).color(t.text_dim));
-    // several fields: the name takes the focus when the dialog opens, not after
-    let r = crate::text_field::TextField::singleline("field:keywordTagName", name)
-        .hint(crate::i18n::tr("Keyword Name"))
-        .width(f32::INFINITY)
-        .select_on_focus(true)
-        .show(ui);
-    if ui.is_enabled() && just_opened(ui, "keyword-tag") {
-        r.response.request_focus();
+
+    use craft::behavior::Proposal;
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
+    use craft::ui::layout_components::Row;
+
+    // These are dialog drafts; only the existing parent confirmation dispatches a command.
+    fn field(ui: &mut egui::Ui, caller: (Option<&str>, Option<&str>), alias: &str, label: &str, hint: &str, value: &mut String, first: bool) -> bool {
+        use craft::ui::text::TextField;
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        // (a measuring copy has an id of its own: two live widgets under one id in a pass are an egui id clash)
+        let item = |measuring: bool| {
+            let field = TextField::new(crate::i18n::tr(label).to_owned(), Bind::given(value.clone()))
+                .id_salt(("keyword-tag-fields", caller, alias, measuring))
+                .placeholder(crate::i18n::tr(hint).to_owned())
+                .limit(None)
+                .submits();
+            if first { field.select_on_focus() } else { field }
+        };
+        if !real {
+            let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+            let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item(true).show(ui));
+            ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), size.y), egui::Sense::hover());
+            return false;
+        }
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), 24.0), egui::Sense::hover());
+        let shown = item(false).show_at(ui, rect);
+        crate::widgets::register_response(alias, shown.response.rect, &shown.response);
+        if !ui.is_enabled() {
+            return false;
+        }
+        // Public landed events include typing and cancellation's restored draft, not just Return commits.
+        if let Some(next) = shown.events.landed() {
+            *value = next.clone();
+        }
+        if first && just_opened(ui, "keyword-tag") {
+            craft::ui::runtime::focus::request(ui.ctx(), craft::ui::runtime::focus::FocusTarget::Id(shown.response.id));
+        }
+        shown.submitted
     }
-    if r.ending == Some(crate::text_field::Ending::Return) {
+
+    fn option(ui: &mut egui::Ui, caller: (Option<&str>, Option<&str>), alias: &str, label: String, value: &mut bool, enabled: bool) {
+        let current = *value;
+        let enabled = enabled && ui.is_enabled();
+        let item = |measuring: bool| {
+            Checkbox::new(Bind::given(current))
+                .id_salt(("keyword-tag-options", caller, alias, measuring))
+                .label(label.clone())
+                .enabled(enabled)
+                .sizing(Sizing::FillWidth)
+        };
+        if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+            // Use the public labelled flow's ideal size without creating a live control or publishing a target.
+            let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+            let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item(true).show(ui));
+            ui.allocate_exact_size(size, egui::Sense::hover());
+            return;
+        }
+        let out = item(false).show(ui);
+        crate::widgets::register_response(alias, out.response.rect, &out.response);
+        #[cfg(test)]
+        keyword_tag_options_flow_tests::observe(ui, alias, &out.response);
+        if let Some(&next) = out.events.committed()
+            && enabled
+            && next != current
+        {
+            *value = next;
+        }
+    }
+    // Only the actual edit target or creation parent identifies the caller; text, flags and selection are drafts.
+    let caller = (editing.as_deref(), parent.as_deref());
+
+    // (captions, not selectable text: a selectable label senses the pointer, and the dialog's measuring run of the body
+    // gave each one a second use of its id, which egui's debug build painted over the fields)
+    let caption = |ui: &mut egui::Ui, text: &str| {
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(text)).color(t.text_dim)).selectable(false));
+    };
+    caption(ui, "Keyword Name");
+    if field(ui, caller, "field:keywordTagName", "Keyword Name", "Keyword Name", name, true) {
         *confirm = true;
     }
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(crate::i18n::tr("Synonyms")).color(t.text_dim));
-    // Return in either field creates (or saves) the keyword
-    let r = crate::text_field::TextField::singleline("field:keywordSynonyms", synonyms)
-        .hint(crate::i18n::tr("Separated by commas"))
-        .width(f32::INFINITY)
-        .show(ui);
-    if r.ending == Some(crate::text_field::Ending::Return) {
+    caption(ui, "Synonyms");
+    if field(ui, caller, "field:keywordSynonyms", "Synonyms", "Separated by commas", synonyms, false) {
         *confirm = true;
     }
     ui.add_space(6.0);
+
     if editing.is_none() {
-        if let Some(p) = parent {
-            let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
-            crate::widgets::register(ui, "check:keywordInside", r.rect);
+        if let Some(p) = parent.as_ref() {
+            option(ui, caller, "check:keywordInside", crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")), inside, true);
         }
-        let n = app.session.selection.ids.len();
-        let r = ui.add_enabled(n > 0, egui::Checkbox::new(add_to_selected, crate::i18n::tr("Add to Selected Photos")));
-        crate::widgets::register(ui, "check:keywordAddToSelected", r.rect);
+        option(
+            ui,
+            caller,
+            "check:keywordAddToSelected",
+            crate::i18n::tr("Add to Selected Photos").to_owned(),
+            add_to_selected,
+            !app.session.selection.ids.is_empty(),
+        );
         ui.add_space(4.0);
     }
-    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Tag Options")).color(t.text_dim));
-    for (on, label, id) in [
+    caption(ui, "Keyword Tag Options");
+    for (on, label, alias) in [
         (include_on_export, "Include on Export", "check:keywordIncludeOnExport"),
         (export_containing, "Export Containing Keywords", "check:keywordExportContaining"),
         (export_synonyms, "Export Synonyms", "check:keywordExportSynonyms"),
         (person, "Person", "check:keywordPerson"),
     ] {
-        let r = ui.checkbox(on, crate::i18n::tr(label));
-        crate::widgets::register(ui, id, r.rect);
-    }
-}
-
-/// The body of the KeywordSet dialog.
-fn keyword_set_body(ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut Dialog) {
-    let Dialog::KeywordSet { replaces, name, slots, as_new } = dlg else { return };
-    ui.label(egui::RichText::new(crate::i18n::tr("Set name")).color(t.text_dim));
-    let r = crate::text_field::TextField::singleline("field:keywordSetName", name)
-        .hint(crate::i18n::tr("Set name"))
-        .width(f32::INFINITY)
-        .select_on_focus(true)
-        .show(ui);
-    if ui.is_enabled() && just_opened(ui, "keyword-set") {
-        r.response.request_focus();
-    }
-    let mut returned = r.ending == Some(crate::text_field::Ending::Return);
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(crate::i18n::tr("Keywords (⌥1–⌥9)")).color(t.text_dim));
-    slots.resize(9, String::new());
-    // equal columns of a set width (the window is still finding its own)
-    let w = 130.0;
-    egui::Grid::new("keyword-set-slots").num_columns(3).min_col_width(w).spacing([6.0, 4.0]).show(ui, |ui| {
-        for (i, slot) in slots.iter_mut().enumerate() {
-            let r = crate::text_field::TextField::singleline(&format!("field:keywordSetSlot:{}", i + 1), slot)
-                .hint(format!("⌥{}", i + 1))
-                .width(w)
-                .show(ui);
-            returned |= r.ending == Some(crate::text_field::Ending::Return);
-            if i % 3 == 2 {
-                ui.end_row();
-            }
-        }
-    });
-    if replaces.is_some() {
-        ui.add_space(6.0);
-        let r = ui.checkbox(as_new, crate::i18n::tr("Save as a new set"));
-        crate::widgets::register(ui, "check:keywordSetAsNew", r.rect);
-    }
-    // Return in any field saves the set
-    if returned {
-        *confirm = true;
+        option(ui, caller, alias, crate::i18n::tr(label).to_owned(), on, true);
     }
 }
 
@@ -1985,9 +1913,23 @@ fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);
-    let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));
-    crate::widgets::register(ui, "check:moveDontAsk", c.rect);
-    c.on_hover_text(crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on"));
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    // A measuring or disabled run edits a copy only; the draft takes the real run's answer.
+    let mut candidate = *dont_ask;
+    let hint = crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on");
+    let shown = Checkbox::new(Bind::bound(&mut candidate))
+        .id_salt("moveDontAsk")
+        .label(crate::i18n::tr("Don't ask again").to_owned())
+        .tooltip(hint.to_owned())
+        .show(ui);
+    if real && ui.is_enabled() {
+        *dont_ask = candidate;
+    }
+    if real {
+        crate::widgets::register_response("check:moveDontAsk", shown.response.rect, &shown.response);
+    }
 }
 
 /// The body of the LightroomCatalog dialog.
@@ -2022,63 +1964,59 @@ fn remove_folder_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     );
 }
 
-/// The body of the About dialog.
-fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::About = dlg else { return };
-    ui.set_min_width(820.0);
-    let tab_id = egui::Id::unique("about_tab");
-    let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for (i, (id, label)) in ABOUT_TABS.iter().enumerate() {
-            if crate::widgets::text_button(ui, &format!("aboutTab-{id}"), label, usize::from(tab) == i).clicked() {
-                tab = u8::try_from(i).unwrap_or(0);
-            }
-        }
+/// About owns its SDK layer. Never put it inside the legacy modal window.
+pub(crate) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: bool) {
+    if save_effect::active(app, root.ctx()) {
+        return save_effect::show_root(app, root, blocked);
+    }
+    if !matches!(app.ui.dialog, Some(Dialog::About)) {
+        return show(app, root.ctx(), blocked);
+    }
+    // A higher-priority native prompt owns this pass, including its dismissal event.
+    if blocked || crate::panels::library_problem::blocks_dialog_input(app) {
+        return;
+    }
+    use craft::ui::patterns::form_dialogs::{AboutDialog, AboutInfo, AboutLink};
+    // The channel's name and version line (Nightly: `0.21.0 (nightly-v1)`), and on Nightly the exact source
+    // commit, so a report can name the build (plain text, as the catalogs carry no translated sentence for it).
+    let version = match crate::channel::commit() {
+        Some(commit) => format!("{} · Nightly build {}", crate::channel::display_version(), &commit[..commit.len().min(12)]),
+        None => crate::channel::display_version(),
+    };
+    let info = AboutInfo::new(crate::channel::name(), crate::i18n::tr("A clean-room, pure-Rust photo library and raw developer."), version)
+        .community(AboutLink::new(crate::i18n::tr("Join the ArtCraft Discord"), crate::links::DISCORD))
+        .links([
+            AboutLink::new(crate::i18n::tr("LightCraft website"), crate::links::APP_PAGE),
+            AboutLink::new(crate::i18n::tr("Source code on GitHub"), crate::links::GITHUB),
+            AboutLink::new(crate::i18n::tr("ArtCraft — more creative apps"), crate::links::WEBSITE),
+        ])
+        .built_with(crate::i18n::tr_format!(
+            "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
+            crate::theme::font_credits(app.chinese_font.is_some())
+        ));
+    let dialog = AboutDialog::new(&info, credits::framework_credits());
+    let ctx = root.ctx().clone();
+    let (out, record) = craft::ui::runtime::inspect::record(root, egui::Id::unique("about-app-contract"), |ui| {
+        craft::ui::runtime::overlay::stack_place(&ctx, STACK_DIALOG, egui::Id::unique("lightcraft.dialog"), || dialog.show(ui))
     });
-    ui.data_mut(|d| d.insert_temp(tab_id, tab));
-    ui.separator();
-    match tab {
-        1 => crate::credits::contributors_ui(app, ui),
-        2 => crate::credits::models_ui(ui),
-        _ => {
-            ui.label(egui::RichText::new(crate::channel::name()).font(t.semibold(20.0)).color(t.text));
-            ui.label(crate::i18n::tr_format!(
-                "Version {} — a clean-room, pure-Rust photo library and raw developer.",
-                crate::channel::display_version()
-            ));
-            // Nightly only: the exact source commit, so a report can name the build (plain text, as the
-            // catalogs carry no translated sentence for a build identity).
-            if let Some(commit) = crate::channel::commit() {
-                ui.label(format!("Nightly build {}", &commit[..commit.len().min(12)]));
-            }
-            ui.label(crate::i18n::tr_format!(
-                "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
-                crate::theme::font_credits(app.chinese_font.is_some())
-            ));
-            ui.add_space(10.0);
-            let r = crate::button::Button::new("Join the ArtCraft Discord")
-                .primary()
-                .large()
-                .min_width(260.0)
-                .widget("button:aboutDiscord")
-                .tooltip(crate::links::DISCORD)
-                .show(ui);
-            if r.clicked() {
-                let _ = crate::links::open(app, crate::links::DISCORD);
-            }
-            ui.add_space(6.0);
-            for (label, url) in [
-                ("LightCraft website", crate::links::APP_PAGE),
-                ("Source code on GitHub", crate::links::GITHUB),
-                ("ArtCraft — more creative apps", crate::links::WEBSITE),
-            ] {
-                let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
-                if r.clicked() {
-                    let _ = crate::links::open(app, url);
-                }
-            }
+    // The framework dialog's window and its OK under the names every dialog has, with their real responses.
+    if !root.is_sizing_pass() && !craft::ui::runtime::measure::active(root.ctx()) {
+        crate::widgets::register_response("dialog:window", out.response.rect, &out.response);
+        let ok = [crate::i18n::tr("OK"), crate::i18n::tr("Close")];
+        if let Some(element) = record.iter().flat_map(|record| record.elements.iter()).find(|element| {
+            element.component == "Button"
+                && element.part.is_none()
+                && element.facts.as_ref().and_then(|facts| facts.name.as_deref()).is_some_and(|name| ok.contains(&name))
+        }) && let Some(response) = root.ctx().read_response(element.id)
+        {
+            crate::widgets::register_response("button:dialogOk", element.rect, &response);
         }
+    }
+    if let Some(url) = out.link {
+        let _ = crate::links::open(app, &url);
+    }
+    if out.closed.is_some() && matches!(app.ui.dialog, Some(Dialog::About)) {
+        app.ui.dialog = None;
     }
 }
 
@@ -2095,10 +2033,12 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::LightroomResult { .. } => lightroom_result_body(ui, dlg),
         Dialog::SystemInfo { .. } => system_info_body(ui, t, dlg),
         Dialog::AllMetadata { .. } => all_metadata_body(ui, t, dlg),
-        Dialog::SmartRules { .. } => smart_rules_body(app, ui, t, dlg),
+        Dialog::SmartRules { .. } => smart_rules_body(app, ui, t, close, dlg),
         Dialog::NewSmartAlbum { .. } => new_smart_album_body(app, ui, t, confirm, dlg),
         Dialog::CaptureTime { .. } => capture_time_body(app, ui, t, dlg),
-        Dialog::LabelNames { .. } => label_names_body(app, ui, t, dlg),
+        Dialog::LabelNames { .. } => {
+            *close |= label_names_body(app, ui, t, dlg);
+        }
         Dialog::Rename { .. } => rename_body(app, ui, t, dlg),
         Dialog::RenamePerson { .. } => rename_person_body(app, ui, t, confirm, dlg),
         Dialog::RenameKeyword { .. } => rename_keyword_body(app, ui, t, confirm, dlg),
@@ -2118,10 +2058,11 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             if dialog_field(ui, "field:presetName", name, "Preset name") {
                 *confirm = true;
             }
-            crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(group).hint_text(crate::i18n::tr("Group")).desired_width(f32::INFINITY)),
-                crate::i18n::tr("Group"),
-            );
+            crate::text_field::TextField::singleline("field:presetGroup", group)
+                .hint(crate::i18n::tr("Group"))
+                .label(crate::i18n::tr("Group"))
+                .width(f32::INFINITY)
+                .show(ui);
             ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
             group_checklist(ui, "presetInclude", groups);
         }
@@ -2137,7 +2078,8 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::Settings { tab } => crate::panels::settings::window(app, ui, tab, body_max),
         Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
         Dialog::KeywordTag { .. } => keyword_tag_body(app, ui, t, confirm, dlg),
-        Dialog::KeywordSet { .. } => keyword_set_body(ui, t, confirm, dlg),
+        // Edit Keyword Set owns its framework dialog above, not this legacy body dispatcher.
+        Dialog::KeywordSet { .. } => {}
         Dialog::MoveKeyword { .. } => move_keyword_body(ui, t, dlg),
         Dialog::DeleteKeyword { .. } => delete_keyword_body(ui, t, dlg),
         Dialog::SaveEffect { name, group, fields, amount, brush } => {
@@ -2161,9 +2103,29 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),
         Dialog::LensDatabase { .. } => crate::lens_db::offer(ui),
         Dialog::RemoveFolder { .. } => remove_folder_body(ui, t, dlg),
-        Dialog::About => about_body(app, ui, t, dlg),
+        // About is mounted on the root UI, not here: the framework shell has no body for it.
+        Dialog::About => {}
         Dialog::Shortcuts => crate::panels::keymap::body(app, ui, t),
         Dialog::ViewOptions => crate::panels::settings::view_options(app, ui, t),
-        Dialog::Print => crate::print_view::body(app, ui, t),
+        Dialog::Print => *close |= crate::print_view::body(app, ui, t),
     }
 }
+
+#[cfg(test)]
+#[path = "dialogs/smart_rules_flow_tests.rs"]
+mod smart_rules_flow_tests;
+
+#[cfg(test)]
+#[path = "dialogs/new_album_flow_tests.rs"]
+mod new_album_port_tests;
+
+#[cfg(test)]
+#[path = "dialogs/new_album_sdk_route_tests.rs"]
+mod new_album_sdk_route_tests;
+
+#[cfg(test)]
+#[path = "dialogs/keyword_tag_options_flow_tests.rs"]
+mod keyword_tag_options_flow_tests;
+#[cfg(test)]
+#[path = "dialogs/label_names_flow_tests.rs"]
+mod label_names_port_tests;

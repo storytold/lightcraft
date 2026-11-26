@@ -5,9 +5,9 @@
 
 use std::cmp::Ordering;
 
-use egui::RichText;
+use craft::ui::patterns::form_dialogs::{Contributor as FrameworkContributor, Credits as FrameworkCredits, ModelCredit as FrameworkModelCredit};
 
-use crate::{LightcraftApp, theme::Tokens};
+use egui::RichText;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
@@ -35,7 +35,49 @@ pub struct Model {
     pub lines_deleted: u64,
 }
 
+// Keep the baked, consent-filtered DTOs as the source of truth. The SDK owns
+// presentation; converting a row must not choose a name, sort it or open its link.
+impl From<&Contributor> for FrameworkContributor {
+    fn from(person: &Contributor) -> Self {
+        let mut row = Self::new(person.login)
+            .counts(person.prs, person.commits)
+            .lines(person.lines_added, person.lines_deleted)
+            .binary(person.binary_added, person.binary_deleted)
+            .active(person.first_commit, person.last_commit)
+            .profile(profile_url(person));
+        if let Some(name) = person.display_name {
+            row = row.display_name(name);
+        }
+        if let Some(name) = person.real_name {
+            row = row.real_name(name);
+        }
+        row
+    }
+}
+
+impl From<&Model> for FrameworkModelCredit {
+    fn from(model: &Model) -> Self {
+        Self::new(model.company, model.model, model.version).work(model.commits, model.lines_added, model.lines_deleted)
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/credits.rs"));
+
+/// The baked credits in the existing SDK's public data format, ready for an About consumer.
+///
+/// These tables never change at runtime. Share one immutable projection rather than
+/// allocating contributor profiles and both row vectors on each presentation pass.
+/// This does not install the SDK, render a dialog, read credit files or open links.
+pub fn framework_credits() -> &'static FrameworkCredits {
+    static CREDITS: std::sync::OnceLock<FrameworkCredits> = std::sync::OnceLock::new();
+    CREDITS.get_or_init(|| {
+        FrameworkCredits::new(
+            CONTRIBUTORS.iter().map(FrameworkContributor::from).collect::<Vec<_>>(),
+            MODELS.iter().map(FrameworkModelCredit::from).collect::<Vec<_>>(),
+            TOTAL_COMMITS,
+        )
+    })
+}
 
 /// Which name to show. Display and real names fall back to the `@username` when not given.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -174,6 +216,14 @@ pub fn sorted(list: &[Contributor], mode: NameMode, key: SortKey, ascending: boo
         let o = if ascending { o } else { o.reverse() };
         o.then_with(|| compare(a, b, mode, SortKey::Name)).then_with(|| a.login.cmp(b.login))
     });
+    // Someone with no date for a date sort (credited only through a merged pull request) follows everyone with one in
+    // either direction, as the About dialog lists them.
+    let undated = |c: &&Contributor| match key {
+        SortKey::FirstCommit => c.first_commit.is_empty(),
+        SortKey::LastCommit => c.last_commit.is_empty(),
+        _ => false,
+    };
+    v.sort_by_key(|c| undated(c));
     v
 }
 
@@ -198,105 +248,12 @@ fn day(iso: &str) -> &str {
     if iso.is_empty() { "—" } else { iso.get(..10).unwrap_or(iso) }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct View {
-    names: NameMode,
-    key: SortKey,
-    ascending: bool,
-    table: bool,
-}
-
-impl Default for View {
-    fn default() -> Self {
-        View { names: NameMode::Username, key: SortKey::FirstCommit, ascending: true, table: false }
-    }
-}
-
 /// The scrolling list's height: the About dialog is a fixed-size, centred window.
 const LIST_HEIGHT: f32 = 360.0;
 
 fn profile_url(c: &Contributor) -> String {
     format!("https://github.com/{}", c.login)
 }
-
-/// A contributor's name as a link to their GitHub profile, with the whole line as its tooltip.
-fn name_link(app: &mut LightcraftApp, ui: &mut egui::Ui, c: &Contributor, names: NameMode) {
-    if ui.link(c.name(names)).on_hover_text(c.summary()).clicked() {
-        let _ = crate::links::open(app, &profile_url(c));
-    }
-}
-
-/// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let id = egui::Id::unique("credits_view");
-    let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
-    ui.horizontal_wrapped(|ui| {
-        ui.label(crate::i18n::tr("Show"));
-        for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, crate::i18n::tr(m.label())).clicked() {
-                v.names = m;
-            }
-        }
-        ui.separator();
-        ui.label(crate::i18n::tr("Sort"));
-        let sort = crate::widgets::combo_box("credits_sort").selected_text(crate::i18n::tr(v.key.label().0)).show_ui(ui, |ui| {
-            for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, crate::i18n::tr(k.label().0)).clicked() {
-                    v.key = k;
-                    v.ascending = k.default_ascending();
-                }
-            }
-        });
-        crate::widgets::name_combo(&sort.response, crate::i18n::tr("Sort"));
-        let reverse =
-            crate::widgets::arrow_button(ui, "", if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown }, false);
-        reverse.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Reverse the order")));
-        if reverse.on_hover_text(crate::i18n::tr("Reverse the order")).clicked() {
-            v.ascending = !v.ascending;
-        }
-        ui.separator();
-        let r = ui.selectable_label(!v.table, crate::i18n::tr("Grab bag"));
-        crate::widgets::register(ui, "button:creditsGrabBag", r.rect);
-        if r.clicked() {
-            v.table = false;
-        }
-        let r = ui.selectable_label(v.table, crate::i18n::tr("Table"));
-        crate::widgets::register(ui, "button:creditsTable", r.rect);
-        if r.clicked() {
-            v.table = true;
-        }
-    });
-    let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
-    ui.label(RichText::new(crate::i18n::tr_format!("{} contributors · {} commits", list.len(), group(TOTAL_COMMITS))).small().color(t.text_dim));
-    ui.separator();
-    let list_h = crate::panels::dialogs::list_height(ui, LIST_HEIGHT);
-    if list.is_empty() {
-        ui.label(crate::i18n::tr("No contributor data was built into this copy."));
-    } else if v.table {
-        // The table scrolls vertically itself, under a fixed header; it only scrolls sideways
-        // once its columns are dragged wider than the dialog.
-        ui.allocate_ui(egui::vec2(ui.available_width(), list_h), |ui| {
-            ui.set_max_height(list_h);
-            egui::ScrollArea::horizontal().id_salt("credits_scroll").auto_shrink([false, false]).show(ui, |ui| table(app, ui, &list, &mut v));
-        });
-    } else {
-        egui::ScrollArea::vertical().id_salt("credits_scroll").max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (i, c) in list.iter().enumerate() {
-                    if i > 0 {
-                        ui.label(RichText::new("·").color(t.text_dim));
-                    }
-                    name_link(app, ui, c, v.names);
-                }
-            });
-        });
-    }
-    ui.data_mut(|d| d.insert_temp(id, v));
-}
-
-/// How the contributor table's spare width is shared out: all of it to Name.
-const CONTRIBUTOR_GROW: [f32; 10] = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
 /// How the model table's spare width is shared out: to Company and Model, the text columns.
 const MODEL_GROW: [f32; 6] = [1.0, 2.0, 0.0, 0.0, 0.0, 0.0];
@@ -371,72 +328,6 @@ fn aligned<R>(ui: &mut egui::Ui, right: bool, add: impl FnOnce(&mut egui::Ui) ->
 
 fn row_height(ui: &egui::Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Body) + 6.0
-}
-
-/// One contributor's table cells after the name, in `SortKey::ALL` order.
-fn cells(c: &Contributor) -> [String; 9] {
-    [
-        group(c.prs),
-        group(c.commits),
-        group(c.lines_added),
-        group(c.lines_deleted),
-        signed(c.lines_delta()),
-        group(c.binary_added),
-        group(c.binary_deleted),
-        day(c.first_commit).to_string(),
-        day(c.last_commit).to_string(),
-    ]
-}
-
-/// A contributor-table header. The sorted column is highlighted; its direction shows on the
-/// toolbar's sort-order button, so no arrow widens the column.
-fn header_text(k: SortKey) -> RichText {
-    RichText::new(crate::i18n::tr(k.label().1)).strong()
-}
-
-fn table(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
-    let h = row_height(ui);
-    let rows: Vec<[String; 9]> = list.iter().map(|c| cells(c)).collect();
-    let widths: Vec<f32> = SortKey::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, &k)| match i.checked_sub(1) {
-            None => natural(ui, header_text(k), list.iter().map(|c| c.name(v.names))),
-            Some(col) => natural(ui, header_text(k), rows.iter().filter_map(|r| r.get(col).cloned())),
-        })
-        .collect();
-    fitted_table(ui, "credits_table", &widths, &CONTRIBUTOR_GROW)
-        .header(h + 4.0, |mut header| {
-            for k in SortKey::ALL {
-                header.col(|ui| {
-                    let r = aligned(ui, k != SortKey::Name, |ui| ui.selectable_label(v.key == k, header_text(k)))
-                        .on_hover_text(crate::i18n::tr(k.label().0));
-
-                    if r.clicked() {
-                        if v.key == k {
-                            v.ascending = !v.ascending;
-                        } else {
-                            v.key = k;
-                            v.ascending = k.default_ascending();
-                        }
-                    }
-                });
-            }
-        })
-        .body(|mut body| {
-            for (c, cells) in list.iter().zip(rows) {
-                body.row(h, |mut row| {
-                    row.col(|ui| {
-                        aligned(ui, false, |ui| name_link(app, ui, c, v.names));
-                    });
-                    for text in cells {
-                        row.col(|ui| {
-                            aligned(ui, true, |ui| ui.label(text));
-                        });
-                    }
-                });
-            }
-        });
 }
 
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.
@@ -533,6 +424,63 @@ mod tests {
 
     fn logins(v: &[&Contributor]) -> Vec<&'static str> {
         v.iter().map(|c| c.login).collect()
+    }
+
+    #[test]
+    fn framework_contributors_preserve_absent_names_and_all_credit_fields() {
+        for (display, real) in [(None, None), (Some("Display name"), None), (None, Some("Real name")), (Some("Display name"), Some("Real name"))] {
+            let source = Contributor {
+                login: "some-user",
+                display_name: display,
+                real_name: real,
+                prs: u64::MAX,
+                commits: 18,
+                lines_added: 7,
+                lines_deleted: u64::MAX,
+                binary_added: 91,
+                binary_deleted: 65,
+                first_commit: "",
+                last_commit: "2026-01-03T00:00:00Z",
+            };
+            let row = FrameworkContributor::from(&source);
+            assert_eq!(row.login.as_ref(), source.login);
+            assert_eq!(row.display_name.as_deref(), display, "absent consent is not replaced by a guessed name");
+            assert_eq!(row.real_name.as_deref(), real);
+            assert_eq!(row.profile.as_deref(), Some("https://github.com/some-user"));
+            assert_eq!((row.prs, row.commits), (source.prs, source.commits));
+            assert_eq!((row.lines_added, row.lines_deleted), (source.lines_added, source.lines_deleted));
+            assert_eq!((row.binary_added, row.binary_deleted), (source.binary_added, source.binary_deleted));
+            assert_eq!(row.first_commit.as_ref(), source.first_commit);
+            assert_eq!(row.last_commit.as_ref(), source.last_commit);
+            assert_eq!(row.lines_delta(), 7 - i128::from(u64::MAX));
+        }
+    }
+
+    #[test]
+    fn framework_models_preserve_versions_and_untruncated_work_counts() {
+        for version in ["", "1.2.3"] {
+            let source = Model { company: "Company", model: "Model", version, commits: u64::MAX, lines_added: 12, lines_deleted: 98 };
+            let row = FrameworkModelCredit::from(&source);
+            assert_eq!(row.company.as_ref(), source.company);
+            assert_eq!(row.model.as_ref(), source.model);
+            assert_eq!(row.version.as_ref(), source.version);
+            assert_eq!((row.commits, row.lines_added, row.lines_deleted), (source.commits, source.lines_added, source.lines_deleted));
+        }
+    }
+
+    #[test]
+    fn framework_snapshot_uses_baked_order_totals_and_is_reused() {
+        let credits = framework_credits();
+        assert!(std::ptr::eq(credits, framework_credits()), "immutable baked data is not remapped per pass");
+        assert_eq!(credits.total_commits, TOTAL_COMMITS);
+        assert_eq!(credits.contributors.len(), CONTRIBUTORS.len());
+        assert_eq!(credits.models.len(), MODELS.len());
+        for (source, row) in CONTRIBUTORS.iter().zip(credits.contributors.iter()) {
+            assert_eq!(row, &FrameworkContributor::from(source));
+        }
+        for (source, row) in MODELS.iter().zip(credits.models.iter()) {
+            assert_eq!(row, &FrameworkModelCredit::from(source));
+        }
     }
 
     #[test]
@@ -708,3 +656,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "credits_contributor_flow_tests.rs"]
+mod contributor_verification_tests;

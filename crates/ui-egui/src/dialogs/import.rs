@@ -21,10 +21,12 @@ use std::sync::atomic::Ordering;
 use crate::LightcraftApp;
 use crate::render::Slot;
 use crate::theme::Tokens;
-use crate::widgets::register;
 
 mod body;
+mod controls;
 mod scan;
+#[cfg(test)]
+mod sdk_tests;
 mod tags;
 mod task;
 
@@ -37,7 +39,7 @@ pub(crate) use body::thumb_edge;
 #[cfg(test)]
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
-pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_dialog_bottom, thumb_size};
+pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_body_room, note_dialog_bottom, thumb_size};
 #[cfg(test)]
 use body::{RECIPE_CONTROLS, note_recipe_value};
 pub(crate) use scan::StoppingScans;
@@ -46,7 +48,9 @@ pub(crate) use scan::cards_seen;
 #[cfg(test)]
 pub(crate) use scan::{HELD_RESOLVES, ScanEnd, scan_by_hand, stall_scan, stall_scan_of};
 pub use scan::{ScanTask, browse, open, poll_scan, running};
-pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
+#[cfg(test)]
+pub(crate) use tags::tag_toggle;
+pub(crate) use tags::{tag_help, template_field, unknown_tags_warning};
 pub use task::{ImportTask, start, start_paths, tick};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

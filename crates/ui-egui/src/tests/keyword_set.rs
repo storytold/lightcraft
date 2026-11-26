@@ -177,3 +177,34 @@ fn alt_0_and_alt_shift_0_cycle_the_keyword_sets() {
     ask(&mut h, "ui.key", json!({"key": "0", "alt": true, "shift": true}));
     assert_eq!(sets(&mut h)["current"], "Recent Keywords", "⌥⇧0: the previous set");
 }
+
+/// One Escape from a dirty, focused slot abandons the whole draft. The SDK must not
+/// leave a hidden modal behind: Edit Set is usable immediately, with saved values.
+#[test]
+fn escape_from_a_dirty_slot_cancels_and_the_editor_reopens() {
+    let mut h = keywords_panel();
+    h.app.session.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony", "reception"]})).unwrap();
+    h.settle(SETTLE);
+    let before = sets(&mut h);
+    open_editor(&mut h);
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordSetSlot:2"}));
+    ask(&mut h, "ui.key", json!({"key": "A", "cmd": true}));
+    ask(&mut h, "ui.text", json!({"text": "discard this slot"}));
+    let Some(crate::state::Dialog::KeywordSet { slots, .. }) = &h.app.ui.dialog else { panic!("editor is open") };
+    assert_eq!(slots[1], "discard this slot", "typing reached the focused slot");
+    assert_eq!(sets(&mut h), before, "typing only changes the dialog draft");
+
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    assert_eq!(h.app.ui.dialog, None, "one Escape cancels the dialog, not just its field");
+    assert!(!h.app.widgets.iter().any(|(id, _)| id == "field:keywordSetName"));
+    assert_eq!(sets(&mut h), before, "Escape saves nothing");
+
+    open_editor(&mut h);
+    let Some(crate::state::Dialog::KeywordSet { name, slots, .. }) = &h.app.ui.dialog else { panic!("editor reopened") };
+    assert_eq!(name, "Weddings");
+    assert_eq!(&slots[..2], &["ceremony", "reception"], "discarded text does not return");
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "field:keywordSetSlot:2"), "the reopened editor is visible");
+    ask(&mut h, "ui.clickWidget", json!({"id": "button:dialogCancel"}));
+    assert_eq!(h.app.ui.dialog, None);
+    assert_eq!(sets(&mut h), before);
+}

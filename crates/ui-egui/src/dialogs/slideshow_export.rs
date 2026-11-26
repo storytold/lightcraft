@@ -3,10 +3,15 @@
 //! `slideshow.export` in the background. The export's row in the activity stack shows its
 //! progress and ✕ (the engine owns the row); [`poll`] tells the user how it ended.
 
+use craft::behavior::Proposal;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::text::NumberField;
+use craft::ui::value_drag::Slider;
 use serde_json::{Value, json};
 
 use super::Tokens;
-use super::frame::{choices, field};
+use super::frame::field;
 use crate::LightcraftApp;
 use crate::pick::{PickKind, PickRequest, Picked};
 
@@ -86,14 +91,14 @@ pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, 
         *settings = ExportSettings { full_screen: settings.full_screen, ..ExportSettings::for_format(settings.format) };
     }
     slideshow_size_rows(ui, settings);
-    field(ui, "Quality", |ui| {
-        let r = ui.add(egui::Slider::new(&mut settings.quality, 1..=100));
-        crate::widgets::register(ui, "slider:slideshowExportQuality", r.rect);
-    });
+    quality_row(ui, &mut settings.quality);
     let note = match settings.format {
         Format::Pdf => {
-            let r = ui.checkbox(&mut settings.full_screen, crate::i18n::tr("Automatically show full screen"));
-            crate::widgets::register(ui, "check:slideshowExportFullScreen", r.rect);
+            let shown = Checkbox::new(Bind::bound(&mut settings.full_screen))
+                .id_salt("slideshowExportFullScreen")
+                .label(crate::i18n::tr("Automatically show full screen").to_owned())
+                .show(ui);
+            register(ui, "check:slideshowExportFullScreen", &shown.response);
             "One page per slide (the long side in pixels = points), with the slide duration and fade for the viewer's presentation mode."
         }
         Format::Jpeg => "Numbered JPEG files (name-001.jpg…) in a new folder named in the next step.",
@@ -145,6 +150,77 @@ fn slideshow_size_rows(ui: &mut egui::Ui, settings: &mut lightcraft_engine::slid
         }
     }
 }
+
+/// Both native sizing and SDK measurement are speculative: neither publishes hits or edits.
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// Register the real control's response only after committed layout, without widening its hit.
+fn register(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+/// Mutually exclusive options use the SDK's radio group (including roving keyboard focus).
+/// Keep the existing automation ids while mounting in the native labelled row's remainder.
+fn choices<V: PartialEq + Copy + Send + Sync + 'static>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str)], value: &mut V) {
+    let body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
+        ui.horizontal_wrapped(|ui| {
+            for (i, (value, label)) in options.iter().enumerate() {
+                let shown = Radio::new(*value).id_salt((id, i)).label(crate::i18n::tr(label).to_owned()).show(ui);
+                register(ui, format!("button:{id}-{i}"), &shown);
+            }
+        });
+    };
+    field(ui, label, |ui| {
+        let width = ui.available_width().max(1.0);
+        let mut measuring = *value;
+        let child = ui.new_child(
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY))).sizing_pass().invisible(),
+        );
+        let size =
+            RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut measuring)).id_salt(id).measure_in(&child, Proposal::Ideal, body);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size.y.max(24.0)), egui::Sense::hover());
+        RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(value)).id_salt(id).show_at(ui, rect, body);
+    });
+}
+
+/// Preserve the integer 1–100 slider and exact numeric entry of the native quality control.
+fn quality_row(ui: &mut egui::Ui, value: &mut u8) {
+    let mut quality = f64::from(*value);
+    field(ui, "Quality", |ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(140.0, 24.0), egui::Sense::hover());
+        let shown = Slider::new(Bind::bound(&mut quality), 1.0..=100.0)
+            .id_salt("slideshowExportQuality")
+            .label(crate::i18n::tr("Quality"))
+            .step(1.0)
+            .show_at(ui, rect);
+        register(ui, "slider:slideshowExportQuality", &shown.response);
+        let mut typed = Some(quality);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 24.0), egui::Sense::hover());
+        let shown = NumberField::new(crate::i18n::tr("Quality"), Bind::bound(&mut typed))
+            .id_salt("slideshowExportQualityValue")
+            .range(1.0..=100.0)
+            .step(1.0)
+            .snap_typed(true)
+            .commit_decimals(0)
+            .fixed_decimals(0)
+            .show_at(ui, rect);
+        register(ui, "sliderValue:slideshowExportQuality", &shown.response);
+        if let Some(number) = typed.filter(|number| number.is_finite()) {
+            quality = number;
+        }
+    });
+    if !measuring(ui) {
+        *value = quality.round().clamp(1.0, 100.0) as u8;
+    }
+}
+
+#[cfg(test)]
+#[path = "slideshow_export_wave110_tests.rs"]
+mod wave110_tests;
 
 #[cfg(test)]
 mod tests {

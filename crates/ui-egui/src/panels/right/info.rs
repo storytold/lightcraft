@@ -31,16 +31,24 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         // colour label: one swatch per label (hover shows its name); clicking the current one clears it
         ui.horizontal(|ui| {
             for l in lightcraft_catalog::ColorLabel::ALL {
-                let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                crate::widgets::announce(&resp, crate::i18n::tr(&format!("{l:?}")));
+                let (_, r) = ui.allocate_space(vec2(22.0, 22.0));
                 let key = format!("{l:?}").to_lowercase();
-                register(ui, format!("label:{key}"), r);
                 let on = p.label == Some(l);
+                let resp = crate::panels::detail::host::target(
+                    ui,
+                    ("info-label", &key),
+                    r,
+                    crate::panels::detail::host::Target::new(crate::i18n::tr(&format!("{l:?}")))
+                        .selected(on)
+                        .tooltip(crate::i18n::color_label(&app.session.catalog, l)),
+                );
+                if crate::panels::detail::host::live(ui) {
+                    crate::widgets::register_response(format!("label:{key}"), r, &resp);
+                }
                 ui.painter().circle_filled(r.center(), if on || resp.hovered() { 8.0 } else { 6.5 }, crate::panels::grid::label_color(l));
                 if on {
                     ui.painter().circle_stroke(r.center(), 10.0, egui::Stroke::new(1.5, t.text));
                 }
-                let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
                 if resp.clicked() {
                     // in Compare / Survey only the active photo, as the rating keys and the bottom pill do
                     let mut params = json!({"label": if on { "none".to_string() } else { key }});
@@ -138,15 +146,11 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let gps = if gps_mixed { String::new() } else { m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default() };
         let gid = egui::Id::unique("info-gps");
         ui.label(egui::RichText::new("GPS").size(11.5).color(t.text_dim));
-        let mut edit: FieldEdit = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &targets));
+        let mut edit: FieldEdit = draft(ui.ctx(), gid).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &targets));
         let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
         let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
         edit.typed |= edit.text != edit.start;
-        if r.editing {
-            ui.data_mut(|d| d.insert_temp(gid, edit.clone()));
-        } else {
-            ui.data_mut(|d| d.remove::<FieldEdit>(gid));
-        }
+        keep_edit(ui, gid, &edit, &r);
         // Return or leaving saves; Esc gives the edit up
         let text = edit.text.trim();
         if r.committed()
@@ -309,12 +313,14 @@ struct FieldEdit {
     mixed: bool,
     /// Something was typed or deleted since.
     typed: bool,
+    /// The pass the edit was last under way in.
+    seen: u64,
 }
 
 impl FieldEdit {
     fn new(value: &str, mixed: bool, targets: &[PhotoId]) -> Self {
         let ids = targets.iter().map(|id| id.0).collect();
-        FieldEdit { text: value.to_string(), start: value.to_string(), ids, mixed, typed: false }
+        FieldEdit { text: value.to_string(), start: value.to_string(), ids, mixed, typed: false, seen: 0 }
     }
 
     /// A Mixed field that was typed in and left empty: it clears the field on every selected photo.
@@ -416,21 +422,74 @@ fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// selected photos' statuses differ, and any status picked is given to all of them. A status
 /// picked goes to the photos `targets`.
 fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus, mixed: bool, targets: &[PhotoId]) {
+    use craft::behavior::Mixed;
+    use craft::i18n::{Word, WordRows};
+    use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+    use craft::ui::pickers::Select;
+    use craft::ui::runtime::env::{WordsOverride, with_env};
+
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
-    let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
-    let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
-        for st in lightcraft_catalog::CopyrightStatus::ALL {
-            let on = !mixed && st == current;
-            if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
-                let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
-                let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
-            }
+    let label = crate::i18n::tr("Copyright Status");
+    ui.label(egui::RichText::new(label).size(11.5).color(t.text_dim));
+    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+    let editable = ui.is_enabled() && !targets.is_empty() && !measuring;
+    let entries: Vec<_> =
+        lightcraft_catalog::CopyrightStatus::ALL.into_iter().map(|status| Entry::new(status, crate::i18n::tr(status.label()))).collect();
+    let value = if mixed { Mixed::Mixed } else { Mixed::Same(current) };
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), 24.0), Sense::hover());
+    // The fixed field has already reserved its measured size. A speculative pass must not
+    // construct the interactive picker: a real press might otherwise open its popup here.
+    if measuring {
+        ui.add_space(6.0);
+        return;
+    }
+    // Keep LightCraft's translated Mixed label without replacing the SDK's mixed binding.
+    let words = WordRows::new().row(Word::keyed("select.mixed", MIXED), crate::i18n::tr(MIXED));
+    let shown = with_env(
+        ui,
+        |scope| scope.words = Some(WordsOverride::Overlay(words)),
+        |ui| Select::new(label, Bind::given(value), &entries).id_salt("info-copyright-status").enabled(editable).show_at(ui, rect),
+    );
+    if !measuring {
+        crate::widgets::register_response("field:copyrightStatus", shown.response.rect, &shown.response);
+        // The SDK owns drafts, keyboard navigation and dismissal. Only its commit edits the
+        // document; reselecting a common value must not create an Undo entry.
+        if let Some(status) = shown.events.committed().filter(|status| mixed || **status != current)
+            && editable
+        {
+            let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
+            let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": status.id()}));
         }
-    });
-    crate::widgets::name_combo(&r.response, crate::i18n::tr("Copyright Status"));
-    register(ui, "field:copyrightStatus", r.response.rect);
+    }
     ui.add_space(6.0);
+}
+
+/// Keeps a field's edit in egui memory while it is under way, and forgets it once its end (saved or given up) was
+/// reported. An edit that stops in a pass egui then runs again (`request_discard`) reports its end only in the pass run
+/// again, so it is kept through the pass it was last under way in, and the one after.
+fn keep_edit(ui: &egui::Ui, id: egui::Id, edit: &FieldEdit, r: &crate::text_field::TextFieldResponse) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    if r.editing {
+        ui.data_mut(|d| d.insert_temp(id, FieldEdit { seen: pass, ..edit.clone() }));
+    } else if r.ending.is_some() || !current(edit.seen, pass) {
+        ui.data_mut(|d| d.remove::<FieldEdit>(id));
+    }
+}
+
+/// Whether an edit last under way in pass `seen` is still the field's in pass `pass`: the pass it was
+/// under way in, and the one after (egui may run a pass again; see [`keep_edit`]). An older draft is
+/// one the panel stopped drawing: it is given up rather than loaded onto another photo with the
+/// photos it edited.
+fn current(seen: u64, pass: u64) -> bool {
+    seen.saturating_add(1) >= pass
+}
+
+/// The edit kept for the field `id`, when it is still the field's ([`current`]). A draft left behind
+/// by a panel that stopped drawing is not this photo's text, so it is not shown (nor committed with
+/// the other photo's `ids`).
+fn draft(ctx: &egui::Context, id: egui::Id) -> Option<FieldEdit> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<FieldEdit>(id)).filter(|edit| current(edit.seen, pass))
 }
 
 /// A labeled metadata text field: the typed text lives in egui memory while focused and is
@@ -443,7 +502,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
     let id = egui::Id::unique(("info-field", key));
     let value = if mixed { "" } else { value };
-    let mut edit: FieldEdit = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| FieldEdit::new(value, mixed, targets));
+    let mut edit: FieldEdit = draft(ui.ctx(), id).unwrap_or_else(|| FieldEdit::new(value, mixed, targets));
     let widget = format!("field:{key}");
     let field = if lines > 1 {
         crate::text_field::TextField::multiline(&widget, &mut edit.text).rows(lines)
@@ -454,14 +513,18 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     let r = field.label(crate::i18n::tr(label)).width(f32::INFINITY).show(ui);
     edit.typed |= edit.text != edit.start;
     // the typed text outlives frames while it is edited (the photo's value is drawn otherwise)
-    if r.editing {
-        ui.data_mut(|d| d.insert_temp(id, edit.clone()));
-    } else {
-        ui.data_mut(|d| d.remove::<FieldEdit>(id));
-    }
+    keep_edit(ui, id, &edit, &r);
     // Return (one line) or leaving saves; Esc gives the edit up
     if r.committed() && (edit.text != edit.start || edit.clears()) {
         let _ = app.run("photo.setMeta", json!({"ids": edit.ids, key: edit.text}));
     }
     ui.add_space(6.0);
 }
+
+#[cfg(test)]
+#[path = "info_copyright_tests.rs"]
+mod copyright_tests;
+
+#[cfg(test)]
+#[path = "info_draft_tests.rs"]
+mod draft_tests;

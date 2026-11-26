@@ -14,13 +14,17 @@ fn harness(view: ViewMode) -> Harness<'static, LightcraftApp> {
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = RightPanel::Edit;
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        // the framework runtime (docking, keys, AccessKit) installs before the first pass, as the app's host does
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     h
 }
@@ -72,13 +76,17 @@ fn an_empty_filmstrip_is_still_a_landmark_and_says_why() {
     app.ui.left_panel = true;
     app.ui.view = ViewMode::Detail;
     app.ui.right = RightPanel::Edit;
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        // the framework runtime (docking, keys, AccessKit) installs before the first pass, as the app's host does
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     assert_eq!(count(&h, Role::Region, "Filmstrip"), 1, "the empty strip is still a landmark");
     let said = h

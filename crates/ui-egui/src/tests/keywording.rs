@@ -123,14 +123,14 @@ fn cmd_k_puts_the_cursor_in_the_add_keyword_box() {
     ask(&mut h, "ui.key", json!({"key": "K", "cmd": true}));
     assert_eq!(h.app.ui.right, crate::state::RightPanel::Keywords, "the Keywords panel");
     assert!(!h.app.ui.section_folded("keywording") && has(&h, "field:keyword"), "Keywording is open");
-    assert!(h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:keyword"))), "the box has the cursor");
+    assert!(crate::panels::keywording::field_focused(&h.view.ctx), "the box has the cursor");
     ask(&mut h, "ui.text", json!({"text": "harbour"}));
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     assert!(ids.iter().all(|id| keywords_of(&h, *id).contains(&"harbour".to_string())), "typed and given to both");
-    assert!(!h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:keyword"))), "Return gave up the cursor");
+    assert!(!crate::panels::keywording::field_focused(&h.view.ctx), "Return gave up the cursor");
     ask(&mut h, "ui.key", json!({"key": "K", "cmd": true}));
     assert_eq!(h.app.ui.right, crate::state::RightPanel::Keywords, "pressed again: the panel stays");
-    assert!(h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:keyword"))), "and the cursor is back in the box");
+    assert!(crate::panels::keywording::field_focused(&h.view.ctx), "and the cursor is back in the box");
 }
 
 /// With no photo, ⌘K shows the Keywords panel and its note; selecting photos afterwards doesn't put the
@@ -146,7 +146,7 @@ fn cmd_k_without_a_photo_leaves_the_cursor_alone() {
     assert!(!has(&h, "field:keyword"), "no box without a photo");
     ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
     assert!(has(&h, "field:keyword"));
-    assert!(!h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:keyword"))), "the box waits for a click");
+    assert!(!crate::panels::keywording::field_focused(&h.view.ctx), "the box waits for a click");
 }
 
 /// An Add Keywords request the box wasn't drawn for in time (the panel couldn't show) expires: a
@@ -159,7 +159,7 @@ fn a_stale_add_keywords_request_leaves_the_cursor_alone() {
     h.app.ui.focus_keywords = Some(h.view.ctx.cumulative_pass_nr().saturating_sub(crate::state::FOCUS_KEYWORDS_PASSES + 1));
     h.step();
     assert_eq!(h.app.ui.focus_keywords, None, "the request is used up");
-    assert!(!h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:keyword"))), "the box waits for a click");
+    assert!(!crate::panels::keywording::field_focused(&h.view.ctx), "the box waits for a click");
 }
 
 /// The keyword set's buttons say whether the selection has each keyword, as their ⌥1–⌥9 toggle it
@@ -967,7 +967,7 @@ fn enter(h: &mut Headless, text: &str) {
 }
 
 fn enter_focused(h: &Headless) -> bool {
-    h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:enterKeywords")))
+    crate::text_field::focused(&h.view.ctx, "field:enterKeywords")
 }
 
 /// Given two selected photos, when Enter Keywords is chosen, then the box shows their keywords as

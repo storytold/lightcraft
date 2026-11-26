@@ -231,10 +231,10 @@ impl LightcraftApp {
                 }
                 shot.reserved = bytes;
             }
-            // One slot and one callback per issue; the callback only holds a weak slot and wakes
-            // the viewport. File writes and replies happen in `collect_screenshots`.
-            let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, egui::ViewportId::ROOT, MAX_SHOT_BYTES);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(callback));
+            // One slot per issue: the framework sends the viewport's screenshot command and asks for a
+            // pass even while the window is hidden. Its callback only holds a weak slot and wakes the
+            // viewport. File writes and replies happen in `collect_screenshots`.
+            let slot = craft::ui::runtime::windows::WindowHost::of(ctx).screenshot(egui::ViewportId::ROOT, MAX_SHOT_BYTES);
             log::debug!("ui.screenshot {}: issued at {:?}, {} bytes reserved", shot.token, geometry.viewport, shot.reserved);
             shot.slot = Some(slot);
             shot.sent_at_ms = Some(now);
@@ -265,8 +265,33 @@ impl LightcraftApp {
             view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |_| {});
         }
         // same scroll offsets, open sections, style… as the window
-        let memory = main.memory(|m| m.clone());
-        view.ctx.memory_mut(|m| *m = memory);
+        // (by value: the shadow keeps a runtime of its own, its pass state, focus and overlays, while it draws the
+        // window's scroll offsets and open sections; a plain Memory copy would share the window's runtime state)
+        if craft::ui::runtime::memory::fork_into(main, &view.ctx).is_err() {
+            self.shadow = Some(view);
+            return None;
+        }
+        // The copied memory carries the framework's record of the main window's current pass (the ids it has
+        // claimed). An empty pass first moves the shadow context on to a pass of its own, so drawing the window here
+        // claims its ids afresh instead of twice in what the runtime takes for the main window's pass.
+        // The framework's records are stamped with the pass number of the context that wrote them, and reset only
+        // when the pass number changes. The shadow context counts its own passes, so a pass of it numbered like one
+        // of the window's last passes would take the copied claims for its own: pass on to a number past them (an
+        // empty pass costs next to nothing).
+        let window_pass = main.cumulative_pass_nr_for(egui::ViewportId::ROOT);
+        loop {
+            view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |_| {});
+            let draw = view.ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT) + 1;
+            if draw + 2 < window_pass || draw > window_pass {
+                break;
+            }
+        }
+        // The framework's frame input is not part of the forked memory: the window sets it before each pass
+        // (`shell::prepare`), so without it the shadow draws the framework's fallback root — light, the default sizes,
+        // no host, so the framework's own English words — over a window that is dark, sized and translated. Give the
+        // shadow the window's own input for its pass. It goes after the pass numbers agree, because the fork also
+        // brought the window's pass count and `set_input` expects the hooks to have run for this context's last pass.
+        super::shell::prepare(self, &view.ctx);
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
@@ -291,7 +316,7 @@ impl LightcraftApp {
         let mut shots = std::mem::take(&mut self.pending_screenshots);
         let mut keep = Vec::with_capacity(shots.len());
         for mut shot in shots.drain(..) {
-            let completed = shot.slot.as_ref().and_then(craft_ui::capture::CaptureSlot::take);
+            let completed = shot.slot.as_ref().and_then(craft::ui::runtime::windows::ScreenshotSlot::take);
             match completed {
                 Some(Ok(image)) => {
                     let stale =

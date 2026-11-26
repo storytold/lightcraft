@@ -16,7 +16,10 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Align2, RichText, vec2};
+use craft::behavior::Proposal;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
+use egui::{RichText, vec2};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -24,9 +27,8 @@ use crate::state::{AppSettings, LaunchLibrary};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
-/// Egui ids/layers shared by the window drawing and the control-channel barrier: the two blocking
-/// windows and their dim.
-const DIM_ID: &str = "library-problem-dim";
+/// The framework dialog ids of the two blocking windows, which name their layers for the
+/// control-channel barrier.
 const ERROR_WINDOW_ID: &str = "library-problem";
 /// What the error window says about the library's safety and the way on (drawn as it is, not translated).
 const EXPLANATION: &str = "Your photos and edits in it are untouched. You can try again (e.g. after closing another program that has it open \
@@ -34,27 +36,28 @@ const EXPLANATION: &str = "Your photos and edits in it are untouched. You can tr
                             then nothing you do is saved.";
 const CHOOSER_WINDOW_ID: &str = "library-chooser";
 
-/// The named `Foreground` layer used by the dim and the two blocking library windows.
-fn foreground_layer(id: &str) -> egui::LayerId {
-    egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(id))
+/// The framework dialog id of a blocking library window.
+fn window_id(id: &str) -> egui::Id {
+    egui::Id::unique(id)
 }
 
-/// The full-screen backdrop that takes the modal layer while the library window is up.
-pub(crate) fn dim_layer() -> egui::LayerId {
-    foreground_layer(DIM_ID)
+/// The egui layer a blocking library window's framework dialog is shown on: the error window's or
+/// the launch list's. While one is up it is the modal layer, its scrim covering everything else.
+pub(crate) fn window_layer(error: bool) -> egui::LayerId {
+    crate::dialogs::framework_dialog_layer(window_id(if error { ERROR_WINDOW_ID } else { CHOOSER_WINDOW_ID }))
 }
 
 /// Whether `layer` is one of the blocking library windows' own layers (the error window or the
-/// launch list). Their registered controls are the only targets allowed through the dim.
+/// launch list).
 fn is_window_layer(layer: egui::LayerId) -> bool {
-    layer == foreground_layer(ERROR_WINDOW_ID) || layer == foreground_layer(CHOOSER_WINDOW_ID)
+    layer == window_layer(true) || layer == window_layer(false)
 }
 
-/// Whether a control-channel press must be explicitly refused because the library window's dim
+/// Whether a control-channel press must be explicitly refused because a blocking library window
 /// owns the modal layer and the target is not one of that window's own controls. Ordinary dialogs
 /// keep their existing backdrop semantics; only this blocking window is different.
 pub(crate) fn refuses_control_target(top_modal: Option<egui::LayerId>, target: egui::LayerId) -> bool {
-    top_modal == Some(dim_layer()) && !is_window_layer(target)
+    top_modal.is_some_and(is_window_layer) && Some(target) != top_modal
 }
 
 /// Which blocking window is on screen.
@@ -85,7 +88,7 @@ pub(crate) enum LibraryPass {
 /// Its `Foreground` areas are non-interactable during their first layout pass, and a text field
 /// behind it may still own the keyboard focus. The frame that creates a window therefore draws
 /// only that window and drops background input, just as a new notice prompt does.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct WindowBarrier {
     /// The window whose completed layout has already settled. `None` until the first pass is
     /// accepted (and again once the window or its banner replaces it).
@@ -247,11 +250,17 @@ pub(crate) fn begin_draw(app: &mut LightcraftApp) {
 /// pass settles it; a window hidden by a prompt or by the dialog it opened, or one that appeared
 /// midway through this pass (the banner's Open Library… button), keeps the transition armed so
 /// the first pass that draws it again is shielded.
-pub(crate) fn finish_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if ctx.will_discard() {
+pub(crate) struct LibraryCompletion(WindowBarrier, Option<WindowMode>, bool);
+pub(crate) fn capture_completion(app: &LightcraftApp) -> LibraryCompletion {
+    LibraryCompletion(app.library_window_input.clone(), visible_mode(app), app.library_problem.as_ref().is_none_or(|p| p.dismissed))
+}
+pub(crate) fn apply_completion(app: &mut LightcraftApp, completion: LibraryCompletion) {
+    let LibraryCompletion(barrier, visible, absent) = completion;
+    if visible_mode(app) != visible || app.library_problem.as_ref().is_none_or(|p| p.dismissed) != absent {
         return;
     }
-    if let Some(mode) = visible_mode(app) {
+    app.library_window_input = barrier;
+    if let Some(mode) = visible {
         if app.library_window_input.drawn == Some(mode) && (!app.library_window_input.transition || app.library_window_input.shielded) {
             app.library_window_input.shown = Some(mode);
             app.library_window_input.transition = false;
@@ -260,7 +269,7 @@ pub(crate) fn finish_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) {
         } else if !app.library_window_input.transition {
             app.library_window_input.begin_transition();
         }
-    } else if app.library_problem.as_ref().is_none_or(|p| p.dismissed) {
+    } else if absent {
         app.library_window_input = WindowBarrier::default();
     } else if !app.library_window_input.transition {
         // A prompt appeared or changed during the draw and now hides the window.
@@ -1003,17 +1012,19 @@ fn chooser_shown(app: &LightcraftApp) -> Option<&Chooser> {
 }
 
 /// ↑ / ↓ move the selection, Return opens it (unless a button has the keyboard focus: it acts
-/// itself), Esc quits — or, over a library already open, keeps it. Taken before the shortcuts.
+/// itself). Taken before the shortcuts. Esc is the framework dialog's cancel ([`show_chooser`]):
+/// it quits — or, over a library already open, keeps it.
 fn chooser_keys(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(c) = chooser_shown(app) else { return };
-    let (n, selected, over) = (c.libraries.len(), c.selected, c.over.is_some());
+    let (n, selected) = (c.libraries.len(), c.selected);
     let focused = ctx.memory(|m| m.focused().is_some());
     use egui::{Key, Modifiers};
-    let (up, down, enter, esc) = ctx.input_mut(|i| {
+    let (up, down, enter) = ctx.input_mut(|i| {
         let up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
         let down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
         let enter = !focused && i.consume_key(Modifiers::NONE, Key::Enter);
-        (up, down, enter, i.consume_key(Modifiers::NONE, Key::Escape))
+        // (Escape is left for the framework dialog, which reads it during the pass)
+        (up, down, enter)
     });
     if (up || down) && n > 0 {
         let at = match selected {
@@ -1025,8 +1036,6 @@ fn chooser_keys(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     if enter {
         act(app, Choice::Open);
-    } else if esc {
-        act(app, if over { Choice::Keep } else { Choice::Quit });
     }
 }
 
@@ -1040,29 +1049,86 @@ fn select(app: &mut LightcraftApp, at: usize) {
     }
 }
 
-/// Dim everything behind the window; it swallows clicks, so nothing there can be used meanwhile.
-/// The dim is `Foreground` and takes the modal layer: a `Middle` dialog such as Settings may be
-/// open underneath, and without this the dialog's own modal layer would let its controls receive
-/// clicks through the dim. Dialogs are drawn before this window, and a quit prompt or settings
-/// notice suppresses this window entirely (`show` returns early), so neither is covered by it.
-/// Pressing the dim raises its area, so each window is moved back above it after being shown.
-fn dim(ctx: &egui::Context) {
-    let screen = ctx.content_rect();
-    let dim = egui::Area::new(egui::Id::unique(DIM_ID)).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(true).show(ctx, |ui| {
-        // swallows clicks: nothing behind the window can be used meanwhile
-        ui.allocate_rect(screen, egui::Sense::click_and_drag());
-        ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
+/// One action button of a blocking window: a framework button at least 26 points tall, registered
+/// as `button:{id}` with its real response. True when it was clicked this pass.
+fn action_button(ui: &mut egui::Ui, window: &str, id: &str, label: &str, enabled: bool) -> bool {
+    let enabled = enabled && ui.is_enabled();
+    let mut button = Button::new(crate::i18n::tr(label).to_owned()).id_salt((window, id)).size(craft::theme::ControlSize::Sm).enabled(enabled);
+    let size = button.measure_in(ui, Proposal::Ideal).max(vec2(0.0, 26.0));
+    let (_, rect) = ui.allocate_space(size);
+    let r = button.show_at(ui, rect);
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    if real {
+        crate::widgets::register_response(format!("button:{id}"), r.response.rect, &r.response);
+    }
+    real && enabled && (r.clicked() || crate::widgets::same_pass_click(&r.response))
+}
+
+/// A blocking window: a modal framework dialog over a scrim that covers everything behind it, so
+/// nothing there can be used meanwhile (a `Middle` dialog such as Settings may be open underneath:
+/// the window opened later stands above it). Dialogs are drawn before this window, and a quit
+/// prompt or settings notice suppresses this window entirely (`show` returns early), so neither is
+/// covered by it. `footer` draws the action buttons; returns how the dialog closed this pass (its
+/// Escape) and its response.
+fn blocking_window(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    width: f32,
+    body: impl FnMut(&mut egui::Ui),
+    footer: impl FnMut(&mut egui::Ui),
+) -> Option<(Option<craft::ui::runtime::overlay::CloseReason>, egui::Response)> {
+    use craft::ui::contract::{Bind, ShowContainer as _};
+    use craft::ui::dialog::Dialog;
+    use craft::ui::runtime::overlay::Backdrop;
+    let (mut body, mut footer) = (body, footer);
+    let mut shown = None;
+    // The dialog mounts its own modal layer; this area only gives it a parent `Ui`.
+    // Above the dialog it covers on the dialog stack, below a prompt.
+    craft::ui::runtime::overlay::stack_place(ctx, crate::dialogs::STACK_LIBRARY, window_id(id), || {
+        crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
+            let output = Dialog::new(crate::i18n::tr(title).to_owned())
+                .id(window_id(id))
+                .opened(Bind::given(true))
+                .closable(false)
+                .backdrop(Backdrop::Scrim)
+                .footer(|ui, _| footer(ui))
+                .show(ui, |ui, _| {
+                    // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
+                    ui.set_width(width);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    // The framework sizes the window from a measuring run of the body, where the list's scroll area and
+                    // its rows (host targets only in a real pass) come out shorter: reserve the height the real body
+                    // took, so the footer's buttons sit below the last row instead of over it.
+                    let height_id = window_id(id).with("body-height");
+                    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                    let top = ui.cursor().top();
+                    if let Some(height) = ui.ctx().data(|d| d.get_temp::<f32>(height_id)) {
+                        ui.set_min_height(height);
+                    }
+                    body(ui);
+                    if real {
+                        // where the content ends (the cursor, which the reserved height does not move), so it can shrink
+                        let height = (ui.cursor().top() - ui.spacing().item_spacing.y - top).max(0.0);
+                        if ui.ctx().data(|d| d.get_temp::<f32>(height_id)).is_none_or(|kept| (kept - height).abs() > 0.5) {
+                            ui.ctx().data_mut(|d| d.insert_temp(height_id, height));
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                })
+                .output;
+            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
+                shown = Some((output.closed, output.response));
+            }
+        })
     });
-    // A bare interactable Area does not become the modal layer by itself. Without this, a
-    // Settings dialog opened before the library window can keep the modal layer and receive a
-    // control-channel press that the dim is meant to cover.
-    ctx.memory_mut(|memory| memory.set_modal_layer(dim.response.layer_id));
+    shown
 }
 
 /// The blocking window (until a choice is made). `blocked` freezes the barrier of a quit prompt
 /// or settings notice that was on screen when this frame began: the launch list/error window is
-/// `Order::Foreground` too, so drawing it after the prompt could cover it and let the same
-/// click or key act twice. It returns on the first pass after the prompt goes away.
+/// a modal too, so drawing it after the prompt could cover it and let the same click or key act
+/// twice. It returns on the first pass after the prompt goes away.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     if blocked || crate::panels::notices::blocks_input(app) {
         return;
@@ -1083,27 +1149,20 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     }
     let t = Tokens::get(ctx);
     note_first_draw(app, WindowMode::Error);
-    dim(ctx);
     let mut choice = None;
-    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
     // what the window says, in one piece, for a screen reader: the labels below are separate nodes
     let description = if problem.path.is_empty() {
         format!("{} {} {EXPLANATION}", crate::i18n::tr("LightCraft couldn't find where to keep your library."), problem.error)
     } else {
         format!("{} {}. {} {EXPLANATION}", crate::i18n::tr("LightCraft couldn't open the library at"), problem.path, problem.error)
     };
-    let shown = egui::Window::new(crate::i18n::tr("Your library couldn't be opened"))
-        .id(egui::Id::unique(ERROR_WINDOW_ID))
-        .order(egui::Order::Foreground)
-        .collapsible(false)
-        .resizable(false)
-        .frame(frame)
-        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .default_width(460.0)
-        .show(ctx, |ui| {
-            // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-            ui.set_width(440.0);
-            ui.spacing_mut().item_spacing.y = 8.0;
+    let can_pick = app.services.pick_folder.is_some();
+    let shown = blocking_window(
+        ctx,
+        ERROR_WINDOW_ID,
+        "Your library couldn't be opened",
+        440.0,
+        |ui| {
             if problem.path.is_empty() {
                 ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't find where to keep your library.")).color(t.text));
             } else {
@@ -1112,26 +1171,24 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             }
             ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
             ui.label(RichText::new(EXPLANATION).color(t.text_dim));
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
-                    let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui, format!("button:{id}"), r.rect);
-                    if r.clicked() {
-                        choice = Some(c);
-                    }
-                };
-                button(ui, "libraryRetry", "Try Again", problem.can_retry && !problem.path.is_empty(), Choice::Retry);
-                button(ui, "libraryChoose", "Choose Another Library…", app.services.pick_folder.is_some(), Choice::Choose);
-                button(ui, "libraryTemporary", "Continue Without Saving", true, Choice::Temporary);
-                button(ui, "libraryQuit", "Quit", true, Choice::Quit);
-            });
-        });
-    if let Some(w) = &shown {
-        crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Alert);
-        crate::widgets::describe_dialog(ctx, &w.response, &description);
-        // A press on the dim raises its area; keep this window (and its own buttons) above it.
-        ctx.move_to_top(w.response.layer_id);
+        },
+        |ui| {
+            for (id, label, enabled, c) in [
+                ("libraryRetry", "Try Again", problem.can_retry && !problem.path.is_empty(), Choice::Retry),
+                ("libraryChoose", "Choose Another Library…", can_pick, Choice::Choose),
+                ("libraryTemporary", "Continue Without Saving", true, Choice::Temporary),
+                ("libraryQuit", "Quit", true, Choice::Quit),
+            ] {
+                if action_button(ui, ERROR_WINDOW_ID, id, label, enabled) {
+                    choice = Some(c);
+                }
+            }
+        },
+    );
+    // (Esc has no choice of its own here: the window stays until one of its buttons is used)
+    if let Some((_, response)) = &shown {
+        crate::widgets::announce_dialog(ctx, response, crate::widgets::Modal::Alert);
+        crate::widgets::describe_dialog(ctx, response, &description);
     }
     app.library_window_input.drawn = Some(WindowMode::Error);
     if let Some(c) = choice {
@@ -1189,27 +1246,23 @@ fn act(app: &mut LightcraftApp, choice: Choice) {
 }
 
 /// The launch list (issue #1290): the recent libraries, greyed out with the reason when they
-/// can't be opened, and Open / Open Another… / New Library… / Remove from List / Quit.
+/// can't be opened, and Open / Open Another… / New Library… / Remove from List / Quit. Esc quits —
+/// or, over a library already open, keeps it.
 fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryProblem, chooser: &Chooser) {
+    use craft::ui::runtime::overlay::CloseReason;
     let t = Tokens::get(ctx);
-    dim(ctx);
     let mut choice = None;
     let mut clicked_row = None;
     let can_pick = app.services.pick_folder.is_some();
     let open_now = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
-    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
-    let shown = egui::Window::new(crate::i18n::tr("Open a Library"))
-        .id(egui::Id::unique(CHOOSER_WINDOW_ID))
-        .order(egui::Order::Foreground)
-        .collapsible(false)
-        .resizable(false)
-        .frame(frame)
-        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .default_width(520.0)
-        .show(ctx, |ui| {
-            // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-            ui.set_width(500.0);
-            ui.spacing_mut().item_spacing.y = 8.0;
+    let selected = chooser.selected.and_then(|i| chooser.libraries.get(i));
+    let mut remove = false;
+    let shown = blocking_window(
+        ctx,
+        CHOOSER_WINDOW_ID,
+        "Open a Library",
+        500.0,
+        |ui| {
             ui.label(RichText::new(crate::i18n::tr("Choose the library to open.")).color(t.text_label));
             if chooser.libraries.is_empty() {
                 let r = ui.label(RichText::new(crate::i18n::tr("No recent libraries. Open one from a folder, or make a new one.")).color(t.text_dim));
@@ -1218,10 +1271,11 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
             egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (i, library) in chooser.libraries.iter().enumerate() {
-                    let r = recent_row(ui, &t, i, library, chooser.selected == Some(i), open_now.as_deref() == Some(Path::new(&library.path)));
-                    if r.double_clicked() {
+                    let (clicked, double) =
+                        recent_row(ui, &t, i, library, chooser.selected == Some(i), open_now.as_deref() == Some(Path::new(&library.path)));
+                    if double {
                         clicked_row = Some((i, true));
-                    } else if r.clicked() {
+                    } else if clicked {
                         clicked_row = Some((i, false));
                     }
                 }
@@ -1229,38 +1283,35 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
             if !problem.error.is_empty() {
                 ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
             }
-            let selected = chooser.selected.and_then(|i| chooser.libraries.get(i));
-            let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
-                let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                register(ui, format!("button:{id}"), r.rect);
-                if r.clicked() {
-                    choice = Some(c);
-                }
-            };
             ui.horizontal(|ui| {
-                button(ui, "libraryForget", "Remove from List", selected.is_some(), Choice::Remove);
+                remove |= action_button(ui, CHOOSER_WINDOW_ID, "libraryForget", "Remove from List", selected.is_some());
                 ui.label(RichText::new(crate::i18n::tr("The library itself stays where it is.")).size(11.0).color(t.text_dim));
             });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                button(ui, "libraryOpen", "Open", selected.is_some_and(|l| l.unavailable.is_none()), Choice::Open);
-                button(ui, "libraryOpenAnother", "Open Another…", can_pick, Choice::Choose);
-                button(ui, "libraryNew", "New Library…", can_pick, Choice::New);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    button(ui, "libraryQuit", "Quit", true, Choice::Quit);
-                });
-            });
-        });
-    if let Some(w) = &shown {
-        crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Dialog);
-        // A press on the dim raises its area; keep the launch list above it.
-        ctx.move_to_top(w.response.layer_id);
+        },
+        |ui| {
+            for (id, label, enabled, c) in [
+                ("libraryOpen", "Open", selected.is_some_and(|l| l.unavailable.is_none()), Choice::Open),
+                ("libraryOpenAnother", "Open Another…", can_pick, Choice::Choose),
+                ("libraryNew", "New Library…", can_pick, Choice::New),
+                ("libraryQuit", "Quit", true, Choice::Quit),
+            ] {
+                if action_button(ui, CHOOSER_WINDOW_ID, id, label, enabled) {
+                    choice = Some(c);
+                }
+            }
+        },
+    );
+    if remove {
+        choice = Some(Choice::Remove);
     }
     if let Some((i, open)) = clicked_row {
         select(app, i);
         if open {
             act(app, Choice::Open);
         }
+    }
+    if choice.is_none() && shown.as_ref().is_some_and(|(closed, _)| *closed == Some(CloseReason::Escape)) {
+        choice = Some(if chooser.over.is_some() { Choice::Keep } else { Choice::Quit });
     }
     if let Some(c) = choice {
         act(app, c);
@@ -1269,18 +1320,20 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
 
 /// One row of the launch list: the library's name and when it was last opened, the folder it is
 /// in, and why it can't be opened (then greyed out). Registered as `libraryRecent:<index>`.
-fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, selected: bool, open: bool) -> egui::Response {
+/// Returns whether it was clicked and whether that was a double click.
+fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, selected: bool, open: bool) -> (bool, bool) {
     let dir = Path::new(&library.path);
     let name = crate::panels::settings::library_name(dir);
     let parent = dir.parent().map(|p| p.display().to_string()).unwrap_or_default();
     let ok = library.unavailable.is_none();
-    let (main, dim) = if ok { (t.text, t.text_dim) } else { (t.text_disabled, t.text_disabled) };
+    // a library that can't be opened reads muted, not disabled-faint: its name and folder stay legible beside why
+    let (main, dim) = if ok { (t.text, t.text_dim) } else { (t.text_dim, t.text_dim) };
     let background = ui.painter().add(egui::Shape::Noop);
     let inner = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.horizontal(|ui| {
-            ui.add(egui::Label::new(RichText::new(name).font(t.semibold(12.5)).color(main)).truncate().selectable(false));
+            ui.add(egui::Label::new(RichText::new(name.as_str()).font(t.semibold(12.5)).color(main)).truncate().selectable(false));
             let when = if open {
                 Some(crate::i18n::tr("Open now").to_string())
             } else {
@@ -1305,19 +1358,33 @@ fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, 
             ui.add(egui::Label::new(RichText::new(text).size(11.0).color(dim)).wrap().selectable(false));
         }
     });
-    let r = ui.interact(inner.response.rect, egui::Id::unique(("library-recent", i)), egui::Sense::click());
-    register(ui, format!("libraryRecent:{i}"), r.rect);
+    let rect = inner.response.rect;
+    // The row is app-painted; the framework senses it (click, double click, its accessible node). The launch list's
+    // own Up/Down/Enter move through the rows, so a row is no Tab stop of its own.
+    let mut picked = (false, false);
+    let mut hovered = false;
+    if crate::panels::detail::host::live(ui) {
+        let out = crate::panels::detail::host::target(
+            ui,
+            ("library-recent", i),
+            rect,
+            crate::panels::detail::host::Target::new(name.clone()).selected(selected).pointer_only(),
+        );
+        crate::widgets::register_response(format!("libraryRecent:{i}"), rect, &out.response);
+        picked = (out.clicked(), out.double_clicked());
+        hovered = out.response.hovered();
+    }
     let fill = if selected {
         Some(t.tool_active)
-    } else if r.hovered() {
+    } else if hovered {
         Some(t.hover)
     } else {
         None
     };
     if let Some(fill) = fill {
-        ui.painter().set(background, egui::Shape::rect_filled(r.rect, 4.0, fill));
+        ui.painter().set(background, egui::Shape::rect_filled(rect, 4.0, fill));
     }
-    r
+    picked
 }
 
 /// The banner under the top bar while the session is temporary (Continue Without Saving).
@@ -1338,11 +1405,12 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         .color(t.canvas),
                 );
                 register(ui, "indicator:temporarySession", r.rect);
-                let b = ui.add(
-                    egui::Button::new(RichText::new(crate::i18n::tr("Open Library…")).color(t.canvas)).fill(egui::Color32::from_black_alpha(40)),
-                );
-                register(ui, "button:libraryReopen", b.rect);
-                reopen = b.clicked();
+                let b =
+                    Button::new(crate::i18n::tr("Open Library…").to_owned()).id_salt("libraryReopen").size(craft::theme::ControlSize::Sm).show(ui);
+                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                    crate::widgets::register_response("button:libraryReopen", b.response.rect, &b.response);
+                    reopen = b.clicked() || crate::widgets::same_pass_click(&b.response);
+                }
             });
         });
     if reopen && let Some(p) = app.library_problem.as_mut() {
@@ -1353,5 +1421,33 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.library_window_input.begin_transition();
         clear_focus(ui.ctx());
         ui.ctx().request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    #[test]
+    fn own_draw_and_shield_survive_delayed_completion_but_hidden_window_does_not_settle() {
+        let ctx = egui::Context::default();
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        app.install_framework(&ctx);
+        app.library_problem = Some(super::LibraryProblem::new("missing", "test"));
+        app.library_window_input.begin_transition();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.library_window_input.drawn = Some(super::WindowMode::Error);
+            app.library_window_input.shielded = true;
+            app.capture_ui_completion(ui.ctx());
+        })
+        .drop_without_applying_deltas();
+        assert!(app.library_window_input.transition);
+        app.library_window_input.drawn = None;
+        app.drain_ui_completions(&ctx);
+        assert_eq!(app.library_window_input.shown, Some(super::WindowMode::Error));
+        assert!(!app.library_window_input.transition);
+        app.library_window_input.begin_transition();
+        app.library_window_input.drawn = None;
+        let hidden = super::capture_completion(&app);
+        super::apply_completion(&mut app, hidden);
+        assert!(app.library_window_input.transition, "no actual draw cannot settle a window");
     }
 }

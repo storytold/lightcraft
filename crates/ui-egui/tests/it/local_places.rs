@@ -38,19 +38,23 @@ fn harness(places: Vec<(String, String)>, kept: Vec<String>) -> Harness<'static,
     app.headless_host = true;
     app.ui.left_panel = true;
     app.ui.local_roots = kept;
-    let mut h = Harness::builder().with_size(vec2(1000.0, 800.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = Harness::builder()
+        .with_size(vec2(1000.0, 800.0))
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(8);
     h
 }
 
 fn open_menu(h: &mut Harness<'_, LightcraftApp>, row: &str) {
-    h.get_by_label(row).click_button(PointerButton::Secondary);
+    // (the row and its text both carry the name: the row is the first)
+    h.get_all_by_label(row).next().expect("the row is listed").click_button(PointerButton::Secondary);
     h.run_steps(4);
 }
 

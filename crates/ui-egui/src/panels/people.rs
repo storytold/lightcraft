@@ -7,13 +7,15 @@
 //! every face is cut from the same kind of box (the detector's, once the scan has looked at it), so faces are shown
 //! equally close. Only the rows on screen ask for a face render (the engine caches them, memory and disk).
 
-use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::primitives::IconSpec;
+use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::Person;
 use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::theme::Tokens;
-use crate::widgets::register;
 
 const GAP: f32 = 14.0;
 pub(super) const PAD: f32 = 20.0;
@@ -72,11 +74,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let label = fit(ui.painter(), &last, t.font(13.0), 224.0);
         let width = ui.painter().layout_no_wrap(label.clone(), t.font(13.0), Color32::WHITE).size().x + 44.0;
         let r = Rect::from_min_size(pos2(title.right() + 14.0, head.center().y - 12.0), vec2(width, 24.0));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
-        let b = crate::widgets::arrow_button(&mut child, RichText::new(label).font(t.font(13.0)), crate::icons::Icon::ChevronRight, false);
-        register(ui, "people:last", b.rect);
-        if b.on_hover_text(crate::i18n::tr("Back to this person")).clicked() {
-            let _ = app.run("view.person", json!({"name": last}));
+        let back = Button::new(label)
+            .id_salt("people:last")
+            .trailing_icon(IconSpec::glyph(&super::detail::host::IconGlyph(crate::icons::Icon::ChevronRight)))
+            .tooltip(crate::i18n::tr("Back to this person"))
+            .show_at(ui, r);
+        if super::detail::host::live(ui) {
+            crate::widgets::register_response("people:last", r, &back.response);
+            if back.clicked() {
+                let _ = app.run("view.person", json!({"name": last}));
+            }
         }
     }
     ui.painter().text(pos2(head.right() - PAD, head.center().y), Align2::RIGHT_CENTER, people.len().to_string(), t.font(13.0), t.text_dim);
@@ -166,9 +173,16 @@ fn photo_count_text(count: usize) -> String {
 fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, edge: f32, ppp: f32, selected: bool) {
     let t = Tokens::get(ui.ctx());
     let face = Rect::from_min_size(r.min, vec2(edge, edge));
-    let resp = ui.interact(r, egui::Id::unique(("person-card", &person.name)), Sense::click());
-    crate::widgets::announce(&resp, format!("{}, {}", person.name, photo_count_text(person.count)));
-    register(ui, format!("person:{}", person.name), r);
+    let resp = super::detail::host::target(
+        ui,
+        ("person-card", &person.name),
+        r,
+        super::detail::host::Target::new(format!("{}, {}", person.name, photo_count_text(person.count)))
+            .tooltip(crate::i18n::tr_format!("{} — show their photos", person.name)),
+    );
+    if super::detail::host::live(ui) {
+        crate::widgets::register_response(format!("person:{}", person.name), r, &resp);
+    }
     let view = app.session.face_view(person.photo, person.face);
     let p = ui.painter();
     p.rect_filled(face, 3.0, t.canvas);
@@ -193,13 +207,14 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     // a long name must not run past the card
     let name = fit(p, &person.name, t.semibold(13.0), edge);
     p.text(pos2(r.left() + 2.0, face.bottom() + 14.0), Align2::LEFT_CENTER, name, t.semibold(13.0), t.text);
-    let resp = resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name));
     let full = person.name.clone();
-    crate::widgets::context_menu(&resp, |ui| {
-        let r = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui, "personMenu:rename", r.rect);
-        if r.clicked() {
-            open_rename(app, &full);
+    super::detail::host::context_menu(ui, &resp, crate::i18n::tr("Person"), |ui| {
+        let row = craft::ui::menu::MenuItem::new(crate::i18n::tr("Rename Person…")).id_salt("personMenu:rename").show(ui);
+        if super::detail::host::live(ui) {
+            crate::widgets::register_response("personMenu:rename", row.response.rect, &row.response);
+            if row.ran {
+                open_rename(app, &full);
+            }
         }
     });
     if resp.clicked() {

@@ -6,12 +6,15 @@
 
 use std::sync::Arc;
 
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::primitives::IconSpec;
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::theme::Tokens;
-use crate::widgets::register;
+use crate::widgets::register_response;
 
 const PAD: f32 = 20.0;
 const SECTION_H: f32 = 56.0;
@@ -112,6 +115,7 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
     if !ctx.input(|i| i.modifiers == egui::Modifiers::NONE && i.key_pressed(egui::Key::A)) {
         return false;
     }
+
     let Some((cached_name, cached_revision, _, _, page)) = &app.caches.person_page else { return false };
     if *cached_name != name || *cached_revision != app.session.catalog.revision {
         return false;
@@ -148,24 +152,40 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.add_space(PAD - 4.0);
-        let back = crate::widgets::arrow_button(ui, crate::i18n::tr("People"), crate::icons::Icon::ChevronLeft, true);
-        register(ui, "person:back", back.rect);
-        if back.clicked() {
-            let _ = app.run("view.people", json!({}));
+        let back = Button::new(crate::i18n::tr("People"))
+            .id_salt("person:back")
+            .icon(IconSpec::glyph(&super::detail::host::IconGlyph(crate::icons::Icon::ChevronLeft)))
+            .show(ui);
+        // Measurement must not publish automation targets or dispatch page actions.
+        if super::detail::host::live(ui) {
+            register_response("person:back", back.response.rect, &back.response);
+            if back.clicked() {
+                let _ = app.run("view.people", json!({}));
+            }
         }
         ui.label(RichText::new(&shown_name).font(t.semibold(15.0)).color(t.text));
-        let rename = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui, "person:rename", rename.rect);
-        if rename.clicked() {
+        let rename = Button::new(crate::i18n::tr("Rename Person…")).id_salt("person:rename").show(ui);
+        // Measurement must not publish automation targets or dispatch page actions.
+        let real_pass = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        if real_pass {
+            register_response("person:rename", rename.response.rect, &rename.response);
+        }
+        if real_pass && rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
         let count = if page.total == 1 { "1 face".to_string() } else { format!("{} faces", page.total) };
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(PAD - 4.0);
-            let photos = ui.button(crate::i18n::tr("Show photos")).on_hover_text(crate::i18n::tr("Their photos in the grid"));
-            register(ui, "person:photos", photos.rect);
-            if photos.clicked() {
+            let photos =
+                Button::new(crate::i18n::tr("Show photos")).id_salt("person:photos").tooltip(crate::i18n::tr("Their photos in the grid")).show(ui);
+            let clicked = photos.clicked();
+            let response = photos.response;
+            let real_pass = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+            if real_pass {
+                register_response("person:photos", response.rect, &response);
+            }
+            if real_pass && clicked {
                 let _ = app.run("library.filter", json!({"person": shown_name}));
                 let _ = app.run("view.photoGrid", json!({}));
             }
@@ -239,13 +259,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         if !recognising {
             let r = Rect::from_min_size(pos2(area.left() + PAD + 330.0, area.top() + more_top + 8.0), vec2(120.0, 24.0));
             let label = if step == super::faces::Setup::TurnOn { "Turn on" } else { "Open Settings" };
-            let b = ui.put(r, egui::Button::new(label));
-            register(ui, "faces:setup", b.rect);
-            if b.clicked() {
-                if step == super::faces::Setup::TurnOn {
-                    super::faces::take_step(app, ui.ctx(), step);
-                } else {
-                    let _ = app.run("app.settings", json!({"tab": "faces"}));
+            let b = Button::new(label).id_salt("faces:setup").show_at(ui, r);
+            if super::detail::host::live(ui) {
+                register_response("faces:setup", r, &b.response);
+                if b.clicked() {
+                    if step == super::faces::Setup::TurnOn {
+                        super::faces::take_step(app, ui.ctx(), step);
+                    } else {
+                        let _ = app.run("app.settings", json!({"tab": "faces"}));
+                    }
                 }
             }
         }
@@ -310,16 +332,37 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     let TileSpec { r, f, ppp, more, name, above_count } = *spec;
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
-    let resp = ui.interact(r, egui::Id::unique((salt, f.photo, f.index)), Sense::click());
-    crate::widgets::announce(&resp, name.to_string());
-    register(ui, format!("{salt}:{}:{}", f.photo, f.index), r);
+    let host = |label: String| super::detail::host::Target::new(label);
+    let tip = if more {
+        format!("Looks like {name} (similarity {:.2}). Click to confirm.", f.score)
+    } else {
+        format!("{name} — click to open this photo")
+    };
+    let resp = super::detail::host::target(ui, (salt, f.photo, f.index), r, host(name.to_string()).tooltip(tip));
+    let real = super::detail::host::live(ui);
+    if real {
+        register_response(format!("{salt}:{}:{}", f.photo, f.index), r, &resp);
+    }
     // the × is added after the tile, so it wins where they overlap
     let x_rect = Rect::from_min_size(pos2(r.right() - 24.0, r.top() + 4.0), vec2(20.0, 20.0));
-    let x_resp = more.then(|| ui.interact(x_rect, egui::Id::unique(("more-face-x", f.photo, f.index)), Sense::click()));
+    let x_resp =
+        more.then(|| super::detail::host::target(ui, ("more-face-x", f.photo, f.index), x_rect, host(crate::i18n::tr("Hide this face").to_string())));
     let above_rect = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(24.0, 20.0));
-    let above_resp = more.then(|| ui.interact(above_rect, egui::Id::unique(("more-face-above", f.photo, f.index)), Sense::click()));
-    if more {
-        register(ui, format!("more-face-above:{}:{}", f.photo, f.index), above_rect);
+    let above_resp = more.then(|| {
+        let tip =
+            format!("All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A.");
+        super::detail::host::target(
+            ui,
+            ("more-face-above", f.photo, f.index),
+            above_rect,
+            host(crate::i18n::tr("Confirm all above").to_string()).tooltip(tip),
+        )
+    });
+    if more
+        && real
+        && let Some(above) = above_resp.as_ref()
+    {
+        register_response(format!("more-face-above:{}:{}", f.photo, f.index), above_rect, above);
     }
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
@@ -353,13 +396,6 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         p.line_segment([pos2(ac.x, ac.y - 5.0), pos2(ac.x + 4.0, ac.y - 1.0)], arrow);
     }
     if more {
-        let tip = format!("Looks like {name} (similarity {:.2}). Click to confirm.", f.score);
-        let _ = resp.clone().on_hover_text(tip);
-        if let Some(above) = above_resp.as_ref() {
-            let _ = above.clone().on_hover_text(format!(
-                "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A."
-            ));
-        }
         if x_resp.as_ref().is_some_and(|x| x.clicked()) {
             hit = Hit::Dismiss;
         } else if above_resp.as_ref().is_some_and(|x| x.clicked()) {
@@ -367,14 +403,15 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         } else if resp.clicked() {
             hit = Hit::Confirm;
         }
-    } else {
-        let _ = resp.clone().on_hover_text(format!("{name} — click to open this photo"));
-        if resp.clicked() {
-            hit = Hit::Open;
-        }
+    } else if resp.clicked() {
+        hit = Hit::Open;
     }
     hit
 }
+
+#[cfg(test)]
+#[path = "tests_named_person_actions.rs"]
+mod named_person_actions_tests;
 
 #[cfg(test)]
 mod tests {

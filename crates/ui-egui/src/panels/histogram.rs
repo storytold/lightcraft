@@ -127,6 +127,10 @@ pub fn clipping_rects_in(plot: Rect, scroll_bar_width: f32, scroll_bar_outer_mar
 /// the drag moves that control, a double-click resets it. Returns what the highlight and the readout
 /// should show, `None` when the pointer is nowhere near a zone.
 ///
+/// Call it only on a pass that draws for real: it writes develop commands and closes the interaction, so a
+/// measuring run (a sizing pass, the SDK's measure) must not take the pointer's release (`histogram` gates it on
+/// `crate::panels::detail::host::live`).
+///
 /// `plot` is the plot's rect: the strip under it (the readout and the EXIF line) is not a zone, and
 /// neither are the clipping buttons in the plot's top corners, which take their own presses.
 pub fn interact(app: &mut LightcraftApp, ui: &egui::Ui, resp: &Response, plot: Rect, id: PhotoId) -> Option<Active> {

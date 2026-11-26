@@ -25,6 +25,7 @@ pub mod person;
 pub mod presets;
 pub mod profiles;
 pub mod right;
+pub(crate) mod scroll_focus;
 pub mod second;
 pub mod slideshow;
 pub mod strip;
@@ -174,12 +175,16 @@ pub fn empty_state(ui: &mut egui::Ui, rect: Rect, title: &str, body: &str, actio
             let w = widths.iter().copied().fold(0.0, f32::max).min(wrap);
             Rect::from_min_size(pos2(rect.center().x - w / 2.0, buttons_top + i as f32 * (BUTTON_H + GAP)), vec2(w, BUTTON_H))
         };
-        let label = egui::RichText::new(crate::i18n::tr(a.label)).font(t.semibold(13.0));
-        let button =
-            if i == 0 { egui::Button::new(label.color(egui::Color32::WHITE)).fill(t.accent) } else { egui::Button::new(label.color(t.text)) };
-        let resp = ui.put(r, button);
-        crate::widgets::register(ui, a.widget, resp.rect);
-        if resp.clicked() {
+        use craft::ui::contract::{Props as _, Show as _};
+        let shown = craft::ui::buttons::Button::new(crate::i18n::tr(a.label))
+            .id_salt(("empty-state-action", a.widget))
+            .variant(if i == 0 { craft::theme::Variant::PRIMARY } else { craft::theme::Variant::SECONDARY })
+            .show_at(ui, r);
+        let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+        if !measuring {
+            crate::widgets::register_response(a.widget, shown.response.rect, &shown.response);
+        }
+        if !measuring && shown.clicked() {
             clicked = Some(a.command);
         }
     }
@@ -188,3 +193,6 @@ pub fn empty_state(ui: &mut egui::Ui, rect: Rect, title: &str, body: &str, actio
     }
     clicked
 }
+
+#[cfg(test)]
+mod empty_library_action_port_tests;

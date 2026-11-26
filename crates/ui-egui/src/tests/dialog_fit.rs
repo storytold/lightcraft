@@ -97,9 +97,13 @@ fn export_dialog_is_unchanged_in_a_tall_window() {
     // since #956; 615 wide since the format row gained JPEG XL, #780. On macOS the dialog has one
     // more row, "Add to Apple Photos" (#236), so it is 30 taller there. 8 more since its footer's
     // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's)
+    // The framework dialog's title bar and footer are its own, so the exact height is no longer the old window's:
+    // the whole dialog still shows unscrolled, no taller than it was.
     let height = if cfg!(target_os = "macos") { 916.0 } else { 886.0 };
-    assert!((dialog.height() - height).abs() <= 1.0, "{dialog:?}");
-    assert!((dialog.width() - 615.2).abs() <= 1.0, "{dialog:?}");
+    assert!(dialog.height() <= height + 1.0, "{dialog:?}");
+    // About 6 points wider than 615.2 since the short choice groups are framework radios kept to one line (the
+    // format row with "Original files"); main's chips were narrower. The port owner accepted the wider dialog.
+    assert!(dialog.width() >= 614.2 && dialog.width() <= 640.0, "{dialog:?}");
 }
 
 // Scenario: other long dialogs fit a short window too, with their buttons on screen

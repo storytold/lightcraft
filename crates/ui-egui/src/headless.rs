@@ -102,6 +102,10 @@ impl HeadlessView {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
+        // Every control is a framework component: a view without the runtime would not sense or route input.
+        // Installing it only registers on a fresh context, which cannot fail; a view without it is not a view.
+        #[allow(clippy::expect_used)]
+        crate::app::install_runtime(&ctx).expect("the UI runtime installs on a fresh context");
         HeadlessView {
             ctx,
             textures: TextureStore::default(),
@@ -294,9 +298,11 @@ impl Headless {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut app = app.with_control(rx);
         app.headless_host = true;
+        let view = HeadlessView::new();
+        app.install_framework(&view.ctx);
         Headless {
             app,
-            view: HeadlessView::new(),
+            view,
             max_texture_side: 16384,
             reported_texture_side: None,
             size,
@@ -350,6 +356,7 @@ impl Headless {
         self.reported_texture_side = Some(self.max_texture_side);
         // A headless run's timers follow its simulated clock, not the host's wall clock.
         self.app.set_simulated_clock(Some(self.time));
+        self.app.install_framework(&self.view.ctx);
         self.app.raw_input_hook(&self.view.ctx, &mut raw);
         #[cfg(test)]
         if let Some(mut hook) = self.after_raw_input_hook.take() {
@@ -362,6 +369,7 @@ impl Headless {
             app.ui(ui);
             cursor = ui.ctx().output(|output| output.cursor_icon);
         });
+        self.app.drain_ui_completions(&self.view.ctx);
         self.last_cursor = cursor;
         self.time += FRAME_DT;
         self.frames += 1;
@@ -552,3 +560,19 @@ impl crate::render::RenderOffload for RenderGate {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn final_headless_output_is_drained_before_the_driver_advances() {
+    let app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+    let mut host = Headless::new(app, [800.0, 600.0], 1.0);
+    host.step();
+    host.step();
+    let before = host.app.ui_passes;
+    host.step();
+    assert!(host.app.ui_passes > before, "final completion did not depend on another body");
+    assert!(!host.app.widgets.is_empty());
+    let completed = host.app.ui_passes;
+    host.app.drain_ui_completions(&host.view.ctx);
+    assert_eq!(host.app.ui_passes, completed, "driver already took the final completion");
+}

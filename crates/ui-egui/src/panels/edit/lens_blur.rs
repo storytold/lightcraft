@@ -2,8 +2,8 @@
 //! shape that can be moved on the photo), Find Subject and Brush Refinement.
 
 use super::{
-    Color32, ControlSpec, Icon, LightcraftApp, Pos2, Rect, RichText, Section, Sense, Stroke, Tokens, Track, control, paint, pos2, register, slider,
-    sub_title, text_button, vec2,
+    Color32, ControlSpec, Icon, LightcraftApp, Pos2, Rect, RichText, Section, Sense, Stroke, Tokens, Track, control, paint, pos2, slider, sub_title,
+    text_button, vec2,
 };
 use lightcraft_develop::DevelopSettings;
 use serde_json::json;
@@ -14,60 +14,19 @@ pub(super) fn lens_blur(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopS
     let t = Tokens::get(ui.ctx());
     let b = &d.lens_blur;
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
-        let mut on = b.enabled;
-        let r = ui.checkbox(&mut on, crate::i18n::tr("Apply"));
-        register(ui, "check:lensBlur.enabled", r.rect);
-        if r.on_hover_text(crate::i18n::tr("Blur what is out of focus, as a wide aperture would")).changed() {
-            let mut patch = json!({"enabled": on});
-            // switched on the first time: a visible starting amount, as in Lightroom
-            if on && b.amount == 0.0 {
-                patch["amount"] = json!(50.0);
-            }
-            let _ = app.run("develop.merge", json!({"settings": {"lens_blur": patch}, "label": "Lens Blur"}));
-        }
+        lens_blur_apply(app, ui, b);
     });
     control(app, ui, d, "lensBlur.amount", b.enabled);
     control(app, ui, d, "lensBlur.boost", b.enabled);
     control(app, ui, d, "lensBlur.transition", b.enabled);
     // the focus controls do nothing while the blur is off: shown, but not usable
     let has_mask = b.focus_mask.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_some();
-    if app.ui.tool == "lensBlurShape" && (!b.enabled || has_mask || b.shape == lightcraft_develop::FocusShape::Auto) {
+    // A sizing pass can observe the new focus choice, but only a real frame leaves the shape tool.
+    if !lens_blur_measuring(ui) && app.ui.tool == "lensBlurShape" && (!b.enabled || has_mask || b.shape == lightcraft_develop::FocusShape::Auto) {
         app.ui.tool.clear();
     }
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 4 }).show(ui, |ui| ui.add_enabled_ui(b.enabled, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(crate::i18n::tr("In Focus")).font(t.font(13.0)).color(t.text_dim));
-            let chosen = b.focus_mask.and_then(|id| d.masks.iter().find(|m| m.id == id));
-            // without a mask: the subject estimate, or the fixed shape chosen below
-            let auto = b.shape == lightcraft_develop::FocusShape::Auto;
-            let none = if auto { crate::i18n::tr("Subject") } else { crate::i18n::tr(b.shape.label()) };
-            let shown = chosen.map_or_else(|| none.to_string(), |m| m.name.clone());
-            let r = crate::widgets::dropdown(ui, "lensBlurFocus", &shown, t.font(14.0), t.text_label);
-            let r = r.on_hover_text(crate::i18n::tr("What stays sharp: the photo's subject, or the selection of one of its masks"));
-            let mut pick: Option<Option<u32>> = None;
-            egui::Popup::menu(&r).show(|ui| {
-                let item = ui.selectable_label(chosen.is_none() && auto, crate::i18n::tr("Subject"));
-                register(ui, "lensBlurFocus:subject", item.rect);
-                if item.clicked() {
-                    pick = Some(None);
-                }
-                for m in &d.masks {
-                    let item = ui.selectable_label(chosen.is_some_and(|c| c.id == m.id), m.name.as_str());
-                    register(ui, format!("lensBlurFocus:mask:{}", m.id), item.rect);
-                    if item.clicked() {
-                        pick = Some(Some(m.id));
-                    }
-                }
-            });
-            if let Some(focus) = pick {
-                // "Subject": the estimate again, not a fixed shape
-                let mut patch = json!({"focus_mask": focus});
-                if focus.is_none() {
-                    patch["shape"] = json!("auto");
-                }
-                let _ = app.run("develop.merge", json!({"settings": {"lens_blur": patch}, "label": "Lens Blur Focus"}));
-            }
-        });
+        lens_blur_focus(app, ui, d);
         // without a focus mask: the focus area's shape (the estimate, or a fixed one), which can
         // be moved and resized on the photo
         if !has_mask {
@@ -122,52 +81,178 @@ pub(super) fn lens_blur(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopS
     lens_blur_brush(app, ui, b);
 }
 
+/// Keep edits and automation targets out of both speculative layout modes.
+fn lens_blur_measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn lens_blur_apply(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_develop::LensBlur) {
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+
+    let mut on = b.enabled;
+    let out = Checkbox::new(Bind::bound(&mut on))
+        .id_salt("check:lensBlur.enabled")
+        .label(crate::i18n::tr("Apply").to_owned())
+        .tooltip(crate::i18n::tr("Blur what is out of focus, as a wide aperture would").to_owned())
+        .show(ui);
+    if lens_blur_measuring(ui) {
+        return;
+    }
+    // The SDK adds the label to the same egui owner after measuring the check square.
+    // Register the final labeled hit target, not just the square returned by the renderer.
+    let response = ui.ctx().read_response(out.response.id).unwrap_or(out.response);
+    crate::widgets::register_response("check:lensBlur.enabled", response.rect, &response);
+    if ui.is_enabled() && out.events.committed().copied() == Some(on) && on != b.enabled {
+        let mut patch = json!({"enabled": on});
+        // switched on the first time: a visible starting amount, as in Lightroom
+        if on && b.amount == 0.0 {
+            patch["amount"] = json!(50.0);
+        }
+        let _ = app.run("develop.merge", json!({"settings": {"lens_blur": patch}, "label": "Lens Blur"}));
+    }
+}
+
+/// The framework's value menu under the opener owns the popup, dismissal and focus lifecycle.
+fn lens_blur_focus(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+    let t = Tokens::get(ui.ctx());
+    let b = &d.lens_blur;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(crate::i18n::tr("In Focus")).font(t.font(13.0)).color(t.text_dim));
+        let chosen = b.focus_mask.and_then(|id| d.masks.iter().find(|m| m.id == id));
+        // without a mask: the subject estimate, or the fixed shape chosen below
+        let auto = b.shape == lightcraft_develop::FocusShape::Auto;
+        let none = if auto { crate::i18n::tr("Subject") } else { crate::i18n::tr(b.shape.label()) };
+        let shown = chosen.map_or_else(|| none.to_string(), |m| m.name.clone());
+        let r = crate::widgets::dropdown(ui, "lensBlurFocus", &shown, t.font(14.0), t.text_label);
+        let r = r.on_hover_text(crate::i18n::tr("What stays sharp: the photo's subject, or the selection of one of its masks"));
+        let mut pick: Option<Option<u32>> = None;
+        let enabled = ui.is_enabled();
+        let parent_measuring = lens_blur_measuring(ui);
+        // A speculative pass (egui sizing, an SDK measure) shows no menu: its rows would claim the real run's ids.
+        if !parent_measuring {
+            use craft::ui::contract::overlay::Trigger;
+            use craft::ui::contract::{Props as _, ShowContainer as _};
+            craft::ui::menu::Menu::new(crate::i18n::tr("In Focus").to_owned())
+                .id_salt(("lensBlurFocus", app.session.active()))
+                .values()
+                .opened_by(&r, Trigger::Click)
+                .show(ui, |ui, _| {
+                    if lens_blur_focus_item(
+                        ui,
+                        "lensBlurFocus:subject",
+                        crate::i18n::tr("Subject"),
+                        chosen.is_none() && auto,
+                        enabled,
+                        parent_measuring,
+                    ) {
+                        pick = Some(None);
+                    }
+                    for m in &d.masks {
+                        let selected = chosen.is_some_and(|c| c.id == m.id);
+                        if lens_blur_focus_item(ui, &format!("lensBlurFocus:mask:{}", m.id), &m.name, selected, enabled, parent_measuring) {
+                            pick = Some(Some(m.id));
+                        }
+                    }
+                });
+        }
+        if !lens_blur_measuring(ui)
+            && ui.is_enabled()
+            && let Some(focus) = pick
+        {
+            // "Subject": the estimate again, not a fixed shape
+            let mut patch = json!({"focus_mask": focus});
+            if focus.is_none() {
+                patch["shape"] = json!("auto");
+            }
+            let _ = app.run("develop.merge", json!({"settings": {"lens_blur": patch}, "label": "Lens Blur Focus"}));
+        }
+    });
+}
+
+/// A real SDK response, salted by the exact mask id rather than its non-unique display name.
+fn lens_blur_focus_item(ui: &mut egui::Ui, id: &str, label: &str, selected: bool, enabled: bool, parent_measuring: bool) -> bool {
+    use craft::ui::contract::{Props as _, Show as _};
+
+    let out = craft::ui::menu::MenuItem::new(label.to_owned()).id_salt(id).entry_checked(selected).enabled(enabled && !parent_measuring).show(ui);
+    if parent_measuring || lens_blur_measuring(ui) {
+        return false;
+    }
+    crate::widgets::register_response(id, out.response.rect, &out.response);
+    // the menu closes on its row's run
+    enabled && ui.is_enabled() && out.ran
+}
+
 /// The Lens Blur focus area's shape when no mask sets it: one button per shape, each showing it
 /// (drawn in the theme's colours, so it reads on the light themes too).
 fn focus_shape_row(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_develop::LensBlur) {
     use lightcraft_develop::FocusShape;
     let t = Tokens::get(ui.ctx());
-    let enabled = ui.is_enabled();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(crate::i18n::tr("Shape")).font(t.font(13.0)).color(t.text_dim));
-        ui.add_space(4.0);
-        for shape in FocusShape::ALL {
-            let selected = b.shape == shape;
-            let (r, resp) = ui.allocate_exact_size(vec2(36.0, 28.0), Sense::click());
-            let name = serde_json::to_value(shape).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-            register(ui, format!("lensBlurShape:{name}"), r);
-            crate::widgets::announce(&resp, crate::i18n::tr(shape.label()));
-            let resp = resp.on_hover_text(crate::i18n::tr(match shape {
-                FocusShape::Auto => "Auto: the photo's subject, estimated",
-                FocusShape::Round => "Round",
-                FocusShape::Wide => "Horizontal oval",
-                FocusShape::Tall => "Vertical oval",
-            }));
-            let p = ui.painter();
-            let fill = if selected {
-                t.pressed
-            } else if resp.hovered() && enabled {
-                t.hover
-            } else {
-                t.button
-            };
-            p.rect_filled(r, 4.0, fill);
-            if selected {
-                p.rect_stroke(r, 4.0, Stroke::new(1.0, if enabled { t.accent } else { t.text_dim }), egui::StrokeKind::Inside);
+
+    use craft::behavior::Proposal;
+    use craft::theme::{Emphasis, Variant, variant::Tone};
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+
+    let owner = app.session.active();
+    let real = !lens_blur_measuring(ui);
+    let interactive = real && ui.is_enabled() && owner.is_some();
+    // The existing picture stays an image-domain glyph; the SDK owns its ordinary button face.
+    let button = |index: usize, shape: FocusShape| {
+        Button::new(crate::i18n::tr(shape.label()).to_owned())
+            .painted("")
+            .id_salt(("lens-blur-shape", owner.map(|id| id.0), index))
+            .variant(if b.shape == shape { Variant::look(Emphasis::Soft, Tone::Accent) } else { Variant::SECONDARY })
+            .enabled(interactive)
+            .tooltip(
+                crate::i18n::tr(match shape {
+                    FocusShape::Auto => "Auto: the photo's subject, estimated",
+                    FocusShape::Round => "Round",
+                    FocusShape::Wide => "Horizontal oval",
+                    FocusShape::Tall => "Vertical oval",
+                })
+                .to_owned(),
+            )
+    };
+    ui.label(RichText::new(crate::i18n::tr("Shape")).font(t.font(13.0)).color(t.text_dim));
+    let face = FocusShape::ALL
+        .into_iter()
+        .enumerate()
+        .fold(vec2(36.0, 28.0), |size, (index, shape)| size.max(button(index, shape).measure_in(ui, Proposal::Ideal)));
+    let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0));
+    let columns = if 4.0 * face.x + 12.0 <= width {
+        4
+    } else if 2.0 * face.x + 4.0 <= width {
+        2
+    } else {
+        1
+    };
+    for (row, shapes) in FocusShape::ALL.chunks(columns).enumerate() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (column, shape) in shapes.iter().copied().enumerate() {
+                let (rect, _) = ui.allocate_exact_size(face, Sense::hover());
+                if !real {
+                    // External SDK measurement can use an ordinary Ui: measure/allocate, never sense or publish.
+                    continue;
+                }
+                let out = button(row * columns + column, shape).show_at(ui, rect);
+                let name = serde_json::to_value(shape).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+                crate::widgets::register_response(format!("lensBlurShape:{name}"), out.response.interact_rect, &out.response);
+                let selected = b.shape == shape;
+                let colour = match (interactive, selected) {
+                    (false, _) => t.icon.gamma_multiply(0.4),
+                    (true, true) => t.accent,
+                    (true, false) => t.icon,
+                };
+                paint_focus_shape(ui.painter(), out.response.rect.shrink(5.0), shape, colour);
+                // A selected preset is an action when moved, but a genuine no-op while already centered.
+                if interactive && app.session.active() == owner && out.clicked() && (!selected || b.area.is_some()) {
+                    let _ = app.run("develop.merge", json!({"settings": {"lens_blur": {"shape": name, "area": null}}, "label": "Lens Blur Shape"}));
+                }
             }
-            // (dimmed while the blur is off, in the theme's colours)
-            let colour = match (enabled, selected) {
-                (false, _) => t.icon.gamma_multiply(0.4),
-                (true, true) => t.accent,
-                (true, false) => t.icon,
-            };
-            paint_focus_shape(p, r.shrink(5.0), shape, colour);
-            // a preset puts the shape back in the middle at its size (also the one in use, once moved)
-            if resp.clicked() && (!selected || b.area.is_some()) {
-                let _ = app.run("develop.merge", json!({"settings": {"lens_blur": {"shape": name, "area": null}}, "label": "Lens Blur Shape"}));
-            }
-        }
-    });
+        });
+    }
 }
 
 /// A focus shape's picture in `r`: the oval in its proportions (the largest fills the height), or
@@ -251,7 +336,15 @@ fn lens_blur_brush(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_de
         }
     }
     // the brushes paint only while the blur is on
-    if !on && app.ui.tool.starts_with("lensBlur") {
+    if !on && !lens_blur_measuring(ui) && app.ui.tool.starts_with("lensBlur") {
         app.ui.tool.clear();
     }
 }
+
+#[cfg(test)]
+#[path = "lens_blur_controls_external155_tests.rs"]
+mod lens_blur_controls_external155_tests;
+
+#[cfg(test)]
+#[path = "lens_blur_shape_flow_tests.rs"]
+mod lens_blur_shape_flow_tests;

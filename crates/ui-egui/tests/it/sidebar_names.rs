@@ -17,13 +17,16 @@ fn sidebar() -> Harness<'static, LightcraftApp> {
     app.ui.left_panel = true;
     app.ui.view = ViewMode::PhotoGrid;
     app.ui.right = RightPanel::None;
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     h
 }
@@ -57,13 +60,16 @@ fn a_month_triangle_names_its_year() {
     app.ui.left_panel = true;
     app.ui.view = ViewMode::PhotoGrid;
     app.ui.right = RightPanel::None;
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     for year in ["Expand 2025", "Expand 2026"] {
         h.get_by_label(year).click();
@@ -94,13 +100,16 @@ fn a_keyword_list_triangle_names_its_keyword() {
     app.ui.right = RightPanel::Keywords;
     // Trips is open, so Italy (which has Rome below it) shows, closed
     app.ui.keyword_list_open = vec!["trips".to_string()];
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = Harness::builder()
+        .with_size(vec2(1500.0, 950.0))
+        .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
+        .build_ui_state(
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     let names = button_names(&h);
     assert!(names.iter().any(|n| n == "Collapse Trips"), "the open keyword's triangle: {names:?}");

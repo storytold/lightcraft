@@ -1,4 +1,53 @@
 use super::{LightcraftApp, Tokens, json};
+use craft::ui::buttons::{Button, Link};
+use craft::ui::contract::{Props as _, Show as _};
+
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn register(ui: &egui::Ui, id: &str, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+/// The SDK owns activation; host services still own opening the browser.
+fn sam_link(ui: &mut egui::Ui, id: &str, label: &str, url: &str) -> bool {
+    // Do not set Link::url: that would also dispatch an SDK browser action.
+    let shown = Link::new(crate::i18n::tr(label).to_owned()).id_salt(id).show(ui);
+    let clicked = !measuring(ui) && shown.clicked();
+    let response = shown.response.on_hover_text(url);
+    register(ui, id, &response);
+    clicked
+}
+
+fn sam_button(ui: &mut egui::Ui, id: &str, label: &str) -> bool {
+    let shown = Button::new(crate::i18n::tr(label).to_owned()).id_salt(id).show(ui);
+    register(ui, id, &shown.response);
+    !measuring(ui) && shown.clicked()
+}
+
+/// Render a download snapshot without starting work. Cancellation stays with the caller.
+fn sam_download(ui: &mut egui::Ui, d: &lightcraft_engine::segment::DownloadStatus) -> bool {
+    let gb = |b: u64| b as f64 / 1e9;
+    let text = format!("{:.2} / {:.2} GB · {}", gb(d.done), gb(d.total), d.file);
+    // Keep the shared app progress renderer and its established automation/accessibility contract.
+    let mut progress = crate::progress::Progress::new(crate::progress::fraction_of(d.done, d.total)).label(text);
+    if !measuring(ui) {
+        progress = progress.widget("progress:samDownload");
+    }
+    progress.show(ui);
+    let cancel = sam_button(ui, "button:samCancel", "Cancel Download");
+    ui.label(
+        egui::RichText::new(crate::i18n::tr("You can close this: the download continues, and resumes if interrupted."))
+            .color(Tokens::get(ui.ctx()).text_dim),
+    );
+    if !measuring(ui) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
+    cancel
+}
 
 /// No SAM 3 model, no download running and nowhere to download it from: installing it by hand is
 /// all the dialog can offer.
@@ -61,23 +110,15 @@ pub(super) fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: 
         ))
         .color(t.text_label),
     );
-    let r = ui.link(crate::i18n::tr("Read the SAM License")).on_hover_text(LICENSE_URL);
-    crate::widgets::register(ui, "link:samLicense", r.rect);
-    if r.clicked() {
+    if sam_link(ui, "link:samLicense", "Read the SAM License", LICENSE_URL) {
         let _ = crate::links::open(app, LICENSE_URL);
     }
     let seg = &app.session.segmenter;
     if d.running {
         ui.add_space(4.0);
-        let text = format!("{:.2} / {:.2} GB · {}", gb(d.done), gb(d.total), d.file);
-        crate::progress::Progress::new(crate::progress::fraction_of(d.done, d.total)).label(text).widget("progress:samDownload").show(ui);
-        let r = ui.button(crate::i18n::tr("Cancel Download"));
-        crate::widgets::register(ui, "button:samCancel", r.rect);
-        if r.clicked() {
+        if sam_download(ui, &d) {
             app.session.segmenter.cancel_download();
         }
-        ui.label(egui::RichText::new(crate::i18n::tr("You can close this: the download continues, and resumes if interrupted.")).color(t.text_dim));
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         return;
     }
     if seg.mirrors().is_empty() {
@@ -90,18 +131,14 @@ pub(super) fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: 
             .color(t.text_dim),
         );
         ui.horizontal_wrapped(|ui| {
-            if dir.is_some() && crate::menus::ui_enabled(app, "app.openSamModelFolder") {
-                let r = ui.button(crate::i18n::tr(crate::menus::reveal_label()));
-                crate::widgets::register(ui, "button:samFolder", r.rect);
-                if r.clicked()
-                    && let Err(e) = app.run("app.openSamModelFolder", json!({}))
-                {
-                    app.toast_error(ui.ctx(), e);
-                }
+            if dir.is_some()
+                && crate::menus::ui_enabled(app, "app.openSamModelFolder")
+                && sam_button(ui, "button:samFolder", crate::menus::reveal_label())
+                && let Err(e) = app.run("app.openSamModelFolder", json!({}))
+            {
+                app.toast_error(ui.ctx(), e);
             }
-            let r = ui.link(crate::i18n::tr("How to install the model")).on_hover_text(SAM_HELP);
-            crate::widgets::register(ui, "link:samHelp", r.rect);
-            if r.clicked()
+            if sam_link(ui, "link:samHelp", "How to install the model", SAM_HELP)
                 && let Err(e) = crate::links::open(app, SAM_HELP)
             {
                 app.toast(ui.ctx(), e);
@@ -112,3 +149,7 @@ pub(super) fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: 
         ui.label(egui::RichText::new(format!("{} {e}", crate::i18n::tr("The download didn't work:"))).color(egui::Color32::from_rgb(230, 90, 80)));
     }
 }
+
+#[cfg(test)]
+#[path = "sam_model_port155_tests.rs"]
+mod sam_model_port155_tests;

@@ -34,7 +34,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
         // (taken on every pass the panel is drawn; one from earlier than the pass before is forgotten)
-        let held = held_offset(ui.ctx());
+        // (a sizing or measuring run in the pass leaves it for the real draw, which would else find it gone)
+        let held = if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { None } else { held_offset(ui.ctx()) };
         let Some(id) = app.session.active() else {
             // the Keyword List is the library's, not a photo's: it is there without a selection
             if app.ui.right == RightPanel::Keywords {
@@ -52,6 +53,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 return;
             }
             let r = ui.max_rect();
+            // the panel's frame goes round the whole panel, as it does round a photo's tools: with nothing allocated it
+            // drew its border round an empty rect, a stray dot under the tab
+            ui.allocate_rect(r, egui::Sense::hover());
             // every tab (Edit, Info, Versions…) says it: nothing to show until photos come in
             if super::empty_library::shown(&app.session) {
                 super::empty_message(ui, r, "No photos yet", "Import photos to get started");
@@ -71,13 +75,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         // (where the pass starts: by its end egui may have pulled a shrunken panel's offset back)
         let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::unique(AREA)));
-        let start = held.or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.clamped_offset().y));
-        ui.data_mut(|d| match start {
-            Some(o) => {
-                d.insert_temp(egui::Id::unique(OFFSET), o);
-            }
-            None => d.remove::<f32>(egui::Id::unique(OFFSET)),
-        });
+        let ended = ui.data(|d| d.get_temp::<f32>(egui::Id::unique(ENDED)));
+        let start = held.or(ended).or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.clamped_offset().y));
+        // (only a real pass says where it started: a sizing or measuring run in the next pass would write the offset
+        // the last pass ended at, which egui has already pulled back as the content shrank, and the hold would count that
+        // change twice)
+        if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
+            ui.data_mut(|d| match start {
+                Some(o) => {
+                    d.insert_temp(egui::Id::unique(OFFSET), o);
+                }
+                None => d.remove::<f32>(egui::Id::unique(OFFSET)),
+            });
+        }
         let scrolled = area.show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             match app.ui.right {
@@ -93,8 +103,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Activity => activity(app, ui, id),
                 RightPanel::None => {}
             }
+            // Tab and focus requests keep the focused control in view
+            super::scroll_focus::reveal_focus(ui, egui::Id::unique("right-scroll-focus"));
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
+        // (the offset this real pass ended at: the next pass holds from it, not from the state a sizing or
+        // measuring run in between may already have pulled back as the content shrank)
+        if !(ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())) {
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique(ENDED), scrolled.state.clamped_offset().y));
+        }
     });
 }
 
@@ -103,6 +120,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 const AREA: &str = "right-scroll-id";
 const OFFSET: &str = "right-scroll-offset";
 const HOLD: &str = "right-scroll-hold";
+const ENDED: &str = "right-scroll-ended";
 
 /// Where [`hold_list_in_place`] holds the panel: its offset as the pass before started, moved by as much as
 /// the Keywords box grew. Set on the scroll area as it starts, so the pass drawn again shows the list
@@ -125,8 +143,9 @@ pub fn header(ui: &mut egui::Ui, title: &str) {
 /// A panel title that folds its section shut and open again (`section:{id}`; kept in
 /// [`crate::state::UiState::folded_sections`]). Says whether the section is open.
 pub fn fold_header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+    let (_, r) = ui.allocate_space(vec2(ui.available_width(), 46.0));
     let title = crate::i18n::tr(title);
+    let resp = crate::panels::detail::host::target(ui, ("fold-header", id), r, crate::panels::detail::host::Target::new(title));
     fold_title(app, ui, id, r, &resp, title)
 }
 
@@ -146,7 +165,7 @@ pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, res
     p.text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, title, t.semibold(15.0), t.text);
     let chevron = Rect::from_center_size(pos2(r.right() - 30.0, r.center().y + 2.0), vec2(14.0, 14.0));
     paint(p, chevron, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.icon);
-    if resp.clicked() {
+    if craft::ui::contract::clicked(resp) {
         app.ui.toggle_folded(id);
     }
     open

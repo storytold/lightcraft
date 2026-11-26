@@ -105,11 +105,13 @@ fn hint(h: &Headless) -> Option<String> {
     h.view.ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::unique("drag-photos-hint"))).map(|(_, text)| text)
 }
 
-/// Click a widget the way a person does (press and release on it).
+/// Click a widget the way a person does: the control channel moves to it, presses and releases there (the
+/// framework gives a press to the part the pointer was over in the pass before, which it takes care of).
 fn click(h: &mut Headless, id: &str) {
-    let at = widget(h, id).unwrap_or_else(|| panic!("no {id}")).center();
-    press(h, at);
-    release(h, at);
+    let r = h.request("ui.clickWidget", json!({"id": id}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
 }
 
 fn toast(h: &Headless) -> String {
@@ -207,16 +209,7 @@ fn photos_already_in_the_folder_stay_put() {
     let (root, trip, home) = folders("here");
     let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
     // open the folder holding both
-    let toggle = widget(&h, &format!("libraryFolderToggle:{}", folder_key(&root))).unwrap();
-    h.app.synthetic.push(egui::Event::PointerMoved(toggle.center()));
-    h.app.synthetic.push(egui::Event::PointerButton {
-        pos: toggle.center(),
-        button: egui::PointerButton::Primary,
-        pressed: true,
-        modifiers: egui::Modifiers::NONE,
-    });
-    h.step();
-    release(&mut h, toggle.center());
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
     let target = folder_row(&h, &home).expect("opened");
     let garden = id_of(&h, "garden.png");
     h.app.ui.dragging_photos = Some(vec![garden]);

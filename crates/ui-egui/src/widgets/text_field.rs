@@ -1,18 +1,18 @@
-//! A text field that behaves the same everywhere in the app: right-click for Cut, Copy, Paste and
-//! Select All; Esc gives back the text from before the edit; Return or leaving the field ends the
-//! edit; optionally everything is selected when it takes focus, for fields that are retyped whole.
+//! A text field that behaves the same everywhere in the app, drawn by the framework's `TextField`: the
+//! framework owns typing, selection, its Cut / Copy / Paste / Select All menu, focus and Tab. Esc gives back
+//! the text from before the edit; Return (one-line fields) or leaving the field ends the edit; optionally
+//! everything is selected when it takes focus, for fields that are retyped whole.
 //!
 //! It knows nothing of the app's documents or commands, only the UI's plumbing (the automation
-//! registry, translations, shortcut labels). The caller owns the text and learns how an edit
-//! ended from [`TextFieldResponse::ending`]; what an ending means (save, apply, close) is the
-//! caller's. Each field's widget id is unique on screen: its state is keyed by it.
+//! registry, translations). The caller owns the text and learns how an edit ended from
+//! [`TextFieldResponse::ending`]; what an ending means (save, apply, close) is the caller's. Each
+//! field's widget id is unique on screen: its state is keyed by it.
 //!
 //! New text boxes use it rather than `egui::TextEdit`.
-//!
-//! The keyboard's ⌘X / ⌘C / ⌘V / ⌘A and undo are egui's own, and the app's shortcuts step aside
-//! while a field has focus (`shortcuts::handle`, the native menu's `yields_to_text`).
 
-use egui::{Response, Ui};
+use craft::ui::contract::{Bind, Props as _, Show as _, Sizing};
+use craft::ui::runtime::focus::FocusTarget;
+use egui::{Rect, Response, Ui};
 
 /// How an edit ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub struct TextFieldResponse {
     pub response: Response,
     /// Set on the frame an edit ends.
     pub ending: Option<Ending>,
-    /// An edit is under way: the field has the focus, or its menu does.
+    /// An edit is under way: the field has the focus.
     pub editing: bool,
 }
 
@@ -55,11 +55,6 @@ pub struct TextField<'a> {
     width: Option<f32>,
     select_on_focus: bool,
     begin_edit: bool,
-    frame: bool,
-    font: Option<egui::FontId>,
-    color: Option<egui::Color32>,
-    align: Option<egui::Align>,
-    margin: Option<egui::Margin>,
     rows: Option<usize>,
 }
 
@@ -68,31 +63,129 @@ pub fn id(widget: &str) -> egui::Id {
     egui::Id::unique("lc-text-field").with(widget)
 }
 
+/// Whether the keyboard focus is on something that types: a framework text part or shortcut recorder, or an app's own
+/// egui text widget outside the framework. A focused framework button, slider or list does not count: the runtime
+/// already keeps the keys it uses, so the app's shortcuts still get the rest.
+pub(crate) fn typing(ctx: &egui::Context) -> bool {
+    match craft::ui::runtime::focus::focused_rec(ctx) {
+        // (a part of the stop, such as a number field's text part, holding egui's focus is typing too)
+        Some(rec) => {
+            rec.stop.text
+                || craft::ui::runtime::focus::takes_letters(&rec.stop.keys)
+                || ctx.memory(|m| m.focused()).is_some_and(|focused| focused != rec.stop.root && focused != rec.stop.id)
+        }
+        None => ctx.egui_wants_keyboard_input(),
+    }
+}
+
+/// Whether the field registered as `widget` has the keyboard focus now.
+pub(crate) fn focused(ctx: &egui::Context, widget: &str) -> bool {
+    has_focus(ctx, id(widget))
+}
+
+/// Gives the field registered as `widget` the keyboard focus.
+pub(crate) fn focus(ctx: &egui::Context, widget: &str) {
+    focus_id(ctx, id(widget));
+}
+
+/// Gives the field whose id is `id` ([`id`]) the keyboard focus.
+pub(crate) fn focus_id(ctx: &egui::Context, id: egui::Id) {
+    craft::ui::runtime::focus::request(ctx, FocusTarget::Id(id));
+}
+
+/// Takes the keyboard focus from the field registered as `widget`, if it has it.
+pub(crate) fn blur(ctx: &egui::Context, widget: &str) {
+    blur_id(ctx, id(widget));
+}
+
+/// Takes the keyboard focus from the field whose id is `id`, if it has it.
+pub(crate) fn blur_id(ctx: &egui::Context, id: egui::Id) {
+    if let Some(rec) = craft::ui::runtime::focus::focused_rec(ctx).filter(|rec| rec.stop.id == id || rec.stop.root == id) {
+        ctx.memory_mut(|m| m.surrender_focus(rec.stop.root));
+        if let Some(now) = ctx.memory(|m| m.focused()) {
+            ctx.memory_mut(|m| m.surrender_focus(now));
+        }
+    }
+}
+
+/// Whether the field whose id is `id` has the keyboard focus.
+pub(crate) fn has_focus_id(ctx: &egui::Context, id: egui::Id) -> bool {
+    has_focus(ctx, id)
+}
+
+/// The egui id of the field's text part, which holds the keyboard focus while the field is edited.
+pub(crate) fn text_id(id: egui::Id) -> egui::Id {
+    craft::ui::runtime::memory::sub(id, ("text", craft::behavior::PartKey::new("text")))
+}
+
+fn has_focus(ctx: &egui::Context, id: egui::Id) -> bool {
+    craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == id || rec.stop.root == id)
+        || ctx.memory(|m| m.has_focus(id) || m.has_focus(text_id(id)))
+}
+
+/// What a field remembers between passes: the pass it was last drawn in and whether an edit was under way.
+#[derive(Clone, Copy, Default)]
+struct Memo {
+    editing: bool,
+    pass: u64,
+}
+
 /// Whether the field had an unfinished edit on the immediately preceding egui pass.
 pub(crate) fn was_editing(ctx: &egui::Context, widget: &str) -> bool {
     let pass = ctx.cumulative_pass_nr();
-    ctx.data(|d| d.get_temp::<Memo>(id(widget).with("memo")).is_some_and(|memo| memo.before.is_some() && memo.pass.checked_add(1) == Some(pass)))
+    ctx.data(|d| d.get_temp::<Memo>(id(widget).with("memo")).is_some_and(|memo| memo.editing && memo.pass.checked_add(1) == Some(pass)))
+}
+
+/// Registers the field's real placed rect for automation, and its edit menu's items (`{widget}:cut`, `:copy`,
+/// `:paste`, `:selectAll`) while that menu is open. SDK hit responses are clipped and become a zero-height rect on
+/// the clip edge when scrolled away: the placed geometry is kept for visibility, scrolling and automation.
+pub(crate) fn register_field(ui: &egui::Ui, widget: &str, response: &egui::Response, record: Option<&craft::ui::runtime::inspect::Recorded>) -> Rect {
+    if craft::ui::runtime::measure::active(ui.ctx()) || ui.is_sizing_pass() {
+        return response.rect;
+    }
+    let rect = record
+        .and_then(|record| record.elements.iter().find(|element| element.id == response.id && element.part.is_none()))
+        .map_or(response.rect, |element| element.rect);
+    if let Some(record) = record {
+        for element in &record.elements {
+            let Some(facts) = &element.facts else { continue };
+            let action = [("Cut", "cut"), ("Copy", "copy"), ("Paste", "paste"), ("Select All", "selectAll")]
+                .into_iter()
+                .find(|(label, _)| facts.name.as_deref() == Some(crate::i18n::tr(label)));
+            if element.component == "MenuItem"
+                && let Some((_, action)) = action
+                && let Some(response) = ui.ctx().read_response(element.id)
+                // (a menu body still fading out after it closed publishes nothing)
+                && egui::AreaState::load(ui.ctx(), response.layer_id.id).is_none_or(|state| state.interactable)
+            {
+                crate::widgets::register_response(format!("{widget}:{action}"), response.rect, &response);
+            }
+        }
+    }
+    // The keyboard focus sits on the field's text part: register that response, so a focused id names the widget.
+    let text_part = ui.ctx().read_response(text_id(response.id));
+    if response.interact_rect.is_positive() {
+        crate::widgets::register_response(widget, rect, text_part.as_ref().unwrap_or(response));
+    } else {
+        crate::widgets::register_geometry(ui.ctx(), widget, rect);
+    }
+    rect
+}
+
+/// Whether the field's own edit menu (its Cut, Copy, Paste and Select All rows) is shown in this pass, open or still
+/// fading out after Esc closed it (the focus comes back to the field once it has gone).
+fn edit_menu_open(_ctx: &egui::Context, record: Option<&craft::ui::runtime::inspect::Recorded>) -> bool {
+    record.is_some_and(|record| {
+        record.elements.iter().any(|element| {
+            element.component == "MenuItem" && element.facts.as_ref().is_some_and(|facts| facts.name.as_deref() == Some(crate::i18n::tr("Copy")))
+        })
+    })
 }
 
 impl<'a> TextField<'a> {
     /// A one-line field (Return ends the edit) registered as `widget`.
     pub fn singleline(widget: &'a str, text: &'a mut String) -> Self {
-        TextField {
-            widget,
-            text,
-            multiline: false,
-            hint: None,
-            label: None,
-            width: None,
-            select_on_focus: false,
-            begin_edit: false,
-            frame: true,
-            font: None,
-            color: None,
-            align: None,
-            margin: None,
-            rows: None,
-        }
+        TextField { widget, text, multiline: false, hint: None, label: None, width: None, select_on_focus: false, begin_edit: false, rows: None }
     }
 
     /// A multi-line field: Return starts a new line; leaving the field ends the edit.
@@ -113,6 +206,7 @@ impl<'a> TextField<'a> {
         self
     }
 
+    /// The field's width; `f32::INFINITY` fills the row.
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
         self
@@ -124,298 +218,88 @@ impl<'a> TextField<'a> {
         self
     }
 
-    /// Draw the field's own box (on by default); off where the caller draws one around it.
-    pub fn frame(mut self, on: bool) -> Self {
-        self.frame = on;
-        self
-    }
-
-    pub fn font(mut self, font: egui::FontId) -> Self {
-        self.font = Some(font);
-        self
-    }
-
-    pub fn text_color(mut self, color: egui::Color32) -> Self {
-        self.color = Some(color);
-        self
-    }
-
-    pub fn horizontal_align(mut self, align: egui::Align) -> Self {
-        self.align = Some(align);
-        self
-    }
-
-    pub fn margin(mut self, margin: egui::Margin) -> Self {
-        self.margin = Some(margin);
-        self
-    }
-
     /// Select all the text when the field takes focus, so typing replaces it (names, numbers).
     pub fn select_on_focus(mut self, on: bool) -> Self {
         self.select_on_focus = on;
         self
     }
 
-    /// Initialize a newly revealed value editor before its first input is processed.
+    /// Give a newly revealed value editor the focus before its first input is processed.
     pub(crate) fn begin_edit(mut self, on: bool) -> Self {
         self.begin_edit = on;
         self
     }
 
-    /// The field's remembered state at the start of a pass: a field not drawn on the previous pass starts afresh,
-    /// a begun edit or a choice made from the menu last frame is carried out, and a field focused by the previous
-    /// pass selects its text when it asks to.
-    fn prepare(&self, ui: &mut Ui, id: egui::Id) -> Memo {
-        let mut memo: Memo = ui.data_mut(|d| d.get_temp(id.with("memo"))).unwrap_or_default();
-        // a field not drawn last frame (its dialog or panel closed) starts afresh: an edit, a menu
-        // or a choice from it that was under way is gone with it
-        let pass = ui.ctx().cumulative_pass_nr();
-        if memo.pass.checked_add(1) != Some(pass) {
-            memo = Memo::default();
-        }
-        memo.pass = pass;
-        if self.begin_edit {
-            memo.before = Some(self.text.clone());
-            memo.select_on_release = false;
-            ui.memory_mut(|m| m.request_focus(id));
-            select_all(ui.ctx(), id, self.text);
-        }
-        // a choice from the menu last frame: the field takes the focus back and does it, with
-        // egui's own handling of the clipboard events (a password is never copied)
-        if let Some(action) = memo.action.take() {
-            ui.memory_mut(|m| m.request_focus(id));
-            match action {
-                Action::Cut => ui.input_mut(|i| i.events.push(egui::Event::Cut)),
-                Action::Copy => ui.input_mut(|i| i.events.push(egui::Event::Copy)),
-                // only the host can read the clipboard: it answers with a paste event
-                Action::Paste => ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste),
-                Action::SelectAll => select_all(ui.ctx(), id, self.text),
-                Action::Refocus => {}
-            }
-        }
-        // A field focused by the previous pass (a dialog asks after drawing it) must already
-        // select its text on the pass that carries the first keystroke: egui processes text
-        // inside `ui.add`, before the after-add branch below could select, leaving the new text
-        // inserted into the old. A press may go on to drag a selection, so it keeps the
-        // after-add path; an edit already under way keeps its pre-edit text for Esc.
-        let focused_at_start = ui.memory(|m| m.has_focus(id));
-        if focused_at_start && memo.before.is_none() && self.select_on_focus && !ui.input(|i| i.pointer.any_down()) {
-            memo.before = Some(self.text.clone());
-            select_all(ui.ctx(), id, self.text);
-        }
-        memo
-    }
-
-    /// Draw the field and return its response, any ending this frame, and whether an edit is
-    /// under way. Per-frame state keeps the pre-edit text for Esc, the selection across the
-    /// context menu, and select-on-focus; single-line Enter ends the edit, and focus loss ends it
-    /// except when the focus went to the field's own menu (a choice from the menu resumes the
-    /// edit). The menu offers cut/copy/paste/select-all (paste is omitted on the web; egui also
-    /// handles their keyboard shortcuts), and a field not drawn on the previous pass starts clean.
+    /// Draw the field and return its response, any ending this pass, and whether an edit is under way.
     pub fn show(self, ui: &mut Ui) -> TextFieldResponse {
         let id = id(self.widget);
         let pass = ui.ctx().cumulative_pass_nr();
-        let mut memo = self.prepare(ui, id);
-        let name = self.label.clone().or_else(|| self.hint.clone());
-        let mut edit = if self.multiline { egui::TextEdit::multiline(self.text) } else { egui::TextEdit::singleline(self.text) };
-        edit = edit.id(id);
-        if let Some(hint) = self.hint {
-            edit = edit.hint_text(hint);
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        if self.begin_edit && real {
+            craft::ui::runtime::focus::request(ui.ctx(), FocusTarget::Id(id));
         }
-        if let Some(w) = self.width {
-            edit = edit.desired_width(w);
-        }
-        if !self.frame {
-            edit = edit.frame(egui::Frame::NONE);
-        }
-        if let Some(font) = self.font {
-            edit = edit.font(font);
-        }
-        if let Some(color) = self.color {
-            edit = edit.text_color(color);
-        }
-        if let Some(align) = self.align {
-            edit = edit.align(egui::Align2([align, egui::Align::Min]));
-        }
-        if let Some(margin) = self.margin {
-            edit = edit.margin(margin);
-        }
-        if let Some(rows) = self.rows {
-            edit = edit.desired_rows(rows);
-        }
-        let (escape, enter) = ui.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Enter)));
-        // a right-click places the cursor as a left one does: the selection the menu acts on
-        // would be gone
-        let right = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary) || i.pointer.button_released(egui::PointerButton::Secondary));
-        let selection = egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range());
-        let mut response = ui.add(edit);
-        // screen readers: the field by its caption, even once it holds text (egui names it by
-        // nothing but its contents)
-        if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
-            ui.ctx().accesskit_node_builder(response.id, |node| node.set_label(name));
-        }
-        // The menu may take focus on a primary-button release. egui collapses a
-        // TextEdit selection when focus leaves; retain the range our own menu acts on.
-        if right && response.contains_pointer() || memo.menu_open && !ui.memory(|m| m.has_focus(id)) {
-            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
-            state.cursor.set_char_range(selection);
-            state.store(ui.ctx(), id);
-        }
-        crate::widgets::register(ui, self.widget, response.rect);
-        // egui's own focus: `Response::has_focus` is also false while the window is in the
-        // background (another app in front), which neither ends nor restarts an edit
-        let focused = ui.memory(|m| m.has_focus(id));
-        // The opening press may place a cursor; keep the original selected, never replacement text.
-        if self.begin_edit && focused && !response.changed() {
-            select_all(ui.ctx(), id, self.text);
-        }
-
-        // an edit not under way (none, or one cut short when the field went away) is forgotten
-        let in_menu = memo.away || memo.menu_open || memo.action.is_some();
-        if !focused && !response.lost_focus() && !in_menu {
-            memo.before = None;
-        }
-        // the start of an edit (not the focus coming back from the menu)
-        let pressing = ui.input(|i| i.pointer.any_down());
-        if focused && memo.before.is_none() {
-            memo.before = Some(self.text.clone());
-            if self.select_on_focus {
-                // a press that took the focus may go on to drag a selection: wait for its release
-                if pressing {
-                    memo.select_on_release = true;
-                } else {
-                    select_all(ui.ctx(), id, self.text);
-                }
+        let name = self.label.clone().or_else(|| self.hint.clone()).unwrap_or_default();
+        let widget = self.widget;
+        let multiline = self.multiline;
+        let (shown, record) = craft::ui::runtime::inspect::record(ui, id.with("inspect"), |ui| {
+            let mut field = craft::ui::text::TextField::new(name, Bind::bound(&mut *self.text)).id(id).limit(None);
+            if let Some(hint) = self.hint.clone() {
+                field = field.placeholder(hint);
             }
-        }
-        if memo.select_on_release && !pressing {
-            memo.select_on_release = false;
-            // a plain click selects everything; a drag keeps what it selected
-            if focused && !has_selection(ui.ctx(), id) {
-                select_all(ui.ctx(), id, self.text);
-            }
-        }
-        let menu_was_open = memo.menu_open;
-        // a click on a greyed-out item does nothing, as in a native menu: only a choice or a click
-        // outside closes it (not the right-click that moves the menu within the field, #1877)
-        // (while photos are carried a right-click opens no menu: that is not what the person is doing)
-        memo.menu_open = !(response.secondary_clicked() && crate::widgets::carrying(ui.ctx()))
-            && egui::Popup::context_menu(&response)
-                .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
-                .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
-                .is_some();
-
-        let mut ending = None;
-        let close_menu = |ui: &Ui| egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        // egui reports a lost focus on two frames: only an edit under way ends
-        if response.lost_focus() && memo.before.is_some() {
-            if escape && menu_was_open {
-                // Esc closes only the menu, as in native menus: the field takes the focus back
-                memo.action = Some(Action::Refocus);
-            } else if escape {
-                if let Some(before) = memo.before.take()
-                    && *self.text != before
-                {
-                    *self.text = before;
-                    response.mark_changed();
-                }
-                ending = Some(Ending::Escape);
-            } else if enter && !self.multiline {
-                ending = Some(Ending::Return);
-                close_menu(ui);
-            } else if menu_was_open || memo.menu_open || memo.action.is_some() {
-                // the click went to the menu: the edit goes on once the menu is done with
-                memo.away = true;
+            if multiline {
+                field = field.lines(self.rows.unwrap_or(3));
             } else {
-                ending = Some(Ending::Away);
+                field = field.submits();
             }
-        } else if memo.away && escape && memo.action.is_none() {
-            // Esc with the focus in the menu (Tab took it there) closes only the menu
-            memo.action = Some(Action::Refocus);
-            memo.away = false;
-        } else if memo.away && !memo.menu_open && memo.action.is_none() && !focused {
-            // the menu closed without a choice: the click outside it left the field
-            ending = Some(Ending::Away);
+            if self.select_on_focus {
+                field = field.select_on_focus();
+            }
+            // while photos are carried a right-click opens no edit menu: that is not what the person is doing
+            if crate::widgets::carrying(ui.ctx()) {
+                field = field.own_context_menu();
+            }
+            match self.width {
+                Some(w) if w.is_finite() => {
+                    let lines = if multiline { self.rows.unwrap_or(3).max(1) as f32 } else { 1.0 };
+                    let h = ui.spacing().interact_size.y.max(24.0) + (lines - 1.0) * ui.text_style_height(&egui::TextStyle::Body);
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(w.max(1.0), h), egui::Sense::hover());
+                    field.show_at(ui, rect)
+                }
+                Some(_) => field.sizing(Sizing::FillWidth).show(ui),
+                None => field.show(ui),
+            }
+        });
+        register_field(ui, widget, &shown.response, record.as_deref());
+        let committed = shown.events.iter().any(|event| matches!(event, craft::behavior::EditEvent::Commit { .. }));
+        let ending = if !real {
+            None
+        } else if shown.escaped {
+            Some(Ending::Escape)
+        } else if shown.submitted && !multiline {
+            Some(Ending::Return)
+        } else if committed || shown.left_by_tab.is_some() {
+            Some(Ending::Away)
+        } else {
+            None
+        };
+        // Return and Escape end the edit and give up the keyboard, as the app's fields always have: the next key is a
+        // shortcut again.
+        if matches!(ending, Some(Ending::Return | Ending::Escape)) {
+            blur_id(ui.ctx(), id);
         }
-        if focused {
-            memo.away = false;
+        // The field's own Cut / Copy / Paste menu takes the focus while it is open, but the edit goes on under it: the
+        // typing stays, and Esc closes only the menu.
+        let editing =
+            ending.is_none() && (has_focus(ui.ctx(), id) || (real && was_editing(ui.ctx(), widget) && edit_menu_open(ui.ctx(), record.as_deref())));
+        if real {
+            ui.data_mut(|d| d.insert_temp(id.with("memo"), Memo { editing, pass }));
         }
-        if ending.is_some() {
-            memo = Memo { pass, ..Memo::default() };
-        }
-        let editing = ending.is_none() && (focused || memo.away || memo.menu_open || memo.action.is_some());
-        ui.data_mut(|d| d.insert_temp(id.with("memo"), memo));
-        TextFieldResponse { response, ending, editing }
-    }
-}
-
-/// What a field remembers between frames.
-#[derive(Clone, Default)]
-struct Memo {
-    /// The text when the edit started, for Esc.
-    before: Option<String>,
-    /// The context menu was open at the end of the frame.
-    menu_open: bool,
-    /// The menu's choice, done next frame.
-    action: Option<Action>,
-    /// The focus left for the menu: the edit ends if the menu closes without a choice.
-    away: bool,
-    /// The field took the focus with select-on-focus under a press: select all on its release,
-    /// unless it dragged a selection.
-    select_on_release: bool,
-    /// The frame (egui pass) the field was last drawn in.
-    pass: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
-    Cut,
-    Copy,
-    Paste,
-    SelectAll,
-    /// Only take the focus back (Esc closed the menu).
-    Refocus,
-}
-
-fn select_all(ctx: &egui::Context, id: egui::Id, text: &str) {
-    let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
-    let end = egui::text::CCursor::new(text.chars().count());
-    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
-    state.store(ctx, id);
-}
-
-/// Some text is selected in the field.
-fn has_selection(ctx: &egui::Context, id: egui::Id) -> bool {
-    egui::text_edit::TextEditState::load(ctx, id).and_then(|s| s.cursor.char_range()).is_some_and(|r| !r.is_empty())
-}
-
-/// The field's context menu: Cut, Copy, Paste, Select All, with the keyboard's shortcuts beside them.
-fn menu(ui: &mut Ui, widget: &str, id: egui::Id, text: &str, action: &mut Option<Action>) {
-    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let selected = has_selection(ui.ctx(), id);
-    let items = [
-        (Action::Cut, "cut", "Cut", "Cmd+X", selected),
-        (Action::Copy, "copy", "Copy", "Cmd+C", selected),
-        // a browser only pastes from its own paste event, never on request
-        (Action::Paste, "paste", "Paste", "Cmd+V", !cfg!(target_arch = "wasm32")),
-        (Action::SelectAll, "selectAll", "Select All", "Cmd+A", !text.is_empty()),
-    ];
-    for (a, key, label, shortcut, enabled) in items {
-        if a == Action::Paste && cfg!(target_arch = "wasm32") {
-            continue;
-        }
-        if a == Action::SelectAll {
-            ui.separator();
-        }
-        let button = egui::Button::new(crate::i18n::tr(label)).shortcut_text(crate::menubar::shortcut_text(shortcut, mac));
-        let r = ui.add_enabled(enabled, button);
-        crate::widgets::register(ui, format!("{widget}:{key}"), r.rect);
-        if r.clicked() {
-            *action = Some(a);
-            ui.close();
-        }
+        TextFieldResponse { response: shown.response, ending, editing }
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod live_filter_tests;

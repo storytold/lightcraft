@@ -294,12 +294,16 @@ fn other_than(image: &egui::ColorImage, rect: egui::Rect, colour: egui::Color32)
 #[test]
 fn a_page_that_goes_on_below_shows_a_scroll_handle_without_the_pointer_on_it() {
     let mut h = demo([900.0, 560.0]);
-    let chrome = crate::theme::Tokens::get(&h.view.ctx).chrome;
     // (the pointer is nowhere near the window)
     h.request("ui.move", json!({"x": 5.0, "y": 5.0}), T);
+    // The strip at the page's right edge against the dialog's own surface, read at the strip's foot: a handle starts
+    // at the top of an unscrolled page and is shorter than it. (The framework dialog's surface is its own colour, not
+    // the app's chrome token.)
     let handle = |h: &Headless| {
         let room = rect(h, "settings:pageRoom");
-        other_than(&h.paint(), egui::Rect::from_min_max(egui::pos2(room.right() - 6.0, room.top()), room.max), chrome)
+        let image = h.paint();
+        let surface = image.pixels[(room.bottom() - 2.0).round() as usize * image.size[0] + (room.right() - 3.0).round() as usize];
+        other_than(&image, egui::Rect::from_min_max(egui::pos2(room.right() - 6.0, room.top()), room.max), surface)
     };
     // Given Import, which is taller than the room a 560 pt tall app window has for it
     show(&mut h, "import");

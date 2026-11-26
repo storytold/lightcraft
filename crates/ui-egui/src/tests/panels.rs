@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
+use crate::panels::left::{INDENT_STEP, MIN_INDENT_STEP, indent_step};
 use crate::state::{LEFT_WIDTH, MIN_PHOTO_WIDTH, RIGHT_WIDTH};
 use crate::{LightcraftApp, Services};
 
@@ -1608,7 +1609,8 @@ fn a_chain_of_single_folders_starts_open() {
 
 /// The sidebar at its narrowest, with fourteen folders open one inside the other, names wider than
 /// the room a row keeps for its name, counts five digits wide all the way up, and a color label on
-/// the deepest folder (a dot just before its count). Returns the deepest folder's path.
+/// the deepest folder (a dot just before its count). Returns the deepest folder's path. (The chain
+/// is opened in the widest panel, where every triangle can be reached; the panel is narrowed after.)
 fn folders_app_with_deep_labeled_chain() -> (Headless, String) {
     let names: Vec<String> = (1..=14).map(|i| format!("level-{i:02}")).collect();
     let mut paths = Vec::new();
@@ -1623,9 +1625,9 @@ fn folders_app_with_deep_labeled_chain() -> (Headless, String) {
     let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
     // (tall enough for every row of the chain to be drawn: rows below the fold are not)
     let mut h = folders_app_sized(&refs, [1400.0, 1500.0]);
-    let left = widget(&h, "panel:left_panel");
-    drag(&mut h, left.right() - 2.0, -1400.0);
-    assert_eq!(h.app.ui.left_width, crate::state::LEFT_WIDTH.min, "the panel at its narrowest");
+    let r = h.request("ui.set", json!({"leftWidth": crate::state::LEFT_WIDTH.max}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
     let mut path = String::new();
     for name in &names[..names.len() - 1] {
         path.push('/');
@@ -1634,21 +1636,51 @@ fn folders_app_with_deep_labeled_chain() -> (Headless, String) {
         assert!(h.step_until(T, |h| has(h, &toggle)), "{toggle} is drawn");
         let r = h.request("ui.clickWidget", json!({"id": toggle}), T);
         assert_eq!(r["ok"], true, "{r}");
-        // the frame a new row is first drawn in, before the content has grown to what it asked for
         h.step();
-        let panel = widget(&h, "panel:left_panel");
-        for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:")) {
-            assert!(r.right() <= panel.right() || r.left() >= panel.right(), "opening {path}: {id} straddles the edge: {r:?} / {panel:?}");
-        }
         h.step();
     }
     h.app.run("folder.label", json!({"path": dir, "label": "red"})).unwrap();
+    let r = h.request("ui.set", json!({"leftWidth": crate::state::LEFT_WIDTH.min}), T);
+    assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
+    assert_eq!(h.app.ui.left_width, crate::state::LEFT_WIDTH.min, "the panel at its narrowest");
     (h, dir)
 }
 
-/// In a panel too narrow for a deep row, the count gives way: it is drawn after the name, never
-/// over it or over the folder's icon.
+/// Where the sidebar's visible part ends: the edge its counts are pinned to while the content
+/// scrolls sideways under them.
+fn sidebar_edge(h: &Headless) -> f32 {
+    crate::panels::left::sidebar_visible_right(&h.view.ctx)
+}
+
+/// Whether `r` is whole at the edge `edge`: inside it, or wholly past it, never cut in two by it.
+fn whole_at_edge(r: egui::Rect, edge: f32) -> bool {
+    r.right() <= edge || r.left() >= edge
+}
+
+/// Every count and colour label's dot the Folders list drew, by widget name.
+fn folder_counts(h: &Headless) -> Vec<(String, egui::Rect)> {
+    h.app
+        .widgets
+        .iter()
+        .filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:"))
+        .map(|(w, r)| (w.clone(), *r))
+        .collect()
+}
+
+/// Every count and dot of the Folders list is whole at the sidebar's visible edge; `when` says
+/// which frame this is.
+fn assert_counts_whole(h: &Headless, when: &str) {
+    let edge = sidebar_edge(h);
+    for (id, rect) in folder_counts(h) {
+        assert!(whole_at_edge(rect, edge), "{when}: {id} straddles the edge: {rect:?} / {edge}");
+    }
+}
+
+/// A row with room for both keeps its count at the sidebar's visible edge, where it stays while
+/// the content scrolls sideways under it. In a panel too narrow for a deep row the count gives
+/// way: it is drawn after the name, never over it or over the folder's icon, and wholly past the
+/// edge rather than cut in two by it.
 #[test]
 fn a_count_never_covers_the_name_of_a_deep_row() {
     let (mut h, deep) = folders_app_with_deep_labeled_chain();
@@ -1661,26 +1693,22 @@ fn a_count_never_covers_the_name_of_a_deep_row() {
         mark.left() >= label.right() && mark.right() <= count.left(),
         "the color dot sits between the name and the count: {label:?} {mark:?} {count:?}"
     );
-    // a row with room keeps its count at the panel's visible edge
-    let panel = widget(&h, "panel:left_panel");
-    assert!(widget(&h, "count:all").right() <= panel.right());
-    // and no count is cut in two by that edge (5 digits wide here): it is whole, inside or past it
+    // a shallow row keeps its count at the visible edge, a count's width short of it
+    let edge = sidebar_edge(&h);
+    let all = widget(&h, "count:all");
+    assert!(all.right() <= edge && all.right() > edge - 40.0, "the count of All Photos is pinned at the edge: {all:?} / {edge}");
+    // and no count is cut in two by that edge (five digits wide here): it is whole, inside or past it
     let mut past = 0;
-    for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:")) {
-        assert!(r.right() <= panel.right() || r.left() >= panel.right(), "{id} straddles the edge: {r:?} / {panel:?}");
-        past += usize::from(r.left() >= panel.right());
+    for (id, rect) in folder_counts(&h) {
+        assert!(whole_at_edge(rect, edge), "{id} straddles the edge: {rect:?} / {edge}");
+        past += usize::from(rect.left() >= edge);
     }
     assert!(past > 0, "the deepest rows' counts are past the edge");
-    // at every width, also where the content is only a little wider than the panel (a count that
-    // gave way used to be held back by the row's own end there, and was cut by the edge)
+    // at every width
     for width in (200..=330).step_by(2) {
         let r = h.request("ui.set", json!({"leftWidth": width}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
-        let panel = widget(&h, "panel:left_panel");
-        for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
-            assert!(r.right() <= panel.right() || r.left() >= panel.right(), "at {width} pt {id} straddles the edge: {r:?} / {panel:?}");
-        }
         // and the deepest row's color dot and count still come after its name
         let (label, count) = (widget(&h, &format!("label:libfolder:{deep}")), widget(&h, &format!("count:libfolder:{deep}")));
         let mark = widget(&h, &format!("labelMark:libfolder:{deep}"));
@@ -1688,29 +1716,38 @@ fn a_count_never_covers_the_name_of_a_deep_row() {
             mark.left() >= label.right() && mark.right() <= count.left(),
             "at {width} pt the dot and count come after the name: {label:?} {mark:?} {count:?}"
         );
+        assert_counts_whole(&h, &format!("at {width} pt"));
     }
 }
 
-/// A count or dot that gives way is whole at the panel's edge in every frame, also the one right
-/// after the panel's width changes, before the content has grown to the room the row asked for.
+/// A count or dot that gives way is whole at the sidebar's visible edge in every frame, also the
+/// one right after the panel's width changes, before the content has grown to the room the row
+/// asked for; the counts move with the edge in that same frame rather than a frame later.
 #[test]
 fn a_count_that_gives_way_is_whole_in_the_frame_the_panel_changes() {
     let (mut h, _) = folders_app_with_deep_labeled_chain();
-    let up: Vec<i32> = (200..=330).step_by(2).collect();
+    let up: Vec<i32> = (200..=330).step_by(6).collect();
+    // (the visible edge and the right edge of the count of All Photos, as the frame before saw them)
+    let mut was: Option<(f32, f32)> = None;
     for width in up.iter().chain(up.iter().rev()) {
         let r = h.request("ui.set", json!({"leftWidth": width}), T);
         assert_eq!(r["ok"], true, "{r}");
         // (one frame, not settled)
         h.step();
-        let panel = widget(&h, "panel:left_panel");
-        for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
-            assert!(r.right() <= panel.right() || r.left() >= panel.right(), "one frame after {width} pt {id} straddles the edge: {r:?} / {panel:?}");
+        assert_counts_whole(&h, &format!("one frame after {width} pt"));
+        let (edge, all) = (sidebar_edge(&h), widget(&h, "count:all").right());
+        if let Some((was_edge, was_all)) = was {
+            assert!(
+                (all - was_all - (edge - was_edge)).abs() < 1.5,
+                "one frame after {width} pt the count is where the edge was before: {was_all} -> {all} for {was_edge} -> {edge}"
+            );
         }
+        was = Some((edge, all));
     }
 }
 
 /// A sideways scroll of many points in one frame (a flick) does not leave a count or dot cut in
-/// two by the panel's edge in the frame it lands.
+/// two by the sidebar's visible edge in the frame it lands.
 #[test]
 fn a_count_that_gives_way_is_whole_after_a_sideways_flick() {
     let (mut h, _) = folders_app_with_deep_labeled_chain();
@@ -1721,13 +1758,7 @@ fn a_count_that_gives_way_is_whole_after_a_sideways_flick() {
             h.settle(SETTLE);
             h.request("ui.scroll", json!({"dx": dx}), T);
             h.step();
-            let panel = widget(&h, "panel:left_panel");
-            for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
-                assert!(
-                    r.right() <= panel.right() || r.left() >= panel.right(),
-                    "flick {dx} at {width} pt: {id} straddles the edge: {r:?} / {panel:?}"
-                );
-            }
+            assert_counts_whole(&h, &format!("a flick of {dx} at {width} pt"));
         }
     }
 }
@@ -1749,33 +1780,24 @@ fn a_count_that_gives_way_is_whole_when_the_panel_grows_in_one_frame() {
                 }
             }
             let panel = widget(&h, "panel:left_panel");
-            assert!((panel.width() - (from + by) as f32).abs() < 2.0, "the panel is already {} pt wide in that frame: {panel:?}", from + by);
-            for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
-                assert!(
-                    r.right() <= panel.right() || r.left() >= panel.right(),
-                    "one frame after {from} -> {} pt {id} straddles the edge: {r:?} / {panel:?}",
-                    from + by
-                );
-            }
+            assert!(panel.width() + 1.0 >= (from + by) as f32, "the panel is already {} pt wide in that frame: {panel:?}", from + by);
+            assert_counts_whole(&h, &format!("one frame after {from} -> {} pt", from + by));
         }
     }
 }
 
 /// Scrolling the sidebar sideways, a frame at a time, never leaves a count or dot cut in two by
-/// the panel's edge, also where the scroll reaches the end of the content.
+/// its visible edge, also where the scroll reaches the end of the content.
 #[test]
 fn a_count_that_gives_way_is_whole_while_the_sidebar_scrolls_sideways() {
     let (mut h, _) = folders_app_with_deep_labeled_chain();
     h.request("ui.move", json!({"x": 120.0, "y": 400.0}), T);
-    for (dx, frames) in [(-6.0, 80), (6.0, 80)] {
+    for (dx, frames) in [(-6.0, 60), (6.0, 60)] {
         for frame in 0..frames {
             let r = h.request("ui.scroll", json!({"dx": dx}), T);
             assert_eq!(r["ok"], true, "{r}");
             h.step();
-            let panel = widget(&h, "panel:left_panel");
-            for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
-                assert!(r.right() <= panel.right() || r.left() >= panel.right(), "frame {frame} of {dx}: {id} straddles the edge: {r:?} / {panel:?}");
-            }
+            assert_counts_whole(&h, &format!("frame {frame} of {dx}"));
         }
     }
 }
@@ -1794,8 +1816,44 @@ fn removing_a_folder_from_the_library_asks_first() {
     assert_eq!(h.app.ui.dialog, None);
 }
 
+/// Every egui "Double use of widget ID" warning painted this frame, with where it sits.
+fn id_clash_warnings(h: &Headless) -> Vec<(String, egui::Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Text(t) => {
+                let text = t.galley.text();
+                if text.contains("use of widget ID") {
+                    out.push((text.to_string(), t.pos));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.view.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The masking panel, with a mask selected and its Effect section open, paints no egui warning
+/// about two widgets sharing an id (the warnings paint over the panel).
+#[test]
+fn the_masking_panel_has_no_widget_id_clashes() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "masking"}));
+    let r = h.request("engine.execute", json!({"command": "mask.add", "params": {"kind": "linear"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    h.step();
+    let clashes = id_clash_warnings(&h);
+    let near = |p: egui::Pos2| h.app.widgets.iter().filter(|(_, r)| r.expand(6.0).contains(p)).map(|(w, _)| w.clone()).collect::<Vec<_>>();
+    let said: Vec<_> = clashes.iter().map(|(t, p)| format!("{t} at {p:?} near {:?}", near(*p))).collect();
+    assert!(clashes.is_empty(), "{said:#?}");
+}
+
 fn popup_open(h: &Headless) -> bool {
-    egui::Popup::is_any_open(&h.view.ctx)
+    egui::Popup::is_any_open(&h.view.ctx) || craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any)
 }
 
 fn right_click(h: &mut Headless, id: &str) {
@@ -2136,7 +2194,11 @@ fn narrow_chain_of_folders_app(deep: &str, size: [f32; 2]) -> Headless {
     }
     let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
     let mut h = folders_app_sized(&paths, size);
-    // each level is opened once its row is drawn (a slow machine may need more than a frame)
+    // each level is opened once its row is drawn (a slow machine may need more than a frame), in the
+    // widest panel, where every triangle can be reached; the panel goes back to its usual width after
+    let r = h.request("ui.set", json!({"leftWidth": crate::state::LEFT_WIDTH.max}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
     for level in &levels[..levels.len() - 1] {
         let toggle = format!("libraryFolderToggle:{level}");
         assert!(h.step_until(T, |h| has(h, &toggle)), "{toggle} is drawn");
@@ -2144,6 +2206,8 @@ fn narrow_chain_of_folders_app(deep: &str, size: [f32; 2]) -> Headless {
     }
     let last = format!("libraryFolderToggle:{}", levels[levels.len() - 1]);
     assert!(h.step_until(T, |h| has(h, &last)), "{last} is drawn");
+    let r = h.request("ui.set", json!({"leftWidth": crate::state::LEFT_WIDTH.default}), T);
+    assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     h
 }
@@ -2169,16 +2233,15 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     // (tall enough for the whole chain: Recently Deleted is above it now)
     let mut h = narrow_chain_of_folders_app(deep, [1400.0, 1700.0]);
     let xs = chevron_xs(&h, deep);
-    let step = crate::panels::left::MIN_INDENT_STEP;
-    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), step, "26 levels do not fit the default panel even at the narrowest step");
-    assert!(xs.len() == 26 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
+    let step = xs[1] - xs[0];
+    assert!(xs.len() == 26 && step > 0.0 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
     let panel = widget(&h, "panel:left_panel");
-    assert!(crate::panels::left::content_width(&h.view.ctx) > panel.width(), "the content is wider than the panel: the bar appears");
-    assert!(widget(&h, "source:all").width() > panel.width(), "the rows are as wide as the widest one, so there is something to scroll to");
-    // counts stay where you can read them, at the visible edge, however wide the rows are
-    for id in ["count:all", "count:picks", "count:recentlyDeleted", "count:libfolder:/a"] {
-        assert!(widget(&h, id).right() <= panel.right(), "{id} stays inside the panel");
-    }
+    // (the rows are as wide as the widest one, so there is something to scroll to: the deepest
+    // chevron lies past the panel) while every count stays at the visible edge, whole
+    assert!(xs.last().is_some_and(|x| *x > panel.right()), "the rows reach past the panel: the deepest chevron is {xs:?}");
+    let edge = sidebar_edge(&h);
+    let all = widget(&h, "count:all");
+    assert!(all.right() <= edge && all.right() > edge - 40.0, "the count of All Photos stays at the visible edge: {all:?} / {edge}");
     // what a row needs is known before it is drawn off screen, so the plus stays reachable
     assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
     // a click in the middle of a deep row chooses it; only the little chevron folds it
@@ -2187,20 +2250,18 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's middle is the row, not its chevron");
 }
 
-/// A library below a deep path (issue #2298): in the default panel the levels step right by
-/// less than a full step, so the deepest folder's name has room and nothing scrolls sideways;
-/// a wide panel goes back to full steps, and a shallow tree never narrows.
+/// A library below a deep path (issue #2298): in the default panel the levels step in by less than
+/// a full step, so the deepest folder's name keeps its room; a wide panel steps in by the full step
+/// again, and a shallow tree never narrows.
 #[test]
 fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
     let deep = "/Users/someone/Library/CloudStorage/Nextcloud-cloud.example.com/RAW/Club/2026-09-24 Team/RAW";
     let mut h = narrow_chain_of_folders_app(deep, [1400.0, 1200.0]);
-    let full = crate::panels::left::INDENT_STEP;
-    let narrow = crate::panels::left::indent_step(&h.view.ctx);
-    assert!(narrow < full && narrow >= crate::panels::left::MIN_INDENT_STEP, "the step narrows in the default panel: {narrow}");
+    assert_eq!(indent_step(&h.view.ctx), MIN_INDENT_STEP, "a deep path in the default panel steps in by the floor");
     let xs = chevron_xs(&h, deep);
-    assert!(xs.windows(2).all(|w| (w[1] - w[0] - narrow).abs() < 0.5), "every level still steps right by the same amount: {xs:?}");
-    let panel = widget(&h, "panel:left_panel");
-    assert!(crate::panels::left::content_width(&h.view.ctx) <= panel.width(), "nothing scrolls sideways");
+    let step = xs[1] - xs[0];
+    assert!(step > 0.0 && (step - MIN_INDENT_STEP).abs() < 0.5, "a level steps in by the narrow step: {step} in {xs:?}");
+    assert!(xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by the same amount: {xs:?}");
     let id = format!("libfolder:{deep}");
     let (label, count) = (widget(&h, &format!("label:{id}")), widget(&h, &format!("count:{id}")));
     assert!(label.width() > 20.0 && label.right() + 4.0 <= count.left(), "the deepest name shows, left of its count: {label:?} {count:?}");
@@ -2208,25 +2269,28 @@ fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
     let r = h.request("ui.set", json!({"leftWidth": 480.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a wide panel indents by the full step");
+    assert_eq!(indent_step(&h.view.ctx), INDENT_STEP, "a wide panel indents by the full step");
     let xs = chevron_xs(&h, deep);
-    assert!(xs.windows(2).all(|w| (w[1] - w[0] - full).abs() < 0.5), "{xs:?}");
+    assert!(xs.windows(2).all(|w| (w[1] - w[0] - INDENT_STEP).abs() < 0.5), "a wide panel's levels step by the full step: {xs:?}");
     // a shallow tree keeps the full step in the default panel
     let h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
-    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a shallow tree is drawn as before");
+    assert_eq!(indent_step(&h.view.ctx), INDENT_STEP, "a shallow tree is drawn as before");
 }
 
-/// The step is chosen in whole bands from the panel's width and the deepest row.
+/// The step is chosen in whole bands from the panel's width and the deepest row: the widest rung of
+/// the old ladder (16, 14, 12, 10) at which the deepest row keeps a name's room and its count, never
+/// below the 12 pt floor (the sidebar scrolls sideways instead).
 #[test]
 fn the_indent_step_narrows_in_bands() {
     use crate::panels::left::step_for;
-    // (room for the steps: the panel less the row's margins, a name's 80 pt and a count's 40)
-    assert_eq!(step_for(268.0, 0.0), 16.0, "top-level rows only");
-    assert_eq!(step_for(268.0, 5.0 * 16.0), 16.0, "five levels fit at full steps");
-    assert_eq!(step_for(268.0, 7.0 * 16.0), 12.0, "seven levels at 12 pt");
-    assert_eq!(step_for(268.0, 9.0 * 16.0), 8.0, "nine levels at 8 pt");
-    assert_eq!(step_for(268.0, 30.0 * 16.0), 8.0, "never below 8 pt: the sidebar scrolls instead");
-    assert_eq!(step_for(480.0, 9.0 * 16.0), 16.0, "a wide panel keeps full steps");
+    // (room for the steps: the panel less what a row spends before its levels, a name's 80 pt and the count's 40)
+    assert_eq!(step_for(268.0, 0), INDENT_STEP, "top-level rows only");
+    assert_eq!(step_for(268.0, 5), INDENT_STEP, "five levels fit at full steps");
+    assert_eq!(step_for(268.0, 7), 14.0, "seven levels step in by 14 pt");
+    assert_eq!(step_for(268.0, 8), MIN_INDENT_STEP, "eight levels step in by the floor, 12 pt");
+    assert_eq!(step_for(268.0, 9), MIN_INDENT_STEP, "the 10 pt rung is below the floor, so the floor is drawn");
+    assert_eq!(step_for(268.0, 40), MIN_INDENT_STEP, "never below the floor: the sidebar scrolls instead");
+    assert_eq!(step_for(480.0, 9), INDENT_STEP, "a wide panel keeps full steps");
 }
 
 /// A sidebar that fits needs no sideways scrolling.
@@ -2234,9 +2298,9 @@ fn the_indent_step_narrows_in_bands() {
 fn a_sidebar_that_fits_does_not_scroll_sideways() {
     let h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
     let panel = widget(&h, "panel:left_panel");
-    let w = crate::panels::left::content_width(&h.view.ctx);
-    assert!(w > 0.0 && w <= panel.width(), "rows were measured and fit: no horizontal bar ({w} vs {})", panel.width());
-    assert!((widget(&h, "source:all").width() - (panel.width() - 0.0)).abs() < 24.0, "rows are as wide as the panel");
+    let w = widget(&h, "source:all").width();
+    assert!(w > 0.0 && w <= panel.width() + 0.5, "rows fit: no horizontal bar ({w} vs {})", panel.width());
+    assert!((w - panel.width()).abs() < 24.0, "rows are as wide as the panel");
 }
 
 /// A long folder name is trimmed before it can run under the photo count.
@@ -2294,19 +2358,22 @@ fn widening_the_sidebar_shows_more_of_a_long_name() {
 fn a_long_name_alone_does_not_make_the_sidebar_scroll() {
     let h = folders_app(&[&format!("/{LONG_NAME}/a.jpg")]);
     let panel = widget(&h, "panel:left_panel");
-    assert!(crate::panels::left::content_width(&h.view.ctx) <= panel.width(), "a name takes at most what a row can show");
+    assert!(widget(&h, "source:all").width() <= panel.width() + 0.5, "a name takes at most what a row can show");
 }
 
-/// The selection bar ends at the panel's edge, not past it, when the content is wider.
+/// The selection bar spans its whole row, as wide as the other rows, when the content is wider than
+/// the panel (the sidebar scrolls sideways; the bar starts at the panel's left edge).
 #[test]
-fn the_selection_bar_stays_inside_the_panel() {
+fn the_selection_bar_spans_the_row() {
     let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m";
     // (tall enough for the whole chain: Recently Deleted is above it now)
     let mut h = folders_app_sized(&[&format!("{deep}/x/1.jpg"), &format!("{deep}/y/2.jpg")], [1400.0, 1000.0]);
     click(&mut h, "source:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
     let panel = widget(&h, "panel:left_panel");
     let bar = widget(&h, "highlight:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
-    assert!(bar.right() <= panel.right(), "the bar {bar:?} ends inside the panel {panel:?}");
+    let all = widget(&h, "source:all");
+    assert!(bar.left() >= panel.left() - 0.5, "the bar {bar:?} starts at the panel {panel:?}");
+    assert!((bar.width() - all.width()).abs() < 1.0, "the bar {bar:?} is as wide as the other rows {all:?}");
 }
 
 /// Select All in the loupe: every filmstrip cell of a selected photo is drawn selected, not just

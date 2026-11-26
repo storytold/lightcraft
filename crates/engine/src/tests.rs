@@ -2187,3 +2187,211 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
         assert!(s.auto_sync, "Auto Sync must remain enabled");
     }
 }
+
+/// Interaction snapshots own the complete before-image used by cancel and committed inverses.
+/// These use real engine commands and catalog records, without a UI timestamp repair.
+mod interaction_edit_metadata {
+    use super::{Session, demo, json};
+    use lightcraft_catalog::{Op, PhotoId};
+    use serde_json::Value;
+
+    const PRIOR: &str = "2001-02-03T04:05:06";
+    const CURRENT: &str = "2026-11-21T06:00:00";
+
+    fn records(s: &Session, ids: [PhotoId; 2]) -> [Value; 2] {
+        ids.map(|id| serde_json::to_value(s.catalog.photo(id).unwrap()).unwrap())
+    }
+
+    fn fixture(prior: Option<&str>) -> (Session, [PhotoId; 2]) {
+        let mut s = demo();
+        let visible = s.visible_cloned();
+        let ids = [visible[0], visible[1]];
+        s.execute("library.select", &json!({"ids":[ids[0].0,ids[1].0],"active":ids[0].0})).unwrap();
+        s.execute("develop.autoSync", &json!({"on":false})).unwrap();
+        s.clock = Box::new(|| CURRENT.to_owned());
+        // Initial catalog data, not a production workaround: Some and None are independent inputs.
+        let settings = s.develop_of(ids[0]).unwrap();
+        s.catalog.apply(Op::SetDevelop { id: ids[0], settings, label: "Fixture timestamp".into(), edited: prior.map(str::to_owned) }).unwrap();
+        (s, ids)
+    }
+
+    fn set(s: &mut Session, value: f64) {
+        s.execute("develop.set", &json!({"control":"light.exposure","value":value})).unwrap();
+    }
+
+    fn release_undo_redo(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        let before = records(&s, ids);
+        let original = s.develop_of(ids[0]).unwrap().light.exposure;
+        let undo = s.undo.len();
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        assert_eq!(records(&s, ids), before, "Begin preserves the exact prior optional timestamp and both complete photos");
+        set(&mut s, original + 0.25);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT));
+        assert_eq!(s.undo.len(), undo, "first live update is not an Undo entry");
+        assert_eq!(records(&s, ids)[1], before[1], "first live update never edits the neighbor");
+        set(&mut s, original + 0.5);
+        assert_eq!(s.undo.len(), undo, "later live updates remain one interaction");
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        let committed = records(&s, ids);
+        assert_eq!(s.develop_of(ids[0]).unwrap().light.exposure, original + 0.5);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT));
+        assert_eq!(committed[1], before[1], "release never edits the complete neighbor");
+        assert_eq!(s.undo.len(), undo + 1, "release commits exactly one Undo entry");
+        assert!(s.interaction.is_none());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), before, "Undo restores the complete original photos, exact optional timestamp, value and history");
+        assert_eq!(s.undo.len(), undo);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), committed, "Redo restores the complete committed photos and committed timestamp/value pair");
+        assert_eq!(s.undo.len(), undo + 1);
+    }
+
+    fn cancel(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        let before = records(&s, ids);
+        let original = s.develop_of(ids[0]).unwrap().light.exposure;
+        let (undo, redo) = (s.undo.len(), s.redo.len());
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        assert_eq!(records(&s, ids), before);
+        set(&mut s, original + 0.75);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT));
+        assert_eq!(records(&s, ids)[1], before[1]);
+        s.execute("develop.cancelInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), before, "Cancel restores the entire prior target and optional timestamp, leaving its neighbor unchanged");
+        assert_eq!((s.undo.len(), s.redo.len()), (undo, redo), "Cancel adds neither Undo nor Redo entries");
+        assert!(s.interaction.is_none());
+    }
+
+    fn return_to_original(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        let before = records(&s, ids);
+        let original = s.develop_of(ids[0]).unwrap().light.exposure;
+        let (undo, redo) = (s.undo.len(), s.redo.len());
+        let revision = s.catalog.revision;
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        assert_eq!(s.catalog.revision, revision, "an untouched Begin/End does not manufacture a catalog mutation");
+        assert_eq!(records(&s, ids), before);
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        set(&mut s, original + 0.5);
+        set(&mut s, original);
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().edited.as_deref(), Some(CURRENT), "the preview still carries the new timestamp before release");
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), before, "return-to-start is a complete no-op, including the optional timestamp and neighbor");
+        assert_eq!((s.undo.len(), s.redo.len()), (undo, redo));
+        assert!(s.interaction.is_none());
+    }
+
+    fn attachment(prior: Option<&str>) {
+        let (mut s, ids) = fixture(prior);
+        s.execute("mask.add", &json!({"kind":"linear"})).unwrap();
+        let mut old = (*s.develop_of(ids[0]).unwrap()).clone();
+        old.masks[0].on_photo = false;
+        s.catalog
+            .apply(Op::SetDevelop {
+                id: ids[0],
+                settings: std::sync::Arc::new(old.clone()),
+                label: "Legacy fixture".into(),
+                edited: prior.map(str::to_owned),
+            })
+            .unwrap();
+        let before = records(&s, ids);
+        let mut attached = old.clone();
+        s.attach_masks(ids[0], &old, &mut attached);
+        assert!(attached.masks.iter().all(|mask| mask.on_photo), "fixture actually exercises legacy attachment");
+        let mut canonical = before.clone();
+        canonical[0]["develop"] = serde_json::to_value(&attached).unwrap();
+        let undo = s.undo.len();
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        assert_eq!(records(&s, ids), canonical, "Begin performs only existing attachment, retaining the exact optional timestamp and neighbor");
+        assert_eq!(&*s.interaction.as_ref().unwrap().original, &attached, "the interaction still snapshots canonical on-photo settings");
+        set(&mut s, attached.light.exposure + 0.25);
+        s.execute("develop.cancelInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), canonical, "Cancel keeps existing attachment semantics while restoring the original timestamp");
+        assert_eq!(s.undo.len(), undo);
+    }
+
+    /// An edit committed while a drag is open (Reset Edits, say) is newer than the drag's snapshot,
+    /// and the drag keeps previewing on top of it: cancelling gives that preview up and comes back
+    /// to what the edit left, not to the settings from before the drag (CodeRabbit #4750).
+    #[test]
+    fn cancel_after_a_committed_edit_drops_a_later_preview() {
+        let (mut s, ids) = fixture(None);
+        // a committed edit the drag starts from, so the reset below is a third, distinct state
+        set(&mut s, 1.75);
+        let before = records(&s, ids);
+        let (undo, redo) = (s.undo.len(), s.redo.len());
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        set(&mut s, 0.25);
+        assert_eq!(s.undo.len(), undo, "live updates are not Undo entries");
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = records(&s, ids);
+        assert_ne!(reset[0]["develop"], before[0]["develop"], "the committed edit actually replaced the settings");
+        assert_eq!(s.undo.len(), undo + 1, "Reset is one committed step");
+        // the drag goes on: its preview is not the photo's state, and no command saw it
+        set(&mut s, 0.5);
+        assert_ne!(records(&s, ids)[0]["develop"], reset[0]["develop"], "the drag previewed on top of the reset");
+        assert_eq!(s.undo.len(), undo + 1, "a live preview adds no step");
+        s.execute("develop.cancelInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), reset, "Cancel drops the later preview and keeps what the committed edit left");
+        assert_eq!((s.undo.len(), s.redo.len()), (undo + 1, redo), "Cancel adds neither Undo nor Redo entries");
+        assert!(s.interaction.is_none());
+    }
+
+    /// Releasing a drag that an edit was committed during commits the drag's own change as a step
+    /// from that edit, so Undo goes back to it rather than over it (CodeRabbit #4750).
+    #[test]
+    fn release_after_a_committed_edit_steps_back_to_it() {
+        let (mut s, ids) = fixture(None);
+        set(&mut s, 1.75);
+        let undo = s.undo.len();
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        set(&mut s, 0.25);
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = records(&s, ids);
+        let reset_develop = (*s.develop_of(ids[0]).unwrap()).clone();
+        set(&mut s, 0.5);
+        let preview = (*s.develop_of(ids[0]).unwrap()).clone();
+        assert_ne!(preview, reset_develop, "the drag previewed on top of the reset");
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        assert_eq!(*s.develop_of(ids[0]).unwrap(), preview, "release keeps the drag's own change");
+        assert_eq!(s.undo.len(), undo + 2, "the committed edit and the drag are two steps");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), reset, "Undo goes back to what the committed edit left, not before the drag");
+        assert!(s.interaction.is_none());
+    }
+
+    #[test]
+    fn release_undo_redo_restore_prior_some_timestamp_and_complete_photos() {
+        release_undo_redo(Some(PRIOR));
+    }
+    #[test]
+    fn release_undo_redo_restore_prior_none_timestamp_and_complete_photos() {
+        release_undo_redo(None);
+    }
+    #[test]
+    fn cancel_restores_prior_some_timestamp_and_untouched_neighbor() {
+        cancel(Some(PRIOR));
+    }
+    #[test]
+    fn cancel_restores_prior_none_timestamp_and_untouched_neighbor() {
+        cancel(None);
+    }
+    #[test]
+    fn no_op_release_preserves_prior_some_timestamp_without_history() {
+        return_to_original(Some(PRIOR));
+    }
+    #[test]
+    fn no_op_release_preserves_prior_none_timestamp_without_history() {
+        return_to_original(None);
+    }
+    #[test]
+    fn legacy_attachment_preserves_prior_some_timestamp_before_snapshot() {
+        attachment(Some(PRIOR));
+    }
+    #[test]
+    fn legacy_attachment_preserves_prior_none_timestamp_before_snapshot() {
+        attachment(None);
+    }
+}

@@ -509,7 +509,12 @@ fn assert_shielded_return(h: &mut Headless, what: &str) {
         "{what}: the return frame must shield (and discard) the window's first pass, then draw the background"
     );
     h.step();
-    assert_eq!(pass_log(h), vec![LibraryPass::Background], "{what}: once settled, later frames draw normally without re-shielding");
+    // (a frame may run a second background pass: the framework discards a pass whose layout it is still settling)
+    let later = pass_log(h);
+    assert!(
+        !later.is_empty() && later.iter().all(|pass| *pass == LibraryPass::Background),
+        "{what}: once settled, later frames draw normally without re-shielding: {later:?}"
+    );
 }
 
 /// A notice dismissed after the error window was already settled must shield the first frame that
@@ -629,6 +634,8 @@ fn closing_the_new_library_dialog_shields_the_launch_lists_first_return_frame() 
     let press = |pressed| egui::Event::PointerButton { pos: cancel, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     h.events.extend([egui::Event::PointerMoved(cancel), press(true), press(false)]);
     h.step();
+    // (the framework holds what follows a press in one batch for the next frame: the release lands then)
+    h.step();
     assert!(h.app.ui.dialog.is_none(), "Cancel closed the New Library name dialog");
     // The dialog-closing frame drew the list but must not settle it.
     let _ = pass_log(&mut h);
@@ -672,6 +679,8 @@ fn the_banner_reopen_shields_the_first_input_frame() {
         .expect("the banner button is on screen");
     let press = |pressed| egui::Event::PointerButton { pos: reopen, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     h.events.extend([egui::Event::PointerMoved(reopen), press(true), press(false)]);
+    h.step();
+    // (the framework holds what follows a press in one batch for the next frame: the release lands then)
     h.step();
     assert!(h.app.library_problem.as_ref().is_some_and(|p| !p.dismissed), "the banner reopened the window");
     assert!(has(&h, "button:libraryRetry"));
@@ -878,4 +887,136 @@ fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
     assert!(h.app.waiting_import.files.is_empty());
     let _ = h.app.session.close_library();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Recovery-action port wave 155: no on-disk library, native chooser or real host is involved.
+fn recovery_actions_155_fixture(path: &str, can_retry: bool, pick_folder: bool) -> Headless {
+    let mut app = LightcraftApp::new(
+        lightcraft_engine::Session::new(),
+        Services { pick_folder: pick_folder.then(|| Box::new(|| None) as crate::services::PickFolder), ..Default::default() },
+    );
+    app.library_problem = Some(LibraryProblem { can_retry, ..LibraryProblem::new(path, "Recovery action fixture") });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    h.step();
+    h.step();
+    h.step();
+    h
+}
+
+fn recovery_actions_155_click(h: &mut Headless, id: &str) {
+    let reply = h.request("ui.clickWidget", json!({"id": id}), T);
+    assert_eq!(reply["ok"], true, "{id}: {reply}");
+    h.step();
+    h.step();
+}
+
+#[test]
+fn library_recovery_actions_155_disabled_retry_and_unavailable_chooser_are_no_ops() {
+    for (path, can_retry) in [("", true), ("never-open-this-fixture", false)] {
+        let mut h = recovery_actions_155_fixture(path, can_retry, false);
+        let problem = h.app.library_problem.clone();
+        for id in ["button:libraryRetry", "button:libraryChoose"] {
+            recovery_actions_155_click(&mut h, id);
+            assert_eq!(h.app.library_problem, problem, "{id} must not dispatch while disabled");
+            assert!(h.app.session.library.is_none());
+            assert!(!h.quit_requested());
+        }
+    }
+}
+
+#[test]
+fn library_recovery_actions_155_retry_reaches_existing_switch_guard_without_disk_io() {
+    let mut h = recovery_actions_155_fixture("never-open-this-fixture", true, false);
+    // A fake outstanding Move Folder picker makes can_switch_library reject Retry before
+    // any path inspection, library lock or filesystem open. Keep the sender alive, unanswered.
+    let (keep_pending, rx) = std::sync::mpsc::channel();
+    let mut rx = Some(rx);
+    h.app.services.picker = Some(Box::new(move |_| Ok(rx.take().expect("one fake pending picker"))));
+    let picked = crate::pick::ask(&mut h.app, "folder.move", &json!({}), "path", crate::pick::PickRequest::folder("Fake pending move"), |_| None);
+    assert!(matches!(picked, crate::pick::Picked::Later));
+    recovery_actions_155_click(&mut h, "button:libraryRetry");
+    let problem = h.app.library_problem.as_ref().expect("Retry keeps the error window");
+    assert_eq!(problem.error, "wait for Move Folder To… to finish before switching libraries");
+    assert!(!problem.dismissed);
+    assert!(h.app.session.library.is_none());
+    assert!(!h.quit_requested());
+    drop(keep_pending);
+}
+
+#[test]
+fn library_recovery_actions_155_choose_uses_only_a_cancelled_fake_picker() {
+    let mut h = recovery_actions_155_fixture("never-open-this-fixture", true, true);
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    h.app.services.picker = Some(Box::new(move |request| {
+        assert_eq!(request.kind, crate::pick::PickKind::Folder);
+        observed.set(observed.get() + 1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Vec::new()).expect("cancel fake chooser");
+        Ok(rx)
+    }));
+    let problem = h.app.library_problem.clone();
+    recovery_actions_155_click(&mut h, "button:libraryChoose");
+    assert_eq!(calls.get(), 1, "the real Choose button requested exactly one fake folder picker");
+    assert!(h.app.pending_picks.is_empty(), "the fake cancellation was consumed");
+    assert_eq!(h.app.library_problem, problem, "cancellation preserves the recovery window and error");
+    assert!(h.app.session.library.is_none());
+    assert!(!h.quit_requested());
+}
+
+#[test]
+fn library_recovery_actions_155_continue_is_in_memory_and_survives_a_dim_press() {
+    let mut h = recovery_actions_155_fixture("", false, false);
+    let at = egui::pos2(10.0, 10.0);
+    h.events.extend([
+        egui::Event::PointerMoved(at),
+        egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+    ]);
+    h.step();
+    h.step();
+    assert!(h.app.library_problem.as_ref().is_some_and(|p| !p.dismissed));
+    recovery_actions_155_click(&mut h, "button:libraryTemporary");
+    assert!(h.app.library_problem.as_ref().is_some_and(|p| p.dismissed && p.saves_nothing()));
+    assert!(has(&h, "indicator:temporarySession"));
+    assert!(!has(&h, "button:libraryRetry"));
+    assert!(h.app.session.library.is_none());
+    assert!(!h.quit_requested());
+}
+
+#[test]
+fn library_recovery_actions_155_quit_requests_only_the_headless_host() {
+    let mut h = recovery_actions_155_fixture("", false, false);
+    recovery_actions_155_click(&mut h, "button:libraryQuit");
+    assert!(h.quit_requested(), "the unchanged Choice::Quit dispatch requested the fake host only");
+    assert!(h.app.session.library.is_none());
+    assert!(h.app.library_problem.as_ref().is_some_and(|p| !p.dismissed));
+}
+
+// Candidate-only identity check: the native baseline publishes hover probes, not real buttons.
+#[test]
+fn library_recovery_sdk_155_four_unique_real_foreground_responses_preserve_height_and_labels() {
+    let h = recovery_actions_155_fixture("never-open-this-fixture", true, true);
+    // The error window is a framework dialog: its buttons are on the dialog's own modal layer.
+    let foreground = crate::panels::library_problem::window_layer(true);
+    let mut ids = std::collections::HashSet::new();
+    let text = h.painted_text().join("\n");
+    for (id, label) in [
+        ("button:libraryRetry", "Try Again"),
+        ("button:libraryChoose", "Choose Another Library…"),
+        ("button:libraryTemporary", "Continue Without Saving"),
+        ("button:libraryQuit", "Quit"),
+    ] {
+        assert_eq!(h.app.widgets.iter().filter(|(name, _)| name == id).count(), 1, "one locator for {id}");
+        assert_eq!(h.app.widget_hits.iter().filter(|(name, _)| name == id).count(), 1, "one hit owner for {id}");
+        let hit = crate::control::widget_hit(&h.app, id).expect("recovery action target");
+        let response = h.view.ctx.read_response(hit.id).expect("actual SDK button response");
+        assert!(ids.insert(response.id), "separate input owner for {id}");
+        assert!(response.sense.senses_click(), "{id} is the button, not a hover-only probe");
+        assert_eq!(hit.layer_id, foreground);
+        assert_eq!(response.layer_id, foreground);
+        assert_eq!(hit.interact_rect, response.interact_rect);
+        assert!(response.rect.height() >= 26.0, "minimum recovery action height for {id}");
+        assert!(text.contains(label), "unchanged visible label {label}: {text}");
+    }
 }

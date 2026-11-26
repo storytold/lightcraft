@@ -1,0 +1,546 @@
+//! Native Denoise work/cache workflow on the actual Settings parent, plus supported panel-only speculative input.
+//! No downloads, injected device, inference, user settings or focus requests. Full owns runtime.
+use crate::{LightcraftApp, Services};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
+use lightcraft_engine::Session;
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+const CLEAR: &str = "denoise:clear";
+const LIMIT: &str = "Cache limit";
+
+#[derive(Clone, Copy, Debug)]
+enum Scope {
+    Full,
+    Panel,
+}
+#[derive(Clone, Copy, Debug)]
+enum Probe {
+    Real,
+    Disabled,
+    Measure,
+    Sizing,
+}
+struct Owned {
+    root: PathBuf,
+    protected: BTreeMap<PathBuf, Vec<u8>>,
+}
+impl Owned {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lc-denoise-work-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut owned = Self { root: root.canonicalize().unwrap(), protected: BTreeMap::new() };
+        for name in ["originals", "models", "models/keep-model", "library", "library/denoise"] {
+            std::fs::create_dir_all(owned.root.join(name)).unwrap();
+        }
+        for (index, name) in ["originals/a.png", "originals/b.png"].into_iter().enumerate() {
+            let image = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 57 + index as u8 * 83, 255]);
+            let options = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+            let bytes = lightcraft_engine::export::encode_image(&image, &options).unwrap();
+            owned.keep(name, bytes);
+        }
+        owned.keep("models/keep-model/model.onnx", b"inert model preservation sentinel; never installed or loaded".to_vec());
+        owned.keep("models/keep-model/model-note.txt", b"keep all original model files".to_vec());
+        owned.keep("library/catalog-preservation.txt", b"not generated denoise cache".to_vec());
+        println!("DENOISE_OWNED_ROOT {}", owned.root.display());
+        owned
+    }
+    fn keep(&mut self, name: &str, bytes: Vec<u8>) {
+        let path = self.root.join(name);
+        self.inside(&path);
+        std::fs::write(&path, &bytes).unwrap();
+        self.protected.insert(path, bytes);
+    }
+    fn inside(&self, path: &Path) -> PathBuf {
+        // Existing paths must resolve inside our successfully-created root, not just share text.
+        let resolved =
+            if path.exists() { path.canonicalize().unwrap() } else { path.parent().unwrap().canonicalize().unwrap().join(path.file_name().unwrap()) };
+        assert!(resolved.starts_with(&self.root) && resolved != self.root, "unsafe test path {} -> {}", path.display(), resolved.display());
+        resolved
+    }
+    fn intact(&self) {
+        for (path, bytes) in &self.protected {
+            self.inside(path);
+            assert_eq!(&std::fs::read(path).unwrap(), bytes, "protected original/model/library file");
+        }
+        let originals = std::fs::read_dir(self.root.join("originals")).unwrap().map(|e| e.unwrap().path()).collect::<Vec<_>>();
+        assert_eq!(originals.len(), 2, "no XMP sidecars, exports or extra originals");
+    }
+    fn contain(&self, s: &mut Session) {
+        self.intact();
+        let library = s.library.as_ref().expect("owned on-disk library");
+        assert!(library.on_disk);
+        assert_eq!(self.inside(&library.dir), self.root.join("library"));
+        let list = s.execute("denoise.models.list", &json!({})).unwrap();
+        assert_eq!(self.inside(Path::new(list["dir"].as_str().expect("owned models path"))), self.root.join("models"));
+        assert_eq!(self.inside(Path::new(list["productsDir"].as_str().expect("owned products path"))), self.root.join("library/denoise"));
+        for entry in std::fs::read_dir(self.root.join("library/denoise")).unwrap() {
+            self.inside(&entry.unwrap().path());
+        }
+    }
+    fn cache(&self) -> BTreeMap<String, Vec<u8>> {
+        std::fs::read_dir(self.root.join("library/denoise"))
+            .unwrap()
+            .map(|e| {
+                let path = e.unwrap().path();
+                self.inside(&path);
+                (path.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(path).unwrap())
+            })
+            .collect()
+    }
+    fn seed_cache(&self) {
+        for (name, bytes) in [
+            ("one.lcdn", b"generated-one".as_slice()),
+            ("two.lcdn", b"generated-two-longer".as_slice()),
+            ("keep-not-a-product.txt", b"not a denoise product".as_slice()),
+        ] {
+            let path = self.root.join("library/denoise").join(name);
+            self.inside(&path);
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+}
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_dir_all(&self.root) {
+            eprintln!("owned Denoise fixture cleanup {}: {e}", self.root.display());
+        }
+    }
+}
+struct Node {
+    name: Option<String>,
+    role: String,
+    rect: Option<Rect>,
+}
+struct Output(egui::FullOutput);
+impl Drop for Output {
+    fn drop(&mut self) {
+        self.0.textures_delta.clear();
+        self.0.platform_output.commands.clear();
+        self.0.viewport_output.clear();
+        self.0.shapes.clear();
+    }
+}
+struct Review {
+    app: LightcraftApp,
+    ctx: egui::Context,
+    owned: Owned,
+    tick: u64,
+    scope: Scope,
+    probe: Probe,
+    record: Option<std::sync::Arc<craft::ui::runtime::inspect::Recorded>>,
+    nodes: Vec<Node>,
+    texts: Vec<(String, Rect)>,
+    size: egui::Vec2,
+}
+fn text_shapes(shape: &egui::epaint::Shape, out: &mut Vec<(String, Rect)>) {
+    match shape {
+        egui::epaint::Shape::Vec(shapes) => {
+            for shape in shapes {
+                text_shapes(shape, out)
+            }
+        }
+        egui::epaint::Shape::Text(text) => out.push((text.galley.job.text.clone(), Rect::from_min_size(text.pos, text.galley.size()))),
+        _ => {}
+    }
+}
+impl Review {
+    fn new(scope: Scope) -> Self {
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        let owned = Owned::new();
+        let mut s = Session::new().with_fs();
+        s.clock = Box::new(|| "2026-11-21T21:00:00Z".into());
+        s.xmp.auto_write = false;
+        let library = owned.inside(&owned.root.join("library"));
+        s.open_library(library, false).unwrap();
+        s.set_denoise_models_dir(Some(owned.inside(&owned.root.join("models"))));
+        owned.contain(&mut s);
+        s.execute("denoise.settings", &json!({"auto":false,"runOn":"cpu","cacheGb":20})).unwrap();
+        s.execute("library.import", &json!({"paths":[owned.root.join("originals/a.png"),owned.root.join("originals/b.png")]})).unwrap();
+        let ids = s.catalog.photos().map(|p| p.id.0).collect::<Vec<_>>();
+        assert_eq!(ids.len(), 2);
+        s.execute("library.select", &json!({"ids":[ids[0]],"active":ids[0]})).unwrap();
+        let mut app = LightcraftApp::new(s, Services { png: None, local_places: Some(vec![]), ..Default::default() });
+        app.headless_host = true;
+        app.run("develop.merge", json!({"settings":{"light":{"exposure":0.4}},"label":"Owned fixture first step"})).unwrap();
+        app.run("develop.merge", json!({"settings":{"light":{"exposure":0.8}},"label":"Owned fixture redo branch"})).unwrap();
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(!app.session.undo.is_empty() && !app.session.redo.is_empty());
+        app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "denoise".into() });
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        app.install_framework(&ctx);
+        ctx.enable_accesskit();
+        let mut r = Self {
+            app,
+            ctx,
+            owned,
+            tick: 0,
+            scope,
+            probe: Probe::Real,
+            record: None,
+            nodes: vec![],
+            texts: vec![],
+            size: egui::vec2(1400.0, 1100.0),
+        };
+        r.idle(18);
+        assert_eq!(r.app.session.execute("denoise.status", &json!({})).unwrap()["enabled"], true);
+        r.safe();
+        r
+    }
+    fn docs(&self) -> Value {
+        let s = &self.app.session;
+        let history = |entries: &[lightcraft_engine::UndoEntry]| {
+            json!(entries.iter().map(|e| json!({"label":e.label,"op":e.op,"folder":format!("{:?}",e.folder)})).collect::<Vec<_>>())
+        };
+        json!({"catalog":s.catalog,"revision":s.catalog.revision,"undo":history(&s.undo),"redo":history(&s.redo),"commits":s.commits(),"journal":s.journal,"selection":s.selection,"source":s.source,"browse":s.browse,"filter":s.filter,"interaction":s.interaction.is_some()})
+    }
+    fn settings(&self) -> Value {
+        let path = self.owned.root.join("models/settings.json");
+        self.owned.inside(&path);
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+    fn safe(&mut self) {
+        self.owned.contain(&mut self.app.session);
+        assert!(!self.app.session.denoise_busy(), "non-raw fixtures must never run inference");
+    }
+    fn frame(&mut self, events: Vec<Event>) {
+        self.safe();
+        let ctx = self.ctx.clone();
+        let mut raw = crate::headless::HeadlessView::raw_input(self.size, 1.0, self.tick as f64 / 60.0, events);
+        self.app.set_simulated_clock(Some(self.tick as f64 / 60.0));
+        self.app.install_framework(&ctx);
+        self.app.raw_input_hook(&ctx, &mut raw);
+        let app = &mut self.app;
+        let scope = self.scope;
+        let probe = self.probe;
+        let mut registry = None;
+        let mut record = None;
+        let output = Output(ctx.run_ui(raw, |root| {
+            app.logic(&ctx);
+            let mut draw = |ui: &mut egui::Ui| {
+                let (_, captured) =
+                    craft::ui::runtime::inspect::record(ui, egui::Id::unique("denoise-work-owner-focus-diagnostic"), |ui| match scope {
+                        Scope::Full => app.ui(ui),
+                        Scope::Panel => {
+                            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::dialogs::settings::body(app, ui, "denoise"));
+                        }
+                    });
+                record = captured;
+            };
+            match probe {
+                Probe::Real => draw(root),
+                Probe::Disabled => {
+                    root.disable();
+                    draw(root)
+                }
+                Probe::Measure => craft::ui::runtime::measure::run(&ctx, || draw(root)),
+                Probe::Sizing => {
+                    let mut child = root.new_child(egui::UiBuilder::new().max_rect(root.max_rect()).sizing_pass());
+                    draw(&mut child)
+                }
+            }
+            if matches!(scope, Scope::Panel) {
+                registry = Some(crate::widgets::take_registries(&ctx));
+            }
+        }));
+        self.app.drain_ui_completions(&ctx);
+        if let Some((rects, hits)) = registry {
+            self.app.widgets = rects;
+            self.app.widget_hits = hits;
+        }
+        self.nodes.clear();
+        if let Some(update) = &output.0.platform_output.accesskit_update {
+            for (_, node) in &update.nodes {
+                self.nodes.push(Node {
+                    name: node.label().map(str::to_owned),
+                    role: format!("{:?}", node.role()),
+                    rect: node.bounds().map(|r| Rect::from_min_max(egui::pos2(r.x0 as f32, r.y0 as f32), egui::pos2(r.x1 as f32, r.y1 as f32))),
+                })
+            }
+        }
+        self.texts.clear();
+        for shape in &output.0.shapes {
+            text_shapes(&shape.shape, &mut self.texts)
+        }
+        self.record = record;
+        self.tick += 1;
+        self.safe();
+    }
+    fn idle(&mut self, n: usize) {
+        for _ in 0..n {
+            self.frame(vec![])
+        }
+    }
+    fn rect(&self, name: &str) -> Option<Rect> {
+        self.app
+            .widgets
+            .iter()
+            .find(|(alias, _)| alias == name)
+            .map(|(_, r)| *r)
+            .or_else(|| self.nodes.iter().find(|node| node.name.as_deref() == Some(name) && node.role == "ComboBox").and_then(|node| node.rect))
+    }
+    fn reveal(&mut self, name: &str) -> Rect {
+        for _ in 0..10 {
+            if let Some(rect) = self.rect(name)
+                && rect.min.y >= 0.0
+                && rect.max.y < self.size.y
+            {
+                return rect;
+            }
+            self.frame(vec![
+                Event::PointerMoved(egui::pos2(self.size.x / 2.0, self.size.y / 2.0)),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -180.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+            self.idle(3);
+        }
+        panic!("real visible target absent {name}; aliases {:?}", self.app.widgets);
+    }
+    fn point(&mut self, name: &str) -> Pos2 {
+        let rect = self.reveal(name);
+        let at = rect.center();
+        for _ in 0..3 {
+            self.frame(vec![Event::PointerMoved(at)])
+        }
+        let owners = self
+            .ctx
+            .interaction_snapshot(|s| s.contains_pointer.iter().copied().collect::<Vec<_>>())
+            .into_iter()
+            .filter_map(|id| self.ctx.read_response(id))
+            .filter(|r| {
+                r.enabled()
+                    && r.sense.senses_click()
+                    && (r.rect == rect || r.interact_rect == rect)
+                    && r.interact_rect.contains(at)
+                    && self.ctx.layer_id_at(at) == Some(r.layer_id)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(owners.len(), 1, "one exact real click owner, never a semantic/hover-only fake");
+        println!(
+            "DENOISE_DIAGNOSTIC_TARGET {}",
+            json!({"name":name,"point":[at.x,at.y],"owners":owners.iter().map(|r|format!("{:?}",r.id)).collect::<Vec<_>>()})
+        );
+        at
+    }
+    fn pointer(&mut self, at: Pos2, pressed: bool) {
+        self.frame(vec![
+            Event::PointerMoved(at),
+            Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE },
+        ])
+    }
+    fn click(&mut self, name: &str) {
+        let at = self.point(name);
+        self.pointer(at, true);
+        self.pointer(at, false);
+        self.idle(6)
+    }
+    fn key(&mut self, key: Key, shift: bool) {
+        let modifiers = Modifiers { shift, ..Default::default() };
+        for pressed in [true, false] {
+            self.frame(vec![Event::ModifiersChanged(modifiers), Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }])
+        }
+        self.idle(2)
+    }
+
+    fn observe(&self, phase: &str, at: Option<Pos2>) {
+        let focused = self.ctx.memory(|m| m.focused());
+        let sdk_focus = craft::ui::runtime::focus::focused_rec(&self.ctx);
+        let observed = self
+            .ctx
+            .interaction_snapshot(|s| s.contains_pointer.iter().copied().collect::<Vec<_>>())
+            .into_iter()
+            .filter_map(|id| self.ctx.read_response(id))
+            .map(|r| {
+                format!(
+                    "{:?}: rect={:?} interact={:?} enabled={} sense={:?} layer={:?}",
+                    r.id,
+                    r.rect,
+                    r.interact_rect,
+                    r.enabled(),
+                    r.sense,
+                    r.layer_id
+                )
+            })
+            .collect::<Vec<_>>();
+        let semantic = self
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.role == "ComboBox"
+                    || node.role == "ListBox"
+                    || node.role == "ListBoxOption"
+                    || node.name.as_deref().is_some_and(|s| s.ends_with(" GB"))
+            })
+            .map(|node| format!("{} {:?} {:?}", node.role, node.name, node.rect))
+            .collect::<Vec<_>>();
+        let rec = self.record.as_ref().map(|rec| {
+            rec.elements
+                .iter()
+                .filter(|e| e.stop.is_some() || e.component.contains("Select") || e.component.contains("List"))
+                .map(|e| format!("{:?} {:?} {} stop={:?} rect={:?} facts={:?}", e.id, e.part, e.component, e.stop, e.rect, e.facts))
+                .collect::<Vec<_>>()
+        });
+        println!(
+            "DENOISE_OWNER_FOCUS {}",
+            json!({"phase":phase,"tick":self.tick,"scope":format!("{:?}",self.scope),"probe":format!("{:?}",self.probe),"at":at.map(|p|[p.x,p.y]),"egui_focus":format!("{focused:?}"),"sdk_focus":format!("{sdk_focus:?}"),"actual_pointer_owners":observed,"semantic":semantic,"recorded_stops":rec,"budget":self.settings()["cacheGb"],"cache_keys":self.owned.cache().keys().cloned().collect::<Vec<_>>()})
+        );
+    }
+    fn acquire_fresh_popup_pick(&mut self, gb: u32) {
+        // Independent diagnostic reentry, not a weakened original oracle: escape a possibly valid
+        // already-open list after real press, then require a new physical open and a live row owner.
+        self.observe("independent-before-popup-dismiss", None);
+        self.key(Key::Escape, false);
+        self.idle(6);
+        self.observe("independent-after-popup-dismiss", None);
+        self.click(LIMIT);
+        let text = format!("{gb} GB");
+        let matches = self.texts.iter().filter(|(s, _)| s == &text).map(|(_, r)| *r).collect::<Vec<_>>();
+        assert!(!matches.is_empty(), "real painted popup row {text}");
+        let at = matches.last().unwrap().center();
+        for _ in 0..3 {
+            self.frame(vec![Event::PointerMoved(at)]);
+            self.observe("independent-popup-hover", Some(at));
+        }
+        let owners = self
+            .ctx
+            .interaction_snapshot(|s| s.contains_pointer.iter().copied().collect::<Vec<_>>())
+            .into_iter()
+            .filter_map(|id| self.ctx.read_response(id))
+            .filter(|r| r.enabled() && r.sense.senses_click() && r.interact_rect.contains(at))
+            .collect::<Vec<_>>();
+        assert!(!owners.is_empty(), "popup row has actual owner");
+        self.pointer(at, true);
+        self.pointer(at, false);
+        self.idle(5);
+    }
+
+    fn tab_to(&mut self, name: &str, reverse: bool) {
+        let mut trace = vec![];
+        for _ in 0..180 {
+            self.key(Key::Tab, reverse);
+            let id = self.ctx.memory(|m| m.focused());
+            let response = id.and_then(|id| self.ctx.read_response(id));
+            trace.push(format!("{:?}: {:?}", id, response.as_ref().map(|r| (r.rect, r.interact_rect))));
+            self.observe("tab-original-after-key-cycle", None);
+            if let (Some(response), Some(rect)) = (response, self.rect(name))
+                && (response.rect == rect || response.interact_rect == rect)
+            {
+                println!("DENOISE_DIAGNOSTIC_TAB {}", json!({"reverse":reverse,"target":name,"trace":trace}));
+                return;
+            }
+        }
+        panic!("natural Tab did not reach {name}: {trace:?}")
+    }
+}
+
+fn independent_safety(probe: Probe) {
+    for name in [CLEAR, LIMIT] {
+        for real_press in [false, true] {
+            let mut r = Review::new(Scope::Panel);
+            r.owned.seed_cache();
+            let docs = r.docs();
+            let settings = r.settings();
+            let cache = r.owned.cache();
+            let at = r.point(name);
+            println!("DENOISE_DIAGNOSTIC_NONREAL {probe:?} {name} real_press={real_press}");
+            if real_press {
+                r.pointer(at, true);
+                r.probe = probe;
+                r.pointer(at, false);
+            } else {
+                r.probe = probe;
+                r.pointer(at, true);
+                r.probe = Probe::Real;
+                r.pointer(at, false);
+            }
+            r.probe = Probe::Real;
+            r.idle(6);
+            assert_eq!(r.docs(), docs);
+            assert_eq!(r.settings(), settings);
+            assert_eq!(r.owned.cache(), cache, "nonreal release cannot clear, evict or replay");
+            if name == CLEAR {
+                r.click(CLEAR);
+                assert_eq!(r.owned.cache().len(), 1);
+            } else {
+                r.acquire_fresh_popup_pick(5);
+                assert_eq!(r.settings()["cacheGb"], 5);
+            }
+            assert_eq!(r.docs(), docs);
+        }
+    }
+}
+#[test]
+fn denoise_sdk_immediate_disabled_owned_cache_safety_and_fresh_reentry() {
+    independent_safety(Probe::Disabled)
+}
+#[test]
+fn denoise_sdk_immediate_sdk_measure_owned_cache_safety_and_fresh_reentry() {
+    independent_safety(Probe::Measure)
+}
+#[test]
+fn denoise_sdk_immediate_egui_sizing_owned_cache_safety_and_fresh_reentry() {
+    independent_safety(Probe::Sizing)
+}
+
+#[test]
+fn denoise_sdk_immediate_natural_keyboard_preserves_original_fifty_gb_expectation() {
+    let mut r = Review::new(Scope::Panel);
+    r.owned.seed_cache();
+    let docs = r.docs();
+    r.tab_to(LIMIT, false);
+    r.key(Key::Space, false);
+    r.key(Key::ArrowDown, false);
+    r.key(Key::Enter, false);
+    assert_eq!(r.settings()["cacheGb"], 50);
+    r.tab_to(CLEAR, false);
+    r.key(Key::Space, false);
+    assert_eq!(r.owned.cache().len(), 1);
+    r.tab_to(LIMIT, true);
+    r.key(Key::Enter, false);
+    r.key(Key::Escape, false);
+    assert_eq!(r.docs(), docs);
+}
+
+#[test]
+fn denoise_native_settings_natural_keyboard_acquires_intended_fifty_gb_row_and_clear() {
+    let mut r = Review::new(Scope::Full);
+    r.owned.seed_cache();
+    let docs = r.docs();
+    r.tab_to(LIMIT, false);
+    let cache = r.owned.cache();
+    r.key(Key::Space, false);
+    assert_eq!(r.settings()["cacheGb"], 20);
+    assert_eq!(r.docs(), docs);
+    assert_eq!(r.owned.cache(), cache);
+    // The framework list opens on the current 20 GB row: one ArrowDown reaches 50 GB, and only
+    // Enter commits it.
+    r.key(Key::ArrowDown, false);
+    assert_eq!(r.settings()["cacheGb"], 20, "row traversal only highlights, never commits");
+    assert_eq!(r.docs(), docs);
+    assert_eq!(r.owned.cache(), cache);
+    r.key(Key::Enter, false);
+    assert_eq!(r.settings()["cacheGb"], 50);
+    r.tab_to(CLEAR, false);
+    r.key(Key::Space, false);
+    assert_eq!(r.owned.cache().len(), 1);
+    r.tab_to(LIMIT, true);
+    r.key(Key::Enter, false);
+    r.key(Key::Escape, false);
+    assert_eq!(r.settings()["cacheGb"], 50, "native popup cancellation preserves committed intended budget");
+    assert_eq!(r.docs(), docs);
+}

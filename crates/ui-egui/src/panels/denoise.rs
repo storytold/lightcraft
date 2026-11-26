@@ -143,12 +143,23 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 /// Per-photo AI Denoise switch.
 pub fn detail_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, on: bool, applicable: bool) {
-    let mut enabled = on;
+    use craft::behavior::Proposal;
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _, Sizing};
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
-        let r = ui.add_enabled(applicable, egui::Checkbox::new(&mut enabled, crate::i18n::tr("AI Denoise")));
-        register(ui, "denoise:enabled", r.rect);
-        if r.changed() {
-            let _ = app.run("denoise.toggle", json!({"id": id.0, "enabled": enabled}));
+        let checkbox =
+            || Checkbox::new(Bind::given(on)).id_salt(("denoise:enabled", id)).label(crate::i18n::tr("AI Denoise")).sizing(Sizing::FillWidth);
+        if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+            // Speculation receives real measured geometry without a live owner or proposal.
+            let child = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+            let size = checkbox().measure_in(&child, Proposal::Ideal);
+            ui.allocate_space(size);
+            return;
+        }
+        let shown = ui.add_enabled_ui(applicable, |ui| checkbox().show(ui)).inner;
+        crate::widgets::register_response("denoise:enabled", shown.response.interact_rect, &shown.response);
+        if let Some(enabled) = shown.events.committed().copied().filter(|enabled| applicable && ui.is_enabled() && *enabled != on) {
+            let _ = app.run("denoise.toggle", json!({"id":id.0,"enabled":enabled}));
         }
     });
 }
@@ -264,12 +275,8 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .unwrap_or_default();
     heading(ui, t, "Your own model (optional)");
     let installing = downloads.iter().any(|d| d["id"] == "local-install" && d["state"].as_str() == Some("installing"));
-    let r = crate::button::Button::new("Install from file…")
-        .enabled(runtime && app.services.pick_denoise_model.is_some())
-        .busy(installing)
-        .widget("denoise:installFile")
-        .show(ui);
-    if r.clicked()
+    let can_install = runtime && app.services.pick_denoise_model.is_some();
+    if install_button(ui, can_install, installing)
         && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
     {
         match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
@@ -336,9 +343,26 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
     );
     hint(ui, t, &device_line(&status["device"], run_on));
     if run_on != "cpu" && status["device"]["retry"] == true {
-        let r = ui.small_button(crate::i18n::tr("Try the graphics card again"));
-        register(ui, "denoise:retryGpu", r.rect);
-        if r.clicked() {
+        use craft::behavior::Proposal;
+        use craft::ui::contract::{Props as _, Show as _};
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        let interactive = real && ui.is_enabled();
+        let clicked = {
+            let owner = egui::Id::unique(("denoise-work-retry", list["dir"].as_str(), app.session.library.as_ref().map(|library| &library.dir)));
+            let control =
+                || craft::ui::buttons::Button::new(crate::i18n::tr("Try the graphics card again").to_owned()).id(owner).enabled(interactive);
+            if !real {
+                let measure = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+                let size = control().measure_in(&measure, Proposal::Width(ui.available_width()));
+                ui.allocate_space(size);
+                false
+            } else {
+                let shown = control().show(ui);
+                crate::widgets::register_response("denoise:retryGpu", shown.response.interact_rect, &shown.response);
+                interactive && shown.clicked()
+            }
+        };
+        if clicked {
             // choosing where it runs, even the same again, forgets the failed set-up
             let _ = app.run("denoise.settings", json!({"runOn": run_on}));
             app.caches.denoise.epoch += 1;
@@ -357,17 +381,34 @@ fn photos_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: 
     hint(ui, t, "Only photos whose AI Denoise amount is above 0 are made. Exports always make theirs if it is missing.");
     let (running, queued) = (app.caches.denoise.running, app.caches.denoise.queued);
     progress_line(app, ui, t, status, running, queued);
+    photos_queue_actions(ui, running, queued, |command, params| {
+        let _ = app.run(command, params);
+    });
+}
+
+/// Photos actions share their production rendering with command-recording tests; the callback
+/// is synchronous command dispatch, never a background pump or inference entry point here.
+fn photos_queue_actions(ui: &mut egui::Ui, running: Option<(u64, u64)>, queued: u64, mut run: impl FnMut(&str, Value)) {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+
     ui.horizontal(|ui| {
-        let r = ui.button(tr("Denoise all photos with an Amount"));
-        register(ui, "denoise:queueAll", r.rect);
-        if r.clicked() {
-            let _ = app.run("denoise.queue", json!({"scope": "withAmount"}));
+        // Measurement must neither publish automation targets nor dispatch commands.
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        let queue = Button::new(tr("Denoise all photos with an Amount")).id_salt("denoise:queueAll").show(ui);
+        if real {
+            crate::widgets::register_response("denoise:queueAll", queue.response.rect, &queue.response);
+        }
+        if real && queue.clicked() {
+            run("denoise.queue", json!({"scope": "withAmount"}));
         }
         if running.is_some() || queued > 0 {
-            let r = ui.button(tr("Stop"));
-            register(ui, "denoise:stop", r.rect);
-            if r.clicked() {
-                let _ = app.run("denoise.cancel", json!({}));
+            let stop = Button::new(tr("Stop")).id_salt("denoise:stop").show(ui);
+            if real {
+                crate::widgets::register_response("denoise:stop", stop.response.rect, &stop.response);
+            }
+            if real && stop.clicked() {
+                run("denoise.cancel", json!({}));
             }
         }
     });
@@ -416,20 +457,50 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
     ui.horizontal(|ui| {
         ui.label(RichText::new(crate::i18n::tr("Limit")).color(t.text_label));
         let current = list["cacheGb"].as_u64().unwrap_or(20) as u32;
-        let mut choice = current;
-        let combo = crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
-            for gb in CACHE_LIMITS {
-                ui.selectable_value(&mut choice, gb, tr_format!("{size} GB", size = gb));
+        use craft::behavior::Proposal;
+        use craft::ui::contract::{Bind, Props as _, Show as _};
+        let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+        let interactive = real && ui.is_enabled();
+        // Settings are model-folder global, but a pending action also belongs to this library:
+        // changing the budget immediately evicts there, and Clear must never retarget a new one.
+        let owner = egui::Id::unique(("denoise-work-cache", list["dir"].as_str(), app.session.library.as_ref().map(|library| &library.dir)));
+        let choice = {
+            let entries =
+                CACHE_LIMITS.into_iter().map(|gb| craft::ui::contract::Entry::new(gb, tr_format!("{size} GB", size = gb))).collect::<Vec<_>>();
+            let control = || {
+                craft::ui::pickers::Select::new(tr("Cache limit").to_owned(), Bind::given(current), &entries)
+                    .id(owner.with("limit"))
+                    .enabled(interactive)
+            };
+            if !real {
+                let measure = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+                let size = control().measure_in(&measure, Proposal::Width(ui.available_width()));
+                ui.allocate_space(size);
+                None
+            } else {
+                let shown = control().show(ui);
+                crate::widgets::register_response("denoise:cacheLimit", shown.response.interact_rect, &shown.response);
+                shown.events.committed().copied().filter(|choice| interactive && *choice != current)
             }
-        });
-        crate::widgets::name_combo(&combo.response, tr("Cache limit"));
-        if choice != current {
+        };
+        if let Some(choice) = choice {
             let _ = app.run("denoise.settings", json!({"cacheGb": choice}));
             app.caches.denoise.epoch += 1;
         }
-        let r = ui.button(tr("Clear cache"));
-        register(ui, "denoise:clear", r.rect);
-        if r.clicked() {
+        let clicked = {
+            let control = || craft::ui::buttons::Button::new(tr("Clear cache").to_owned()).id(owner.with("clear")).enabled(interactive);
+            if !real {
+                let measure = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible());
+                let size = control().measure_in(&measure, Proposal::Width(ui.available_width()));
+                ui.allocate_space(size);
+                false
+            } else {
+                let shown = control().show(ui);
+                crate::widgets::register_response("denoise:clear", shown.response.interact_rect, &shown.response);
+                interactive && shown.clicked()
+            }
+        };
+        if clicked {
             let _ = app.run("denoise.clear", json!({}));
         }
     });
@@ -446,6 +517,47 @@ fn device_line(d: &Value, run_on: &str) -> String {
         }
         _ => tr("The graphics card is set up when the next photo is made.").into(),
     }
+}
+
+/// A model row's button: a framework button that keeps its activation through the tooltip chain.
+struct ModelButton {
+    response: egui::Response,
+    activated: bool,
+}
+
+impl ModelButton {
+    fn clicked(&self) -> bool {
+        self.activated
+    }
+
+    fn on_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.response = self.response.on_hover_text(text);
+        self
+    }
+}
+
+/// A button of a model row (`widget` names it for the control channel), never acting while the framework only measures.
+fn model_button(ui: &mut egui::Ui, widget: &str, label: &str) -> ModelButton {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let shown = Button::new(tr(label).to_owned()).id_salt(("denoise-model", widget)).show(ui);
+    if real {
+        crate::widgets::register_response(widget.to_owned(), shown.response.rect, &shown.response);
+    }
+    ModelButton { activated: real && ui.is_enabled() && shown.clicked(), response: shown.response }
+}
+
+/// Install from file… (`denoise:installFile`): busy while an installation runs, disabled without a model chooser.
+fn install_button(ui: &mut egui::Ui, enabled: bool, installing: bool) -> bool {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _};
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let shown = Button::new(tr("Install from file…").to_owned()).id_salt("denoise:installFile").enabled(enabled).loading(installing).show(ui);
+    if real {
+        crate::widgets::register_response("denoise:installFile", shown.response.rect, &shown.response);
+    }
+    real && enabled && ui.is_enabled() && shown.clicked()
 }
 
 fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
@@ -511,22 +623,19 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    let r = ui.button(tr("Remove"));
-                    register(ui, format!("denoise:remove:{id}"), r.rect);
+                    let r = model_button(ui, &format!("denoise:remove:{id}"), "Remove");
                     if r.clicked() {
                         let _ = app.run("denoise.models.remove", json!({"id": id}));
                         app.caches.denoise.epoch += 1;
                     }
                     if selected {
-                        let r = ui.button(tr("Stop using"));
-                        register(ui, format!("denoise:off:{id}"), r.rect);
+                        let r = model_button(ui, &format!("denoise:off:{id}"), "Stop using");
                         if r.clicked() {
                             let _ = app.run("denoise.models.select", json!({"id": null}));
                             app.caches.denoise.epoch += 1;
                         }
                     } else {
-                        let r = ui.button(tr("Use"));
-                        register(ui, format!("denoise:use:{id}"), r.rect);
+                        let r = model_button(ui, &format!("denoise:use:{id}"), "Use");
                         if r.clicked() {
                             let _ = app.run("denoise.models.select", json!({"id": id}));
                             app.caches.denoise.epoch += 1;
@@ -535,8 +644,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                 } else {
                     match dl_state {
                         Some("running") => {
-                            let r = ui.button(tr("Cancel"));
-                            register(ui, format!("denoise:cancelDownload:{id}"), r.rect);
+                            let r = model_button(ui, &format!("denoise:cancelDownload:{id}"), "Cancel");
                             if r.clicked() {
                                 let _ = app.run("denoise.models.downloadCancel", json!({"id": id}));
                                 app.caches.denoise.dl_watch.retain(|w| w != &id);
@@ -546,10 +654,8 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         Some("done" | "installing") => {}
                         _ => {
                             if let Some(url) = m["source"].as_str() {
-                                let r = ui
-                                    .button(tr("Open page"))
+                                let r = model_button(ui, &format!("denoise:get:{id}"), "Open page")
                                     .on_hover_text(tr("Opens the model's own page in your browser, to read about it or get the file yourself."));
-                                register(ui, format!("denoise:get:{id}"), r.rect);
                                 if r.clicked() {
                                     open_page(app, url);
                                 }
@@ -561,8 +667,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                     mb(m["sizeBytes"].as_u64()),
                                     host = host
                                 );
-                                let r = ui.button(tr(label)).on_hover_text(tip);
-                                register(ui, format!("denoise:download:{id}"), r.rect);
+                                let r = model_button(ui, &format!("denoise:download:{id}"), label).on_hover_text(tip);
                                 if r.clicked() {
                                     open_download_dialog(app, m);
                                 }
@@ -781,3 +886,15 @@ mod tests {
         assert_eq!(sentence("下载失败。"), "下载失败。", "a Chinese or Japanese full stop ends the sentence");
     }
 }
+
+#[cfg(test)]
+#[path = "denoise_queue_actions_tests.rs"]
+mod queue_actions_tests;
+
+#[cfg(test)]
+#[path = "denoise_qualified_work_flow_tests.rs"]
+mod qualified_work_flow_tests;
+
+#[cfg(test)]
+#[path = "denoise_per_photo_qualified_flow_tests.rs"]
+mod per_photo_qualified_flow_tests;

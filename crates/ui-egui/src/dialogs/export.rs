@@ -1,5 +1,28 @@
-use super::frame::{field, num};
+use self::core::{check, num};
 use super::{ControlSpec, LightcraftApp, Section, SettingsGroup, Tokens, Track};
+
+mod core;
+
+/// SDK export settings over the existing dialog draft. Measuring never mutates the live draft.
+pub(super) fn export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, tokens: &Tokens, dialog: &mut super::Dialog) {
+    // The host already supplies the SDK theme mode in app::shell::prepare. This legacy
+    // dialog owns its egui labelled rows; wrapping them in an SDK Stack supplies an
+    // inherited `offered` width to each native child Ui and counts LABEL_W twice
+    // (`layout::open_room` restores the parent's offered width). Keep one layout owner.
+    // The controls themselves remain real SDK components, mounted in those row rects.
+    let popup = craft::ui::runtime::overlay::top(ui.ctx())
+        .and_then(|id| craft::ui::runtime::overlay::entry(ui.ctx(), id))
+        .is_some_and(|entry| entry.rank == craft::ui::runtime::overlay::Rank::Popup);
+    if popup && ui.is_enabled() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        crate::widgets::take_escape(ui.ctx());
+    }
+    let measuring = craft::ui::runtime::measure::active(ui.ctx());
+    let mut draft = dialog.clone();
+    core::body(app, ui, tokens, &mut draft);
+    if !measuring {
+        *dialog = draft;
+    }
+}
 
 /// The Export dialog's watermark preview: the first exported photo, as wide as the dialog whatever
 /// its shape, with the watermark drawn on it as the file will have it at size `resize` (`None` =
@@ -161,14 +184,41 @@ pub(super) fn export_dialog_params(
 
 /// Two columns of settings-group checkboxes (Copy Settings, Create Preset) plus All / None.
 pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>) {
+    use craft::behavior::Proposal;
+    use craft::ui::buttons::Button;
+    use craft::ui::choice::Checkbox;
+    use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
+    use craft::ui::layout_components::Row;
+
+    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+    let enabled = ui.is_enabled();
     let key_of = |g: &SettingsGroup| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
     ui.columns(2, |cols| {
         for (i, g) in SettingsGroup::ALL.iter().enumerate() {
             let key = key_of(g);
-            let mut on = groups.contains(&key);
-            let r = cols[i % 2].checkbox(&mut on, crate::i18n::tr(g.label()));
-            crate::widgets::register_response(format!("{tag}:{key}"), r.rect, &r);
-            if r.changed() {
+            let current = groups.contains(&key);
+            let item = || {
+                Checkbox::new(Bind::given(current))
+                    .id_salt(("settings-group-checklist", tag, *g))
+                    .label(crate::i18n::tr(g.label()).to_owned())
+                    .sizing(Sizing::FillWidth)
+            };
+            let column = &mut cols[i % 2];
+            if measuring {
+                // Measure the labelled flow, not just the Checkbox's indicator. This is an ordinary invisible
+                // public sizing run: no live target, draft edit or deferred gesture is published here.
+                let child = column.new_child(egui::UiBuilder::new().max_rect(column.available_rect_before_wrap()).sizing_pass().invisible());
+                let size = Row::new().measure_in(&child, Proposal::Ideal, |ui, _| item().show(ui));
+                column.allocate_exact_size(size, egui::Sense::hover());
+                continue;
+            }
+            let out = item().show(column);
+            // The whole labelled row is the checkbox's hit (box and label): register that, not the box alone.
+            crate::widgets::register_response(format!("{tag}:{key}"), out.response.interact_rect, &out.response);
+            if let Some(&on) = out.events.committed()
+                && enabled
+                && on != current
+            {
                 if on {
                     groups.push(key);
                 } else {
@@ -178,14 +228,18 @@ pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<Str
         }
     });
     ui.horizontal(|ui| {
-        let all = ui.small_button(crate::i18n::tr("All"));
-        crate::widgets::register(ui, format!("{tag}:all"), all.rect);
-        if all.clicked() {
+        let all = Button::new(crate::i18n::tr("All").to_owned()).id_salt(("settings-group-checklist-action", tag, "all")).show(ui);
+        if !measuring {
+            crate::widgets::register_response(format!("{tag}:all"), all.response.rect, &all.response);
+        }
+        if !measuring && enabled && all.clicked() {
             *groups = SettingsGroup::ALL.iter().map(key_of).collect();
         }
-        let none = ui.small_button(crate::i18n::tr("None"));
-        crate::widgets::register(ui, format!("{tag}:none"), none.rect);
-        if none.clicked() {
+        let none = Button::new(crate::i18n::tr("None").to_owned()).id_salt(("settings-group-checklist-action", tag, "none")).show(ui);
+        if !measuring {
+            crate::widgets::register_response(format!("{tag}:none"), none.response.rect, &none.response);
+        }
+        if !measuring && enabled && none.clicked() {
             groups.clear();
         }
     });
@@ -230,32 +284,21 @@ pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft
         (R::Megapixels, "Megapixels"),
         (R::Percent, "Percentage"),
     ];
-    let r_full = ui.checkbox(full, crate::i18n::tr("Full size"));
-    crate::widgets::register(ui, "check:exportFullSize", r_full.rect);
+    check(ui, "check:exportFullSize", "Full size", full);
     if !*full {
-        field(ui, "Resize to", |ui| {
-            let cur = MODES.iter().find(|m| m.0 == r.mode).map_or("Long Edge", |m| m.1);
-            let before = r.mode;
-            let c = crate::widgets::combo_box("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (m, l) in MODES {
-                    ui.selectable_value(&mut r.mode, m, crate::i18n::tr(l));
-                }
-            });
-            crate::widgets::name_combo(&c.response, crate::i18n::tr("Resize"));
-            crate::widgets::register(ui, "combo:exportResizeMode", c.response.rect);
-            if r.mode != before {
-                // a sensible value for the new unit
-                r.value = match r.mode {
-                    R::Megapixels => 12.0,
-                    R::Percent => 50.0,
-                    _ if matches!(before, R::Megapixels | R::Percent) => 2048.0,
-                    _ => r.value,
-                };
-                if matches!(r.mode, R::Dimensions | R::WidthHeight) && r.height == 0 {
-                    r.height = r.value as u32;
-                }
+        let before = r.mode;
+        core::resize_mode(ui, &MODES, &mut r.mode);
+        if r.mode != before {
+            r.value = match r.mode {
+                R::Megapixels => 12.0,
+                R::Percent => 50.0,
+                _ if matches!(before, R::Megapixels | R::Percent) => 2048.0,
+                _ => r.value,
+            };
+            if matches!(r.mode, R::Dimensions | R::WidthHeight) && r.height == 0 {
+                r.height = r.value as u32;
             }
-        });
+        }
         let mut v = r.value as f64;
         let spec = match r.mode {
             R::Megapixels => &SIZE_MP,
@@ -272,8 +315,7 @@ pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft
                 r.height = h as u32;
             }
         }
-        let c = ui.checkbox(&mut r.dont_enlarge, crate::i18n::tr("Don't enlarge"));
-        crate::widgets::register(ui, "check:exportDontEnlarge", c.rect);
+        check(ui, "check:exportDontEnlarge", "Don't enlarge", &mut r.dont_enlarge);
     }
     let mut p = *ppi as f64;
     if num(ui, &PPI, &mut p) {
@@ -430,3 +472,11 @@ mod tiff_lzw_note_tests {
         assert!(note_rect(&h).is_none(), "back to ZIP: the note goes");
     }
 }
+
+#[cfg(test)]
+#[path = "export/size_controls_flow_tests.rs"]
+mod size_controls_flow_tests;
+
+#[cfg(test)]
+#[path = "settings_group_checklist_flow_tests.rs"]
+mod settings_group_checklist_flow_tests;

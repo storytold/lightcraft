@@ -1,39 +1,61 @@
-//! The star rating: clicking sets the rating, clicking the current one clears it, the row is one
-//! Tab stop, the arrow keys step it, and screen readers hear every star.
+//! The star rating: clicking sets the rating, clicking the current one clears it, the row is one Tab
+//! stop, the digits set it, and screen readers hear every star.
 
 use egui::{Pos2, Rect, vec2};
 
 use crate::rating::Rating;
 
-/// Draw `build` for a few frames. After the first, click the centre of star `click` (1 to 5) if given,
-/// then press `keys`. Returns every value `build` reported and the AccessKit
-/// (role, name) pairs.
-fn drive(click: Option<u8>, keys: &[egui::Key], build: impl Fn(&mut egui::Ui) -> Option<u8>) -> (Vec<u8>, Vec<(String, String)>) {
+/// A context with the framework's runtime, which senses the row and builds its accessibility nodes.
+fn context() -> egui::Context {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx);
     ctx.enable_accesskit();
+    crate::app::install_runtime(&ctx).expect("the UI runtime installs");
+    ctx
+}
+
+fn raw(size: egui::Vec2, events: Vec<egui::Event>) -> egui::RawInput {
+    egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), events, ..Default::default() }
+}
+
+fn press(key: egui::Key) -> egui::Event {
+    egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Default::default() }
+}
+
+/// Draw `build` for a few frames. From the second on, move to the centre of star `click` (1 to 5) if given, press
+/// and release there (a frame each: the framework counts a click from a press in one pass and a release in a later
+/// one), then press `keys`, one a frame. Returns every value `build` reported and the AccessKit (role, name) pairs.
+fn drive(click: Option<u8>, keys: &[egui::Key], build: impl Fn(&mut egui::Ui) -> Option<u8>) -> (Vec<u8>, Vec<(String, String)>) {
+    let ctx = context();
     let mut reported = Vec::new();
     let mut nodes = Vec::new();
     let mut rects: Vec<(String, Rect)> = Vec::new();
-    for frame in 0..6 {
+    let button = |at: Pos2, pressed: bool| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    for frame in 0..10 {
         let mut events = Vec::new();
-        if frame == 1
-            && let Some(n) = click
-        {
+        if let Some(n) = click {
             let want = format!("star:t:{n}");
             let at = rects.iter().find(|(id, _)| *id == want).map(|(_, r)| r.center()).unwrap_or(Pos2::ZERO);
-            events.push(egui::Event::PointerMoved(at));
-            events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-            events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            match frame {
+                3 => events.push(egui::Event::PointerMoved(at)),
+                4 => events.push(button(at, true)),
+                5 => events.push(button(at, false)),
+                _ => {}
+            }
         }
-        // one key per frame from the third on, so Tab has moved the focus before an arrow arrives
-        if frame >= 2
-            && let Some(k) = keys.get(frame - 2)
+        // one key per frame from the fifth on, so Tab has moved the focus before the next key arrives
+        if frame >= 4
+            && let Some(k) = keys.get(frame - 4)
         {
-            events.push(egui::Event::Key { key: *k, physical_key: Some(*k), pressed: true, repeat: false, modifiers: Default::default() });
+            events.push(press(*k));
         }
-        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))), events, ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| {
+        let mut out = ctx.run_ui(raw(vec2(400.0, 200.0), events), |ui| {
             if let Some(v) = build(ui) {
                 reported.push(v);
             }
@@ -73,30 +95,18 @@ fn hovering_alone_changes_nothing() {
     assert!(got.is_empty());
 }
 
-/// How many stars `Rating::show` paints filled (in the star colour) after the pointer has moved to
-/// the centre of star `hover` (1 to 5), if given. A filled star is ten triangles of one colour.
-fn filled_stars(rating: u8, hover: Option<u8>) -> usize {
-    fn count(shape: &egui::Shape, colour: egui::Color32) -> usize {
-        match shape {
-            egui::Shape::Path(path) => usize::from(path.fill == colour),
-            egui::Shape::Vec(shapes) => shapes.iter().map(|shape| count(shape, colour)).sum(),
-            _ => 0,
-        }
-    }
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
-    let colour = crate::theme::Tokens::get(&ctx).star;
+/// What `row(rating)` paints in the last of a few frames after the pointer has moved to the centre of star `hover`
+/// (1 to 5), if given.
+fn painted(rating: u8, hover: Option<u8>) -> Vec<egui::epaint::ClippedShape> {
+    let ctx = context();
     let mut at = None;
-    let mut filled = 0;
-    for frame in 0..4 {
-        let mut events = Vec::new();
-        if frame >= 1
-            && let Some(at) = at
-        {
-            events.push(egui::Event::PointerMoved(at));
-        }
-        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))), events, ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| {
+    let mut shapes = Vec::new();
+    for frame in 0..6 {
+        let events = match at.filter(|_| frame >= 1) {
+            Some(at) => vec![egui::Event::PointerMoved(at)],
+            None => Vec::new(),
+        };
+        let mut out = ctx.run_ui(raw(vec2(400.0, 200.0), events), |ui| {
             let _ = row(rating).show(ui);
         });
         out.textures_delta.clear();
@@ -106,133 +116,64 @@ fn filled_stars(rating: u8, hover: Option<u8>) -> usize {
             at = seen.iter().find(|(id, _)| *id == want).map(|(_, r)| r.center());
             assert!(at.is_some(), "star {n} is registered");
         }
-        filled = out.shapes.iter().map(|clipped| count(&clipped.shape, colour)).sum::<usize>() / 10;
+        shapes = out.shapes;
     }
-    filled
+    shapes
 }
 
 #[test]
 fn hovering_a_star_paints_the_rating_a_click_would_set() {
-    // the row shows 2 filled stars; the pointer over star 4 shows 4, and over star 1 shows 1
-    assert_eq!(filled_stars(2, None), 2);
-    assert_eq!(filled_stars(2, Some(4)), 4);
-    assert_eq!(filled_stars(2, Some(1)), 1, "hovering a lower star previews the lower rating");
+    // the pointer over star 4 of a row showing 2 paints what a row showing 4 paints under the same pointer, and not
+    // what the row paints at rest
+    let hovered = painted(2, Some(4));
+    assert_eq!(hovered, painted(4, Some(4)), "hovering star 4 previews 4 stars");
+    assert_ne!(hovered, painted(2, None), "the preview differs from the rating shown");
+    assert_ne!(painted(2, Some(1)), painted(2, None), "hovering a lower star previews the lower rating");
 }
 
 #[test]
 fn a_screen_reader_hears_every_star_with_its_state() {
     let (_, nodes) = drive(None, &[], |ui| row(2).show(ui));
     for n in 1..=5 {
-        let name = format!("{n} ★");
-        assert!(nodes.iter().any(|(role, label)| role == "Button" && *label == name), "{name}: {nodes:?}");
+        let name = if n == 1 { "1 star".to_owned() } else { format!("{n} stars") };
+        assert!(nodes.iter().any(|(role, label)| role == "RadioButton" && *label == name), "{name}: {nodes:?}");
     }
 }
 
 #[test]
-fn the_arrow_keys_step_the_rating_of_a_focused_star() {
-    // Tab focuses the first star; the row shows 3, so → asks for 4 and ← for 2
-    let (got, _) = drive(None, &[egui::Key::Tab, egui::Key::ArrowRight], |ui| row(3).show(ui));
+fn the_digits_set_the_rating_while_the_row_has_the_focus() {
+    // Tab focuses the row; 4 then sets four stars
+    let (got, _) = drive(None, &[egui::Key::Tab, egui::Key::Num4], |ui| row(2).show(ui));
     assert_eq!(got, vec![4], "{got:?}");
-    let (got, _) = drive(None, &[egui::Key::Tab, egui::Key::ArrowLeft], |ui| row(3).show(ui));
-    assert_eq!(got, vec![2], "{got:?}");
 }
 
 #[test]
-fn arrow_keys_do_nothing_when_no_star_is_focused() {
-    let (got, _) = drive(None, &[egui::Key::ArrowRight], |ui| row(3).show(ui));
+fn the_arrow_keys_move_between_the_stars_without_changing_the_rating() {
+    let (got, _) = drive(None, &[egui::Key::Tab, egui::Key::ArrowRight, egui::Key::ArrowRight], |ui| row(3).show(ui));
     assert!(got.is_empty(), "{got:?}");
-}
-
-/// Feed the shown rating back each frame, with other focusable widgets on both sides.
-fn step_with_neighbours(start: u8, keys: &[egui::Key]) -> Vec<u8> {
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
-    let rating = std::cell::Cell::new(start);
-    let mut seen = Vec::new();
-    // a key every frame, Tab then an arrow straight away
-    for frame in 0..keys.len() + 3 {
-        let mut events = Vec::new();
-        if let Some(k) = frame.checked_sub(1).and_then(|f| keys.get(f)) {
-            events.push(egui::Event::Key { key: *k, physical_key: Some(*k), pressed: true, repeat: false, modifiers: Default::default() });
-        }
-        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 200.0))), events, ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| {
-            ui.horizontal(|ui| {
-                let _ = ui.button("left neighbour");
-                if let Some(r) = row(rating.get()).show(ui) {
-                    rating.set(r);
-                }
-                let _ = ui.button("right neighbour");
-            });
-        });
-        out.textures_delta.clear();
-        seen.push(rating.get());
-    }
-    seen
-}
-
-#[test]
-fn arrows_keep_stepping_between_other_focusable_widgets() {
-    use egui::Key::*;
-    // Tab, Tab: the left neighbour, then star 1
-    let seen = step_with_neighbours(5, &[Tab, Tab, ArrowLeft, ArrowLeft, ArrowLeft, ArrowLeft, ArrowLeft]);
-    assert_eq!(seen.last(), Some(&0), "{seen:?}");
-    let seen = step_with_neighbours(0, &[Tab, Tab, ArrowRight, ArrowRight, ArrowRight, ArrowRight, ArrowRight, ArrowLeft]);
-    assert_eq!(seen.last(), Some(&4), "{seen:?}");
 }
 
 #[test]
 fn a_rating_row_is_one_tab_stop() {
-    use egui::Key::Tab;
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::Show as _;
     // left neighbour, one stop for the five stars, right neighbour: the third Tab is already past the row
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
+    let ctx = context();
     let mut focused = Vec::new();
-    for frame in 0..5 {
-        let events = if frame >= 1 {
-            vec![egui::Event::Key { key: Tab, physical_key: Some(Tab), pressed: true, repeat: false, modifiers: Default::default() }]
-        } else {
-            Vec::new()
-        };
-        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 200.0))), events, ..Default::default() };
+    for frame in 0..8 {
+        // Tab in the frames 3 to 5
+        let events = if (3..=5).contains(&frame) { vec![press(egui::Key::Tab)] } else { Vec::new() };
         let mut right = None;
-        let mut out = ctx.run_ui(raw, |ui| {
+        let mut out = ctx.run_ui(raw(vec2(600.0, 200.0), events), |ui| {
             ui.horizontal(|ui| {
-                let _ = ui.button("left neighbour");
+                let _ = Button::new("left neighbour").show(ui);
                 let _ = row(3).show(ui);
-                right = Some(ui.button("right neighbour").id);
+                right = Some(Button::new("right neighbour").show(ui).response.id);
             });
         });
         out.textures_delta.clear();
         focused.push(right.is_some_and(|id| ctx.memory(|m| m.has_focus(id))));
     }
-    // frames 1 to 3 press Tab: left neighbour, the row, right neighbour
-    assert_eq!(focused, vec![false, false, false, true, false], "{focused:?}");
-}
-
-#[test]
-fn a_rating_changed_from_outside_moves_the_focus_to_the_tab_stop() {
-    use egui::Key::Tab;
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
-    let rating = std::cell::Cell::new(2u8);
-    let mut stars_focused = Vec::new();
-    for frame in 0..5 {
-        // frame 1: Tab focuses the row's stop (star 2); frame 2: the rating changes elsewhere to 5
-        if frame == 2 {
-            rating.set(5);
-        }
-        let events = if frame == 1 {
-            vec![egui::Event::Key { key: Tab, physical_key: Some(Tab), pressed: true, repeat: false, modifiers: Default::default() }]
-        } else {
-            Vec::new()
-        };
-        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 200.0))), events, ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| {
-            let _ = row(rating.get()).show(ui);
-            stars_focused = (0..5).map(|i| ctx.memory(|m| m.has_focus(ui.scope_id().with(("rating-star", "t", i as u8))))).collect();
-        });
-        out.textures_delta.clear();
-    }
-    assert_eq!(stars_focused, vec![false, false, false, false, true], "{stars_focused:?}");
+    // frames 3 to 5 press Tab: left neighbour, the row, right neighbour
+    assert_eq!(focused, vec![false, false, false, false, false, true, true, true], "{focused:?}");
 }

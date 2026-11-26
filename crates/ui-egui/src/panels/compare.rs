@@ -2,7 +2,9 @@
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::menu::MenuItem;
+use egui::{Align2, Color32, Rect, Stroke, pos2, vec2};
 use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
 
@@ -14,6 +16,10 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 pub mod survey;
+
+#[cfg(test)]
+#[path = "compare_external155_tests.rs"]
+mod compare_external155_tests;
 
 /// Most photos a survey shows.
 pub const SURVEY_MAX: usize = 48;
@@ -236,11 +242,18 @@ fn photo_tile(
     area: Rect,
     label: &str,
     zoom: Zoom,
-) -> (Rect, Rect, egui::Response) {
+) -> (Rect, Rect, super::detail::host::HostOutput) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
-    let resp = ui.interact(area, egui::Id::unique(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
-    crate::widgets::announce(&resp, app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default());
+    // The pane is a control over a painted photo: it clicks (select, double-click zoom), drags (pan) and takes the
+    // menu. It is a Tab stop, as it was: a context menu opened from a target the keyboard cannot reach would not hand
+    // its Escape back to the menu.
+    let resp = super::detail::host::target(
+        ui,
+        ("cull-tile", slot_index(slot), id.0),
+        area,
+        super::detail::host::Target::new(app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default()).drag(),
+    );
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, area, resp) };
     let caption_h = 26.0;
     let img_area = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - caption_h));
@@ -525,6 +538,17 @@ fn slot_index(s: Slot) -> u8 {
     }
 }
 
+/// Keep automation on the actual SDK response; measuring a popup must not publish hits or act.
+fn compare_action(ui: &mut egui::Ui, id: &'static str, label: &'static str) -> bool {
+    let shown = MenuItem::new(crate::i18n::tr(label).to_owned()).id_salt(id).enabled(ui.is_enabled()).show(ui);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return false;
+    }
+    crate::widgets::register_response(id, shown.response.rect, &shown.response);
+    // Running a row closes the SDK menu, by pointer or by key.
+    shown.ran
+}
+
 pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
     let Some((sel, cand)) = compare_pair(app) else {
@@ -549,14 +573,14 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.double_clicked() {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
-        crate::widgets::context_menu(&resp, |ui| {
-            if ui.button(crate::i18n::tr("Swap")).clicked() {
+        super::detail::host::context_menu(ui, &resp, crate::i18n::tr("Compare"), |ui| {
+            if compare_action(ui, "compare:swap", "Swap") {
                 let _ = swap(app);
             }
-            if ui.button(crate::i18n::tr("Make Candidate the Select")).clicked() {
+            if compare_action(ui, "compare:makeSelect", "Make Candidate the Select") {
                 let _ = make_select(app);
             }
-            ui.separator();
+            craft::ui::display::Divider::horizontal().show(ui);
             super::grid::context_menu(app, ui, id);
         });
     }
@@ -606,15 +630,19 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // the tile has lost its hover to the × (tied to `hovered()`, it vanished before a click landed)
         if resp.contains_pointer() && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
-            let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
-            crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
+            let xresp = super::detail::host::target(
+                ui,
+                ("survey-x", id.0),
+                xr,
+                super::detail::host::Target::new(crate::i18n::tr("Remove from survey")).tooltip(crate::i18n::tr("Remove from survey")),
+            );
             ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
             paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);
             if xresp.clicked() {
                 let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }
         }
-        crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));
+        super::detail::host::context_menu(ui, &resp, crate::i18n::tr("Photo"), |ui| super::grid::context_menu(app, ui, *id));
     }
     let n = photos.len();
     let msg = if app.session.selection.ids.len() > SURVEY_MAX {
@@ -644,8 +672,8 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (_, _, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", zoom);
     let (img, _, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
     app.image_rect = Some(img);
-    crate::widgets::context_menu(&lresp, |ui| {
-        if ui.button(crate::i18n::tr("Clear Reference")).clicked() {
+    super::detail::host::context_menu(ui, &lresp, crate::i18n::tr("Reference"), |ui| {
+        if compare_action(ui, "compare:clearReference", "Clear Reference") {
             app.ui.reference = None;
             app.ui.view = ViewMode::Detail;
         }

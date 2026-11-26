@@ -5,6 +5,13 @@
 //! commands: dragging a cell is `print.cell.move`, its corner handle `print.cell.resize`, with
 //! the guides' snapping done by the command. Widgets register under `print:*`, `button:print*`
 //! and `drag:print*` ids for the control channel and the headless tests.
+use std::ops::RangeInclusive;
+
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::pickers::Select;
+use craft::ui::text::NumberField;
+
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::export::ExportOptions;
@@ -95,25 +102,69 @@ fn fmt_len(inches: f64, unit: Unit) -> String {
     format!("{:.*} {}", decimals(unit), unit.from_inches(inches), unit.label())
 }
 
+fn measuring(ui: &Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// One number row: the id it registers for automation, the label it shows, and the field's own
+/// range, scrub step, displayed decimals and unit.
+struct NumberSpec<'a> {
+    id: &'a str,
+    label: &'a str,
+    range: RangeInclusive<f64>,
+    step: f64,
+    decimals: usize,
+    unit: &'a str,
+}
+
+/// Mount fields in the native settings rows, not an inherited SDK column width.
+/// The engine owns inches; only the displayed value and scrub step use the ruler unit.
+fn number(ui: &mut Ui, spec: NumberSpec<'_>, value: f64) -> Option<f64> {
+    let NumberSpec { id, label, range, step, decimals, unit } = spec;
+    let mut typed = Some(value);
+    let (rect, _) = ui.allocate_exact_size(vec2(76.0, 24.0), Sense::hover());
+    let shown = NumberField::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut typed))
+        .id_salt(("print-number", id))
+        .range(range)
+        .step(step)
+        .commit_decimals(decimals)
+        .fixed_decimals(decimals)
+        .unit(unit.to_owned())
+        .show_at(ui, rect);
+    if measuring(ui) {
+        return None;
+    }
+    // Return applies the value and gives up the keyboard, as the app's fields do: a focused number field keeps
+    // taking the wheel, so the settings column would not scroll.
+    let returned = ui.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. })));
+    if returned && crate::text_field::has_focus_id(ui.ctx(), shown.response.id) {
+        crate::text_field::blur_id(ui.ctx(), shown.response.id);
+    }
+    // (the rect it was laid out at: below the column's visible part too)
+    crate::widgets::register_response(format!("drag:{id}"), rect, &shown.response);
+    typed.filter(|v| ui.is_enabled() && v.is_finite() && *v != value)
+}
+
 /// A length field in the ruler's unit; the new value in inches when it changed.
 fn length(ui: &mut Ui, id: &str, inches: f64, unit: Unit, min_in: f64, max_in: f64) -> Option<f64> {
-    let mut v = unit.from_inches(inches);
-    let r = ui.add(
-        egui::DragValue::new(&mut v)
-            .range(unit.from_inches(min_in)..=unit.from_inches(max_in))
-            .speed(unit.per_inch() * 0.01)
-            .max_decimals(decimals(unit))
-            .suffix(format!(" {}", unit.label())),
-    );
-    register(ui, format!("drag:{id}"), r.rect);
-    r.changed().then(|| unit.to_inches(v))
+    let spec = NumberSpec {
+        id,
+        label: id,
+        range: unit.from_inches(min_in)..=unit.from_inches(max_in),
+        step: unit.per_inch() * 0.01,
+        decimals: decimals(unit),
+        unit: unit.label(),
+    };
+    number(ui, spec, unit.from_inches(inches)).map(|v| unit.to_inches(v))
 }
 
 fn check(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
-    let mut v = value;
-    let r = ui.checkbox(&mut v, crate::i18n::tr(label));
-    register(ui, format!("check:{id}"), r.rect);
-    r.changed().then_some(v)
+    let shown = Checkbox::new(Bind::given(value)).id_salt(("print-check", id)).label(crate::i18n::tr(label).to_owned()).show(ui);
+    if measuring(ui) {
+        return None;
+    }
+    crate::widgets::register_response(format!("check:{id}"), shown.response.rect, &shown.response);
+    shown.events.committed().copied().filter(|v| ui.is_enabled() && *v != value)
 }
 
 fn choice<V: PartialEq + Copy>(ui: &mut Ui, id: &str, options: &[(V, &str)], current: V) -> Option<V> {
@@ -161,12 +212,13 @@ fn current_paper(paper: &str) -> &str {
 }
 
 /// The dialog's body: the settings column and the page preview side by side.
-pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
+pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) -> bool {
     let ctx = ui.ctx().clone();
     let screen = ctx.content_rect();
     let width = (screen.width() - 80.0).clamp(640.0, 1180.0);
     let height = (screen.height() - 190.0).clamp(280.0, 780.0);
     let mut pu = std::mem::take(&mut app.ui.print);
+    let mut close = false;
     let st = app.session.print.clone();
     // (no `id`/`ids` given: the selection, which never fails to parse)
     let ids = app.session.targets(&json!({})).unwrap_or_default();
@@ -181,7 +233,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
             ui.set_min_size(vec2(SETTINGS_W, height));
             egui::ScrollArea::vertical().id_salt("print-settings").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_width(SETTINGS_W - 14.0);
-                settings(app, ui, t, &mut pu, &st, ids.len());
+                close = settings(app, ui, t, &mut pu, &st, ids.len());
             });
         });
         // (a `separator` would take the dialog's whole free height)
@@ -194,17 +246,34 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
         });
     });
     app.ui.print = pu;
+    close
 }
 
 /// The print templates: save the settings as one, import, and the saved ones to apply, export and delete.
-fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi) {
+fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi) -> bool {
     let ctx = ui.ctx().clone();
     heading(ui, t, "Templates");
+    let mut close = false;
     ui.horizontal(|ui| {
-        crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
-            .hint(crate::i18n::tr("Template name"))
-            .width(140.0)
-            .show(ui);
+        let (rect, _) = ui.allocate_exact_size(vec2(140.0, ui.spacing().interact_size.y.max(24.0)), Sense::hover());
+        let real = !measuring(ui);
+        let eligible = real && ui.is_enabled() && ui.is_visible() && ui.clip_rect().intersects(rect);
+        let shown = craft::ui::text::TextField::new(crate::i18n::tr("Template name").to_owned(), Bind::bound(&mut pu.template_name))
+            .id_salt("field:printTemplateName")
+            .placeholder(crate::i18n::tr("Template name").to_owned())
+            // A disabled adapter can still cancel its old focused gesture. Protect the
+            // mutable binding as well so the first covered Escape cannot clear Name.
+            .read_only(!ui.is_enabled())
+            .limit(None)
+            .show_at(ui, rect);
+        if real {
+            crate::widgets::register_response("field:printTemplateName", shown.response.rect, &shown.response);
+        }
+        // Preserve the observed native one-Escape parent dismissal for this plain Name.
+        // `escaped` also includes Escape-reason Revert; no such programmatic path is
+        // installed here, and this is not a general physical-key discriminator.
+        close |= eligible && shown.escaped;
+
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
@@ -242,6 +311,7 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
             });
         });
     }
+    close
 }
 
 /// The image settings: zoom, rotation, border and stroke.
@@ -274,10 +344,8 @@ fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSet
         if let Some(v) = check(ui, "printStroke", "Inner Stroke", im.stroke_enabled) {
             patch(app, &ctx, json!({"image": {"strokeEnabled": v}}));
         }
-        let mut pt = im.stroke_width_pt;
-        let r = ui.add(egui::DragValue::new(&mut pt).range(0.0..=36.0).speed(0.05).max_decimals(2).suffix(" pt"));
-        register(ui, "drag:printStrokeWidth", r.rect);
-        if r.changed() {
+        let width = NumberSpec { id: "printStrokeWidth", label: "Inner stroke width", range: 0.0..=36.0, step: 0.05, decimals: 2, unit: "pt" };
+        if let Some(pt) = number(ui, width, im.stroke_width_pt) {
             patch(app, &ctx, json!({"image": {"strokeWidthPt": pt}}));
         }
         if let Some(c) = colour(ui, "printStrokeColor", im.stroke_color) {
@@ -312,14 +380,16 @@ fn page_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSett
     }
 }
 
-fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
+fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) -> bool {
     let ctx = ui.ctx().clone();
     let l = &st.layout;
     let unit = st.guides.units;
-    ui.spacing_mut().item_spacing.y = 5.0;
+    // main's density: the SDK rows are a little taller than the old native ones, so a 5 pt gap pushed the last
+    // margin row (Bottom) out of the column
+    ui.spacing_mut().item_spacing.y = 3.0;
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
 
-    templates_section(app, ui, t, pu);
+    let close = templates_section(app, ui, t, pu);
 
     heading(ui, t, "Layout Style");
     let styles =
@@ -341,13 +411,17 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         Style::ContactSheet => {
             let g = &l.grid;
             row(ui, t, "Grid", |ui| {
-                let (mut c, mut r) = (g.columns, g.rows);
-                let a = ui.add(egui::DragValue::new(&mut c).range(1..=layout::MAX_GRID).suffix(" cols"));
-                register(ui, "drag:printColumns", a.rect);
-                let b = ui.add(egui::DragValue::new(&mut r).range(1..=layout::MAX_GRID).suffix(" rows"));
-                register(ui, "drag:printRows", b.rect);
-                if a.changed() || b.changed() {
-                    patch(app, &ctx, json!({"layout": {"grid": {"columns": c, "rows": r}}}));
+                let cells = 1.0..=layout::MAX_GRID as f64;
+                let columns = NumberSpec { id: "printColumns", label: "Columns", range: cells.clone(), step: 1.0, decimals: 0, unit: "cols" };
+                let rows = NumberSpec { id: "printRows", label: "Rows", range: cells, step: 1.0, decimals: 0, unit: "rows" };
+                let c = number(ui, columns, g.columns as f64);
+                let r = number(ui, rows, g.rows as f64);
+                if c.is_some() || r.is_some() {
+                    patch(
+                        app,
+                        &ctx,
+                        json!({"layout": {"grid": {"columns": c.unwrap_or(g.columns as f64) as usize, "rows": r.unwrap_or(g.rows as f64) as usize}}}),
+                    );
                 }
             });
             row(ui, t, "Spacing", |ui| {
@@ -446,16 +520,17 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
 
     heading(ui, t, "Page Setup");
     row(ui, t, "Paper", |ui| {
-        let current = current_paper(&l.page.paper);
-        let c = craft_ui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
-            for name in layout::paper_names().chain(std::iter::once("custom")) {
-                if ui.selectable_label(current == name, paper_label(name)).clicked() {
-                    patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
-                }
+        let current = current_paper(&l.page.paper).to_owned();
+        let entries: Vec<_> =
+            layout::paper_names().chain(std::iter::once("custom")).map(|name| Entry::new(name.to_owned(), paper_label(name))).collect();
+        let (rect, _) = ui.allocate_exact_size(vec2(170.0, 24.0), Sense::hover());
+        let shown = Select::new(crate::i18n::tr("Paper"), Bind::given(current.clone()), &entries).id_salt("printPaper").show_at(ui, rect);
+        if !measuring(ui) {
+            crate::widgets::register_response("combo:printPaper", shown.response.rect, &shown.response);
+            if let Some(name) = shown.events.committed().filter(|name| **name != current) {
+                patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
             }
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
-        register(ui, "combo:printPaper", c.response.rect);
+        }
     });
     if l.page.paper.eq_ignore_ascii_case("custom") {
         row(ui, t, "Size", |ui| {
@@ -491,14 +566,13 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
 
     heading(ui, t, "Print Job");
     row(ui, t, "Resolution", |ui| {
-        let mut ppi = st.job.ppi;
-        let r = ui.add(egui::DragValue::new(&mut ppi).range(72.0..=720.0).speed(1.0).max_decimals(0).suffix(" ppi"));
-        register(ui, "drag:printPpi", r.rect);
-        if r.changed() {
+        let spec = NumberSpec { id: "printPpi", label: "Resolution", range: 72.0..=720.0, step: 1.0, decimals: 0, unit: "ppi" };
+        if let Some(ppi) = number(ui, spec, f64::from(st.job.ppi)) {
             patch(app, &ctx, json!({"job": {"ppi": ppi}}));
         }
     });
     print_job_color(app, ui, t, &st.job.color);
+    close
 }
 
 /// Send one colour setting of the print job (the rest stay as they are).
@@ -521,25 +595,29 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     };
     let mut pick = false;
     row(ui, t, "Profile", |ui| {
-        let c = craft_ui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
+        crate::widgets::dropdown_menu(ui, "combo:printProfile", crate::i18n::tr("Profile"), &shown, Some(190.0), |ui| {
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
-                let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
-                register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
-                if r.clicked() && color.profile != managed(space) {
+                let name = format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default());
+                let current = color.profile == managed(space);
+                if crate::widgets::menu_row(ui, ("printProfile", label), Some(&name), crate::i18n::tr(label), None, current, true) && !current {
                     patch_color(app, &ctx, "profile", to_value(managed(space)));
                 }
             }
             if let PrintProfile::Icc { .. } = &color.profile {
-                let _ = ui.selectable_label(true, shown.as_str());
+                let _ = crate::widgets::menu_row(ui, ("printProfile", "icc"), None, &shown, None, true, true);
             }
             if app.services.pick_display_profile.is_some() {
-                let r = ui.selectable_label(false, crate::i18n::tr("Other…"));
-                register(ui, "item:printProfile-other", r.rect);
-                pick |= r.clicked();
+                pick |= crate::widgets::menu_row(
+                    ui,
+                    ("printProfile", "other"),
+                    Some("item:printProfile-other"),
+                    crate::i18n::tr("Other…"),
+                    None,
+                    false,
+                    true,
+                );
             }
         });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Profile"));
-        register(ui, "combo:printProfile", c.response.rect);
     });
     if pick && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next()) {
         patch_color(app, &ctx, "profile", json!({"kind": "icc", "path": path}));
@@ -556,10 +634,9 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     });
     for (key, label, value) in [("brightness", "Brightness", color.brightness), ("contrast", "Contrast", color.contrast)] {
         row(ui, t, label, |ui| {
-            let mut v = value;
-            let r = ui.add(egui::DragValue::new(&mut v).range(-100.0..=100.0).speed(0.5).max_decimals(0));
-            register(ui, format!("drag:print{label}"), r.rect);
-            if r.changed() {
+            let id = format!("print{label}");
+            let spec = NumberSpec { id: &id, label, range: -100.0..=100.0, step: 0.5, decimals: 0, unit: "" };
+            if let Some(v) = number(ui, spec, f64::from(value)) {
                 patch_color(app, &ctx, key, json!(v));
             }
         });
@@ -734,9 +811,20 @@ fn package_cells(
         let rect = sheet.rect(&c.rect);
         paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect);
         shown.push(rect);
-        let resp = ui.interact(rect, egui::Id::unique(("print-cell", c.id)), Sense::click_and_drag());
-        register(ui, format!("print:cell:{}", c.id), rect);
-        if resp.clicked() || resp.drag_started() {
+        // A cell is host-painted; the framework senses it (click, drag, its accessible node), as the raw cell did, no Tab stop.
+        if !crate::panels::detail::host::live(ui) {
+            continue;
+        }
+        let label = format!("{} {}", crate::i18n::tr("Cell"), c.id);
+        let out = crate::panels::detail::host::target(
+            ui,
+            ("print-cell", c.id),
+            rect,
+            crate::panels::detail::host::Target::new(label).drag().selected(pu.selected == Some(c.id)).pointer_only(),
+        );
+        let resp = out.response.clone();
+        crate::widgets::register_response(format!("print:cell:{}", c.id), rect, &resp);
+        if out.clicked() || resp.drag_started() {
             pu.selected = Some(c.id);
         }
         if resp.drag_started() {
@@ -754,19 +842,19 @@ fn package_cells(
             pu.drag = None;
         }
         let id = c.id;
-        crate::widgets::context_menu(&resp, |ui| {
+        crate::panels::detail::host::context_menu(ui, &resp, crate::i18n::tr("Cell"), |ui| {
+            use craft::ui::contract::{Props as _, Show as _};
+            use craft::ui::menu::MenuItem;
             for (how, label) in
                 [("toFront", "Bring to Front"), ("forward", "Bring Forward"), ("backward", "Send Backward"), ("toBack", "Send to Back")]
             {
-                if ui.button(crate::i18n::tr(label)).clicked() {
+                if MenuItem::new(crate::i18n::tr(label).to_owned()).id_salt(("print-cell-order", id, how)).show(ui).ran {
                     run(app, &ctx, "print.cell.stack", json!({"id": id, "order": how}));
-                    ui.close();
                 }
             }
-            ui.separator();
-            if ui.button(crate::i18n::tr("Delete Cell")).clicked() {
+            craft::ui::display::Divider::horizontal().show(ui);
+            if MenuItem::new(crate::i18n::tr("Delete Cell").to_owned()).id_salt(("print-cell-delete", id)).show(ui).ran {
                 run(app, &ctx, "print.cell.delete", json!({"id": id}));
-                ui.close();
             }
         });
     }
@@ -777,8 +865,17 @@ fn package_cells(
     painter.rect_stroke(rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
     let handle = Rect::from_center_size(rect.right_bottom(), Vec2::splat(HANDLE));
     painter.rect_filled(handle, 2.0, t.accent);
-    let resp = ui.interact(handle, egui::Id::unique(("print-resize", sel.id)), Sense::drag());
-    register(ui, format!("print:resize:{}", sel.id), handle);
+    if !crate::panels::detail::host::live(ui) {
+        return;
+    }
+    let out = crate::panels::detail::host::target(
+        ui,
+        ("print-resize", sel.id),
+        handle,
+        crate::panels::detail::host::Target::new(crate::i18n::tr("Resize Cell")).drag().pointer_only(),
+    );
+    let resp = out.response.clone();
+    crate::widgets::register_response(format!("print:resize:{}", sel.id), handle, &resp);
     if resp.drag_started() {
         pu.drag = Some(Drag { cell: sel.id, origin: sel.rect, resize: true, press: press_origin(ui, &resp), total: Vec2::ZERO });
     }
@@ -1034,3 +1131,11 @@ mod tests {
         assert_eq!(paper_label(current_paper("a4")), "A4");
     }
 }
+
+#[cfg(test)]
+#[path = "print_view_wave110_tests.rs"]
+mod wave110_tests;
+
+#[cfg(test)]
+#[path = "print_template_flow_tests.rs"]
+mod print_template_flow_tests;

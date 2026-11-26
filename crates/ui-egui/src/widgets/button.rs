@@ -10,13 +10,21 @@
 //! Button::new("Remove").icon(Icon::Trash).danger().show(ui);
 //! ```
 
-use egui::{Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use std::ops::Deref;
+use std::sync::Arc;
 
-use crate::icons::{Icon, paint};
+use craft::behavior::{Metrics, Sense};
+use craft::theme::{Stateful, States};
+use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _, Styled as _};
+use craft::ui::primitives::{Glyph, IconSpec};
+use craft::ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, UiTokens};
+use egui::{Color32, CornerRadius, Galley, Painter, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
+
+use crate::icons::Icon;
 use crate::theme::Tokens;
 
 /// What a button is for, which decides how loud it is.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Kind {
     /// The step to take: filled with the accent. One per place (a dialog's confirm, the welcome's
     /// Import Photos…).
@@ -31,7 +39,7 @@ pub enum Kind {
 }
 
 /// How big a button is: its height, padding, text and icon size.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Size {
     /// 24 points: in toolbars, banners and dense rows.
     Small,
@@ -136,8 +144,30 @@ fn fill_for_white(fill: Color32) -> Color32 {
     f
 }
 
+/// The theme colours a button's looks come from. All of them are part of the style key, so a theme change restyles it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Palette {
+    accent: Color32,
+    reject: Color32,
+    button: Color32,
+    hover: Color32,
+    pressed: Color32,
+    border: Color32,
+    text: Color32,
+}
+
+impl From<&Tokens> for Palette {
+    fn from(t: &Tokens) -> Self {
+        Self { accent: t.accent, reject: t.reject, button: t.button, hover: t.hover, pressed: t.pressed, border: t.button_border, text: t.text }
+    }
+}
+
 /// The colours of a `kind` button in `state` with the theme `t`.
 pub fn look(t: &Tokens, kind: Kind, state: State) -> Look {
+    look_in(&Palette::from(t), kind, state)
+}
+
+fn look_in(p: &Palette, kind: Kind, state: State) -> Look {
     let filled = |base: Color32| {
         let base = fill_for_white(base);
         // hover and press go darker: white on them only reads better
@@ -149,25 +179,25 @@ pub fn look(t: &Tokens, kind: Kind, state: State) -> Look {
         Look { fill: Some(fill), border: None, content: Color32::WHITE }
     };
     let look = match kind {
-        Kind::Primary => filled(t.accent),
-        Kind::Danger => filled(t.reject),
+        Kind::Primary => filled(p.accent),
+        Kind::Danger => filled(p.reject),
         Kind::Secondary => Look {
             fill: Some(match state {
-                State::Idle | State::Disabled => t.button,
-                State::Hovered => t.hover,
-                State::Pressed => t.pressed,
+                State::Idle | State::Disabled => p.button,
+                State::Hovered => p.hover,
+                State::Pressed => p.pressed,
             }),
-            border: Some(t.button_border),
-            content: t.text,
+            border: Some(p.border),
+            content: p.text,
         },
         Kind::Ghost => Look {
             fill: match state {
                 State::Idle | State::Disabled => None,
-                State::Hovered => Some(t.hover),
-                State::Pressed => Some(t.pressed),
+                State::Hovered => Some(p.hover),
+                State::Pressed => Some(p.pressed),
             },
             border: None,
-            content: t.text,
+            content: p.text,
         },
     };
     if state == State::Disabled {
@@ -175,6 +205,178 @@ pub fn look(t: &Tokens, kind: Kind, state: State) -> Look {
         Look { fill: look.fill.map(fade), border: look.border.map(fade), content: fade(look.content) }
     } else {
         look
+    }
+}
+
+/// The face of a button: the fill and border by state, the content (text and icon) by state, and the focus ring.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+struct FaceStyle {
+    #[style(surface)]
+    surface: craft::ui::style::SurfaceLook,
+    #[style(focus)]
+    focus: FocusLook,
+    #[style(metrics)]
+    metrics: Metrics,
+    content: Stateful<StyleColor>,
+}
+
+#[derive(craft::ui::contract::MemoProps)]
+struct ButtonGlyph(Icon);
+
+impl Glyph for ButtonGlyph {
+    fn paint(&self, painter: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+        // LightCraft's own vector drawings, not a substituted SDK icon set.
+        crate::icons::paint(painter, rect, self.0, color);
+    }
+}
+
+/// The leaf a [`Button`] shows: the framework owns sensing, primary-release activation, cancellation, focus, the
+/// keyboard and the access node; only this face (its fill, border, content and spinner) is local.
+#[derive(craft::ui::contract::Component)]
+struct FaceButton {
+    #[common]
+    common: Common,
+    #[style_key]
+    palette: Palette,
+    #[style_key]
+    kind: Kind,
+    #[style_key]
+    size: Size,
+    #[style_key]
+    busy: bool,
+    galley: Option<Arc<Galley>>,
+    icon: Option<Icon>,
+    desired: Vec2,
+    opacity: f32,
+}
+
+impl Component for FaceButton {
+    const ROLE: Role = Role::BUTTON;
+    const OVERLAYS: bool = false;
+    const PARTS: bool = false;
+    type Style = FaceStyle;
+    type Output = ButtonOutput;
+
+    fn style(cx: &StyleCx<'_>, key: FaceButtonStyleKey) -> FaceStyle {
+        let color = |value: Color32| cx.color(craft::theme::Rgba::from(value));
+        // a busy button shows no hover or press: there is nothing to press
+        let at = |state: State| look_in(&key.palette, key.kind, if key.busy && state != State::Disabled { State::Idle } else { state });
+        let states = [at(State::Idle), at(State::Hovered), at(State::Pressed), at(State::Disabled)];
+        let by_state = |pick: fn(&Look) -> Color32| {
+            Stateful::new(color(pick(&states[0]))).off(States::new(
+                color(pick(&states[0])),
+                color(pick(&states[1])),
+                color(pick(&states[2])),
+                color(pick(&states[3])),
+            ))
+        };
+        let surface_fill = by_state(|l| l.fill.unwrap_or(Color32::TRANSPARENT));
+        let border = by_state(|l| l.border.unwrap_or(Color32::TRANSPARENT));
+        let content = by_state(|l| l.content);
+        FaceStyle {
+            surface: craft::ui::style::SurfaceLook::new(surface_fill).radius(CornerRadius::same(key.size.radius() as u8)).border(border, 1.0),
+            // inside the control, so a narrow panel's clipping never hides the keyboard focus ring
+            focus: FocusLook::new(Stroke::new(2.0, key.palette.accent), -2.0),
+            metrics: Metrics::new(),
+            content,
+        }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        self.desired
+    }
+
+    fn sense(&self) -> Sense {
+        // a busy button is still reachable by the keyboard, but there is nothing to press
+        if self.busy { Sense::HOVER | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if self.busy {
+            access.busy(true);
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let content = cx.resolve(&cx.style.content);
+        let rect = cx.rect;
+        let icon_s = self.size.icon();
+        // busy: the spinner is the icon's slot; with text alone it is a smaller one in the button's own padding (a
+        // little tighter), so the button never grows
+        let spinner_only = self.busy && self.icon.is_none() && self.galley.is_some();
+        let (slot, gap) = if spinner_only { ((self.size.padding() * 2.0 - 12.0).clamp(8.0, icon_s), 4.0) } else { (icon_s, self.size.gap()) };
+        let has_slot = self.icon.is_some() || spinner_only;
+        let content_w = match (&self.galley, has_slot) {
+            (Some(g), true) => slot + gap + g.size().x,
+            (Some(g), false) => g.size().x,
+            (None, true) => slot,
+            (None, false) => 0.0,
+        };
+        let mut x = rect.center().x - content_w / 2.0;
+        let mut slot_rect = None;
+        if has_slot {
+            slot_rect = Some(Rect::from_center_size(pos2(x + slot / 2.0, rect.center().y), vec2(slot, slot)));
+            x += slot + gap;
+        }
+        if let Some(slot_rect) = slot_rect {
+            if self.busy {
+                if cx.visible.intersects(rect) {
+                    let ctx = &cx.response.ctx;
+                    let painter = Painter::new(ctx.clone(), cx.response.layer_id, cx.visible);
+                    crate::progress::paint_spinner(&painter, slot_rect, content.egui(), ctx.input(|i| i.time));
+                    ctx.request_repaint_after(std::time::Duration::from_millis(33));
+                }
+            } else if let Some(icon) = self.icon {
+                ui.draw().icon(slot_rect, &IconSpec::glyph(&ButtonGlyph(icon)).color(content));
+            }
+        }
+        if let Some(g) = &self.galley {
+            // A reserved SDK paint slot keeps the exact galley under the pipeline's clip and focus ring.
+            let at = pos2(x, rect.center().y - g.size().y / 2.0);
+            let shape = egui::epaint::TextShape::new(at, Arc::clone(g), content.egui()).with_opacity_factor(self.opacity);
+            ui.reserve_slot(cx.visible).extend(&cx.response.ctx, vec![shape.into()]);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> ButtonOutput {
+        ButtonOutput { response: cx.response.clone() }
+    }
+}
+
+/// What a [`Button`] reports: its egui geometry and hover response, and the framework's activation.
+///
+/// `clicked()` follows the framework's primary-release rule (including key and accessibility activation), not egui's
+/// independent pointer duration limit; a busy or disabled button never reports one. Keep the output through tooltip
+/// chains.
+#[derive(Clone, Debug)]
+pub struct ButtonOutput {
+    pub response: Response,
+}
+
+impl ButtonOutput {
+    pub fn clicked(&self) -> bool {
+        craft::ui::contract::clicked(&self.response)
+    }
+
+    pub fn on_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.response = self.response.on_hover_text(text);
+        self
+    }
+}
+
+impl Deref for ButtonOutput {
+    type Target = Response;
+
+    fn deref(&self) -> &Response {
+        &self.response
+    }
+}
+
+impl Outcome for ButtonOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
     }
 }
 
@@ -301,9 +503,10 @@ impl<'a> Button<'a> {
         }
     }
 
-    fn galley(&self, ui: &Ui) -> Option<std::sync::Arc<egui::Galley>> {
+    fn galley(&self, ui: &Ui) -> Option<Arc<Galley>> {
         let t = Tokens::get(ui.ctx());
-        self.text.filter(|s| !s.is_empty()).map(|s| ui.painter().layout_no_wrap(crate::i18n::tr(s).to_string(), self.font(&t), Color32::WHITE))
+        // laid out in no colour of its own: the face paints it in the colour of the button's state
+        self.text.filter(|s| !s.is_empty()).map(|s| ui.painter().layout_no_wrap(crate::i18n::tr(s).to_string(), self.font(&t), Color32::PLACEHOLDER))
     }
 
     /// How big it is drawn.
@@ -320,14 +523,15 @@ impl<'a> Button<'a> {
     }
 
     /// Show it where the layout puts it.
-    pub fn show(self, ui: &mut Ui) -> Response {
+    pub fn show(self, ui: &mut Ui) -> ButtonOutput {
         let size = self.desired_size(ui);
-        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        // the layout's room, sensing nothing: the framework leaf owns the pointer
+        let (_, rect) = ui.allocate_space(size);
         self.show_at(ui, rect)
     }
 
     /// Show it in `rect` (sized by the caller, e.g. a row of equal buttons).
-    pub fn show_at(self, ui: &mut Ui, rect: Rect) -> Response {
+    pub fn show_at(self, ui: &mut Ui, rect: Rect) -> ButtonOutput {
         let t = Tokens::get(ui.ctx());
         // stable across frames and moves: its widget id (with its salt) when it has one, else its
         // place in the ui (moved on, so the next button in the same ui gets another)
@@ -341,88 +545,32 @@ impl<'a> Button<'a> {
         };
         // a button in a disabled part of the window is disabled too
         let enabled = self.enabled && ui.is_enabled();
-        let resp = ui.interact(
-            rect,
-            id,
-            if !enabled {
-                Sense::hover()
-            } else if self.busy {
-                // still reachable by the keyboard, but nothing to press
-                Sense::focusable_noninteractive()
-            } else {
-                Sense::click()
-            },
-        );
         let words = crate::i18n::tr(self.name.or(self.text).unwrap_or_default()).to_string();
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, words.clone()));
-        if self.busy {
-            ui.ctx().accesskit_node_builder(resp.id, |node| node.set_busy());
+        // the tooltip, or an icon's name, also while disabled (what the button would do)
+        let tip = self.tooltip.or(if self.text.is_none() { self.name } else { None }).map(|tip| crate::i18n::tr(tip).to_string());
+        let mut face = FaceButton {
+            common: Common::new(),
+            palette: Palette::from(&t),
+            kind: self.kind,
+            size: self.size,
+            busy: self.busy,
+            galley: self.galley(ui),
+            icon: self.icon,
+            desired: self.desired_size(ui),
+            opacity: ui.opacity(),
         }
-        if let Some(w) = &self.widget {
-            crate::widgets::register(ui, w.clone(), rect);
+        .id(id)
+        .label(words)
+        .enabled(enabled);
+        if let Some(tip) = tip {
+            face = face.tooltip(tip);
         }
-        let state = if !enabled {
-            State::Disabled
-        } else if self.busy {
-            State::Idle
-        } else if resp.is_pointer_button_down_on() {
-            State::Pressed
-        } else if resp.hovered() {
-            State::Hovered
-        } else {
-            State::Idle
-        };
-        let lk = look(&t, self.kind, state);
-        // (its own rectangle and its focus ring: a long text never runs over its neighbours)
-        let p = &ui.painter_at(rect.expand(5.0));
-        let radius = self.size.radius();
-        if let Some(fill) = lk.fill {
-            p.rect_filled(rect, radius, fill);
+        let shown = face.show_at(ui, rect);
+        if let Some(w) = self.widget
+            && !super::measuring(ui)
+        {
+            super::register_response(w, rect, &shown.response);
         }
-        if let Some(border) = lk.border {
-            p.rect_stroke(rect, radius, Stroke::new(1.0, border), StrokeKind::Inside);
-        }
-        // where the keyboard is: an accent ring around it
-        if resp.has_focus() {
-            p.rect_stroke(rect.expand(2.0), radius + 2.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
-        }
-        let galley = self.galley(ui);
-        let icon_s = self.size.icon();
-        // busy: the spinner is the icon's slot; with text alone it is a smaller one in the button's
-        // own padding (a little tighter), so the button never grows
-        let spinner_only = self.busy && self.icon.is_none() && galley.is_some();
-        let (slot, gap) = if spinner_only { ((self.size.padding() * 2.0 - 12.0).clamp(8.0, icon_s), 4.0) } else { (icon_s, self.size.gap()) };
-        let has_slot = self.icon.is_some() || spinner_only;
-        let content_w = match (&galley, has_slot) {
-            (Some(g), true) => slot + gap + g.size().x,
-            (Some(g), false) => g.size().x,
-            (None, true) => slot,
-            (None, false) => 0.0,
-        };
-        let mut x = rect.center().x - content_w / 2.0;
-        if has_slot {
-            let slot_rect = Rect::from_center_size(pos2(x + slot / 2.0, rect.center().y), vec2(slot, slot));
-            if self.busy {
-                if ui.is_rect_visible(rect) {
-                    crate::progress::paint_spinner(p, slot_rect, lk.content, ui.input(|i| i.time));
-                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
-                }
-            } else if let Some(icon) = self.icon {
-                paint(p, slot_rect, icon, lk.content);
-            }
-            x += slot + gap;
-        }
-        if let Some(g) = galley {
-            let at = pos2(x, rect.center().y - g.size().y / 2.0);
-            p.galley_with_override_text_color(at, g, lk.content);
-        }
-        // the tooltip, or an icon's name, also while disabled (what the button would do). egui
-        // calls a response disabled only in a disabled ui: a button turned off on its own still
-        // answers hover, and takes the ordinary tooltip
-        match self.tooltip.or(if self.text.is_none() { self.name } else { None }) {
-            Some(tip) if resp.enabled() => resp.on_hover_text(crate::i18n::tr(tip)),
-            Some(tip) => resp.on_disabled_hover_text(crate::i18n::tr(tip)),
-            None => resp,
-        }
+        shown
     }
 }

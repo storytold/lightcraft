@@ -58,7 +58,7 @@ impl Rig {
             endings.extend(r.ending);
             *editing = r.editing;
             if focus_after {
-                ui.memory_mut(|m| m.request_focus(id(FIELD)));
+                focus(ui.ctx(), FIELD);
             }
         });
         self.widgets = crate::widgets::take_registry(&self.view.ctx);
@@ -185,18 +185,23 @@ fn right_clicking_again_moves_the_menu() {
     assert!(rig.endings.is_empty(), "the edit goes on");
 }
 
+/// A click back in the field closes its menu and goes no further: the selection stays. The
+/// next click places a caret.
 #[test]
-fn clicking_back_into_field_dismisses_its_menu_and_places_a_new_caret() {
+fn clicking_back_into_field_dismisses_its_menu_and_the_next_click_places_a_caret() {
     let mut rig = Rig::new("Lisbon");
     rig.select_all_by_keys();
     rig.click(FIELD, PointerButton::Secondary);
     let rect = rig.rect(FIELD).unwrap();
-    rig.click_at(egui::pos2(rect.left() + 2.0, rect.center().y), PointerButton::Primary);
-    let range = egui::text_edit::TextEditState::load(&rig.view.ctx, id(FIELD)).unwrap().cursor.char_range().unwrap();
-    assert!(range.is_empty(), "a click back in the field places a caret: {range:?}");
+    let at = egui::pos2(rect.left() + 2.0, rect.center().y);
+    rig.click_at(at, PointerButton::Primary);
+    assert!(rig.rect(&format!("{FIELD}:cut")).is_none(), "the menu closed");
+    rig.click_at(at, PointerButton::Primary);
+    let range = egui::text_edit::TextEditState::load(&rig.view.ctx, text_id(id(FIELD))).unwrap().cursor.char_range().unwrap();
+    assert!(range.is_empty(), "the second click places a caret: {range:?}");
     rig.type_text("X");
     assert_eq!(rig.text, "XLisbon");
-    assert!(rig.endings.is_empty(), "dismissing into the field keeps the edit open");
+    assert!(rig.endings.is_empty(), "the edit stays open");
 }
 
 /// With nothing selected, Cut and Copy are greyed out: clicking one does nothing, as in a native
@@ -240,17 +245,19 @@ fn return_ends_the_edit() {
     assert_eq!(rig.endings, vec![Ending::Return]);
 }
 
-/// Return with the menu open ends the edit as Return does, and closes the menu.
+/// Return with the menu open closes the menu and runs none of its rows (no row is lit); it
+/// does not reach the field, as with a native menu. The next Return ends the edit.
 #[test]
-fn return_with_the_menu_open_ends_the_edit() {
+fn return_with_the_menu_open_closes_it() {
     let mut rig = Rig::new("Lisbon");
     rig.select_all_by_keys();
     rig.type_text("Rome");
     rig.click(FIELD, PointerButton::Secondary);
     rig.key(Key::Enter, Modifiers::NONE);
-    assert_eq!(rig.endings, vec![Ending::Return]);
-    assert_eq!(rig.text, "Rome");
     assert!(rig.rect(&format!("{FIELD}:cut")).is_none(), "the menu closed");
+    assert_eq!((rig.text.as_str(), rig.endings.clone()), ("Rome", vec![]), "no row ran and the edit goes on");
+    rig.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(rig.endings, vec![Ending::Return]);
 }
 
 /// Esc with the menu open closes only the menu, as in native menus: the edit goes on, and a
@@ -293,12 +300,18 @@ fn clicking_away_ends_the_edit() {
     assert_eq!(rig.endings, vec![Ending::Away]);
 }
 
-/// Opening the menu and closing it without a choice (a click outside) leaves the field.
+/// A click outside the menu only closes it, as a native menu does: the click reaches nothing
+/// below, and the field keeps the focus and its edit. The next click outside leaves the field.
 #[test]
-fn dismissing_the_menu_leaves_the_field() {
+fn dismissing_the_menu_keeps_the_edit() {
     let mut rig = Rig::new("Lisbon");
-    rig.click(FIELD, PointerButton::Primary);
+    rig.select_all_by_keys();
+    rig.type_text("Rome");
     rig.click(FIELD, PointerButton::Secondary);
+    rig.click_at(egui::pos2(300.0, 250.0), PointerButton::Primary);
+    assert!(rig.rect(&format!("{FIELD}:cut")).is_none(), "the menu closed");
+    assert!(rig.focused(), "the field keeps the focus");
+    assert_eq!(rig.endings, vec![]);
     rig.click_at(egui::pos2(300.0, 250.0), PointerButton::Primary);
     assert!(!rig.focused());
     assert_eq!(rig.endings, vec![Ending::Away]);
@@ -323,7 +336,7 @@ fn text_typed_on_the_first_focused_pass_replaces_the_whole_text() {
     rig.select_on_focus = true;
     // the dialog draws the field, then asks for its focus: effective on the next pass
     rig.frame_with(vec![], true);
-    assert!(rig.view.ctx.memory(|m| m.has_focus(id(FIELD))), "focused for the next pass");
+    assert!(focused(&rig.view.ctx, FIELD), "focused for the next pass");
     // the pass the focus takes effect already carries the text
     rig.frame(vec![Event::Text("Fresh".into())]);
     assert_eq!(rig.text, "Fresh", "the first keystroke replaced the selected text");

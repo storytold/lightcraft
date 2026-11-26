@@ -40,6 +40,29 @@ fn drag(h: &mut Headless, id: &str, dx: f32, dy: f32) {
     h.settle(T);
 }
 
+/// Scrolls the settings pane until `id` shows (its middle is inside its clipped hit area), as a person scrolls to a
+/// control below the pane's edge: the framework's settings rows are taller, and Page Setup starts below the fold of a
+/// 900 pt window.
+fn reveal(h: &mut Headless, id: &str) {
+    for _ in 0..16 {
+        let target = rect(h, id);
+        let seen = h.app.widget_hits.iter().rev().find(|(w, _)| w == id).map(|(_, hit)| hit.interact_rect).expect("a registered hit");
+        if seen.contains(target.center()) {
+            return;
+        }
+        // below the pane's edge: scroll down; above it: up
+        let dy = if target.center().y > seen.center().y { -60.0 } else { 60.0 };
+        // the wheel over the pane's column, halfway down the window
+        let at = egui::pos2(target.center().x, h.size.y * 0.5);
+        let r = h.request("ui.move", json!({"x": at.x, "y": at.y}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let r = h.request("ui.scroll", json!({"dy": dy}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(T);
+    }
+    panic!("{id} never scrolled into view");
+}
+
 fn cmd(h: &mut Headless, id: &str, params: Value) -> Value {
     let r = h.request("engine.execute", json!({"command": id, "params": params}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
@@ -90,12 +113,15 @@ fn style_buttons_and_checkboxes_run_print_set() {
     click(&mut h, "check:printZoomFill");
     click(&mut h, "check:printStroke");
     assert!(h.app.session.print.image.zoom_to_fill && h.app.session.print.image.stroke_enabled);
+    reveal(&mut h, "button:printOrientation-1");
     click(&mut h, "button:printOrientation-1");
     assert_eq!(h.app.session.print.layout.page.orientation, lightcraft_engine::print::layout::Orientation::Landscape);
     let p = rect(&h, "print:page");
     assert!(p.width() > p.height(), "the page is drawn landscape");
+    reveal(&mut h, "button:printUnits-2");
     click(&mut h, "button:printUnits-2");
     assert_eq!(h.app.session.print.guides.units, lightcraft_engine::print::layout::Unit::Millimeters);
+    reveal(&mut h, "check:printShowGrid");
     click(&mut h, "check:printShowGrid");
     assert!(h.app.session.print.guides.show_page_grid);
 }

@@ -62,6 +62,9 @@ fn opening_release_honors_return_and_escape_immediately() {
             Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
         ]);
         assert_eq!(out.value, (key == Key::Enter).then_some(2.0));
+        // The key came in the pass that opened the field, before the field had the keyboard; it gives it back on the
+        // next pass (no hand presses another key within that frame).
+        assert_eq!(h.frame(vec![]).value, None, "the empty frame applies nothing");
         assert!(!h.view.ctx.egui_wants_keyboard_input());
         assert!(h.key(Key::Enter).value.is_none(), "no retired draft can commit later");
     }
@@ -99,6 +102,25 @@ fn typing_after_a_released_click_still_edits() {
     assert!(h.view.ctx.egui_wants_keyboard_input(), "the field keeps the keyboard after the click");
     h.frame(vec![Event::Text("2".into())]);
     assert_eq!(h.key(Key::Enter).value, Some(2.0));
+}
+
+#[test]
+fn escape_after_typing_restores_the_value_and_gives_the_keyboard_back() {
+    // a click, a typed value, then Escape on a frame of its own: the old value stays and the readout shows it again
+    let mut h = Harness::new();
+    let pos = h.rect.center();
+    let button = |pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.frame(vec![Event::PointerMoved(pos)]);
+    h.frame(vec![button(true)]);
+    h.frame(vec![button(false)]);
+    h.frame(vec![]);
+    assert!(h.view.ctx.egui_wants_keyboard_input(), "the click opens the field");
+    h.frame(vec![Event::Text("2".into())]);
+    assert_eq!(h.key(Key::Escape).value, None, "Escape keeps the old value");
+    h.frame(vec![]);
+    assert_eq!(h.value, 0.71);
+    assert!(!h.view.ctx.egui_wants_keyboard_input(), "Escape gives the keyboard back");
+    assert!(h.key(Key::Enter).value.is_none(), "no retired draft can commit later");
 }
 
 impl Harness {
@@ -272,6 +294,8 @@ fn leaving_the_row_during_a_drag_keeps_dragging_but_release_disarms_the_wheel() 
     h.frame(vec![button(inside, true)]);
     let initial = h.value;
     h.frame(vec![Event::PointerMoved(outside)]);
+    // the framework's drag begins on the pass the pointer first moves and proposes from the next one
+    h.frame(vec![]);
     assert!(h.value > initial, "an owned drag keeps editing outside the row");
     h.frame(vec![button(outside, false)]);
     let released = h.value;

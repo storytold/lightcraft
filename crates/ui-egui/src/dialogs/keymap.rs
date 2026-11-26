@@ -10,7 +10,31 @@ use egui::RichText;
 use crate::LightcraftApp;
 use crate::shortcuts::{self, Bindable};
 use crate::theme::Tokens;
-use crate::widgets::register;
+use craft::ui::buttons::Button;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::text::TextField;
+
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn register(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
+    if !measuring(ui) {
+        crate::widgets::register_response(id, response.rect, response);
+    }
+}
+
+/// The restore button's ↺: LightCraft's own arrow drawing (the UI font has no ↺, so a painted "↺" was cut to an
+/// ellipsis).
+#[derive(craft::ui::contract::MemoProps)]
+struct RestoreGlyph(crate::icons::Icon);
+
+impl craft::ui::primitives::Glyph for RestoreGlyph {
+    fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: egui::Rect, color: egui::Color32, _: bool) {
+        crate::icons::paint(painter, rect, self.0, color);
+    }
+}
 
 const SEARCH: &str = "shortcuts-search";
 const SHOW_ALL: &str = "shortcuts-show-all";
@@ -20,29 +44,42 @@ const SHOW_ALL: &str = "shortcuts-show-all";
 /// on), and the fixed non-command keys. Pending shortcut capture is processed once per frame.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    capture(app, ui.ctx());
+    if !measuring(ui) {
+        capture(app, ui.ctx());
+    }
     ui.set_min_width(560.0);
     let (search_id, all_id) = (egui::Id::unique(SEARCH), egui::Id::unique(SHOW_ALL));
     let mut search: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
     let mut show_all: bool = ui.data(|d| d.get_temp(all_id)).unwrap_or(false);
     ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text(crate::i18n::tr("Search commands or keys")).desired_width(220.0));
-        register(ui, "field:shortcutsSearch", r.rect);
-        let r = ui.checkbox(&mut show_all, crate::i18n::tr("Show commands without a shortcut"));
-        register(ui, "check:shortcuts.showAll", r.rect);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 24.0), egui::Sense::hover());
+        let shown = TextField::new(crate::i18n::tr("Search commands or keys").to_owned(), Bind::bound(&mut search))
+            .id_salt(SEARCH)
+            .placeholder(crate::i18n::tr("Search commands or keys").to_owned())
+            .limit(None)
+            .show_at(ui, rect);
+        register(ui, "field:shortcutsSearch", &shown.response);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = ui.add_enabled(!app.ui.settings.keymap.is_empty(), egui::Button::new(crate::i18n::tr("Reset All")));
-            register(ui, "button:shortcutsResetAll", r.rect);
-            if r.clicked() {
+            let shown = Button::new(crate::i18n::tr("Reset All").to_owned())
+                .id_salt("shortcutsResetAll")
+                .enabled(!app.ui.settings.keymap.is_empty())
+                .show(ui);
+            register(ui, "button:shortcutsResetAll", &shown.response);
+            if !measuring(ui) && shown.clicked() {
                 let _ = app.run("app.resetShortcuts", serde_json::json!({}));
                 app.recording_shortcut = None;
             }
         });
     });
-    ui.data_mut(|d| {
-        d.insert_temp(search_id, search.clone());
-        d.insert_temp(all_id, show_all);
-    });
+    let shown =
+        Checkbox::new(Bind::bound(&mut show_all)).id_salt(SHOW_ALL).label(crate::i18n::tr("Show commands without a shortcut").to_owned()).show(ui);
+    register(ui, "check:shortcuts.showAll", &shown.response);
+    if !measuring(ui) {
+        ui.data_mut(|d| {
+            d.insert_temp(search_id, search.clone());
+            d.insert_temp(all_id, show_all);
+        });
+    }
     ui.label(RichText::new(crate::i18n::tr("Click a shortcut, then press the new keys (Esc cancels).")).size(11.0).color(t.text_dim));
     ui.add_space(4.0);
 
@@ -64,6 +101,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // (shorter on a short window, so the dialog fits it)
     let h = crate::panels::dialogs::list_height(ui, 400.0);
     egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h).auto_shrink([false, false]).id_salt("shortcuts-list").show(ui, |ui| {
+        // a faint stripe over the dialog's own surface, as main's was (the theme's inset colour is near black on
+        // the dialog's grey, which banded the list and hid the grey command ids)
+        ui.visuals_mut().faint_bg_color = t.text.gamma_multiply(0.05);
         egui::Grid::new("shortcuts").striped(true).num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
             for (b, sc) in &rows {
                 row(app, ui, t, b, sc.as_deref(), mac);
@@ -100,32 +140,43 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     };
     ui.label(name).on_hover_text(hover);
     let recording = app.recording_shortcut.as_deref() == Some(b.id);
-    let text = if recording {
-        RichText::new(crate::i18n::tr("Press keys…")).color(egui::Color32::WHITE)
-    } else {
-        match sc {
-            Some(sc) => RichText::new(menu_text(sc, mac)).color(t.text),
-            None => RichText::new("—").color(t.text_dim),
-        }
-    };
-    let r = ui.add(egui::Button::new(text).min_size(egui::vec2(110.0, 0.0)).selected(recording));
-    register(ui, format!("button:shortcut-{}", b.id), r.rect);
-    if r.clicked() {
+    let text = if recording { crate::i18n::tr("Press keys…").to_owned() } else { sc.map_or_else(|| "—".to_owned(), |sc| menu_text(sc, mac)) };
+    // The SDK's stand-alone chord recorder is crate-private. A normal SDK Button
+    // routes Tab, activation and Escape as intents instead of leaving raw chords
+    // for capture(). Keep this one focus owner native until the recorder is public.
+    let response = ui.add(egui::Button::new(text).min_size(egui::vec2(110.0, 0.0)).selected(recording));
+    register(ui, format!("button:shortcut-{}", b.id), &response);
+    if !measuring(ui) && response.clicked() {
         app.recording_shortcut = if recording { None } else { Some(b.id.to_string()) };
+        if !recording {
+            response.request_focus();
+        }
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let r = ui.add_enabled(sc.is_some(), egui::Button::new("×").small()).on_hover_text(crate::i18n::tr("Remove shortcut"));
-        register(ui, format!("button:shortcutClear-{}", b.id), r.rect);
-        if r.clicked() {
+        let shown =
+            Button::new(crate::i18n::tr("Remove shortcut").to_owned()).painted("×").id_salt(("shortcutClear", b.id)).enabled(sc.is_some()).show(ui);
+        let clicked = !measuring(ui) && shown.clicked();
+        let response = shown.response.on_hover_text(crate::i18n::tr("Remove shortcut"));
+        register(ui, format!("button:shortcutClear-{}", b.id), &response);
+        if clicked {
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "shortcut": null}));
         }
-        let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match b.default {
+        let restore = match b.default {
             Some(d) => crate::i18n::tr_format!("Restore {}", menu_text(d, mac)),
             None => crate::i18n::tr("Restore (no shortcut)").to_string(),
-        });
-        register(ui, format!("button:shortcutReset-{}", b.id), r.rect);
-        if r.clicked() {
+        };
+        let glyph = RestoreGlyph(crate::icons::Icon::Rotate);
+        let shown = Button::new(restore.clone())
+            .painted(String::new())
+            .icon(craft::ui::primitives::IconSpec::glyph(&glyph))
+            .id_salt(("shortcutReset", b.id))
+            .enabled(changed)
+            .show(ui);
+        let clicked = !measuring(ui) && shown.clicked();
+        let response = shown.response.on_hover_text(restore);
+        register(ui, format!("button:shortcutReset-{}", b.id), &response);
+        if clicked {
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "reset": true}));
         }
     });
@@ -241,3 +292,7 @@ fn capture(app: &mut LightcraftApp, ctx: &egui::Context) {
         None => app.toast_for(ctx, crate::i18n::tr("That key can't be used as a shortcut"), 3.0),
     }
 }
+
+#[cfg(test)]
+#[path = "keymap_external155_tests.rs"]
+mod keymap_external155_tests;

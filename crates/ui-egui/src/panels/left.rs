@@ -1,12 +1,12 @@
 //! The left "My Photos" panel: library sources, albums tree, and date groups.
 
-use egui::{Align2, Rect, Sense, pos2, vec2};
+use egui::{Align2, Rect, pos2, vec2};
 use lightcraft_catalog::{Album, AlbumId, FolderNode, KeywordNode};
 use lightcraft_engine::LibrarySource;
 use serde_json::json;
 
 use crate::LightcraftApp;
-use crate::icons::{Icon, paint};
+use crate::icons::Icon;
 use crate::sidebar::SidebarSection;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
@@ -30,44 +30,33 @@ pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
 use local::{local_now, local_rows};
 pub(crate) use rows::disclosure_name;
 #[cfg(test)]
-pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
-use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
-pub(crate) use rows::{content_width, indent_step, step_for};
+pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP, indent_step, step_for};
+use rows::{LIBFOLDER_REVEALED, SCROLL_TO_ROW, SideEvent, SideRow, SideSpec, content_width, set_tree_open, settle_layout, side_list};
 pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
+
+/// Where the sidebar's visible part ends this frame (its inner right edge while the sidebar
+/// scrolls sideways): the tests read it to say what "at the edge" means.
+#[cfg(test)]
+pub(crate) fn sidebar_visible_right(ctx: &egui::Context) -> f32 {
+    sections::visible_right_of(ctx)
+}
 #[cfg(test)]
 pub(crate) use sections::section_drop_before;
-use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sections_menu};
+use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sidebar_title};
 
 /// Draw the My Photos sidebar: title and open-library name, the scrollable sources, albums,
 /// folders and sections, with the section visibility menu on the title.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
+    // the drags of sections and albums are the framework's: the app's state follows them
+    sections::adopt_drags(app, ui);
+    // (the dock shows the panel edge to edge: the margin round the lists is the panel's own, inside its border)
+    let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider)).inner_margin(egui::Margin::same(8));
     frame.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         // the title offers the sections' menu too: where hidden sections come back from
-        let (hr, title) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
-        crate::widgets::announce(&title, crate::i18n::tr("My Photos"));
-        register(ui, "sidebarTitle", hr);
-        crate::widgets::context_menu(&title, |ui| sections_menu(app, ui, None));
-        // the open library's name under the title, so nobody edits in the wrong one (issue #902)
-        let library = crate::panels::settings::open_library_name(app);
-        let title_y = if library.is_some() { hr.center().y - 7.0 } else { hr.center().y };
-        ui.painter().text(pos2(hr.left() + 18.0, title_y), Align2::LEFT_CENTER, crate::i18n::tr("My Photos"), t.semibold(15.0), t.text);
-        if let Some(name) = library {
-            ui.painter().with_clip_rect(hr.shrink2(vec2(18.0, 0.0))).text(
-                pos2(hr.left() + 18.0, hr.center().y + 10.0),
-                Align2::LEFT_CENTER,
-                name,
-                t.font(11.0),
-                t.text_dim,
-            );
-            crate::widgets::register(ui, "label:libraryName", hr);
-            if let Some(l) = app.session.library.as_ref() {
-                title.on_hover_text(l.dir.display().to_string());
-            }
-        }
+        sidebar_title(app, ui);
         let counts = app.caches.counts(&app.session.catalog);
         let (total, picks, deleted) = (counts.total, counts.picks, counts.deleted);
         egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
@@ -75,44 +64,38 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // where the visible part of the content starts (screen y), for the pinned header
             let view_top = ui.cursor().top() + viewport.min.y;
             ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-view-top"), view_top));
-            // rows are as wide as the widest one needs (last frame), at least the panel
+            // rows are as wide as the deepest one asks (last frame), at least the panel; the sidebar
+            // scrolls sideways when that exceeds the panel
             let wide = viewport.width().max(content_width(ui.ctx()));
             ui.set_min_width(wide);
             ui.set_max_width(wide);
-            ui.data_mut(|d| {
-                d.insert_temp(egui::Id::unique("left-content-width-next"), 0.0f32);
-                d.insert_temp(egui::Id::unique("left-deepest-indent-next"), 0.0f32);
-                // where the visible part of the content ends (screen x), for what stays at the edge
-                d.insert_temp(egui::Id::unique("left-visible-right"), ui.cursor().left() + viewport.max.x);
-            });
+            // where the visible part of the content ends (screen x), for what stays at the edge
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-visible-right"), ui.cursor().left() + viewport.max.x));
             let src = app.session.source;
-            for (id, icon, label, count, s) in [
-                ("all", Icon::Photos, "All Photos", Some(total), LibrarySource::All),
-                ("recentlyAdded", Icon::Clock, "Recently Added", None, LibrarySource::RecentlyAdded),
-                ("picks", Icon::FlagPick, "Picks", Some(picks), LibrarySource::Picks),
-            ] {
-                if Row::new(id, icon, label).count(count).selected(src == s).show(app, ui).clicked() {
-                    let _ = app.run("library.source", json!({"kind": id}));
-                }
-            }
             // photos whose files can't be found (checked every few seconds, not every frame)
             let missing = missing_count(app, ui);
-            if (missing > 0 || src == LibrarySource::Missing)
-                && Row::new("missing", Icon::Folder, "Missing Photos")
-                    .count(Some(missing))
-                    .selected(src == LibrarySource::Missing)
-                    .show(app, ui)
-                    .clicked()
-            {
-                let _ = app.run("library.source", json!({"kind": "missing"}));
+            let mut sources = vec![
+                SideRow::new("all", "image", crate::i18n::tr("All Photos")).count(Some(total)),
+                SideRow::new("recentlyAdded", "clock", crate::i18n::tr("Recently Added")),
+                SideRow::new("picks", "flag", crate::i18n::tr("Picks")).count(Some(picks)),
+            ];
+            if missing > 0 || src == LibrarySource::Missing {
+                sources.push(SideRow::new("missing", "folder", crate::i18n::tr("Missing Photos")).count(Some(missing)));
             }
-            if Row::new("recentlyDeleted", Icon::Trash, "Recently Deleted")
-                .count(Some(deleted))
-                .selected(src == LibrarySource::RecentlyDeleted)
-                .show(app, ui)
-                .clicked()
-            {
-                let _ = app.run("library.source", json!({"kind": "recentlyDeleted"}));
+            sources.push(SideRow::new("recentlyDeleted", "trash", crate::i18n::tr("Recently Deleted")).count(Some(deleted)));
+            let chosen = match src {
+                LibrarySource::All => Some("all"),
+                LibrarySource::RecentlyAdded => Some("recentlyAdded"),
+                LibrarySource::Picks => Some("picks"),
+                LibrarySource::Missing => Some("missing"),
+                LibrarySource::RecentlyDeleted => Some("recentlyDeleted"),
+                _ => None,
+            };
+            let spec = SideSpec::new("sources", crate::i18n::tr("Library"), app.ui.show_counts).flat().selected(chosen);
+            for event in side_list(ui, spec, sources).events {
+                if let SideEvent::Activate(kind) = event {
+                    let _ = app.run("library.source", json!({"kind": kind}));
+                }
             }
             // the album just made: the folders down to it open, once (also when the section is shut)
             let reveal = app.ui.reveal_album.take();
@@ -165,12 +148,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let tree = app.caches.folder_tree(&app.session.catalog);
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
-                            folder_rows(app, ui, &tree, 0.0);
+                            folder_rows(app, ui, &tree);
                         })
                     }
                     SidebarSection::Keywords => {
                         let tree = app.caches.keyword_tree(&app.session.catalog);
-                        section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
+                        section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree))
                     }
                 };
                 placed.push(at);
@@ -180,19 +163,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.add_space(SECTION_GAP * 2.0);
             pinned_header(app, ui, &placed, view_top);
             section_drag(app, ui, &placed);
-            // what the rows asked for becomes next frame's width
-            let next = ui.data(|d| d.get_temp::<f32>(egui::Id::unique("left-content-width-next"))).unwrap_or(0.0);
-            if (next - content_width(ui.ctx())).abs() > 0.5 {
-                ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-content-width"), next));
-                ui.ctx().request_repaint();
-            }
-            // …and the deepest row drawn (or passed over out of sight) sets next frame's step
-            let deepest = ui.data(|d| d.get_temp::<f32>(egui::Id::unique("left-deepest-indent-next"))).unwrap_or(0.0);
-            let step = step_for(viewport.width(), deepest);
-            if step != indent_step(ui.ctx()) {
-                ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-indent-step"), step));
-                ui.ctx().request_repaint();
-            }
+            settle_layout(ui.ctx(), viewport.width());
+            // a drag the lists started this frame is adopted at once
+            sections::adopt_drags(app, ui);
         });
     });
 }

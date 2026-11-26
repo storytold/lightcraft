@@ -1,5 +1,7 @@
 use super::*;
 
+mod settings_keyboard_contract;
+
 #[test]
 fn desktop_clear_color_stays_opaque_with_a_modal_open() {
     let mut app = App(
@@ -305,8 +307,8 @@ fn docking_survives_native_settings_file_reload() {
     restored_app.ui = restored.unwrap();
     restored_app.run("ui.dock", serde_json::json!({"operation":"open", "panel":"tools"})).unwrap();
     assert_eq!(
-        restored_app.ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect,
-        [70.0, 80.0, 310.0, 500.0]
+        restored_app.ui.docking.as_ref().unwrap().layout().floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect,
+        egui::Rect::from_min_size(egui::pos2(70.0, 80.0), egui::vec2(310.0, 500.0))
     );
     std::fs::remove_dir_all(d).unwrap();
 }

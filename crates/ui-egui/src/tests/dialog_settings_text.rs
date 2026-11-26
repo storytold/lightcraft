@@ -144,3 +144,25 @@ fn using_the_edit_menu_does_not_save_a_half_typed_text() {
     key(&mut h, "Enter");
     assert_eq!(copyright(&mut h), json!("Example Name"));
 }
+
+#[test]
+fn settings_checkboxes_update_only_their_own_store() {
+    let mut h = demo();
+    let library_value = |h: &mut Headless| h.app.run("library.preferences", json!({})).unwrap()["import"]["perCamera"].as_bool().unwrap();
+    let original_library = library_value(&mut h);
+    let original_app = h.app.ui.settings.import_dropped_directly;
+    show(&mut h, "import");
+    click(&mut h, "check:settings.importDropped");
+    assert_eq!(h.app.ui.settings.import_dropped_directly, !original_app);
+    assert_eq!(library_value(&mut h), original_library);
+    click(&mut h, "check:settings.perCamera");
+    assert_eq!(library_value(&mut h), !original_library);
+    assert_eq!(h.app.ui.settings.import_dropped_directly, !original_app);
+    key(&mut h, "Escape");
+    assert!(h.app.ui.dialog.is_none());
+    show(&mut h, "import");
+    click(&mut h, "check:settings.perCamera");
+    click(&mut h, "check:settings.importDropped");
+    assert_eq!(library_value(&mut h), original_library);
+    assert_eq!(h.app.ui.settings.import_dropped_directly, original_app);
+}

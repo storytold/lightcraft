@@ -1,13 +1,14 @@
+use craft::ui::contract::{Props as _, Show as _};
 use serde_json::json;
 
+use super::controls::{self, button, choice, register};
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-use super::{Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Value, Vec2, pos2, register, vec2};
+use super::{Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Value, Vec2, pos2, vec2};
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
 
-/// Memory keys: where the photo grid ended and where the dialog's content (its buttons) ended, last
-/// frame. Their difference is the room the grid leaves below it.
+/// Memory keys: where the photo grid ended in a run, and the height the dialog's content (its buttons) took below it.
 const GRID_BOTTOM: &str = "import-grid-bottom";
 
 const CONTENT_BOTTOM: &str = "import-content-bottom";
@@ -46,8 +47,7 @@ fn thumb_size_slider(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         decimals: 0,
         track: Track::Plain,
     };
-    let out = crate::widgets::slider(ui, &SIZE, f64::from(thumb_size(app.ui.import_thumb_size)), true, None);
-    if let Some(size) = out.value {
+    if let Some(size) = controls::number(ui, &SIZE, f64::from(thumb_size(app.ui.import_thumb_size))) {
         let _ = app.run("view.importThumbSize", json!({"size": SIZE.clamp(size)}));
     }
 }
@@ -59,12 +59,57 @@ pub(crate) fn grid_height(available: f32, below: f32, row: f32) -> f32 {
     if h.is_finite() { h.max(row) } else { (DIALOG_SIZE[1] - DEFAULT_BELOW_GRID).max(row) }
 }
 
+/// Where the review dialog's body starts and the height it has to show, for the photo grid this frame.
+const BODY_ROOM: &str = "lc-import-body-room";
+
+/// Note the room the review dialog's body has (`room` points from where `ui` starts), for [`grid_height`].
+///
+/// Noted in every run of the body, measuring ones too: each run places the body elsewhere, and the grid reads where its
+/// own run's body starts.
+///
+/// A real run measures the room itself: the height of the body's visible part (its clip), which the dialog's own
+/// chrome and the window's size decide; `room` stands in until a real run has measured it. A measuring run uses the
+/// real run's room, so both size the grid alike. A room that changed asks for another frame.
+pub(crate) fn note_body_room(ui: &egui::Ui, room: f32) {
+    let measuring = controls::measuring(ui);
+    let top = ui.cursor().top();
+    let seen = egui::Id::unique((BODY_ROOM, "seen"));
+    let ctx = ui.ctx();
+    if !measuring {
+        let clip = ui.clip_rect();
+        let visible = (clip.bottom() - top.max(clip.top())).floor();
+        if visible.is_finite() && visible > 0.0 && ctx.data(|m| m.get_temp::<f32>(seen)).is_none_or(|kept| (kept - visible).abs() > 0.5) {
+            ctx.data_mut(|m| m.insert_temp(seen, visible));
+            ctx.request_repaint();
+        }
+    }
+    let room = ctx.data(|m| m.get_temp::<f32>(seen)).unwrap_or(room);
+    ctx.data_mut(|m| m.insert_temp(egui::Id::unique((BODY_ROOM, measuring)), (top, room)));
+}
+
 /// Remember where the review dialog's content ends this frame (after its buttons), for
 /// [`grid_height`] on the next.
+///
+/// Noted in the framework's measuring run too: the run that lays the body out for the view comes after it in the same
+/// pass, so the grid there leaves room for rows that appeared this pass (a Copy's destination) instead of a frame
+/// later, which moved everything below the grid between two frames.
+///
+/// What it keeps is the height below the grid, from a real run only: a measuring run stands in for a few rows with rows
+/// of another height and reserves the real body's height (`body`), so its bottom says nothing about the rows. Both
+/// kinds of run then size the grid alike. A height that changed asks for another frame, so the grid follows it before
+/// the review counts as settled.
 pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
-    if !ui.is_sizing_pass() {
-        let y = ui.min_rect().bottom();
-        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(CONTENT_BOTTOM), y));
+    if controls::measuring(ui) {
+        return;
+    }
+    let y = ui.min_rect().bottom();
+    let ctx = ui.ctx();
+    let Some(grid) = ctx.data(|m| m.get_temp::<f32>(egui::Id::unique((GRID_BOTTOM, false)))) else { return };
+    let below = y - grid;
+    let key = egui::Id::unique(CONTENT_BOTTOM);
+    if ctx.data(|m| m.get_temp::<f32>(key)).is_none_or(|kept| (kept - below).abs() > 0.5) {
+        ctx.data_mut(|m| m.insert_temp(key, below));
+        ctx.request_repaint();
     }
 }
 
@@ -98,6 +143,56 @@ pub(crate) fn scan_note(d: &ImportDialog) -> Option<String> {
 
 /// The dialog body: options, then the candidate grid.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+    // The height the body took in its last real run: a measuring run stands in for a few rows (the album picker, the
+    // source summary) with rows of another height, so it reserves at least that height, or the dialog would measure
+    // its body shorter than it lays out and the last rows of an opened recipe could not be scrolled to.
+    let real_height = egui::Id::unique("lc-import-body-height");
+    let top = ui.cursor().top();
+    if controls::measuring(ui) {
+        // Keep speculative disabled state on a child, never on the caller's real Ui.
+        ui.scope_builder(egui::UiBuilder::new().disabled(), |ui| body_inner(app, ui, &mut d.clone()));
+        let took = ui.min_rect().bottom() - top;
+        if let Some(height) = ui.ctx().data(|m| m.get_temp::<f32>(real_height)).filter(|height| *height > took) {
+            ui.allocate_space(vec2(0.0, height - took));
+        }
+    } else {
+        body_inner(app, ui, d);
+        let took = ui.min_rect().bottom() - top;
+        if ui.ctx().data(|m| m.get_temp::<f32>(real_height)).is_none_or(|height| (height - took).abs() > 0.5) {
+            ui.ctx().data_mut(|m| m.insert_temp(real_height, took));
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
+/// The import review's preset choices: None (""), then the presets under their group headings. Kept until the presets
+/// or the language change, since a library can hold thousands of presets.
+fn preset_entries(app: &LightcraftApp, ui: &egui::Ui) -> std::sync::Arc<Vec<craft::ui::contract::Entry<String>>> {
+    use craft::ui::contract::Entry;
+    use std::sync::Arc;
+    type Cached = (u64, crate::i18n::Locale, Arc<Vec<Entry<String>>>);
+    let generation = app.session.presets.generation();
+    let language = crate::i18n::language();
+    let cache = egui::Id::unique("import-preset-entries");
+    if let Some((_, _, entries)) = ui.data(|data| data.get_temp::<Cached>(cache)).filter(|(old, locale, _)| *old == generation && *locale == language)
+    {
+        return entries;
+    }
+    let mut entries = vec![Entry::new(String::new(), crate::i18n::tr("None").to_owned())];
+    let mut group = None;
+    for preset in app.session.presets.iter() {
+        if group != Some(preset.group.as_str()) {
+            group = Some(preset.group.as_str());
+            entries.push(Entry::heading(crate::i18n::builtin_label(&preset.group, preset.builtin).to_owned()));
+        }
+        entries.push(Entry::new(preset.id.clone(), crate::i18n::builtin_label(&preset.name, preset.builtin).to_owned()));
+    }
+    let entries = Arc::new(entries);
+    ui.data_mut(|data| data.insert_temp(cache, (generation, language, Arc::clone(&entries))));
+    entries
+}
+
+fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
     let n = d.candidates.len();
     let (dups, in_source, trashed) = dup_counts(d);
@@ -115,10 +210,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {trashed} in Recently Deleted", trashed = trashed)).color(t.text_dim));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::text_button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
+            if button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
                 d.checked.iter_mut().for_each(|c| *c = false);
             }
-            if crate::widgets::text_button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
+            if button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
                 for i in 0..n {
                     d.checked[i] = d.checked_by_default(i);
                 }
@@ -137,8 +232,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ui.label(egui::RichText::new(crate::i18n::tr("File types:")).color(t.text_dim));
             for (ty, count) in &types {
                 let on = d.type_checked(ty);
-                let r = crate::widgets::text_button(ui, &format!("importType:{ty}"), &format!("{ty} · {count}"), on)
-                    .on_hover_text(crate::i18n::tr(if on { "Uncheck the files of this type" } else { "Check the files of this type" }));
+                let r = button(ui, &format!("importType:{ty}"), &format!("{ty} · {count}"), on).on_hover_text(crate::i18n::tr(if on {
+                    "Uncheck the files of this type"
+                } else {
+                    "Check the files of this type"
+                }));
                 if r.clicked() {
                     d.check_type(ty, !on);
                 }
@@ -153,11 +251,17 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let rows = n.div_ceil(cols);
     // as tall as the window leaves after the options and buttons below it (measured last frame),
     // so resizing the dialog resizes the grid
-    let below = ui.ctx().data(|m| {
-        let y = |key: &str| m.get_temp::<f32>(egui::Id::unique(key));
-        y(CONTENT_BOTTOM).zip(y(GRID_BOTTOM)).map(|(content, grid)| content - grid)
-    });
-    let grid_h = grid_height(ui.available_height(), below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
+    let below = ui.ctx().data(|m| m.get_temp::<f32>(egui::Id::unique(CONTENT_BOTTOM)));
+    // the room left in the dialog's body below this point ([`note_body_room`]), else what the ui has
+    let room = ui
+        .ctx()
+        .data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique((BODY_ROOM, controls::measuring(ui)))))
+        .map(|(top, room)| top + room - ui.cursor().top());
+    // (the room alone: a measuring run's ui may offer less height than the real run's, and the grid must be as tall
+    // in both, or the body measures shorter than it lays out and its last rows can't be scrolled to)
+    // (less one row gap: the body's content counts the gap after its last row, and a body a gap too tall scrolls)
+    let available = room.map_or_else(|| ui.available_height(), |room| room - ui.spacing().item_spacing.y);
+    let grid_h = grid_height(available, below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
     let mut visible = std::collections::HashSet::new();
     let grid =
         egui::ScrollArea::vertical().id_salt("import-grid").max_height(grid_h).auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
@@ -174,21 +278,26 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 candidate_cell(app, ui, d, i, rect);
             }
         });
-    if !ui.is_sizing_pass() {
+    if !controls::measuring(ui) {
         app.renderer.retain_imports(&visible);
-        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(GRID_BOTTOM), grid.inner_rect.bottom()));
     }
+    // (in a measuring run too: see `note_dialog_bottom`)
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique((GRID_BOTTOM, controls::measuring(ui))), grid.inner_rect.bottom()));
     ui.add_space(4.0);
     // options
     if !d.sources.is_empty() {
         field(ui, "Source", |ui| {
             // (whether each source is a folder is checked off the UI thread, once)
             let joined = d.sources.join("\n");
-            let summary = crate::panels::left::fs_cached(ui, "import-source", &joined, f64::INFINITY, |s| {
-                inspect_sources(&s.split('\n').map(str::to_string).collect::<Vec<_>>())
-            })
-            .map(|summary| summary.display())
-            .unwrap_or_else(|| crate::i18n::tr_format!("{} item{}", d.sources.len(), if d.sources.len() == 1 { "" } else { "s" }));
+            let summary = (!controls::measuring(ui))
+                .then(|| {
+                    crate::panels::left::fs_cached(ui, "import-source", &joined, f64::INFINITY, |s| {
+                        inspect_sources(&s.split('\n').map(str::to_string).collect::<Vec<_>>())
+                    })
+                })
+                .flatten()
+                .map(|summary| summary.display())
+                .unwrap_or_else(|| crate::i18n::tr_format!("{} item{}", d.sources.len(), if d.sources.len() == 1 { "" } else { "s" }));
             let r = ui.label(egui::RichText::new(summary).color(t.text_label)).on_hover_text(joined);
             register(ui, "label:importSource", r.rect);
         });
@@ -200,7 +309,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     }
     field(ui, "Transfer", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if crate::widgets::text_button(ui, "importAdd", crate::i18n::tr("Add in place"), !d.copy)
+        if choice(ui, "importAdd", crate::i18n::tr("Add in place"), !d.copy)
             .on_hover_text(crate::i18n::tr("Reference the files where they are"))
             .clicked()
         {
@@ -208,14 +317,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             d.move_files = false;
         }
         let can_copy = app.session.library.as_ref().is_some_and(|l| l.on_disk) || app.services.pick_folder.is_some();
-        let r =
-            ui.add_enabled_ui(can_copy, |ui| crate::widgets::text_button(ui, "importCopy", crate::i18n::tr("Copy"), d.copy && !d.move_files)).inner;
+        let r = ui.add_enabled_ui(can_copy, |ui| choice(ui, "importCopy", crate::i18n::tr("Copy"), d.copy && !d.move_files)).inner;
         if r.on_hover_text(crate::i18n::tr("Copy the files (into the library's Originals/, or a folder you choose)")).clicked() {
             d.copy = true;
             d.move_files = false;
         }
-        let r =
-            ui.add_enabled_ui(can_copy, |ui| crate::widgets::text_button(ui, "importMove", crate::i18n::tr("Move"), d.copy && d.move_files)).inner;
+        let r = ui.add_enabled_ui(can_copy, |ui| choice(ui, "importMove", crate::i18n::tr("Move"), d.copy && d.move_files)).inner;
         if r.on_hover_text(crate::i18n::tr("Move the files (into the library's Originals/, or a folder you choose), removing them from the source"))
             .clicked()
         {
@@ -243,12 +350,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             let shown = if d.destination.trim().is_empty() { crate::i18n::tr("Library Originals").to_string() } else { d.destination.clone() };
             ui.label(egui::RichText::new(shown).color(Tokens::get(ui.ctx()).text_label));
             if app.services.pick_folder.is_some()
-                && crate::widgets::text_button(ui, "importDest", crate::i18n::tr("Choose…"), false).clicked()
+                && button(ui, "importDest", crate::i18n::tr("Choose…"), false).clicked()
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
             {
                 d.destination = f;
             }
-            if !d.destination.is_empty() && crate::widgets::text_button(ui, "importDestReset", crate::i18n::tr("Library"), false).clicked() {
+            if !d.destination.is_empty() && button(ui, "importDestReset", crate::i18n::tr("Library"), false).clicked() {
                 d.destination.clear();
             }
         });
@@ -260,33 +367,23 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 ("custom", "Custom template…"),
             ];
             let key = if d.organize.is_empty() { "date".to_string() } else { d.organize.clone() };
-            let cur = opts.iter().find(|o| o.0 == key).map_or(opts[0].1, |o| o.1);
-            let combo = crate::widgets::combo_box("import-organize").selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (k, label) in opts {
-                    let r = ui.selectable_label(key == k, crate::i18n::tr(label));
-                    register(ui, format!("button:importOrganize-{k}"), r.rect);
-                    if r.clicked() {
-                        d.organize = k.to_string();
-                        if k == "custom" && d.folder_template.trim().is_empty() {
-                            d.folder_template = DEFAULT_FOLDER_TEMPLATE.into();
-                        }
-                    }
+            if let Some(key) = controls::select(ui, "importOrganize", "Organize into", &key, &opts, true) {
+                d.organize = key;
+                if d.organize == "custom" && d.folder_template.trim().is_empty() {
+                    d.folder_template = DEFAULT_FOLDER_TEMPLATE.into();
                 }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Organize into"));
-            register(ui, "combo:importOrganize", combo.response.rect);
+            }
         });
         if d.organize == "custom" {
             let folders_id = egui::Id::unique("import-folder-template");
             let tags_open = field(ui, "Template", |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let w = tag_field_width(ui);
-                let r = ui.add(egui::TextEdit::singleline(&mut d.folder_template).id(folders_id).hint_text(DEFAULT_FOLDER_TEMPLATE).desired_width(w));
-                register(ui, "field:importFolderTemplate", r.rect);
-                tag_toggle(ui, "importFolders")
+                native_template(ui, "field:importFolderTemplate", &mut d.folder_template, folders_id, DEFAULT_FOLDER_TEMPLATE, w);
+                native_tags(ui, "importFolders")
             });
             if tags_open {
-                tag_help(ui, "importFolders", &mut d.folder_template, folders_id);
+                native_tag_help(ui, "importFolders", &mut d.folder_template, folders_id);
             }
             let t = Tokens::get(ui.ctx());
             match lightcraft_engine::rename::folder_template_error(&d.folder_template) {
@@ -305,25 +402,18 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
         }
         if !d.move_files {
             field(ui, "Raw files", |ui| {
-                let r = ui.checkbox(&mut d.dng, crate::i18n::tr("Copy as DNG"));
-                register(ui, "check:importDng", r.rect);
+                controls::check(ui, "check:importDng", "Copy as DNG", &mut d.dng);
             });
         }
         let rename_id = egui::Id::unique("import-rename");
         let tags_open = field(ui, "Rename", |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let w = tag_field_width(ui);
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut d.rename)
-                    .id(rename_id)
-                    .hint_text(crate::i18n::tr("keep names — or e.g. {date}_{seq:3}"))
-                    .desired_width(w),
-            );
-            register(ui, "field:importRename", r.rect);
-            tag_toggle(ui, "importRename")
+            native_template(ui, "field:importRename", &mut d.rename, rename_id, crate::i18n::tr("keep names — or e.g. {date}_{seq:3}"), w);
+            native_tags(ui, "importRename")
         });
         if tags_open {
-            tag_help(ui, "importRename", &mut d.rename, rename_id);
+            native_tag_help(ui, "importRename", &mut d.rename, rename_id);
         }
         unknown_tags_warning(ui, &d.rename);
         if let Some(example) = example_destination(app, d) {
@@ -339,22 +429,15 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     }
     if d.trashed.iter().any(|t| *t) {
         field(ui, "In Recently Deleted", |ui| {
-            let cur = match d.on_deleted.as_str() {
-                "restore" => "Restore them",
-                "fresh" => "Import as new",
-                _ => "Leave them",
-            };
-            let mut pick = None;
-            let combo = crate::widgets::combo_box("import-on-deleted").selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (v, label) in [("restore", "Restore them"), ("fresh", "Import as new"), ("", "Leave them")] {
-                    if ui.selectable_label(d.on_deleted == v, crate::i18n::tr(label)).clicked() {
-                        pick = Some(v);
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Recently deleted files"));
-            if let Some(v) = pick {
-                d.set_on_deleted(v);
+            if let Some(value) = controls::select(
+                ui,
+                "importOnDeleted",
+                "Recently deleted files",
+                &d.on_deleted,
+                &[("restore", "Restore them"), ("fresh", "Import as new"), ("", "Leave them")],
+                true,
+            ) {
+                d.set_on_deleted(&value);
             }
             let t = Tokens::get(ui.ctx());
             ui.label(
@@ -370,6 +453,14 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     d.album = d.album.filter(|id| albums.iter().any(|a| a.id == *id && !a.folder));
     field(ui, "Album", |ui| {
         ui.vertical(|ui| {
+            if controls::measuring(ui) {
+                // The retained native picker must not register its real widget or mutate focus.
+                ui.allocate_exact_size(vec2(ui.available_width(), ui.spacing().interact_size.y), Sense::hover());
+                if d.album.is_none() && !d.new_album.is_empty() {
+                    controls::text(ui, "field:importAlbumName", "New album", &mut d.new_album, "", f32::INFINITY);
+                }
+                return;
+            }
             let mut chosen = d.album;
             let mut extra = None;
             let empty = crate::i18n::tr(if d.new_album.is_empty() { "None" } else { "New album" });
@@ -377,17 +468,24 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 .width(ui.available_width())
                 .empty_text(empty)
                 .show_with_choices(ui, |ui| {
-                    let none = ui.selectable_label(d.album.is_none() && d.new_album.is_empty(), crate::i18n::tr("None"));
-                    register(ui, "importAlbum:none", none.rect);
-                    if none.clicked() {
-                        extra = Some(false);
+                    // The picker's own choices before its albums: framework rows, the current one selected.
+                    for (name, label, new, current) in [
+                        ("importAlbum:none", "None", false, d.album.is_none() && d.new_album.is_empty()),
+                        ("importAlbum:new", "New album…", true, d.album.is_none() && !d.new_album.is_empty()),
+                    ] {
+                        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), Sense::hover());
+                        let row = craft::ui::buttons::Button::new(crate::i18n::tr(label).to_owned())
+                            .id_salt(("import-album-choice", name))
+                            .variant(craft::theme::Variant::GHOST)
+                            .align(craft::ui::primitives::HAlign::Start)
+                            .selected(current)
+                            .show_at(ui, rect);
+                        crate::widgets::register_response(name, rect, &row.response);
+                        if row.clicked() {
+                            extra = Some(new);
+                        }
                     }
-                    let new = ui.selectable_label(d.album.is_none() && !d.new_album.is_empty(), crate::i18n::tr("New album…"));
-                    register(ui, "importAlbum:new", new.rect);
-                    if new.clicked() {
-                        extra = Some(true);
-                    }
-                    ui.separator();
+                    craft::ui::display::Divider::horizontal().show(ui);
                     extra.is_some()
                 });
             if response.changed() {
@@ -403,51 +501,69 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 }
             }
             if d.album.is_none() && !d.new_album.is_empty() {
-                let r = ui.add(egui::TextEdit::singleline(&mut d.new_album).desired_width(f32::INFINITY));
-                register(ui, "field:importAlbumName", r.rect);
+                controls::text(ui, "field:importAlbumName", "New album", &mut d.new_album, "", f32::INFINITY);
             }
         });
     });
     field(ui, "Preset", |ui| {
-        let cur = app
-            .session
-            .presets
-            .iter()
-            .find(|p| p.id == d.preset)
-            .map(|p| crate::i18n::builtin_label(&p.name, p.builtin).to_string())
-            .unwrap_or_else(|| crate::i18n::tr("None").into());
-        let combo = crate::widgets::combo_box("import-preset").selected_text(cur).height(300.0).show_ui(ui, |ui| {
-            if ui.selectable_label(d.preset.is_empty(), crate::i18n::tr("None")).clicked() {
-                d.preset.clear();
-            }
-            let selected = (!d.preset.is_empty()).then_some(d.preset.as_str());
-            if let Some(pid) = crate::panels::presets::picker_rows(ui, "import-preset", &app.session.presets, selected) {
-                d.preset = pid;
-            }
-        });
-        crate::widgets::name_combo(&combo.response, crate::i18n::tr("Preset"));
+        // "" is no preset; a preset that has gone shows as None until another is chosen
+        let entries = preset_entries(app, ui);
+        if let Some(pid) = crate::widgets::select(
+            ui,
+            "combo:importPreset",
+            crate::i18n::tr("Preset"),
+            d.preset.clone(),
+            entries.as_slice(),
+            Some(crate::i18n::tr("None").to_owned()),
+            None,
+        ) {
+            d.preset = pid;
+        }
     });
     if !app.session.metadata_presets.is_empty() {
         field(ui, "Metadata", |ui| {
-            let cur = if d.metadata_preset.is_empty() { crate::i18n::tr("None").to_string() } else { d.metadata_preset.clone() };
-            let combo = crate::widgets::combo_box("import-metadata").selected_text(cur).show_ui(ui, |ui| {
-                if ui.selectable_label(d.metadata_preset.is_empty(), crate::i18n::tr("None")).clicked() {
-                    d.metadata_preset.clear();
-                }
-                for m in &app.session.metadata_presets {
-                    if ui.selectable_label(d.metadata_preset == m.name, &m.name).clicked() {
-                        d.metadata_preset = m.name.clone();
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Metadata preset"));
+            let mut options = vec![("", crate::i18n::tr("None"))];
+            options.extend(app.session.metadata_presets.iter().map(|m| (m.name.as_str(), m.name.as_str())));
+            if let Some(value) = controls::select(ui, "importMetadata", "Metadata preset", &d.metadata_preset, &options, false) {
+                d.metadata_preset = value;
+            }
         });
     }
     field(ui, "Keywords", |ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut d.keywords).hint_text(crate::i18n::tr("comma, separated")).desired_width(f32::INFINITY));
-        register(ui, "field:importKeywords", r.rect);
+        controls::text(ui, "field:importKeywords", "Keywords", &mut d.keywords, "comma, separated", f32::INFINITY);
     });
     recipe_section(app, ui, d);
+}
+
+/// The remaining caret-aware native editors are never mounted by speculative layout.
+fn native_template(ui: &mut egui::Ui, key: &str, value: &mut String, id: egui::Id, hint: &str, width: f32) {
+    if controls::measuring(ui) {
+        ui.allocate_exact_size(vec2(width, ui.spacing().interact_size.y), Sense::hover());
+    } else {
+        super::tags::template_field(ui, key, crate::i18n::tr("Template"), value, id, hint, width);
+    }
+}
+
+fn native_tags(ui: &mut egui::Ui, key: &str) -> bool {
+    if controls::measuring(ui) {
+        ui.allocate_exact_size(vec2(crate::widgets::text_button_size(ui, "Tags"), 24.0), Sense::hover());
+        ui.ctx().data(|data| data.get_temp::<bool>(egui::Id::unique((key, "tags-open")))).unwrap_or(false)
+    } else {
+        tag_toggle(ui, key)
+    }
+}
+
+fn native_tag_help(ui: &mut egui::Ui, key: &str, text: &mut String, id: egui::Id) {
+    let height_key = egui::Id::unique((key, "native-help-height"));
+    if controls::measuring(ui) {
+        // Reuse the last visible height. A first speculative pass reserves the bounded scroll
+        // section plus its explanatory line and frame; it never mounts native tag buttons.
+        let height = ui.ctx().data(|data| data.get_temp::<f32>(height_key)).unwrap_or(212.0);
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    } else {
+        let shown = ui.scope(|ui| tag_help(ui, key, text, id));
+        ui.ctx().data_mut(|data| data.insert_temp(height_key, shown.response.rect.height()));
+    }
 }
 
 /// The develop controls offered in the import review's optional batch-edit recipe: the everyday
@@ -495,14 +611,16 @@ fn recipe_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     let mut open = ui.ctx().data(|m| m.get_temp::<bool>(open_id)).unwrap_or(false);
     field(ui, "Batch edits", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if crate::widgets::text_button(ui, "importRecipeToggle", if open { "Hide adjustments" } else { "Adjust…" }, open).clicked() {
+        if choice(ui, "importRecipeToggle", if open { "Hide adjustments" } else { "Adjust…" }, open).clicked() {
             open = !open;
         }
         let n = d.recipe.len();
         let summary = if n == 0 { crate::i18n::tr("None").to_string() } else { crate::i18n::tr_format!("Adjustments: {n}", n = n) };
         ui.label(egui::RichText::new(summary).color(if n == 0 { t.text_dim } else { t.text_label }));
     });
-    ui.ctx().data_mut(|m| m.insert_temp(open_id, open));
+    if !controls::measuring(ui) {
+        ui.ctx().data_mut(|m| m.insert_temp(open_id, open));
+    }
     if !open {
         return;
     }
@@ -516,19 +634,15 @@ fn recipe_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     for &id in RECIPE_CONTROLS {
         let Some(spec) = lightcraft_develop::controls::find(id) else { continue };
         let v = d.recipe.get(id).copied().unwrap_or(spec.default);
-        if let Some(nv) = crate::widgets::slider(ui, spec, v, true, None).value {
+        if let Some(nv) = controls::number(ui, spec, v) {
             note_recipe_value(&mut d.recipe, spec, nv);
         }
     }
     field(ui, "Recipe", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        crate::text_field::TextField::singleline("field:importRecipeName", &mut d.recipe_name)
-            .hint(crate::i18n::tr("name for a saved preset"))
-            .width(160.0)
-            .show(ui);
+        controls::text(ui, "field:importRecipeName", "Recipe name", &mut d.recipe_name, "name for a saved preset", 160.0);
         let can = !d.recipe.is_empty() && !d.recipe_name.trim().is_empty();
-        let b = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Save as Preset")));
-        register(ui, "button:importRecipeSave", b.rect);
+        let b = ui.add_enabled_ui(can, |ui| button(ui, "importRecipeSave", "Save as Preset", false)).inner;
         if b.clicked() {
             let params = json!({"name": d.recipe_name.trim(), "recipe": recipe_items(&d.recipe)});
             match app.run("preset.saveRecipe", params) {
@@ -549,15 +663,36 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     let Ok(slot_index) = u32::try_from(i) else { return };
     let ok = d.importable(i);
     let img = Rect::from_min_size(rect.min, vec2(rect.width(), rect.width()));
-    let resp = ui.interact(img, egui::Id::unique(("import-cell", i)), Sense::click());
-    crate::widgets::announce(&resp, c.name.clone());
-    register(ui, format!("import:{i}"), img);
+    let tip = format!(
+        "{}\n{} × {} · {} · {:.1} MB{}",
+        c.path,
+        c.width,
+        c.height,
+        c.format,
+        c.file_size as f64 / 1e6,
+        c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
+    );
+    let on = d.checked.get(i).copied().unwrap_or(false) && ok;
+    // The cell is host-painted; the framework senses it (click, tooltip, its accessible node), no Tab stop as before;
+    // none in speculative layout.
+    let clicked = (!controls::measuring(ui)).then(|| {
+        let out = crate::panels::detail::host::target(
+            ui,
+            ("import-cell", i),
+            img,
+            crate::panels::detail::host::Target::new(c.name.clone()).tooltip(tip).selected(on).pointer_only(),
+        );
+        crate::widgets::register_response(format!("import:{i}"), img, &out.response);
+        out.clicked()
+    });
     let p = ui.painter();
     p.rect_filled(img, 3.0, t.skeleton);
     // thumbnail (background job; the grid only asks for the cells in view)
     let slot = Slot::Import(slot_index);
     let edge = thumb_edge(img.width(), ui.ctx().pixels_per_point());
-    app.renderer.import_preview(&mut app.session, &c, slot_index, edge);
+    if !controls::measuring(ui) {
+        app.renderer.import_preview(&mut app.session, &c, slot_index, edge);
+    }
     if let Some(tex) = app.renderer.textures.get(&slot) {
         let [tw, th] = tex.size;
         let s = ((img.width() - 8.0) / tw as f32).min((img.height() - 8.0) / th as f32);
@@ -565,7 +700,6 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         let tint = if ok { Color32::WHITE } else { Color32::from_gray(110) };
         p.image(tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     }
-    let on = d.checked.get(i).copied().unwrap_or(false) && ok;
     if on {
         p.rect_stroke(img, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
@@ -601,17 +735,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     name.wrap.max_rows = 1;
     let name = p.layout_job(name);
     p.galley(pos2(rect.left() + 2.0, img.bottom() + 2.0), name, color);
-    let tip = format!(
-        "{}\n{} × {} · {} · {:.1} MB{}",
-        c.path,
-        c.width,
-        c.height,
-        c.format,
-        c.file_size as f64 / 1e6,
-        c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
-    );
-    let resp = resp.on_hover_text(tip);
-    if resp.clicked() && ok {
+    if clicked == Some(true) && ok {
         let shift = ui.input(|input| input.modifiers.shift);
         d.click(i, shift);
     }
@@ -718,3 +842,7 @@ fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R
     })
     .inner
 }
+
+#[cfg(test)]
+#[path = "recipe_controls_flow_tests.rs"]
+mod recipe_controls_flow_tests;

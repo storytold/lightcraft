@@ -2,16 +2,23 @@
 //! keyword of the library, those without photos too, as a tree with photo counts. A tick box per
 //! keyword gives it to the selected photos or takes it away; the arrow shows the photos with it.
 
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::primitives::IconSpec;
+use craft::ui::text::TextField;
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::keywords::{KeywordInfo, KeywordNode, same};
 use lightcraft_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
 use crate::LightcraftApp;
-use crate::icons::{Icon, paint};
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::widgets::register;
+
+mod controls;
+use controls::Face;
 
 /// Rows are this tall; each level is indented this much.
 const ROW_H: f32 = 24.0;
@@ -22,7 +29,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     crate::widgets::divider(ui);
     // the title, where a dragged keyword goes back to the top level
-    let (title, title_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+    let (_, title) = ui.allocate_space(vec2(ui.available_width(), 46.0));
+    // (the framework target is the title's pointer and keyboard sensing; the fold title paints over it)
+    let title_resp = crate::panels::detail::host::target(
+        ui,
+        "keyword-list-title",
+        title,
+        crate::panels::detail::host::Target::new(crate::i18n::tr("Keyword List")),
+    )
+    .response;
     register(ui, "keywordList:topLevel", title);
     let dragging = app.ui.dragging_keyword.clone();
     let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
@@ -46,20 +61,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.add_space(24.0);
-        crate::text_field::TextField::singleline("field:keywordFilter", &mut filter)
-            .hint(crate::i18n::tr("Filter Keywords"))
-            .width(ui.available_width() - 82.0)
-            .show(ui);
-        // + creates a keyword (inside the picked one), − deletes the picked one
-        let plus = ui.button("+").on_hover_text(crate::i18n::tr("Create Keyword Tag"));
-        register(ui, "keywordList:create", plus.rect);
-        if plus.clicked() {
+        // The field and its real neighboring actions share the SDK's focus ownership.
+        // Porting the filter alone strands Tab in the SDK before the native +.
+        let width = ui.available_width() - 82.0;
+        live_filter(ui, &mut filter, width);
+        // + creates a keyword (inside the picked one), − deletes the picked one.
+        if header_action(ui, "keywordList:create", "+", "Create Keyword Tag", true) {
             app.ui.dialog = Some(create_dialog(app));
         }
         let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
-        let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
-        register(ui, "keywordList:delete", minus.rect);
-        if minus.clicked()
+        if header_action(ui, "keywordList:delete", "−", "Delete Keyword", picked.is_some())
             && let Some(k) = picked
         {
             app.ui.dialog = Some(delete_dialog(app, &k));
@@ -83,6 +94,89 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         row(app, ui, r, &selection, &ticks, filter.trim().is_empty());
     }
     ui.add_space(12.0);
+}
+
+/// Only caller visibility lifetime is remembered here. The SDK owns editing, selection,
+/// clipboard, IME and traversal; the filter is still the caller's temporary UI value.
+#[derive(Clone, Default)]
+struct FilterLifetime {
+    pass: Option<u64>,
+    epoch: u64,
+}
+
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+fn live_filter(ui: &mut egui::Ui, filter: &mut String, width: f32) {
+    const WIDGET: &str = "field:keywordFilter";
+    let key = crate::text_field::id(WIDGET).with("sdk-live-filter");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let mut lifetime: FilterLifetime = ui.data(|data| data.get_temp(key)).unwrap_or_default();
+    // As on the native path, a hidden panel keeps its filter, not an abandoned edit.
+    if lifetime.pass.is_some_and(|last| last != pass && last.checked_add(1) != Some(pass)) {
+        lifetime.epoch = lifetime.epoch.wrapping_add(1);
+    }
+    let field = key.with(lifetime.epoch);
+    let width = width.min(ui.available_width()).max(1.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    let label = crate::i18n::tr("Filter Keywords");
+    let enabled = ui.is_enabled();
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, field.with("inspect"), |ui| {
+        TextField::new(label, Bind::bound(filter)).id(field).enabled(enabled).placeholder(label).limit(None).submits().show_at(ui, rect)
+    });
+    if measuring(ui) {
+        return;
+    }
+    // Name the SDK's actual menu hit owners, never hover-only stand-ins over a popup.
+    if let Some(record) = record.as_deref() {
+        for element in &record.elements {
+            if element.component != "MenuItem" {
+                continue;
+            }
+            let name = element.facts.as_ref().and_then(|facts| facts.name.as_deref());
+            let action = [("Cut", "cut"), ("Copy", "copy"), ("Paste", "paste"), ("Select All", "selectAll")]
+                .into_iter()
+                .find(|(label, _)| name == Some(crate::i18n::tr(label)));
+            if let Some((_, action)) = action
+                && let Some(response) = ui.ctx().read_response(element.id)
+            {
+                crate::widgets::register_response(format!("{WIDGET}:{action}"), response.rect, &response);
+            }
+        }
+    }
+    if shown.response.interact_rect.is_positive() {
+        crate::widgets::register_response(WIDGET, rect, &shown.response);
+    } else {
+        crate::widgets::register_geometry(ui.ctx(), WIDGET, rect);
+    }
+    // SDK Enter commits but stays focused; the caller's single-line field ends editing.
+    if (shown.submitted || shown.escaped)
+        && let Some(focused) = craft::ui::runtime::focus::focused_rec(ui.ctx()).filter(|rec| rec.stop.id == field)
+    {
+        ui.memory_mut(|memory| memory.surrender_focus(focused.stop.root));
+    }
+    lifetime.pass = Some(pass);
+    ui.data_mut(|data| data.insert_temp(key, lifetime));
+}
+
+/// A genuine SDK button: keyboard and pointer activation take the same caller action.
+fn header_action(ui: &mut egui::Ui, widget: &str, face: &'static str, label: &'static str, enabled: bool) -> bool {
+    let (rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+    // (the glyph is LightCraft's own + or −: a text face does not fit the 24-point button and is cut to dots)
+    let icon = if face == "+" { crate::icons::Icon::Plus } else { crate::icons::Icon::Minus };
+    let glyph = crate::panels::detail::host::IconGlyph(icon);
+    let shown = IconButton::new(IconSpec::glyph(&glyph))
+        .id(egui::Id::unique(widget))
+        .label(crate::i18n::tr(label).to_owned())
+        .enabled(enabled && ui.is_enabled())
+        .show_at(ui, rect);
+    if measuring(ui) {
+        return false;
+    }
+    crate::widgets::register_response(widget, rect, &shown.response);
+    let _ = shown.response.clone().on_hover_text(crate::i18n::tr(label));
+    shown.clicked()
 }
 
 /// After the keyword `from` became `to` (renamed, moved or merged), the list's pick and open
@@ -168,32 +262,36 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
-    crate::widgets::announce(&resp, r.path.clone());
-    register(ui, format!("keywordRow:{}", r.path), rect);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+    let picked = app.ui.keyword_list_selected.as_deref().is_some_and(|k| same(k, &r.path));
+    let resp = controls::show(ui, &format!("keywordRow:{}", r.path), rect, Face::Row { selected: picked }, r.path.clone(), true);
+    if measuring(ui) {
+        return;
+    }
     if resp.drag_started() {
         app.ui.dragging_keyword = Some(r.path.clone());
     }
-    drop_target(app, ui, rect, &r.path);
-    let picked = app.ui.keyword_list_selected.as_deref().is_some_and(|k| same(k, &r.path));
-    let inner = Rect::from_min_max(rect.min + vec2(16.0, 0.0), rect.max - vec2(16.0, 0.0));
-    if picked {
-        ui.painter().rect_filled(inner, 4.0, t.canvas);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
+    // SDK consumes Escape when it cancels its captured row press. Retire this caller's
+    // drag from the genuine owner's cancellation, not by rereading a consumed key.
+    if resp.cancelled && app.ui.dragging_keyword.as_deref().is_some_and(|path| same(path, &r.path)) {
+        app.ui.dragging_keyword = None;
     }
+    drop_target(app, ui, rect, &r.path);
+    let inner = Rect::from_min_max(rect.min + vec2(16.0, 0.0), rect.max - vec2(16.0, 0.0));
     let x = inner.left() + 4.0 + r.depth as f32 * INDENT;
     let cy = rect.center().y;
     // the triangle
     if r.has_children {
         let c = pos2(x + 6.0, cy);
         let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
-        let tr = ui.interact(tri, egui::Id::unique(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
-        crate::widgets::announce(&tr, super::left::disclosure_name(r.open, &r.name));
-        register(ui, format!("keywordRowToggle:{}", r.path), tri);
-        // while a filter opens the levels the triangle does nothing: it doesn't light up either
-        let lit = tr.hovered() && can_fold;
-        paint(ui.painter(), tri, if r.open { Icon::ChevronDown } else { Icon::ChevronRight }, if lit { t.text } else { t.text_dim });
+        let tr = controls::show(
+            ui,
+            &format!("keywordRowToggle:{}", r.path),
+            tri,
+            Face::Disclosure { open: r.open, can_fold },
+            super::left::disclosure_name(r.open, &r.name),
+            true,
+        );
         if tr.clicked() && can_fold {
             let key = r.path.to_lowercase();
             if r.open {
@@ -208,34 +306,22 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let inside = ticks.inside(&r.path);
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
     let on = !selection.is_empty();
-    // (it senses drags too, so a press there that moves doesn't pick the keyword up)
-    let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
-    let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
-    crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
-    register(ui, format!("keywordCheck:{}", r.path), boxr);
-    let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
-    match state {
-        Tick::All => {
-            ui.painter().rect_filled(boxr, 2.0, t.accent);
-            let pts = vec![boxr.left_center() + vec2(2.5, 0.0), boxr.center_bottom() + vec2(-1.0, -3.0), boxr.right_top() + vec2(-2.5, 3.0)];
-            ui.painter().add(egui::Shape::line(pts, Stroke::new(1.6, Color32::WHITE)));
-        }
-        Tick::Some => {
-            ui.painter().rect_stroke(boxr, 2.0, Stroke::new(1.0, edge), StrokeKind::Inside);
-            ui.painter().line_segment([boxr.left_center() + vec2(3.0, 0.0), boxr.right_center() - vec2(3.0, 0.0)], Stroke::new(1.6, t.text));
-        }
-        Tick::No => {
-            ui.painter().rect_stroke(boxr, 2.0, Stroke::new(1.0, edge), StrokeKind::Inside);
-            // the selection has a keyword inside this one: a dot in the empty box, so a folded
-            // keyword shows that it holds something applied (a shape of its own beside the tick
-            // and the dash, which are about the keyword itself)
-            if !inside.is_empty() {
-                let dot = Rect::from_center_size(boxr.center(), vec2(5.0, 5.0));
-                ui.painter().circle_filled(dot.center(), 2.5, t.text);
-                register(ui, format!("keywordInside:{}", r.path), dot);
-            }
-        }
+    // The actual SDK tick owns CLICK|DRAG|FOCUS when enabled, so moving a press
+    // on it cannot become a drag on the row underneath. No photo selection: no stop.
+    let tb = controls::show(
+        ui,
+        &format!("keywordCheck:{}", r.path),
+        boxr.expand(3.0),
+        Face::Check { state, inside: !inside.is_empty(), on },
+        format!("{} {}", crate::i18n::tr("Keyword"), r.path),
+        on,
+    );
+    if state == Tick::No && !inside.is_empty() {
+        let dot = Rect::from_center_size(boxr.center(), vec2(5.0, 5.0));
+        crate::widgets::register_geometry(ui.ctx(), format!("keywordInside:{}", r.path), dot);
     }
+    // Keep published visual geometry separate from the larger real tick hit area.
+    // register_response uses the visual rect for automation and the actual owner's hit.
     // (with nothing selected it does nothing, and says nothing)
     let tb = if on {
         let does = crate::i18n::tr(match state {
@@ -260,12 +346,14 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     register(ui, format!("keywordCount:{}", r.path), count_rect);
     ui.painter().galley(count_rect.min, count, t.text_dim);
     let arrow = Rect::from_center_size(pos2(count_rect.left() - 12.0, cy), vec2(16.0, 16.0));
-    let ar = ui.interact(arrow, egui::Id::unique(("keyword-list-show", r.path.to_lowercase())), Sense::click());
-    crate::widgets::announce(&ar, crate::i18n::tr("Show photos"));
-    register(ui, format!("keywordShow:{}", r.path), arrow);
-    if resp.hovered() || ar.hovered() {
-        paint(ui.painter(), arrow, Icon::ChevronRight, if ar.hovered() { t.text } else { t.text_dim });
-    }
+    let ar = controls::show(
+        ui,
+        &format!("keywordShow:{}", r.path),
+        arrow,
+        Face::Arrow { revealed: resp.hovered() },
+        crate::i18n::tr("Show photos").to_owned(),
+        true,
+    );
     if ar.on_hover_text(crate::i18n::tr("Show Photos with Keyword")).clicked() {
         super::left::browse_all_photos(app, true);
         let _ = app.run("library.filter", json!({"keyword": r.path}));
@@ -289,10 +377,18 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     // part of the keyword shortcut (⇧K adds it): a + after the name
     if in_shortcut {
-        let plus = ui.painter().text(pos2(after + 5.0, cy), Align2::LEFT_CENTER, "+", font.clone(), t.accent);
+        let plus = Rect::from_min_size(pos2(after + 5.0, cy - 8.0), vec2(measure("+"), 16.0));
+        // (a label that only shows its tooltip: the framework target draws nothing, the "+" is painted above)
+        ui.painter().text(plus.left_center(), Align2::LEFT_CENTER, "+", font.clone(), t.accent);
+        crate::panels::detail::host::target(
+            ui,
+            ("keyword-list-shortcut", r.path.to_lowercase()),
+            plus,
+            crate::panels::detail::host::Target::new(crate::i18n::tr("Part of the keyword shortcut"))
+                .tooltip(crate::i18n::tr("Part of the keyword shortcut"))
+                .hover_only(),
+        );
         register(ui, format!("keywordShortcut:{}", r.path), plus);
-        ui.interact(plus, egui::Id::unique(("keyword-list-shortcut", r.path.to_lowercase())), Sense::hover())
-            .on_hover_text(crate::i18n::tr("Part of the keyword shortcut"));
     }
     let resp = resp.on_hover_text(r.path.replace('|', " › "));
     if resp.clicked() {
@@ -301,7 +397,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if resp.double_clicked() {
         app.ui.dialog = Some(edit_dialog(app, &r.path));
     }
-    crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, selection));
+    if !crate::widgets::carrying(ui.ctx()) {
+        Menu::context(r.path.clone(), &resp.response).id_salt(("keyword-context", &r.path)).show(ui, |ui, _| menu(app, ui, &r.path, selection));
+    }
 }
 
 /// How many of the keywords inside one are named before the rest are counted.
@@ -367,9 +465,11 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
     let name = path.replace('|', " › ");
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
-        let r = ui.add_enabled(enabled, egui::Button::new(label));
-        register(ui, format!("keywordMenu:{id}"), r.rect);
-        r.clicked()
+        let shown = MenuItem::new(label.to_owned()).id_salt(("keyword-menu", path, id)).enabled(enabled).show(ui);
+        if !measuring(ui) {
+            crate::widgets::register_response(format!("keywordMenu:{id}"), shown.response.rect, &shown.response);
+        }
+        !measuring(ui) && shown.ran
     };
     if item(ui, "create", &crate::i18n::tr_format!("Create Keyword Tag Inside “{name}”…", name = name), true) {
         let mut d = create_dialog(app);
@@ -720,3 +820,9 @@ mod tests {
         assert_eq!(Ticks::of(&c, &ids).inside("travel"), [] as [&str; 0]);
     }
 }
+
+#[cfg(test)]
+mod focus_tests;
+
+#[cfg(test)]
+mod clip_tests;

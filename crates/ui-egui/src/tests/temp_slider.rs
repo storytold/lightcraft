@@ -41,21 +41,13 @@ fn widget(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
-/// Where the slider's thumb (the hollow ring on the track's centre line) is drawn, from 0 to 1 along the track.
+/// Where the slider's thumb is, from 0 to 1 along the track: the framework slider's real thumb (`sliderThumb:`),
+/// whose centre runs along the span `slider:` names.
 fn thumb(h: &Headless, control: &str) -> f32 {
     let track = widget(h, &format!("slider:{control}"));
-    let rings: Vec<f32> = h
-        .view
-        .painted_shapes()
-        .iter()
-        .filter_map(|s| match s {
-            egui::epaint::Shape::Circle(c) if c.radius == 7.0 && (c.center.y - track.center().y).abs() < 0.5 => Some(c.center.x),
-            _ => None,
-        })
-        .filter(|x| (track.left() - 0.5..=track.right() + 0.5).contains(x))
-        .collect();
-    assert!(!rings.is_empty() && rings.iter().all(|x| (x - rings[0]).abs() < 0.01), "one thumb on {control}: {rings:?}");
-    (rings[0] - track.left()) / track.width()
+    let thumbs: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| *w == format!("sliderThumb:{control}")).map(|(_, r)| *r).collect();
+    assert_eq!(thumbs.len(), 1, "one thumb on {control}: {thumbs:?}");
+    (thumbs[0].center().x - track.left()) / track.width()
 }
 
 fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
@@ -102,11 +94,22 @@ fn the_kelvin_temp_slider_has_lightrooms_scale() {
 #[test]
 fn other_sliders_stay_linear() {
     let mut h = edit_panel(true);
-    set(&mut h, "light.exposure", 1.0);
-    assert!((thumb(&h, "light.exposure") - 0.6).abs() < 0.005, "+1.00 of −5…+5 at 60 %");
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure", "fx": 0.75}), T)["ok"], true);
-    h.settle(SETTLE);
-    assert!((develop(&h).light.exposure - 2.5).abs() < 0.011, "{}", develop(&h).light.exposure);
+    // The framework slider exposes its actual thumb geometry (`sliderThumb:`), as the Temp
+    // tests read it too.
+    for value in [-4.0, -2.5, 0.0, 1.0, 3.75] {
+        set(&mut h, "light.exposure", value);
+        let track = widget(&h, "slider:light.exposure");
+        let knob = widget(&h, "sliderThumb:light.exposure");
+        let at = (knob.center().x - track.left()) / track.width();
+        let expected = (value + 5.0) / 10.0;
+        assert!((f64::from(at) - expected).abs() < 0.005, "{value} drawn at {at}, linear position is {expected}");
+    }
+    for fraction in [0.1, 0.25, 0.6, 0.75, 0.9] {
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure", "fx": fraction}), T)["ok"], true);
+        h.settle(SETTLE);
+        let expected = -5.0 + 10.0 * fraction;
+        assert!((develop(&h).light.exposure - expected).abs() < 0.011, "click {fraction}: {} vs linear {expected}", develop(&h).light.exposure);
+    }
 }
 
 /// The relative temperature of a rendered photo (−100…+100, 0 = as shot, in the middle) is unchanged.

@@ -1041,9 +1041,13 @@ pub fn shortcut_text(sc: &str, mac: bool) -> String {
     }
 }
 
-/// Horizontal gap between in-window menu titles. The buttons are frameless, and egui gives
-/// frameless buttons no padding, so the gap has to come from the layout's item spacing.
+/// Room reserved per in-window menu title beyond its caption: the framework's title face pads its
+/// caption on both sides, and [`bar_width`] keeps the top bar's search field clear of the titles.
 const TITLE_GAP: f32 = 24.0;
+
+/// The room the in-window bar is given when its titles do not fit: enough for its collapsed "Menu" title and too
+/// little for a title beside the "…" one, as the old bar showed one "Menu" button whatever the room.
+const MENU_MIN: f32 = 48.0;
 
 /// Width of the in-window menu bar's titles.
 pub fn bar_width(ui: &egui::Ui) -> f32 {
@@ -1051,63 +1055,87 @@ pub fn bar_width(ui: &egui::Ui) -> f32 {
     MENUS.iter().map(|m| ui.painter().layout_no_wrap(crate::i18n::tr(m).to_string(), t.font(13.0), t.text).size().x + TITLE_GAP).sum::<f32>()
 }
 
-/// The in-window menu bar (hosts without a native one): one dropdown per menu, or a single
-/// "Menu" button when the space is too narrow. Returns the width used.
+/// The command a clicked menu row asked for: its id and parameters.
+type Clicked = std::cell::RefCell<Option<(String, Value)>>;
+
+/// Escape a caption for the framework's menu rows, which read `&` as a mnemonic marker. Every
+/// caption here is literal text (translations and user-defined names), never a marked one.
+fn literal(caption: &str) -> String {
+    caption.replace('&', "&&")
+}
+
+/// Whether this pass draws nothing the user can reach: a sizing or measuring run publishes no
+/// automation names and runs no command.
+fn measuring(ui: &egui::Ui) -> bool {
+    ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
+}
+
+/// The in-window menu bar (hosts without a native one): the framework's menu bar, one menu per
+/// title, collapsing into "…" or a single "Menu" when the space is too narrow. Returns the width
+/// used. Titles are published as `menu:<title>` (`menu:all` for the collapsed one), every row as
+/// `menuitem:<command id>`, every submenu row as `menusub:<label>` and every level of rows as
+/// `menu-level:<depth>`.
 pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32) -> f32 {
-    let t = crate::theme::Tokens::get(ui.ctx());
+    use craft::ui::contract::{Props as _, Show as _};
+    use craft::ui::menu::{MenuBar, MenuTitle};
+
     let bar = menu_bar(app);
-    let font = t.font(13.0);
-    let widths: Vec<f32> = bar
-        .iter()
-        .map(|(title, _)| ui.painter().layout_no_wrap(crate::i18n::tr(title).to_string(), font.clone(), t.text).size().x + TITLE_GAP)
-        .collect();
-    let total: f32 = widths.iter().sum();
-    let mut clicked: Option<(String, Value)> = None;
-    let start = ui.cursor().left();
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    // Menus hang below the whole top bar and never grow past the window (#189): a tall menu
-    // scrolls instead of egui sliding it up over the titles.
-    let bar_bottom = Some(ui.max_rect().bottom());
-    if total <= max_width {
-        let saved = ui.spacing().item_spacing.x;
-        ui.spacing_mut().item_spacing.x = TITLE_GAP;
-        // All titles first, then their popups, so a title the pointer moves onto can take over
-        // from the open menu before either is drawn (no frame with two menus or none).
-        let titles: Vec<egui::Response> = bar
+    let clicked: Clicked = Default::default();
+    // The bar's own keys (F10, a lone Alt, Alt+letter or digit) are off: the app binds Alt+digit and holds Alt for
+    // its tools, and the old bar had none. Tab and the arrow keys still reach and move through the titles.
+    let keys = false;
+    // (the panel's own height: not the row's, which this bar helps to size)
+    let height = ui.max_rect().height().min(48.0);
+    let width = if max_width >= bar_width(ui) { max_width } else { MENU_MIN };
+    let room = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, height));
+    let (shown, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("lc-menubar-inspect"), |ui| {
+        let titles: Vec<MenuTitle<'_>> = bar
             .iter()
-            .map(|(title, _)| {
-                let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(title)).font(font.clone()).color(t.text_label)).frame(false));
-                crate::widgets::register(ui, format!("menu:{title}"), r.rect);
-                r
+            .map(|(title, items)| {
+                let clicked = &clicked;
+                MenuTitle::new(literal(crate::i18n::tr(title)), move |ui: &mut egui::Ui| nodes_ui(ui, items, mac, clicked, 1))
             })
             .collect();
-        let confirmed = switch_open_title(ui.ctx(), &titles);
-        for ((_, items), r) in bar.iter().zip(&titles) {
-            // (opening and closing by click is done in `switch_open_title`)
-            // (the click confirming a menu a hover opened must not close it again)
-            let close = if confirmed == Some(egui::Popup::default_response_id(r)) {
-                egui::PopupCloseBehavior::IgnoreClicks
-            } else {
-                egui::PopupCloseBehavior::CloseOnClick
-            };
-            egui::Popup::menu(r)
-                .close_behavior(close)
-                .open_memory(None)
-                .show(|ui| crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 1, bar_bottom)));
-        }
-        ui.spacing_mut().item_spacing.x = saved;
-    } else {
-        let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Menu")).font(font.clone()).color(t.text_label)).frame(false));
-        crate::widgets::register(ui, "menu:all", r.rect);
-        egui::Popup::menu(&r).show(|ui| {
-            crate::menu_level::level(ui, 1, bar_bottom, |ui| {
-                for (title, items) in &bar {
-                    submenu(ui, title, crate::i18n::tr(title).to_string(), 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 2, bar_bottom));
+        // The bar is placed in its room, so the titles that do not fit go into its "…" or "Menu" title. A measuring
+        // or sizing run must never open a menu: disabled, its titles sense nothing.
+        MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles)
+            .id_salt("in-window-menu-bar")
+            .keyboard(keys)
+            .enabled(!measuring(ui))
+            .show_at(ui, room)
+    });
+    // the titles' own width is what the bar takes of the row
+    let used = shown.titles.width().max(0.0);
+    ui.allocate_exact_size(egui::vec2(used, height), egui::Sense::hover());
+    // The titles are parts of the bar: their automation names come from the bar's own recorded
+    // parts and hit areas, never from guessed rectangles or substitute widgets.
+    if let Some(record) = record.filter(|_| !measuring(ui)) {
+        let mut shown_titles = 0;
+        let mut overflow = None;
+        for element in &record.elements {
+            if element.part.is_none() || element.component != "MenuBar" {
+                continue;
+            }
+            let Some(name) = element.facts.as_ref().and_then(|facts| facts.name.as_deref()) else { continue };
+            let hit = record.hits.iter().find(|hit| hit.owner == element.id && hit.part == element.part).map_or(element.rect, |hit| hit.rect);
+            let mut response = shown.response.clone();
+            response.id = element.id;
+            response.rect = element.rect;
+            response.interact_rect = hit;
+            match MENUS.iter().find(|title| crate::i18n::tr(title) == name) {
+                Some(title) => {
+                    shown_titles += 1;
+                    crate::widgets::register_response(format!("menu:{title}"), element.rect, &response);
                 }
-            });
-        });
+                None => overflow = Some((element.rect, response)),
+            }
+        }
+        if let Some((rect, response)) = overflow {
+            crate::widgets::register_response(if shown_titles == 0 { "menu:all" } else { "menu:more" }, rect, &response);
+        }
     }
-    if let Some((id, params)) = clicked {
+    if let Some((id, params)) = clicked.into_inner() {
         let r = run_item(app, &id, params);
         // an export that can't start (e.g. no folder), or a backup / restore the host refuses
         // (changes still unsaved, nothing stored in this browser), says why instead of doing nothing
@@ -1117,95 +1145,58 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             app.toast(ui.ctx(), e);
         }
     }
-    ui.cursor().left() - start
+    used
 }
 
-/// Native menu-bar behaviour for the top-level titles: while one menu is open, resting the pointer
-/// on another title closes it and opens that one, and a click on another title opens it in that
-/// same click (instead of only closing the open menu as a click outside). Without an open menu
-/// hovering does nothing; clicking a title toggles its menu. egui keeps one popup open at a time.
-/// Returns the menu whose title was just clicked right after a hover opened it.
-fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<egui::Id> {
-    let popup = egui::Popup::default_response_id;
-    let key = egui::Id::unique("lc-menubar-hover-opened");
-    let open = titles.iter().position(|r| egui::Popup::is_id_open(ctx, popup(r)));
-    // the menu a hover opened, until it closes or is clicked
-    let mut confirmed = None;
-    let mut hover_opened: Option<egui::Id> = ctx.data(|d| d.get_temp(key)).filter(|id| open.is_some_and(|o| popup(&titles[o]) == *id));
-    for (i, r) in titles.iter().enumerate() {
-        if r.clicked() {
-            // the click that follows a hover switch confirms the menu the hover opened
-            if hover_opened == Some(popup(r)) {
-                confirmed = Some(popup(r));
-            } else {
-                egui::Popup::toggle_id(ctx, popup(r));
-            }
-            hover_opened = None;
-        } else if r.hovered() && open.is_some_and(|o| o != i) {
-            egui::Popup::open_id(ctx, popup(r));
-            hover_opened = Some(popup(r));
-            // a pointer move alone doesn't schedule the frame that draws the new menu
-            ctx.request_repaint();
-        }
-    }
-    // (leaving the titles ends it: a later click on the open title closes the menu)
-    let hover_opened = hover_opened.filter(|_| titles.iter().any(|r| r.hovered()));
-    ctx.data_mut(|d| match hover_opened {
-        Some(id) => {
-            d.insert_temp(key, id);
-        }
-        None => {
-            d.remove::<egui::Id>(key);
-        }
-    });
-    confirmed
-}
+/// One level of a menu: its rows, separators and submenu rows. `depth` is 1 for a top-level
+/// menu's rows. The level's visible rect is published as `menu-level:<depth>`.
+fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &Clicked, depth: usize) {
+    use craft::ui::contract::{Props as _, Show as _};
+    use craft::ui::display::Divider;
+    use craft::ui::menu::{Menu, MenuItem};
 
-/// A submenu row showing `text` at `depth`, whose rows `children` draws one level deeper,
-/// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
-/// label), and while its submenu is open it is the anchor the next frame's room is measured from.
-fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
-    let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
-    crate::widgets::register(ui, format!("menusub:{label}"), r.response.rect);
-    if r.inner.is_some() {
-        crate::menu_level::set_anchor(ui.ctx(), depth + 1, r.response.rect);
-    }
-}
-
-/// `depth` is 1 for a top-level menu's rows; `bar_bottom` is where the menu bar ends.
-fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Option<(String, Value)>, depth: usize, bar_bottom: Option<f32>) {
-    ui.set_min_width(220.0);
     for n in nodes {
         match n {
             MenuNode::Separator => {
-                ui.separator();
+                Divider::horizontal().show(ui);
             }
             MenuNode::Submenu { label, children } => {
-                submenu(ui, label, format!("      {}", crate::i18n::tr(label)), depth, bar_bottom, |ui| {
-                    nodes_ui(ui, children, mac, clicked, depth + 1, bar_bottom)
-                });
+                let head = Menu::submenu_row(ui, literal(crate::i18n::tr(label)), |ui, _| nodes_ui(ui, children, mac, clicked, depth + 1));
+                if !measuring(ui) {
+                    crate::widgets::register_response(format!("menusub:{label}"), head.response.rect, &head.response);
+                }
             }
             MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
-                // a gutter for check marks, like native menus
-                let mut b = egui::Button::new(format!("      {}", display_item_label(id, params, label)));
+                let key = MenuNode::key(id, params);
+                let mut row = MenuItem::new(literal(display_item_label(id, params, label))).id_salt(&key).enabled(*enabled);
+                if let Some(on) = checked {
+                    row = row.check(*on);
+                }
                 if let Some(sc) = shortcut {
-                    b = b.shortcut_text(shortcut_text(sc, mac));
+                    row = row.shortcut(shortcut_text(sc, mac));
                 }
-                let r = ui.add_enabled(*enabled, b);
-                crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
-                if *checked == Some(true) {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
-                    crate::icons::paint(ui.painter(), c, crate::icons::Icon::Check, if *enabled { t.text } else { t.text_disabled });
+                let out = row.show(ui);
+                if measuring(ui) {
+                    continue;
                 }
-                if r.clicked() {
-                    *clicked = Some((id.clone(), params.clone()));
-                    ui.close();
+                crate::widgets::register_response(format!("menuitem:{id}"), out.response.rect, &out.response);
+                if *enabled && out.ran {
+                    *clicked.borrow_mut() = Some((id.clone(), params.clone()));
                 }
             }
         }
     }
+    if !measuring(ui) {
+        // The level the user can reach: its rows, less what a menu taller than the window scrolled out of sight. The
+        // scroll strips above and below the viewport belong to the level, so a row half under one is inside it.
+        let strip = egui::vec2(0.0, 16.0);
+        crate::widgets::register(ui, format!("menu-level:{depth}"), ui.min_rect().intersect(ui.clip_rect().expand2(strip)));
+    }
 }
+
+#[cfg(test)]
+#[path = "menubar/in_window_title_flow_tests.rs"]
+mod in_window_title_flow_tests;
 
 #[cfg(test)]
 mod tests;

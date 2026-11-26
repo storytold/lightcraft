@@ -1,6 +1,8 @@
-use super::folders::folder_tree;
-use super::rows::Row;
-use super::{Icon, LibrarySource, LightcraftApp, SidebarSection, json, register};
+use std::collections::HashMap;
+
+use super::folders::{library_node_for, move_folder_item, reveal_item, synchronize_item};
+use super::rows::{MAX_DEPTH, MenuAt, SideEvent, SideOut, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, tree_open};
+use super::{LibrarySource, LightcraftApp, SidebarSection, json};
 
 /// Local's folders as they stand this frame, and the folder being browsed among them.
 pub(super) struct LocalNow {
@@ -86,42 +88,199 @@ fn builtin_place_in(injected: Option<&[(String, String)]>, home: &str, path: &st
     }
 }
 
+/// What a Local row stands for, by the row's key.
+struct Meta {
+    path: String,
+    name: String,
+    depth: usize,
+    transient: bool,
+    /// The place the row's tree hangs from (the same folder can be listed in more than one tree).
+    place: String,
+}
+
+/// The key of the Browse Folder… row, and of the one that brings hidden places back.
+const BROWSE: &str = "local:browse";
+const RESTORE: &str = "local:restoreHidden";
+
+fn open_key(place: &str, path: &str) -> egui::Id {
+    egui::Id::unique(("folder-open", place.to_string(), path.to_string()))
+}
+
+/// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
+/// subfolders. In the tree that holds the folder being browsed (`reveal`), the folders on the
+/// way down to it open whenever the browsed folder changes, so it shows highlighted in place.
+/// `transient`: a top-level row listed for this session only (it offers Keep in Local).
+/// `place`: the top-level folder this tree hangs from. A folder can be listed in more than one
+/// tree (Pictures on its own and inside Home): each row opens and closes by itself, and has a key
+/// of its own (#1093).
+#[allow(clippy::too_many_arguments)]
+fn flatten(
+    ui: &egui::Ui,
+    place: &str,
+    name: &str,
+    path: &str,
+    depth: usize,
+    current: Option<&str>,
+    reveal: bool,
+    transient: bool,
+    rows: &mut Vec<SideRow>,
+    meta: &mut HashMap<String, Meta>,
+) {
+    let open_id = open_key(place, path);
+    let sel = current.is_some_and(|c| same_folder(c, path));
+    let on_the_way = !sel && current.is_some_and(|c| lightcraft_catalog::query::folder_within(c, path));
+    let mut open = tree_open(ui, open_id, false);
+    if reveal && on_the_way {
+        // opened once per browsed folder: collapsing it again afterwards sticks
+        let revealed_id = egui::Id::unique(("folder-revealed", place.to_string(), path.to_string()));
+        let target = current.map(str::to_string);
+        if ui.data(|d| d.get_temp::<Option<String>>(revealed_id)) != Some(target.clone()) {
+            open = true;
+            set_tree_open(ui, open_id, true);
+            ui.data_mut(|d| d.insert_temp(revealed_id, target));
+        }
+    }
+    let key = format!("local:{place}\u{1f}{path}");
+    let id = format!("local:{path}");
+    rows.push(SideRow::new(id, "folder", name).key(key.clone()).depth(depth).group(open, format!("folderToggle:{path}")).tip(path));
+    meta.insert(key, Meta { path: path.to_string(), name: name.to_string(), depth, transient, place: place.to_string() });
+    if open && depth < MAX_DEPTH.min(8) {
+        for (n, p) in subfolders(ui, path).iter() {
+            flatten(ui, place, n, p, depth + 1, current, reveal, false, rows, meta);
+        }
+    }
+}
+
 /// Local's rows: each place as a folder tree, Browse Folder…, and the way back for hidden places.
 pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &LocalNow) {
     let (local, current) = (&now.places, now.current.as_deref());
+    let mut rows = Vec::new();
+    let mut meta = HashMap::new();
     for (i, (name, path)) in local.places.iter().enumerate() {
         let transient = local.browse_root.as_deref() == Some(path.as_str());
         let reveal = local.owner == Some(i);
-        folder_tree(app, ui, path, name, path, 0.0, current, reveal, transient);
+        flatten(ui, path, name, path, 0, current, reveal, transient, &mut rows, &mut meta);
     }
-    if app.services.pick_folder.is_some() && Row::new("local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…")).show(app, ui).clicked() {
-        let picked = app.services.pick_folder.as_mut().and_then(|f| f());
-        if let Some(path) = picked {
-            match app.run("library.browse", json!({"path": path})) {
-                // the picked folder stays in Local (and comes back if it was hidden)
-                Ok(r) => {
-                    let dir = r["path"].as_str().unwrap_or(&path).to_string();
-                    let _ = app.run("local.addRoot", json!({"path": dir}));
-                }
-                Err(e) => app.toast(ui.ctx(), e),
-            }
-        }
+    let browse = app.services.pick_folder.is_some();
+    if browse {
+        rows.push(SideRow::new("local:browse", "plus", crate::i18n::tr("Browse Folder…")).key(BROWSE));
     }
     // the way back for hidden places: one comes back from the row itself; several are listed, so
     // each comes back on its own, or all at once (issue #2114: the row used to bring every one back)
     let hidden = now.hidden.len();
     if hidden > 0 {
         let label = crate::i18n::tr_format!("Show {hidden} hidden location{}", if hidden == 1 { "" } else { "s" }, hidden = hidden);
-        let resp = Row::new("local:restoreHidden", Icon::Folder, &label)
-            .show(app, ui)
-            .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"));
-        if let [(_, only)] = now.hidden.as_slice() {
-            if resp.clicked() {
-                let _ = app.run("local.restoreHidden", json!({"path": only}));
-            }
-        } else {
-            egui::Popup::menu(&resp).show(|ui| hidden_menu(app, ui, &now.hidden));
+        rows.push(
+            SideRow::new("local:restoreHidden", "folder", label)
+                .key(RESTORE)
+                .tip(crate::i18n::tr("Put the locations you removed from Local back (no files change)")),
+        );
+    }
+    let selected = meta.iter().find(|(_, m)| current.is_some_and(|c| same_folder(c, &m.path))).map(|(key, _)| key.clone());
+    let spec = SideSpec::new("local", crate::i18n::tr("Local"), app.ui.show_counts).selected(selected.as_deref());
+    let out = side_list(ui, spec, rows);
+    let request = apply_row_events(app, ui, &out, &meta, &now.hidden);
+    host_menu(ui, "local", crate::i18n::tr("Local"), out.response.as_ref(), request, |ui, key| {
+        if key == RESTORE {
+            hidden_menu(app, ui, &now.hidden);
+        } else if let Some(m) = meta.get(key) {
+            folder_menu(app, ui, m);
         }
+    });
+}
+
+/// Apply the list's row events: open or close a folder's tree, Browse Folder…, bring the hidden
+/// places back, or ask for a folder's menu. Returns the menu a row asked for, if one did.
+fn apply_row_events(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    out: &SideOut,
+    meta: &HashMap<String, Meta>,
+    hidden: &[(String, String)],
+) -> Option<(String, MenuAt)> {
+    let mut request = None;
+    for event in &out.events {
+        match event {
+            SideEvent::Open { key, open } => {
+                if let Some(m) = meta.get(key) {
+                    set_tree_open(ui, open_key(&m.place, &m.path), *open);
+                }
+            }
+            SideEvent::Activate(key) if key == BROWSE => {
+                let picked = app.services.pick_folder.as_mut().and_then(|f| f());
+                if let Some(path) = picked {
+                    match app.run("library.browse", json!({"path": path})) {
+                        // the picked folder stays in Local (and comes back if it was hidden)
+                        Ok(r) => {
+                            let dir = r["path"].as_str().unwrap_or(&path).to_string();
+                            let _ = app.run("local.addRoot", json!({"path": dir}));
+                        }
+                        Err(e) => app.toast(ui.ctx(), e),
+                    }
+                }
+            }
+            SideEvent::Activate(key) if key == RESTORE => {
+                if let [(_, only)] = hidden {
+                    let _ = app.run("local.restoreHidden", json!({"path": only}));
+                } else if let Some(rect) = out.rect_of(RESTORE) {
+                    request = Some((key.clone(), MenuAt::Rect(rect)));
+                }
+            }
+            SideEvent::Activate(key) => {
+                if let Some(m) = meta.get(key)
+                    && let Err(e) = app.run("library.browse", json!({"path": m.path}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            }
+            SideEvent::Menu { key, at } => {
+                if meta.contains_key(key) {
+                    request = Some((key.clone(), MenuAt::Point(*at)));
+                }
+            }
+        }
+    }
+    request
+}
+
+/// The context menu of a Local folder row.
+fn folder_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Meta) {
+    let (path, name, top) = (m.path.as_str(), m.name.as_str(), m.depth == 0);
+    // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
+    let library = app.caches.folder_tree(&app.session.catalog);
+    let held = library_node_for(&library, path);
+    if (m.transient || !top)
+        && entry("local", crate::i18n::tr(if m.transient { "Keep in Local" } else { "Add to Local" }))
+            .tip(crate::i18n::tr("List this folder in Local from now on"))
+            .show(ui)
+    {
+        let _ = app.run("local.addRoot", json!({"path": path}));
+    }
+    if top
+        && entry("local", crate::i18n::tr("Remove from Local"))
+            .tip(crate::i18n::tr("Hides this shortcut only; the folder and its photos stay as they are"))
+            .show(ui)
+    {
+        let _ = app.run("local.hide", json!({"path": path}));
+    }
+    // a built-in place is one of the computer's own folders under a translated label (Home is
+    // the user's whole home): Local offers no Rename or Move for it (the other items stay)
+    if !(top && is_builtin_place(app, path)) {
+        if entry("local", crate::i18n::tr("Rename Folder…")).show(ui) {
+            app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+                title: crate::i18n::tr_format!("Rename “{name}”", name = name),
+                hint: "Folder name (renamed on disk; its photos follow)".into(),
+                value: name.to_string(),
+                command: "folder.rename".into(),
+                params: json!({"path": path}),
+                key: "name".into(),
+            });
+        }
+        move_folder_item(app, ui, path);
+    }
+    reveal_item(app, ui, path);
+    if let Some(held) = &held {
+        synchronize_item(app, ui, &held.0, &held.1);
     }
 }
 
@@ -129,19 +288,13 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
 /// Restore All.
 fn hidden_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, hidden: &[(String, String)]) {
     for (name, path) in hidden {
-        let r = ui.button(name).on_hover_text(path);
-        register(ui, format!("local:restoreHidden:{path}"), r.rect);
-        if r.clicked() {
+        if entry(path, name).tip(path).widget(format!("local:restoreHidden:{path}")).show(ui) {
             let _ = app.run("local.restoreHidden", json!({"path": path}));
-            ui.close();
         }
     }
-    ui.separator();
-    let r = ui.button(crate::i18n::tr("Restore All"));
-    register(ui, "local:restoreHidden:all", r.rect);
-    if r.clicked() {
+    rule(ui);
+    if entry("all", crate::i18n::tr("Restore All")).widget("local:restoreHidden:all").show(ui) {
         let _ = app.run("local.restoreHidden", json!({}));
-        ui.close();
     }
 }
 
@@ -366,15 +519,12 @@ mod tests {
     fn local_folder_rows_outside_the_viewport_skip_interactive_widgets() {
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
         let mut view = crate::headless::HeadlessView::new();
+        let places = (0..500).map(|index| (format!("Folder {index}"), format!("/lightcraft-test/folder-{index:04}"))).collect();
+        let now = super::LocalNow { places: super::LocalPlaces { places, owner: None, browse_root: None }, current: None, hidden: Vec::new() };
         for frame in 0..3 {
             let raw = crate::headless::HeadlessView::raw_input(egui::vec2(300.0, 160.0), 1.0, frame as f64 / 60.0, vec![]);
             view.run(raw, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for index in 0..500 {
-                        let path = format!("/lightcraft-test/folder-{index:04}");
-                        super::folder_tree(&mut app, ui, &path, &format!("Folder {index}"), &path, 0.0, None, false, false);
-                    }
-                });
+                egui::ScrollArea::vertical().show(ui, |ui| super::local_rows(&mut app, ui, &now));
             });
             let widgets = crate::widgets::take_registry(&view.ctx);
             if frame == 2 {
@@ -552,15 +702,21 @@ mod tests {
     fn a_local_folder_lines_up_with_the_rows_above_and_its_triangle_stays_left_of_the_icon() {
         use crate::Services;
         use crate::headless::HeadlessView;
+        use crate::panels::left::rows::{SideRow, SideSpec, side_list};
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
         let mut view = HeadlessView::new();
         let path = "/lightcraft-test/Pictures";
+        let now = super::LocalNow {
+            places: super::LocalPlaces { places: vec![("Pictures".into(), path.into())], owner: None, browse_root: None },
+            current: None,
+            hidden: Vec::new(),
+        };
         let mut widgets = vec![];
         for frame in 0..3 {
             let raw = HeadlessView::raw_input(egui::vec2(300.0, 200.0), 1.0, frame as f64 / 60.0, vec![]);
             view.run(raw, |ui| {
-                super::Row::new("all", super::Icon::Photos, "All Photos").show(&mut app, ui);
-                super::folder_tree(&mut app, ui, path, "Pictures", path, 0.0, None, false, false);
+                side_list(ui, SideSpec::new("test-sources", "Sources", true).flat(), vec![SideRow::new("all", "image", "All Photos")]);
+                super::local_rows(&mut app, ui, &now);
             });
             widgets = crate::widgets::take_registry(&view.ctx);
         }
@@ -568,7 +724,8 @@ mod tests {
         let (all, local) = (rect("label:all"), rect(&format!("label:local:{path}")));
         assert_eq!(local.left(), all.left(), "a top-level Local folder's name starts where All Photos' does");
         let triangle = rect(&format!("folderToggle:{path}"));
-        // the icon is 16 points wide and ends 8 points before the name
-        assert!(triangle.right() <= local.left() - 24.0, "triangle {triangle:?} overlaps the icon before {local:?}");
+        let row = rect(&format!("source:local:{path}"));
+        // the triangle is the row's first part, in the gutter before the icon and the name
+        assert!(triangle.left() >= row.left() && triangle.center().x < local.left() + 24.0, "triangle {triangle:?} in {row:?} before {local:?}");
     }
 }

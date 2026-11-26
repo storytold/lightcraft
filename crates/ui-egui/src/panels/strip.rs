@@ -14,71 +14,117 @@ const BUTTON_H: f32 = 40.0;
 /// Space between tool buttons.
 const GAP: f32 = 6.0;
 
+/// Keep one definition of the actual Panel frame for drawing and its intrinsic reservation.
+fn panel_frame(t: &Tokens) -> egui::Frame {
+    egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 8 }).stroke(egui::Stroke::new(1.0, t.divider))
+}
+
+/// Panel's documented separator is outside the frame, in its inner-facing outer margin.
+/// Resolve that public style metric without drawing controls or creating an egui hit owner.
+fn frame_with_separator(mut frame: egui::Frame, style: &egui::Style) -> egui::Frame {
+    let separator = style.visuals.widgets.noninteractive.bg_stroke.width.round() as i8;
+    frame.outer_margin.left = frame.outer_margin.left.saturating_add(separator);
+    frame
+}
+
+fn centered_reservation(outer_width: f32, child_width: f32, frame: egui::Frame) -> f32 {
+    let content_width = (outer_width - frame.total_margin().sum().x).max(0.0);
+    let centered_overflow = (child_width - content_width).max(0.0) / 2.0;
+    (outer_width - centered_overflow).max(0.0)
+}
+
+/// The room the existing fixed-width, centered-content Panel actually leaves unavailable to
+/// its neighbor. Its frame response can extend past the host; shell reservation must not
+/// confuse this consumed extent with the Panel's requested presentation width.
+pub(crate) fn shell_extent(ctx: &egui::Context) -> f32 {
+    let t = Tokens::get(ctx);
+    let frame = frame_with_separator(panel_frame(&t), &ctx.global_style());
+    centered_reservation(t.strip_w, t.strip_w, frame)
+}
+
+fn presentation_rect(mut slot: egui::Rect, width: f32, rtl: bool) -> egui::Rect {
+    if rtl {
+        slot.max.x = slot.min.x + width;
+    } else {
+        slot.min.x = slot.max.x - width;
+    }
+    slot
+}
+
+/// Draw exactly once in the original presentation footprint, independently of the consumed
+/// extent. Merely narrowing the parent would narrow the content again and move every button.
+/// The outside edge stays fixed in both directions; only the inside clip grows to the same
+/// footprint the old declared-width slot supplied. The viewport still bounds every hit/paint.
+pub(crate) fn show_in_shell(app: &mut LightcraftApp, ui: &mut egui::Ui, rtl: bool) {
+    let width = Tokens::get(ui.ctx()).strip_w;
+    let rect = presentation_rect(ui.max_rect(), width, rtl);
+    let mut clip = ui.clip_rect();
+    if rtl {
+        clip.max.x = clip.max.x.max(rect.max.x);
+    } else {
+        clip.min.x = clip.min.x.min(rect.min.x);
+    }
+    let clip = clip.intersect(rect).intersect(ui.ctx().content_rect());
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("legacy-tool-strip-frame").max_rect(rect));
+    child.set_clip_rect(clip);
+    show(app, &mut child);
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::right("tool_strip")
-        .exact_size(t.strip_w)
-        .resizable(false)
-        .frame(
-            egui::Frame::NONE
-                .fill(t.chrome)
-                .inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 8 })
-                .stroke(egui::Stroke::new(1.0, t.divider)),
-        )
-        .show(ui, |ui| {
-            crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
-            let has_photo = app.session.active().is_some();
-            ui.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
-                    let _ = app.run("panel.presets", json!({}));
+    egui::Panel::right("tool_strip").exact_size(t.strip_w).resizable(false).frame(panel_frame(&t)).show(ui, |ui| {
+        crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
+        let has_photo = app.session.active().is_some();
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = GAP;
+            let sz = vec2(t.strip_w, BUTTON_H);
+            if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
+                let _ = app.run("panel.presets", json!({}));
+            }
+            for (id, icon, panel, tip) in [
+                ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
+                ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
+                ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
+                ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
+                ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
+            ] {
+                let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
+                if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
+                    let _ = app.run(&format!("panel.{id}"), json!({}));
                 }
-                for (id, icon, panel, tip) in [
-                    ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
-                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
-                    ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
-                    ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
-                    ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
-                ] {
-                    let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-                    if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
-                        let _ = app.run(&format!("panel.{id}"), json!({}));
-                    }
-                    if id == "edit" {
-                        separator(ui, &t);
-                    }
+                if id == "edit" {
+                    separator(ui, &t);
                 }
-                separator(ui, &t);
-                if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
-                    let _ = app.run("panel.versions", json!({}));
-                }
-                if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
-                    let _ = app.run("panel.activity", json!({}));
-                }
-                if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::About);
-                }
-            });
-            // bottom icons: two buttons and one gap tall, so Info ends at the bottom margin as
-            // Presets starts at the top one
-            let bottom = ui.max_rect().bottom();
-            let mut child =
-                ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                    egui::pos2(ui.max_rect().left(), bottom - (2.0 * BUTTON_H + GAP)),
-                    ui.max_rect().right_bottom(),
-                )));
-            child.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
-                    let _ = app.run("panel.keywords", json!({}));
-                }
-                if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
-                    let _ = app.run("panel.info", json!({}));
-                }
-            });
+            }
+            separator(ui, &t);
+            if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
+                let _ = app.run("panel.versions", json!({}));
+            }
+            if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
+                let _ = app.run("panel.activity", json!({}));
+            }
+            if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {
+                app.ui.dialog = Some(crate::state::Dialog::About);
+            }
         });
+        // bottom icons: two buttons and one gap tall, so Info ends at the bottom margin as
+        // Presets starts at the top one
+        let bottom = ui.max_rect().bottom();
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), bottom - (2.0 * BUTTON_H + GAP)), ui.max_rect().right_bottom())),
+        );
+        child.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = GAP;
+            let sz = vec2(t.strip_w, BUTTON_H);
+            if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
+                let _ = app.run("panel.keywords", json!({}));
+            }
+            if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
+                let _ = app.run("panel.info", json!({}));
+            }
+        });
+    });
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {
@@ -107,5 +153,67 @@ mod tests {
         let (top, bottom) = (presets.top(), 700.0 - info.bottom());
         assert!((top - bottom).abs() < 0.5, "Presets starts {top} below the top, Info ends {bottom} above the bottom");
         assert_eq!(info.top() - keywords.bottom(), GAP, "the bottom buttons are spaced like the top ones");
+    }
+}
+
+#[cfg(test)]
+mod intrinsic_reservation_tests {
+    use super::*;
+    use crate::headless::HeadlessView;
+
+    #[test]
+    fn intrinsic_extent_matches_actual_panel_with_and_without_overflow() {
+        for width in [1025.0, 1400.0] {
+            for scale in [1.0, 1.25, 2.0] {
+                for child_width in [32.0, 48.0] {
+                    for stroke in [0.0, 1.0, 2.0] {
+                        let mut view = HeadlessView::new();
+                        for frame_index in 0..3 {
+                            let raw = HeadlessView::raw_input(vec2(width, 768.0), scale, frame_index as f64 / 60.0, vec![]);
+                            view.run(raw, |ui| {
+                                let frame = egui::Frame::NONE.stroke(egui::Stroke::new(stroke, egui::Color32::GRAY));
+                                let expected = centered_reservation(48.0, child_width, frame_with_separator(frame, ui.style()));
+                                let root = ui.available_rect_before_wrap();
+                                egui::Panel::right("intrinsic-regression").exact_size(48.0).resizable(false).frame(frame).show(ui, |ui| {
+                                    ui.vertical_centered(|ui| {
+                                        ui.allocate_exact_size(vec2(child_width, 40.0), egui::Sense::hover());
+                                    });
+                                });
+                                let actual = root.right() - ui.available_rect_before_wrap().right();
+                                assert_eq!(actual, expected, "width={width} scale={scale} child={child_width} stroke={stroke}");
+                                if child_width == 32.0 {
+                                    assert_eq!(actual, 48.0, "a non-overflowing child must not receive a parity offset");
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn presentation_footprint_is_unchanged_on_both_end_sides() {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let width = Tokens::get(&ctx).strip_w;
+        let extent = shell_extent(&ctx);
+        for outer in [1025.0, 1400.0] {
+            for rtl in [false, true] {
+                let slot = if rtl {
+                    egui::Rect::from_min_max(egui::pos2(0.0, 42.0), egui::pos2(extent, 768.0))
+                } else {
+                    egui::Rect::from_min_max(egui::pos2(outer - extent, 42.0), egui::pos2(outer, 768.0))
+                };
+                let rect = presentation_rect(slot, width, rtl);
+                assert_eq!(rect.width(), width);
+                assert_eq!((rect.top(), rect.bottom()), (slot.top(), slot.bottom()));
+                if rtl {
+                    assert_eq!((rect.left(), rect.right()), (0.0, width));
+                } else {
+                    assert_eq!((rect.left(), rect.right()), (outer - width, outer));
+                }
+            }
+        }
     }
 }

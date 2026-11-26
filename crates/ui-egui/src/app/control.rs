@@ -1,3 +1,4 @@
+use super::completion::GestureFacts;
 use super::{ControlResponse, GESTURE_TIMEOUT_MS, GestureFrame, LightcraftApp, MAX_PENDING_GESTURES, PendingGesture, Sender, Value};
 use crate::control;
 
@@ -58,6 +59,7 @@ impl LightcraftApp {
         crate::control::check_gesture_numbers(&method, &params)?;
         let now = self.tick_now_ms();
         self.pending_gestures.push(PendingGesture {
+            completion: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
             method,
             params,
             reply,
@@ -77,16 +79,56 @@ impl LightcraftApp {
 
     /// Resolve one queued gesture against the fresh widgets/image rect of the pass that just
     /// completed. A changed view/document/dialog/panel state cancels instead of retargeting.
+    pub(super) fn completion_gestures(&self, ctx: &egui::Context, epoch: u64, passes: u64) -> GestureFacts {
+        let mut facts = GestureFacts {
+            now_ms: self.tick_now_ms(),
+            frame: self.gesture_frame(),
+            epoch,
+            passes,
+            deadlines: self.pending_gestures.iter().map(|gesture| (std::sync::Arc::downgrade(&gesture.completion), gesture.deadline_ms)).collect(),
+            clipboard: control::ClipboardFacts::capture(self, ctx),
+            pastes: Some(Vec::new()),
+        };
+        facts.pastes = Some(
+            self.pending_gestures
+                .iter()
+                .filter(|gesture| {
+                    gesture.resolved_pass.is_none()
+                        && gesture.method == "ui.clipboard"
+                        && gesture.params.get("action").and_then(Value::as_str) == Some("paste")
+                        && gesture.params.get("text").and_then(Value::as_str).is_none()
+                })
+                .map(|gesture| {
+                    (
+                        std::sync::Arc::downgrade(&gesture.completion),
+                        facts.ready(gesture) && control::check_gesture_numbers(&gesture.method, &gesture.params).is_ok(),
+                    )
+                })
+                .collect(),
+        );
+        facts
+    }
     pub(crate) fn resolve_pending_gestures(&mut self, ctx: &egui::Context) {
+        let mut facts = self.completion_gestures(ctx, self.layout_epoch, self.ui_passes);
+        facts.pastes = None; // direct/legacy callers still emit into their current context
+        self.resolve_gestures_at(ctx, &facts);
+    }
+    pub(super) fn resolve_gestures_at(&mut self, ctx: &egui::Context, facts: &GestureFacts) {
         if self.pending_gestures.is_empty() {
             return;
         }
-        let now = self.tick_now_ms();
-        let frame = self.gesture_frame();
-        let epoch = self.layout_epoch;
+        let (now, frame, epoch) = (facts.now_ms, facts.frame, facts.epoch);
         let mut gestures = std::mem::take(&mut self.pending_gestures);
         let mut keep = Vec::with_capacity(gestures.len());
         for mut gesture in gestures.drain(..) {
+            // Allocation identity survives earlier removals; never undo a later progress refresh.
+            let Some((_, deadline)) =
+                facts.deadlines.iter().find(|(id, _)| id.upgrade().is_some_and(|id| std::sync::Arc::ptr_eq(&id, &gesture.completion)))
+            else {
+                keep.push(gesture);
+                continue; // admitted after this body: wait for its own captured layout
+            };
+            gesture.deadline_ms = gesture.deadline_ms.max(*deadline);
             if gesture.resolved_pass.is_some() {
                 // Already handed to the delivery queue; `reply_delivered_gestures` (or
                 // `expire_gestures`) owns its deadline and must remove its unsent events too.
@@ -112,11 +154,24 @@ impl LightcraftApp {
                 continue;
             }
             let before = self.synthetic.len();
-            match control::gesture_events(self, ctx, &gesture.method, &gesture.params) {
+            let outcome = match &facts.pastes {
+                None => control::gesture_events(self, ctx, &gesture.method, &gesture.params),
+                Some(claims) => control::gesture_events_at(
+                    self,
+                    ctx,
+                    &gesture.method,
+                    &gesture.params,
+                    facts.clipboard,
+                    control::PasteDispatch::OwnOutput(
+                        claims.iter().any(|(id, _)| id.upgrade().is_some_and(|id| std::sync::Arc::ptr_eq(&id, &gesture.completion))),
+                    ),
+                ),
+            };
+            match outcome {
                 Ok(outcome) => {
                     gesture.target = outcome.target;
                     gesture.result = outcome.result;
-                    gesture.resolved_pass = Some(self.ui_passes);
+                    gesture.resolved_pass = Some(facts.passes);
                     gesture.remaining_events = self.synthetic.len().saturating_sub(before);
                     gesture.started = gesture.remaining_events == 0;
                     keep.push(gesture);
@@ -138,10 +193,12 @@ impl LightcraftApp {
     /// before resolution ([`Self::resolve_pending_gestures`]) and again immediately before the
     /// batch is injected ([`Self::drop_gestures_stale_before_injection`]).
     pub(crate) fn reply_delivered_gestures(&mut self) {
+        self.reply_gestures_at(self.tick_now_ms());
+    }
+    pub(super) fn reply_gestures_at(&mut self, now: f64) {
         if self.pending_gestures.is_empty() {
             return;
         }
-        let now = self.tick_now_ms();
         // Cancel only the gestures that actually stalled: their unsent events are at the front of
         // the queue, and gestures queued behind them are independent input that must survive.
         let mut i = 0;
