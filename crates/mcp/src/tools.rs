@@ -77,7 +77,7 @@ fn ids_schema(what: &str) -> Value {
 
 /// The hand-written helper tools. UI tools are included only when a desktop app is attached.
 pub fn helper_tools(has_ui: bool) -> Vec<Value> {
-    let photo_id = json!({"type": "integer", "description": "Photo id (default: the active photo). Makes that photo active first."});
+    let photo_id = json!({"type": "integer", "minimum": 1, "description": "Photo id (default: the active photo). Makes that photo active first."});
     let mut v = vec![
         tool(
             "command_list",
@@ -118,7 +118,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             "Render preview",
             "Render a photo with its current develop settings (cropped) and return it as an image (`max_side` is the long edge; does not change selection or save a file).",
             json!({
-                "id": {"type": "integer", "description": "Photo id (default: the active photo); selection is unchanged"},
+                "id": {"type": "integer", "minimum": 1, "description": "Photo id (default: the active photo); selection is unchanged"},
                 "max_side": {"type": "integer", "description": "Long edge in pixels (default 1024, max 4096)"},
                 "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image encoding (default png; jpeg is smaller)"},
             }),
@@ -183,8 +183,18 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             "get_develop",
             "Get develop settings",
             "The full develop settings JSON of a photo (white balance, light, color, curves, mixer, grading, effects, crop, masks, spots…).",
-            json!({"id": {"type": "integer", "description": "Photo id (default: the active photo). Reads without changing the selection."}}),
+            json!({"id": {"type": "integer", "minimum": 1, "description": "Photo id (default: the active photo). Reads without changing the selection."}}),
             &[],
+        ),
+        tool(
+            "auto_develop",
+            "Auto-correct a photo",
+            "Apply one automatic correction to an explicit photo: tone replaces exposure, contrast, highlights, shadows, whites, blacks, vibrance and saturation; white_balance replaces white balance. Edits only this photo in one request: the selection stays as it is and Auto Sync does not carry the correction to other photos. One undo step; returns before/after develop settings. Inspect render_preview before and after. For both corrections, apply white_balance first, then tone.",
+            json!({
+                "id": {"type": "integer", "minimum": 1, "description": "Required target photo id from query_photos or doc_inspect"},
+                "adjustment": {"type": "string", "enum": ["tone", "white_balance"], "description": "Which automatic correction to apply"}
+            }),
+            &["id", "adjustment"],
         ),
         tool(
             "set_develop",
@@ -217,7 +227,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             "Render photo",
             "Render a photo with its current develop settings (cropped) and return it as an image so you can look at the result. `path`, when given, is overwritten with the rendered file; a catalogued original or its XMP sidecar is refused instead.",
             json!({
-                "id": {"type": "integer", "description": "Photo id (default: the active photo); selection is unchanged"},
+                "id": {"type": "integer", "minimum": 1, "description": "Photo id (default: the active photo); selection is unchanged"},
                 "size": {"type": "integer", "description": "Long edge in pixels (default 1024, max 4096)"},
                 "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image encoding (default png; jpeg is smaller)"},
                 "path": {"type": "string", "description": "Also save the rendered file here"}
@@ -482,6 +492,33 @@ impl Drop for TempPng {
     }
 }
 
+/// A malformed explicit target must never fall back to the active photo.
+fn check_photo_id(args: &Value) -> Result<(), String> {
+    if let Some(id) = args.get("id")
+        && !id.as_u64().is_some_and(|id| id > 0)
+    {
+        return Err("`id` must be a positive integer photo id".into());
+    }
+    Ok(())
+}
+
+fn auto_develop(b: &mut dyn Backend, args: &Value) -> Result<Value, String> {
+    let id = args.get("id").and_then(Value::as_u64).filter(|id| *id > 0).ok_or("missing positive integer photo `id`")?;
+    let (command, params) = match args.get("adjustment").and_then(Value::as_str) {
+        Some("tone") => ("develop.auto", json!({"id": id})),
+        Some("white_balance") => ("develop.wb", json!({"mode": "auto", "id": id})),
+        _ => return Err("`adjustment` must be tone or white_balance".into()),
+    };
+    let before = exec(b, "develop.get", json!({"id": id}))?;
+    // One request names the photo: the engine commits a pending slider edit as its own undo step, edits the photo
+    // alone (no Auto Sync) and leaves the selection as it is, so a photo the user selects or drags a slider on
+    // between two requests (`--connect`) never shares the correction.
+    let result = exec(b, command, params)?;
+    let after = exec(b, "develop.get", json!({"id": id}))
+        .map_err(|e| format!("correction applied to photo {id}, but could not read resulting settings: {e}"))?;
+    Ok(json!({"id": id, "adjustment": args["adjustment"], "before": before, "after": after, "result": result}))
+}
+
 /// Read a PNG the backend wrote, optionally downscale / re-encode as JPEG, and wrap it as image
 /// content (+ a text block with the metadata).
 fn image_result(file: &std::path::Path, max: Option<u32>, format: &str, save_to: Option<&str>, meta: Value) -> ToolResult {
@@ -603,6 +640,11 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     if !args.is_object() {
         return ToolResult::error("tool arguments must be an object");
     }
+    if matches!(name, "get_develop" | "set_develop" | "auto_develop" | "crop" | "render_photo" | "render_preview" | "export")
+        && let Err(e) = check_photo_id(args)
+    {
+        return ToolResult::error(e);
+    }
     let s = |k: &str| args.get(k).and_then(Value::as_str);
     if let Some(rest) = name.strip_prefix(COMMAND_TOOL_PREFIX) {
         // Command ids never contain `_`, so the mapping is reversible.
@@ -709,6 +751,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         }
         "list_controls" => ToolResult::from(exec(b, "develop.controls", obj(args, &["section"]))),
         "get_develop" => ToolResult::from(exec(b, "develop.get", obj(args, &["id"]))),
+        "auto_develop" => ToolResult::from(auto_develop(b, args)),
         "set_develop" => {
             let r = (|| {
                 activate(b, args)?;

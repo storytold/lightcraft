@@ -1198,6 +1198,53 @@ fn the_hot_pixel_limit_renders_afresh_only_the_photos_that_remove_hot_pixels() {
 }
 
 #[test]
+fn white_balance_on_a_named_photo_leaves_the_selection_and_auto_sync_alone() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    let target = PhotoId(ids[2]);
+    let mut d = (*s.develop_of(target).unwrap()).clone();
+    d.wb.tint = 30.0;
+    s.set_develop(target, d, "Setup").unwrap();
+    // the user's selection: the first two photos, the first active, Auto Sync on; the named photo is not in it
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let others = [ids[0], ids[1]].map(|id| s.develop_of(PhotoId(id)).unwrap());
+    let before = s.develop_of(target).unwrap();
+    let named = json!({"mode": "auto", "id": target.0});
+    s.execute("develop.wb", &named).unwrap();
+    assert_ne!(s.develop_of(target).unwrap(), before, "the named photo is edited");
+    assert_eq!([ids[0], ids[1]].map(|id| s.develop_of(PhotoId(id)).unwrap()), others, "no Auto Sync");
+    assert_eq!((s.selection.ids.clone(), s.selection.active), (vec![PhotoId(ids[0]), PhotoId(ids[1])], Some(PhotoId(ids[0]))));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(target).unwrap(), before, "one undo step");
+    // the named photo alone, also with nothing active; an unknown photo or a malformed id is refused
+    s.selection.ids.clear();
+    s.selection.active = None;
+    s.execute("develop.wb", &named).unwrap();
+    assert_ne!(s.develop_of(target).unwrap(), before);
+    for bad in [json!({"id": 999_999}), json!({"id": "x"}), json!({"ids": "x"})] {
+        let mut p = json!({"mode": "auto"});
+        p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(s.execute("develop.wb", &p).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn auto_settings_on_a_named_photo_need_no_selection() {
+    let mut s = demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.selection.ids.clear();
+    s.selection.active = None;
+    let before = s.develop_of(id).unwrap();
+    assert!(s.execute("develop.auto", &json!({})).is_err(), "without a photo named or selected there is nothing to correct");
+    s.execute("develop.auto", &json!({"id": id.0})).unwrap();
+    assert_ne!(s.develop_of(id).unwrap(), before, "the named photo is corrected");
+    assert!(s.selection.ids.is_empty() && s.selection.active.is_none(), "and the selection stays empty");
+    assert!(s.execute("develop.auto", &json!({"id": 999_999})).is_err());
+}
+
+#[test]
 fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     use lightcraft_catalog::PhotoId;
     let mut s = demo();

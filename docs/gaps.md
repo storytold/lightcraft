@@ -70,6 +70,9 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 - 2026-10-22: GPX track points decode XML character references in coordinate attributes and
   element text before parsing. Malformed or undeclared references return an error; CDATA stays
   literal. Track positions and timestamps no longer silently change or lose points.
+- 2026-11-21: agent photo-editing workflow shipped as a skill and MCP resource, with explicit-target
+  auto tone/white balance and before/after settings (`docs/mcp.md`). This improves agent operation;
+  the image-quality, model and plug-in ecosystem gaps above remain open.
 
 - 2026-10-20: the import review album picker follows the sidebar folder hierarchy and searches album paths (#2362, LR-IMP-ADD-DIALOG), retaining None/New album and existing destination IDs. This closes a usability subgap; no ranked gap or headline feature count closes.
 
@@ -142,6 +145,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-15 | minor | Gap 28: `\` shows / hides the Filter Bar in the grids; the entry drops `[` `]` (#509), flag cycling (#1490) and F1 (Help), already on main; ⌘L is the filter-bar key left; hours unchanged |
 | 2026-10-12 | minor | Measured Contrast and Blacks calibration; Whites and broader fidelity remain open |
 | 2026-10-16 | patch | Gap 13: catalog VIDEO records match the Videos filter, including after reimport of older records (#1940, filter issue only). Video playback, frame previews and folder-sync discovery remain outside this repair; no gap closed or counts changed. |
+| 2026-11-21 | minor | Record agent workflow support without changing parity gaps or estimates |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
 | 2026-10-14 | minor | Gap 10: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277) |
 | 2026-10-14 | minor | Gap 21: de, es, fr, ja and uk catalogs filled (97–99%); 55–90 h → 40–70 h |
