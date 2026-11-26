@@ -331,6 +331,15 @@ fn invalid_generated_output(ready: &ReadyFile) -> bool {
         && !ready.info.content_hash.as_deref().is_some_and(|hash| ready.copy.as_ref().is_some_and(|copy| copy.is_current(&ready.stored, Some(hash))))
 }
 
+fn report_unverified_dng_paths(s: &Session, report: &mut ImportReport, paths: Vec<(PhotoId, String, Option<String>)>) {
+    report.failed.extend(paths.into_iter().filter_map(|(id, path, hash)| {
+        let restored_here = s.catalog.photo(id).is_some_and(|photo| {
+            photo.content_hash.is_some() && photo.content_hash == hash && photo.library_file().is_some_and(|source| same_import_file(source, &path))
+        });
+        (!restored_here).then_some((path, "this DNG could not be verified as the deleted photo's original; it was left untouched".into()))
+    }));
+}
+
 fn replacement_is_current(path: &str, hash: Option<&str>, output: Option<&CopyOutput>) -> bool {
     match output {
         Some(copy) => copy.is_current(path, hash),
@@ -406,6 +415,22 @@ fn restore_duplicate(
     Ok(())
 }
 
+/// Deleted records that Fresh can replace, indexed by their last known hash and path.
+fn fresh_replacement_targets(s: &Session, on_deleted: OnDeleted) -> (HashMap<String, PhotoId>, HashMap<String, PhotoId>) {
+    let (mut hashes, mut paths) = (HashMap::new(), HashMap::new());
+    if on_deleted == OnDeleted::Fresh {
+        for photo in s.catalog.photos().filter(|p| p.deleted) {
+            if let Some(hash) = &photo.content_hash {
+                hashes.insert(hash.clone(), photo.id);
+            }
+            if let Source::File { path } = &photo.source {
+                paths.insert(path.clone(), photo.id);
+            }
+        }
+    }
+    (hashes, paths)
+}
+
 /// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 /// taken back.
@@ -437,17 +462,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         converted_hashes,
     );
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
-    let (mut trash_hash, mut trash_path): (HashMap<String, PhotoId>, HashMap<String, PhotoId>) = Default::default();
-    if opts.on_deleted == OnDeleted::Fresh {
-        for p in s.catalog.photos().filter(|p| p.deleted) {
-            if let Some(h) = &p.content_hash {
-                trash_hash.insert(h.clone(), p.id);
-            }
-            if let Source::File { path } = &p.source {
-                trash_path.insert(path.clone(), p.id);
-            }
-        }
-    }
+    let (trash_hash, trash_path) = fresh_replacement_targets(s, opts.on_deleted);
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     for it in prepared.items {
@@ -599,12 +614,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     for copy in cleanup {
         copy.remove(s, &prepared.restore_checks, &mut report);
     }
-    report.failed.extend(unverified_dng_paths.into_iter().filter_map(|(id, path, hash)| {
-        let restored_here = s.catalog.photo(id).is_some_and(|photo| {
-            photo.content_hash.is_some() && photo.content_hash == hash && photo.library_file().is_some_and(|source| same_import_file(source, &path))
-        });
-        (!restored_here).then_some((path, "this DNG could not be verified as the deleted photo's original; it was left untouched".into()))
-    }));
+    report_unverified_dng_paths(s, &mut report, unverified_dng_paths);
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
