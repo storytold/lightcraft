@@ -17,6 +17,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 
 pub mod brush_live;
 pub mod canvas_keys;
+pub mod channel;
 mod command_error;
 pub mod control;
 pub mod destination;
@@ -36,6 +37,7 @@ pub mod links;
 pub mod loupe_timing;
 pub mod menus;
 mod missing_sweep;
+pub mod motion;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -51,6 +53,7 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+mod thumb;
 pub mod widgets;
 pub mod window_place;
 
@@ -96,6 +99,7 @@ mod services;
 #[cfg(test)]
 use app::{import_tick_allowed, sam_download_ended, shot_ready};
 pub(crate) use caches::key_of;
+use caches::{AlbumCounts, AlbumRecount};
 pub use caches::{FilterValues, LibraryCounts, RulesView};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
@@ -103,7 +107,7 @@ pub use clock::{monotonic_ms, now_ms};
 pub use services::OpenModelFolderFn;
 pub use services::{
     CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,
-    SharedWrite, SystemThemeFn, WriteFn,
+    SharedWrite, SystemReduceMotionFn, SystemThemeFn, WriteFn,
 };
 use state::{GestureFrame, InjectedPress};
 
@@ -203,6 +207,9 @@ pub struct LightcraftApp {
     /// The language already sent to `Context::set_language`, so a logic pass does not allocate a
     /// `String` just to compare it.
     accesskit_language: Option<String>,
+    /// The selection last seen ([`LightcraftApp::selection_changes`]) and how many times it was
+    /// seen to differ from the one before.
+    selection_seen: (u64, u64),
     /// When playback was auto-paused because the window became hidden (`None`: it is running, or
     /// the user paused it). On unhide the pause is lifted and the slide keeps its remaining time.
     slideshow_hidden_at: Option<f64>,
@@ -333,6 +340,8 @@ pub struct LightcraftApp {
     pub(crate) scans_stopping: import::StoppingScans,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
+    /// The folders the scan of the review on screen listed, for the import that review starts (and no other).
+    pub review_listed: Option<lightcraft_engine::import::ListedFolders>,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
@@ -347,6 +356,8 @@ pub struct LightcraftApp {
     pub(crate) lightroom_result: Option<state::Dialog>,
     /// The import review of a finished scan, waiting for another dialog to close.
     pub(crate) review_pending: Option<state::Dialog>,
+    /// The folders that review's scan listed; they become [`Self::review_listed`] when the review opens.
+    pub(crate) review_pending_listed: Option<lightcraft_engine::import::ListedFolders>,
     /// The library generation the window title and the recent list were last updated for.
     pub shown_library: Option<u64>,
     /// A background export in progress.
@@ -387,6 +398,9 @@ pub struct LightcraftApp {
     /// and when it was last read (egui time, s).
     pub(crate) screen_profile: Option<Vec<u8>>,
     pub(crate) screen_profile_read: Option<f64>,
+    /// The last answer of `services.system_reduce_motion` and when it was read.
+    pub(crate) system_reduce_motion: Option<bool>,
+    pub(crate) system_reduce_motion_read: Option<f64>,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
@@ -624,10 +638,12 @@ pub struct Caches {
     counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
-    /// The albums' counts: the minute they are of (while a smart album asks about "the last N days"), the tally
-    /// that follows edits, and the counts as the panels take them.
-    album_counts:
-        Option<(String, lightcraft_catalog::tally::AlbumTally, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>)>,
+    /// The albums' counts as the sidebar shows them, with the tally that follows edits.
+    album_counts: Option<AlbumCounts>,
+    /// A count of every photo running off the UI thread; the counts above are shown until it is done.
+    album_recount: Option<AlbumRecount>,
+    /// The library, catalog revision and minute a count of every photo failed at: not tried again until one changes.
+    album_recount_failed: Option<(u64, u64, String)>,
     /// How often the album counts were made from every photo (tests check that unchanged frames, and edits to a
     /// photo or a few, don't).
     pub album_count_scans: usize,
