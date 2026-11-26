@@ -232,6 +232,11 @@ mod loupe_view_options_flow_tests;
 
 /// A playback duration slider (`slider:{id}`). While it is dragged the value changes in memory
 /// (the slideshow reads it); letting go saves it through `slideshow.playback`.
+///
+/// A preview is worked out from the settings the gesture began with, not from the last preview:
+/// a slide shorter than the fade clamps the fade, and playing that back onto the clamped settings
+/// would keep the fade short for good, even when Escape gives the slide back or the gesture is let
+/// go at a slide that allows the longer fade again.
 pub(super) fn duration_slider(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
@@ -243,14 +248,33 @@ pub(super) fn duration_slider(
 ) {
     use super::controls::{self, Shape, Step};
     let shape = Shape { label, lo: *range.start(), hi: *range.end(), unit: "s", step: 0.1, log: key == "slideDuration" };
+    // the settings the gesture began with, kept for its previews and its save
+    let start_key = controls::owner(id).with("gesture-start");
+    let held = |ui: &egui::Ui| ui.data(|d| d.get_temp::<lightcraft_engine::slideshow::PlaybackSettings>(start_key));
     for step in controls::slider(ui, controls::owner(id), id, &shape, value) {
         match step {
+            Step::Begin(_) => {
+                let start = app.session.slideshow.clone();
+                ui.data_mut(|d| d.insert_temp(start_key, start));
+            }
             Step::Preview(v) => {
-                if let Ok(next) = app.session.slideshow.merged(&json!({ key: v })) {
+                let start = held(ui).unwrap_or_else(|| {
+                    // a gesture whose Begin this pass did not see: the settings as they are now
+                    let start = app.session.slideshow.clone();
+                    ui.data_mut(|d| d.insert_temp(start_key, start.clone()));
+                    start
+                });
+                if let Ok(next) = start.merged(&json!({ key: v })) {
                     app.session.slideshow = next;
                 }
             }
             Step::Save(v) => {
+                // The command merges into the settings in memory: give it the settings the gesture
+                // began with, so only the duration let go of changes, and the other one is clamped
+                // by that final value alone (the command merges, saves and records).
+                let start = held(ui).unwrap_or_else(|| app.session.slideshow.clone());
+                ui.data_mut(|d| d.remove::<lightcraft_engine::slideshow::PlaybackSettings>(start_key));
+                app.session.slideshow = start;
                 let _ = app.run("slideshow.playback", json!({ key: v }));
             }
         }

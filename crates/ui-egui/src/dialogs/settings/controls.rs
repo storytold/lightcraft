@@ -52,6 +52,9 @@ pub(crate) struct Shape<'a> {
 /// What a slider asks its owner to do, in the numbers it shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Step {
+    /// A gesture began at `value`: the control's own value then (`None` when it had no single one).
+    /// An owner that needs the settings the gesture started from keeps its own copy here.
+    Begin(Option<f64>),
     /// Show `value` now (a drag in progress, or an abandoned gesture's value going back) without saving it.
     Preview(f64),
     /// The change is done: save `value`.
@@ -110,6 +113,8 @@ pub(crate) fn slider(ui: &mut egui::Ui, owner: egui::Id, name: &str, shape: &Sha
     }
     for event in &out.events {
         match event {
+            EditEvent::Begin { before: Mixed::Same(before), .. } => steps.push(Step::Begin(Some(*before))),
+            EditEvent::Begin { .. } => steps.push(Step::Begin(None)),
             EditEvent::Update { value, .. } => steps.push(Step::Preview(*value)),
             EditEvent::Commit { before: Mixed::Same(before), after, .. } => {
                 steps.push(Step::Preview(*before));
@@ -180,9 +185,13 @@ pub(crate) fn colour(ui: &mut egui::Ui, owner: egui::Id, name: &str, label: &str
                 })
                 .inner;
             for step in steps {
-                let (Step::Preview(v) | Step::Save(v)) = step;
-                rgb[i] = v.round().clamp(0.0, 255.0) as u8;
-                saved |= matches!(step, Step::Save(_));
+                match step {
+                    Step::Begin(_) => {}
+                    Step::Preview(v) | Step::Save(v) => {
+                        rgb[i] = v.round().clamp(0.0, 255.0) as u8;
+                        saved |= matches!(step, Step::Save(_));
+                    }
+                }
             }
         }
         if let Some(typed) = hex_field(ui, owner, name, rgb) {
