@@ -1,6 +1,6 @@
 use crate::convert::{from_craft, to_craft};
 use crate::{Metadata, Orientation};
-use craft_tiff::{ParseOptions, Tiff, TiffError, tags as t};
+use craft_tiff::{ParseOptions, Tiff, TiffError};
 
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
     craft_metadata::strip_exif_header(b)
@@ -27,8 +27,7 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
 }
 
 pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
-    let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
-    tiff.ifds.first()?.u16(t::ORIENTATION).map(Orientation::from_exif)
+    craft_metadata::ifd0_orientation_compat(bytes).map(crate::convert::orientation_from_craft)
 }
 
 #[cfg(test)]
