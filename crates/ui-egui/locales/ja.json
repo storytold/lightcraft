@@ -2469,6 +2469,7 @@
   "Next": "次へ",
   "Get Started": "始める",
   "Keywords and presets apply to new files only, not to photos already in Local": "キーワードとプリセットは新しいファイルにのみ適用され、すでにローカルにある写真には適用されません",
+  "Same Content as Another Photo": "他の写真と同じ内容",
   "Reduce Motion": "動きを減らす",
   "Reduce motion": "動きを減らす",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。ここで変更するまで、システムの「視差効果を減らす」設定に従います。",
