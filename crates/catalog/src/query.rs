@@ -599,13 +599,7 @@ impl Catalog {
 
     /// All keywords with usage counts, sorted by name.
     pub fn keywords(&self) -> Vec<(String, usize)> {
-        let mut m: std::collections::BTreeMap<String, usize> = Default::default();
-        for p in self.photos().filter(|p| p.in_library()) {
-            for k in &p.meta.keywords {
-                *m.entry(k.clone()).or_default() += 1;
-            }
-        }
-        m.into_iter().collect()
+        self.keyword_index().counts().map(|(k, c)| (k.to_owned(), c)).collect()
     }
 
     /// The people named on faces in the library (MWG regions read from XMP): how many photos each

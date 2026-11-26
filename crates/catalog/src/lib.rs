@@ -708,7 +708,7 @@ impl Catalog {
         if !self.remembers(revision) {
             return None;
         }
-        let photos = self.changes.touched.iter().filter(|(r, _, _)| *r > revision).fold(Aspects::NONE, |all, (_, _, a)| all.with(*a));
+        let photos = self.changes.touched.iter().rev().take_while(|(r, _, _)| *r > revision).fold(Aspects::NONE, |all, (_, _, a)| all.with(*a));
         Some(if self.changes.keyword_list > revision { photos.with(Aspects::KEYWORD_LIST) } else { photos })
     }
 
@@ -743,6 +743,7 @@ impl Catalog {
         }
         let broad = self.changes.broad;
         let keyword_list = self.changes.keyword_list;
+        let before = self.revision;
         self.changes.torn = false;
         let inv = match self.apply_inner(op) {
             Ok(inv) => inv,
@@ -756,6 +757,7 @@ impl Catalog {
                     self.changes.broad = made;
                     self.revision = made;
                     self.changes.seen = made;
+                    self.index.keywords_changed();
                 } else {
                     // (everything the failed op, or the rollback of a batch, noted was made for the revision it
                     // would have made: nothing earlier has that one. A note the cap already dropped stays
@@ -771,6 +773,9 @@ impl Catalog {
         };
         self.revision += 1;
         self.changes.seen = self.revision;
+        if self.aspects_since(before).is_none_or(|a| a.any_of(Aspects::META.with(Aspects::PRESENCE).with(Aspects::KEYWORD_LIST))) {
+            self.index.keywords_changed();
+        }
         Ok(inv)
     }
 
