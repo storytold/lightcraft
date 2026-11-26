@@ -38,6 +38,7 @@ mod lens_refresh;
 mod libops;
 mod library;
 mod lightroom_folder;
+mod lightroom_history;
 mod mask_effects;
 mod mask_geometry;
 mod merge;
@@ -62,6 +63,7 @@ mod slideshow_export;
 mod slow_drive;
 mod spots;
 mod sync;
+mod task_queue;
 mod view_follow;
 pub(super) mod xmp;
 

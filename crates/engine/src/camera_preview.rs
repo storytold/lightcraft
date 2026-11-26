@@ -36,8 +36,8 @@ use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]
 use look_fit::{
-    FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, sony_dro_off_tone, with_dro_off_tone,
-    with_pooled_tone, with_profile_colour, without_clipped,
+    FIT_PREVIEW_MAX_PIXELS, ProxyFrame, SENSOR_CLIP, at_most, camera_vignetting_amount, clips_more, correct_vignetting, fit_dng_tone, fit_look,
+    fit_look_with, sony_dro_off_tone, vignetting_gains, with_dro_off_tone, with_pooled_tone, with_profile_colour, without_clipped,
 };
 #[cfg(test)]
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
@@ -91,8 +91,11 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 16: a camera profile's pooled tone curve continues a photo's own past what its JPEG showed.
 /// 17: only a look with the profile's colour continues along its pooled tone curve.
 /// 18: continuing a photo's curve keeps it as it was where its JPEG taught it (`thinned_knots`).
-/// 19: the bundled NIKON D780, D750 and D90 profiles.
-pub const LOOK_VERSION: u32 = 19;
+/// 27: the bundled NIKON D780, D750 and D90 profiles.
+/// 26: a lens database's vignetting correction reaches the sensor proxy only in the share the camera JPEG shows
+/// (`camera_vignetting_amount`, ranked within chromaticity classes), not whole: JPEGs that show less of it fitted looks too
+/// dark, with skewed colour. The same for a DNG's tone fit; a CR3 proxy gets the gain where its framed pixels come from.
+pub const LOOK_VERSION: u32 = 27;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
