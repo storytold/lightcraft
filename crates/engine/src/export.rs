@@ -114,5 +114,22 @@ pub struct ExportOptions {
     pub hdr_transfer: HdrCurve,
 }
 
+/// Planned paths for an export of `ids` under `o` to `to`, in batch order: each entry is the file
+/// [`run_batch`] would write (`{path, sidecars, width, height, bytes}`), a skipped name (`{skipped}`),
+/// or a photo whose write would fail (`{photo, file, error}`). It runs the real batch through a
+/// writer that writes nothing, so the placement, conflict policy and original guard are the ones
+/// an export uses; photos are still rendered, which is what sizes and sidecars depend on.
+pub fn export_plan(
+    session: &mut crate::Session,
+    ids: &[lightcraft_catalog::PhotoId],
+    o: &ExportOptions,
+    to: &Destination,
+    exists: &dyn Fn(&str) -> bool,
+) -> Result<Vec<serde_json::Value>, String> {
+    let items = prepare_batch(session, ids, o)?;
+    let mut discard = |_: &str, _: &[u8]| Ok::<(), String>(());
+    run_batch(items, o, to, &mut discard, exists, false, &mut |_, _| true)
+}
+
 #[cfg(test)]
 mod tests;
