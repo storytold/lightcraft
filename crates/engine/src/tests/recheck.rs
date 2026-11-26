@@ -179,6 +179,43 @@ fn reload_reports_file_read_errors_while_a_target_is_current() {
 }
 
 #[test]
+fn reload_failure_follows_the_copy_when_the_original_has_relinked() {
+    use crate::cmd::reload;
+    let mut x = library("unreadable-copy");
+    let copy = x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap()["ids"][0].as_u64().unwrap();
+    let items = reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap();
+    let different = x.dir.join("other.cr3");
+    std::fs::copy(&x.file, &different).unwrap();
+    x.s.execute("photo.relink", &json!({"id": x.id.0, "path": different.to_string_lossy()})).unwrap();
+    let result = reload::apply(&mut x.s, items, vec![Err("drive offline".into())]).unwrap();
+    assert_eq!(result.to_json()["failed"], json!([{"id": copy, "path": x.file.to_string_lossy(), "error": "drive offline"}]));
+}
+
+#[test]
+fn reload_and_recheck_from_an_earlier_library_cannot_update_a_matching_id_and_path() {
+    use crate::cmd::reload;
+    let mut x = library("replaced-library");
+    let reload_items = reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap();
+    let recheck_items = recheck::stale(&mut x.s, false);
+    assert_eq!(recheck_items.len(), 1);
+    let probe = reload::file_probe(&x.s).unwrap();
+    let old = probe(&x.file.to_string_lossy()).unwrap();
+    decodable_now(&x);
+    x.s.open_library(x.dir.join("another-library"), false).unwrap();
+    let result = x.s.execute("library.import", &json!({"paths": [x.file.to_string_lossy()]})).unwrap();
+    assert_eq!(result["imported"], json!([x.id.0]));
+    let before = x.s.catalog.photo(x.id).unwrap().clone();
+    let undo = x.s.undo.len();
+    let rechecked = recheck::apply(&mut x.s, recheck_items.into_iter().map(|item| (item, Ok(old.clone()))).collect()).unwrap();
+    assert!(rechecked.updated.is_empty());
+    let reloaded = reload::apply(&mut x.s, reload_items, vec![Ok(old)]).unwrap();
+    assert!(reloaded.checked.is_empty());
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
+    assert_eq!(x.s.undo.len(), undo);
+    assert!(x.s.execute("photo.reload", &json!({"id": x.id.0})).unwrap()["failed"].is_null());
+}
+
+#[test]
 fn rejected_recheck_does_not_supersede_an_older_reload() {
     use crate::cmd::reload;
     let mut x = checked_orf("rejected-batch");

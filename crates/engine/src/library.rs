@@ -643,6 +643,7 @@ impl Session {
         // (nothing of the list the last library showed is this one's)
         self.refresh_view();
         self.library_generation = crate::LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.reload_tickets = Default::default();
         for entry in self.undo.iter_mut().chain(self.redo.iter_mut()) {
             self.pending_sidecar_repairs.append(&mut entry.retry_sidecars);
         }

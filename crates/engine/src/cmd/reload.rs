@@ -28,6 +28,7 @@ pub struct Item {
     /// Same-file family members, including implicit fallback targets.
     pub(crate) source_targets: Vec<PhotoId>,
     family: PhotoId,
+    library: u64,
     /// The [`plan`] it came from, in the order reloads were started (see [`Tickets`]).
     pub ticket: u64,
 }
@@ -35,6 +36,9 @@ pub struct Item {
 impl Item {
     /// Find a still-current representative without recording the read before its batch commits.
     pub(crate) fn current_representative(&mut self, s: &Session) -> Option<PhotoId> {
+        if self.library != s.library_generation() {
+            return None;
+        }
         self.source_targets.retain(|id| {
             s.reload_tickets.valid(*id, self.ticket)
                 && s.catalog.photo(*id).is_some_and(|p| {
@@ -107,6 +111,7 @@ pub(crate) fn plan_ids(s: &mut Session, ids: Vec<PhotoId>) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     let mut seen = HashSet::new();
     let ticket = s.reload_tickets.next();
+    let library = s.library_generation();
     for id in ids.into_iter().filter(|id| seen.insert(*id)) {
         let Some(ph) = s.catalog.photo(id) else { continue };
         if ph.deleted {
@@ -120,20 +125,22 @@ pub(crate) fn plan_ids(s: &mut Session, ids: Vec<PhotoId>) -> Vec<Item> {
             item.metadata_targets.push(id);
         } else {
             groups.insert(key, items.len());
-            items.push(Item { id, path: path.clone(), metadata_targets: vec![id], source_targets: vec![id], family, ticket });
+            items.push(Item { id, path: path.clone(), metadata_targets: vec![id], source_targets: vec![id], family, library, ticket });
         }
     }
     items
 }
 
 /// Index same-file siblings in one pass at completion, including copies created during the probe.
-pub(crate) fn include_same_file_copies<'a>(catalog: &lightcraft_catalog::Catalog, items: impl Iterator<Item = &'a mut Item>) {
-    let mut groups: std::collections::HashMap<_, _> =
-        items.map(|item| ((item.family, item.path.as_str()), (item.id, &mut item.source_targets))).collect();
+pub(crate) fn include_same_file_copies<'a>(s: &Session, items: impl Iterator<Item = &'a mut Item>) {
+    let mut groups: std::collections::HashMap<_, _> = items
+        .filter(|item| item.library == s.library_generation())
+        .map(|item| ((item.family, item.path.as_str()), (item.id, &mut item.source_targets)))
+        .collect();
     if groups.is_empty() {
         return;
     }
-    for ph in catalog.photos().filter(|p| !p.deleted) {
+    for ph in s.catalog.photos().filter(|p| !p.deleted) {
         if let Source::File { path } = &ph.source
             && let Some((id, targets)) = groups.get_mut(&(ph.copy_of.unwrap_or(ph.id), path.as_str()))
             && ph.id != *id
@@ -214,18 +221,19 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
     let mut ops = Vec::new();
     let mut out = Reloaded::default();
     let mut results: Vec<_> = items.into_iter().zip(results).collect();
-    include_same_file_copies(&s.catalog, results.iter_mut().map(|(item, _)| item));
+    include_same_file_copies(s, results.iter_mut().map(|(item, _)| item));
     let mut accepted = Vec::new();
     for (mut item, info) in results {
         let Some(id) = item.current_representative(s) else { continue };
         let info = match info {
             Ok(info) => info,
             Err(error) => {
-                out.failed.extend(item.metadata_targets.into_iter().filter(|id| item.source_targets.contains(id)).map(|id| ReadFailure {
-                    id,
-                    path: item.path.clone(),
-                    error: error.clone(),
-                }));
+                let before = out.failed.len();
+                let report = |id| ReadFailure { id, path: item.path.clone(), error: error.clone() };
+                out.failed.extend(item.metadata_targets.into_iter().filter(|id| item.source_targets.contains(id)).map(report));
+                if out.failed.len() == before {
+                    out.failed.push(ReadFailure { id, path: item.path, error });
+                }
                 continue;
             }
         };

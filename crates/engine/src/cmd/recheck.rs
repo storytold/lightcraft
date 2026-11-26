@@ -71,7 +71,7 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
     let mut ops = Vec::new();
     let mut out = Rechecked::default();
     let mut results: Vec<_> = results.into_iter().filter_map(|(item, info)| info.ok().map(|info| (item, info))).collect();
-    super::reload::include_same_file_copies(&s.catalog, results.iter_mut().map(|(item, _)| item));
+    super::reload::include_same_file_copies(s, results.iter_mut().map(|(item, _)| item));
     let mut accepted = Vec::new();
     for (mut item, info) in results {
         let Some(id) = item.current_representative(s) else { continue };
