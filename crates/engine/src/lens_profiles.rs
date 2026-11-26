@@ -52,6 +52,51 @@ pub fn host_dir() -> Option<PathBuf> {
     HOST_DIR.read().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
+/// Tests that change the lens database folder in use ([`use_dir`]) take turns through
+/// [`DirGuard`]: the folder is one for the whole test process and tests run at the same
+/// time, so one test's switch would otherwise land under another's assertions (round 2
+/// on #3867).
+#[cfg(test)]
+static CHANGING_DIR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Held while a test changes the lens database folder in use: the other tests that change
+/// it wait, and the folder is put back as it was found when the guard drops — also when
+/// the test fails, so a panicked test cannot leave the whole process reading its folder.
+#[cfg(test)]
+pub(crate) struct DirGuard {
+    // fields drop in order: the folder is put back and the scratch folder removed
+    // before the next test may take its turn
+    _restore: RestoreDir,
+    _turn: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl DirGuard {
+    /// Wait for the other tests that change the folder, then remember the folder as it
+    /// is now. `root` is the test's scratch folder, removed when the guard drops.
+    pub(crate) fn hold(root: PathBuf) -> DirGuard {
+        // poisoned: a test failed holding it, and its guard put the folder back on unwind
+        let turn = CHANGING_DIR.lock().unwrap_or_else(PoisonError::into_inner);
+        DirGuard { _restore: RestoreDir { before: host_dir(), root }, _turn: turn }
+    }
+}
+
+/// Puts the lens database folder back to what it was when made, and removes the test's
+/// scratch folder.
+#[cfg(test)]
+struct RestoreDir {
+    before: Option<PathBuf>,
+    root: PathBuf,
+}
+
+#[cfg(test)]
+impl Drop for RestoreDir {
+    fn drop(&mut self) {
+        use_dir(self.before.clone());
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Read the database again (after a download or an update): the next lookup sees the new data.
 pub fn reload() {
     // under the cache lock, so a load of the old files that finishes meanwhile can't be published ([`database`])
@@ -156,6 +201,48 @@ pub fn profile_name(db: &LensDb, camera: &str, lens: &str) -> Option<String> {
     Some(if model.to_lowercase().starts_with(&p.maker.to_lowercase()) || p.maker.is_empty() { model.clone() } else { format!("{} {model}", p.maker) })
 }
 
+/// Bump when [`lookup`] (or the readers that feed it) would find a profile for a file it found none for before, so
+/// photos remembered as "nothing found" ([`stamp`]) are read again once. A different database does that by itself.
+const LOOKUP_RULES: u32 = 1;
+
+/// What a photo whose file a lookup read against `db` and found no profile for is stamped with
+/// ([`lightcraft_catalog::Photo::lens_checked`]): the database's fingerprint and [`LOOKUP_RULES`]. Remembered for the
+/// database last asked about (hashing a whole lensfun database takes a moment; the app asks once per lookup).
+pub fn stamp(db: &LensDb) -> String {
+    format!("{LOOKUP_RULES}:{:016x}", cached_fingerprint(db))
+}
+
+/// [`LensDb::fingerprint`] of `db`, remembered per database object: the cache holds a `Weak` of every
+/// database it has hashed that a caller may still hold (the one in use, and one replaced since that a
+/// caller kept), so repeated calls for a retained database — not only the latest one — reuse its
+/// fingerprint. An address is only trusted while that database lives (a dead entry is dropped, never
+/// matched by a new database that reuses the address). A database no `Arc` in hand can name (a test's
+/// own, never loaded by [`database`]) is hashed each time; they are small.
+fn cached_fingerprint(db: &LensDb) -> u64 {
+    static CACHE: RwLock<Vec<(std::sync::Weak<LensDb>, u64)>> = RwLock::new(Vec::new());
+    if let Some((_, f)) =
+        CACHE.read().unwrap_or_else(PoisonError::into_inner).iter().find(|(weak, _)| weak.strong_count() > 0 && std::ptr::eq(weak.as_ptr(), db))
+    {
+        return *f;
+    }
+    let f = db.fingerprint();
+    if let Some(current) = LOADED.read().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|(_, d)| d.clone())
+        && std::ptr::eq(Arc::as_ptr(&current), db)
+    {
+        let mut cache = CACHE.write().unwrap_or_else(PoisonError::into_inner);
+        cache.retain(|(weak, _)| weak.strong_count() > 0);
+        cache.push((Arc::downgrade(&current), f));
+        // (a handful of databases are ever alive at once; the cap only guards a caller that loads
+        // folder after folder, whose oldest entries are the least likely to be asked for again)
+        const KEEP: usize = 8;
+        if cache.len() > KEEP {
+            let excess = cache.len() - KEEP;
+            cache.drain(..excess);
+        }
+    }
+    f
+}
+
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
 /// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
@@ -233,6 +320,39 @@ mod tests {
         let (level, line) = summary(dir, "downloaded", &LensDb::parse("<lensdatabase></lensdatabase>").unwrap());
         assert_eq!(level, log::Level::Warn);
         assert!(line.contains("no lenses") && line.contains("downloaded") && line.contains("lenses 0, cameras"), "{line}");
+    }
+
+    /// The fingerprint cache remembers every database a caller may still hold, not only the latest
+    /// one loaded: a retained database that is no longer the one in use still stamps with its own
+    /// fingerprint (round 1 on #3867 — the single-entry cache rehashed it on every call, and a
+    /// cache that mixed databases up would stamp photos against the wrong one).
+    #[test]
+    fn a_retained_database_keeps_its_own_stamp() {
+        if std::env::var_os(ENV).is_some_and(|v| !v.is_empty()) {
+            lightcraft_testkit::skip!(Input, "LIGHTCRAFT_LENSFUN_DIR names the folder in use");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("lc-stamp-cache-{}", std::process::id()));
+        // this test switches the process-wide lens folder: take the turn, and let the
+        // guard put the folder back and remove the scratch folder, also on panic
+        let _dir = DirGuard::hold(root.clone());
+        let _ = std::fs::remove_dir_all(&root);
+        let (d1, d2) = (root.join("one"), root.join("two"));
+        for (d, xml) in [(&d1, DB.to_string()), (&d2, DB.replace("k1=\"-0.03\"", "k1=\"-0.04\""))] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("lenses.xml"), xml).unwrap();
+            std::fs::write(d.join(crate::lensfun_download::MARKER), "whole").unwrap();
+        }
+        use_dir(Some(d1.clone()));
+        let db1 = database().unwrap();
+        let s1 = stamp(&db1);
+        use_dir(Some(d2.clone()));
+        let db2 = database().unwrap();
+        let s2 = stamp(&db2);
+        assert_ne!(s1, s2, "different databases, different stamps");
+        assert_eq!(stamp(&db1), s1, "retained and no longer in use: its own fingerprint");
+        assert_eq!(stamp(&db2), s2, "the one in use: its own fingerprint");
+        // the guard puts the folder back and removes `root` when it drops
     }
 
     #[test]

@@ -139,12 +139,24 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let abs = abs.to_string_lossy().to_string();
     // the file may differ from the one imported (another export, a raw that decodes now or not):
-    // its size, dimensions and preview-only state follow it
+    // its size, dimensions, preview-only state and lens data follow it
     let mut ops = vec![relink_op(id, &abs)];
     if s.media.file_probe.is_some()
         && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
     {
-        ops.extend(crate::cmd::convert::content_op(id, ph, info));
+        // the replacement's lens data, as Reload would bring it; and when the file's content or
+        // lens data changes, a lens lookup remembered against the old file
+        // ([`lightcraft_catalog::Photo::lens_checked`]) is invalidated, so a later sweep reads
+        // the replacement instead of skipping it on the old stamp. An unchanged file (the usual
+        // moved-file relink) keeps its stamp and is not read again.
+        let lens = crate::cmd::convert::lens_ops(id, ph, &info);
+        let changed = !lens.is_empty();
+        ops.extend(lens);
+        let content = crate::cmd::convert::content_op(id, ph, info);
+        if (changed || content.is_some()) && !ph.lens_checked.is_empty() {
+            ops.push(Op::SetLensChecked { id, checked: String::new() });
+        }
+        ops.extend(content);
     }
     let op = match <[Op; 1]>::try_from(ops) {
         Ok([op]) => op,
