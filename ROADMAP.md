@@ -128,6 +128,8 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   them the maintainer's D60 shots); as-shot white balance, black level, rotation and capture time
   from the CIFF records; the PowerShot G5's anomalous coding stays preview-only. With the
   camera-coverage sweep and MRW merged, 557 models verified; Canon bucket 95% → 98%.
+- 2026-10-28: MIDI control surfaces (Windows, macOS): a TOML map binds faders, knobs and buttons to Develop
+  sliders and commands, one undo step per turn (`docs/midi.md`, gap 31). Headline numbers unchanged.
 - 2026-10-14: Camera-coverage sweep verifies 30 more models on 40 CC0 files, with file and sensor
   hashes pinned (`docs/raw/coverage.py`: 515 → 545 verified). Eleven candidates excluded after rechecking
   identity, provenance and camera-image agreement. Phone and drone DNG tone differences remain tracked in #1277.
@@ -199,6 +201,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | MIDI control surfaces (LRC-HW-MIDI): a TOML map binds faders, knobs and buttons to Develop sliders and commands; new gap 31 lists what is missing |
 | 2026-11-15 | minor | Lens Blur with AI subject focus and per-mask bokeh; survey tiles fit the photos' shapes and glide to their new places; direct import of Lightroom backup zips (#2592); legacy shutter repair in virtual copies; the opened-library folder-safety fix; v0.21.0 and v0.21.1 released; craft-libs cutover for TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata and gain maps, plus a security-hardening batch; headline numbers not re-measured |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |

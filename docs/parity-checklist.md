@@ -57,10 +57,10 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
-| Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| Lightroom Classic extras | 41 | 27 | 21 | 8 | — | 24/27 (89%) |
+| **Total** | 419 | 72 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.9% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -701,6 +701,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-LIB-IMPORT | Full import dialog | P1 | ✅ | `cmd:library.import` (`mode`, `destination`, `organize`, `rename`, `metadataPreset`, `preset`, `keywords`, `album`), `crates/ui-egui/src/dialogs/import.rs` | review grid with duplicates skipped; add in place or copy (library Originals or any folder; by day / by month / one folder / custom folder template such as `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 or `{date:%Y}/{date:%B}` → 2026/January, kept inside the destination; example destination shown; rename template with live example, Tags picker (insert at cursor) and unknown-tag warning, numbered across the import); develop preset, metadata preset, keywords, album on import |
 | LRC-LIB-AUTOIMPORT | Watched-folder import | P2 | ✅ | `cmd:library.autoImport` | see LR-IMP-AUTO |
 | LRC-LIB-TETHER | Tethered capture | P2 | ⬜ | | |
+| LRC-HW-MIDI | MIDI control surface | P2 | 🟡 | `cmd:midi.reload`, `crates/engine/src/midi.rs`, `apps/lightcraft/src/midi.rs`, `docs/midi.md` | Lightroom has no MIDI of its own (plug-ins such as MIDI2LR add it). A TOML map (`midi.toml`, examples in `docs/midi/`) binds faders and absolute / relative knobs to Develop sliders and buttons to commands, one undo step per turn; Windows and macOS only; no editing UI, MIDI learn, pickup or LED feedback |
 | LRC-LIB-VIEWS | Grid / loupe / compare / survey / people | P1 | 🟡 | `cmd:view.photoGrid`, `cmd:view.squareGrid`, `cmd:view.detail`, `cmd:view.compare`, `cmd:view.survey`, `cmd:view.gridInfo` | grid, square grid, loupe, compare, survey, second window; square-grid captions: file name, exposure or capture date (View ▸ Grid Info; no people view; picking one in Photo Grid switches to Square Grid) |
 | LRC-LIB-COMPARE | Compare view | P1 | ✅ | `cmd:view.compare` | ⇧C (C is Crop here); swap, make select; a filmstrip click replaces the active side, a ⌘/Ctrl- or Shift-click changes the selection without touching the pair; zoom always linked; each pane says “Rendering…” or that the photo can't be opened, as the loupe does (see LR-VIEW-COMPARE); the Info panel's stars and colour labels (and the Set Color Label menu) act on the active photo only, and each pane's caption shows its colour label (#2398) |
 | LRC-LIB-SURVEY | Survey view | P2 | ✅ | `cmd:view.survey` | N |
@@ -807,6 +808,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | LRC-HW-MIDI: MIDI control surfaces (a TOML map from faders, knobs and buttons to Develop sliders and commands); totals regenerated |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-23 | minor | LR-BEHAV-RENDER-FIDELITY, LR-EDIT-LIGHT-SHADOWS, LR-EDIT-EFFECTS-TEXTURE, LR-EDIT-COLOR-GRADING, LRC-DEV-PROCESS: process V13 eases global Shadows off at large amounts, negative Texture and the Global grading wheel act less, fitted to Lightroom exports of real edits (#523); statuses and counts unchanged |
 | 2026-11-24 | minor | LR-REM-HEAL, LR-REM-CLONE, LRC-DEV-PROCESS: process V14 pins Heal and Remove spots to the photo on the spot's edge (membrane fill of the log ratio), matches the source's grain to its surroundings and reads every spot's source at whole pixels; statuses and counts unchanged |
@@ -907,6 +909,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-12 | minor | Calibrated Contrast and Blacks; mark the measured but incomplete Light controls partial and retain V2 Whites |
 | 2026-10-16 | minor | KEY-TOGGLEZOOM: Space held over a tool on the photo is the view's hand (click zooms, drag pans, the tool gets neither), a tap still toggles; a held Space toggles once (issue #1895); status unchanged |
 | 2026-10-16 | patch | LRC-LIB-CATALOG-IMPORT: VIDEO records appear in the Videos filter; reimport repairs older classification with edits, memberships and undo preserved (#1940, filter issue only). Status and summary counts unchanged. |
+| 2026-10-28 | minor | LRC-HW-MIDI (new, 🟡): MIDI control surfaces drive Develop sliders and commands from a TOML map; `midi.reload` re-reads it |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
 | 2026-10-14 | minor | LR-IMP-CAMERA-COVERAGE: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); status unchanged (🟡) |
 | 2026-10-13 | minor | LR-MERGE-PANO: a panorama's DNG takes its `AsShotNeutral` from the median of its frames' vendor white-balance multipliers (CR2, NEF, ARW…) instead of the first frame's tags, and frames now carry the multipliers (issue #1144); status unchanged (✅) |

@@ -1,0 +1,113 @@
+# MIDI map for the Loupedeck+ (the 2018 model with the white labels) in its plain MIDI mode.
+#
+# Quit the Loupedeck software first: while it runs it holds the device and LightCraft hears nothing.
+# Copy this file to `midi.toml` in LightCraft's config folder (or point LIGHTCRAFT_MIDI_MAP at it) and
+# restart LightCraft, or run the `midi.reload` command. The format is explained in docs/midi.md.
+#
+# The knobs send relative CCs in two's complement (1 = one tick clockwise, 127 = one tick back).
+# The eight thin scroller wheels have four banks that the device switches itself with its Hue, Sat,
+# Lum and Clr/BW keys: CC 1-8, 9-16, 17-24 and 25-32. Those keys also send notes 98-101; they are
+# left unbound so that switching a bank does nothing else.
+# Numbers were captured from the device by pressing and turning every control.
+
+# No `inputs`: the device shows up as one port, and its name differs between systems.
+
+bindings = [
+  # Knobs (CC 33-48, relative)
+  { on = "control_change", number = 33, nudge = "light.exposure", step = 0.05, encoding = "twos_complement" },
+  { on = "control_change", number = 34, nudge = "light.blacks", encoding = "twos_complement" },
+  { on = "control_change", number = 35, nudge = "light.whites", encoding = "twos_complement" },
+  { on = "control_change", number = 36, nudge = "color.saturation", encoding = "twos_complement" },
+  { on = "control_change", number = 37, nudge = "color.vibrance", encoding = "twos_complement" },
+  { on = "control_change", number = 38, nudge = "wb.temp", step = 50, encoding = "twos_complement" },
+  { on = "control_change", number = 39, nudge = "wb.tint", encoding = "twos_complement" },
+  { on = "control_change", number = 40, nudge = "light.highlights", encoding = "twos_complement" },
+  { on = "control_change", number = 41, nudge = "effects.dehaze", encoding = "twos_complement" },   # D1
+  { on = "control_change", number = 42, nudge = "effects.texture", encoding = "twos_complement" },  # D2
+  { on = "control_change", number = 44, nudge = "light.shadows", encoding = "twos_complement" },
+  { on = "control_change", number = 45, nudge = "effects.clarity", encoding = "twos_complement" },
+  { on = "control_change", number = 46, nudge = "light.contrast", encoding = "twos_complement" },
+  { on = "control_change", number = 48, nudge = "crop.angle", step = 0.1, encoding = "twos_complement" },  # Control Dial
+
+  # Scroller bank Hue: Color Mixer hue, red ... magenta
+  { on = "control_change", number = 1, nudge = "mixer.red.hue", encoding = "twos_complement" },
+  { on = "control_change", number = 2, nudge = "mixer.orange.hue", encoding = "twos_complement" },
+  { on = "control_change", number = 3, nudge = "mixer.yellow.hue", encoding = "twos_complement" },
+  { on = "control_change", number = 4, nudge = "mixer.green.hue", encoding = "twos_complement" },
+  { on = "control_change", number = 5, nudge = "mixer.aqua.hue", encoding = "twos_complement" },
+  { on = "control_change", number = 6, nudge = "mixer.blue.hue", encoding = "twos_complement" },
+  { on = "control_change", number = 7, nudge = "mixer.purple.hue", encoding = "twos_complement" },
+  { on = "control_change", number = 8, nudge = "mixer.magenta.hue", encoding = "twos_complement" },
+  # Scroller bank Sat
+  { on = "control_change", number = 9, nudge = "mixer.red.sat", encoding = "twos_complement" },
+  { on = "control_change", number = 10, nudge = "mixer.orange.sat", encoding = "twos_complement" },
+  { on = "control_change", number = 11, nudge = "mixer.yellow.sat", encoding = "twos_complement" },
+  { on = "control_change", number = 12, nudge = "mixer.green.sat", encoding = "twos_complement" },
+  { on = "control_change", number = 13, nudge = "mixer.aqua.sat", encoding = "twos_complement" },
+  { on = "control_change", number = 14, nudge = "mixer.blue.sat", encoding = "twos_complement" },
+  { on = "control_change", number = 15, nudge = "mixer.purple.sat", encoding = "twos_complement" },
+  { on = "control_change", number = 16, nudge = "mixer.magenta.sat", encoding = "twos_complement" },
+  # Scroller bank Lum
+  { on = "control_change", number = 17, nudge = "mixer.red.lum", encoding = "twos_complement" },
+  { on = "control_change", number = 18, nudge = "mixer.orange.lum", encoding = "twos_complement" },
+  { on = "control_change", number = 19, nudge = "mixer.yellow.lum", encoding = "twos_complement" },
+  { on = "control_change", number = 20, nudge = "mixer.green.lum", encoding = "twos_complement" },
+  { on = "control_change", number = 21, nudge = "mixer.aqua.lum", encoding = "twos_complement" },
+  { on = "control_change", number = 22, nudge = "mixer.blue.lum", encoding = "twos_complement" },
+  { on = "control_change", number = 23, nudge = "mixer.purple.lum", encoding = "twos_complement" },
+  { on = "control_change", number = 24, nudge = "mixer.magenta.lum", encoding = "twos_complement" },
+  # Scroller bank Clr/BW: Black & White mix
+  { on = "control_change", number = 25, nudge = "bw.red", encoding = "twos_complement" },
+  { on = "control_change", number = 26, nudge = "bw.orange", encoding = "twos_complement" },
+  { on = "control_change", number = 27, nudge = "bw.yellow", encoding = "twos_complement" },
+  { on = "control_change", number = 28, nudge = "bw.green", encoding = "twos_complement" },
+  { on = "control_change", number = 29, nudge = "bw.aqua", encoding = "twos_complement" },
+  { on = "control_change", number = 30, nudge = "bw.blue", encoding = "twos_complement" },
+  { on = "control_change", number = 31, nudge = "bw.purple", encoding = "twos_complement" },
+  { on = "control_change", number = 32, nudge = "bw.magenta", encoding = "twos_complement" },
+
+  # Knob clicks reset their slider
+  { on = "note", number = 33, run = "develop.set", params = { control = "light.exposure", value = 0 } },
+  { on = "note", number = 34, run = "develop.set", params = { control = "light.blacks", value = 0 } },
+  { on = "note", number = 35, run = "develop.set", params = { control = "light.whites", value = 0 } },
+  { on = "note", number = 36, run = "develop.set", params = { control = "color.saturation", value = 0 } },
+  { on = "note", number = 37, run = "develop.set", params = { control = "color.vibrance", value = 0 } },
+  { on = "note", number = 39, run = "develop.set", params = { control = "wb.tint", value = 0 } },
+  { on = "note", number = 41, run = "develop.set", params = { control = "effects.dehaze", value = 0 } },
+  { on = "note", number = 42, run = "develop.set", params = { control = "effects.texture", value = 0 } },
+  { on = "note", number = 43, run = "develop.set", params = { control = "light.highlights", value = 0 } },
+  { on = "note", number = 44, run = "develop.set", params = { control = "light.shadows", value = 0 } },
+  { on = "note", number = 45, run = "develop.set", params = { control = "effects.clarity", value = 0 } },
+  { on = "note", number = 46, run = "develop.set", params = { control = "light.contrast", value = 0 } },
+  { on = "note", number = 48, run = "develop.set", params = { control = "crop.angle", value = 0 } },  # Control Dial
+
+  # Left block
+  { on = "note", number = 95, run = "edit.undo" },
+  { on = "note", number = 96, run = "edit.redo" },
+  { on = "note", number = 92, run = "develop.copy", params = {} },  # default groups: all but crop, masks, remove
+  { on = "note", number = 93, run = "develop.paste", params = {} },
+  { on = "note", number = 117, run = "develop.auto" },       # Custom Mode
+  { on = "note", number = 65, run = "develop.treatment" },   # */Col: toggles Black & White
+  # The five colour keys set 1-5 stars
+  { on = "note", number = 66, run = "photo.rate", params = { rating = 1 } },
+  { on = "note", number = 67, run = "photo.rate", params = { rating = 2 } },
+  { on = "note", number = 68, run = "photo.rate", params = { rating = 3 } },
+  { on = "note", number = 69, run = "photo.rate", params = { rating = 4 } },
+  { on = "note", number = 70, run = "photo.rate", params = { rating = 5 } },
+
+  # P1-P8: flags and colour labels
+  { on = "note", number = 80, run = "photo.pick" },
+  { on = "note", number = 81, run = "photo.reject" },
+  { on = "note", number = 82, run = "photo.label", params = { label = "red" } },
+  { on = "note", number = 83, run = "photo.label", params = { label = "yellow" } },
+  { on = "note", number = 84, run = "photo.label", params = { label = "green" } },
+  { on = "note", number = 85, run = "photo.label", params = { label = "blue" } },
+  { on = "note", number = 86, run = "photo.label", params = { label = "purple" } },
+  { on = "note", number = 87, run = "photo.clearLabel" },
+
+  # Right block: arrows step through the photos
+  { on = "note", number = 78, run = "library.previous" },
+  { on = "note", number = 79, run = "library.next" },
+  { on = "note", number = 76, run = "photo.increaseRating" },
+  { on = "note", number = 77, run = "photo.decreaseRating" },
+]
