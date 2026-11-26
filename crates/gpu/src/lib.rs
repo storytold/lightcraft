@@ -45,6 +45,8 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+#[cfg(all(feature = "sam", not(target_arch = "wasm32")))]
+pub mod sam3;
 #[cfg(not(target_arch = "wasm32"))]
 mod vram;
 
