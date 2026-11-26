@@ -926,6 +926,37 @@ fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
     assert_eq!(shortfall(Upright::Level, &Analysis::default()), Some(Reject::TooFew.message()));
 }
 
+/// A mode that falls back to a lesser correction says which one it applied, and "no correction" is kept for no
+/// correction at all (CodeRabbit on #2966).
+#[test]
+fn upright_note_names_the_fallback_it_applied() {
+    use crate::upright::{Analysis, Segment, fallback, shortfall, solve};
+    use lightcraft_develop::Upright;
+    use lightcraft_geom::Homography;
+    let line = |deg: f64, y: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        Segment { a: Point::new(-0.4 * c, y - 0.4 * s), b: Point::new(0.4 * c, y + 0.4 * s) }
+    };
+    // no verticals, a tilted horizon: Vertical and Full both level it, and say so
+    let tilted = Analysis { horizontal: vec![line(4.0, -0.2), line(4.0, 0.2)], ..Analysis::default() };
+    for m in [Upright::Vertical, Upright::Full] {
+        assert!(shortfall(m, &tilted).is_some());
+        assert_ne!(solve(m, &tilted), Homography::IDENTITY);
+        assert_eq!(fallback(m, &tilted), Some("Levelled the photo instead"), "{m:?}");
+    }
+    // a vertical vanishing point but no horizontal one: Full straightens the verticals
+    let vertical = Analysis { vertical_vp: Some([0.0, 3.0, 1.0]), ..Analysis::default() };
+    assert!(shortfall(Upright::Full, &vertical).is_some());
+    assert_ne!(solve(Upright::Full, &vertical), Homography::IDENTITY);
+    assert_eq!(fallback(Upright::Full, &vertical), Some("Straightened the vertical lines instead"));
+    assert_eq!(fallback(Upright::Vertical, &vertical), None, "Vertical did what it says");
+    // nothing at all to go by: no fallback, the note says there was no correction
+    for m in [Upright::Vertical, Upright::Full, Upright::Level] {
+        assert_eq!(fallback(m, &Analysis::default()), None);
+        assert_eq!(solve(m, &Analysis::default()), Homography::IDENTITY);
+    }
+}
+
 /// The Guided hint says what to draw: Full needs two guides of each family (Guided uses only the guides drawn, and
 /// one of a kind only levels), Vertical two vertical ones, and Level a single line.
 #[test]

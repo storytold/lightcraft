@@ -718,6 +718,18 @@ pub fn shortfall(mode: Upright, a: &Analysis) -> Option<&'static str> {
     }
 }
 
+/// What [`solve`] applies instead when `mode` falls short ([`shortfall`]) but corrects something all the same: Full
+/// without a horizontal vanishing point straightens the verticals, and Vertical or Full without a vertical one levels.
+/// In words for the user, after "No full correction: …. " (`None` when the result is no correction at all).
+pub fn fallback(mode: Upright, a: &Analysis) -> Option<&'static str> {
+    let levels = || level_angle(&a.vertical, &a.horizontal).is_some_and(|d| d != 0.0);
+    match mode {
+        Upright::Full if a.vertical_vp.is_some() && a.horizontal_vp.is_none() => Some("Straightened the vertical lines instead"),
+        Upright::Vertical | Upright::Full if a.vertical_vp.is_none() && levels() => Some("Levelled the photo instead"),
+        _ => None,
+    }
+}
+
 /// What to draw in Guided when `mode` falls short on `a` ("Try Guided: draw …"). Guided works from the guides
 /// alone, not from lines the mode found, and one guide of a kind only levels ([`solve_guided`]): Full needs two of
 /// each family, Vertical two vertical ones, and levelling one line. Auto follows why it stopped: a tilt more than

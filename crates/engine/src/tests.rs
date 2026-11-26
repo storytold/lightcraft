@@ -2205,7 +2205,7 @@ fn upright_says_why_it_found_nothing_to_correct() {
         match r["note"].as_str() {
             Some(note) => {
                 noted += 1;
-                assert!(identity, "a note was returned with a correction: {r}");
+                assert!(identity || note.contains(" instead."), "a correction was applied but the note doesn't say which: {r}");
                 assert!(note.starts_with("No vertical correction: "), "{note}");
             }
             None => assert!(!identity, "a vertical correction was found: {r}"),
