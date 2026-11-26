@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### All missing photos in one window
+- File ▸ Missing Photos… lists every photo whose original isn't where the library expects it, with the folder it
+  was in. When a disk came back under another drive letter, or a library made on Windows is opened on Linux, Replace
+  changes the beginning of all their paths at once (it suggests the folder they share), and each row's new path can
+  also be typed. Every new path is checked: found, not there, another size, or already another photo's. Relink
+  relinks the ticked ones, those found, as one undo step.
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)

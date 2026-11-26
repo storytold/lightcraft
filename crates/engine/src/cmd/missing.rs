@@ -255,6 +255,8 @@ pub enum MatchBy {
     Name,
     /// Renamed: same content hash (and size, when the library knows it).
     Content,
+    /// The path the person gave in the Missing Photos window ([`check_relinks`]).
+    Chosen,
 }
 
 impl MatchBy {
@@ -262,6 +264,7 @@ impl MatchBy {
         match self {
             MatchBy::Name => "name",
             MatchBy::Content => "content",
+            MatchBy::Chosen => "chosen",
         }
     }
 }
@@ -308,7 +311,11 @@ impl FindPlan {
         let found = list("found")
             .iter()
             .filter_map(|f| {
-                let by = if f.get("by").and_then(Value::as_str) == Some("content") { MatchBy::Content } else { MatchBy::Name };
+                let by = match f.get("by").and_then(Value::as_str) {
+                    Some("content") => MatchBy::Content,
+                    Some("chosen") => MatchBy::Chosen,
+                    _ => MatchBy::Name,
+                };
                 Some(FoundFile {
                     id: PhotoId(f.get("id")?.as_u64()?),
                     from: str_param(f, "from")?.to_string(),
@@ -483,6 +490,135 @@ fn find_missing(s: &mut Session, p: &Value) -> Result<Value> {
     commit_find(s, plan)
 }
 
+/// Whether `path` starts with a Windows drive (`D:\`, `d:/`).
+fn windows_drive(path: &str) -> bool {
+    let b = path.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b.len() == 2 || b[2] == b'\\' || b[2] == b'/')
+}
+
+/// `path` with its beginning `from` replaced by `to` (the Missing Photos window's Replace), or `None` when it
+/// doesn't begin with `from`. `from` is matched at a folder boundary (`D:\Photos` doesn't match
+/// `D:\Photos 2020\a.jpg`); a Windows path in any letter case and with either separator, any other path
+/// exactly. What follows takes the separator `to` uses, so `D:\Photos` → `/media/john/Photos` gives a path this
+/// computer can open.
+pub fn replace_prefix(path: &str, from: &str, to: &str) -> Option<String> {
+    let from = from.trim_end_matches(['\\', '/']);
+    if from.is_empty() || path.len() < from.len() || !path.is_char_boundary(from.len()) {
+        return None;
+    }
+    let (head, rest) = path.split_at(from.len());
+    let same = if windows_drive(from) { head.replace('/', "\\").eq_ignore_ascii_case(&from.replace('/', "\\")) } else { head == from };
+    if !same || !(rest.is_empty() || rest.starts_with(['\\', '/'])) {
+        return None;
+    }
+    let to = to.trim_end_matches(['\\', '/']);
+    let sep = if windows_drive(to) || (to.contains('\\') && !to.contains('/')) { '\\' } else { '/' };
+    let rest: String = rest.chars().map(|c| if c == '\\' || c == '/' { sep } else { c }).collect();
+    Some(format!("{to}{rest}"))
+}
+
+/// How a path proposed for a missing photo compares with what the library recorded ([`check_relinks`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelinkStatus {
+    /// A file is there, of the size on record (or the library knows no size): it can be relinked.
+    Found,
+    /// No file there.
+    Absent,
+    /// A file of another size than the library recorded: not the file it knew (relinked only on request).
+    OtherSize,
+    /// The file is already another photo's original.
+    InUse,
+    /// The photo's own file is back where the library expects it: nothing to relink.
+    NotMissing,
+}
+
+impl RelinkStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelinkStatus::Found => "found",
+            RelinkStatus::Absent => "absent",
+            RelinkStatus::OtherSize => "otherSize",
+            RelinkStatus::InUse => "inUse",
+            RelinkStatus::NotMissing => "notMissing",
+        }
+    }
+}
+
+/// A missing photo with the path proposed for it and what is there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelinkCheck {
+    pub id: PhotoId,
+    pub from: String,
+    pub to: String,
+    pub status: RelinkStatus,
+}
+
+/// What [`check_relinks`] asks of the disk (a pretend disk in tests).
+pub struct RelinkIo<'a> {
+    pub is_file: &'a dyn Fn(&str) -> bool,
+    pub size: &'a dyn Fn(&str) -> Option<u64>,
+}
+
+/// The disk as it is.
+pub fn real_relink_io() -> RelinkIo<'static> {
+    RelinkIo { is_file: &|f| Path::new(f).is_file(), size: &|f| std::fs::metadata(f).ok().map(|m| m.len()) }
+}
+
+/// The Missing Photos window's check: for each proposed `(photo, path)`, whether that path holds the photo's file
+/// as far as the library can tell (its size), is another photo's original, or holds nothing. Photos unknown to
+/// `candidates` are left out. Touches only the disk, so the app runs it on a worker thread; relinking what is
+/// chosen is `library.findMissing {found: [{id, from, to, by: "chosen"}]}`, one undo step.
+pub fn check_relinks(candidates: &[FindCandidate], proposed: &[(PhotoId, String)], io: &RelinkIo<'_>) -> Vec<RelinkCheck> {
+    let by_id: HashMap<PhotoId, &FindCandidate> = candidates.iter().map(|c| (c.id, c)).collect();
+    let in_use: HashSet<&str> = candidates.iter().map(|c| c.path.as_str()).collect();
+    proposed
+        .iter()
+        .filter_map(|(id, to)| {
+            let c = by_id.get(id)?;
+            let status = if (io.is_file)(&c.path) {
+                RelinkStatus::NotMissing
+            } else if in_use.contains(to.as_str()) {
+                RelinkStatus::InUse
+            } else if !(io.is_file)(to) {
+                RelinkStatus::Absent
+            } else if c.size > 0 && (io.size)(to) != Some(c.size) {
+                RelinkStatus::OtherSize
+            } else {
+                RelinkStatus::Found
+            };
+            Some(RelinkCheck { id: c.id, from: c.path.clone(), to: to.clone(), status })
+        })
+        .collect()
+}
+
+/// `library.checkRelinks {from?, to?, relinks?: [{id, to}]}`: [`check_relinks`] for the given paths, or for every
+/// missing photo whose path begins with `from`, with that beginning replaced by `to` ([`replace_prefix`]).
+fn check_relinks_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "library.checkRelinks";
+    let candidates = find_candidates(&s.catalog);
+    let io = real_relink_io();
+    let proposed: Vec<(PhotoId, String)> = match (p.get("relinks"), str_param(p, "from"), str_param(p, "to")) {
+        (Some(list), None, None) => list
+            .as_array()
+            .ok_or_else(|| bad(C, "`relinks` must be a list of {id, to}"))?
+            .iter()
+            .map(|r| match (r.get("id").and_then(Value::as_u64), str_param(r, "to")) {
+                (Some(id), Some(to)) => Ok((PhotoId(id), to.to_string())),
+                _ => Err(bad(C, "each relink is {id, to}")),
+            })
+            .collect::<Result<_>>()?,
+        (None, Some(from), Some(to)) => {
+            candidates.iter().filter(|c| !(io.is_file)(&c.path)).filter_map(|c| replace_prefix(&c.path, from, to).map(|new| (c.id, new))).collect()
+        }
+        _ => return Err(bad(C, "give {from, to} or {relinks: [{id, to}]}")),
+    };
+    let rows: Vec<Value> = check_relinks(&candidates, &proposed, &io)
+        .iter()
+        .map(|r| json!({"id": r.id.0, "from": r.from, "to": r.to, "status": r.status.as_str()}))
+        .collect();
+    Ok(Value::Array(rows))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "library.missing", "Missing Photos", [], None, "{} → [{id, path}] — photos whose original file isn't where the library expects it (every file is looked at: on a network share that takes minutes, so the desktop app, asked over its control channel, checks on a worker thread, with a row in the activity stack that can stop it, and answers when it is done)", always, |s, _| {
@@ -506,5 +642,79 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             find_missing
         ),
+        cmd!(
+            query "library.checkRelinks",
+            "Check Missing Photos' New Paths",
+            [],
+            None,
+            "{from, to} — every missing photo whose path begins with `from`, with that beginning replaced by `to` (a Windows path in any case and with either separator; what follows takes `to`'s separator), or {relinks: [{id, to}]} — the given paths → [{id, from, to, status: found|absent|otherSize|inUse|notMissing}]; relink the found ones with library.findMissing {found: [{id, from, to, by: \"chosen\"}]} (one undo step)",
+            always,
+            check_relinks_cmd
+        ),
     ]
+}
+
+#[cfg(test)]
+mod relink_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn a_beginning_is_replaced_at_a_folder_boundary() {
+        // another drive letter, in any case and with either separator
+        assert_eq!(replace_prefix(r"D:\Photos\2020\a.ARW", r"d:/photos", r"E:\Photos").as_deref(), Some(r"E:\Photos\2020\a.ARW"));
+        assert_eq!(replace_prefix(r"D:\Photos\a.ARW", r"D:\", r"E:\").as_deref(), Some(r"E:\Photos\a.ARW"));
+        // a Windows library opened on Linux: what follows takes the new separator
+        assert_eq!(replace_prefix(r"D:\Photos\2020\a.ARW", r"D:\Photos", "/media/john/Photos").as_deref(), Some("/media/john/Photos/2020/a.ARW"));
+        assert_eq!(replace_prefix("/Volumes/Disk/a.jpg", "/Volumes/Disk/", "/media/john/Disk/").as_deref(), Some("/media/john/Disk/a.jpg"));
+        // not at a folder boundary, another case off Windows, or nothing to replace: no proposal
+        assert_eq!(replace_prefix(r"D:\Photos 2020\a.jpg", r"D:\Photos", r"E:\Photos"), None);
+        assert_eq!(replace_prefix("/media/john/photos/a.jpg", "/media/john/Photos", "/mnt/Photos"), None);
+        assert_eq!(replace_prefix("/a/b.jpg", "", "/c"), None);
+        assert_eq!(replace_prefix(r"C:\a.jpg", r"D:\", r"E:\"), None);
+    }
+
+    #[test]
+    fn each_proposed_path_says_what_is_there() {
+        let photo = |id, path: &str, size| FindCandidate { id: PhotoId(id), path: path.to_string(), size, hash: None };
+        let photos = [
+            photo(1, "/old/a.jpg", 100),
+            photo(2, "/old/b.jpg", 100),
+            photo(3, "/old/c.jpg", 100),
+            photo(4, "/old/d.jpg", 100),
+            photo(5, "/old/e.jpg", 0),
+            photo(6, "/back/f.jpg", 100),
+            photo(7, "/new/taken.jpg", 100),
+        ];
+        let disk: HashMap<&str, u64> =
+            HashMap::from([("/new/a.jpg", 100), ("/new/b.jpg", 101), ("/new/e.jpg", 5), ("/back/f.jpg", 100), ("/new/taken.jpg", 100)]);
+        let io = RelinkIo { is_file: &|f| disk.contains_key(f), size: &|f| disk.get(f).copied() };
+        let proposed: Vec<(PhotoId, String)> = [
+            (1, "/new/a.jpg"),
+            (2, "/new/b.jpg"),
+            (3, "/new/c.jpg"),
+            (4, "/new/taken.jpg"),
+            (5, "/new/e.jpg"),
+            (6, "/new/f.jpg"),
+            (99, "/new/x.jpg"),
+        ]
+        .iter()
+        .map(|(id, to)| (PhotoId(*id), to.to_string()))
+        .collect();
+        let got: Vec<(u64, RelinkStatus)> = check_relinks(&photos, &proposed, &io).iter().map(|r| (r.id.0, r.status)).collect();
+        assert_eq!(
+            got,
+            [
+                (1, RelinkStatus::Found),
+                (2, RelinkStatus::OtherSize),
+                (3, RelinkStatus::Absent),
+                (4, RelinkStatus::InUse),
+                // no size on record: any size will do
+                (5, RelinkStatus::Found),
+                (6, RelinkStatus::NotMissing),
+            ],
+            "a photo the library doesn't have is left out"
+        );
+    }
 }

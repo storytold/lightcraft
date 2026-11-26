@@ -859,6 +859,52 @@ fn renamed_and_ambiguous_scene(tag: &str) -> (std::path::PathBuf, Session) {
     (dir, s)
 }
 
+/// The Missing Photos window: a folder that moved as a whole (another drive letter, another mount) is relinked by
+/// replacing its beginning. `library.checkRelinks` proposes and checks each path; `library.findMissing` relinks
+/// what was chosen, in one undo step.
+#[test]
+fn missing_photos_relink_by_replacing_the_folder_they_were_in() {
+    let dir = temp_dir("missing-replace");
+    let (old, new) = (dir.join("Disk D").join("Photos"), dir.join("Disk E").join("Photos"));
+    std::fs::create_dir_all(old.join("2020")).unwrap();
+    for (n, seed) in [("2020/a.png", 1), ("2020/b.png", 2), ("c.png", 3)] {
+        write_png(&old.join(n), seed);
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [old.to_string_lossy()]})).unwrap();
+    std::fs::rename(dir.join("Disk D"), dir.join("Disk E")).unwrap();
+    // b came back edited (another size), c didn't come back
+    let mut edited = std::fs::read(new.join("2020/b.png")).unwrap();
+    edited.extend_from_slice(b"edited");
+    std::fs::write(new.join("2020/b.png"), edited).unwrap();
+    std::fs::remove_file(new.join("c.png")).unwrap();
+    let rows = s.execute("library.checkRelinks", &json!({"from": old.to_string_lossy(), "to": new.to_string_lossy()})).unwrap();
+    let status = |name: &str| rows.as_array().unwrap().iter().find(|r| r["from"].as_str().unwrap().ends_with(name)).map(|r| r["status"].clone());
+    assert_eq!(
+        (status("a.png"), status("b.png"), status("c.png")),
+        (Some(json!("found")), Some(json!("otherSize")), Some(json!("absent"))),
+        "{rows}"
+    );
+    let found: Vec<Value> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["status"] == "found")
+        .map(|r| json!({"id": r["id"], "from": r["from"], "to": r["to"], "by": "chosen"}))
+        .collect();
+    let done = s.execute("library.findMissing", &json!({"found": found})).unwrap();
+    assert_eq!(done["found"][0]["by"], "chosen", "{done}");
+    assert_eq!(s.execute("library.missing", &json!({})).unwrap().as_array().map(Vec::len), Some(2), "b and c stay missing");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.execute("library.missing", &json!({})).unwrap().as_array().map(Vec::len), Some(3), "undo restores all three");
+    // given paths are checked the same way, and a request without either is refused
+    let a = rows.as_array().unwrap().iter().find(|r| r["status"] == "found").unwrap();
+    let one = s.execute("library.checkRelinks", &json!({"relinks": [{"id": a["id"], "to": a["to"]}]})).unwrap();
+    assert_eq!(one[0]["status"], "found");
+    assert!(s.execute("library.checkRelinks", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #105: Find Missing finds renamed files by content, prefers the content match over a
 /// same-name same-size impostor, and skips (reports) photos it can't tell apart.
 #[test]

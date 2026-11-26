@@ -138,6 +138,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "file.backupLibrary",
             "file.restoreLibrary",
             "file.findMissing",
+            "file.missingPhotos",
             "library.compact",
             "---",
             "dialog.newAlbum",
