@@ -469,8 +469,16 @@ fn undated_files_take_the_file_date() {
     let path = dir.join("export.jpg");
     std::fs::write(&path, &jpeg).unwrap();
     let path = path.to_string_lossy().to_string();
+    // The case reported in issue #2284: a JPEG that went through a messenger keeps no capture
+    // date, only a modification time, here 2026-10-18 20:15:11 in UTC-5. Pinning it also dates
+    // the file in the other half of the year from "now", so a zone with summer time is read at
+    // the right instant and not at today's offset.
+    let shot = lightcraft_meta::DateTime::parse_iso("2026-10-19T01:15:11Z").unwrap().unix_seconds();
+    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::try_from(shot).unwrap());
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
     let mtime = std::fs::metadata(&path).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let want = crate::import::civil(mtime as i64);
+    assert_eq!(mtime as i64, shot, "the file date is the one the test set");
+    let want = crate::import::local_civil(mtime as i64);
     let (_, probe) = fs_hooks();
     let info = probe(&path).unwrap();
     assert_eq!(info.captured, None, "the file itself has no date");
@@ -1233,6 +1241,40 @@ fn dng_lens_corrected_preview_teaches_one_tone_without_baking_in_the_lens() {
 /// own white-balanced neutral comes out yellow (blue 12 % low).
 fn yellowing_look() -> lightcraft_color::Mat3 {
     lightcraft_color::Mat3([[0.42, 0.548, 0.04], [0.246, 0.728, 0.033], [-0.247, 0.679, 0.447]])
+}
+
+/// Decoding passes finite values through, negative ones included, and zeroes NaN and infinities.
+#[test]
+fn decoding_keeps_negative_channels_and_zeroes_non_finite_ones() {
+    assert_eq!(finite([0.6, 0.05, -0.04]), [0.6, 0.05, -0.04]);
+    assert_eq!(finite([f32::NAN, -0.1, f32::INFINITY]), [0.0, -0.1, 0.0]);
+}
+
+/// Dark sensor noise through a saturating camera matrix (a NIKON D780 profile's) averages to a neutral colour: the
+/// per-channel clamp at zero decoding had kept red's and blue's wider positive halves and turned it magenta.
+#[test]
+fn dark_noise_through_a_saturating_matrix_stays_neutral() {
+    let matrix = lightcraft_color::Mat3([[3.48, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]]);
+    let colour = CameraColourModel { wb: [1.0; 3], matrix, gain: 1.0, tables: None, hue_sat: None };
+    // a grey 0.002 above black with ±0.004 of noise per channel (a deterministic sequence)
+    let mut state = 12345u32;
+    let mut noise = || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    let mut img = Rgb32f::new(200, 200);
+    for p in img.data.iter_mut() {
+        *p = [0.002 + noise(), 0.002 + noise(), 0.002 + noise()];
+    }
+    colour.apply(&mut img);
+    let mut mean = [0.0f64; 3];
+    for p in &img.data {
+        for (m, v) in mean.iter_mut().zip(p) {
+            *m += f64::from(*v);
+        }
+    }
+    let (hi, lo) = (mean[0].max(mean[1]).max(mean[2]), mean[0].min(mean[1]).min(mean[2]));
+    assert!(lo > 0.0 && hi / lo < 1.2, "mean {mean:?} is tinted");
 }
 
 /// A fitted camera look applied in lanes, on rows that aren't a whole number of them, gives the bits of the
@@ -2070,7 +2112,7 @@ fn rw2_and_dng_defaults_unchanged() {
             let name = format!("x.{format}");
             let mut p = Photo::new(PhotoId(1), Source::File { path: format!("/{name}") }, &name, format, 64, 48, "");
             p.kind = MediaKind::Raw;
-            p.embedded_lens = embedded;
+            p.embedded_lens = embedded.map(Box::new);
             crate::import::apply_import_defaults(&s, &mut p);
             assert_eq!(p.develop.optics.lens_profile, embedded.is_some(), "{format} {embedded:?}");
         }

@@ -1,8 +1,10 @@
 use super::colour::{PROFILE_PROXY, PROXY, file_local_look};
 use super::hue_sat::fit_hue_sat;
-use super::look_fit::{FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, clip_mask, correct_vignetting, without_clipped};
-use super::pairs::{collect_pairs, fit_matrix};
-use super::{CameraTransform, Filter, HsvTable, Mat3, RawFormat, RawImage, Rgb32f, fit, luminance_2020, resize};
+use super::look_fit::{FIT_PREVIEW_MAX_PIXELS, ProxyFrame, SENSOR_CLIP, clip_mask, correct_vignetting, without_clipped};
+use super::mono::monochrome;
+use super::pairs::{collect_pairs, fit_matrix, luma};
+use super::tone::fit_tone;
+use super::{CameraTone, CameraTransform, Filter, HsvTable, Mat3, RawFormat, RawImage, Rgb32f, fit, luminance_2020, resize};
 
 /// The embedded preview's long edge must be at least this share of the raw's (and 384 px): a DNG whose preview is a
 /// small thumbnail is not fitted. The fit itself runs on a proxy of at most 384 px, so the 1024 px preview
@@ -80,8 +82,10 @@ pub(super) fn structure_agrees(sensor: &Rgb32f, reference: &Rgb32f) -> bool {
     at_zero >= MIN_STRUCTURE && shift.0.abs() <= 1 && shift.1.abs() <= 1
 }
 
-enum ProxyLens<'a> {
+pub(super) enum ProxyLens<'a> {
     PerFile(Option<&'a lightcraft_develop::EmbeddedLens>),
+    // Measure the database shading on the registered proxy, so apply only geometry here.
+    MeasureDatabase(&'a lightcraft_develop::EmbeddedLens),
     Pooled(Option<&'a lightcraft_develop::EmbeddedLens>),
 }
 
@@ -99,18 +103,20 @@ pub(super) fn proxies(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
-    proxies_with_lens(raw, bytes, transform, size, min_fraction, lens, ProxyLens::PerFile(embedded))
+    framed_proxies(raw, bytes, transform, size, min_fraction, lens, ProxyLens::PerFile(embedded))
+        .map(|(sensor, reference, clipped, _)| (sensor, reference, clipped))
 }
 
-fn proxies_with_lens(
+/// [`proxies`], and the mapping from the selected proxy to its oriented sensor, used for database vignetting.
+pub(super) fn framed_proxies<'a>(
     raw: &RawImage,
     bytes: &[u8],
     transform: &CameraTransform,
     size: usize,
     min_fraction: f64,
     lens: Option<&LensGeometry>,
-    profile: ProxyLens<'_>,
-) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
+    profile: ProxyLens<'a>,
+) -> Option<(Rgb32f, Rgb32f, Vec<bool>, ProxyFrame<'a>)> {
     let edge = (2 * size).max(384) as u32;
     let decoded = crate::files::decode_raw_preview(
         bytes,
@@ -145,11 +151,13 @@ fn proxies_with_lens(
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;
     let mut clipped = clip_mask(&sensor);
+    let mut frame = ProxyFrame::new(raw.orientation);
     let embedded = match profile {
         ProxyLens::PerFile(embedded) => {
             correct_vignetting(&mut sensor, embedded, raw.orientation);
             embedded
         }
+        ProxyLens::MeasureDatabase(correction) => Some(correction),
         ProxyLens::Pooled(embedded) => embedded,
     };
     // The camera may have corrected its JPEG with the lens warp the file carries (Nikon Z lenses always, at up to 9 %
@@ -176,7 +184,7 @@ fn proxies_with_lens(
         clipped = clipped.into_oriented(raw.orientation);
         reference = reference.into_oriented(raw.orientation);
         sensor.map_in_place(to_working);
-        (sensor, clipped) = align_cr3_geometry(sensor, clipped, &reference, correction, pooled_candidate.as_ref());
+        (sensor, clipped, frame) = align_cr3_geometry(sensor, clipped, &reference, correction, pooled_candidate.as_ref());
     }
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let mut reference_small = reference_at(&reference, &sensor);
@@ -195,7 +203,7 @@ fn proxies_with_lens(
     if raw.format != RawFormat::Cr3 {
         sensor.map_in_place(to_working);
     }
-    Some((sensor, reference, clipped))
+    Some((sensor, reference, clipped, frame))
 }
 
 /// The camera JPEG at exactly the sensor proxy's size, so the two pair pixel for pixel. Fitting it
@@ -439,13 +447,13 @@ pub(super) fn estimate_profile_framing(candidate: &Rgb32f, reference: &Rgb32f, o
 /// Choose CR3 correspondence without copying the unregistered sensor or mask. The
 /// unwarped fallback and warped proposal need separate searches: their pixels and
 /// support rules differ, and the proposal must preserve the accepted fallback.
-pub(super) fn align_cr3_geometry(
+pub(super) fn align_cr3_geometry<'a>(
     sensor: Rgb32f,
     clipped: Rgb32f,
     reference: &Rgb32f,
-    correction: Option<&lightcraft_develop::EmbeddedLens>,
+    correction: Option<&'a lightcraft_develop::EmbeddedLens>,
     candidate_sensor: Option<&Rgb32f>,
-) -> (Rgb32f, Rgb32f) {
+) -> (Rgb32f, Rgb32f, ProxyFrame<'a>) {
     let frame = |source: &Rgb32f| {
         let framing = estimate_cr3_framing(source, reference);
         (framing, framing.map(|framing| apply_cr3_framing(source, framing)))
@@ -453,17 +461,12 @@ pub(super) fn align_cr3_geometry(
     // Score the warp against the same shading on the original and framed baselines.
     let source = candidate_sensor.unwrap_or(&sensor);
     let (mut framing, mut fallback) = frame(source);
-    if let Some(proposed) = correction.and_then(|correction| {
-        align_profile_geometry_against(
-            source,
-            &clipped,
-            reference,
-            correction,
-            lightcraft_geom::Orientation::Normal,
-            Some(fallback.as_ref().unwrap_or(source)),
-        )
-    }) {
-        return proposed;
+    let orientation = lightcraft_geom::Orientation::Normal;
+    if let Some(lens) = correction
+        && let Some((aligned, mask, framing)) =
+            align_profile_geometry_against(source, &clipped, reference, lens, orientation, Some(fallback.as_ref().unwrap_or(source)))
+    {
+        return (aligned, mask, ProxyFrame { orientation, framing: Some(framing), lens: Some(lens) });
     }
     if candidate_sensor.is_some() {
         // The pooled proposal was rejected. Restore the framing selected on the original samples.
@@ -472,7 +475,7 @@ pub(super) fn align_cr3_geometry(
     // The mask is needed only if the fallback wins; when no framing is accepted,
     // return both original allocations unchanged.
     let clipped = if let Some(framing) = framing { apply_cr3_framing(&clipped, framing) } else { clipped };
-    (fallback.unwrap_or(sensor), clipped)
+    (fallback.unwrap_or(sensor), clipped, ProxyFrame { orientation, framing, lens: None })
 }
 
 /// Move one image to the accepted camera framing, preserving invalid border samples.
@@ -515,7 +518,7 @@ pub(super) fn align_profile_geometry(
     correction: &lightcraft_develop::EmbeddedLens,
     orientation: lightcraft_geom::Orientation,
 ) -> Option<(Rgb32f, Rgb32f)> {
-    align_profile_geometry_against(sensor, clipped, reference, correction, orientation, None)
+    align_profile_geometry_against(sensor, clipped, reference, correction, orientation, None).map(|(sensor, mask, _)| (sensor, mask))
 }
 
 /// Propose lens geometry plus bounded framing and require the original training/held-out gates.
@@ -527,16 +530,14 @@ fn align_profile_geometry_against(
     correction: &lightcraft_develop::EmbeddedLens,
     orientation: lightcraft_geom::Orientation,
     baseline: Option<&Rgb32f>,
-) -> Option<(Rgb32f, Rgb32f)> {
+) -> Option<(Rgb32f, Rgb32f, Cr3Framing)> {
     if correction.warp.is_none() || (sensor.width, sensor.height) != (clipped.width, clipped.height) {
         return None;
     }
     let (w, h) = (sensor.width as f64, sensor.height as f64);
     let (ow, oh) = if orientation.swaps_axes() { (h, w) } else { (w, h) };
     let correction = lightcraft_pipeline::optics::reorient_lens(correction, orientation.inverse(), ow, oh);
-    let mut warp = lightcraft_pipeline::optics::Warp::identity(w, h);
-    warp.lens = Some(correction);
-    warp.lens_dist = 1.0;
+    let warp = profile_warp(&correction, w, h);
     let source = |x, y| warp.corrected_to_source(lightcraft_geom::Point::new(x, y), 1);
     let candidate = resample_correspondence(sensor, source);
     let framing = estimate_framing_against(&candidate, reference, Some(sensor), baseline)?;
@@ -545,28 +546,167 @@ fn align_profile_geometry_against(
         let (x, y) = framing.source(x as f32, y as f32, sensor.width, sensor.height);
         lightcraft_geom::Point::new(f64::from(x), f64::from(y))
     };
-    Some((resample_correspondence(&candidate, frame), resample_correspondence(&mask, frame)))
+    Some((resample_correspondence(&candidate, frame), resample_correspondence(&mask, frame), framing))
 }
 
-/// Colour training pairs of one raw for a camera profile: white-balanced camera RGB (with the
-/// baseline exposure) → its camera JPEG (linear Rec.2020). `None` for formats with their own
-/// colour matrices, other files or unusable previews. `correction` may supply accepted CR3 geometry.
-pub(crate) fn profile_pairs(
+/// Green-plane mapping from corrected pixels to their sensor positions at this proxy size.
+pub(super) fn profile_warp(lens: &lightcraft_develop::EmbeddedLens, w: f64, h: f64) -> lightcraft_pipeline::optics::Warp {
+    let mut warp = lightcraft_pipeline::optics::Warp::identity(w, h);
+    warp.lens = Some(*lens);
+    warp.lens_dist = 1.0;
+    warp
+}
+
+/// What one photo contributes to a camera profile ([`profile_samples`]), in white-balanced camera RGB.
+pub(crate) struct ProfileSamples {
+    /// Colour pairs: camera RGB → the camera JPEG's linear Rec.2020 (empty when the photo has too little colour).
+    pub colour: Vec<([f64; 3], [f64; 3])>,
+    /// Tone samples: camera RGB → the camera JPEG's luminance, dark pixels included (as the photo's own toe fit takes
+    /// them, [`fit_tone_with_shadows`](super::pairs::fit_tone_with_shadows)).
+    pub tone: Vec<([f64; 3], f64)>,
+}
+
+/// A raw's colour and tone samples for a pooled camera profile (`lightcraft-cli calibrate`): white-balanced camera
+/// RGB (with the baseline exposure) → its camera JPEG (linear Rec.2020). `None` for formats with their own colour
+/// matrices, other files or unusable previews.
+pub(crate) fn profile_samples(
     raw: &RawImage,
     bytes: &[u8],
     lens: Option<&LensGeometry>,
     correction: Option<&lightcraft_develop::EmbeddedLens>,
-) -> Option<Vec<([f64; 3], [f64; 3])>> {
+) -> Option<ProfileSamples> {
     if !file_local_look(raw.format) || lightcraft_raw::color::has_matrix(&raw.color) {
         return None;
     }
     let transform = lightcraft_raw::color::camera_transform(raw, lightcraft_raw::color::as_shot_white_xy(raw));
-    let (sensor, reference, clipped) = proxies_with_lens(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, ProxyLens::Pooled(correction))?;
+    let (sensor, reference, clipped, _) = framed_proxies(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, ProxyLens::Pooled(correction))?;
     let to_camera = transform.matrix.inverse()?;
     // clipped sensor pixels don't record the scene's colour (see `fit_look`)
     let sensor = without_clipped(&sensor, &clipped).unwrap_or(sensor);
-    let (pairs, _) = collect_pairs(&sensor, &reference, 0.05, None, false)?;
-    Some(pairs.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect())
+    samples_from_proxies(&sensor, &reference, &to_camera)
+}
+
+/// [`profile_samples`] from a raw's sensor proxy (clipped pixels left out) and its camera JPEG's, `to_camera` taking the
+/// sensor proxy back to white-balanced camera RGB.
+pub(super) fn samples_from_proxies(sensor: &Rgb32f, reference: &Rgb32f, to_camera: &Mat3) -> Option<ProfileSamples> {
+    // a black-and-white JPEG went through a monochrome picture style's own mix and curve: nothing for the profile
+    if monochrome(reference) {
+        return None;
+    }
+    // a dark or colourless photo has no colour pairs but still shows the shadows the pooled curve needs
+    let colour = collect_pairs(sensor, reference, 0.05, None, false).map_or_else(Vec::new, |(pairs, _)| pairs);
+    let tone: Vec<_> = sensor
+        .data
+        .iter()
+        .zip(&reference.data)
+        .filter(|(input, output)| tone_sample(**input, **output))
+        .map(|(input, output)| (to_camera.apply(input.map(f64::from)), f64::from(luminance_2020(*output))))
+        .collect();
+    if colour.is_empty() && tone.is_empty() {
+        return None;
+    }
+    Some(ProfileSamples { colour: colour.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect(), tone })
+}
+
+/// Whether a sensor/JPEG proxy pixel pair can teach the tone curve: every channel above the sensor floor, the JPEG
+/// pixel about one 8-bit sRGB code above black (no flat black segment learnt from JPEG compression) and below the
+/// highlights (clipped or rolled off).
+fn tone_sample(input: [f32; 3], output: [f32; 3]) -> bool {
+    input.iter().all(|v| v.is_finite() && *v > 0.0001 && *v < 1.5)
+        && output.iter().all(|v| v.is_finite() && *v >= 0.0)
+        && (0.0003..0.85).contains(&luminance_2020(output))
+}
+
+/// A camera profile's tone curve from the tone samples pooled over its photos, through the profile's `matrix`: one
+/// curve for the camera, from shadows that only dark photos show to highlights that only bright ones show. Quantile
+/// matching ([`fit_tone`]) pools correctly because every photo went through the same camera curve (picture styles and
+/// Active D-Lighting aside, which it averages). Luminance is taken with negative channels kept, as the render feeds
+/// the curve (raw decoding keeps them, `files::CameraColourModel`).
+pub(crate) fn fit_profile_tone(samples: &[([f64; 3], f64)], matrix: &Mat3) -> Option<CameraTone> {
+    fit_tone(samples.iter().map(|(x, y)| (luma(matrix.apply(*x)), *y)).filter(|(x, _)| *x > 0.0).collect())
+}
+
+/// `photo`'s tone curve where its JPEG taught it, `pooled`'s past that: from the photo's last knot it fades over
+/// 1 EV (`EXTEND_FADE_EV`) from its own level onto the camera's pooled curve, instead of the bounded shoulder
+/// ([`CameraTone::apply`]) whose rate comes from the photo's last two knots. A dark photo's curve ends in the shadows,
+/// and that shoulder rendered it, pushed back up, 4-7 L* darker than a properly exposed photo of the same scene.
+/// `photo` unchanged when the pooled curve doesn't reach on past it.
+pub(super) fn extend_tone(photo: &CameraTone, pooled: &CameraTone) -> CameraTone {
+    /// EV over which the extension moves from the photo's level onto the pooled curve.
+    const EXTEND_FADE_EV: f32 = 1.0;
+    /// Knots per EV of the extension.
+    const EXTEND_KNOTS_PER_EV: f32 = 3.0;
+    let (own, camera) = (photo.knots(), pooled.knots());
+    let (end, last) = (own[31], camera[31][0]);
+    let span = (last / end[0]).log2();
+    if !(span.is_finite() && span > 0.2) {
+        return *photo;
+    }
+    // the photo's own knots, the ones its curve needs least dropped to make room: as many extension knots as keep the
+    // curve within `THIN_TOLERANCE` where the JPEG taught it, at least 2, else the photo keeps its curve as it is
+    let Some((extra, own)) =
+        (2..=((span * EXTEND_KNOTS_PER_EV).round() as usize).clamp(2, 16)).rev().find_map(|extra| thinned_knots(own, 32 - extra).map(|k| (extra, k)))
+    else {
+        if lightcraft_pipeline::profiling() {
+            eprintln!("[profile] camera look: the photo's curve can't make room for the pooled one, kept as fitted");
+        }
+        return *photo;
+    };
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera look: pooled tone curve joined with {extra} knots past the photo's");
+    }
+    let at_end = pooled.apply(end[0]);
+    let ratio = if at_end > 0.0 && end[1] > 0.0 { end[1] / at_end } else { 1.0 };
+    let mut knots = [[0.0f32; 2]; 32];
+    let kept = 32 - extra;
+    for (knot, own) in knots.iter_mut().zip(&own) {
+        *knot = *own;
+    }
+    for k in 1..=extra {
+        let ev = span * k as f32 / extra as f32;
+        let x = end[0] * ev.exp2();
+        let t = (ev / EXTEND_FADE_EV).clamp(0.0, 1.0);
+        let w = t * t * (3.0 - 2.0 * t);
+        knots[kept + k - 1] = [x, pooled.apply(x) * ratio.powf(1.0 - w)];
+    }
+    // monotone and below white whatever the two curves do
+    let mut floor = 0.0f32;
+    for knot in &mut knots {
+        knot[1] = knot[1].max(floor).min(0.999);
+        floor = knot[1];
+    }
+    CameraTone::new(knots).and_then(|tone| tone.with_chroma(*photo.chroma())).unwrap_or(*photo)
+}
+
+/// Largest change, in gamma-encoded display values (1/2.2), that thinning a photo's curve for [`extend_tone`] may make
+/// where its JPEG taught it: one 8-bit code.
+pub(super) const THIN_TOLERANCE: f32 = 1.0 / 255.0;
+
+/// `knots` thinned to `keep` (first and last kept), dropping one at a time the knot whose removal changes the curve
+/// least (`CameraTone::apply` interpolates linearly, so the change peaks at a dropped knot); `None` when that change
+/// would exceed [`THIN_TOLERANCE`].
+fn thinned_knots(knots: &[[f32; 2]; 32], keep: usize) -> Option<Vec<[f32; 2]>> {
+    let encoded = |v: f32| v.max(0.0).powf(1.0 / 2.2);
+    // the change from leaving out every knot strictly between kept indices `a` and `b`
+    let gap = |a: usize, b: usize| {
+        let ([x0, y0], [x1, y1]) = (knots[a], knots[b]);
+        (a + 1..b)
+            .map(|i| {
+                let [x, y] = knots[i];
+                let t = if x1 > x0 { (x - x0) / (x1 - x0) } else { 0.0 };
+                (encoded(y0 + t * (y1 - y0)) - encoded(y)).abs()
+            })
+            .fold(0.0f32, f32::max)
+    };
+    let mut kept: Vec<usize> = (0..knots.len()).collect();
+    while kept.len() > keep.max(2) {
+        let (i, change) = (1..kept.len() - 1).map(|i| (i, gap(kept[i - 1], kept[i + 1]))).min_by(|a, b| a.1.total_cmp(&b.1))?;
+        if change > THIN_TOLERANCE {
+            return None;
+        }
+        kept.remove(i);
+    }
+    Some(kept.into_iter().map(|i| knots[i]).collect())
 }
 
 /// A camera profile's colour model (matrix from white-balanced camera RGB, hue/saturation table)

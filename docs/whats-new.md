@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+### Export subfolder variables
+- The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
@@ -171,6 +173,16 @@
 - Importing a backup of a catalog you already imported no longer adds every collection a second time: collections
   are matched by the catalog's own id, which its backups keep, instead of by the catalog file's path.
 
+## 2026-11-04
+### Remote SAM worker recovers from accept errors
+- A transient connection-accept error is logged and retried after a short pause, so one failed accept no longer
+  stops the remote Metal worker (#2574). Startup validation and bind failures still report an error.
+### Reference View's empty state paints on every platform
+- Its instruction now uses the supported menu arrow symbol, avoiding a missing-glyph panic while the view is drawn.
+### Opening an image at launch honors the Detail startup view
+- When LightCraft starts with a new or already-catalogued image path, an explicit Startup View → Detail View opens
+  the selected image in Detail after the asynchronous import completes. Grid and Last continue to open launch files in
+  Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
 
 ### Lightroom catalogs with a print inside a collection import their collections
@@ -298,6 +310,12 @@
   selected Object mask, and a click on the selected mask's own pin adds nothing. Subject, Sky, Background and the
   range masks still have no pin.
 
+### A dialog no longer dims the macOS title bar
+- On macOS the top bar is the window's title bar, and the window buttons drawn over it stayed bright while a dialog dimmed
+  the bar under them. As under a macOS sheet, the dialog's backdrop now leaves the bar alone: its buttons are inactive, a
+  click on it does not close the dialog, and dragging its empty space still moves the window. Windows, Linux and full
+  screen are unchanged.
+
 ## 2026-10-28
 
 ### The empty photo grid names Import Photos' shortcut as it is bound
@@ -305,7 +323,7 @@
 
 ### The photo in Detail is named with its file for screen readers
 - With VoiceOver, the photo in Detail view is now announced with its file name, rating, flag and colour label ("Photo:
-  IMG_0042.JPG, 4 stars, picked") instead of only "Photo", as the grid names the same photo.
+  IMG_0042.JPG, rating 4 of 5, picked") instead of only "Photo", as the grid names the same photo.
 
 ### The grid's thumbnail size slider is a slider to screen readers
 - With VoiceOver, the Thumbnail size control at the right of the grid's bottom bar is now announced as a slider with its
@@ -320,8 +338,33 @@
   `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
   so a script or an agent can't do it either.
 
+### The window's parts are named for screen readers
+- The top bar, the tool strip and the bottom bar are now announced as toolbars (Top bar, Tool strip, Bottom bar), and the
+  sidebar (Library), the photos, the Tools panel (or Presets) and the filmstrip as landmarks, so a screen reader can list
+  them and jump to one instead of walking every control. Nothing on screen changes. Not yet tried with a real VoiceOver session.
+
+### Dialogs are exposed to screen readers as dialogs
+- Export, Settings and the other dialogs, the library chooser and the prompts that stop the window (the quit question, a
+  library that could not be opened, a settings file problem) are now exposed to screen readers as dialogs: modal ones, so the
+  rest of the window is marked as blocked while one is open, and an alert dialog for the prompts. The answer to Check for
+  Updates is a dialog too, but not a modal one. Before, each was a plain group that only carried the dialog's title.
+- An alert dialog also carries what it says as its description: a screen reader can read the library problem's path, error and
+  explanation, or a prompt's text, together with the dialog.
+
+### Screen readers no longer read the shortcut with every button name
+- Icon-only buttons (the tool strip, the view buttons and Before/After and Filmstrip in the bottom bar, the top bar's
+  Import Photos…, the mask overlay and White Balance Selector buttons, the slideshow controls) are now announced by
+  their label alone ("Edit", "Presets", "Photo Grid"), and the shortcut is the button's description ("E", "Shift+P",
+  "G"), which VoiceOver reads after a pause or on request. Before, it read "Edit (E)" every time it landed on the
+  button. This holds in every language, including Japanese and Traditional Chinese, which write the shortcut in
+  full-width brackets. The tooltip you see on hover is unchanged.
 
 ## 2026-10-27
+
+### One feedback row in the macOS Help menu
+- On macOS the Help menu showed macOS's own "Send LightCraft Feedback" row above LightCraft's Send Feedback…. Only
+  LightCraft's row is left; it opens a new issue on the project's GitHub. (A `--memory` session doesn't change that
+  setting, so on a Mac where LightCraft only ever ran that way macOS's row stays.)
 
 ### The Edit menu loses its Language submenu
 - Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
@@ -367,38 +410,37 @@
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
 
-## 2026-10-29
+### The Window menu lists the open windows
+- On macOS the Window menu now shows a row for each open window (the main window, and the second one from
+  Window ▸ Second Window while it is open), below Bring All to Front. Before, the menu ended at Bring All to Front
+  and listed no window. macOS also adds its own window items there: Fill, Center, Move & Resize and Full Screen Tile
+  on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
 
-### A dialog no longer dims the macOS title bar
-- On macOS the top bar is the window's title bar, and the window buttons drawn over it stayed bright while a dialog dimmed
-  the bar under them. As under a macOS sheet, the dialog's backdrop now leaves the bar alone: its buttons are inactive, a
-  click on it does not close the dialog, and dragging its empty space still moves the window. Windows, Linux and full
-  screen are unchanged.
 
-## 2026-10-28
+## 2026-10-26
 
-### The window's parts are named for screen readers
-- The top bar, the tool strip and the bottom bar are now announced as toolbars (Top bar, Tool strip, Bottom bar), and the
-  sidebar (Library), the photos, the Tools panel (or Presets) and the filmstrip as landmarks, so a screen reader can list
-  them and jump to one instead of walking every control. Nothing on screen changes. Not yet tried with a real VoiceOver session.
-
-### Dialogs are exposed to screen readers as dialogs
-- Export, Settings and the other dialogs, the library chooser and the prompts that stop the window (the quit question, a
-  library that could not be opened, a settings file problem) are now exposed to screen readers as dialogs: modal ones, so the
-  rest of the window is marked as blocked while one is open, and an alert dialog for the prompts. The answer to Check for
-  Updates is a dialog too, but not a modal one. Before, each was a plain group that only carried the dialog's title.
-- An alert dialog also carries what it says as its description: a screen reader can read the library problem's path, error and
-  explanation, or a prompt's text, together with the dialog.
-
-### Screen readers no longer read the shortcut with every button name
-- Icon-only buttons (the tool strip, the view buttons and Before/After and Filmstrip in the bottom bar, the top bar's
-  Import Photos…, the mask overlay and White Balance Selector buttons, the slideshow controls) are now announced by
-  their label alone ("Edit", "Presets", "Photo Grid"), and the shortcut is the button's description ("E", "Shift+P",
-  "G"), which VoiceOver reads after a pause or on request. Before, it read "Edit (E)" every time it landed on the
-  button. This holds in every language, including Japanese and Traditional Chinese, which write the shortcut in
-  full-width brackets. The tooltip you see on hover is unchanged.
+### Panels come back as they were
+- Close Masking, Crop, Remove or Red Eye and the panel you came from is there again, at the same width and scroll
+  position, and the photo doesn't move; if the panel was hidden, it stays hidden. Pressing a panel key a second time
+  (I for Info, M for Masking, C for Crop, H for Remove) or its tool-strip button puts back exactly what the right
+  column showed before: Edit → I → I is Edit again, Masks → I → I is Masks, and a closed panel stays closed.
 
 ## 2026-10-25
+
+### Import from Folder… offers the photos you browsed in Local
+- A folder you browsed in Local no longer shows its photos as "In library" and out of reach in the Import review:
+  they are offered, checked, and importing them brings the browsed photos (with their edits) into the library where
+  they are. Copy and Move still leave them out, since they can't be copied from where they already are, and the
+  review says keywords and presets apply to new files only when they are set for such photos.
+- A copy you only browsed in Local (another path with the same content) no longer makes the import report "already in
+  the library", even after the library photo was permanently deleted and the library reopened, and a library photo
+  with the same content is matched before a browsed copy is promoted. Several browsed copies of one file import once.
+- Files with the same content as a browsed photo are listed as identical copies in the folder, not as already in the
+  library, which doesn't have them. With Copy or Move, which leave the browsed photo out, the first of those files
+  that isn't browsed itself is offered and checked instead, so that content can still be copied in from the folder.
+- A browsed file that another application replaced since (its size on disk is no longer the one that was browsed) is
+  read again: it is compared with the library by what it is now, and importing it brings its record up to date (size,
+  dimensions, content) as it joins the library.
 
 ### A one-field white balance edit no longer shifts the other one
 - Settings that name only a white balance temperature, or only a tint — `develop.merge`,
@@ -421,13 +463,41 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
+## 2026-10-26
 
-## 2026-10-25
+### Pushed shadows of raws no longer turn magenta
+- Raw decoding no longer clips each colour channel at zero. Near black, sensor noise through the camera's colour
+  matrix has negative values, and clipping kept only the positive half of each channel's noise, so dark areas
+  pushed up came out purple or magenta, most visibly with saturating camera profiles. In the fitted view, thumbnails
+  and other views smaller than the photo, where neighbouring pixels are averaged first, pushed shadows now keep their
+  real colour (a lens-cap frame pushed 4 EV rendered magenta; it is now black), and cached thumbnails are rendered
+  again. At 100% and in full-size exports white balance still clips each channel before noise reduction (#840).
 
 ### `>=` and `<=` work in the search box
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
   the `=` was read as part of the number, so such a search quietly showed no photos at all.
 
+### Keywords
+- **No more ghost text in the Keywords list.** Some cameras write their whole keyword list as one metadata entry,
+  a keyword a line; LightCraft now reads it as one keyword a line, and repairs libraries that already hold such a
+  keyword when they open. A name with a line break in it is drawn on one line in the sidebar and the Keyword List.
+
+### The mask overlay shows when it helps
+- One rule now decides when a mask's overlay covers the photo: when you switch it on with **O** (or the eye by the
+  Masks title), while the pointer is on one of the mask's parts (the rows under its name) or its pin, or by itself for a mask that
+  has no settings yet, so you see what it selects. The pointer on the mask's own row shows nothing, so its eye
+  switches the effect on and off with nothing over the photo. A mask with settings (its own or a preset's) never shows the overlay by itself, so you can
+  judge its effect: picking, creating, duplicating or adding to such a mask no longer covers the photo. While a
+  slider is at work nothing covers the photo, not even an overlay switched on with O; it comes back when you let go.
+  During a mask drag or a brush stroke, hovering shows no overlay; an overlay switched on with O, or a mask without
+  settings, keeps showing what it selects. While an Object click or a description is still being computed, no stand-in
+  overlay shows.
+### Color Mixer: HSL
+- **Color Mixer: HSL**, laid out as in Lightroom Classic: **Mixer | Point Color** tabs, then
+  **Adjust: HSL / Color**. HSL shows **Hue, Saturation, Luminance** or **All** (the three stacked,
+  each with its heading): eight colour sliders each, with coloured tracks, and a targeted
+  adjustment per group. HSL is the default and your choice is remembered. Point Color is now the
+  Color Mixer's second tab.
 ### Import rename numbering stops safely at its limit
 - Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
   reported as failed with guidance to lower `renameStart` or leave `rename` blank; completed transfers stay
@@ -451,9 +521,26 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
-
 ## 2026-10-24
 
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
+
+### Settings has a filter that finds a section on whatever tab it is
+- Settings has a filter above its tabs. Type a word, or part of one, and the sections that have it are listed with
+  the tab each is on, whichever tab was open: the names of tabs and sections, labels, buttons and explanations
+  are all looked through, and every word typed has to be there. Click a section (or press Return for the first, or ↓
+  to go down to them) and its tab opens at it. Esc empties the filter; a second Esc closes Settings. The choices of a
+  closed list and tooltips are not looked through. Scripts: `field:settingsFilter`, `settingsFound:<tab>:<section>`
+  for each section found, and `heading:<its English name>` for where a section starts, whatever the interface
+  language.
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
@@ -472,6 +559,36 @@
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
 
+### Imports and moves on a network share ask it less
+- Import no longer asks a network share about each photo's `.xmp` sidecar (up to nine names, each a round trip) when
+  the folder's listing, which the import or the Add Photos review has already read, shows there is none. A sidecar in
+  any letter case (`.xmp`, `.XMP`, `.Xmp`, or `<file name>.xmp`) is still found and read. A folder that changed since
+  it was listed, or was too recently changed to tell, is asked about photo by photo. For the folders that have not
+  changed since the review listed them, importing the photos picked in the review also stops asking the share
+  whether each one is a file or a folder before the first one is handled.
+- Renaming photos, moving them to another folder, and undoing either look for their sidecars in one listing of each
+  folder that eight or more photos leave, instead of asking for four names per photo. Sidecars the listing shows
+  still move with their photos (`.xmp` or `.XMP`, as before).
+- Folders that could not be listed completely or whose time can't be read, and files you add one by one, are checked
+  as before.
+
+### Drag and drop says what a drop will do
+- Photos dragged over an album now say how many a drop adds ("Add 2 photos to “Garden”"), or "Already in “Garden”"
+  when it holds them all, in which case letting go does nothing at all (no undo step, no message). When some are there
+  already, the message after the drop says how many. Over the Keyword List, the label says how many photos get the
+  keyword, or that they all have it.
+- Rows that can't take photos now show it instead of staying silent: a smart album, an album folder and the Keywords
+  in the sidebar show the not-allowed cursor while photos are over them, and letting go says why and where to drop
+  instead (Edit Smart Album…, an album inside the folder, the Keyword List).
+- A keyword dragged over itself or over a keyword inside it shows the not-allowed cursor and says "Can't go inside
+  itself".
+- Esc gives up a drag of photos, as it already did for albums, sidebar sections and keywords: that press ends the drag and does nothing else
+  (it does not also close a dialog, leave full screen or light back on). A drag started before entering full screen or a slideshow now ends with the mouse button, so Esc works there again.
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved in an older catalog format upgrades it, and versions that don't know the new format can't
+  open it afterward. In the desktop app, the library as it was is now kept beside it (`catalog.snap.v<format>-<seq>`,
+  `catalog.log.v<format>-<seq>`), and LightCraft says where once: to go back, see `docs/catalog-persistence.md`. A
+  library that can't be kept is not upgraded. The browser build keeps no copy (it always runs the newest version).
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -517,6 +634,14 @@
   saved.
 
 
+### A change that could only be partly taken back is saved and can be undone
+- When a change made of several steps (such as deleting photos that sit in stacks) failed part-way and LightCraft
+  could not put everything back, what it had changed stayed in the open library but was neither saved nor undoable,
+  so a restart brought back the old state and Undo could not finish the job. Such a change is now saved as it
+  stands, the error says it was only partly taken back, and Undo finishes taking it back once whatever stopped the
+  rollback (such as a file that could not be moved back) is gone. While that remains, Undo reports it and keeps the
+  rest of the change.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
@@ -551,6 +676,45 @@
   left out of a new album made from the selection, out of Add to Album, and out of the target album (B), which does
   nothing and says nothing when none of them is left, and counts only the photos it changed.
 
+### Reorder rules and groups in the smart album editor
+- Every rule and every group in the New / Edit Smart Album window has a grip (six dots) at the start of its row. Drag it
+  to move the row: a line shows where it will land, the row's name follows the pointer, and Esc gives the drag up. Drop
+  on a rule inside a group to put it in that group, beside the group's frame to take it out; drag a whole group to
+  nest it in another. A group can't go inside itself or deeper than three levels: the pointer shows a not-allowed
+  cursor and says why, and nothing moves. A group a move leaves empty goes away.
+- With the keyboard, Tab to a grip and press ↑ or ↓ to move the row one place (at the end of a group it moves out of
+  the group), → to move it into the group above it (or below it, if that is the one next to it) and ← to move it out
+  of its group. The focus stays on the moved row's grip, and a screen reader says where the row is: "Rule 2 of 4:
+  Rating is ≥ 3. Move with the arrow keys".
+- OK saves the rules in the order shown, in one undo step like any other change to the rules.
+
+### Lightroom catalog import keeps the settings of each history step
+- Importing a Lightroom Classic catalog saves its history steps and snapshots in a recovery archive in the library.
+  For catalogs from Lightroom Classic 13 and later, the archive kept each step's name and date but not its
+  settings, because those versions store them compressed. They are now decoded and kept. A step whose settings
+  can't be read is kept without them, with a warning, and the import goes on.
+- When an archive with the history settings would be too big (over 32 MiB), it is now saved without them, with a
+  warning, instead of not at all.
+
+### Big libraries take less memory
+- Photos whose develop settings are equal now hold them once in memory: every unedited JPEG, PNG or other rendered
+  file, every raw on the same import look, and the equal history steps, versions and import looks of one photo. (A
+  raw's unedited Kelvin settings carry its own as-shot white balance, so those share only with raws of the very same
+  white balance.) On a test library of 100,000 photos, 90 % unedited JPEGs, 8 % raws with one as-shot white balance
+  and 2 % edited, a photo takes about 2.8 kB where it took 4.4 kB (285 MB instead of 441 MB). Nothing changes on
+  screen, and the library's files are byte for byte what they were, so earlier versions open them as before.
+### An album caught in a loop is empty, and says so
+- A smart album that tests another album, which tests it back (or that tests itself), used to show a share of
+  its photos, and which photos depended on the album you asked about. Now every album on such a loop shows no
+  photos, however you look at it: in the grid, in the count beside it in the sidebar, and in an Album rule of
+  another smart album.
+- The empty album says why instead of "No photos": "This album is in a loop, so it shows nothing", then the album it
+  loops through and where to fix it (Edit Smart Album…). The row in the sidebar keeps its ⚠, and hovering it says the
+  same.
+- An album that only tests a looping album is not on the loop: it keeps working, and sees the looping album as empty
+  (so an Album rule set to "isn't" that album matches every photo). Change the rules of one album on the loop and its albums hold
+  their photos again.
+- A library that already holds such a loop opens as before; only what the albums on it show changes.
 ## 2026-10-23
 
 ### AI Denoise works out of the box
@@ -575,6 +739,19 @@
   #2575). An agent or script driving LightCraft could name another folder and another server, and have that
   server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
   is in its place instead of writing through a link to somewhere else.
+
+### Open or fold a whole branch of the sidebar
+- Hold Option (Alt on Windows and Linux) and click a row's triangle in the left sidebar to open or fold that row
+  and all the rows inside it, however many: a folder of albums with the folders in it, a folder of the library
+  down to its last folder, a keyword with the keywords inside it, a year with its months. A plain click still
+  opens or folds the one row.
+- What you open or fold inside it afterwards holds for that row. A folder that appears inside it later is as
+  the last Option-click on a row above it left the rest.
+- In Local, Option-click folds everything inside the folder; opening opens the one folder (opening them all
+  would read every folder inside from the disk).
+- The sidebar's rows are not remembered between sessions, so a branch opened or folded this way starts again as
+  the sidebar starts.
+- For scripts: `ui.clickWidget` takes `alt: true` for this click.
 
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
@@ -841,6 +1018,22 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Cleaner thumbnails in the grid
+- With Settings ▸ Interface ▸ Grid ▸ Ratings & flags set to Stars on hover (the default, which used to read "When rated
+  or hovered"), a photo now shows its stars and its edited mark only while the pointer is on it or it is selected.
+  Before, every rated photo wore the badge bar, which in a mostly rated library made it look like Always. Pick and
+  reject flags and colour labels stay on every thumbnail. Always and Never work as before.
+
+### Searching a big library keeps up with your typing
+- Typing in the library search stalls less on a library of hundreds of thousands of photos. The search used to
+  lower-case a photo's file name, title, caption, camera, lens, location, format, every keyword and the names of the
+  people on its faces again for each photo and each letter you typed. It now keeps that text, makes it the first time
+  you search, and keeps it up to date as you edit titles, captions, keywords, people and file names. Smart albums with
+  a Text rule keep their own text the same
+  way, made the first time such an album is counted or shown. Which photos match is unchanged. On a test library of
+  312 000 photos, finding the photos for a word took about 50 ms where it took 120 to 160 ms. The first search makes
+  the text, which takes a fraction of a second and about 32 MB of memory at that size; a Text rule's text is another
+  33 MB. Searches with `camera:`, `lens:` or `name:` gain less (about 70 ms became about 60 ms).
 ### Selection rings you can see in the light themes
 - The active photo's white outline vanished on Silver and Paper's light grid, and told the active photo from the other
   selected ones by lightness alone. Now the active photo has a heavier ring (3 pt, with a thin line against the photo so
@@ -869,7 +1062,43 @@
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
 
+### The same marks on every thumbnail
+- The filmstrip's thumbnails now carry what the grid's do: a virtual copy has its "Copy N" tag, so a copy and its
+  master tell apart; the stack badge can be clicked to expand or collapse the stack, with the same tooltip (now
+  translated); the colour label is a dot, and the grid's photo-shaped placeholder stands in until the picture is drawn.
+- A thumbnail that can't be drawn shows a warning icon instead of a bare "!". Hover it to read why, and where to go:
+  right-click ▸ Locate Missing File… when the original is gone, Reload from Disk otherwise.
+- In the Photo Grid a colour label is no longer a tinted band over the bottom of the picture; it is the dot in the
+  row of marks, as in the Square Grid and the filmstrip.
+- On a narrow thumbnail (a portrait photo at the smallest size) the marks no longer run over the photo's edge: the
+  copy tag drops its name, the edited mark goes, five stars become one star and the number, and what still doesn't fit is left out;
+  the stack badge sheds its icon and then the "1/" of "1/12". Nothing is painted outside the photo. The Preview pill sits
+  above the marks on the filmstrip too, and steps aside for the stack badge. In the Photo Grid, which has no tinted
+  surround, the label dot is kept before the stars on a narrow photo and stays when ratings and flags are turned off.
+- The filmstrip now dims rejected photos as the grid does, and in the grid the dim sits under the marks, so the red
+  reject flag stays clear. Right-clicking the stack badge opens the photo's menu.
+- Screen readers say "rating 3 of 5" in every language, instead of building "stars" from an English plural.
 
+### Find photos whose file is in the library twice
+- Smart albums and the library filter have a new rule, File ▸ Same Content as Another Photo. It finds the photos
+  whose file has the same content as another photo's, under another name or in another folder, such as a copy made
+  with Photo ▸ Duplicate. Virtual copies don't count, and neither do photos in Recently Deleted or only browsed in
+  Local. An album with the rule keeps its count up to date as copies are deleted, restored or removed.
+- The rule needs the library to have recorded each file's content. Photos added by an import have it; photos taken
+  over from a Lightroom catalog don't until you run Photo ▸ Reload from Disk on them, so they match nothing until
+  then, even when their files are identical.
+
+### Menus that fit the screen
+- The View menu is down from 63 rows to 36, so it opens without scrolling on a laptop's menu bar. Its overlays,
+  before/after and slideshow items sit in submenus: Loupe Overlay, Before/After, Mask Overlay (every overlay mode and
+  colour, with the current one checked), Crop Overlay and Slideshow.
+- The panel toggles (My Photos Panel, Right Panel, Sidebar Sections, Photo Counts, Filmstrip, Histogram, Navigator) moved to
+  the Window menu. Photo ▸ Metadata gathers the metadata commands, including Metadata Preset, Save Metadata to File
+  and Detect Faces.
+- File no longer lists Discard Preview Cache twice (it is one command), View no longer lists
+  Choose and Layout Image twice, and every command has a fixed place instead of sitting in a pile at the end of
+  its menu.
+- Keyboard shortcuts are unchanged.
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
@@ -1007,6 +1236,17 @@
 
 ## 2026-10-16
 
+### Dark raws keep their camera's colour and tone
+- A raw whose camera JPEG is too dark (or too colourless) to fit a look to no longer drops its camera profile's
+  colour for the dull neutral fallback: it keeps the profile's colour, with the JPEG's tone curve when one fits, else
+  the default tone curve. Photos of profiled cameras that were underexposed and pushed back up keep their colour: on
+  NIKON D780 frames 3.7 EV under with a local profile, from about 40% of the properly exposed frame's colourfulness
+  to about 95%.
+- `lightcraft-cli calibrate` now also learns the camera's tone curve from all the photos it reads, and a profile
+  made with it carries the curve. A photo of that camera follows its own JPEG's curve as far as that JPEG shows it
+  and the camera's curve beyond, so an underexposed shot pushed back up matches a properly exposed one in
+  brightness instead of coming out 4–7 L* darker. Profiles made before keep working; refit them to get the curve.
+
 ### Synchronize Folder shows that it is listing the folder
 - A folder with tens of thousands of photos, above all on a network share, can take minutes to list before
   Synchronize Folder checks a single photo. Its row in the activity stack used to sit at "0 of 64085" with an empty
@@ -1018,6 +1258,12 @@
 - While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
   every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
   for as long as the import ran. Changing one photo's capture time or crop is quicker too.
+
+### Menu paths without boxes
+- Messages that name a menu path, such as "View → Clear Filters to see all" or the External Editing help in
+  Settings, showed a box between the menu names: the interface font has no glyph for the small triangle used
+  there (issue #1950). They use → now, as the translations already did, and so do these notes. The remove
+  mark of each filter under "+N more" was a box too; it is an × now.
 
 ## 2026-10-15
 

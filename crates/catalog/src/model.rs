@@ -238,12 +238,89 @@ impl Meta {
             .filter(|t| lightcraft_meta::format_exposure_time(*t).is_some_and(|text| text == self.shutter.trim()))
             .or_else(|| parse_shutter_seconds(&self.shutter))
     }
+
+    /// The camera's maker and model as people name them, for display; None when the file names no camera. The maker
+    /// loses its company words ("OLYMPUS IMAGING CORP." is Olympus) and a name in capitals is written as a name
+    /// ("SONY" is Sony; an initialism such as "DJI" stays); the model is kept as the camera writes it, without the
+    /// maker said again ("NIKON CORPORATION NIKON Z 8" is Nikon Z 8). [`Meta::make`] says which words of `camera` are
+    /// the maker's; for a photo added before it was kept, the first word is.
+    pub fn camera_name(&self) -> Option<String> {
+        let (camera, make) = (self.camera.trim(), self.make.trim());
+        let after_make = camera.strip_prefix(make).filter(|rest| !make.is_empty() && (rest.is_empty() || rest.starts_with(char::is_whitespace)));
+        let (maker, model) = match after_make {
+            Some(model) => (make, model),
+            None => camera.split_once(char::is_whitespace).unwrap_or((camera, "")),
+        };
+        let maker: Vec<&str> = maker.split_whitespace().filter(|w| !company_word(w)).collect();
+        let said: Vec<String> = maker.iter().map(|w| word_key(w)).collect();
+        let model: Vec<&str> = if after_make.is_some() {
+            // drop the end of the make said again, with or without its company words ("NIKON", "ACME CAMERA SYSTEMS",
+            // or "KODAK" after "EASTMAN KODAK COMPANY"), then the make's own company words ("NIKON CORPORATION"); any
+            // other word, a company word included, is the model's; an end of company words alone is not the make
+            // ("ACME COMPUTER Computer 1000")
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let keys: Vec<String> = model.iter().map(|w| word_key(w)).collect();
+            let named = |end: &&[String]| keys.starts_with(end) && end.iter().any(|w| !company_word(w));
+            let longest = |of: &[String]| (0..of.len()).filter_map(|i| of.get(i..)).find(named).map_or(0, <[String]>::len);
+            let full: Vec<String> = make.split_whitespace().map(word_key).collect();
+            let run = longest(&full).max(longest(&said));
+            let own: Vec<String> = make.split_whitespace().filter(|w| company_word(w)).map(word_key).collect();
+            let rest = model.get(run..).unwrap_or_default();
+            rest.iter().skip_while(|w| run > 0 && own.contains(&word_key(w))).copied().collect()
+        } else {
+            // the maker taken from the first word: drop the company words it left behind when they hold a legal form
+            // ("CASIO COMPUTER CO.,LTD.", with the maker said again among them), otherwise only the maker said again
+            // ("ACME Computer 1000" keeps Computer)
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let run: Vec<&str> = model.iter().copied().take_while(|w| said.contains(&word_key(w)) || company_word(w)).collect();
+            let drop = if run.iter().any(|w| legal_form(w)) { run.len() } else { run.iter().take_while(|w| said.contains(&word_key(w))).count() };
+            model.get(drop..).unwrap_or_default().to_vec()
+        };
+        let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.into_iter().map(str::to_string)).collect();
+        (!words.is_empty()).then(|| words.join(" "))
+    }
+}
+
+/// A word of a camera's name as words are compared: its letters and digits in lower case ("CORP." is corp, "CO.,LTD."
+/// coltd).
+fn word_key(w: &str) -> String {
+    w.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// Is `w` a word of a maker's company name ("IMAGING CORP.", "COMPANY, LTD.", "CAMERA AG"), or punctuation alone?
+fn company_word(w: &str) -> bool {
+    const DESCRIPTIVE: &str = "imaging camera computer optical electronics";
+    let key = word_key(w);
+    key.is_empty() || legal_form(w) || DESCRIPTIVE.split(' ').any(|c| c == key)
+}
+
+/// Is `w` the legal form of a company ("CORP.", "CO.,LTD.", "AG")? Unlike "CAMERA" or "COMPUTER", no model starts
+/// with one.
+fn legal_form(w: &str) -> bool {
+    const FORMS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag";
+    let key = word_key(w);
+    FORMS.split(' ').any(|c| c == key)
+}
+
+/// A word of a maker's name as a name: one in capitals of more than three letters ("OLYMPUS") or in lower case
+/// ("samsung") with only its first letter a capital; an initialism ("DJI"), a name in mixed case ("GoPro") and a word
+/// with digits or punctuation as written.
+fn maker_word(w: &str) -> String {
+    let letters = w.chars().all(char::is_alphabetic);
+    let capitals = w.chars().all(char::is_uppercase) && w.chars().count() > 3;
+    let lower = w.chars().all(char::is_lowercase);
+    if !(letters && (capitals || lower)) {
+        return w.to_string();
+    }
+    let mut chars = w.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars.flat_map(char::to_lowercase)).collect()).unwrap_or_default()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Version {
     pub name: String,
     pub created: String,
+    #[serde(deserialize_with = "crate::shared::deserialize")]
     pub settings: Arc<DevelopSettings>,
     #[serde(default)]
     pub auto: bool,
@@ -252,6 +329,7 @@ pub struct Version {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HistoryStep {
     pub label: String,
+    #[serde(deserialize_with = "crate::shared::deserialize")]
     pub settings: Arc<DevelopSettings>,
 }
 
@@ -279,6 +357,7 @@ pub struct Photo {
     pub flag: Flag,
     #[serde(default)]
     pub label: Option<ColorLabel>,
+    #[serde(deserialize_with = "crate::shared::deserialize_current")]
     pub develop: Arc<DevelopSettings>,
     #[serde(default)]
     pub edited: Option<String>,
@@ -310,7 +389,7 @@ pub struct Photo {
     /// Lens corrections embedded in the file (DNG `WarpRectilinear` / `FixVignetteRadial`), applied when
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub embedded_lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,7 +400,7 @@ pub struct Photo {
     /// The settings import gave the photo when a user default (a raw/JPEG default preset, see
     /// the engine's import defaults) changed them from [`Photo::camera_defaults`]. They count as
     /// unedited, and Reset returns to them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::shared::deserialize_optional")]
     pub import_look: Option<Arc<DevelopSettings>>,
     /// Assisted culling scores (`None` until analysed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,6 +434,20 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// Set when the person arranged this photo's burst by hand (Window ▸ Bursts, or
+    /// `photo.moveToBurst`): its place in [`Analysis::group`], 0 being the pick, or `Some(0)` for
+    /// a photo taken out of every burst. Culling run again keeps such a photo's burst, place and
+    /// pick (unless asked to regroup). `None` while the burst is as culling made it; left out of the
+    /// catalog JSON then, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+}
+
+impl Analysis {
+    /// Whether the person placed this photo by hand (see [`Analysis::rank`]).
+    pub fn by_hand(&self) -> bool {
+        self.rank.is_some()
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting
@@ -423,7 +516,7 @@ impl Photo {
             rating: 0,
             flag: Flag::None,
             label: None,
-            develop: Arc::new(DevelopSettings::default()),
+            develop: crate::shared::default_settings(),
             edited: None,
             versions: Vec::new(),
             history: Vec::new(),
@@ -574,6 +667,18 @@ impl Photo {
     /// In the library: not deleted and not only browsed (Local).
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
+    }
+    /// The file Missing Photos checks for this photo, if it is in scope: a library photo (not in
+    /// Recently Deleted, not a Local-only record seen while browsing a folder) whose original is a
+    /// file. Browse records are out of scope on purpose: browsing can leave tens of thousands of
+    /// them in the catalog, they never show in library views (Missing Photos included), and a
+    /// folder that is gone is simply not browsed again. The sidebar count, the Missing Photos view,
+    /// `library.missing` and Find Missing Photos all use this one rule.
+    pub fn library_file(&self) -> Option<&str> {
+        match &self.source {
+            Source::File { path } if self.in_library() => Some(path),
+            _ => None,
+        }
     }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
@@ -806,5 +911,67 @@ mod shutter_tests {
             assert_eq!(parse_shutter_seconds(s), None, "{s}");
         }
         assert_eq!(parse_shutter_seconds("1/250"), Some(0.004));
+    }
+}
+
+#[cfg(test)]
+mod camera_name_tests {
+    use super::*;
+
+    fn name(make: &str, camera: &str) -> Option<String> {
+        Meta { make: make.into(), camera: camera.into(), ..Default::default() }.camera_name()
+    }
+
+    #[test]
+    fn a_cameras_name_is_its_maker_once_without_company_words_then_its_model_as_written() {
+        for (make, camera) in [
+            ("OLYMPUS IMAGING CORP.", "OLYMPUS IMAGING CORP. E-M5MarkII"),
+            ("NIKON CORPORATION", "NIKON CORPORATION NIKON Z 8"),
+            ("RICOH IMAGING COMPANY, LTD.", "RICOH IMAGING COMPANY, LTD. PENTAX K-1"),
+            ("LEICA CAMERA AG", "LEICA CAMERA AG LEICA Q3"),
+            ("Canon", "Canon Canon EOS R5"),
+        ] {
+            // the maker known, and a photo added before it was kept (its first word taken for the maker)
+            for make in [make, ""] {
+                let shown = name(make, camera).unwrap_or_else(|| panic!("{camera}: no name"));
+                let (maker, model) = shown.split_once(' ').unwrap_or_else(|| panic!("{shown}: no model"));
+                assert!(camera.ends_with(model), "{shown}: the model as {camera:?} writes it");
+                assert!(!model.to_lowercase().contains(&maker.to_lowercase()), "{shown}: the maker said once");
+                assert!(camera.to_lowercase().starts_with(&maker.to_lowercase()), "{shown}");
+            }
+        }
+        // a maker in capitals is written as a name, an initialism or a name in mixed case as it is
+        assert!(name("SONY", "SONY ILCE-7M4").is_some_and(|n| n.starts_with("Sony ")));
+        assert!(name("DJI", "DJI FC3582").is_some_and(|n| n.starts_with("DJI ")));
+        assert_eq!(name("", "Apple iPhone 15 Pro").as_deref(), Some("Apple iPhone 15 Pro"));
+        // a maker of several words, and a model with no maker before it, as written
+        assert_eq!(name("OM Digital Solutions", "OM Digital Solutions OM-1").as_deref(), Some("OM Digital Solutions OM-1"));
+        assert_eq!(name("", "ILCE-7M4").as_deref(), Some("ILCE-7M4"));
+        assert_eq!(name("", " "), None, "no camera");
+        // a maker whose company words follow its name ("COMPUTER CO.,LTD."), known or taken from the first word
+        for make in ["CASIO COMPUTER CO.,LTD.", ""] {
+            assert_eq!(name(make, "CASIO COMPUTER CO.,LTD. EX-Z1050").as_deref(), Some("Casio EX-Z1050"), "make {make:?}");
+        }
+        // with the maker known, a company word that starts the model is the model's
+        assert_eq!(name("ACME", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // but the maker said again in full, company words and all, is dropped
+        let repeated = "NIKON CORPORATION NIKON CORPORATION Z 8";
+        assert_eq!(name("NIKON CORPORATION", repeated).as_deref(), Some("Nikon Z 8"));
+        // a model word that is only some word of the maker, or a company word the make never had, is the model's
+        let om = "OM Digital Solutions Digital 1000";
+        assert_eq!(name("OM Digital Solutions", om).as_deref(), Some("OM Digital Solutions Digital 1000"));
+        assert_eq!(name("ACME", "ACME ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("ACME COMPUTER", "ACME COMPUTER Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // with the maker taken from the first word, a company word with no legal form after it is the model's, and
+        // the first word ends at any space
+        assert_eq!(name("", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("", "CANON\tALPHA R5").as_deref(), Some("Canon ALPHA R5"));
+        // the end of the maker said again is dropped ("EASTMAN KODAK" then "KODAK")
+        let kodak = "EASTMAN KODAK COMPANY KODAK EASYSHARE C875 ZOOM DIGITAL CAMERA";
+        let shown = name("EASTMAN KODAK COMPANY", kodak);
+        assert_eq!(shown.as_deref(), Some("Eastman Kodak EASYSHARE C875 ZOOM DIGITAL CAMERA"));
+        // the make said again with a company word inside it is dropped whole
+        let systems = "ACME CAMERA SYSTEMS ACME CAMERA SYSTEMS 1000";
+        assert_eq!(name("ACME CAMERA SYSTEMS", systems).as_deref(), Some("Acme Systems 1000"));
     }
 }

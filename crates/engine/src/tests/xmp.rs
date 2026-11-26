@@ -263,6 +263,25 @@ fn reading_metadata_leaves_the_sidecar_alone_with_auto_write_on() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// The open-time keyword repair runs outside a command, so it writes the repaired photos' sidecars itself
+/// when automatic XMP writing is on (CodeRabbit on #2922): another app reading the sidecar sees one keyword a line.
+#[test]
+fn the_keyword_repair_writes_the_sidecar_with_auto_write_on() {
+    let src = temp_dir("split-keywords-autowrite");
+    write_png(&src.join("frame.png"), 6);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let id = only(&s);
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords = vec!["Bride\r\nGroom".into()];
+    s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    assert_eq!(s.split_multiline_keywords(), 1);
+    let xmp = std::fs::read_to_string(src.join("frame.xmp")).expect("the sidecar is written");
+    assert!(xmp.contains(">Bride<") && xmp.contains(">Groom<") && !xmp.contains("Bride\r") && !xmp.contains("Bride\n"), "{xmp}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Issue #934, the round trip the write-back broke: after a read with auto-write on, another app
 /// changes `crs:Exposure2012` from 0.5 to 1.2 (keeping the rest of the file), and the next read
 /// takes 1.2.
@@ -624,6 +643,25 @@ fn regions_drawn_on_the_photo_as_stored_land_on_the_upright_photo() {
         assert_eq!(read["read"].as_array().map(Vec::len), Some(1), "{what}: {read}");
         assert_on_the_upright_face(&s, id, &format!("{what}, read again"));
     }
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A sidecar that says nothing beside a photo whose file states an orientation isn't one the import counts: the
+/// file's orientation goes to a sidecar that said something, not into an empty one (#2674, #2589).
+#[test]
+fn an_empty_sidecar_beside_a_turned_photo_is_not_counted() {
+    let src = temp_dir("regions-empty-sidecar");
+    let file = src.join("p.jpg");
+    write_turned_jpeg(&file, None);
+    std::fs::write(
+        src.join("p.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["sidecars"], 0, "{r}");
     let _ = std::fs::remove_dir_all(&src);
 }
 

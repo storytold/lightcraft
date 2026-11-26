@@ -296,6 +296,8 @@ struct PrefsFile {
     export_presets: Vec<crate::export::ExportPreset>,
     /// Print templates.
     print_templates: Vec<crate::print::template::PrintTemplate>,
+    /// Print Template Browser folders, empty ones included.
+    print_template_folders: Vec<String>,
     /// Metadata presets.
     metadata_presets: Vec<crate::cmd::metadata::MetadataPreset>,
     /// Filter presets.
@@ -358,12 +360,24 @@ fn presets_json(s: &Session) -> String {
 /// Finish a background compaction that is done (cheap otherwise). A failed one lost nothing (the
 /// log is kept whole) and is retried later; it is reported like other persistence errors.
 fn poll_compaction(lib: &mut Library) {
-    if let Err(e) = lib.journal.poll() {
+    let polled = lib.journal.poll();
+    note_upgrade_kept(lib);
+    if let Err(e) = polled {
         log::error!("library: compaction: {e}");
         lib.last_error = Some(format!("compaction: {e}"));
     }
     // (never waits: the log's thread publishes what it holds)
     lib.log_held = lib.journal.unwritten();
+}
+
+/// A snapshot that upgraded a library left in an older format at open kept the files it was:
+/// tell so once, like the open does ([`kept_note`]). Cheap when nothing was kept.
+fn note_upgrade_kept(lib: &mut Library) {
+    let kept = lib.journal.take_kept();
+    if let Some(note) = kept_note(&kept, None) {
+        lib.settings_warnings.push(note);
+        lib.report.kept.extend(kept);
+    }
 }
 
 /// How long the frame loop waits before retrying a failed append (commands retry at once).
@@ -407,6 +421,20 @@ struct SettingsLoad {
     warnings: Vec<String>,
     /// Files not to overwrite this session.
     blocked: Vec<&'static str>,
+}
+
+/// What to tell the person when opening the library upgraded it: the files it was are kept
+/// beside it (as large as it was), and are theirs to delete.
+fn kept_note(kept: &[String], damaged: Option<&String>) -> Option<String> {
+    if kept.is_empty() && damaged.is_none() {
+        return None;
+    }
+    // (a library whose log was damaged: that log is the other half of what it was)
+    let kept: Vec<&str> = kept.iter().chain(damaged).map(String::as_str).collect();
+    Some(format!(
+        "This library was upgraded for this version of LightCraft, and earlier versions can't open it now. The library as it was is kept beside it as {}: delete it once the earlier version is no longer wanted (docs/catalog-persistence.md, \"Going back to an older version\").",
+        kept.join(" and ")
+    ))
 }
 
 impl SettingsLoad {
@@ -607,6 +635,11 @@ impl Session {
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
         self.catalog = catalog;
+        // nor do tasks waiting in line carry over: they name the old library's photos and folders
+        let dropped = self.activity.library_changed();
+        if dropped > 0 {
+            log::info!("library: {dropped} task(s) waiting in line were dropped with the old library");
+        }
         // (nothing of the list the last library showed is this one's)
         self.refresh_view();
         self.library_generation = crate::LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -635,6 +668,8 @@ impl Session {
         // (the built-ins are looked up first); it gets a name of its own instead
         self.rename_shadowing_export_presets();
         self.print_templates = prefs.print_templates;
+        self.print_template_folders = prefs.print_template_folders;
+        crate::print::template::tidy_folders(&mut self.print_template_folders, &mut self.print_templates);
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;
         self.curve_presets = prefs.curve_presets;
@@ -717,6 +752,8 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
+        // (a damaged log is only part of "what the library was" when opening upgraded it, and the store keeps what an upgrade replaces: a library in this format that lost its log's tail was not upgraded, and the browser's store keeps no snapshot for the log to go with)
+        let kept = kept_note(&report.kept, report.damaged.as_ref().filter(|_| report.upgraded_from.is_some() && report.kept_files));
         self.library = Some(Library {
             dir,
             on_disk,
@@ -731,7 +768,7 @@ impl Session {
             forgot_local: None,
             presets_saved,
             view_written,
-            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(settings.warnings).collect(),
+            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(kept).chain(settings.warnings).collect(),
             warnings_reported: 0,
             blocked: settings.blocked,
             folder,
@@ -749,6 +786,13 @@ impl Session {
                 lib.forgot_local = Some(plan);
             }
         }
+        // keywords read whole from a list a line long (before they were split) become one each
+        let journaled = self.pending_log.len();
+        if (self.split_multiline_keywords() > 0 || self.pending_log.len() > journaled)
+            && let Err(e) = self.persist()
+        {
+            log::error!("library: {e}");
+        }
         // smart previews written by an older camera-look fit are brought up to date in the background
         #[cfg(not(target_arch = "wasm32"))]
         if on_disk {
@@ -759,6 +803,68 @@ impl Session {
         self.disk_alert.reset();
         self.check_disk_space(true);
         Ok(())
+    }
+
+    /// Photos whose keywords hold line breaks (a camera preset's whole keyword list read as one
+    /// keyword by an earlier version) get one keyword a line, journaled, not an undo step. Returns
+    /// how many photos changed. A listed keyword with line breaks hands its options to the names it
+    /// splits into (a name listed already keeps its own, but is left out of export when either was),
+    /// and with automatic XMP writing on, the repaired photos' sidecars are written as a command's are.
+    pub fn split_multiline_keywords(&mut self) -> usize {
+        let breaks = |k: &str| k.contains(['\r', '\n', '\u{2028}', '\u{2029}']);
+        let log_start = self.pending_log.len();
+        let listed: Vec<(String, lightcraft_catalog::keywords::KeywordInfo)> =
+            self.catalog.listed_keywords().filter(|k| breaks(&k.path)).map(|k| (k.path.clone(), k.info.clone())).collect();
+        for (path, info) in listed {
+            let mut ops = Vec::new();
+            for (i, name) in lightcraft_catalog::keywords::from_file(std::slice::from_ref(&path), &[]).into_iter().enumerate() {
+                // where new keywords go stays one keyword: the first name it splits into, listed already or not
+                let parent = info.new_keywords_inside && i == 0;
+                let moved = match self.catalog.keyword_info(&name) {
+                    Some(kept) => {
+                        let mut kept = kept.clone();
+                        kept.include_on_export &= info.include_on_export;
+                        kept.new_keywords_inside |= parent;
+                        kept
+                    }
+                    None => lightcraft_catalog::keywords::KeywordInfo { new_keywords_inside: parent, ..info.clone() },
+                };
+                ops.push(lightcraft_catalog::Op::SetKeyword { path: name, info: Some(moved) });
+            }
+            ops.push(lightcraft_catalog::Op::SetKeyword { path, info: None });
+            for op in ops {
+                match self.catalog.apply(op.clone()) {
+                    Ok(_) => self.pending_log.push(op),
+                    Err(e) => log::warn!("split keywords: {e}"),
+                }
+            }
+        }
+        let fix: Vec<(lightcraft_catalog::PhotoId, lightcraft_catalog::Meta)> = self
+            .catalog
+            .photos()
+            .filter(|p| p.meta.keywords.iter().any(|k| breaks(k)))
+            .map(|p| {
+                let mut meta = p.meta.clone();
+                meta.keywords = lightcraft_catalog::keywords::from_file(&meta.keywords, &[]);
+                (p.id, meta)
+            })
+            .collect();
+        let n = fix.len();
+        for (id, meta) in fix {
+            let op = lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) };
+            match self.catalog.apply(op.clone()) {
+                Ok(_) => self.pending_log.push(op),
+                Err(e) => log::warn!("split keywords: {e}"),
+            }
+        }
+        if n > 0 {
+            log::info!("split the line-separated keywords of {n} photo(s) into one keyword a line");
+        }
+        // not run through a command, so the sidecars are written here, as after a command
+        if self.xmp.auto_write && self.pending_log.len() > log_start {
+            self.auto_write_sidecars_since(log_start);
+        }
+        n
     }
 
     /// Write pending ops to the log (fsynced, or handed to the log's own thread natively), compact when due, and save changed presets.
@@ -957,6 +1063,7 @@ impl Session {
             last_merge: self.last_merge.clone(),
             export_presets: self.export_presets.clone(),
             print_templates: self.print_templates.clone(),
+            print_template_folders: self.print_template_folders.clone(),
             metadata_presets: self.metadata_presets.clone(),
             filter_presets: self.filter_presets.clone(),
             curve_presets: self.curve_presets.clone(),
@@ -1045,6 +1152,7 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        note_upgrade_kept(lib);
     }
 
     /// Compact the log into a snapshot now.
@@ -1054,7 +1162,9 @@ impl Session {
             return Err(EngineError::Other("can't compact during an interaction".into()));
         }
         if let Some(lib) = self.library.as_mut() {
-            lib.journal.snapshot(&self.catalog)?;
+            let snapshot = lib.journal.snapshot(&self.catalog);
+            note_upgrade_kept(lib);
+            snapshot?;
         }
         Ok(())
     }

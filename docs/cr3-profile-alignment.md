@@ -7,7 +7,7 @@ to upstream main and requires no prior merge of #2675.
 It does not change CR3 decoding or the lens warp applied when developing the photograph.
 
 A resolved external lens profile may propose geometry only for file-local colour calibration
-and pooled camera-profile pairs, with a fallback camera matrix and no in-file lens warp. The sensor, sensor clip mask, and embedded JPEG are
+and pooled camera-profile samples, with a fallback camera matrix and no in-file lens warp. The sensor, sensor clip mask, and embedded JPEG are
 oriented together before evaluating the already oriented lens profile. White balance and
 baseline exposure are applied exactly once before geometry assessment.
 
@@ -24,16 +24,18 @@ comparison adds no extra improvement threshold. Rejected or absent geometry take
 CR3 framing path. All subsequent colour,
 tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
 
-The proposal reaches file-local colour and tone, pooled camera-profile pairs, and colour tags
+The proposal reaches file-local colour and tone, pooled colour pairs and tone samples, and colour tags
 for merge/DNG conversion. The DNG colour fit uses the external profile for correspondence geometry
 without its vignette gains: the unchanged sensor samples and the DNG writer do not carry that
-database shading correction. File-local fits retain source-position vignetting. Pooled fits apply the profile’s vignette
-to an accepted warp and keep the original unshaded colour pairs when the warp is absent or rejected.
-Cache versions advance from upstream look 14/render 84 to look 15/render 85.
+database shading correction. The file-local fit measures the share of database shading visible in the JPEG
+after registration, using each pixel’s source position under the selected framing and warp. Pooled fits apply
+the profile’s vignette to an accepted warp. A missing or rejected warp preserves both the unshaded colour
+pairs and the tone samples from the original framing.
+Cache versions advance from upstream look 26/render 87 to look 27/render 88.
 The loaded database semantic identity also invalidates camera render/view keys, Smart-preview
 headers and scan markers. Fresh original decodes retain the photo’s hot-pixel setting; offline
 proxies remain readable and cannot be relabelled as freshly fitted pixels.
-The upstream source-position vignetting correction remains before geometry, including CR3. No camera allowlist,
+Embedded vignetting is still applied at the source before geometry. No camera allowlist,
 new profile matching rules, or weaker acceptance gate is introduced. Other RAW formats
 retain their existing correspondence behaviour. The non-CR3 and fixed-mount changes
 proposed by #2675 are separate work.
@@ -47,7 +49,7 @@ rejection, crop-relative profile orientation at multiple resolutions, clip-mask 
 and the complete CR3 correspondence route for EXIF orientations 1–8 with non-unity white balance.
 The opt-in `corpus_cr3_profile_geometry_diagnostics` test exports `geometry.tsv` and plain,
 selected, and JPEG proxy PNGs when `LIGHTCRAFT_CR3_DIAGNOSTICS` names an output directory.
-Both diagnostic routes retain identical vignetting; the plain route removes only the proposed profile warp.
+The plain diagnostic route removes only the proposed profile warp. Both routes use the same lens vignetting data.
 It reads CR3 files from `$LIGHTCRAFT_CORPUS/raw` and the normal configured lens database.
 The TSV appends `status` and `reason` columns. `measured` means both proxy calls returned
 images; acceptance or rejection is recorded separately in the existing measurement columns.

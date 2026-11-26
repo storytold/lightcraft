@@ -78,6 +78,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("kind", "File Type", Kind::Choice(&[("image", "Image"), ("raw", "Raw"), ("video", "Video")])),
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
+    ("sameContent", "Same Content as Another Photo", Kind::Bool),
     // Date
     ("captureDate", "Capture Date", Kind::Date),
     ("importDate", "Import Date", Kind::Date),
@@ -135,7 +136,7 @@ pub const TOP_LEVEL_FIELDS: &[&str] = &["rating", "flag", "label", "text"];
 /// once or in [`TOP_LEVEL_FIELDS`].
 pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Source", &["album", "virtualCopy", "copyName", "stacked"]),
-    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration"]),
+    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration", "sameContent"]),
     ("Date", &["captureDate", "importDate", "editDate"]),
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
     ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
@@ -713,8 +714,37 @@ fn lower(v: &Value) -> String {
     }
 }
 
+/// What a Text rule looks through for `p`: its file name, title, caption, camera, lens, location, city,
+/// state, country, alt text, format, keywords, people and copy name, trimmed and lower-cased.
+pub(crate) fn rule_text(p: &Photo) -> String {
+    let m = &p.meta;
+    let all = [
+        p.file_name.as_str(),
+        &m.title,
+        &m.caption,
+        &m.camera,
+        &m.lens,
+        &m.location,
+        &m.city,
+        &m.state,
+        &m.country,
+        &m.alt_text,
+        &p.format,
+        &m.keywords.join(" "),
+        &p.people().join(" "),
+        p.copy_name.as_deref().unwrap_or(""),
+    ]
+    .join(" ");
+    let all = all.trim();
+    if all.is_ascii() { all.to_ascii_lowercase() } else { all.to_lowercase() }
+}
+
 fn text_op(op: &str, have: &str, want: &str) -> bool {
-    let have = have.trim().to_lowercase();
+    text_op_lowered(op, &have.trim().to_lowercase(), want)
+}
+
+/// [`text_op`] for a `have` that is trimmed and lower-cased already.
+fn text_op_lowered(op: &str, have: &str, want: &str) -> bool {
     match op {
         "contains" => want.split_whitespace().all(|w| have.contains(w)),
         "notContains" => !want.split_whitespace().any(|w| have.contains(w)),
@@ -1049,6 +1079,7 @@ impl Rule {
             "virtualCopy" => yes(p.copy_of.is_some()),
             "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
             "stacked" => yes(cat.stack_of(p.id).is_some()),
+            "sameContent" => yes(cat.has_same_content(p)),
             "cropped" => yes(p.is_cropped()),
             "treatment" => {
                 let t = if p.develop.treatment == lightcraft_develop::Treatment::Bw { "monochrome" } else { "color" };
@@ -1058,26 +1089,10 @@ impl Rule {
             "keywordCount" => num_op(op, Some(p.keyword_count() as f64), value),
             "person" => names_op(op, &p.people(), &want),
             "personCount" => num_op(op, Some(p.people().len() as f64), value),
-            "text" => {
-                let all = [
-                    p.file_name.as_str(),
-                    &m.title,
-                    &m.caption,
-                    &m.camera,
-                    &m.lens,
-                    &m.location,
-                    &m.city,
-                    &m.state,
-                    &m.country,
-                    &m.alt_text,
-                    &p.format,
-                    &m.keywords.join(" "),
-                    &p.people().join(" "),
-                    p.copy_name.as_deref().unwrap_or(""),
-                ]
-                .join(" ");
-                text(&all)
-            }
+            "text" => match cat.rule_text_of(p) {
+                Some(have) => text_op_lowered(op, have, &want),
+                None => text_op_lowered(op, &rule_text(p), &want),
+            },
             "fileName" => text(&p.file_name),
             "extension" => text_op(op, p.extension(), want.trim_start_matches('.')),
             "duration" => num_op(op, p.duration.filter(|d| d.is_finite()), value),
@@ -1206,6 +1221,14 @@ impl RuleSet {
         self.rules.iter().any(|r| match r {
             Rule::Group { group } => group.depends_on_now(),
             Rule::Field { op, .. } => op == "inLast" || op == "notInLast",
+        })
+    }
+
+    /// Whether a rule (nested groups included) tests `field`.
+    pub fn reads(&self, field: &str) -> bool {
+        self.rules.iter().any(|r| match r {
+            Rule::Group { group } => group.reads(field),
+            Rule::Field { field: f, .. } => f == field,
         })
     }
 

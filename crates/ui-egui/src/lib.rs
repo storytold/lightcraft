@@ -37,6 +37,7 @@ pub mod links;
 pub mod loupe_timing;
 pub mod menus;
 mod missing_sweep;
+pub mod motion;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -52,6 +53,7 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+mod thumb;
 pub mod widgets;
 pub mod window_place;
 
@@ -105,7 +107,7 @@ pub use clock::{monotonic_ms, now_ms};
 pub use services::OpenModelFolderFn;
 pub use services::{
     CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,
-    SharedWrite, SystemThemeFn, WriteFn,
+    SharedWrite, SystemReduceMotionFn, SystemThemeFn, WriteFn,
 };
 use state::{GestureFrame, InjectedPress};
 
@@ -238,6 +240,9 @@ pub struct LightcraftApp {
     pub(crate) missing_count_test_delay: Option<std::time::Duration>,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
+    /// The frame being laid out is the offscreen one of a headless screenshot: it has no pointer of
+    /// its own, so it must not end a drag the window's pointer is still holding.
+    drawing_offscreen: bool,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
     /// A gesture was canceled after its synthetic pointer press reached egui. The next
@@ -338,6 +343,8 @@ pub struct LightcraftApp {
     pub(crate) scans_stopping: import::StoppingScans,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
+    /// The folders the scan of the review on screen listed, for the import that review starts (and no other).
+    pub review_listed: Option<lightcraft_engine::import::ListedFolders>,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
@@ -352,6 +359,8 @@ pub struct LightcraftApp {
     pub(crate) lightroom_result: Option<state::Dialog>,
     /// The import review of a finished scan, waiting for another dialog to close.
     pub(crate) review_pending: Option<state::Dialog>,
+    /// The folders that review's scan listed; they become [`Self::review_listed`] when the review opens.
+    pub(crate) review_pending_listed: Option<lightcraft_engine::import::ListedFolders>,
     /// The library generation the window title and the recent list were last updated for.
     pub shown_library: Option<u64>,
     /// A background export in progress.
@@ -392,6 +401,9 @@ pub struct LightcraftApp {
     /// and when it was last read (egui time, s).
     pub(crate) screen_profile: Option<Vec<u8>>,
     pub(crate) screen_profile_read: Option<f64>,
+    /// The last answer of `services.system_reduce_motion` and when it was read.
+    pub(crate) system_reduce_motion: Option<bool>,
+    pub(crate) system_reduce_motion_read: Option<f64>,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
@@ -608,6 +620,11 @@ pub fn split_presets(dropped: Vec<String>) -> (Vec<String>, Vec<String>) {
 #[derive(Default)]
 pub struct Caches {
     keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    /// The Bursts panel's bursts, by the view's generation.
+    bursts: Option<(u64, panels::bursts::Shown)>,
+    /// Every burst of the library (pick first), by the view's generation: what a drag in the
+    /// Bursts panel compares with, so a frame of the drag builds no index of its own.
+    burst_index: Option<(u64, panels::bursts::All)>,
     /// The Keywording box's read-only names (with containing keywords, or Will Export), by library
     /// revision, selection and view.
     keyword_names: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,
