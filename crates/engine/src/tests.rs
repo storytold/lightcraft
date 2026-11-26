@@ -9,6 +9,7 @@ mod album_remove;
 mod albums_local;
 mod autosync_wb;
 mod batch_sidebar;
+mod bursts;
 mod color;
 mod constrain_crop;
 mod crop_angle;
