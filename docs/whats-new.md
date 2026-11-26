@@ -477,6 +477,12 @@
   During a mask drag or a brush stroke, hovering shows no overlay; an overlay switched on with O, or a mask without
   settings, keeps showing what it selects. While an Object click or a description is still being computed, no stand-in
   overlay shows.
+### Color Mixer: HSL
+- **Color Mixer: HSL**, laid out as in Lightroom Classic: **Mixer | Point Color** tabs, then
+  **Adjust: HSL / Color**. HSL shows **Hue, Saturation, Luminance** or **All** (the three stacked,
+  each with its heading): eight colour sliders each, with coloured tracks, and a targeted
+  adjustment per group. HSL is the default and your choice is remembered. Point Color is now the
+  Color Mixer's second tab.
 ### Import rename numbering stops safely at its limit
 - Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
   reported as failed with guidance to lower `renameStart` or leave `rename` blank; completed transfers stay

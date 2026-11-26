@@ -69,6 +69,16 @@ fn window_menu_reopens_closed_panels_in_their_dock_columns() {
 }
 
 #[test]
+fn the_color_mixer_command_brings_tools_forward() {
+    let mut h = app();
+    dock(&mut h, json!({"operation":"move","panel":"tools","target":"library","zone":"center"}));
+    dock(&mut h, json!({"operation":"activate","panel":"library"}));
+    assert!(!crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools));
+    h.app.run("view.colorMixer", json!({})).unwrap();
+    assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools), "the mixer is shown, not left behind Library");
+}
+
+#[test]
 fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
     let mut h = app();
     dock(&mut h, json!({"operation":"move","panel":"tools","target":"library","zone":"center"}));
