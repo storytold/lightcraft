@@ -72,9 +72,9 @@ fn albums_tree(
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
-            // cached: a smart album's count scans the catalog
+            // cached: a smart album's count scans the catalog (in the background: no number until it is known)
             let now = (app.session.clock)();
-            let n = app.caches.album_counts(&app.session.catalog, &now).get(&a.id).copied().unwrap_or(0);
+            let n = app.caches.album_counts(&app.session.catalog, app.session.library_generation(), &now, ui.ctx()).get(&a.id).copied();
             // the album B adds to is marked "+"
             let target =
                 app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some()).or_else(|| app.session.catalog.quick_collection());
@@ -83,7 +83,7 @@ fn albums_tree(
             let problems = app.caches.smart_album_problems(&app.session.catalog).get(&a.id).cloned().unwrap_or_default();
             let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
             let mut resp = Row::new(&format!("album:{}", a.id.0), icon, &label)
-                .count(Some(n))
+                .count(n)
                 .selected(sel)
                 .indent(indent)
                 .sense(Sense::click_and_drag())

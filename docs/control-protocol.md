@@ -383,7 +383,7 @@ one pixel.
   `path` writes `-o` (then `OUT-2.png`, `OUT-3.png`, …); `ui.settle {timeoutMs?}` waits until no
   renders are in flight. Each request runs frames until it is answered and its injected input
   (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`
-  (e.g. `button:upright-auto`). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
+  (e.g. `dropdown:upright`, then `upright:auto` from its menu). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
 
 ## Import album picker
 
