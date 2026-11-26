@@ -159,17 +159,20 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     let nothing = Listing::default();
     for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
         for p in &photos {
-            let from_disk = check_photo(p, owner(naming), &c, &nothing);
-            assert_eq!(check_photo(p, owner(naming), &c, &l), from_disk, "{:?} {naming:?}", p.file_name);
+            let from_disk = check_photo(p, owner(naming), &c, &nothing, None, &FrameProbes::default());
+            assert_eq!(check_photo(p, owner(naming), &c, &l, None, &FrameProbes::default()), from_disk, "{:?} {naming:?}", p.file_name);
         }
     }
     let expected = [Check::Nothing, Check::News, Check::News, Check::News, Check::News, Check::News, Check::Missing, Check::Missing, Check::Missing];
-    assert_eq!(photos.iter().map(|p| check_photo(p, owner(SidecarNaming::Stem), &c, &l)).collect::<Vec<_>>(), expected);
+    assert_eq!(
+        photos.iter().map(|p| check_photo(p, owner(SidecarNaming::Stem), &c, &l, None, &FrameProbes::default())).collect::<Vec<_>>(),
+        expected
+    );
 
     // what the disk was asked about the same photos, with the listing and without: fewer questions with it
     let asked = |l: &Listing| {
         for p in &photos {
-            check_photo(p, owner(SidecarNaming::Stem), &c, l);
+            check_photo(p, owner(SidecarNaming::Stem), &c, l, None, &FrameProbes::default());
         }
         l.asked.load(std::sync::atomic::Ordering::Relaxed)
     };
@@ -198,8 +201,30 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     let mut c2 = Catalog::new();
     for (name, expected) in [("deep.jpg", Check::News), ("gone.jpg", Check::Missing), ("gone.jpg.xmp", Check::Missing)] {
         let p = photo(&mut c2, &sub.join(name));
-        assert_eq!(check_photo(&p, owner(SidecarNaming::Stem), &c2, &only_plain), expected, "{name}");
+        assert_eq!(check_photo(&p, owner(SidecarNaming::Stem), &c2, &only_plain, None, &FrameProbes::default()), expected, "{name}");
     }
     assert_eq!(only_plain.asked.load(std::sync::atomic::Ordering::Relaxed), 0, "every answer came from the listing");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn review_unverified_crop_is_news_even_when_its_numbers_match() {
+    let dir = std::env::temp_dir().join(format!("lc-unverified-crop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("photo.jpg");
+    std::fs::write(&path, b"synthetic photo").unwrap();
+    let text = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasCrop="True" crs:CropLeft="0.1" crs:CropRight="0.6" crs:CropTop="0.2" crs:CropBottom="0.9"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(path.with_extension("xmp"), text).unwrap();
+    let mut catalog = Catalog::new();
+    let mut p = (*photo(&mut catalog, &path)).clone();
+    let sc = crate::sidecar::parse_sidecar(text, crate::crs::Target::for_photo(&p)).unwrap();
+    crate::sidecar::merge_into(&mut p, &sc, "2020-01-01T00:00:00");
+    let before = p.develop.clone();
+    let failed: crate::media::FileProbe = Arc::new(|_| Err("file probe failed".into()));
+    assert!(sidecar_has_news(&catalog, &p, owner(SidecarNaming::Stem), &Listing::default(), Some(&failed), &FrameProbes::default()));
+    let sc = read_sidecar(path.to_str().unwrap(), owner(SidecarNaming::Stem), crate::crs::Target::for_photo(&p), Some(&failed)).unwrap();
+    assert!(sc.warnings.iter().any(|w| w.fields.iter().any(|f| f.starts_with("Crop ("))));
+    crate::sidecar::merge_into(&mut p, &sc, "");
+    assert_eq!(p.develop, before);
+    std::fs::remove_dir_all(dir).unwrap();
 }

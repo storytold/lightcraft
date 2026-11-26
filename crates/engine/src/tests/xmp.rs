@@ -387,9 +387,11 @@ fn default_lightroom_profiles_are_not_reported() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// Foreign profile names and saved Upright matrices stay visible without pretending their
-/// proprietary colour or coordinate data was imported. Diagnostics are per-photo report data;
-/// importing a file without XMP remains quiet, and the source packet is never rewritten.
+/// Foreign profile names and saved Upright matrices that can't be applied stay visible without
+/// pretending their proprietary colour or coordinate data was imported (this packet's Upright
+/// version is not the measured one: `tests_upright` covers the matrices that are imported).
+/// Diagnostics are per-photo report data; importing a file without XMP remains quiet, and the
+/// source packet is never rewritten.
 #[test]
 fn foreign_profile_and_upright_import_diagnostics_are_actionable() {
     let src = temp_dir("xmp-diagnostics");
@@ -398,7 +400,7 @@ fn foreign_profile_and_upright_import_diagnostics_are_actionable() {
     let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
         crs:CameraProfile="Camera Faithful" crs:Exposure2012="1.68" crs:PerspectiveUpright="1"
-        crs:UprightVersion="151388160" crs:UprightTransformCount="6"
+        crs:UprightVersion="151388161" crs:UprightTransformCount="6"
         crs:UprightCenterNormX="0.554156" crs:UprightCenterNormY="0.529745"
         crs:UprightTransform_1="0.897233402,-0.013204641,-0.030578613,-0.096087436,0.953621255,0.003270197,-0.157075841,-0.043520282,1.000000000"/>
     </rdf:RDF></x:xmpmeta>"#;
@@ -450,12 +452,18 @@ fn foreign_profile_and_upright_import_diagnostics_are_actionable() {
         "{reread}"
     );
     assert!(reread["warnings"].as_array().unwrap().iter().any(|w| w["code"] == "uprightGeometry" && w["mode"] == "auto"), "{reread}");
-    for (source, mode) in [("0", "off"), ("2", "level"), ("3", "vertical"), ("4", "full"), ("5", "guided"), ("9", "unknown")] {
+    // Lightroom's values: 2 Full, 3 Level, 4 Vertical (issue #205)
+    for (source, mode) in [("2", "full"), ("3", "level"), ("4", "vertical"), ("5", "guided"), ("9", "unknown")] {
         let mode_xmp = xmp.replace("crs:PerspectiveUpright=\"1\"", &format!("crs:PerspectiveUpright=\"{source}\""));
         std::fs::write(&sidecar, mode_xmp).unwrap();
         let reread = s.execute("photo.readMetadataFromFile", &json!({"ids": [p.id.0]})).unwrap();
         assert!(reread["warnings"].as_array().unwrap().iter().any(|w| w["code"] == "uprightGeometry" && w["mode"] == mode), "{source}: {reread}");
     }
+    // with Upright Off Lightroom applies none of its saved matrices: nothing to warn about
+    std::fs::write(&sidecar, xmp.replace("crs:PerspectiveUpright=\"1\"", "crs:PerspectiveUpright=\"0\"")).unwrap();
+    let reread = s.execute("photo.readMetadataFromFile", &json!({"ids": [p.id.0]})).unwrap();
+    assert!(reread["warnings"].as_array().into_iter().flatten().all(|w| w["code"] != "uprightGeometry"), "{reread}");
+    std::fs::write(&sidecar, xmp).unwrap();
 
     // A foreign name colliding with a built-in profile label remains warning metadata only.
     let collision = src.join("collision.png");
@@ -624,6 +632,37 @@ fn regions_drawn_on_the_photo_as_stored_land_on_the_upright_photo() {
         assert_eq!(read["read"].as_array().map(Vec::len), Some(1), "{what}: {read}");
         assert_on_the_upright_face(&s, id, &format!("{what}, read again"));
     }
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Review of #1386: the import gives every sidecar the photo's stored frame, so an empty `.xmp` beside a turned
+/// photo looked like one that said something. It isn't counted, and the photo is upright as it is without one.
+#[test]
+fn an_empty_sidecar_beside_a_turned_photo_says_nothing() {
+    let src = temp_dir("empty-sidecar-turned");
+    let bare = src.join("bare.jpg");
+    write_turned_jpeg(&bare, None);
+    let beside = src.join("beside.jpg");
+    write_turned_jpeg(&beside, None);
+    std::fs::write(
+        src.join("beside.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let import = |file: &Path| {
+        let mut s = Session::new().with_fs();
+        let r = s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+        let p = s.catalog.photo(only(&s)).unwrap().clone();
+        (r, p)
+    };
+    let (r, p) = import(&beside);
+    assert_eq!(r["sidecars"], 0, "an empty sidecar isn't counted: {r}");
+    assert!(r["warnings"].as_array().is_none_or(Vec::is_empty), "{r}");
+    assert_eq!((p.width, p.height), (24, 32), "the photo is upright");
+    let (_, without) = import(&bare);
+    assert_eq!((p.width, p.height), (without.width, without.height));
+    assert_eq!(p.develop, without.develop, "the same settings as without a sidecar");
     let _ = std::fs::remove_dir_all(&src);
 }
 
