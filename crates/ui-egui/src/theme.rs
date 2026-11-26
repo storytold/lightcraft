@@ -480,6 +480,7 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     ctx.set_visuals_of(egui::Theme::Dark, v.clone());
     ctx.set_visuals_of(egui::Theme::Light, v);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+    let animation_time = crate::motion::animation_time(crate::motion::reduced(ctx));
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
@@ -488,7 +489,7 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.0));
         s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
         s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
-        s.animation_time = 0.08;
+        s.animation_time = animation_time;
         // Captions and headings are not text to select (#1885); text meant for copying opts in
         // with `Label::selectable(true)`.
         s.interaction.selectable_labels = false;
@@ -630,20 +631,35 @@ mod tests {
     /// Exercise the Thai characters of the reported folder name through every egui family.
     #[test]
     fn thai_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Thai", "Studio34 ถ่ายภาพงานแต่งงาน");
+    }
+
+    /// #1915: Hebrew folder names drew as boxes. The release input carries Noto Sans Hebrew, and
+    /// every egui family reaches it (letters, final forms, maqaf, geresh and gershayim, niqqud).
+    /// No ₪ here: Inter and Hack draw it before the Hebrew face, and Hack also holds monospace's
+    /// replacement glyph, where `has_glyph` answers false (the engine test checks ₪ in the face).
+    #[test]
+    fn hebrew_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Hebr", "תמונות טנזניה 2024 ךםןףץ ־ ׳ ״ שָׁלוֹם");
+    }
+
+    /// The craft-fonts face for `script` is in every UI family and draws the non-ASCII
+    /// characters of `name` in each of them.
+    fn folder_name_has_glyphs_in_every_ui_family(script: &str, name: &str) {
         if lightcraft_engine::CRAFT_FONTS.is_empty() {
             lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        let thai = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers("Thai")).expect("font input includes Thai");
+        let face = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers(script)).unwrap_or_else(|| panic!("font input includes {script}"));
         set_language(Locale::En);
         let definitions = font_definitions(lightcraft_engine::CRAFT_FONTS);
-        let name = craft_font_name(thai);
-        assert!(definitions.font_data.contains_key(&name));
+        let face_name = craft_font_name(face);
+        assert!(definitions.font_data.contains_key(&face_name));
         // (The strong family has the face's heavier twin instead when it is a variable font.)
-        let strong = format!("{name} strong");
+        let strong = format!("{face_name} strong");
         for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
             let names = definitions.families.get(&family).expect("UI font family");
-            assert!(names.contains(&name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {name}");
+            assert!(names.contains(&face_name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {face_name}");
         }
         let ctx = egui::Context::default();
         ctx.set_fonts(definitions);
@@ -652,10 +668,10 @@ mod tests {
         ctx.fonts_mut(|fonts| {
             for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
                 let id = FontId::new(13.0, family);
-                // Check the Thai portion; egui 0.36's has_glyph reports false for characters
+                // Check the non-ASCII portion; egui 0.36's has_glyph reports false for characters
                 // in the replacement glyph's own face (including normal monospace Latin).
-                for ch in "Studio34 ถ่ายภาพงานแต่งงาน".chars().filter(|ch| !ch.is_ascii()) {
-                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch}");
+                for ch in name.chars().filter(|ch| !ch.is_ascii()) {
+                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch} (U+{:04X})", ch as u32);
                 }
             }
         });
