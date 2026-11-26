@@ -341,15 +341,28 @@ pub(crate) fn lens_ops(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog:
 /// Evaluate white balance using the source classification the same batch will apply.
 pub(crate) fn reload_wb_op(ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo, camera: &str) -> Option<Op> {
     let (kind, format) = if info.format.is_empty() { (ph.kind, ph.format.as_str()) } else { (info.kind, info.format.as_str()) };
-    if !info.format.is_empty() && (kind != lightcraft_catalog::MediaKind::Raw || info.preview_only.is_some()) {
-        return ph.as_shot_wb.map(|_| Op::SetAsShotWb { id: ph.id, wb: None });
+    let (wb, mode) = if kind == lightcraft_catalog::MediaKind::Raw && info.preview_only.is_none() {
+        let inferred = lightcraft_catalog::relative_wb_camera(format, camera);
+        let relative = if !info.meta.camera.is_empty() {
+            lightcraft_catalog::relative_wb_camera(format, &info.meta.camera)
+        } else if format.eq_ignore_ascii_case(&ph.format) {
+            ph.source_relative_wb.unwrap_or(inferred)
+        } else {
+            inferred
+        };
+        let previous = ph.as_shot_wb.filter(|_| ph.relative_wb() == relative);
+        let measured = info.as_shot_wb.filter(|(t, tint)| !relative && t.is_finite() && tint.is_finite());
+        (measured.or(previous), (relative != inferred).then_some(relative))
+    } else if info.format.is_empty() {
+        return None;
+    } else {
+        (None, None)
+    };
+    if mode != ph.source_relative_wb {
+        Some(Op::SetSourceWb { id: ph.id, wb, relative: mode })
+    } else {
+        (wb != ph.as_shot_wb).then_some(Op::SetAsShotWb { id: ph.id, wb })
     }
-    let read = info.as_shot_wb.filter(|(t, tint)| t.is_finite() && tint.is_finite())?;
-    (kind == lightcraft_catalog::MediaKind::Raw
-        && info.preview_only.is_none()
-        && !lightcraft_catalog::relative_wb_camera(format, camera)
-        && ph.as_shot_wb != Some(read))
-    .then_some(Op::SetAsShotWb { id: ph.id, wb: Some(read) })
 }
 
 /// The ops that bring photo `id` and its same-file family up to date with what their file is now
@@ -508,7 +521,7 @@ mod tests {
                 photo.kind = MediaKind::Raw;
                 photo.format = "ARW".into();
                 photo.preview_only = Some("old unsupported raw".into());
-                photo.meta.camera = if id.0 == 2 { "SONY ILCA-99M2".into() } else { String::new() };
+                photo.meta.camera = if id.0 == 2 { "SONY ILCE-7M2".into() } else { String::new() };
                 s.catalog.apply(Op::AddPhoto { photo: Box::new(photo.clone()) }).unwrap();
             }
             let mut info =
@@ -518,12 +531,41 @@ mod tests {
             let items = crate::cmd::reload::plan(&mut s, &json!({"ids": ids})).unwrap();
             crate::cmd::reload::apply(&mut s, items, vec![Ok(info)]).unwrap();
             for id in [PhotoId(1), PhotoId(2)] {
-                assert_eq!(s.catalog.photo(id).unwrap().as_shot_wb, Some((4300.0, 7.0)), "{id:?}");
+                let photo = s.catalog.photo(id).unwrap();
+                assert_eq!(photo.as_shot_wb, Some((4300.0, 7.0)), "{id:?}");
+                assert!(!photo.relative_wb(), "{id:?}");
             }
+            assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().meta.camera, "SONY ILCE-7M2");
             let copy = s.catalog.photo(PhotoId(3)).unwrap();
-            assert_eq!(copy.as_shot_wb, selected_copy.then_some((4300.0, 7.0)));
+            assert_eq!(copy.as_shot_wb, Some((4300.0, 7.0)));
+            assert!(!copy.relative_wb());
             assert_eq!(copy.meta.camera, if selected_copy { "SONY ILCA-99M2" } else { "" });
         }
+    }
+
+    #[test]
+    fn reload_changes_the_source_key_when_white_balance_mode_changes_without_a_measurement() {
+        let id = PhotoId(1);
+        let mut s = Session::new();
+        let mut photo = Photo::new(id, Source::File { path: "/source.arw".into() }, "source.arw", "ARW", 8, 8, "");
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        photo.meta.camera = "SONY ILCE-7M2".into();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let old = s.render_job(id, 32, 32, false, true).unwrap();
+        let mut info =
+            crate::media::ProbeInfo { kind: lightcraft_catalog::MediaKind::Raw, format: "ARW".into(), width: 8, height: 8, ..Default::default() };
+        info.meta.camera = "SONY ILCA-99M2".into();
+        let items = crate::cmd::reload::plan(&mut s, &json!({"id": id.0})).unwrap();
+        crate::cmd::reload::apply(&mut s, items, vec![Ok(info)]).unwrap();
+        let p = s.catalog.photo(id).unwrap();
+        assert_eq!(p.meta.camera, "SONY ILCE-7M2");
+        assert!(p.as_shot_wb.is_none() && !p.relative_wb());
+        let updated = s.render_job(id, 32, 32, false, true).unwrap();
+        assert_ne!(old.source_key, updated.source_key);
+        assert_ne!(old.key, updated.key);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(s.catalog.photo(id).unwrap().relative_wb());
+        assert_eq!(old.source_key, s.render_job(id, 32, 32, false, true).unwrap().source_key);
     }
 
     /// Reload fills camera fields a photo lacks (a CR3 imported before CR3 metadata was read) and keeps

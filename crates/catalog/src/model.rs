@@ -383,6 +383,9 @@ pub struct Photo {
     /// Raw files: the camera's as-shot white balance (Kelvin, tint).
     #[serde(default)]
     pub as_shot_wb: Option<(f64, f64)>,
+    /// The probed file's white-balance scale when it differs from the catalog's camera metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_relative_wb: Option<bool>,
     /// Hash of the file's bytes (hex), for duplicate detection and preview-cache keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
@@ -530,6 +533,7 @@ impl Photo {
             local: false,
             duration: None,
             as_shot_wb: None,
+            source_relative_wb: None,
             content_hash: None,
             embedded_lens: None,
             copy_of: None,
@@ -571,7 +575,7 @@ impl Photo {
     /// [`Photo::fitted_look`] raw whose camera has no colour matrices measured either
     /// ([`relative_wb_camera`]). Other raws edit white balance in Kelvin.
     pub fn relative_wb(&self) -> bool {
-        self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
+        self.develops_raw() && self.source_relative_wb.unwrap_or_else(|| relative_wb_camera(&self.format, &self.meta.camera))
     }
     /// Every settings holder of this photo that can carry segmentation grids: the develop
     /// settings, the versions', the history steps' and the import look. A snapshot's shared grid

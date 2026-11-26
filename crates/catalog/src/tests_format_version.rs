@@ -262,6 +262,7 @@ fn op_variants_are_versioned() {
             Op::SetKeyword { .. } => 5,
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
+            Op::SetSourceWb { .. } => 15,
             Op::SetHistoryCursor { .. } => 8,
         }
     }

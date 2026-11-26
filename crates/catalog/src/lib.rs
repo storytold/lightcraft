@@ -253,6 +253,12 @@ pub enum Op {
         id: PhotoId,
         wb: Option<(f64, f64)>,
     },
+    /// Source white balance verified from the file when its camera and catalog metadata disagree.
+    SetSourceWb {
+        id: PhotoId,
+        wb: Option<(f64, f64)>,
+        relative: Option<bool>,
+    },
     /// The name shown for a colour label (`None` = its colour's name).
     SetLabelName {
         label: ColorLabel,
@@ -946,9 +952,12 @@ impl Catalog {
                 self.changes.now = Aspects::ALL;
                 self.touch(*id);
             }
-            Op::SetDeleted { .. } | Op::SetLocal { .. } | Op::SetContent { .. } | Op::SetEmbeddedLens { .. } | Op::SetAsShotWb { .. } => {
-                self.changes.now = Aspects::ALL
-            }
+            Op::SetDeleted { .. }
+            | Op::SetLocal { .. }
+            | Op::SetContent { .. }
+            | Op::SetEmbeddedLens { .. }
+            | Op::SetAsShotWb { .. }
+            | Op::SetSourceWb { .. } => self.changes.now = Aspects::ALL,
             Op::SetRating { .. } => self.changes.now = Aspects::RATING,
             Op::SetFlag { .. } => self.changes.now = Aspects::FLAG,
             Op::SetLabel { .. } => self.changes.now = Aspects::LABEL,
@@ -1249,6 +1258,13 @@ impl Catalog {
                 }
                 let p = self.photo_mut(id)?;
                 Op::SetAsShotWb { id, wb: std::mem::replace(&mut p.as_shot_wb, wb) }
+            }
+            Op::SetSourceWb { id, wb, relative } => {
+                if wb.is_some_and(|(t, tint)| !(t.is_finite() && tint.is_finite())) {
+                    return Err(CatalogError::Invalid("as-shot white balance is not a number".into()));
+                }
+                let p = self.photo_mut(id)?;
+                Op::SetSourceWb { id, wb: std::mem::replace(&mut p.as_shot_wb, wb), relative: std::mem::replace(&mut p.source_relative_wb, relative) }
             }
             Op::SetFile { id, file_name, source } => {
                 if file_name.trim().is_empty() {
@@ -1560,6 +1576,7 @@ fn changes_what_albums_test(op: &Op) -> bool {
         | Op::SetContent { .. }
         | Op::SetEmbeddedLens { .. }
         | Op::SetAsShotWb { .. }
+        | Op::SetSourceWb { .. }
         | Op::SetRating { .. }
         | Op::SetFlag { .. }
         | Op::SetLabel { .. }

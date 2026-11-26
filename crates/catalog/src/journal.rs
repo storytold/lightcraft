@@ -68,7 +68,7 @@
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //! | 13 | Lens Blur | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
 //! | 14 | bursts arranged by hand in Assisted Culling | `Analysis.rank` |
-//! | 15 | probed source classification on Relink and Reload | `Op::Relink.kind` |
+//! | 15 | probed source classification and white balance on Relink and Reload | `Op::Relink.kind`, `Op::SetSourceWb`, `Photo.source_relative_wb` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -853,7 +853,7 @@ impl Journal {
         std::mem::take(&mut self.kept_written)
     }
 
-    /// Older readers ignore the classification field, so these ops require a current snapshot.
+    /// Older readers cannot replay these source facts, so the library needs a current snapshot.
     pub fn needs_snapshot_for(&self, ops: &[Op]) -> bool {
         if self.behind.is_none() {
             return false;
@@ -861,7 +861,8 @@ impl Journal {
         let mut pending: Vec<_> = ops.iter().collect();
         while let Some(op) = pending.pop() {
             match op {
-                Op::Relink { kind: Some(_), .. } => return true,
+                Op::Relink { kind: Some(_), .. } | Op::SetSourceWb { .. } => return true,
+                Op::AddPhoto { photo } if photo.source_relative_wb.is_some() => return true,
                 Op::Batch { ops } => pending.extend(ops),
                 _ => {}
             }
@@ -875,7 +876,7 @@ impl Journal {
             return Ok(());
         }
         if self.needs_snapshot_for(ops) {
-            return Err(CatalogError::Io(format!("save a format v{VERSION} snapshot before journaling source classification")));
+            return Err(CatalogError::Io(format!("save a format v{VERSION} snapshot before journaling source facts")));
         }
         let t0 = web_time::Instant::now();
         let mut buf = String::new();

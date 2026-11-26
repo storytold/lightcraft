@@ -779,10 +779,18 @@ impl Session {
                         replaced.push(*id);
                     }
                 }
+                Op::Relink { id, kind, .. } => {
+                    invalidated.push(*id);
+                    if let Some(kind) = kind
+                        && self.catalog.photo(*id).is_some_and(|p| p.kind != *kind)
+                    {
+                        replaced.push(*id);
+                    }
+                }
                 Op::SetFile { id, .. }
-                | Op::Relink { id, .. }
                 | Op::RemovePhoto { id }
                 | Op::SetAsShotWb { id, .. }
+                | Op::SetSourceWb { id, .. }
                 | Op::SetEmbeddedLens { id, .. } => invalidated.push(*id),
                 Op::SetMeta { id, meta }
                     if self

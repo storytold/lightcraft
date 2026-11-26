@@ -176,12 +176,16 @@ pub fn content_key(p: &Photo) -> String {
 /// Include lens data even with the correction off: fitting a raw's starting colour uses the profile.
 pub(super) fn source_metadata_key(p: &Photo) -> u64 {
     let raw = p.develops_raw();
-    let wb = p.as_shot_wb.filter(|_| raw && !p.relative_wb());
+    let kelvin = raw && !p.relative_wb();
+    let wb = p.as_shot_wb.filter(|_| kelvin);
     if !raw && p.embedded_lens.is_none() && wb.is_none() {
         return 0;
     }
     let mut key = Hasher128::new();
     key.str("source-mode").u64(u64::from(raw));
+    if kelvin && wb.is_none() {
+        key.str("kelvin-white-balance");
+    }
     if let Some(lens) = &p.embedded_lens {
         key.str("lens").str(&format!("{lens:?}"));
     }

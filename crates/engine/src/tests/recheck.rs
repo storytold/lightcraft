@@ -549,6 +549,27 @@ fn a_stamp_only_recheck_keeps_the_face_scan() {
     assert!(!x.s.faces.scanned.contains(x.id.0));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn relink_reclassification_invalidates_face_scan_without_changing_file_facts() {
+    let mut x = checked_orf("face-kind");
+    let photo = x.s.catalog.photo(x.id).unwrap().clone();
+    x.s.faces.scanned.insert(x.id.0);
+    let rename = Op::Relink { id: x.id, file_name: photo.file_name.clone(), source: photo.source.clone(), format: None, kind: None };
+    x.s.commit("Relink same source", rename).unwrap();
+    assert!(x.s.faces.scanned.contains(x.id.0));
+    let reclassify = Op::Relink {
+        id: x.id,
+        file_name: photo.file_name.clone(),
+        source: photo.source.clone(),
+        format: None,
+        kind: Some(lightcraft_catalog::MediaKind::Image),
+    };
+    x.s.commit("Relink different kind", reclassify).unwrap();
+    assert!(!x.s.faces.scanned.contains(x.id.0));
+    assert_eq!(x.s.catalog.photo(x.id).unwrap().content_hash, photo.content_hash);
+}
+
 #[test]
 fn an_older_reload_finishing_first_keeps_a_newer_pending_read() {
     use crate::cmd::reload;
