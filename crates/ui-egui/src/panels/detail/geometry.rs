@@ -253,7 +253,7 @@ pub(crate) fn output_px(frame: &Frame) -> [usize; 2] {
 pub(crate) fn focus_box(photo: &lightcraft_catalog::Photo) -> Option<lightcraft_geom::Rect> {
     let f = photo.meta.focus.as_ref()?;
     let d = &photo.develop;
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, d, true, photo.embedded_lens.as_ref());
+    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, d, true, photo.embedded_lens.as_deref());
     let [w, h] = output_px(&frame);
     let to_out = frame.out_to_norm(w, h).inverse()?;
     // stored on the upright photo: the user's Rotate / Flip on top, then the crop

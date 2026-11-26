@@ -25,8 +25,8 @@ use export::{
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened, num,
-    only_shows, return_confirms, trailing_button_row,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choice_grid, choices, clicked_backdrop, dialog_body, dialog_field, field,
+    just_opened, num, only_shows, return_confirms, trailing_button_row,
 };
 pub(crate) use rename::rename_preview;
 use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
@@ -1017,7 +1017,8 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                 for (n, v) in list {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
-                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap());
+                    // values (serial numbers, lens names) are copied out of here; the field names are not
+                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap().selectable(true));
                     ui.end_row();
                 }
             });
@@ -1676,7 +1677,7 @@ fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Expor
                 )
             });
         }
-        choices(ui, "Position", "exportWmAnchor", &WM_POSITIONS, &mut wm.anchor);
+        choice_grid(ui, "Position", "exportWmAnchor", &WM_POSITIONS, 3, &mut wm.anchor);
         choices(ui, "Rotate", "exportWmRotation", &[(0u16, "0°"), (90, "90°"), (180, "180°"), (270, "270°")], &mut wm.rotation);
         let mut size = wm.size as f64 * 100.0;
         if !graphic && num(ui, &WM_SIZE, &mut size) {

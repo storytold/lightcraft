@@ -427,6 +427,15 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
+## 2026-10-26
+
+### Pushed shadows of raws no longer turn magenta
+- Raw decoding no longer clips each colour channel at zero. Near black, sensor noise through the camera's colour
+  matrix has negative values, and clipping kept only the positive half of each channel's noise, so dark areas
+  pushed up came out purple or magenta, most visibly with saturating camera profiles. In the fitted view, thumbnails
+  and other views smaller than the photo, where neighbouring pixels are averaged first, pushed shadows now keep their
+  real colour (a lens-cap frame pushed 4 EV rendered magenta; it is now black), and cached thumbnails are rendered
+  again. At 100% and in full-size exports white balance still clips each channel before noise reduction (#840).
 
 ## 2026-10-25
 
@@ -957,6 +966,15 @@
 - The filmstrip now dims rejected photos as the grid does, and in the grid the dim sits under the marks, so the red
   reject flag stays clear. Right-clicking the stack badge opens the photo's menu.
 - Screen readers say "rating 3 of 5" in every language, instead of building "stars" from an English plural.
+
+### Find photos whose file is in the library twice
+- Smart albums and the library filter have a new rule, File ▸ Same Content as Another Photo. It finds the photos
+  whose file has the same content as another photo's, under another name or in another folder, such as a copy made
+  with Photo ▸ Duplicate. Virtual copies don't count, and neither do photos in Recently Deleted or only browsed in
+  Local. An album with the rule keeps its count up to date as copies are deleted, restored or removed.
+- The rule needs the library to have recorded each file's content. Photos added by an import have it; photos taken
+  over from a Lightroom catalog don't until you run Photo ▸ Reload from Disk on them, so they match nothing until
+  then, even when their files are identical.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
