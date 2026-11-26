@@ -500,6 +500,14 @@
   system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
   now (off by default). Pinch and scroll zoom were never animated.
 
+### Settings has a filter that finds a section on whatever tab it is
+- Settings has a filter above its tabs. Type a word, or part of one, and the sections that have it are listed with
+  the tab each is on, whichever tab was open: the names of tabs and sections, labels, buttons and explanations
+  are all looked through, and every word typed has to be there. Click a section (or press Return for the first, or ↓
+  to go down to them) and its tab opens at it. Esc empties the filter; a second Esc closes Settings. The choices of a
+  closed list and tooltips are not looked through. Scripts: `field:settingsFilter`, `settingsFound:<tab>:<section>`
+  for each section found, and `heading:<its English name>` for where a section starts, whatever the interface
+  language.
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
@@ -543,6 +551,11 @@
   itself".
 - Esc gives up a drag of photos, as it already did for albums, sidebar sections and keywords: that press ends the drag and does nothing else
   (it does not also close a dialog, leave full screen or light back on). A drag started before entering full screen or a slideshow now ends with the mouse button, so Esc works there again.
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved in an older catalog format upgrades it, and versions that don't know the new format can't
+  open it afterward. In the desktop app, the library as it was is now kept beside it (`catalog.snap.v<format>-<seq>`,
+  `catalog.log.v<format>-<seq>`), and LightCraft says where once: to go back, see `docs/catalog-persistence.md`. A
+  library that can't be kept is not upgraded. The browser build keeps no copy (it always runs the newest version).
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -1042,6 +1055,17 @@
   over from a Lightroom catalog don't until you run Photo ▸ Reload from Disk on them, so they match nothing until
   then, even when their files are identical.
 
+### Menus that fit the screen
+- The View menu is down from 63 rows to 36, so it opens without scrolling on a laptop's menu bar. Its overlays,
+  before/after and slideshow items sit in submenus: Loupe Overlay, Before/After, Mask Overlay (every overlay mode and
+  colour, with the current one checked), Crop Overlay and Slideshow.
+- The panel toggles (My Photos Panel, Right Panel, Sidebar Sections, Photo Counts, Filmstrip, Histogram, Navigator) moved to
+  the Window menu. Photo ▸ Metadata gathers the metadata commands, including Metadata Preset, Save Metadata to File
+  and Detect Faces.
+- File no longer lists Discard Preview Cache twice (it is one command), View no longer lists
+  Choose and Layout Image twice, and every command has a fixed place instead of sitting in a pile at the end of
+  its menu.
+- Keyboard shortcuts are unchanged.
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
