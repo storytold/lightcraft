@@ -628,6 +628,43 @@ mod tests {
         assert!(lens_ops(ph.id, &ph, &info).is_empty());
     }
 
+    #[test]
+    fn reload_with_new_source_metadata_leaves_the_old_render_and_source_behind() {
+        use crate::SourceLevel;
+        use std::sync::Arc;
+
+        let mut s = Session::new();
+        let id = PhotoId(1);
+        let mut ph = Photo::new(id, Source::File { path: "/x.arw".into() }, "x.arw", "ARW", 64, 64, "2026-10-06T00:00:00");
+        ph.kind = lightcraft_catalog::MediaKind::Raw;
+        ph.meta.camera = "SONY ILCE-7M3".into();
+        ph.as_shot_wb = Some((6500.0, 0.0));
+        assert!(!ph.relative_wb());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        s.selection.ids = vec![id];
+        s.selection.active = Some(id);
+        let before = s.catalog.photo(id).unwrap().clone();
+        let render_key = s.loupe_job(id, 64, 64, true).unwrap().key;
+        let quick_key = s.quick_view_job(id, 64, true).unwrap().key;
+        let view_key = s.view_key(&before, true);
+        s.media.rendered.put(view_key, Arc::new(lightcraft_raster::Rgba8::new(64, 64)));
+        s.media.insert(id, SourceLevel::Thumb, Arc::new(lightcraft_raster::Rgb32f::new(64, 64)));
+
+        let info = crate::media::ProbeInfo { width: before.width, height: before.height, as_shot_wb: Some((4986.0, -2.0)), ..Default::default() };
+        s.media.file_probe = Some(Arc::new(move |_| Ok(info.clone())));
+        assert_eq!(s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap()["reloaded"], json!([id.0]));
+        let after = s.catalog.photo(id).unwrap();
+        assert_eq!(after.content_hash, before.content_hash);
+        assert_eq!(after.as_shot_wb, Some((4986.0, -2.0)));
+        assert!(s.media.rendered.get(s.view_key(after, true)).is_none(), "the old view render no longer matches");
+        assert_ne!(s.loupe_job(id, 64, 64, true).unwrap().key, render_key);
+        assert_ne!(s.quick_view_job(id, 64, true).unwrap().key, quick_key);
+        assert!(!s.media.has_source(id, SourceLevel::Thumb), "Reload discards the old decoded source");
+
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.view_key(s.catalog.photo(id).unwrap(), true), view_key);
+    }
+
     /// End to end on a public Panasonic raw (skipped without the corpus): a catalog from before the lens data was read
     /// gets it on Reload, the render changes to the corrected one, and Undo takes it all back.
     #[test]

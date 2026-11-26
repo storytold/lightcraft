@@ -227,8 +227,18 @@ fn review_stale_copies_share_one_probe_when_the_parent_is_current() {
     })
     .unwrap();
     decodable_now(&x);
+    let file_probe = recheck::file_probe(&x.s).unwrap();
+    x.s.media.file_probe = Some(std::sync::Arc::new(move |path| {
+        let mut info = file_probe(path)?;
+        info.meta.camera = "Camera from shared source".into();
+        Ok(info)
+    }));
     let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
     assert_eq!(r["checked"], 1, "same-file siblings share a probe even without an eligible parent");
+    for id in &copies {
+        assert_eq!(x.s.catalog.photo(*id).unwrap().meta.camera, "Camera from shared source");
+    }
+    assert!(x.s.catalog.photo(x.id).unwrap().meta.camera.is_empty(), "the current parent was only an implicit target");
     let mut expected = vec![x.id.0];
     expected.extend(copies.iter().map(|id| id.0));
     for field in ["updated", "cleared"] {
@@ -247,7 +257,7 @@ fn review_recheck_keeps_a_listed_copy_after_its_parent_moves() {
         assert_eq!(listed.len(), 1);
         decodable_now(&x);
         let mut info = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
-        info.meta.camera = "must not fill implicit metadata".into();
+        info.meta.camera = "Camera from the listed copy’s source".into();
         let other = x.dir.join("other.cr3");
         std::fs::write(&other, cr3_with_preview(120, 80)).unwrap();
         x.s.execute("photo.relink", &json!({"id": x.id.0, "path": other.to_string_lossy()})).unwrap();
@@ -265,7 +275,7 @@ fn review_recheck_keeps_a_listed_copy_after_its_parent_moves() {
             assert_eq!(out.cleared, vec![copy]);
             let photo = x.s.catalog.photo(copy).unwrap();
             assert!(photo.develops_raw());
-            assert_eq!(photo.meta.camera, before.meta.camera);
+            assert_eq!(photo.meta.camera, "Camera from the listed copy’s source");
         }
     }
 }
@@ -331,8 +341,21 @@ fn review_recheck_after_relink_keeps_fresh_facts_and_the_untouched_copy() {
             preview_checked: p.preview_checked.clone(),
         })
         .unwrap();
-    let listed = recheck::stale(&mut x.s, true);
-    assert_eq!(listed.len(), 1, "the eligible parent owns one grouped probe");
+    let p = x.s.catalog.photo(x.id).unwrap();
+    x.s.catalog
+        .apply(Op::SetContent {
+            id: x.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: None,
+            preview_checked: OTHER.into(),
+        })
+        .unwrap();
+    let listed = recheck::stale(&mut x.s, false);
+    assert_eq!(listed.len(), 1, "only the stale parent requests a probe");
+    assert_eq!(listed[0].metadata_targets, [x.id]);
     let mut old = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
     old.meta.lens = "must not fill the unselected copy".into();
     let old_size = old.file_size;

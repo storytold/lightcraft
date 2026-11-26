@@ -762,8 +762,8 @@ impl Session {
     /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
     /// was), then forget what the session cached of the photos it replaced.
     fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, CatalogError>, invalidate_reads: bool) -> Result<Op> {
-        // Retain only cache IDs while the catalog consumes the operation. Cloning an import
-        // batch here also cloned every photo, although commit already keeps the journal copy.
+        // Retain only the affected IDs while the catalog consumes the operation. Cloning an
+        // import batch here would clone every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
         // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
         let mut replaced = Vec::new();
@@ -771,11 +771,12 @@ impl Session {
         while let Some(op) = pending.pop() {
             match op {
                 Op::SetContent { id, .. } => {
-                    invalidated.push(*id);
+                    invalidated.push((*id, true));
                     replaced.push(*id);
                 }
-                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
-                Op::AddPhoto { photo } => invalidated.push(photo.id),
+                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push((*id, true)),
+                Op::AddPhoto { photo } => invalidated.push((photo.id, true)),
+                Op::SetAsShotWb { id, .. } | Op::SetEmbeddedLens { id, .. } => invalidated.push((*id, false)),
                 Op::Batch { ops } => pending.extend(ops),
                 _ => {}
             }
@@ -785,8 +786,8 @@ impl Session {
         if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
             return applied.map_err(Into::into);
         }
-        for id in invalidated {
-            if invalidate_reads {
+        for (id, source_changed) in invalidated {
+            if source_changed && invalidate_reads {
                 self.reload_tickets.invalidate(id);
             }
             self.media.forget(id);

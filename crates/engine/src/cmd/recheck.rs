@@ -74,7 +74,8 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
         let Ok(info) = info else { continue };
         let Some(id) = item.accept(s) else { continue };
         let first = out.updated.len();
-        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.updated, item.source_targets, |id| id == item.id);
+        let selected: std::collections::HashSet<_> = item.metadata_targets.into_iter().collect();
+        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.updated, item.source_targets, |id| selected.contains(&id));
         if info.preview_only.is_none() {
             out.cleared.extend(out.updated[first..].iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.preview_only.is_some())));
         }
