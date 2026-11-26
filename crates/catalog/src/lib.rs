@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bursts;
 pub mod dates;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
@@ -26,6 +27,7 @@ pub mod lock;
 #[cfg(not(target_arch = "wasm32"))]
 mod log_writer;
 pub mod model;
+pub mod opened_folder;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
@@ -38,12 +40,15 @@ use std::sync::Arc;
 
 pub use dates::{DateRun, GroupBy};
 pub use folders::{FolderNode, FolderRecord};
+use index::file_path;
+pub use index::{file_name_index_key, folder_index_key, photo_folder_index_key};
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
 use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, LocalRecords, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
+pub use opened_folder::OpenedFolder;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
 pub use rules::{Match, Rule, RuleSet};
 use serde::{Deserialize, Serialize};
@@ -221,8 +226,8 @@ pub enum Op {
         /// `None` = its raw data decodes (or it isn't a raw).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview_only: Option<String>,
-        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); empty
-        /// when it is `None`.
+        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); also
+        /// retained for supported ORF files so their withdrawal recheck runs only once.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         preview_checked: String,
     },
@@ -332,6 +337,9 @@ impl Aspects {
     pub const ANALYSIS: Aspects = Aspects(1 << 7);
     /// Whether it is in the library at all: added, removed, deleted, restored, taken in from Local.
     pub const PRESENCE: Aspects = Aspects(1 << 8);
+    /// The keyword list (keywords on their own and their attributes): of no photo, and read by no rule, filter or
+    /// sort, only by what lists keywords (the keyword tree, export names).
+    pub const KEYWORD_LIST: Aspects = Aspects(1 << 9);
     /// Everything: the photo may count differently for any tally.
     pub const ALL: Aspects = Aspects(u16::MAX);
 
@@ -401,9 +409,11 @@ struct Changes {
     touched: std::collections::VecDeque<(u64, PhotoId, Aspects)>,
     /// What the op being applied changes of its photo.
     now: Aspects,
-    /// The latest revision made by an op that changed more than photos of its own (an album, a stack, a keyword of
-    /// the list…): what it changed for which photos is not known.
+    /// The latest revision made by an op that changed more than photos of its own (an album, a stack…): what it
+    /// changed for which photos is not known.
     broad: u64,
+    /// The latest revision made by an op that changed the keyword list ([`Aspects::KEYWORD_LIST`]).
+    keyword_list: u64,
     /// Changes up to this revision are no longer all in `touched`.
     floor: u64,
     /// The revision the last op recorded here made. When the catalog's revision is another, it was set from
@@ -699,25 +709,50 @@ impl Catalog {
         if !self.remembers(revision) {
             return None;
         }
-        Some(self.changes.touched.iter().filter(|(r, _, _)| *r > revision).fold(Aspects::NONE, |all, (_, _, a)| all.with(*a)))
+        let photos = self.changes.touched.iter().filter(|(r, _, _)| *r > revision).fold(Aspects::NONE, |all, (_, _, a)| all.with(*a));
+        Some(if self.changes.keyword_list > revision { photos.with(Aspects::KEYWORD_LIST) } else { photos })
     }
 
     /// Whether every change since the catalog was at `revision` is remembered photo by photo.
     fn remembers(&self, revision: u64) -> bool {
-        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor && self.changes.broad <= revision
+        self.remembers_photos(revision) && self.changes.broad <= revision
+    }
+
+    /// Whether every change to a photo since the catalog was at `revision` is remembered.
+    fn remembers_photos(&self, revision: u64) -> bool {
+        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor
     }
 
     /// The photos changed, added or removed since the catalog was at `revision`, each once. `None` when that is not
     /// known: an op since then changed more than photos of its own, or it was too long ago. Then anything may
     /// have changed.
     pub fn touched_since(&self, revision: u64) -> Option<Vec<PhotoId>> {
-        if !self.remembers(revision) {
-            return None;
-        }
-        let mut ids: Vec<PhotoId> = self.changes.touched.iter().filter(|(r, _, _)| *r > revision).map(|(_, id, _)| *id).collect();
+        self.remembers(revision).then(|| self.touched_after(revision, Aspects::ALL))
+    }
+
+    /// The photos whose `reads` (what a tally reads of them) changed since the catalog was at
+    /// `revision`, added and removed photos included, each once; ops that change no photo of their
+    /// own (an album, a stack, the keyword list, a folder's label) and other things of a photo (a
+    /// rating, a slider) aside: for what is counted from the photos alone (the folders, days and
+    /// keywords they carry). `None` when that is not known: too long ago, or the catalog was set
+    /// from outside (a library loaded).
+    pub fn photos_changed_since(&self, revision: u64, reads: Aspects) -> Option<Vec<PhotoId>> {
+        // (every op that changes a photo says which, in `photo_mut` or as it adds or removes it:
+        // the ops `apply_inner` marks broad change no photo)
+        self.remembers_photos(revision).then(|| self.touched_after(revision, reads))
+    }
+
+    fn touched_after(&self, revision: u64, reads: Aspects) -> Vec<PhotoId> {
+        let mut ids: Vec<PhotoId> = self
+            .changes
+            .touched
+            .iter()
+            .filter(|(r, _, a)| *r > revision && (reads == Aspects::ALL || a.any_of(reads)))
+            .map(|(_, id, _)| *id)
+            .collect();
         ids.sort_unstable();
         ids.dedup();
-        Some(ids)
+        ids
     }
     fn album_mut(&mut self, id: AlbumId) -> Result<&mut Album> {
         self.albums.get_mut(&id).ok_or(CatalogError::NoAlbum(id))
@@ -732,6 +767,7 @@ impl Catalog {
             self.changes = Changes { floor: self.revision, seen: self.revision, ..Default::default() };
         }
         let broad = self.changes.broad;
+        let keyword_list = self.changes.keyword_list;
         self.changes.torn = false;
         let inv = match self.apply_inner(op) {
             Ok(inv) => inv,
@@ -753,6 +789,7 @@ impl Catalog {
                         self.changes.touched.pop_back();
                     }
                     self.changes.broad = broad;
+                    self.changes.keyword_list = keyword_list;
                 }
                 return Err(e);
             }
@@ -801,9 +838,9 @@ impl Catalog {
     }
 
     fn apply_inner(&mut self, op: Op) -> Result<Op> {
-        // An op that changes one photo says which (`photo_mut`, and adding or removing it below). Every other kind
-        // can change what any photo matches or where it sorts: an album's photos or rules, a stack, a keyword's
-        // name. Listed kind by kind, so a new one has to be put on one side.
+        // An op that changes one photo says which (`photo_mut`, and adding or removing it below). Most other kinds
+        // can change what any photo matches or where it sorts: an album's photos or rules, a stack. The keyword
+        // list changes only lists of keywords. Listed kind by kind, so a new one has to be put on one side.
         match &op {
             // (a photo that comes, goes, or changes what it is to the library counts for every tally; so do the
             // rare kinds whose reach nobody has to think about)
@@ -843,8 +880,9 @@ impl Catalog {
             | Op::SetStack { .. }
             | Op::SetLabelName { .. }
             | Op::SetBrowsed { .. }
-            | Op::SetKeyword { .. }
             | Op::SetFolderRecord { .. } => self.changes.broad = self.revision.saturating_add(1),
+            // (no photo matches, counts or sorts by it: only lists of keywords change)
+            Op::SetKeyword { .. } => self.changes.keyword_list = self.revision.saturating_add(1),
         }
         Ok(match op {
             Op::AddPhoto { mut photo } => {
@@ -854,11 +892,13 @@ impl Catalog {
                 photo.trim_history();
                 let id = photo.id;
                 self.next_photo = self.next_photo.max(id.0.saturating_add(1));
+                self.index.file_changed(id, None, file_path(&photo.source));
                 self.photos.insert(id, Arc::new(*photo));
                 Op::RemovePhoto { id }
             }
             Op::RemovePhoto { id } => {
                 let p = self.photos.remove(&id).ok_or(CatalogError::NoPhoto(id))?;
+                self.index.file_changed(id, file_path(&p.source), None);
                 // album membership is restored by the batch the engine builds (see `delete_permanently`)
                 Op::AddPhoto { photo: Box::new((*p).clone()) }
             }
@@ -1068,6 +1108,9 @@ impl Catalog {
                 Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
             }
             Op::Relink { id, file_name, source, format } => {
+                if let Some(p) = self.photos.get(&id) {
+                    self.index.file_changed(id, file_path(&p.source), file_path(&source));
+                }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
@@ -1099,6 +1142,9 @@ impl Catalog {
             Op::SetFile { id, file_name, source } => {
                 if file_name.trim().is_empty() {
                     return Err(CatalogError::Invalid("empty file name".into()));
+                }
+                if let Some(p) = self.photos.get(&id) {
+                    self.index.file_changed(id, file_path(&p.source), file_path(&source));
                 }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
@@ -1525,6 +1571,8 @@ mod tests_album_order;
 #[cfg(test)]
 mod tests_background;
 #[cfg(test)]
+mod tests_folder_index;
+#[cfg(test)]
 mod tests_folder_records;
 #[cfg(test)]
 mod tests_folders;
@@ -1542,6 +1590,8 @@ mod tests_local;
 mod tests_lock;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_log_thread;
+#[cfg(test)]
+mod tests_opened_folder;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]

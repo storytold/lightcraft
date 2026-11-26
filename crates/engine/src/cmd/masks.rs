@@ -98,6 +98,10 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
     match shape {
         MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } => {}
         MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && background => {
+            // refused here, not when the worker later fails at the model's limit after "pending"
+            if hint.len() + exclude.len() > crate::segment::MAX_CLICKS {
+                return Err(ai_err(format!("an Object selection takes at most {} clicks", crate::segment::MAX_CLICKS)));
+            }
             s.segmenter.require_model()?;
             return Ok(Later::Clicks(std::mem::take(hint), std::mem::take(exclude)));
         }
@@ -158,7 +162,11 @@ fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mas
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     let mut active = s.active_mask;
+    // the Lens Blur focus follows its mask: a deleted one stops being the focus, so a new mask
+    // that gets its id (the next id is the highest + 1) doesn't turn into it
+    let focus = d.lens_blur.focus_mask.filter(|f| d.masks.iter().any(|m| m.id == *f));
     f(&mut d.masks, &mut active)?;
+    d.lens_blur.focus_mask = focus.filter(|f| d.masks.iter().any(|m| m.id == *f));
     s.set_develop(id, d, label)?;
     s.active_mask = active;
     Ok(json!({"activeMask": active}))
@@ -573,7 +581,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AI Mask Model Status",
             [],
             None,
-            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, and the download's progress → {available, installed, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
+            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, where it runs and how long the last photo took, and the download's progress → {available, installed, dir, loaded, busy, analyzing, runOn (auto | cpu: segment.settings), backend: {device (what runs the backbone: a GPU's name, Metal GPU or CPU; null until loaded), runtime (wgpu|candle), heads (CPU|Metal GPU, and which of the parts after the backbone the GPU accelerator runs, e.g. `CPU; the necks on the GPU`), fallback (why the backbone is not on the GPU), encodeMs (last backbone run), analyzeMs (last photo's analysis before the first click)}, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
             super::always,
             |s, _| {
                 let g = &s.segmenter;
@@ -585,12 +593,30 @@ pub fn specs() -> Vec<CommandSpec> {
                     "loaded": g.loaded(),
                     "busy": g.busy(),
                     "analyzing": g.analyzing(),
+                    "runOn": g.run_on().name(),
+                    "backend": g.backend(),
                     "sizeBytes": crate::segment::MODEL_BYTES,
                     "license": crate::segment::LICENSE_NAME,
                     "licenseUrl": crate::segment::LICENSE_URL,
                     "mirrors": g.mirrors().len(),
                     "download": g.download_status(),
                 }))
+            }
+        ),
+        cmd!(
+            query "segment.settings",
+            "AI Mask Settings",
+            [],
+            None,
+            "{runOn?: auto | cpu} → {runOn} — where SAM 3 runs (Settings ▸ Performance ▸ AI masks): `auto` (the default) the GPU when there is one (Metal on macOS; elsewhere candle on the CPU: this build has no wgpu kernels for SAM 3 yet), `cpu` all of it on the CPU on every platform (for a GPU that can't run it). Local inference only: a remote worker (`LIGHTCRAFT_SAM3_REMOTE`) runs on its Mac's Metal device either way. Kept with the app's settings; a loaded model moves at its next request",
+            super::always,
+            |s, p| {
+                let c = "segment.settings";
+                if let Some(v) = p.get("runOn") {
+                    let run_on = v.as_str().and_then(crate::segment::RunOn::parse).ok_or_else(|| bad(c, "`runOn` must be auto or cpu"))?;
+                    s.segmenter.set_run_on(run_on).map_err(ai_err)?;
+                }
+                Ok(json!({"runOn": s.segmenter.run_on().name()}))
             }
         ),
         cmd!(
@@ -648,7 +674,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Mask Adjustments",
             [],
             None,
-            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, amount}}",
+            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, lens_blur, lens_blur_off, lens_blur_outside, lens_blur_boost, lens_blur_transition, color_hue, color_sat, amount}}",
             has_active,
             |s, p| {
                 let vals = p.get("values").cloned().ok_or_else(|| bad("mask.adjust", "missing values"))?;
@@ -1147,6 +1173,9 @@ pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     ] {
         c(v, -100.0, 100.0);
     }
+    c(&mut a.lens_blur, 0.0, 100.0);
+    c(&mut a.lens_blur_boost, 0.0, 100.0);
+    c(&mut a.lens_blur_transition, 0.0, 100.0);
     c(&mut a.color_hue, 0.0, 360.0);
     c(&mut a.color_sat, 0.0, 100.0);
     c(&mut a.amount, 0.0, 200.0);
@@ -1155,7 +1184,7 @@ pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
 
 /// `mask.brushStroke`'s `pressure`: one number 0..1 per point (clamped), at most one per point; absent or `null`
 /// is no pressure data.
-fn pressure_list(v: Option<&Value>, points: usize) -> Result<Vec<f32>> {
+pub(super) fn pressure_list(v: Option<&Value>, points: usize) -> Result<Vec<f32>> {
     let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
     let list = v.as_array().ok_or_else(|| bad("mask.brushStroke", "pressure must be a list of numbers 0..1"))?;
     if list.len() > points {

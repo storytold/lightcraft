@@ -219,7 +219,8 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
     let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { adapter.limits() };
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("egui wgpu device"),
-        required_limits: wgpu::Limits { max_texture_dimension_2d: 8192, ..base },
+        // (GL takes the conservative defaults for everything else, whose 2048 is too small for a window)
+        required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d, ..base },
         ..Default::default()
     }))
     .map_err(|e| format!("{}: no device: {e}", adapter.get_info().name))?;
@@ -252,8 +253,10 @@ pub fn check_pipeline(device: &wgpu::Device, build: impl FnOnce(&wgpu::Device)) 
 
 /// The start failed (error or panic) before the window's renderer came up: start the app again,
 /// which then tries the next renderer. `false`: not relaunched (it came up, nothing written to
-/// disk, or the retries are used up).
-pub fn relaunch_after_failure(files: &Files) -> bool {
+/// disk, or the retries are used up). `before_spawn` runs once the decision to retry is made and
+/// before the new process exists, so a resource the new process must own (the Nightly session
+/// lease) is released first.
+pub fn relaunch_after_failure(files: &Files, before_spawn: impl FnOnce()) -> bool {
     if !files.armed() {
         return false;
     }
@@ -262,6 +265,7 @@ pub fn relaunch_after_failure(files: &Files) -> bool {
         return false;
     }
     let Ok(exe) = std::env::current_exe() else { return false };
+    before_spawn();
     log::warn!("window: the renderer failed to start; starting again with the next one");
     std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
@@ -317,7 +321,7 @@ mod tests {
         // nothing written without a settings folder
         let none = Files::new(None);
         none.arm(dx);
-        assert!(!none.armed() && !relaunch_after_failure(&none));
+        assert!(!none.armed() && !relaunch_after_failure(&none, || {}));
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -395,6 +399,22 @@ mod tests {
         .unwrap();
         // outside a scope: logged by our handler, not a panic
         let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl("not wgsl".into()) });
+    }
+
+    /// The probed device keeps the adapter's own `max_texture_dimension_2d`, so a window
+    /// ballooned past 8192 px can still configure its surface. Needs an adapter; skipped
+    /// where there is none (CI without a GPU).
+    #[test]
+    fn probed_device_uses_adapter_max_texture_size() {
+        let Ok(setup) = probe(backend::window_backends(), false) else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
+        assert_eq!(
+            setup.device.limits().max_texture_dimension_2d,
+            setup.adapter.limits().max_texture_dimension_2d,
+            "the probed device must use the adapter's own max_texture_dimension_2d, not a fixed 8192 cap",
+        );
     }
 
     /// The workaround is opt-in and changes presentation only for Windows DX12.
