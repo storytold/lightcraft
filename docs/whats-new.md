@@ -601,6 +601,14 @@
   Rating is ≥ 3. Move with the arrow keys".
 - OK saves the rules in the order shown, in one undo step like any other change to the rules.
 
+### Lightroom catalog import keeps the settings of each history step
+- Importing a Lightroom Classic catalog saves its history steps and snapshots in a recovery archive in the library.
+  For catalogs from Lightroom Classic 13 and later, the archive kept each step's name and date but not its
+  settings, because those versions store them compressed. They are now decoded and kept. A step whose settings
+  can't be read is kept without them, with a warning, and the import goes on.
+- When an archive with the history settings would be too big (over 32 MiB), it is now saved without them, with a
+  warning, instead of not at all.
+
 ### Big libraries take less memory
 - Photos whose develop settings are equal now hold them once in memory: every unedited JPEG, PNG or other rendered
   file, every raw on the same import look, and the equal history steps, versions and import looks of one photo. (A
