@@ -184,7 +184,8 @@ pub enum Dialog {
     },
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
     /// of each burst (and stack each burst, best on top, with `stack_groups`); shots at most
-    /// `burst_gap` seconds apart and at least `similarity` alike are a burst.
+    /// `burst_gap` seconds apart and at least `similarity` alike are a burst. Bursts arranged by
+    /// hand (Window ▸ Bursts) are kept unless `reset_bursts`.
     Cull {
         reject_below: f32,
         pick_best: bool,
@@ -192,6 +193,8 @@ pub enum Dialog {
         stack_groups: bool,
         burst_gap: f32,
         similarity: f32,
+        #[serde(default)]
+        reset_bursts: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
