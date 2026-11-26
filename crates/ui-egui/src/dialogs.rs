@@ -52,6 +52,14 @@ pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../docs/whats-new.md");
 
+/// A line of What's New as the dialog shows it, in the UI language. The notes are written like the
+/// docs, with symbols Inter lacks (issue #1950): ▸ between menu items shows as → (as in the
+/// translations), the activity stack's ✕ as ×, and the sidebar's full-width ＋, which only the CJK
+/// faces have, as +.
+pub(crate) fn whats_new_line(source: &str) -> String {
+    crate::i18n::tr(source).replace('`', "").replace('▸', "→").replace('✕', "×").replace('＋', "+")
+}
+
 /// The tour's window title and the labels of its next and last-page buttons: translated in every
 /// catalog, with the pages' text (the test that pins it reads these).
 pub(crate) const WELCOME_TITLE: &str = "Welcome";
@@ -389,8 +397,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         let frame = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(egui::Id::unique(BACKDROP_SHOWN), frame));
     }
+    // a review closed without importing (Cancel, Esc) leaves no listing behind (OK took it already)
     if close && matches!(dlg, Dialog::Import { .. }) {
         app.renderer.forget_imports();
+        app.review_listed = None;
     }
     app.ui.dialog = if close { None } else { Some(dlg) };
 }
@@ -918,15 +928,15 @@ fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             let l = line.trim_end();
             if let Some(h) = l.strip_prefix("### ") {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(12.5)).color(t.text));
             } else if let Some(h) = l.strip_prefix("## ") {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
+                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(14.0)).color(t.text));
             } else if l.starts_with("# ") || l.is_empty() {
             } else if let Some(b) = l.strip_prefix("- ") {
-                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
+                ui.label(egui::RichText::new(format!("•  {}", whats_new_line(b))).color(t.text_label));
             } else {
-                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
+                ui.label(egui::RichText::new(whats_new_line(l.trim())).color(t.text_label));
             }
         }
     });
