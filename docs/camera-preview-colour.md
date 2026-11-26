@@ -259,6 +259,21 @@ A proxy older than the constant is brought up to date by the existing Build Smar
 - when the original can't be read (offline drive), the proxy and its curve are kept exactly as they are (`staleKept`). The old version in its header is the mark: the next Build Smart Previews with the original online rebuilds it. A rebuilt proxy carries the current version, so nothing is rebuilt twice. A proxy is only ever rebuilt from the original, never from another proxy;
 - the two never write the same proxy at once: each proxy is checked and written under one lock.
 
+A raw's proxy also holds the source its decode made, which the fit does not decide: previews of sensors too small to
+bin at preview size are demosaiced like full-size developments. `SOURCE_VERSION` in `crates/engine/src/smart.rs` is
+that decode's version, recorded as `source_version` (missing or malformed: 0). **Bump it in any change that makes a
+raw's decode give different pixels at preview size** (the demosaic, highlight reconstruction, the colour model); the
+render cache version covers renders and in-memory sources, not proxies. Every raw developed from its sensor data goes
+stale for it, with or without the per-file look (DNG proxies too); the opening scan and Build Smart Previews treat it
+as they treat the look version, with a `source-version` marker of its own. Version 1 is #1328's white-balanced
+demosaic. When both versions change in one release the scan runs once, and a rebuilt proxy carries both.
+
+A proxy whose look or source version, or whose encode version (`enc`), is newer than this build's is never rewritten,
+even when another of its versions is older: not by the opening refresh, and not by Build Smart Previews (it counts as
+`newerKept`). A build that knows both versions brings it up to date; Discard Smart Previews removes it. The
+`look-version` and `source-version` markers only move up. `RENDER_CACHE_VERSION` 84 redraws cached full-size renders
+for this decode change (83 is reserved by open #3943).
+
 ## Photo Merge
 
 A merge (HDR, panorama, HDR panorama) writes a linear DNG of the sources' camera RGB, with the reference frame's colour

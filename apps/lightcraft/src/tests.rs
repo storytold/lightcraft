@@ -6,6 +6,7 @@ fn desktop_clear_color_stays_opaque_with_a_modal_open() {
         LightcraftApp::new(Session::new(), Services::default()),
         PrefsWriter::default(),
         None,
+        NightlyExit::none(),
         #[cfg(target_os = "macos")]
         None,
     );
@@ -14,6 +15,34 @@ fn desktop_clear_color_stays_opaque_with_a_modal_open() {
     for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
         assert_eq!(eframe::App::clear_color(&app, &visuals)[3], 1.0);
     }
+}
+
+/// The launch profile hands the files over after `--` (launch_profile::parse): a file named like
+/// an option stays a file, and nothing after `--` is read as an option again.
+#[test]
+fn the_launch_profile_hands_files_over_after_a_double_dash() {
+    let args = ["--", "--version", "--library", "--control", "-h", "photo with spaces.dng"].map(String::from);
+    assert_eq!(
+        app_command(&args, true).unwrap(),
+        AppCommand::Start(AppOptions {
+            files: ["--version", "--library", "--control", "-h", "photo with spaces.dng"].map(String::from).to_vec(),
+            seed_demo: true,
+            ..AppOptions::default()
+        })
+    );
+    // Stable and Nightly share the parser: Nightly consumes and ignores --control with its port.
+    assert_eq!(
+        app_command(&["--control".to_string(), "7000".to_string()], true).unwrap(),
+        AppCommand::Start(AppOptions { seed_demo: true, ..AppOptions::default() })
+    );
+    assert_eq!(
+        app_command(&["--control".to_string(), "7000".to_string()], false).unwrap(),
+        AppCommand::Start(AppOptions { control: Some("7000".into()), seed_demo: true, ..AppOptions::default() })
+    );
+    // The queries stay queries, and an unknown option stays a usage error.
+    assert_eq!(app_command(&["--version".to_string()], true).unwrap(), AppCommand::Version);
+    assert_eq!(app_command(&["-h".to_string()], true).unwrap(), AppCommand::Help);
+    assert!(app_command(&["--bogus".to_string()], true).unwrap_err().contains("unknown option `--bogus`"));
 }
 
 fn dir(tag: &str) -> std::path::PathBuf {
@@ -604,6 +633,7 @@ fn on_exit_ends_the_process_on_macos() {
             app,
             PrefsWriter::default(),
             None,
+            NightlyExit::none(),
             #[cfg(target_os = "macos")]
             None,
         );
@@ -637,6 +667,7 @@ fn on_exit_removes_the_lock_owner_note() {
             LightcraftApp::new(session, Services::default()),
             PrefsWriter::default(),
             None,
+            NightlyExit::none(),
             #[cfg(target_os = "macos")]
             None,
         );
