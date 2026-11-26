@@ -45,6 +45,8 @@ struct AccessibleNode {
     role: String,
     name: Option<String>,
     description: Option<String>,
+    /// The node's pressed or checked state, as AccessKit words it.
+    toggled: String,
 }
 fn local_tone() -> Arc<lightcraft_pipeline::local_tone::LocalTone> {
     Arc::new(
@@ -91,7 +93,6 @@ struct Fixture {
     record_layer: Option<egui::LayerId>,
     panel: Rect,
     texts: Vec<PaintedText>,
-    access_checks: std::collections::HashMap<String, String>,
     access_nodes: Vec<AccessibleNode>,
     trace: VecDeque<String>,
     prior_locale: crate::i18n::Locale,
@@ -179,7 +180,6 @@ impl Fixture {
             record_layer: None,
             panel: Rect::NOTHING,
             texts: vec![],
-            access_checks: Default::default(),
             access_nodes: vec![],
             trace: VecDeque::new(),
             prior_locale,
@@ -290,10 +290,8 @@ impl Fixture {
                     role: format!("{:?}", node.role()),
                     name: node.label().map(str::to_owned),
                     description: node.description().map(str::to_owned),
+                    toggled: format!("{:?}", node.toggled()),
                 });
-                if let Some(label) = node.label() {
-                    self.access_checks.insert(label.to_owned(), format!("{:?}", node.toggled()));
-                }
             }
         }
         self.panel = panel;
@@ -466,7 +464,10 @@ impl Fixture {
         assert!(rect.expand(1.0).contains_rect(label[0].rect), "the label belongs to the real hit rectangle");
         let active = self.app.session.active().unwrap();
         let value = self.app.session.develop_of(active).unwrap().profile.camera_local_tone;
-        assert_eq!(self.access_checks.get(crate::i18n::tr(LABEL)).map(String::as_str), Some(if value { "Some(True)" } else { "Some(False)" }));
+        // the checkbox's own node, by its id: another node can share its name
+        let owner = self.hit(KEY).id.accesskit_id().0;
+        let node = self.access_nodes.iter().find(|node| node.id == owner).expect("the checkbox's own AccessKit node");
+        assert_eq!(node.toggled, if value { "Some(True)" } else { "Some(False)" });
     }
 }
 impl Drop for Fixture {

@@ -45,7 +45,8 @@ struct Fixture {
     panel: Rect,
     trace: VecDeque<String>,
     prior_locale: crate::i18n::Locale,
-    access_checks: std::collections::HashMap<String, String>,
+    /// Each AccessKit node's pressed or checked state, by node id (names can repeat).
+    access_checks: std::collections::HashMap<u64, String>,
     callback_targets: Vec<(String, bool)>,
 }
 impl Fixture {
@@ -209,10 +210,8 @@ impl Fixture {
         });
 
         if let Some(update) = &output.platform_output.accesskit_update {
-            for (_, node) in &update.nodes {
-                if let Some(label) = node.label() {
-                    self.access_checks.insert(label.to_owned(), format!("{:?}", node.toggled()));
-                }
+            for (id, node) in &update.nodes {
+                self.access_checks.insert(id.0, format!("{:?}", node.toggled()));
             }
         }
         self.callback_targets = callback_targets;
@@ -438,7 +437,8 @@ impl Fixture {
             previous = Some(rect);
             let selected = if MIXER_BANDS.contains(&self.app.ui.mixer_mode.as_str()) { self.app.ui.mixer_mode == *band } else { index == 0 };
             assert_eq!(
-                self.access_checks.get(crate::i18n::tr(band)).map(String::as_str),
+                // the band's own node, by its id: another node can share its name
+                self.access_checks.get(&hit.id.accesskit_id().0).map(String::as_str),
                 Some(if selected { "Some(True)" } else { "Some(False)" }),
                 "actual accessible selected cue for {band}"
             );
