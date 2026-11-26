@@ -5,10 +5,11 @@
 //!
 //! The model directory is `LIGHTCRAFT_SAM3_DIR`, else `~/.config/lightcraft/models/sam3`. Prints the device and
 //! kernel creation, the weight upload, the first and the warm forward passes, each neck's first run (which builds
-//! it) and warm runs, the CPU forward pass and how far the two outputs are apart. `--app` then times what the app
-//! does per photo, with the model loaded as the app loads it (GPU backbone, necks and DETR encoder, the rest in candle on the CPU): encode,
-//! click features, first click, first and second Describe (`--cpu-necks`: with the necks in candle, as before they
-//! ran on the GPU).
+//! it) and warm runs, the text detector's mask decoder (first and warm, on made-up inputs), the CPU forward pass and
+//! how far the two outputs are apart. `--app` then times what the app does per photo, with the model loaded as the
+//! app loads it (GPU backbone, necks, DETR encoder and mask decoder, the rest in candle on the CPU): encode, click
+//! features, first click, first and second Describe (`--cpu-necks`: with the necks in candle, as before they ran on
+//! the GPU; `--cpu-masks`: with the mask decoder in candle).
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -35,6 +36,7 @@ fn main() -> Result<(), String> {
     let cpu = !args.iter().any(|a| a == "--no-cpu");
     let app = args.iter().any(|a| a == "--app");
     let cpu_necks = args.iter().any(|a| a == "--cpu-necks");
+    let cpu_masks = args.iter().any(|a| a == "--cpu-masks");
     let dir = model_dir().ok_or("no SAM 3 model: set LIGHTCRAFT_SAM3_DIR")?;
 
     let scene = &lightcraft_scenes::demo_library()[0];
@@ -75,6 +77,23 @@ fn main() -> Result<(), String> {
         }
     }
     println!("neck device memory: {:.0} MB", gpu.neck_bytes() as f64 / 1e6);
+    {
+        let (memory, text, valid) = (vec![0.1f32; 5184 * 256], vec![0.3f32; 32 * 256], vec![true; 32]);
+        let (l1, l0) = (vec![0.2f32; 256 * 144 * 144], vec![0.4f32; 256 * 288 * 288]);
+        let (rows, bias) = (vec![0.01f32; 200 * 256], vec![0.5f32; 200]);
+        match timed(runs, || gpu.mask_decoder(&memory, &text, &valid, [&l1, &l0], &rows, &bias).map(drop)) {
+            Ok((first, best, mean)) => {
+                let (w, b) = gpu.mask_decoder_bytes().unwrap_or_default();
+                println!(
+                    "mask decoder (200 queries): first {first:7.1} ms, warm {best:.1} ms (mean of {runs}: {mean:.1} ms); {:.0} MB weights, {:.0} MB work buffers",
+                    w as f64 / 1e6,
+                    b as f64 / 1e6
+                );
+            }
+            Err(e) => println!("mask decoder failed on the GPU: {e}"),
+        }
+    }
+
     if cpu {
         let model = Sam3::load_on(&dir, candle_core::Device::Cpu).map_err(|e| e.to_string())?;
         let px = candle_core::Tensor::from_vec(pixels.clone(), (1, 3, INPUT, INPUT), &candle_core::Device::Cpu).map_err(|e| e.to_string())?;
@@ -96,7 +115,7 @@ fn main() -> Result<(), String> {
     }
     drop(gpu);
     if app {
-        as_the_app(&dir, &rgb, (img.width, img.height), runs, cpu_necks)?;
+        as_the_app(&dir, &rgb, (img.width, img.height), runs, (cpu_necks, cpu_masks))?;
     }
     // no GPU work in flight when the process ends (issue #620)
     lightcraft_gpu::begin_shutdown();
@@ -124,10 +143,11 @@ fn ms(t: Instant) -> String {
     format!("{:.0} ms", t.elapsed().as_secs_f64() * 1e3)
 }
 
-/// The model's GPU accelerator with the necks left to candle (`--cpu-necks`).
+/// The model's GPU accelerator with the necks (`--cpu-necks`) or the mask decoder (`--cpu-masks`) left to candle.
 struct Heads {
     gpu: Box<dyn BackboneAccel>,
     necks: bool,
+    masks: bool,
 }
 
 impl BackboneAccel for Heads {
@@ -144,7 +164,7 @@ impl BackboneAccel for Heads {
         self.gpu.runs_detr_encoder()
     }
     fn runs_mask_decoder(&self) -> bool {
-        self.gpu.runs_mask_decoder()
+        self.masks && self.gpu.runs_mask_decoder()
     }
     fn neck(&self, which: NeckKind, backbone: &[f32], n: usize) -> Result<Vec<Vec<f32>>, String> {
         self.gpu.neck(which, backbone, n)
@@ -166,9 +186,11 @@ impl BackboneAccel for Heads {
 }
 
 /// The model as the app loads it, timed per photo: encode, click features, a click, two Describes.
-fn as_the_app(dir: &std::path::Path, rgb: &[u8], (w, h): (usize, usize), runs: usize, cpu_necks: bool) -> Result<(), String> {
+fn as_the_app(dir: &std::path::Path, rgb: &[u8], (w, h): (usize, usize), runs: usize, (cpu_necks, cpu_masks): (bool, bool)) -> Result<(), String> {
     let t = Instant::now();
-    let make = |r: &WeightReader| -> Result<Box<dyn BackboneAccel>, String> { Ok(Box::new(Heads { gpu: sam3::backbone(r)?, necks: !cpu_necks })) };
+    let make = |r: &WeightReader| -> Result<Box<dyn BackboneAccel>, String> {
+        Ok(Box::new(Heads { gpu: sam3::backbone(r)?, necks: !cpu_necks, masks: !cpu_masks }))
+    };
     let mut model = Sam3::load_accelerated(dir, candle_core::Device::Cpu, make).map_err(|e| e.to_string())?;
     println!("app: load {} on {}", ms(t), model.backbone_device());
     let click = |x, y| lightcraft_segment::Click { x, y, positive: true };
