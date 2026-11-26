@@ -675,6 +675,19 @@ fn family_vp(segs: &[Segment], vertical: bool) -> (Option<[f64; 3]>, Option<Reje
         None => (None, Some(Reject::TooFew)),
         Some((v, _)) => match reliable(segs, v, vertical) {
             Ok(()) => (Some(v), None),
+            // the strongest point may be one of many short pieces (foliage, folds) outweighing a few long posts:
+            // the long lines alone get their say, judged against the whole family (a short-only family stays out)
+            Err(Reject::TooShort) => {
+                let long: Vec<Segment> = segs.iter().copied().filter(|s| s.len() >= LONG_LINE).collect();
+                let again = (long.len() >= 2 && long.len() < segs.len())
+                    .then(|| vanishing_point_where(&long, |v| !inside(v)).or_else(|| vanishing_point(&long)))
+                    .flatten()
+                    .filter(|(v, _)| reliable(segs, *v, vertical).is_ok());
+                match again {
+                    Some((v, _)) => (Some(v), None),
+                    None => (None, Some(Reject::TooShort)),
+                }
+            }
             Err(why) => (None, Some(why)),
         },
     }
@@ -779,7 +792,13 @@ fn auto(a: &Analysis) -> Result<Homography, Reject> {
         Some(d) if d.abs() <= 5.0 => Ok(rot_z_h(d)),
         _ if vertical.is_some() => Err(Reject::TooSteep),
         Some(_) => Err(Reject::TooTilted),
-        _ => Err(a.vertical_why.unwrap_or(Reject::TooFew)),
+        // nothing to level by: a vertical family's own reason when it has one beyond a lack of lines, else lines
+        // that are there but don't agree, else too few lines
+        _ => Err(match a.vertical_why {
+            Some(why) if why != Reject::TooFew => why,
+            _ if a.vertical.is_empty() && a.horizontal.is_empty() => Reject::TooFew,
+            _ => Reject::Disagree,
+        }),
     }
 }
 
@@ -947,6 +966,41 @@ pub fn homography(g: &Geometry, ow: f64, oh: f64) -> Homography {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Many short parallel pieces outweighing three long posts don't hide the posts' vanishing point: the long
+    /// lines are tried on their own when the strongest point has only short lines (CodeRabbit on #2966).
+    #[test]
+    fn short_pieces_outweighing_the_posts_do_not_hide_their_vanishing_point() {
+        let mut segs: Vec<Segment> = [-0.7, 0.0, 0.7].iter().map(|&x| Segment { a: Point::new(x, -0.8), b: Point::new(0.75 * x, 0.8) }).collect();
+        let (dx, dy) = (0.06 * 20f64.to_radians().sin(), 0.06 * 20f64.to_radians().cos());
+        for i in 0..60 {
+            let cx = -0.59 + 0.02 * i as f64;
+            segs.push(Segment { a: Point::new(cx - dx, -dy), b: Point::new(cx + dx, dy) });
+        }
+        let a = analyze(&segs);
+        assert!(a.vertical_vp.is_some(), "the posts give a vertical vanishing point: {:?}", a.vertical_why);
+        // short pieces alone still give none
+        let a = analyze(&segs[3..]);
+        assert!(a.vertical_vp.is_none());
+    }
+
+    /// Lines that are there but don't agree on a level say so, rather than that there are too few lines
+    /// (CodeRabbit on #2966).
+    #[test]
+    fn horizontals_that_disagree_are_reported_as_disagreeing() {
+        let segs: Vec<Segment> = [-4f64, 0.0, 4.0]
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                let (c, s) = (0.4 * d.to_radians().cos(), 0.4 * d.to_radians().sin());
+                let y = -0.5 + 0.5 * i as f64;
+                Segment { a: Point::new(-c, y - s), b: Point::new(c, y + s) }
+            })
+            .collect();
+        let a = analyze(&segs);
+        assert!(a.vertical.is_empty());
+        assert_eq!(auto(&a).err(), Some(Reject::Disagree));
+    }
 
     /// The point refined from a candidate's lines is still held to the same test as the candidate: one that test
     /// turns down leaves the candidate itself (CodeRabbit on #2966).

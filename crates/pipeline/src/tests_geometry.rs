@@ -764,7 +764,8 @@ fn upright_corrects_converging_posts_among_people() {
                 n += 1.0;
             }
         }
-        s / n.max(1.0)
+        assert!(n > 0.0, "a post is visible on row {y}");
+        s / n
     };
     let lean = |img: &Rgba8, right: bool| post_x(img, img.height / 6, right) - post_x(img, img.height * 5 / 6, right);
     let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
@@ -849,7 +850,8 @@ fn upright_vertical_follows_the_posts_not_the_deck_or_the_drapes() {
                 n += 1.0;
             }
         }
-        s / n.max(1.0)
+        assert!(n > 0.0, "a post is visible on row {y}");
+        s / n
     };
     let lean = |img: &Rgba8, right: bool| post_x(img, img.height / 8, right) - post_x(img, img.height * 5 / 8, right);
     let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
