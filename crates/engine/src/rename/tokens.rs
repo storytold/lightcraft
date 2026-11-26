@@ -152,25 +152,47 @@ pub fn expand_folder(template: &str, p: &Photo, seq: usize) -> Vec<String> {
         .split(['/', '\\'])
         .map(str::trim)
         .filter(|s| !s.is_empty() && !matches!(*s, "." | ".."))
-        .map(|s| {
-            let v = sanitize(&expand_tokens(s, p, seq, 1));
-            if v.is_empty() { "unknown".to_string() } else { v }
-        })
+        .map(|s| expand_folder_component(s, p, seq))
         .collect()
+}
+
+pub(crate) fn expand_folder_component(template: &str, p: &Photo, seq: usize) -> String {
+    let v = sanitize(&expand_tokens(template, p, seq, 1));
+    if v.is_empty() { "unknown".to_string() } else { v }
+}
+
+fn template_tags(mut template: &str) -> impl Iterator<Item = &str> {
+    std::iter::from_fn(move || {
+        let start = template.find('{')?;
+        let end = start + template[start..].find('}')? + 1;
+        let tag = &template[start..end];
+        template = &template[end..];
+        Some(tag)
+    })
+}
+
+fn token_name(tag: &str) -> &str {
+    let body = &tag[1..tag.len() - 1];
+    body.split_once(':').map_or(body, |(name, _)| name).trim()
+}
+
+pub(crate) fn has_known_token(template: &str) -> bool {
+    template_tags(template).any(|tag| {
+        let name = token_name(tag);
+        TOKENS
+            .iter()
+            .any(|help| std::iter::once(help.tag).chain(help.aliases.iter().copied()).any(|known| token_name(known).eq_ignore_ascii_case(name)))
+    })
 }
 
 /// The `{…}` tags in `template` that aren't tokens (they stay as typed), for a warning.
 pub fn unknown_tokens(template: &str) -> Vec<String> {
     let p = sample_photo();
     let mut out = Vec::new();
-    let mut rest = template;
-    while let Some(i) = rest.find('{') {
-        let Some(j) = rest[i..].find('}') else { break };
-        let tag = &rest[i..i + j + 1];
+    for tag in template_tags(template) {
         if expand_tokens(tag, &p, 1, 1) == tag && !out.iter().any(|t| t == tag) {
             out.push(tag.to_string());
         }
-        rest = &rest[i + j + 1..];
     }
     out
 }

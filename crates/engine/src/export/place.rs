@@ -62,7 +62,7 @@ fn join_path(a: &str, b: &str) -> String {
 
 /// A subfolder that stays inside the destination folder (issue #2571): `\`, `:` and NUL become `_`
 /// (so no drive, root or Windows separator), and empty, `.` and `..` parts are dropped; `a/b` still
-/// nests. Applied where the folder is used, so presets and the Export dialog's field are covered too.
+/// nests. Applied after resolving the subfolder, including a template set by a preset or the dialog.
 pub(super) fn clean_subfolder(s: &str) -> String {
     let s = s.trim().replace(['\\', ':', '\0'], "_");
     s.split('/').map(str::trim).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/")
@@ -82,7 +82,7 @@ impl<'a> Placer<'a> {
     /// The folder photo `name` (its original in `source_dir`) is written to: the batch's folder or
     /// the photo's own ([`DestinationMode`]), plus the subfolder. An error for a photo with no
     /// folder of its own, or whose folder is gone: never a file written somewhere else instead.
-    fn folder_for(&self, name: &str, source_dir: Option<&str>) -> Result<String, String> {
+    fn folder_for(&self, name: &str, source_dir: Option<&str>, subfolder: &str) -> Result<String, String> {
         let base = match self.o.destination_mode {
             DestinationMode::SpecificFolder => self.to.dir.clone(),
             DestinationMode::SameAsOriginal => {
@@ -97,8 +97,7 @@ impl<'a> Placer<'a> {
                 d.to_string()
             }
         };
-        let sub = clean_subfolder(&self.o.subfolder);
-        Ok(if sub.is_empty() { base } else { join_path(&base, &sub) })
+        Ok(if subfolder.is_empty() { base } else { join_path(&base, subfolder) })
     }
 
     /// Place photo `photo`'s export result (file `name`, its original in `source_dir`): write it
@@ -108,12 +107,13 @@ impl<'a> Placer<'a> {
         photo: lightcraft_catalog::PhotoId,
         name: String,
         source_dir: Option<&str>,
+        subfolder: &str,
         guard: &crate::originals::OriginalGuard,
         e: Result<Exported, String>,
     ) -> Result<(), String> {
         use serde_json::json;
         // an exact file path needs no folder
-        let dir = if self.to.exact.is_some() && self.single { Ok(String::new()) } else { self.folder_for(&name, source_dir) };
+        let dir = if self.to.exact.is_some() && self.single { Ok(String::new()) } else { self.folder_for(&name, source_dir, subfolder) };
         let (o, exists) = (self.o, self.exists);
         let (dir, e) = match dir.and_then(|dir| e.map(|e| (dir, e))) {
             Ok(v) => v,

@@ -430,7 +430,10 @@ impl ExportOptions {
             naming: s("naming").map_or(d.naming, str::to_string),
             start_number: u("startNumber").map_or(d.start_number, |v| v.min(999_999) as u32),
             destination_mode: s("destinationMode").and_then(DestinationMode::parse).unwrap_or(d.destination_mode),
-            subfolder: s("subfolder").map_or(d.subfolder, clean_subfolder),
+            subfolder: s("subfolder").map_or(d.subfolder, |s| {
+                // Keep arguments like :%Y in a template until the photo's tokens are expanded.
+                if s.split('/').any(crate::rename::has_known_token) { s.to_string() } else { clean_subfolder(s) }
+            }),
             conflict: s("conflict").and_then(Conflict::parse).unwrap_or(d.conflict),
             tiff_compression: match s("tiffCompression").map(str::to_ascii_lowercase).as_deref() {
                 Some("none") => TiffCompression::None,
@@ -598,7 +601,7 @@ impl ExportOptions {
     /// extension is kept for [`ExportFormat::Original`]).
     pub fn file_name_for(&self, p: &lightcraft_catalog::Photo, seq: usize) -> String {
         let base = if self.naming.trim().is_empty() { "{name}" } else { self.naming.as_str() };
-        let n = seq + self.start_number.max(1) as usize - 1;
+        let n = self.sequence_number(seq);
         let name = crate::rename::expand_tokens(base, p, n, 3);
         // the catalog's own file name is cleaned the same way: a name from a supplied catalog may hold separators
         let clean = |s: &str| -> String { s.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c }).collect() };
@@ -616,5 +619,22 @@ impl ExportOptions {
         } else {
             format!("{name}.{}", self.format.extension())
         }
+    }
+
+    pub(super) fn subfolder_for(&self, p: &lightcraft_catalog::Photo, seq: usize) -> String {
+        if !self.subfolder.contains('{') {
+            return clean_subfolder(&self.subfolder);
+        }
+        let seq = self.sequence_number(seq);
+        let levels: Vec<_> = self
+            .subfolder
+            .split('/')
+            .map(|level| if crate::rename::has_known_token(level) { crate::rename::expand_folder_component(level, p, seq) } else { level.to_owned() })
+            .collect();
+        clean_subfolder(&levels.join("/"))
+    }
+
+    fn sequence_number(&self, seq: usize) -> usize {
+        seq + self.start_number.max(1) as usize - 1
     }
 }
