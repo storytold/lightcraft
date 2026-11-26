@@ -684,6 +684,12 @@ pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str,
         });
         // The framework's value menu, as White Balance has: its rows own real responses, and it handles the
         // keyboard focus and dismissal.
+        // A sizing or measuring run shows no menu, as the Tool Overlay dropdown: it publishes nothing and takes no
+        // pick, and rows run inside a measuring run claim the stages of the menu's real run in the same pass.
+        if measuring(ui) {
+            return;
+        }
+        let mut rows = Vec::new();
         Menu::new(name.to_owned()).id_salt(("labeled-dropdown", id)).values().opened_by(&r, Trigger::Click).show(ui, |ui, _| {
             for (i, (v, l, key)) in items.iter().enumerate() {
                 let mut row =
@@ -693,13 +699,20 @@ pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str,
                 }
                 let out = row.show(ui);
                 if !measuring(ui) {
-                    register_response(format!("{id}:{key}"), out.response.rect, &out.response);
+                    rows.push((format!("{id}:{key}"), out.response.clone()));
                     if out.ran {
                         chosen = Some(*v);
                     }
                 }
             }
         });
+        // A closing menu may still paint its rows: they are live (published) only while the menu is open, so a
+        // pick, Escape or a press outside leaves no row to click.
+        if craft::ui::contract::overlay::opened_from(ui.ctx(), r.id) {
+            for (name, response) in &rows {
+                register_response(name.clone(), response.rect, response);
+            }
+        }
     });
     if measuring(ui) || !ui.is_enabled() { None } else { chosen }
 }
