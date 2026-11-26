@@ -46,7 +46,7 @@ mod types;
 pub(crate) use commit::start_from_file;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use commit::workers;
-pub use commit::{batch_size, civil, commit_prepared, system_clock};
+pub use commit::{batch_size, civil, commit_prepared, local_civil, local_instant, system_clock};
 pub use defaults::{CameraDefault, ImportDefaults, apply_import_defaults, has_import_look, import_defaults};
 #[cfg(test)]
 use files::expand_knowing;
