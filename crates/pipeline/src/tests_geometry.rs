@@ -950,6 +950,11 @@ fn upright_note_names_the_fallback_it_applied() {
     assert_ne!(solve(Upright::Full, &vertical), Homography::IDENTITY);
     assert_eq!(fallback(Upright::Full, &vertical), Some("Straightened the vertical lines instead"));
     assert_eq!(fallback(Upright::Vertical, &vertical), None, "Vertical did what it says");
+    // verticals already along the image's y axis: Full stores no correction, so it names no fallback
+    let straight = Analysis { vertical_vp: Some([0.0, 1.0, 0.0]), ..Analysis::default() };
+    assert!(shortfall(Upright::Full, &straight).is_some());
+    assert_eq!(solve(Upright::Full, &straight), Homography::IDENTITY);
+    assert_eq!(fallback(Upright::Full, &straight), None);
     // nothing at all to go by: no fallback, the note says there was no correction
     for m in [Upright::Vertical, Upright::Full, Upright::Level] {
         assert_eq!(fallback(m, &Analysis::default()), None);

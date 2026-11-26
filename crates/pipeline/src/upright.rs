@@ -724,7 +724,10 @@ pub fn shortfall(mode: Upright, a: &Analysis) -> Option<&'static str> {
 pub fn fallback(mode: Upright, a: &Analysis) -> Option<&'static str> {
     let levels = || level_angle(&a.vertical, &a.horizontal).is_some_and(|d| d != 0.0);
     match mode {
-        Upright::Full if a.vertical_vp.is_some() && a.horizontal_vp.is_none() => Some("Straightened the vertical lines instead"),
+        // verticals that already stand straight leave no correction to name
+        Upright::Full if a.vertical_vp.is_some() && a.horizontal_vp.is_none() => {
+            (solve(Upright::Full, a) != Homography::IDENTITY).then_some("Straightened the vertical lines instead")
+        }
         Upright::Vertical | Upright::Full if a.vertical_vp.is_none() && levels() => Some("Levelled the photo instead"),
         _ => None,
     }
