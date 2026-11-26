@@ -2,8 +2,10 @@
 
 The catalog is two files in the library folder (`crates/catalog/src/journal.rs`): `catalog.snap`, a JSON snapshot of
 the whole catalog, and `catalog.log`, one JSON line per change made since. Every change is handed to the log before
-its command returns; natively the log's own thread writes and fsyncs it right after, so a command never waits for the drive (a
-write that fails is held and retried, and switching the library or quitting waits for it). Now and then the log is
+its command returns; natively the log's own thread writes and fsyncs it right after, so appending a change never waits for the
+drive (a write that fails is held and retried, and switching the library or quitting waits for it). `library.compact` does
+wait: it writes and syncs its snapshot before it returns, and the first snapshot after a deferred upgrade copies the files
+it keeps on the caller's thread. Now and then the log is
 compacted into a new snapshot. This page covers what happens to a library's files when a newer version opens it.
 
 ## Going back to an older version

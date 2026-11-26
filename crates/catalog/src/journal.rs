@@ -836,6 +836,15 @@ impl Journal {
         }
     }
 
+    /// A snapshot reported a failure: one that landed all the same (a share that dropped its answer) and is in this
+    /// build's format did the upgrade, so the files kept for it are the way back now, to be told without waiting for
+    /// a later snapshot that succeeds.
+    fn upgraded_despite_error(&mut self) {
+        if self.behind.is_some() && self.on_disk_version() == Some(Some(VERSION)) {
+            self.upgraded_later();
+        }
+    }
+
     /// The files a snapshot kept when it upgraded a library that was left in an older format at
     /// open (see `behind`), once, after it was written: [`LoadReport::kept`] has only what the
     /// open kept. Empty when there are none.
@@ -915,6 +924,7 @@ impl Journal {
             Ok(t) => t,
             Err(e) => {
                 // nothing lost (the log is whole); don't retry on every append
+                self.upgraded_despite_error();
                 self.stats.failed_snapshots += 1;
                 self.retry_at_records = self.log_records + self.policy.max_records;
                 return Err(io(e));
@@ -1006,6 +1016,7 @@ impl Journal {
             Ok(t) => t,
             Err(e) => {
                 // the log still holds every record: nothing lost, retry later
+                self.upgraded_despite_error();
                 self.stats.failed_snapshots += 1;
                 self.retry_at_records = self.log_records + self.policy.max_records;
                 log::error!("catalog: background snapshot failed: {e}");

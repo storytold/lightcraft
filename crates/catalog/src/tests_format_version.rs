@@ -672,8 +672,9 @@ fn a_snapshot_that_landed_after_its_files_were_kept_is_tried_again() {
     LAND.store(1, std::sync::atomic::Ordering::SeqCst);
     assert!(j.snapshot(&c).is_err(), "landed, and said it did not");
     assert_eq!(snapshot_version(&m), u64::from(VERSION), "it did land");
-    j.snapshot(&c).unwrap();
+    // the upgrade landed: its way back is told now, not only after a later snapshot succeeds
     assert_eq!(j.take_kept(), ["catalog.snap.v6-8", "catalog.log.v6-8"]);
+    j.snapshot(&c).unwrap();
     assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log)), "the old library, not the snapshot that landed");
     assert!(j.take_kept().is_empty(), "told once");
 }
