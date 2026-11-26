@@ -297,7 +297,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
         ui.close();
     }
     if item(ui, "maskEffectMenu:import", crate::i18n::tr("Import Presets…").to_string(), app.services.pick_preset_files.is_some()) {
-        let _ = app.run("file.importPresets", json!({}));
+        let _ = app.run("file.importPresets", json!({"from": "panel"}));
         ui.close();
     }
     let any = !app.session.mask_effects.is_empty();

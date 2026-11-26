@@ -271,7 +271,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let _ = app.run("library.clearFilter", json!({}));
     }
     // filter presets: apply one, save the current filter, delete
-    let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.font(12.5), t.text);
+    let presets =
+        crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr_ctx(crate::i18n::FILTER_BAR_CONTEXT, "Presets"), t.font(12.5), t.text);
     register(ui, "button:filterPresets", presets.rect);
     egui::Popup::menu(&presets).show(|ui| {
         let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
