@@ -4,7 +4,7 @@
 //! the activity stack, issue #345), or inline with `wait` (CLI, MCP, tests).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
@@ -24,7 +24,10 @@ pub struct PreviewBuild {
     pub failed: AtomicUsize,
     /// Shared with the build's row in the activity stack (its ✕ sets it).
     pub cancel: Arc<AtomicBool>,
+    /// Legacy completion mirror for waiters. `terminal` decides running and the final outcome.
     pub finished: AtomicBool,
+    /// 0 = running, 1 = completed, 2 = cancelled: changed once, atomically.
+    pub(crate) terminal: AtomicU8,
     /// Damaged smart previews rebuilt (Build Smart Previews only).
     pub repaired: AtomicUsize,
     /// What is built ("" = previews; "smart previews" — Build Smart Previews runs the same way).
@@ -52,12 +55,16 @@ pub struct PreviewBuild {
 }
 
 impl PreviewBuild {
+    const RUNNING: u8 = 0;
+    const COMPLETED: u8 = 1;
+    const CANCELLED: u8 = 2;
+
     pub fn json(&self) -> Value {
         json!({
             "total": self.total,
             "done": self.done.load(Ordering::Relaxed),
             "failed": self.failed.load(Ordering::Relaxed),
-            "running": !self.finished.load(Ordering::Relaxed),
+            "running": self.running(),
             "cancelled": self.cancel.load(Ordering::Relaxed),
             "what": if self.what.is_empty() { "previews" } else { self.what },
             "repaired": self.repaired.load(Ordering::Relaxed),
@@ -70,6 +77,32 @@ impl PreviewBuild {
 
     pub fn running(&self) -> bool {
         !self.finished.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn ended_cancelled(&self) -> bool {
+        self.terminal.load(Ordering::Relaxed) == Self::CANCELLED
+    }
+
+    /// Accept cancellation after a caller observed the build running. Completion and cancellation
+    /// race for one terminal state; the loser cannot rewrite the winner's result.
+    fn accept_cancellation(&self) -> bool {
+        let accepted = self.terminal.compare_exchange(Self::RUNNING, Self::CANCELLED, Ordering::SeqCst, Ordering::SeqCst).is_ok();
+        if accepted {
+            self.cancel.store(true, Ordering::Relaxed);
+        }
+        accepted
+    }
+
+    pub fn cancel_if_running(&self) -> bool {
+        self.running() && self.accept_cancellation()
+    }
+
+    fn complete(&self) {
+        let outcome = if self.cancel.load(Ordering::Relaxed) { Self::CANCELLED } else { Self::COMPLETED };
+        // Cancellation may already have closed the outcome. Worker completion is a separate event:
+        // it always releases waiters, but never changes which outcome won.
+        let _ = self.terminal.compare_exchange(Self::RUNNING, outcome, Ordering::SeqCst, Ordering::SeqCst);
+        self.finished.store(true, Ordering::Relaxed);
     }
 
     /// The user is at photo `id`, moving `backward` or forward: build from there on.
@@ -471,7 +504,7 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
         let _ = lanes;
         work();
     }
-    state.finished.store(true, Ordering::Relaxed);
+    state.complete();
 }
 
 /// The long edge a standard preview is built at: [`STANDARD_EDGE`], or what the loupe asks for
@@ -501,7 +534,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     let mut gives_way = None;
     if let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
         if b.background && !background {
-            gives_way = Some(b.cancel.clone());
+            gives_way = Some(b.clone());
         } else {
             return Err(bad(C, "a preview build is already running"));
         }
@@ -535,8 +568,8 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     let lanes = if background { crate::prep::background_lanes() } else { lanes(jobs.len(), edge.is_none()) };
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
     if wait {
-        if let Some(cancel) = gives_way {
-            cancel.store(true, Ordering::Relaxed);
+        if let Some(previous) = gives_way {
+            previous.cancel_if_running();
         }
         run_all(jobs, &state, task.as_ref(), lanes, force);
         return Ok(state.json());
@@ -557,12 +590,12 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         if let Err(e) = started {
             // never started: not left "running", which would hold every later build back, and the
             // build it was to replace carries on
-            state.finished.store(true, Ordering::Relaxed);
+            state.complete();
             s.preview_build = previous;
             return Err(bad(C, format!("could not start: {e}")));
         }
-        if let Some(cancel) = gives_way {
-            cancel.store(true, Ordering::Relaxed);
+        if let Some(previous) = gives_way {
+            previous.cancel_if_running();
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -771,7 +804,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let mut gives_way = None;
     if background && let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
         if b.background {
-            gives_way = Some(b.cancel.clone());
+            gives_way = Some(b.clone());
         } else {
             return Err(bad(C, "a preview build is already running"));
         }
@@ -800,7 +833,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
                 log::warn!("{C}: {e}");
                 *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
             }
-            st.finished.store(true, Ordering::Relaxed);
+            st.complete();
         };
         #[cfg(test)]
         let started = if test_gate::take_fail_spawn() {
@@ -814,12 +847,12 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         if let Err(e) = started {
             // never started: not left "running", and the background build it was to replace carries on
             // (CodeRabbit on #3077)
-            state.finished.store(true, Ordering::Relaxed);
+            state.complete();
             s.preview_build = previous;
             return Err(bad(C, format!("could not start: {e}")));
         }
-        if let Some(cancel) = gives_way {
-            cancel.store(true, Ordering::Relaxed);
+        if let Some(previous) = gives_way {
+            previous.cancel_if_running();
         }
         return Ok(state.json());
     }
@@ -1023,10 +1056,8 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("library.cancelPreviews", "Cancel Preview Build", [], None, "{}", always, |s, _| {
-            if let Some(b) = &s.preview_build
-                && b.running()
-            {
-                b.cancel.store(true, Ordering::Relaxed);
+            if let Some(b) = &s.preview_build {
+                b.cancel_if_running();
             }
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
         }),
@@ -1037,7 +1068,7 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use serde_json::json;
 
-    use super::{jobs_for, run_photo};
+    use super::{PreviewBuild, jobs_for, run_photo};
     use crate::Session;
     use crate::media::SourceRef;
 
@@ -1089,5 +1120,24 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+
+    #[test]
+    fn completion_and_cancellation_have_one_terminal_winner() {
+        // The caller observes a running build, then the worker completes before cancellation is
+        // accepted: completion wins, and the late request cannot change its outcome.
+        let completed = PreviewBuild::default();
+        assert!(completed.running());
+        completed.complete();
+        assert!(!completed.accept_cancellation());
+        assert!(!completed.ended_cancelled());
+        assert!(!completed.cancel.load(std::sync::atomic::Ordering::Relaxed));
+        // The opposite interleaving: cancellation wins, and completion only releases the worker.
+        let cancelled = PreviewBuild::default();
+        assert!(cancelled.accept_cancellation());
+        cancelled.complete();
+        assert!(cancelled.ended_cancelled());
+        assert!(cancelled.cancel.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!cancelled.running());
     }
 }

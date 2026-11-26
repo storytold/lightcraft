@@ -383,6 +383,37 @@ fn an_automatic_stop_keeps_its_reason_when_settings_change_before_harvest() {
 }
 
 #[test]
+fn the_first_automatic_stop_reason_wins_when_two_conditions_arrive_before_harvest() {
+    let (mut s, root, ids) = library("prep-first-stop-reason", 2);
+    s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"scope": "marked"}}})).unwrap();
+    s.execute("photo.rate", &json!({"ids": [ids[0]], "rating": 1})).unwrap();
+    use crate::cmd::previews::test_gate::{self, PreviewGate, ReleaseOnDrop};
+    let gate = PreviewGate::new();
+    test_gate::install(gate.clone());
+    let _release = ReleaseOnDrop(gate.clone());
+    let mode = crate::prep::Mode::Library;
+    for k in 0..3 {
+        s.prep_tick(mode, Some(ids[k % ids.len()]), false);
+    }
+    let b = s.preview_build.clone().expect("the background pass started");
+    assert!(gate.wait_entered(1), "the worker is held through both stop conditions");
+    assert!(b.running());
+    // Another marked photo changes the view, then preparation is switched off before the worker ends.
+    s.execute("photo.rate", &json!({"ids": [ids[1]], "rating": 1})).unwrap();
+    s.prep_tick(mode, Some(ids[1]), false);
+    s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"previews": false}}})).unwrap();
+    s.prep_tick(mode, Some(ids[1]), false);
+    assert!(b.running(), "the second stop also arrived while the worker was held");
+    gate.release();
+    assert!(wait_finished(&b));
+    s.prep_tick(mode, Some(ids[1]), false);
+    let last = s.prep_json()["last"].clone();
+    assert_eq!(last["outcome"], "stopped", "{last}");
+    assert_eq!(last["reason"], "viewChanged", "the second stop must not replace the first reason: {last}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn the_last_background_preparation_reports_an_empty_scope() {
     let (mut s, root, ids) = library("prep-last-empty", 2);
     s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"scope": "marked"}}})).unwrap();

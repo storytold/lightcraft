@@ -343,7 +343,7 @@ fn last_build_json(build: &PreviewBuild, reason: &str) -> Value {
     let done = build.done.load(Ordering::Relaxed);
     let skipped = build.skipped.load(Ordering::Relaxed) + build.shared.load(Ordering::Relaxed);
     let failed = build.failed.load(Ordering::Relaxed);
-    let outcome = if build.cancel.load(Ordering::Relaxed) {
+    let outcome = if build.ended_cancelled() {
         "stopped"
     } else if failed > 0 || build.error().is_some() {
         "failed"
@@ -387,22 +387,24 @@ impl Session {
         if let Some(b) = self.prep.build.clone() {
             if b.running() {
                 if !wanted {
-                    b.cancel.store(true, Ordering::Relaxed);
-                    self.prep.stop_reason = Some("switchedOff");
+                    if b.cancel_if_running() {
+                        self.prep.stop_reason.get_or_insert("switchedOff");
+                    }
                 } else if self.prep.started_for.is_some_and(|sig| sig != signature(&self.visible_cloned(), self, want.scope)) {
                     // another view (a folder, a filter, another library): this build's photos are
                     // not the ones shown; stopped, and the view now shown is prepared in its place
                     // (not counted as stopped by the user)
-                    b.cancel.store(true, Ordering::Relaxed);
-                    self.prep.stop_reason = Some("viewChanged");
-                    self.prep.started_for = None;
+                    if b.cancel_if_running() {
+                        self.prep.stop_reason.get_or_insert("viewChanged");
+                        self.prep.started_for = None;
+                    }
                 } else if let Some(id) = at {
                     b.focus_on(id, backward);
                 }
                 return;
             }
             let mine = self.preview_build.as_ref().is_some_and(|p| Arc::ptr_eq(p, &b));
-            let cancelled = b.cancel.load(Ordering::Relaxed);
+            let cancelled = b.ended_cancelled();
             let reason = match self.prep.stop_reason.take() {
                 Some(reason) => reason,
                 None if !cancelled => "completed",
@@ -535,6 +537,17 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_late_cancel_flag_does_not_rewrite_a_completed_build() {
+        let build = PreviewBuild::default();
+        build.done.store(1, Ordering::Relaxed);
+        build.finished.store(true, Ordering::Relaxed);
+        // The activity row's flag can arrive after completion; the terminal result must not change.
+        build.cancel.store(true, Ordering::Relaxed);
+        let last = last_build_json(&build, "completed");
+        assert_eq!(last["outcome"], "built", "{last}");
+    }
 
     #[test]
     fn a_patch_changes_only_what_it_names_and_is_kept_in_range() {
