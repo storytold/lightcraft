@@ -55,12 +55,12 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
-| Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 86 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 420 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.2% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -540,6 +540,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-VIEW-EDIT | Edit Panel | P0 | ✅ | `cmd:panel.edit` | |
 | MENU-VIEW-FULLSCREENPREVIEW | Full Screen Preview | P1 | ✅ | `cmd:view.fullScreenPreview` | |
 | MENU-VIEW-LIGHTSOUT | Lights Out | P2 | ✅ | `cmd:view.lightsOut` | everything but the photo veiled; panels stay put |
+| LR-VIEW-LOUPE-BG | Loupe background colour | P2 | ✅ | `cmd:view.loupeBackground`, `crates/ui-egui/src/panels/detail.rs` | Theme Color (default), Black, Dark/Medium/Light Gray, White #FFFFFF; View menu and right-click around the photo; full screen follows it |
 | MENU-VIEW-ENTERFULLSCREEN | Enter Full Screen | P1 | ✅ | `cmd:view.enterFullScreen` | |
 | MENU-VIEW-PHOTOSPANEL | Show/Hide photos panel | P0 | ✅ | `cmd:view.leftPanel` | |
 | MENU-VIEW-FILMSTRIP | Show/Hide filmstrip | P0 | ✅ | `cmd:view.filmstrip` | |
@@ -807,6 +808,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | LR-VIEW-LOUPE-BG: new row, ✅ (View ▸ Loupe Background and the right-click menu around the photo: Theme Color, Black, Dark/Medium/Light Gray, White) |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-23 | minor | LR-BEHAV-RENDER-FIDELITY, LR-EDIT-LIGHT-SHADOWS, LR-EDIT-EFFECTS-TEXTURE, LR-EDIT-COLOR-GRADING, LRC-DEV-PROCESS: process V13 eases global Shadows off at large amounts, negative Texture and the Global grading wheel act less, fitted to Lightroom exports of real edits (#523); statuses and counts unchanged |
 | 2026-11-24 | minor | LR-REM-HEAL, LR-REM-CLONE, LRC-DEV-PROCESS: process V14 pins Heal and Remove spots to the photo on the spot's edge (membrane fill of the log ratio), matches the source's grain to its surroundings and reads every spot's source at whole pixels; statuses and counts unchanged |

@@ -425,13 +425,11 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     if let Some(mut canvas) = canvas {
         let ui = &mut canvas;
         crate::panels::bottombar::show(app, ui);
-        let bg = if matches!(
-            app.ui.view,
-            crate::state::ViewMode::Detail | crate::state::ViewMode::Compare | crate::state::ViewMode::Survey | crate::state::ViewMode::Reference
-        ) {
-            t.canvas
-        } else {
-            t.grid_bg
+        let bg = match app.ui.view {
+            // View ▸ Loupe Background: the colour behind the photo in the Detail view
+            crate::state::ViewMode::Detail => app.ui.settings.loupe_background.color().unwrap_or(t.canvas),
+            crate::state::ViewMode::Compare | crate::state::ViewMode::Survey | crate::state::ViewMode::Reference => t.canvas,
+            _ => t.grid_bg,
         };
         crate::panels::compare::prepare(app);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| match app.ui.view {
