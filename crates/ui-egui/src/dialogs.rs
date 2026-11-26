@@ -1897,7 +1897,7 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     ui.add_space(6.0);
     if editing.is_none() {
         if let Some(p) = parent {
-            let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
+            let r = ui.checkbox(inside, crate::panels::keyword_list::put_inside_label(p));
             crate::widgets::register(ui, "check:keywordInside", r.rect);
         }
         let n = app.session.selection.ids.len();
@@ -2003,9 +2003,9 @@ fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the MovePhotos dialog.
 fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::MovePhotos { ids, name, dont_ask, .. } = dlg else { return };
-    let n = ids.len();
-    ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
+    let Dialog::MovePhotos { name, files, dont_ask, .. } = dlg else { return };
+    let n = *files;
+    ui.label(crate::i18n::tr_format!("Move {n} file{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);
     let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));
