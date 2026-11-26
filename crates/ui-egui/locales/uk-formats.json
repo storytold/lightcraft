@@ -329,6 +329,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Він повертається до себе через альбом «{}»: змініть правила одного з альбомів у циклі (Редагувати смарт-альбом…)",
   "Add {n} photo{} to “{}”": "Додати до «{1}» фото: {n}{0:.0}",
   "{n} already there": "{n} уже там",
   "Add “{keyword}” to {n} photo{}": "Додати «{keyword}» до фото: {n}{:.0}",

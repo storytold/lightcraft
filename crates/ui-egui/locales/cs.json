@@ -2527,6 +2527,8 @@
   "Get Started": "Začít",
   "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
   "Keywords and presets apply to new files only, not to photos already in Local": "Klíčová slova a předvolby se použijí jen u nových souborů, ne u fotografií, které už jsou v Místních souborech",
+  "This album is in a loop, so it shows nothing": "Toto album je ve smyčce, a proto nic nezobrazuje",
+  "It tests itself: change its rules (Edit Smart Album…)": "Testuje samo sebe: změňte jeho pravidla (Upravit inteligentní album…)",
   "Can't add to an album folder": "Nelze přidat do složky alb",
   "An album folder holds albums, not photos: drop on an album inside it": "Složka alb obsahuje alba, ne fotografie: pusťte je na album uvnitř",
   "Can't add to a smart album": "Nelze přidat do inteligentního alba",
@@ -2548,5 +2550,11 @@
   "Stack — click to collapse (S)": "Sada — kliknutím sbalíte (S)",
   "Virtual copy": "Virtuální kopie",
   "Right-click ▸ Locate Missing File… to find it again.": "Klikněte pravým tlačítkem → Najít chybějící soubor… a najděte jej znovu.",
-  "Right-click ▸ Reload from Disk to try again.": "Klikněte pravým tlačítkem → Znovu načíst z disku a zkuste to znovu."
+  "Right-click ▸ Reload from Disk to try again.": "Klikněte pravým tlačítkem → Znovu načíst z disku a zkuste to znovu.",
+  "Album name (empty outside an album view)": "Název alba (prázdné mimo zobrazení alba)",
+  "Export date (YYYYMMDD)": "Datum exportu (YYYYMMDD)",
+  "Export time (HHMM)": "Čas exportu (HHMM)",
+  "Insert variable": "Vložit proměnnou",
+  "Insert…": "Vložit…",
+  "none  ({album}, {date}, {hour})": "žádné  ({album}, {date}, {hour})"
 }

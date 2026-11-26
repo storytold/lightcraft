@@ -2759,6 +2759,8 @@
   "Its templates move to User Templates.": "Các mẫu trong đó sẽ được chuyển vào Mẫu người dùng.",
   "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
   "Keywords and presets apply to new files only, not to photos already in Local": "Từ khóa và cài đặt sẵn chỉ áp dụng cho tệp mới, không áp dụng cho ảnh đã có trong Cục bộ",
+  "This album is in a loop, so it shows nothing": "Album này nằm trong một vòng lặp nên không hiển thị gì",
+  "It tests itself: change its rules (Edit Smart Album…)": "Album này tự kiểm tra chính nó: hãy đổi quy tắc của nó (Chỉnh sửa album thông minh…)",
   "Filter settings": "Lọc cài đặt",
   "No setting matches what is typed.": "Không có cài đặt nào khớp với nội dung đã nhập.",
   "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Hãy thử một từ hoặc một phần của từ: tên các tab và mục, nhãn và phần giải thích đều được tìm.",
@@ -2786,5 +2788,11 @@
   "Stack — click to expand (S)": "Chồng — nhấp để mở rộng (S)",
   "Stars on hover": "Sao khi rê chuột",
   "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Sao khi rê chuột: cờ và nhãn màu luôn hiển thị; sao và dấu đã chỉnh sửa xuất hiện khi ảnh được rê chuột qua hoặc được chọn.",
-  "Virtual copy": "Bản sao ảo"
+  "Virtual copy": "Bản sao ảo",
+  "Album name (empty outside an album view)": "Tên album (trống ngoài chế độ xem album)",
+  "Export date (YYYYMMDD)": "Ngày xuất (YYYYMMDD)",
+  "Export time (HHMM)": "Giờ xuất (HHMM)",
+  "Insert variable": "Chèn biến",
+  "Insert…": "Chèn…",
+  "none  ({album}, {date}, {hour})": "không có  ({album}, {date}, {hour})"
 }

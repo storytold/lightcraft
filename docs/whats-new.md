@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+### Export subfolder variables
+- The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
@@ -480,6 +482,16 @@
   a keyword a line; LightCraft now reads it as one keyword a line, and repairs libraries that already hold such a
   keyword when they open. A name with a line break in it is drawn on one line in the sidebar and the Keyword List.
 
+### The mask overlay shows when it helps
+- One rule now decides when a mask's overlay covers the photo: when you switch it on with **O** (or the eye by the
+  Masks title), while the pointer is on one of the mask's parts (the rows under its name) or its pin, or by itself for a mask that
+  has no settings yet, so you see what it selects. The pointer on the mask's own row shows nothing, so its eye
+  switches the effect on and off with nothing over the photo. A mask with settings (its own or a preset's) never shows the overlay by itself, so you can
+  judge its effect: picking, creating, duplicating or adding to such a mask no longer covers the photo. While a
+  slider is at work nothing covers the photo, not even an overlay switched on with O; it comes back when you let go.
+  During a mask drag or a brush stroke, hovering shows no overlay; an overlay switched on with O, or a mask without
+  settings, keeps showing what it selects. While an Object click or a description is still being computed, no stand-in
+  overlay shows.
 ### Import rename numbering stops safely at its limit
 - Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
   reported as failed with guidance to lower `renameStart` or leave `rename` blank; completed transfers stay
@@ -685,6 +697,18 @@
   white balance.) On a test library of 100,000 photos, 90 % unedited JPEGs, 8 % raws with one as-shot white balance
   and 2 % edited, a photo takes about 2.8 kB where it took 4.4 kB (285 MB instead of 441 MB). Nothing changes on
   screen, and the library's files are byte for byte what they were, so earlier versions open them as before.
+### An album caught in a loop is empty, and says so
+- A smart album that tests another album, which tests it back (or that tests itself), used to show a share of
+  its photos, and which photos depended on the album you asked about. Now every album on such a loop shows no
+  photos, however you look at it: in the grid, in the count beside it in the sidebar, and in an Album rule of
+  another smart album.
+- The empty album says why instead of "No photos": "This album is in a loop, so it shows nothing", then the album it
+  loops through and where to fix it (Edit Smart Album…). The row in the sidebar keeps its ⚠, and hovering it says the
+  same.
+- An album that only tests a looping album is not on the loop: it keeps working, and sees the looping album as empty
+  (so an Album rule set to "isn't" that album matches every photo). Change the rules of one album on the loop and its albums hold
+  their photos again.
+- A library that already holds such a loop opens as before; only what the albums on it show changes.
 ## 2026-10-23
 
 ### AI Denoise works out of the box

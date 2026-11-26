@@ -2687,6 +2687,8 @@
   "Next": "Далее",
   "Get Started": "Начать",
   "Keywords and presets apply to new files only, not to photos already in Local": "Ключевые слова и пресеты применяются только к новым файлам, а не к фото, которые уже есть в «Локальных»",
+  "This album is in a loop, so it shows nothing": "Этот альбом попал в цикл, поэтому ничего не показывает",
+  "It tests itself: change its rules (Edit Smart Album…)": "Он проверяет сам себя: измените его условия (Изменить смарт-альбом…)",
   "Can't add to an album folder": "Нельзя добавить в папку альбомов",
   "An album folder holds albums, not photos: drop on an album inside it": "В папке альбомов лежат альбомы, а не фото: бросьте на альбом внутри неё",
   "Can't add to a smart album": "Нельзя добавить в смарт-альбом",
@@ -2708,5 +2710,11 @@
   "Stack — click to collapse (S)": "Стопка — щёлкните, чтобы свернуть (S)",
   "Virtual copy": "Виртуальная копия",
   "Right-click ▸ Locate Missing File… to find it again.": "Щёлкните правой кнопкой → Указать отсутствующий файл…, чтобы найти его снова.",
-  "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку."
+  "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку.",
+  "Album name (empty outside an album view)": "Название альбома (пусто вне просмотра альбома)",
+  "Export date (YYYYMMDD)": "Дата экспорта (YYYYMMDD)",
+  "Export time (HHMM)": "Время экспорта (HHMM)",
+  "Insert variable": "Вставить переменную",
+  "Insert…": "Вставить…",
+  "none  ({album}, {date}, {hour})": "нет  ({album}, {date}, {hour})"
 }

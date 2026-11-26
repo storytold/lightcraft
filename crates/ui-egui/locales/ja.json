@@ -2480,6 +2480,8 @@
   "Next": "次へ",
   "Get Started": "始める",
   "Keywords and presets apply to new files only, not to photos already in Local": "キーワードとプリセットは新しいファイルにのみ適用され、すでにローカルにある写真には適用されません",
+  "This album is in a loop, so it shows nothing": "このアルバムは循環しているため、何も表示されません",
+  "It tests itself: change its rules (Edit Smart Album…)": "自分自身を条件にしています。条件を変更してください（スマートアルバムを編集…）",
   "Can't add to an album folder": "アルバムフォルダには追加できません",
   "An album folder holds albums, not photos: drop on an album inside it": "アルバムフォルダに入れられるのはアルバムだけです：中のアルバムにドロップしてください",
   "Can't add to a smart album": "スマートアルバムには追加できません",
@@ -2501,5 +2503,11 @@
   "Stack — click to collapse (S)": "スタック — クリックして折りたたむ (S)",
   "Virtual copy": "仮想コピー",
   "Right-click ▸ Locate Missing File… to find it again.": "右クリック → 見つからないファイルを指定… で、ファイルをもう一度指定できます。",
-  "Right-click ▸ Reload from Disk to try again.": "右クリック → ディスクから再読み込み で、もう一度試せます。"
+  "Right-click ▸ Reload from Disk to try again.": "右クリック → ディスクから再読み込み で、もう一度試せます。",
+  "Album name (empty outside an album view)": "アルバム名（アルバム表示外では空）",
+  "Export date (YYYYMMDD)": "書き出し日 (YYYYMMDD)",
+  "Export time (HHMM)": "書き出し時刻 (HHMM)",
+  "Insert variable": "変数を挿入",
+  "Insert…": "挿入…",
+  "none  ({album}, {date}, {hour})": "なし  ({album}, {date}, {hour})"
 }

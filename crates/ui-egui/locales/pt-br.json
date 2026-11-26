@@ -2325,6 +2325,8 @@
   "Next": "Próximo",
   "Get Started": "Começar",
   "Keywords and presets apply to new files only, not to photos already in Local": "Palavras-chave e predefinições valem só para arquivos novos, não para fotos que já estão em Local",
+  "This album is in a loop, so it shows nothing": "Este álbum está em um ciclo, então não mostra nada",
+  "It tests itself: change its rules (Edit Smart Album…)": "Ele testa a si mesmo: mude as regras dele (Editar álbum inteligente…)",
   "Can't add to an album folder": "Não é possível adicionar a uma pasta de álbuns",
   "An album folder holds albums, not photos: drop on an album inside it": "Uma pasta de álbuns contém álbuns, não fotos: solte em um álbum dentro dela",
   "Can't add to a smart album": "Não é possível adicionar a um álbum inteligente",
@@ -2346,5 +2348,11 @@
   "Stack — click to collapse (S)": "Pilha — clique para recolher (S)",
   "Virtual copy": "Cópia virtual",
   "Right-click ▸ Locate Missing File… to find it again.": "Clique com o botão direito → Localizar arquivo ausente… para encontrá-lo de novo.",
-  "Right-click ▸ Reload from Disk to try again.": "Clique com o botão direito → Recarregar do disco para tentar de novo."
+  "Right-click ▸ Reload from Disk to try again.": "Clique com o botão direito → Recarregar do disco para tentar de novo.",
+  "Album name (empty outside an album view)": "Nome do álbum (vazio fora de uma visualização de álbum)",
+  "Export date (YYYYMMDD)": "Data de exportação (YYYYMMDD)",
+  "Export time (HHMM)": "Hora de exportação (HHMM)",
+  "Insert variable": "Inserir variável",
+  "Insert…": "Inserir…",
+  "none  ({album}, {date}, {hour})": "nenhum  ({album}, {date}, {hour})"
 }
