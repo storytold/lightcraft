@@ -7,7 +7,8 @@ use crate::widgets::slider_salted;
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step, and a typed value, a key
 /// step or a reset (which begin and stop at once) is one too. An abandoned drag cancels the interaction it began,
-/// which restores the settings from before it without an undo step.
+/// which restores the settings from before it without an undo step — unless an edit was committed to the photo
+/// during the drag, which stays and is not restored over.
 pub fn apply_slider_out(
     app: &mut LightcraftApp,
     spec: &ControlSpec,

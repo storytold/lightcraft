@@ -2312,6 +2312,56 @@ mod interaction_edit_metadata {
         assert_eq!(s.undo.len(), undo);
     }
 
+    /// An edit committed while a drag is open (Reset Edits, say) is newer than the drag's snapshot,
+    /// and the drag keeps previewing on top of it: cancelling gives that preview up and comes back
+    /// to what the edit left, not to the settings from before the drag (CodeRabbit #4750).
+    #[test]
+    fn cancel_after_a_committed_edit_drops_a_later_preview() {
+        let (mut s, ids) = fixture(None);
+        // a committed edit the drag starts from, so the reset below is a third, distinct state
+        set(&mut s, 1.75);
+        let before = records(&s, ids);
+        let (undo, redo) = (s.undo.len(), s.redo.len());
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        set(&mut s, 0.25);
+        assert_eq!(s.undo.len(), undo, "live updates are not Undo entries");
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = records(&s, ids);
+        assert_ne!(reset[0]["develop"], before[0]["develop"], "the committed edit actually replaced the settings");
+        assert_eq!(s.undo.len(), undo + 1, "Reset is one committed step");
+        // the drag goes on: its preview is not the photo's state, and no command saw it
+        set(&mut s, 0.5);
+        assert_ne!(records(&s, ids)[0]["develop"], reset[0]["develop"], "the drag previewed on top of the reset");
+        assert_eq!(s.undo.len(), undo + 1, "a live preview adds no step");
+        s.execute("develop.cancelInteraction", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), reset, "Cancel drops the later preview and keeps what the committed edit left");
+        assert_eq!((s.undo.len(), s.redo.len()), (undo + 1, redo), "Cancel adds neither Undo nor Redo entries");
+        assert!(s.interaction.is_none());
+    }
+
+    /// Releasing a drag that an edit was committed during commits the drag's own change as a step
+    /// from that edit, so Undo goes back to it rather than over it (CodeRabbit #4750).
+    #[test]
+    fn release_after_a_committed_edit_steps_back_to_it() {
+        let (mut s, ids) = fixture(None);
+        set(&mut s, 1.75);
+        let undo = s.undo.len();
+        s.execute("develop.beginInteraction", &json!({"label":"Exposure"})).unwrap();
+        set(&mut s, 0.25);
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = records(&s, ids);
+        let reset_develop = (*s.develop_of(ids[0]).unwrap()).clone();
+        set(&mut s, 0.5);
+        let preview = (*s.develop_of(ids[0]).unwrap()).clone();
+        assert_ne!(preview, reset_develop, "the drag previewed on top of the reset");
+        s.execute("develop.endInteraction", &json!({})).unwrap();
+        assert_eq!(*s.develop_of(ids[0]).unwrap(), preview, "release keeps the drag's own change");
+        assert_eq!(s.undo.len(), undo + 2, "the committed edit and the drag are two steps");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(records(&s, ids), reset, "Undo goes back to what the committed edit left, not before the drag");
+        assert!(s.interaction.is_none());
+    }
+
     #[test]
     fn release_undo_redo_restore_prior_some_timestamp_and_complete_photos() {
         release_undo_redo(Some(PRIOR));
