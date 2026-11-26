@@ -3,19 +3,25 @@ use super::ui_commands::{UI_COMMANDS, language_from_command};
 use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel, Value, ViewMode, Zoom, json, thumb_size_view};
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
-    if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
-        app.ui.right = RightPanel::None;
+    // toggled off: back to exactly what the right column showed before (in the same frame: no flash, no jump),
+    // closed when it was closed (note 21)
+    let exposed = crate::docking::exposed(app, crate::docking::Panel::Tools);
+    let tool_before = app.ui.tool.clone();
+    let on = app.ui.toggle_panel(p, exposed);
+    // toggled off: the panel put back brings its own tool back (Masking's Brush, Remove's Heal or Clone)
+    let tool_restored = !on && app.ui.tool != tool_before;
+    if !on {
         app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
-        app.ui.right = p;
         app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
         }
     }
-    if p != RightPanel::Masking && app.ui.tool != "wbPicker" {
+    if !tool_restored && p != RightPanel::Masking && app.ui.tool != "wbPicker" {
         app.ui.tool.clear();
     }
+    app.ui.note_right();
     let _ = app.session.end_interaction();
 }
 
@@ -30,20 +36,26 @@ fn remove_brush(app: &mut LightcraftApp) {
 
 /// `[` / `]` (size ×`k`) and ⇧`[` / ⇧`]` (feather +`df`) for the brush in use: the Remove tool's
 /// (and its selected spot's) or the Masking brush's.
-fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
+pub(crate) fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
+    let v = resize_brush(app, k, df);
+    if app.ui.right == RightPanel::Remove && app.session.active_spot.is_some() {
+        let mut p = json!({});
+        if k != 1.0 {
+            p["size"] = json!(app.ui.remove_size);
+        }
+        if df != 0.0 {
+            p["feather"] = json!(app.ui.remove_feather);
+        }
+        let _ = app.run("spot.update", p);
+    }
+    v
+}
+
+/// The brush in use alone, size ×`k` and feather +`df`, for the next stroke: no spot changes.
+pub(crate) fn resize_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
     if app.ui.right == RightPanel::Remove {
         app.ui.remove_size = (app.ui.remove_size * k).clamp(0.001, 0.25);
         app.ui.remove_feather = (app.ui.remove_feather + df).clamp(0.0, 100.0);
-        if app.session.active_spot.is_some() {
-            let mut p = json!({});
-            if k != 1.0 {
-                p["size"] = json!(app.ui.remove_size);
-            }
-            if df != 0.0 {
-                p["feather"] = json!(app.ui.remove_feather);
-            }
-            let _ = app.run("spot.update", p);
-        }
         json!({"size": app.ui.remove_size, "feather": app.ui.remove_feather})
     } else {
         app.ui.brush_size = (app.ui.brush_size * k).clamp(0.002, 0.5);
@@ -661,6 +673,9 @@ fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             if app.ui.right != RightPanel::None && crate::docking::exposed(app, crate::docking::Panel::Tools) {
                 app.ui.right_hidden = app.ui.right;
                 app.ui.right = RightPanel::None;
+                // noted now, not at the frame's end: a command after it in the same frame (a batch of control
+                // requests) opens a tool on the hidden column, not on the panel F8 hid
+                app.ui.note_right();
                 if app.ui.tool != "wbPicker" {
                     app.ui.tool.clear();
                 }
@@ -671,6 +686,9 @@ fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                     p => p,
                 };
                 app.ui.right = p;
+                // (a tool shown again this way still closes to the panel before it; noted now, as for hiding)
+                app.ui.right_shown_by_f8 = Some(p);
+                app.ui.note_right();
                 if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
                     app.ui.view = ViewMode::Detail;
                 }
@@ -1056,6 +1074,10 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             panel(app, ctx, RightPanel::Activity, "History");
             Ok(Value::Null)
         }
+        "panel.bursts" => {
+            panel(app, ctx, RightPanel::Bursts, "Bursts");
+            Ok(Value::Null)
+        }
         "panel.presets" => {
             app.ui.presets = !app.ui.presets || !crate::docking::exposed(app, crate::docking::Panel::Presets);
             if app.ui.presets && app.ui.view != ViewMode::Detail {
@@ -1064,7 +1086,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "tool.done" => {
-            // Return commits a tool panel (crop, remove, red eye, masking): back to Edit
+            // Return commits a tool panel (crop, remove, red eye, masking): back to the panel before it
             use RightPanel::*;
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
                 if app.ui.right == Crop {
@@ -1072,7 +1094,8 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 }
                 let _ = app.session.end_interaction();
                 app.ui.tool.clear();
-                app.ui.right = Edit;
+                // back to the panel shown before the tool (hidden if it was)
+                app.ui.right = app.ui.leave_tool();
             }
             Ok(Value::Null)
         }
@@ -1350,7 +1373,14 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, stack_groups: app.ui.cull_stack, burst_gap, similarity });
+            app.ui.dialog = Some(Dialog::Cull {
+                reject_below: 0.0,
+                pick_best: true,
+                stack_groups: app.ui.cull_stack,
+                burst_gap,
+                similarity,
+                reset_bursts: false,
+            });
             Ok(Value::Null)
         }
         "app.whatsNew" => {

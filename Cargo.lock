@@ -4225,6 +4225,7 @@ name = "lightcraft-gpu"
 version = "0.21.1"
 dependencies = [
  "bytemuck",
+ "candle-core",
  "lightcraft-color",
  "lightcraft-denoise",
  "lightcraft-develop",
@@ -4234,6 +4235,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",
+ "lightcraft-segment",
  "lightcraft-testkit",
  "log",
  "pollster 1.0.1",

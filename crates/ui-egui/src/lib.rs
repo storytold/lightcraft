@@ -245,6 +245,9 @@ pub struct LightcraftApp {
     pub(crate) missing_count_test_delay: Option<std::time::Duration>,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
+    /// The frame being laid out is the offscreen one of a headless screenshot: it has no pointer of
+    /// its own, so it must not end a drag the window's pointer is still holding.
+    drawing_offscreen: bool,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
     /// A gesture was canceled after its synthetic pointer press reached egui. The next
@@ -622,6 +625,11 @@ pub fn split_presets(dropped: Vec<String>) -> (Vec<String>, Vec<String>) {
 #[derive(Default)]
 pub struct Caches {
     keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    /// The Bursts panel's bursts, by the view's generation.
+    bursts: Option<(u64, panels::bursts::Shown)>,
+    /// Every burst of the library (pick first), by the view's generation: what a drag in the
+    /// Bursts panel compares with, so a frame of the drag builds no index of its own.
+    burst_index: Option<(u64, panels::bursts::All)>,
     /// The Keywording box's read-only names (with containing keywords, or Will Export), by library
     /// revision, selection and view.
     keyword_names: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,

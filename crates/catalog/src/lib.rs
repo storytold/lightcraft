@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bursts;
 pub mod dates;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
@@ -687,7 +688,10 @@ impl Catalog {
 
     fn photo_mut(&mut self, id: PhotoId) -> Result<&mut Photo> {
         self.touch(id);
-        self.photos.get_mut(&id).map(Arc::make_mut).ok_or(CatalogError::NoPhoto(id))
+        let p = self.photos.get_mut(&id).map(Arc::make_mut).ok_or(CatalogError::NoPhoto(id))?;
+        // (`Arc::make_mut` copies a photo others hold: the text kept for it goes with the copy)
+        self.index.text_moved(id, p);
+        Ok(p)
     }
 
     /// The op being applied changes photo `id` (or adds or removes it).
@@ -837,6 +841,29 @@ impl Catalog {
     }
 
     fn apply_inner(&mut self, op: Op) -> Result<Op> {
+        // a photo that comes, goes, is deleted or restored, is imported from Local or gets other content can change
+        // whether the photos with its content have the same content as another one (`index::content_key`), when
+        // anything asks
+        let photo = match &op {
+            Op::AddPhoto { photo } => Some(photo.id),
+            Op::RemovePhoto { id } | Op::SetDeleted { id, .. } | Op::SetLocal { id, .. } | Op::SetContent { id, .. } => Some(*id),
+            _ => None,
+        }
+        .filter(|_| self.follows_contents());
+        let albums = matches!(op, Op::AddAlbum { .. } | Op::RemoveAlbum { .. } | Op::SetAlbumRules { .. });
+        let before = photo.and_then(|id| self.content_of(id));
+        let inv = self.apply_op(op)?;
+        if let Some(id) = photo {
+            let after = self.content_of(id);
+            self.content_moved(id, before, after);
+        }
+        if albums {
+            self.index.albums_changed();
+        }
+        Ok(inv)
+    }
+
+    fn apply_op(&mut self, op: Op) -> Result<Op> {
         // An op that changes one photo says which (`photo_mut`, and adding or removing it below). Most other kinds
         // can change what any photo matches or where it sorts: an album's photos or rules, a stack. The keyword
         // list changes only lists of keywords. Listed kind by kind, so a new one has to be put on one side.
@@ -893,11 +920,13 @@ impl Catalog {
                 self.next_photo = self.next_photo.max(id.0.saturating_add(1));
                 self.index.file_changed(id, None, file_path(&photo.source));
                 self.photos.insert(id, Arc::new(*photo));
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
                 Op::RemovePhoto { id }
             }
             Op::RemovePhoto { id } => {
                 let p = self.photos.remove(&id).ok_or(CatalogError::NoPhoto(id))?;
                 self.index.file_changed(id, file_path(&p.source), None);
+                self.index.text_changed(id, None);
                 // album membership is restored by the batch the engine builds (see `delete_permanently`)
                 Op::AddPhoto { photo: Box::new((*p).clone()) }
             }
@@ -925,7 +954,9 @@ impl Catalog {
             }
             Op::SetMeta { id, meta } => {
                 let p = self.photo_mut(id)?;
-                Op::SetMeta { id, meta: Box::new(std::mem::replace(&mut p.meta, *meta)) }
+                let old = std::mem::replace(&mut p.meta, *meta);
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
+                Op::SetMeta { id, meta: Box::new(old) }
             }
             Op::SetDeleted { id, deleted } => {
                 let p = self.photo_mut(id)?;
@@ -1113,7 +1144,9 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
-                Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
+                let old = Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format };
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
+                old
             }
             Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
                 let p = self.photo_mut(id)?;
@@ -1129,7 +1162,7 @@ impl Catalog {
             }
             Op::SetEmbeddedLens { id, lens } => {
                 let p = self.photo_mut(id)?;
-                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens.map(|l| *l)).map(Box::new) }
+                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens) }
             }
             Op::SetAsShotWb { id, wb } => {
                 if wb.is_some_and(|(t, tint)| !(t.is_finite() && tint.is_finite())) {
@@ -1147,7 +1180,9 @@ impl Catalog {
                 }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
-                Op::SetFile { id, file_name: old_name, source: std::mem::replace(&mut p.source, source) }
+                let old = Op::SetFile { id, file_name: old_name, source: std::mem::replace(&mut p.source, source) };
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
+                old
             }
             Op::SetLabelName { label, name } => {
                 let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
@@ -1263,6 +1298,10 @@ impl Catalog {
     /// wrote).
     pub fn repair(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
+        // Photos others hold are copied below (`Arc::make_mut`), which moves them in memory and strands the text kept
+        // for their address ([`index::Indexes`]), and stacks and albums change outside `apply`: nothing derived is
+        // kept across a repair, and the lookups are built again when asked.
+        self.index = index::Indexes::default();
         // Segmentation grids shared by the snapshot this was read from (issue #2154): each
         // reference takes its grid's data, and the table is not kept — a live catalog always
         // stores the data inline, so masks render and serialize without the snapshot's table.
@@ -1373,9 +1412,8 @@ impl Catalog {
             self.next_stack = self.next_stack.max(stack);
         }
         if !changed.is_empty() {
-            // stacks and albums changed outside `apply`: the lookups are built again when asked
-            self.index = index::Indexes::default();
-            // (and what was worked out from the albums, the guard of [`Self::keeps_written_order`] too)
+            // stacks and albums changed outside `apply`: what was worked out from the albums is made again (the guard of
+            // [`Self::keeps_written_order`] too)
             self.plans = PlansMemo::default();
         }
         changed
@@ -1597,6 +1635,8 @@ mod tests_repair;
 mod tests_rule_order;
 #[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_search_text;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]
