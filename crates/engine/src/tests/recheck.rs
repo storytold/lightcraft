@@ -501,6 +501,31 @@ fn undo_of_source_metadata_rejects_a_pending_reload() {
     assert!(out.checked.is_empty());
 }
 
+#[test]
+fn undo_and_redo_only_invalidate_pending_reloads_for_source_names() {
+    use crate::cmd::reload;
+    let mut x = checked_orf("metadata-history-source-names");
+    let id = x.id;
+    let mut meta = x.s.catalog.photo(id).unwrap().meta.clone();
+    meta.camera = "Camera from the previous read".into();
+    meta.make = "Maker from the previous read".into();
+    meta.lens = "Lens from the previous read".into();
+    x.s.commit("Probe-derived metadata", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    let probe = reload::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    for action in ["edit.undo", "edit.redo"] {
+        let items = reload::plan(&mut x.s, &json!({"id": id.0})).unwrap();
+        x.s.execute(action, &json!({})).unwrap();
+        let out = reload::apply(&mut x.s, items, vec![Ok(probe.clone())]).unwrap();
+        assert!(out.checked.is_empty(), "{action} must reject the older source read");
+    }
+    let mut meta = x.s.catalog.photo(id).unwrap().meta.clone();
+    meta.title = "Edited title".into();
+    x.s.commit("Photo title", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    let items = reload::plan(&mut x.s, &json!({"id": id.0})).unwrap();
+    x.s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(reload::apply(&mut x.s, items, vec![Ok(probe)]).unwrap().checked, [id]);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_stamp_only_recheck_keeps_the_face_scan() {

@@ -784,6 +784,14 @@ impl Session {
                 | Op::RemovePhoto { id }
                 | Op::SetAsShotWb { id, .. }
                 | Op::SetEmbeddedLens { id, .. } => invalidated.push(*id),
+                Op::SetMeta { id, meta }
+                    if self
+                        .catalog
+                        .photo(*id)
+                        .is_some_and(|p| p.meta.camera != meta.camera || p.meta.make != meta.make || p.meta.lens != meta.lens) =>
+                {
+                    invalidated.push(*id);
+                }
                 Op::AddPhoto { photo } => invalidated.push(photo.id),
                 Op::Batch { ops } => pending.extend(ops),
                 _ => {}

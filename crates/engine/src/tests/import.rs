@@ -5103,15 +5103,21 @@ fn relink_uses_the_replacement_cameras_white_balance_scale() {
     let mut s = Session::new().with_fs();
     s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
-    s.media.file_probe = Some(std::sync::Arc::new(|_| {
+    s.media.file_probe = Some(std::sync::Arc::new(|path| {
         let mut info = crate::media::ProbeInfo { kind: MediaKind::Raw, format: "ARW".into(), as_shot_wb: Some((4300.0, 7.0)), ..Default::default() };
         info.meta.camera = "SONY ILCA-99M2".into();
+        if path.ends_with("replacement.arw") {
+            info.meta.lens = "Replacement lens".into();
+        }
         Ok(info)
     }));
     s.execute("photo.relink", &json!({"id": id.0, "path": replacement.to_string_lossy()})).unwrap();
     let photo = s.catalog.photo(id).unwrap();
     assert!(photo.develops_raw() && !photo.relative_wb());
     assert_eq!(photo.as_shot_wb, Some((4300.0, 7.0)));
+    assert_eq!(photo.meta.lens, "Replacement lens");
+    s.execute("photo.relink", &json!({"id": id.0, "path": original.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.lens, "Replacement lens", "an empty probe preserves the stored lens");
 }
 
 #[test]
