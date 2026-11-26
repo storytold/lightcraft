@@ -2326,4 +2326,73 @@ pub(crate) const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/data/Mamiya/ZD/RAW_MAMIYA_ZD.MEF",
         "bcd63507c3c4cc3ea1bad2945e3f88cb4677a1a3c762e1acc38df4445714eb7c",
     ),
+    // One CC0 raw.pixls.us file per body, for per-model verification: the tests pin the decoded sensor
+    // hash and check the mosaic against the camera's embedded JPEG.
+    (
+        "nef-nikon-1-s2.nef",
+        "https://raw.pixls.us/data/Nikon/1%20S2/RAW_NIKON_1S2.NEF",
+        "c9a3eac53afb6ff393458f6a389466af05dcce8a32e97725f7aaef543e2894cb",
+    ),
+    ("nef-nikon-d100.nef", "https://raw.pixls.us/data/Nikon/D100/DSC_2376.NEF", "1889abfd1ed64048c90b0c3384e1e0be9bbb021692249427e90848d5d1e9c8f0"),
+    ("nef-nikon-d1x.nef", "https://raw.pixls.us/data/Nikon/D1X/DSC_0494.NEF", "9fabb93479b17c6de96ec5e5247de3b0a0a6e90101a8c8fc03356937af5d7014"),
+    (
+        "nef-nikon-z5-2-lossless.nef",
+        "https://raw.pixls.us/data/NIKON%20CORPORATION/NIKON%20Z5_2/Lossless_compression_FX_1.NEF",
+        "387d613e1f81e43a704bc349d7c64ef297880a8f306b001baf8be39856c532de",
+    ),
+    (
+        "nef-nikon-z6-3-lossless.nef",
+        "https://raw.pixls.us/data/NIKON%20CORPORATION/NIKON%20Z6_3/Nikon_Z6__3_Lossless_compressed_FX.NEF",
+        "17180e80555c149c5954a8a2f09459ede593b49731f1941f7094be105f3520e2",
+    ),
+    (
+        "nrw-nikon-coolpix-p7000.nrw",
+        "https://raw.pixls.us/data/Nikon/Coolpix%20P7000/RAW_NIKON_P7000.NRW",
+        "09165ec1031b36e6ae43f2263b4400ec4d9c3444ae252d258d002f7e96dbea25",
+    ),
+    (
+        "nrw-nikon-coolpix-p7800.nrw",
+        "https://raw.pixls.us/data/Nikon/Coolpix%20P7800/DSCN2039.NRW",
+        "27ac09537dd0f75523864dcf221278e2db354d490534bc13b6eabdc031060e51",
+    ),
+    (
+        "cr2-canon-eos-1d-mark-ii.cr2",
+        "https://raw.pixls.us/data/Canon/EOS-1D%20Mark%20II/RAW_CANON_1DM2.CR2",
+        "aa27b723cbf885acae845331a9b5816abe87d6c1158cf57442cbc0b1defb40b5",
+    ),
+    (
+        "cr2-canon-eos-1d-x.cr2",
+        "https://raw.pixls.us/data/Canon/EOS-1D%20X/RAW_CANON_EOS_1DX.CR2",
+        "a9bc228ad9a00832c173fdc3fcf4a4679cb019d451288f6fcee3002471c73636",
+    ),
+    (
+        "cr2-canon-eos-1ds-mark-iii.cr2",
+        "https://raw.pixls.us/data/Canon/EOS-1Ds%20Mark%20III/RAW_CANON_1DSM3.CR2",
+        "834a4761f4471de64b2541302d291a3affe8a75b7820ecd0d25dcb11def6a96a",
+    ),
+    (
+        "cr2-canon-powershot-g10.cr2",
+        "https://raw.pixls.us/data/Canon/PowerShot%20G10/RAW_CANON_G10.CR2",
+        "207717b321988279062a6623c8f6de53645130755eb3ee77ccb241f06f82138c",
+    ),
+    (
+        "cr2-canon-powershot-s90.cr2",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S90/RAW_CANON_S90.CR2",
+        "aff72063aacf6efb224544a2e62c1edd10b3f50bcf73f2bb0ef5d3f3c6c3d894",
+    ),
+    (
+        "crw-canon-powershot-g2.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20G2/RAW_CANON_G2.CRW",
+        "05bdd52c725dcd1aedb0f642731c7397711bdb91ed596f0bc12e1642b5ece98a",
+    ),
+    (
+        "crw-canon-powershot-pro1.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20Pro1/RAW_CANON_PRO1_ARGB.CRW",
+        "d4a11e5b861f93f10c40d16d3faf5a87682b0cd1793290df8cf188d656b71030",
+    ),
+    (
+        "crw-canon-powershot-s70.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S70/RAW_CANON_S70_SRGB.CRW",
+        "8015f91a4f6d549fc882fe026a831bbf45f033b2b44ba11cb88e8cbf761f4f0e",
+    ),
 ];

@@ -807,6 +807,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | LR-IMP-CAMERA-COVERAGE: 15 more Adobe models verified on one CC0 file each (Nikon 1 S2, D1X, D100, Z 5 II, Z 6 III, COOLPIX P7000 and P7800; Canon EOS-1D Mark II, EOS-1D X, EOS-1Ds Mark III, PowerShot G2, G10, Pro 1, S70 and S90): 573 verified, 649 unverified; 95% use-weighted coverage, ~87% on a verified body; status unchanged (🟡) |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-23 | minor | LR-BEHAV-RENDER-FIDELITY, LR-EDIT-LIGHT-SHADOWS, LR-EDIT-EFFECTS-TEXTURE, LR-EDIT-COLOR-GRADING, LRC-DEV-PROCESS: process V13 eases global Shadows off at large amounts, negative Texture and the Global grading wheel act less, fitted to Lightroom exports of real edits (#523); statuses and counts unchanged |
 | 2026-11-24 | minor | LR-REM-HEAL, LR-REM-CLONE, LRC-DEV-PROCESS: process V14 pins Heal and Remove spots to the photo on the spot's edge (membrane fill of the log ratio), matches the source's grain to its surroundings and reads every spot's source at whole pixels; statuses and counts unchanged |

@@ -72,7 +72,16 @@ fn corpus_raw_decodes() {
         let info = probe_info(&bytes);
         let di = t2.elapsed().as_secs_f64() * 1e3;
         match (&decoded, &info) {
-            (Ok(img), Ok(info)) => assert_eq!(&img.info(), info, "{name}: probe_info differs from decode"),
+            (Ok(img), Ok(info)) => {
+                let (mut decoded_info, mut header_info) = (img.info(), info.clone());
+                if img.format == RawFormat::Cr3 {
+                    // a full CR3 decode adds the white headroom it measures from the samples to
+                    // `baseline_exposure`; the header probe cannot see it (see cr3_variants.rs).
+                    decoded_info.color.baseline_exposure = 0.0;
+                    header_info.color.baseline_exposure = 0.0;
+                }
+                assert_eq!(decoded_info, header_info, "{name}: probe_info differs from decode");
+            }
             (Err(RawError::Unsupported(_)), Err(RawError::Unsupported(_))) => {}
             (d, i) => panic!("{name}: decode {:?} but probe_info {:?}", d.as_ref().err(), i.as_ref().err()),
         }
