@@ -321,3 +321,28 @@ fn mask_and_spot_targets_preserve_explicit_defaults_and_selection_clearing() {
     s.execute("mask.brushStroke", &json!({"points": [[0.5, 0.5]]})).unwrap();
     assert_eq!(s.develop_of(s.active().unwrap()).unwrap().masks.len(), 3);
 }
+
+/// Deleting a mask other than the selected one (the Masks list's right-click ▸ Delete Mask passes its id) moved the
+/// selection onto the last mask; only deleting the selected mask moves it.
+#[test]
+fn deleting_another_mask_keeps_the_selection() {
+    let mut s = Session::with_demo();
+    for _ in 0..5 {
+        s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    }
+    let ids: Vec<u32> = s.develop_of(s.active().unwrap()).unwrap().masks.iter().map(|m| m.id).collect();
+    let &[a, b, c, d, e] = ids.as_slice() else { panic!("five masks: {ids:?}") };
+    assert_eq!(s.active_mask, Some(e));
+    s.execute("mask.delete", &json!({"id": a})).unwrap();
+    assert_eq!(s.active_mask, Some(e), "the selected last mask stays selected");
+    s.execute("mask.select", &json!({"id": b})).unwrap();
+    s.execute("mask.delete", &json!({"id": d})).unwrap();
+    assert_eq!(s.active_mask, Some(b), "the selected first mask stays selected");
+    s.execute("mask.select", &json!({"id": null})).unwrap();
+    s.execute("mask.delete", &json!({"id": c})).unwrap();
+    assert_eq!(s.active_mask, None, "no selection stays no selection");
+    // deleting the selected mask still selects the last one left
+    s.execute("mask.select", &json!({"id": b})).unwrap();
+    s.execute("mask.delete", &json!({})).unwrap();
+    assert_eq!(s.active_mask, Some(e));
+}
