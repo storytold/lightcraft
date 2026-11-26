@@ -626,9 +626,7 @@ fn ticking_a_keyword_keeps_the_list_in_place() {
     for i in 0..40 {
         run(&mut h, "keyword.create", json!({"name": format!("zz{i:02}")}));
     }
-    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
-    let row = rect(&h, "keywordRow:zz30");
-    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -(row.top() - 300.0)}));
+    scroll_row_to(&mut h, "keywordRow:zz30", 300.0);
     assert!(rect(&h, "field:keyword").top() < 0.0, "the box is scrolled out of sight");
     let mut box_moved = false;
     let picked: Vec<String> = (30..36).map(|i| format!("zz{i}")).collect();
@@ -671,9 +669,7 @@ fn ticks_in_quick_succession_land_on_their_rows() {
     for i in 0..40 {
         run(&mut h, "keyword.create", json!({"name": format!("zz{i:02}")}));
     }
-    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
-    let row = rect(&h, "keywordRow:zz30");
-    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -(row.top() - 300.0)}));
+    scroll_row_to(&mut h, "keywordRow:zz30", 300.0);
     let picked: Vec<String> = (30..36).map(|i| format!("zz{i}")).collect();
     for k in &picked {
         // (no settling in between, as a script or a quick hand clicks)
@@ -684,4 +680,77 @@ fn ticks_in_quick_succession_land_on_their_rows() {
     let mut have = keywords_of(&h, ids[0]);
     have.sort();
     assert_eq!(have, picked);
+}
+
+/// Scroll the panel holding the Keyword List until the row `id` is at `y`. Rows out of sight
+/// are not built (issue #4353), so the panel is scrolled down until the row is.
+pub(crate) fn scroll_row_to(h: &mut Headless, id: &str, y: f32) {
+    ask(h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
+    for _ in 0..50 {
+        if let Some(r) = h.app.widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| *r) {
+            ask(h, "ui.scroll", json!({"dx": 0, "dy": -(r.top() - y)}));
+            return;
+        }
+        ask(h, "ui.scroll", json!({"dx": 0, "dy": -200}));
+    }
+    panic!("no {id} after scrolling");
+}
+
+/// The keyword rows built this frame.
+fn keyword_rows(h: &Headless) -> Vec<String> {
+    h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("keywordRow:")).map(str::to_string).collect()
+}
+
+/// A library with `keywords` top-level keywords (six to a photo), its Keyword List open.
+fn many_keywords(keywords: u64) -> Headless {
+    let mut s = lightcraft_engine::Session::new();
+    for i in 0..keywords / 6 {
+        let path = format!("/lightcraft-kw-test/IMG_{i:05}.jpg");
+        let id = lightcraft_catalog::PhotoId(i + 1);
+        let name = format!("IMG_{i:05}.jpg");
+        let mut p = lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path }, &name, "JPEG", 60, 40, "2026-01-01T00:00:00");
+        p.meta.keywords = (0..6).map(|k| format!("Keyword {:05}", i * 6 + k)).collect();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1400.0, 900.0], 1.0);
+    ask(&mut h, "ui.set", json!({"view": "photoGrid", "right": "keywords"}));
+    h
+}
+
+/// Given a library with 3,000 keywords, when the Keyword List is open, then a frame builds only
+/// the few dozen rows near the screen (not all 3,000), and scrolling to the end reaches the last
+/// keyword: the rows out of sight keep their room (issue #4353).
+#[test]
+fn the_keyword_list_builds_only_the_rows_near_the_screen() {
+    const KEYWORDS: u64 = 3000;
+    let mut h = many_keywords(KEYWORDS);
+    let rows = keyword_rows(&h);
+    assert!(!rows.is_empty() && rows.len() < 100, "{} of {KEYWORDS} keyword rows built", rows.len());
+    assert!(rows.contains(&"Keyword 00000".to_string()), "{rows:?}");
+    // all the way down
+    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
+    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -(KEYWORDS as f32) * 40.0}));
+    for _ in 0..60 {
+        h.step();
+    }
+    let rows = keyword_rows(&h);
+    assert!(!rows.is_empty() && rows.len() < 100, "{} of {KEYWORDS} keyword rows built", rows.len());
+    assert!(rows.contains(&format!("Keyword {:05}", KEYWORDS - 1)), "the last keyword is reached: {rows:?}");
+    assert!(!rows.contains(&"Keyword 00000".to_string()), "{rows:?}");
+}
+
+/// Given a keyword's menu open in a long list, when the list scrolls a few rows under it, then
+/// the menu still acts on that keyword: a row is known by its keyword, not by where it falls among
+/// the rows built (which change as the list scrolls).
+#[test]
+fn a_keywords_menu_stays_with_it_while_the_list_scrolls() {
+    let mut h = many_keywords(3000);
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordRow:Keyword 00010", "button": "right"}));
+    assert!(has(&h, "keywordMenu:defaultParent"), "the menu is open");
+    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordRow:Keyword 00004"}));
+    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -400}));
+    assert!(!keyword_rows(&h).contains(&"Keyword 00000".to_string()), "the list scrolled: {:?}", keyword_rows(&h));
+    assert!(has(&h, "keywordMenu:defaultParent"), "the menu is still open");
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordMenu:defaultParent"}));
+    assert_eq!(h.app.session.catalog.default_keyword_parent().as_deref(), Some("Keyword 00010"));
 }

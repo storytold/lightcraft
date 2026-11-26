@@ -79,8 +79,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let selection = app.session.selected();
     let ticks = app.caches.keyword_ticks(&app.session.catalog, &selection);
-    for r in &rows {
+    // Only the rows in view (and one either side) are laid out, drawn and listed; the others keep
+    // their room, so the panel scrolls as far as before. A library's vocabulary can run to
+    // 200 000 keywords, and building every row each frame took seconds (issue #4353).
+    let pitch = ROW_H + ui.spacing().item_spacing.y;
+    let (first, end) = super::presets::rows_in_view(ui.cursor().top(), pitch, rows.len(), ui.clip_rect().expand2(vec2(0.0, pitch)));
+    if first > 0 {
+        ui.add_space(first as f32 * pitch);
+    }
+    for r in rows.get(first..end).unwrap_or_default() {
         row(app, ui, r, &selection, &ticks, filter.trim().is_empty());
+    }
+    if end < rows.len() {
+        ui.add_space((rows.len() - end) as f32 * pitch);
     }
     ui.add_space(12.0);
 }
@@ -168,14 +179,17 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
-    crate::widgets::announce(&resp, r.path.clone());
+    // the row is known by its keyword, not by where it falls among the rows built (which change as
+    // the list scrolls): an open menu, a drag and a hover stay with it
+    let (_, rect) = ui.allocate_space(vec2(ui.available_width(), ROW_H));
+    let resp = ui.interact(rect, egui::Id::unique(("keyword-list-row", r.path.to_lowercase())), Sense::click_and_drag());
+    crate::widgets::announce(&resp, r.path);
     register(ui, format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {
-        app.ui.dragging_keyword = Some(r.path.clone());
+        app.ui.dragging_keyword = Some(r.path.to_string());
     }
-    drop_target(app, ui, rect, &r.path);
-    let picked = app.ui.keyword_list_selected.as_deref().is_some_and(|k| same(k, &r.path));
+    drop_target(app, ui, rect, r.path);
+    let picked = app.ui.keyword_list_selected.as_deref().is_some_and(|k| same(k, r.path));
     let inner = Rect::from_min_max(rect.min + vec2(16.0, 0.0), rect.max - vec2(16.0, 0.0));
     if picked {
         ui.painter().rect_filled(inner, 4.0, t.canvas);
@@ -189,7 +203,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         let c = pos2(x + 6.0, cy);
         let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
         let tr = ui.interact(tri, egui::Id::unique(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
-        crate::widgets::announce(&tr, super::left::disclosure_name(r.open, &r.name));
+        crate::widgets::announce(&tr, super::left::disclosure_name(r.open, r.name));
         register(ui, format!("keywordRowToggle:{}", r.path), tri);
         // while a filter opens the levels the triangle does nothing: it doesn't light up either
         let lit = tr.hovered() && can_fold;
@@ -204,8 +218,8 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         }
     }
     // the tick box: does the selection have it?
-    let state = ticks.tick(&r.path);
-    let inside = ticks.inside(&r.path);
+    let state = ticks.tick(r.path);
+    let inside = ticks.inside(r.path);
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
     let on = !selection.is_empty();
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
@@ -271,13 +285,13 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         let _ = app.run("library.filter", json!({"keyword": r.path}));
     }
     // the name, cut short before the arrow, leaving room for the dot and the + that follow it
-    let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path));
-    let in_shortcut = app.session.catalog.keyword_info(&r.path).is_some_and(|i| i.keyword_shortcut);
+    let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, r.path));
+    let in_shortcut = app.session.catalog.keyword_info(r.path).is_some_and(|i| i.keyword_shortcut);
     let font = t.font(13.0);
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x;
     let marks = if is_default { 10.0 } else { 0.0 } + if in_shortcut { 5.0 + measure("+") } else { 0.0 };
     let room = (arrow.left() - 4.0 - (x + 34.0) - marks).max(0.0);
-    let name = if measure(&r.name) <= room { r.name.clone() } else { crate::widgets::elide_head(&r.name, room, measure) };
+    let name = if measure(r.name) <= room { r.name.to_string() } else { crate::widgets::elide_head(r.name, room, measure) };
     let label = ui.painter().text(pos2(x + 34.0, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
     // where new keywords go (Put New Keywords Inside This Keyword): a dot after the name
     let mut after = label.right();
@@ -296,12 +310,12 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     let resp = resp.on_hover_text(r.path.replace('|', " › "));
     if resp.clicked() {
-        app.ui.keyword_list_selected = Some(r.path.clone());
+        app.ui.keyword_list_selected = Some(r.path.to_string());
     }
     if resp.double_clicked() {
-        app.ui.dialog = Some(edit_dialog(app, &r.path));
+        app.ui.dialog = Some(edit_dialog(app, r.path));
     }
-    crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, selection));
+    crate::widgets::context_menu(&resp, |ui| menu(app, ui, r.path, selection));
 }
 
 /// How many of the keywords inside one are named before the rest are counted.
@@ -469,11 +483,12 @@ pub(crate) fn delete_dialog(app: &LightcraftApp, path: &str) -> Dialog {
     Dialog::DeleteKeyword { keyword, count }
 }
 
-/// One row of the Keyword List as drawn.
+/// One row of the Keyword List as drawn, borrowing its names from the keyword tree (the list is
+/// worked out each frame, and a vocabulary can run to 200 000 keywords).
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Row {
-    pub path: String,
-    pub name: String,
+pub(crate) struct Row<'a> {
+    pub path: &'a str,
+    pub name: &'a str,
     /// Levels below the top (0 = a top-level keyword).
     pub depth: usize,
     pub count: usize,
@@ -485,7 +500,7 @@ pub(crate) struct Row {
 /// The rows to draw: the tree with its levels open as `open` says (by path, any case). With a
 /// `filter`, the keywords whose name contains it (any case) and the keywords containing them,
 /// opened so that they show.
-pub(crate) fn rows(tree: &[KeywordNode], filter: &str, open: &dyn Fn(&str) -> bool) -> Vec<Row> {
+pub(crate) fn rows<'a>(tree: &'a [KeywordNode], filter: &str, open: &dyn Fn(&str) -> bool) -> Vec<Row<'a>> {
     let filter = filter.trim().to_lowercase();
     let mut out = Vec::new();
     add_rows(tree, 0, &filter, open, &mut out);
@@ -497,7 +512,7 @@ fn holds(n: &KeywordNode, filter: &str) -> bool {
     n.name.to_lowercase().contains(filter) || n.children.iter().any(|c| holds(c, filter))
 }
 
-fn add_rows(nodes: &[KeywordNode], depth: usize, filter: &str, open: &dyn Fn(&str) -> bool, out: &mut Vec<Row>) {
+fn add_rows<'a>(nodes: &'a [KeywordNode], depth: usize, filter: &str, open: &dyn Fn(&str) -> bool, out: &mut Vec<Row<'a>>) {
     for n in nodes {
         // filtering: a match, or a keyword containing one, opened down to it
         let below = n.children.iter().any(|c| holds(c, filter));
@@ -505,7 +520,7 @@ fn add_rows(nodes: &[KeywordNode], depth: usize, filter: &str, open: &dyn Fn(&st
             continue;
         }
         let is_open = if filter.is_empty() { open(&n.path) } else { below };
-        out.push(Row { path: n.path.clone(), name: n.name.clone(), depth, count: n.count, has_children: !n.children.is_empty(), open: is_open });
+        out.push(Row { path: &n.path, name: &n.name, depth, count: n.count, has_children: !n.children.is_empty(), open: is_open });
         if is_open {
             add_rows(&n.children, depth + 1, filter, open, out);
         }
@@ -643,7 +658,7 @@ mod tests {
     }
 
     fn shown(rows: &[Row]) -> Vec<(String, usize, usize)> {
-        rows.iter().map(|r| (r.path.clone(), r.depth, r.count)).collect()
+        rows.iter().map(|r| (r.path.to_string(), r.depth, r.count)).collect()
     }
 
     /// The list shows the top level, and the keywords below a level once it is open.
@@ -669,11 +684,11 @@ mod tests {
         let tree = c.keyword_tree();
         let found = rows(&tree, "RO", &|_| false);
         assert_eq!(
-            found.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            found.iter().map(|r| r.path).collect::<Vec<_>>(),
             ["travel", "travel|Italy", "travel|Italy|Rome", "travel|Spain", "travel|Spain|Ronda"]
         );
         assert!(found.iter().filter(|r| r.has_children).all(|r| r.open));
-        assert_eq!(rows(&tree, "italy", &|_| false).iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), ["travel", "travel|Italy"]);
+        assert_eq!(rows(&tree, "italy", &|_| false).iter().map(|r| r.path).collect::<Vec<_>>(), ["travel", "travel|Italy"]);
         assert!(rows(&tree, "lisbon", &|_| false).is_empty());
     }
 

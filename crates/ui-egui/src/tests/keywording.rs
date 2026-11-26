@@ -314,6 +314,7 @@ fn a_keyword_shows_that_one_inside_it_is_applied() {
     let (mut h, ids) = two_selected();
     ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": ids, "addKeywords": ["travel|Italy|Rome"]}}));
     h.settle(SETTLE);
+    crate::tests::keyword_list::scroll_row_to(&mut h, "keywordRow:travel", 200.0);
     // folded: `travel` is the only row of the three, and says there is something inside
     assert!(has(&h, "keywordRow:travel") && !has(&h, "keywordRow:travel|Italy"), "folded");
     assert!(has(&h, "keywordInside:travel"));
