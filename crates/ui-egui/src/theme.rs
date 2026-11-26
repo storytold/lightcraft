@@ -11,6 +11,19 @@ use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
 
 pub const FONT_SEMIBOLD: &str = "semibold";
 const WEB_CHINESE_FONT: &str = "web Noto Sans CJK SC";
+const OS_HEBREW_FONT: &str = "system Hebrew (runtime only)";
+
+/// Load the Hebrew face provided by the host OS rather than distributing proprietary font files.
+/// This covers a Native build without optional CRAFT_FONTS_DIR assets.
+fn native_hebrew_font() -> Option<Arc<FontData>> {
+    #[cfg(target_os = "macos")]
+    let paths = &["/System/Library/Fonts/SFHebrew.ttf"][..];
+    #[cfg(target_os = "windows")]
+    let paths = &[r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\segoeui.ttf"][..];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let paths = &["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"][..];
+    paths.iter().find_map(|path| std::fs::read(path).ok().map(|bytes| Arc::new(FontData::from_owned(bytes))))
+}
 
 /// Shared colour-label palette for badges, thumbnail surrounds and feedback.
 pub fn label_color(label: lightcraft_catalog::ColorLabel) -> Color32 {
@@ -326,6 +339,12 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
         fonts.font_data.insert(name.clone(), Arc::new(heavier));
     }
     let script = crate::i18n::language().script();
+    let native_hebrew = (script == "Hebr").then(native_hebrew_font).flatten();
+    if let Some(font) = &native_hebrew {
+        fonts.font_data.insert(OS_HEBREW_FONT.into(), font.clone());
+        regular.push(OS_HEBREW_FONT.to_owned());
+        bold.push(OS_HEBREW_FONT.to_owned());
+    }
     let prefer_chinese = chinese.is_some() && matches!(script, "Hans" | "Hant");
     if let Some(font) = chinese {
         fonts.font_data.insert(WEB_CHINESE_FONT.into(), font.clone());
@@ -355,6 +374,9 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
         mono_fallback.push(WEB_CHINESE_FONT.into());
     }
     mono.extend(mono_fallback);
+    if native_hebrew.is_some() {
+        mono.push(OS_HEBREW_FONT.to_owned());
+    }
     fonts
 }
 
@@ -497,6 +519,26 @@ mod tests {
     use super::*;
     use crate::button::contrast;
     use crate::i18n::{Locale, set_language};
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn host_hebrew_face_draws_ui_text_in_all_families() {
+        set_language(Locale::He);
+        let definitions = font_definitions(&[]);
+        assert!(definitions.font_data.contains_key(OS_HEBREW_FONT));
+        let ctx = egui::Context::default();
+        ctx.set_fonts(definitions);
+        let mut frame = ctx.run_ui(egui::RawInput::default(), |_| {});
+        frame.textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
+                let id = FontId::new(13.0, family);
+                for letter in "עברית".chars() {
+                    assert!(fonts.has_glyph(&id, letter), "{id:?} missing U+{:04X}", letter as u32);
+                }
+            }
+        });
+        set_language(Locale::En);
+    }
 
     /// The selection ring is a mark on the grid: 3:1 or more against what it is drawn over, in
     /// every theme. The active photo's ring reads on the grid and on a selected or unselected

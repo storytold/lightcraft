@@ -30,3 +30,16 @@ fn short_times() {
     assert_eq!(super::short_time("2026-09-30T12:00:05"), "Sep 30, 2026, 12:00 PM");
     assert_eq!(super::short_time("2026-01-02"), "Jan 2, 2026");
 }
+
+// Hebrew headings follow the reading edge; English and numeric geometry stay unchanged.
+#[test]
+fn panel_heading_anchor_follows_locale_direction() {
+    use egui::{Align2, Rect, pos2};
+    let r = Rect::from_min_max(pos2(10.0, 20.0), pos2(310.0, 66.0));
+    let (english_pos, english_align) = super::heading_anchor(r, false);
+    let (hebrew_pos, hebrew_align) = super::heading_anchor(r, true);
+    assert_eq!(english_pos, pos2(34.0, 45.0));
+    assert_eq!(hebrew_pos, pos2(286.0, 45.0));
+    assert_eq!(english_align, Align2::LEFT_CENTER);
+    assert_eq!(hebrew_align, Align2::RIGHT_CENTER);
+}

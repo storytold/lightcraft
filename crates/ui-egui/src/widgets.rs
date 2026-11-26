@@ -1075,7 +1075,7 @@ pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str,
     let t = Tokens::get(ui.ctx());
     let active = items.iter().position(|(v, _, _)| *v == current).unwrap_or(0);
     let mut chosen = None;
-    ui.horizontal(|ui| {
+    let row = |ui: &mut Ui| {
         let name = crate::i18n::tr(label);
         ui.label(egui::RichText::new(name).color(t.text_dim));
         let shown = items.get(active).map_or("", |(_, l, _)| crate::i18n::tr(l));
@@ -1096,7 +1096,13 @@ pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str,
                 }
             }
         });
-    });
+    };
+    if crate::i18n::language() == crate::i18n::Locale::He {
+        let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+        ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), row);
+    } else {
+        ui.horizontal(row);
+    }
     chosen
 }
 
