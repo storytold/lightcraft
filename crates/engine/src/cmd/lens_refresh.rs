@@ -31,18 +31,28 @@ pub struct Missing {
 /// none) and the raws whose file named no lens when they were imported (a newer LightCraft may read their lens).
 /// No file-system calls.
 pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[PhotoId]>, again: bool) -> Vec<Missing> {
+    missing_with(cat, ids, again, |camera, lens| crate::lens_profiles::profile_name(db, camera, lens).is_some())
+}
+
+/// [`missing`], with `known(camera, lens)` saying whether the database knows a lens by name. `known` is asked once
+/// per distinct (camera, lens) pair in a call, hit or miss, and its answer reused for every photo with that pair,
+/// virtual copies included: each search scores every lens in the database, and a large library shares a handful
+/// of pairs (#3999). The answers live only for this call, so the next call (a database loaded or replaced
+/// meanwhile) asks again.
+pub(crate) fn missing_with(cat: &Catalog, ids: Option<&[PhotoId]>, again: bool, mut known: impl FnMut(&str, &str) -> bool) -> Vec<Missing> {
     // a photo and its virtual copies list the photo once, in library order
     let mut seen = std::collections::HashSet::new();
+    let mut pairs: std::collections::HashMap<(&str, &str), bool> = std::collections::HashMap::new();
     let from_database = |p: &Photo| p.embedded_lens.is_some_and(|l| l.source == LensSource::Database);
     cat.photos()
         .filter(|p| ids.is_none_or(|ids| ids.contains(&p.id) || p.copy_of.is_some_and(|c| ids.contains(&c))))
         .map(|p| p.copy_of.and_then(|c| cat.photo(c)).map_or(&**p, |orig| &**orig))
         .filter(|p| p.develops_raw())
-        .filter(|p| {
-            let lens = p.meta.lens.trim();
+        .filter(|&p| {
+            let (camera, lens) = (p.meta.camera.as_str(), p.meta.lens.trim());
             match &p.embedded_lens {
                 None if lens.is_empty() => again,
-                None => crate::lens_profiles::profile_name(db, &p.meta.camera, lens).is_some(),
+                None => *pairs.entry((camera, lens)).or_insert_with(|| known(camera, lens)),
                 Some(_) => again && from_database(p),
             }
         })
