@@ -1,4 +1,4 @@
-//! The Edit panel: histogram, Auto/B&W, profile, and the Light / Color / Effects / Detail / Optics
+//! The Edit panel: histogram, the camera, Auto/B&W, profile, and the Light / Color / Effects / Detail / Optics
 //! sections, built from the engine's control specs.
 
 use egui::epaint::{Mesh, Vertex};
@@ -38,6 +38,22 @@ use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_men
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
 
+/// The camera photo `id` was taken with, maker and model ([`lightcraft_catalog::Meta::camera_name`]), on its own line
+/// above the Edit header (widget `edit:camera`). A label, so screen readers read it; a long name is cut short with …
+/// and shown whole on hover. The line keeps its height for a photo that names no camera, so the controls below stay
+/// in place from one photo to the next.
+fn camera_line(app: &LightcraftApp, ui: &mut egui::Ui, id: PhotoId, t: &Tokens) {
+    let font = t.font(12.5);
+    let height = ui.ctx().fonts_mut(|f| f.row_height(&font));
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 12, bottom: 0 }).show(ui, |ui| {
+        ui.set_min_size(vec2(ui.available_width(), height));
+        if let Some(name) = app.session.catalog.photo(id).and_then(|p| p.meta.camera_name()) {
+            let r = ui.add(egui::Label::new(RichText::new(name).font(font).color(t.text_label)).truncate());
+            register(ui, "edit:camera", r.rect);
+        }
+    });
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
@@ -63,9 +79,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.ui.soft_proof {
         soft_proofing(app, ui, id);
     }
+    camera_line(app, ui, id, &t);
     // header: Edit + Auto / B&W / HDR
     let mut reset_clicked = false;
-    let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+    let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().text(pos2(hr.left() + 24.0, hr.bottom() - 10.0), Align2::LEFT_CENTER, crate::i18n::tr("Edit"), t.semibold(15.0), t.text);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
         let tip = reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac);
