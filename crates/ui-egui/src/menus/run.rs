@@ -371,6 +371,21 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.settings.zoom_to_focus = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.zoom_to_focus);
             Ok(json!({"on": app.ui.settings.zoom_to_focus}))
         }
+        "view.reduceMotion" => {
+            // {on?} sets it; {follow: true} goes back to the system's Reduce Motion; no params toggles
+            // what is in effect. Zoom and spinner animations stop; fades stay.
+            let (follow, on) = match (bool_param(id, p, "follow"), bool_param(id, p, "on")) {
+                (Ok(follow), Ok(on)) => (follow, on),
+                (Err(e), _) | (_, Err(e)) => return Some(Err(e)),
+            };
+            // (where the host has no system setting to read, or its reader has not answered, following
+            // would turn off a choice made for nothing, and report a system that is not there)
+            if follow == Some(true) && !app.system_reduce_motion_available() {
+                return Some(Err("view.reduceMotion: this system has no Reduce Motion setting to follow".into()));
+            }
+            app.ui.settings.reduce_motion = if follow == Some(true) { None } else { Some(on.unwrap_or(!app.reduce_motion())) };
+            Ok(json!({"on": app.reduce_motion(), "followsSystem": app.ui.settings.reduce_motion.is_none()}))
+        }
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);
             Ok(json!({"show": app.ui.face_boxes}))
@@ -1674,12 +1689,11 @@ fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> 
         .and_then(Value::as_u64)
         .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)).filter(|a| a.is_smart()).cloned());
     app.ui.dialog = Some(match album {
-        Some(a) => Dialog::SmartRules {
-            id: Some(a.id.0),
-            name: a.name.clone(),
+        Some(a) => Dialog::smart_rules(
+            Some(a.id.0),
+            a.name.clone(),
             // older rules read as they always matched (RuleSet::upgrade)
-            rules: a
-                .smart
+            a.smart
                 .as_ref()
                 .and_then(|f| f.rule_set.clone())
                 .map(|mut r| {
@@ -1687,14 +1701,14 @@ fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> 
                     r
                 })
                 .unwrap_or_default(),
-            parent: None,
-        },
-        None => Dialog::SmartRules {
-            id: None,
-            name: p.get("name").and_then(Value::as_str).unwrap_or("").into(),
-            rules: lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
-            parent: parent_param(p),
-        },
+            None,
+        ),
+        None => Dialog::smart_rules(
+            None,
+            p.get("name").and_then(Value::as_str).unwrap_or("").into(),
+            lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
+            parent_param(p),
+        ),
     });
     Ok(Value::Null)
 }

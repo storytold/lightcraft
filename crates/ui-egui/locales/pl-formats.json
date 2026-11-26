@@ -277,6 +277,7 @@
   "Exported to {path}": "Wyeksportowano do {path}",
   "Saved template {name}": "Zapisano szablon {name}",
   "Imported {name}": "Zaimportowano {name}",
+  "Moved {name} to {folder}": "Przeniesiono {name} do {folder}",
   "Skipped {problem}": "Pominięto: {problem}",
   "…and {more} more": "…i jeszcze {more}",
   "Template preview: {name}": "Podgląd szablonu: {name}",
@@ -326,5 +327,7 @@
   "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
   "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Reguła {n} z {m}: {what}. Przenoś strzałkami",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grupa {n} z {m}: dopasuj {mode}, w środku {count}. Przenoś strzałkami",
   ", rating {} of 5": ", ocena: {} na 5"
 }

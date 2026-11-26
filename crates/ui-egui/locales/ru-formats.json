@@ -288,6 +288,7 @@
   "Exported to {path}": "Экспортировано в {path}",
   "Saved template {name}": "Шаблон {name} сохранён",
   "Imported {name}": "Импортировано: {name}",
+  "Moved {name} to {folder}": "{name} перемещено в {folder}",
   "Skipped {problem}": "Пропущено: {problem}",
   "…and {more} more": "…и ещё {more}",
   "Template preview: {name}": "Просмотр шаблона: {name}",
@@ -327,5 +328,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографии добавляются через Файл › Импорт фото… ({keys}).",
   "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys}).",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Условие {n} из {m}: {what}. Перемещение стрелками",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Группа {n} из {m}: совпадение {mode}, внутри {count}. Перемещение стрелками",
   ", rating {} of 5": ", оценка: {} из 5"
 }

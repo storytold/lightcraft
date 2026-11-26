@@ -292,6 +292,7 @@
   "Exported to {path}": "{path} に書き出しました",
   "Saved template {name}": "テンプレート {name} を保存しました",
   "Imported {name}": "{name} を読み込みました",
+  "Moved {name} to {folder}": "{name} を {folder} に移動しました",
   "Skipped {problem}": "スキップ: {problem}",
   "…and {more} more": "…ほか {more} 件",
   "Template preview: {name}": "テンプレートのプレビュー: {name}",
@@ -327,5 +328,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "条件 {n}/{m}：{what}。矢印キーで移動",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "グループ {n}/{m}：一致条件 {mode}、中に {count} 件。矢印キーで移動",
   ", rating {} of 5": "、評価: 5段階中{}"
 }

@@ -292,6 +292,7 @@
   "Exported to {path}": "已匯出到 {path}",
   "Saved template {name}": "已儲存範本 {name}",
   "Imported {name}": "已匯入 {name}",
+  "Moved {name} to {folder}": "已將 {name} 移至 {folder}",
   "Skipped {problem}": "已略過：{problem}",
   "…and {more} more": "…還有 {more} 個",
   "Template preview: {name}": "範本預覽：{name}",
@@ -327,5 +328,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "透過 檔案 › 匯入照片… ({keys}) 匯入照片。",
   "View › Detail View ({keys}).": "檢視 › 詳細檢視 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "規則 {n}/{m}：{what}。用方向鍵移動",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "群組 {n}/{m}：符合{mode}，內含 {count} 項。用方向鍵移動",
   ", rating {} of 5": "，評分：{}/5"
 }

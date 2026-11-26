@@ -285,6 +285,7 @@
   "{n} JPEG files": "File JPEG: {n}",
   "Exported {} effect preset{}": "Preset effetto esportati: {}{:.0}",
   "Imported {name}": "{name} importato",
+  "Moved {name} to {folder}": "{name} spostato in {folder}",
   "{n} pages": "Pagine: {n}",
   " · kept, not applied: {}": " · conservato, non applicato: {}",
   "Delete the effect preset “{name}”?": "Eliminare il preset effetto “{name}”?",
@@ -326,5 +327,7 @@
   "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Regola {n} di {m}: {what}. Sposta con le frecce",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Gruppo {n} di {m}: corrispondenza {mode}, {count} all’interno. Sposta con le frecce",
   ", rating {} of 5": ", valutazione: {} su 5"
 }

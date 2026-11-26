@@ -292,6 +292,7 @@
   "Exported to {path}": "已导出到 {path}",
   "Saved template {name}": "已保存模板 {name}",
   "Imported {name}": "已导入 {name}",
+  "Moved {name} to {folder}": "已将 {name} 移到 {folder}",
   "Skipped {problem}": "已跳过：{problem}",
   "…and {more} more": "…还有 {more} 个",
   "Template preview: {name}": "模板预览：{name}",
@@ -327,5 +328,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "规则 {n}/{m}：{what}。用方向键移动",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "组 {n}/{m}：匹配{mode}，内含 {count} 项。用方向键移动",
   ", rating {} of 5": "，评分：{}/5"
 }
