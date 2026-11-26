@@ -902,6 +902,52 @@ fn a_photo_stored_under_a_differently_cased_library_path_is_relinked() {
     );
 }
 
+/// On a case-sensitive volume, `trip` and `Trip` are different folders. Renaming one outside the
+/// library must not relink a photo in the other, or follow a browse of it.
+#[test]
+fn a_folder_that_differs_only_in_letter_case_is_left_alone_when_it_is_outside_the_library() {
+    let dir = Scratch::new("outside-case");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let trip = dir.0.join("work/trip");
+    let trip_cap = dir.0.join("work/Trip");
+    std::fs::create_dir_all(&trip).unwrap();
+    if trip_cap.exists() {
+        // the volume treats trip and Trip as one folder: the distinct-directory case does not arise
+        return;
+    }
+    std::fs::create_dir_all(&trip_cap).unwrap();
+    let photo = trip.join("a.jpg");
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo.to_string_lossy());
+    let other = trip_cap.join("b.jpg");
+    std::fs::write(&other, b"jpeg").unwrap();
+    add(&mut s, &other.to_string_lossy());
+    s.browse = Some(crate::Browse { path: trip.to_string_lossy().to_string(), subfolders: false });
+    s.execute("folder.rename", &json!({"path": trip_cap.to_string_lossy(), "name": "Beach"})).unwrap();
+    let mut paths: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    paths.sort();
+    let moved = dir.0.join("work/Beach/b.jpg");
+    let mut expected = vec![photo.to_string_lossy().to_string(), moved.to_string_lossy().to_string()];
+    expected.sort();
+    assert_eq!(paths, expected, "the photo in trip stays; only the renamed folder is relinked");
+    assert!(photo.is_file());
+    assert!(moved.is_file());
+    assert_eq!(
+        s.browse.as_ref().expect("browse stays on trip").path,
+        trip.to_string_lossy().as_ref(),
+        "browsing trip is unchanged when a distinct Trip folder is renamed"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn the_library_folder_is_protected_however_its_path_is_spelled() {

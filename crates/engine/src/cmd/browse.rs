@@ -484,18 +484,27 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"moved": n, "folder": folder}))
 }
 
+/// Names below `from` in `path`. Letter case is ignored only when `fold_case` is set (a folder inside the open
+/// library, whose prefix may be stored with a different spelling). Other folders keep an exact match, so
+/// `/work/trip` is not `/work/Trip` on a case-sensitive volume.
+fn rest_under(path: &Path, from: &Path, fold_case: bool) -> Option<PathBuf> {
+    path.strip_prefix(from).ok().map(|rel| rel.to_path_buf()).or_else(|| fold_case.then(|| strip_prefix_ignore_case(path, from)).flatten())
+}
+
 /// After a folder moved from `from` to `to`: a browsed folder at or below it follows.
 pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
     // a library folder chosen at or below it follows too, as a source or as a filter
-    follow_library_folder(&mut s.library_folder, from, to);
-    follow_library_folder(&mut s.filter.library_folder, from, to);
-    follow_library_folder(&mut s.filter.folder, from, to);
+    // letter case in a library prefix may differ; a folder outside the library is matched as written
+    let fold_case = s.library.as_ref().is_some_and(|l| Path::new(from).starts_with(&l.dir));
+    follow_library_folder(&mut s.library_folder, from, to, fold_case);
+    follow_library_folder(&mut s.filter.library_folder, from, to, fold_case);
+    follow_library_folder(&mut s.filter.folder, from, to, fold_case);
     if let Some(f) = s.shelved_filter.as_mut() {
-        follow_library_folder(&mut f.library_folder, from, to);
-        follow_library_folder(&mut f.folder, from, to);
+        follow_library_folder(&mut f.library_folder, from, to, fold_case);
+        follow_library_folder(&mut f.folder, from, to, fold_case);
     }
     if let Some(b) = &mut s.browse
-        && let Some(rel) = strip_prefix_ignore_case(Path::new(&b.path), Path::new(from))
+        && let Some(rel) = rest_under(Path::new(&b.path), Path::new(from), fold_case)
     {
         b.path = if rel.as_os_str().is_empty() { to.to_string() } else { Path::new(to).join(rel).to_string_lossy().to_string() };
         // with filters off the filter stays empty: Cmd+L brings back the one put aside
@@ -509,10 +518,12 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
 /// A chosen library folder at or below `from` becomes the same place below `to`. Compared the
 /// way the filter does, by folder identity, so a differently spelled choice is not widened to
 /// the folder itself.
-fn follow_library_folder(chosen: &mut Option<String>, from: &str, to: &str) {
+fn follow_library_folder(chosen: &mut Option<String>, from: &str, to: &str, fold_case: bool) {
     let Some(c) = chosen.as_deref() else { return };
     let rest = lightcraft_catalog::query::folder_rest(c, from).or_else(|| {
-        strip_prefix_ignore_case(Path::new(c), Path::new(from)).map(|rel| rel.iter().map(|n| n.to_string_lossy().into_owned()).collect())
+        fold_case
+            .then(|| rest_under(Path::new(c), Path::new(from), true).map(|rel| rel.iter().map(|n| n.to_string_lossy().into_owned()).collect()))
+            .flatten()
     });
     if let Some(rest) = rest {
         // joined by the platform, so the result is spelled like `to` and like a path read from disk
@@ -700,7 +711,8 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
         .photos()
         .filter_map(|p| match &p.source {
             lightcraft_catalog::Source::File { path } => {
-                strip_prefix_ignore_case(Path::new(path), src).map(|rel| (p.id, p.file_name.clone(), dst.join(rel)))
+                let fold_case = s.library.as_ref().is_some_and(|l| src.starts_with(&l.dir));
+                rest_under(Path::new(path), src, fold_case).map(|rel| (p.id, p.file_name.clone(), dst.join(rel)))
             }
             _ => None,
         })
