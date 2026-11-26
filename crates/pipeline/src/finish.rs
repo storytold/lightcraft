@@ -103,10 +103,12 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 | Process::V10 | Process::V13 if draft => {
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V15 if draft => {
                 crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal)
             }
-            Process::V7 | Process::V8 | Process::V10 | Process::V13 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V15 => {
+                crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal)
+            }
         }
     }
 }
@@ -211,9 +213,9 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Process V13's Exposure on a display-referred source: the channel level past which a brightening gain is
+    /// Process V15's Exposure on a display-referred source: the channel level past which a brightening gain is
     /// compressed towards white instead of clipping ([`expose`], [`EXPOSURE_KNEE`]); 0 when off (raws, which
-    /// have their tone curve's roll-off, darkening, HDR renders, and processes before V13).
+    /// have their tone curve's roll-off, darkening, HDR renders, and processes before V15).
     pub expo_knee: f32,
     /// Film grain: the model of the photo's process ([`GrainModel`]).
     pub grain: Option<GrainModel>,
@@ -249,7 +251,7 @@ impl FinishParams {
         let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space, draft } = input;
         let effects = s.section_enabled("effects");
         let (clar, tex, dehaze) = if effects {
-            ((s.effects.clarity / 100.0) as f32, (s.effects.texture / 100.0) as f32, (s.effects.dehaze / 100.0) as f32)
+            ((s.effects.clarity / 100.0) as f32, texture_slider(s.effects.texture, s.process.process()), (s.effects.dehaze / 100.0) as f32)
         } else {
             (0.0, 0.0, 0.0)
         };
@@ -266,7 +268,7 @@ impl FinishParams {
         let grain = if effects && finite_frame { GrainModel::new(s, px_per_long, draft) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
-        let expo_knee = if s.process.process() >= Process::V13 && !info.raw && peak <= 1.0 && gain > 1.0 { EXPOSURE_KNEE } else { 0.0 };
+        let expo_knee = if s.process.process() >= Process::V15 && !info.raw && peak <= 1.0 && gain > 1.0 { EXPOSURE_KNEE } else { 0.0 };
         FinishParams {
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
@@ -283,7 +285,7 @@ impl FinishParams {
             out_trc: space.trc(),
             proof: None,
             hl: (s.light.highlights / 100.0) as f32,
-            sh: (s.light.shadows / 100.0) as f32,
+            sh: tone_slider(s.light.shadows, SHADOWS_EASE, s.process.process()),
             clar,
             tex,
             dehaze,
@@ -322,7 +324,46 @@ impl FinishParams {
     }
 }
 
-/// The display-linear level up to which process V13's Exposure brightens a display-referred source (a JPEG, PNG,
+/// How much a full global Shadows (−100 or +100) eases off from V6's strength under V13: it acts at
+/// `1 / (1 + SHADOWS_EASE)` of it.
+pub const SHADOWS_EASE: f64 = 1.33;
+
+/// A global Shadows slider (−100..100) as the strength the local tone operator takes (−1..1), with `ease` =
+/// [`SHADOWS_EASE`].
+///
+/// Up to V10 the strength is the slider's, linearly. From V13 it eases off as the amount grows, `a / (1 + ease·|a|)`
+/// for `a` = slider / 100: slope 1 at 0, so small amounts change least (Shadows +10 acts at 0.88 of V6's), and
+/// `1 / (1 + ease)` of V6's at ±100.
+/// Fitted to 56 Lightroom exports of real portrait edits (Canon raws, Shadows +40 to +100): V6 left their darkest
+/// tones about 6 L* above the exports; the amounts that cancel that are about 0.6 of V6's at +52 and 0.43 at +100.
+/// Global Highlights stays linear in every process: on the same edits V6 renders their brightest tones about 5 L*
+/// too dark, but Lightroom's response to Highlights alone is close to linear and depends on the frame's content
+/// (single-slider exports, #3923), which a fixed easing would not follow. Masks keep their linear amounts.
+pub fn tone_slider(value: f64, ease: f64, process: lightcraft_develop::Process) -> f32 {
+    if process < lightcraft_develop::Process::V13 {
+        return (value / 100.0) as f32;
+    }
+    let a = (value / 100.0).clamp(-1.0, 1.0);
+    if !a.is_finite() {
+        return 0.0;
+    }
+    (a / (1.0 + ease * a.abs())) as f32
+}
+
+/// How much of V6's strength a global negative Texture keeps under V13.
+pub const NEGATIVE_TEXTURE_V13: f64 = 0.67;
+
+/// The global Texture slider (−100..100) as the strength of the texture band (−1..1).
+///
+/// From V13 a negative amount smooths at [`NEGATIVE_TEXTURE_V13`] of V6's strength: at Texture −27, V6 left the
+/// 1–8 px detail of four full-size Lightroom exports of real Canon EOS R6 edits at 0.87–0.94 of the exports' and
+/// 0.67 of the amount brings it to 0.94–1.02. Positive amounts, masks and V1 to V10 are unchanged.
+pub fn texture_slider(value: f64, process: lightcraft_develop::Process) -> f32 {
+    let t = value / 100.0;
+    if process >= lightcraft_develop::Process::V13 && t < 0.0 { (t * NEGATIVE_TEXTURE_V13) as f32 } else { t as f32 }
+}
+
+/// The display-linear level up to which process V15's Exposure brightens a display-referred source (a JPEG, PNG,
 /// TIFF) by the plain gain: about 73 % in sRGB, so shadows and midtones move by the full amount.
 pub const EXPOSURE_KNEE: f32 = 0.5;
 
@@ -374,11 +415,13 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V13 => match info.camera_tone.as_ref().filter(|_| info.raw) {
-            Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
-            None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
-            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
-        },
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V15 => {
+            match info.camera_tone.as_ref().filter(|_| info.raw) {
+                Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
+                None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
+                None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+            }
+        }
     }
 }
 
@@ -903,6 +946,7 @@ fn enc(v: f32, dither: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_develop::Process;
 
     #[test]
     fn exposure_compresses_towards_white_instead_of_clipping() {
@@ -938,7 +982,7 @@ mod tests {
         // pixel's with one)
         use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
         let src = lightcraft_raster::Rgb32f::from_fn(256, 4, |x, _| [(x as f32 / 255.0).powf(2.2); 3]);
-        let mut s = DevelopSettings { process: Process::V13.version(), ..Default::default() };
+        let mut s = DevelopSettings { process: Process::V15.version(), ..Default::default() };
         s.light.exposure = 1.5;
         s.light.highlights = -60.0;
         let req = crate::RenderRequest::fit(256, 4);
@@ -959,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn only_v13_brightening_a_display_source_compresses() {
+    fn only_v15_brightening_a_display_source_compresses() {
         let knee = |p: Process, raw: bool, ev: f64| {
             let mut s = DevelopSettings { process: p.version(), ..Default::default() };
             s.light.exposure = ev;
@@ -977,15 +1021,17 @@ mod tests {
             })
             .expo_knee
         };
-        assert_eq!(knee(Process::V13, false, 1.0), EXPOSURE_KNEE);
-        assert_eq!(knee(Process::V13, true, 1.0), 0.0, "raws keep their tone curve's roll-off");
-        assert_eq!(knee(Process::V13, false, -1.0), 0.0, "darkening is a plain gain");
-        assert_eq!(knee(Process::V10, false, 1.0), 0.0, "earlier processes keep theirs");
+        assert_eq!(knee(Process::V15, false, 1.0), EXPOSURE_KNEE);
+        assert_eq!(knee(Process::V15, true, 1.0), 0.0, "raws keep their tone curve's roll-off");
+        assert_eq!(knee(Process::V15, false, -1.0), 0.0, "darkening is a plain gain");
+        for p in [Process::V10, Process::V13, Process::V14] {
+            assert_eq!(knee(p, false, 1.0), 0.0, "{p:?} keeps its plain gain");
+        }
     }
 
     #[test]
     fn a_brightened_jpeg_keeps_its_highlights() {
-        // a display-referred ramp from black to white at +1.5 EV: V10 turns its whole upper part flat white, V13
+        // a display-referred ramp from black to white at +1.5 EV: V14 turns its whole upper part flat white, V15
         // keeps it a gradient up to white, and both treat the darks alike
         let src = lightcraft_raster::Rgb32f::from_fn(256, 4, |x, _| [(x as f32 / 255.0).powf(2.2); 3]);
         let row = |p: Process| {
@@ -994,12 +1040,96 @@ mod tests {
             let r = crate::render(&src, &SourceInfo::default(), &s, &crate::RenderRequest::fit(256, 4));
             (0..256).map(|x| r.image.get(x, 2)[1]).collect::<Vec<u8>>()
         };
-        let (v10, v13) = (row(Process::V10), row(Process::V13));
+        let (v14, v15) = (row(Process::V14), row(Process::V15));
         let white = |r: &[u8]| r.iter().filter(|v| **v >= 254).count();
-        assert!(white(&v10) > 80 && white(&v13) * 4 < white(&v10), "flat white: V10 {}, V13 {}", white(&v10), white(&v13));
+        assert!(white(&v14) > 80 && white(&v15) * 4 < white(&v14), "flat white: V14 {}, V15 {}", white(&v14), white(&v15));
         // (8-bit output is dithered: one code of slack)
-        assert!(v13.windows(2).all(|p| u16::from(p[1]) + 1 >= u16::from(p[0])), "V13 stays a ramp: {v13:?}");
-        assert!((0..60).all(|x| v10[x].abs_diff(v13[x]) <= 1), "the darks move alike");
+        assert!(v15.windows(2).all(|p| u16::from(p[1]) + 1 >= u16::from(p[0])), "V15 stays a ramp: {v15:?}");
+        assert!((0..60).all(|x| v14[x].abs_diff(v15[x]) <= 1), "the darks move alike");
+    }
+
+    /// Every process before V13, which renders global Shadows, negative Texture and the Global wheel as before.
+    fn before_v13() -> impl Iterator<Item = Process> {
+        Process::ALL.into_iter().filter(|p| *p < Process::V13)
+    }
+
+    #[test]
+    fn tone_sliders_ease_off_from_v13_only() {
+        for v in [-100.0, -52.0, 0.0, 13.0, 100.0, 250.0] {
+            for p in before_v13() {
+                assert_eq!(tone_slider(v, SHADOWS_EASE, p), (v / 100.0) as f32, "{p:?} keeps the linear amount");
+            }
+        }
+        let v13 = |v: f64| tone_slider(v, SHADOWS_EASE, Process::V13);
+        assert_eq!(v13(0.0), 0.0);
+        assert!((v13(1.0) - 0.01).abs() < 2e-4, "slope 1 at 0");
+        // eases off more as the amount grows: a small amount keeps most of the linear strength, a full one less
+        let share = |v: f64| v13(v) / (v / 100.0) as f32;
+        assert!(share(10.0) < 1.0 && share(10.0) > share(52.0) && share(52.0) > share(100.0) && share(100.0) > 0.0);
+        assert_eq!(v13(-100.0), -v13(100.0), "symmetric");
+        assert_eq!(v13(250.0), v13(100.0), "clamped to the slider's range");
+        assert_eq!(v13(f64::NAN), 0.0);
+        let mut last = -1.0;
+        for i in -100..=100 {
+            let y = v13(i as f64);
+            assert!(y > last, "monotonic at {i}");
+            last = y;
+        }
+    }
+
+    #[test]
+    fn v13_eases_negative_texture_only() {
+        for v in [-100.0, -27.0, 0.0, 35.0] {
+            for p in before_v13() {
+                assert_eq!(texture_slider(v, p), (v / 100.0) as f32, "{p:?} keeps the linear amount");
+            }
+        }
+        let (eased, linear) = (texture_slider(-27.0, Process::V13), -0.27f32);
+        assert!(eased < 0.0 && eased > linear, "a negative Texture still smooths, less: {eased}");
+        assert_eq!(texture_slider(35.0, Process::V13), 0.35, "positive amounts unchanged");
+        assert_eq!(texture_slider(0.0, Process::V13), 0.0);
+    }
+
+    #[test]
+    fn v13_shadows_lift_less_than_v10() {
+        let src = lightcraft_raster::Rgb32f::from_fn(64, 8, |x, _| [0.002 * 1.12f32.powi(x as i32); 3]);
+        let mean = |p: Process, shadows: f64| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            s.light.shadows = shadows;
+            let r = crate::render(&src, &SourceInfo::default(), &s, &crate::RenderRequest::fit(64, 8));
+            r.image.data.iter().take(24).map(|px| px[1] as f32).sum::<f32>() / 24.0
+        };
+        let (base, v10, v13) = (mean(Process::V13, 0.0), mean(Process::V10, 80.0), mean(Process::V13, 80.0));
+        assert!(v13 > base && v13 < v10, "Shadows still lifts the darks, less than V10: none {base}, V10 {v10}, V13 {v13}");
+        assert_eq!(mean(Process::V10, 0.0), base, "without Shadows V13 renders as V10");
+    }
+
+    #[test]
+    fn a_render_takes_the_eased_shadows_and_linear_highlights() {
+        let params = |p: Process, highlights: f64, shadows: f64| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            (s.light.highlights, s.light.shadows) = (highlights, shadows);
+            let frame = crate::geometry::Frame::new(64, 8, &s, false);
+            let info = SourceInfo::default();
+            let fp = FinishParams::new(FinishParamsInput {
+                settings: &s,
+                frame: &frame,
+                info: &info,
+                image_size: (64, 8),
+                px_per_long: 64.0,
+                air_pre: 0.0,
+                space: OutputSpace::Srgb,
+                draft: false,
+            });
+            (fp.hl, fp.sh)
+        };
+        for (highlights, shadows) in [(0.0, 52.0), (-100.0, 100.0), (-48.0, 0.0)] {
+            let linear = ((highlights / 100.0) as f32, (shadows / 100.0) as f32);
+            assert_eq!(params(Process::V13, highlights, shadows), (linear.0, tone_slider(shadows, SHADOWS_EASE, Process::V13)));
+            for p in before_v13() {
+                assert_eq!(params(p, highlights, shadows), linear, "{p:?} {highlights}/{shadows}");
+            }
+        }
     }
 
     #[test]

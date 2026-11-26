@@ -473,7 +473,7 @@ fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32, top: f32) -> vec3<f32> {
     return r;
 }
 
-// Exposure's gain, with process V13's compression towards white past `knee` on display-referred sources
+// Exposure's gain, with process V15's compression towards white past `knee` on display-referred sources
 // (`lightcraft_pipeline::finish::expose`).
 fn expose(c: vec3<f32>, gain: f32, knee: f32) -> vec3<f32> {
     let m = max(c.x, max(c.y, c.z));

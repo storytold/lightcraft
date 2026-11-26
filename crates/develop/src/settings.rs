@@ -104,19 +104,42 @@ pub enum Process {
     V8,
     /// V8, with the checked Bradford white-balance fallback (`Mat3::IDENTITY` when a source
     /// illuminant's Bradford blue cone response is `<= 0.0`, `craft-libs#587`).
-    /// `ProcessVersion(9)` is reserved for `HealMethod::Pinned` (`#4069`).
+    /// `ProcessVersion(9)` names no process: a saved 9 renders as V8.
     V10,
-    /// V10, with Exposure on a display-referred source (a JPEG, PNG, TIFF) compressing what it lifts past white
-    /// instead of clipping it (`lightcraft_pipeline::finish::expose`, issue #4586); raws and darkening as in V10.
-    /// `ProcessVersion(11)` is claimed by `#4069`; 12 was written by unofficial builds and renders as V10.
+    /// V10, calibrated against Lightroom exports of real edits: global Shadows answers large amounts
+    /// compressively (`lightcraft_pipeline::finish::tone_slider`), a negative Texture smooths less
+    /// (`finish::texture_slider`) and the Global grading wheel tints less (`colorops::global_wheel`).
+    /// `ProcessVersion(11)` and `ProcessVersion(12)` name no process here (12 is left to the open claim
+    /// of #4047): a saved 11 or 12 renders as V10.
     V13,
+    /// V13, with Heal and Remove spots pinned to the photo on the spot's edge: the correction is a
+    /// membrane fill of the log ratio of photo to source, the source's fine detail is matched to its
+    /// surroundings, and every spot reads its source at whole pixels
+    /// (`lightcraft_pipeline::spots::HealMethod`).
+    V14,
+    /// V14, with Exposure on a display-referred source (a JPEG, PNG, TIFF) compressing what it lifts past white
+    /// instead of clipping it (`lightcraft_pipeline::finish::expose`, issue #4586); raws and darkening as in V14.
+    V15,
 }
 
 impl Process {
-    /// Every process, oldest first (`ProcessVersion(9)` is reserved for `#4069`).
-    pub const ALL: [Process; 10] =
-        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10, Process::V13];
-    pub const LATEST: Process = Process::V13;
+    /// Every process, oldest first (`ProcessVersion(9)` names none and renders as V8; 11 and 12 name none and
+    /// render as V10, 12 being claimed by an open pull request).
+    pub const ALL: [Process; 12] = [
+        Process::V1,
+        Process::V2,
+        Process::V3,
+        Process::V4,
+        Process::V5,
+        Process::V6,
+        Process::V7,
+        Process::V8,
+        Process::V10,
+        Process::V13,
+        Process::V14,
+        Process::V15,
+    ];
+    pub const LATEST: Process = Process::V15;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -130,6 +153,8 @@ impl Process {
             Process::V8 => ProcessVersion(8),
             Process::V10 => ProcessVersion(10),
             Process::V13 => ProcessVersion(13),
+            Process::V14 => ProcessVersion(14),
+            Process::V15 => ProcessVersion(15),
         }
     }
 }
