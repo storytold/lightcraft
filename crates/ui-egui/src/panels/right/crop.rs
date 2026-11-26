@@ -198,6 +198,9 @@ fn aspect_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: PhotoId, ori
     }
 }
 
+/// The Crop and Geometry panels for photo `id`: the aspect ratio and its lock, the angle, the
+/// Overlay dropdown (with Flip Overlay for Triangle and Spiral) and the Upright dropdown, where
+/// Guided starts drawing guides on the photo and any other mode stops it.
 pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Crop");
@@ -335,28 +338,54 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
     });
-    crop_overlay_choices(app, ui, id);
+    // Crop's composition overlay is a view preference, not a develop edit or a canvas action. Layout probes must
+    // neither publish speculative choices nor activate the retained Flip action.
+    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let interactive = real && ui.is_enabled() && app.session.active() == Some(id);
+    padded(ui, |ui| {
+        if !interactive {
+            ui.disable();
+        }
+        use crate::state::CropOverlay as O;
+        let overlays = [
+            (O::Thirds, "Thirds", "thirds"),
+            (O::Grid, "Grid", "grid"),
+            (O::Golden, "Golden Ratio", "golden"),
+            (O::Diagonal, "Diagonal", "diagonal"),
+            (O::Triangle, "Triangle", "triangle"),
+            (O::Spiral, "Spiral", "spiral"),
+            (O::None, "None", "none"),
+        ];
+        // scoped to the photo: a menu opened (or a row held) for one photo never picks for another
+        let picked = ui.push_id(("crop-overlay", id), |ui| crate::widgets::labeled_dropdown(ui, "cropOverlay", "Overlay", "", &overlays, app.ui.crop_overlay)).inner;
+        if let Some(o) = picked
+            && interactive
+        {
+            app.ui.crop_overlay = o;
+        }
+        if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
+            && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
+            && interactive
+        {
+            let _ = app.run("view.cropOverlayOrientation", json!({}));
+        }
+    });
     divider(ui);
     header(ui, "Geometry");
     padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Perspective Correction"));
-        {
-            use lightcraft_develop::Upright;
-            let modes = [
-                ("Off", Upright::Off, "off"),
-                ("Auto", Upright::Auto, "auto"),
-                ("Guided", Upright::Guided, "guided"),
-                ("Level", Upright::Level, "level"),
-                ("Vertical", Upright::Vertical, "vertical"),
-                ("Full", Upright::Full, "full"),
-            ];
-            let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
-            let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-            if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
-                let (_, mode, key) = modes[i];
-                let _ = app.run("geometry.upright", json!({"mode": key}));
-                app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
-            }
+        use lightcraft_develop::Upright;
+        let modes = [
+            (Upright::Off, "Off", "off"),
+            (Upright::Auto, "Auto", "auto"),
+            (Upright::Guided, "Guided", "guided"),
+            (Upright::Level, "Level", "level"),
+            (Upright::Vertical, "Vertical", "vertical"),
+            (Upright::Full, "Full", "full"),
+        ];
+        if let Some(mode) = crate::widgets::labeled_dropdown(ui, "upright", "Perspective Correction", "", &modes, d.geometry.upright) {
+            let _ = app.run("geometry.upright", json!({"mode": mode}));
+            // Guided starts drawing guides on the photo; any other mode stops it
+            app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
         }
         let guided = d.geometry.upright == lightcraft_develop::Upright::Guided;
         ui.horizontal_wrapped(|ui| {
@@ -400,120 +429,9 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
 }
 
-/// Crop's composition overlay is a view preference, not a develop edit or a canvas action.
-/// One spatial radio group keeps keyboard ownership across its rows; each row holds as many whole labels as fit.
-fn crop_overlay_choices(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: PhotoId) {
-    use crate::state::CropOverlay as O;
-    use craft::behavior::{NavShape, Proposal};
-    use craft::ui::choice::{Radio, RadioGroup};
-    use craft::ui::contract::ShowContainer as _;
-
-    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let interactive = real && ui.is_enabled() && app.session.active() == Some(owner);
-    padded(ui, |ui| {
-        // Layout probes must neither publish speculative choices nor activate the retained Flip action.
-        if !interactive {
-            ui.disable();
-        }
-        ui.label(crate::i18n::tr("Overlay"));
-        let opts = [
-            (O::Thirds, "Thirds", "thirds"),
-            (O::Grid, "Grid", "grid"),
-            (O::Golden, "Golden", "golden"),
-            (O::Diagonal, "Diagonal", "diagonal"),
-            (O::Triangle, "Triangle", "triangle"),
-            (O::Spiral, "Spiral", "spiral"),
-            (O::None, "None", "none"),
-        ];
-        let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-        let picked = {
-            let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0)).max(1.0);
-            // As many columns as fit every choice whole (a radio, its gap and its label; each column as wide as its
-            // widest label): a label never wraps mid-word ("Golde/n"), and a wide panel still takes four a row.
-            let label_widths: Vec<f32> = opts
-                .iter()
-                .map(|(_, label, _)| {
-                    let font = egui::TextStyle::Body.resolve(ui.style());
-                    let text = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_owned(), font, egui::Color32::WHITE).size().x;
-                    // the radio's circle, its gap to the label and a little air
-                    text + 16.0 + 6.0 + 6.0
-                })
-                .collect();
-            let widths_for = |columns: usize| -> Vec<f32> {
-                (0..columns).map(|column| label_widths.iter().skip(column).step_by(columns).copied().fold(0.0_f32, f32::max)).collect()
-            };
-            let fits = |columns: usize| widths_for(columns).iter().sum::<f32>() + 4.0 * (columns as f32 - 1.0) <= width;
-            let columns = (2..=4).rev().find(|&columns| fits(columns)).unwrap_or(2);
-            let room = width - 4.0 * (columns as f32 - 1.0);
-            let column_widths: Vec<f32> = if fits(columns) {
-                // the room left over is shared out, so the columns still span the panel
-                let natural = widths_for(columns);
-                let spare = ((room - natural.iter().sum::<f32>()) / columns as f32).max(0.0);
-                natural.iter().map(|w| w + spare).collect()
-            } else {
-                // a panel too narrow for two whole long labels (a long translation at the narrowest width): two equal
-                // columns inside the panel, their labels wrapping in them
-                vec![(room / columns as f32).max(1.0); columns]
-            };
-            let body = |ui: &mut egui::Ui, _: &mut craft::ui::contract::BodyCx<'_>| {
-                for (row_index, row) in opts.chunks(columns).enumerate() {
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        for (column, (_, label, key)) in row.iter().enumerate() {
-                            let index = (row_index * columns + column) as u8;
-                            let cell_width = column_widths[column];
-                            ui.allocate_ui_with_layout(egui::vec2(cell_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                                ui.set_min_width(cell_width);
-                                ui.set_max_width(cell_width);
-                                let response =
-                                    Radio::new(index).id_salt(("crop-overlay-choice", owner, key)).label(crate::i18n::tr(label).to_owned()).show(ui);
-                                if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
-                                    // The real arena response keeps the painted face in rect, but its
-                                    // completed interaction rectangle includes this same owner's label.
-                                    crate::widgets::register_response(format!("button:cropOverlay-{key}"), response.interact_rect, &response);
-                                }
-                            });
-                        }
-                    });
-                }
-            };
-            let selected = active.unwrap_or_default() as u8;
-            let child = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY)))
-                    .sizing_pass()
-                    .invisible(),
-            );
-            let size = RadioGroup::new(crate::i18n::tr("Overlay").to_owned(), Bind::given(selected))
-                .id_salt(("crop-overlay-choices", owner))
-                .nav(NavShape::Spatial)
-                .enabled(interactive)
-                .measure_in(&child, Proposal::Ideal, body);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size.y.max(24.0)), egui::Sense::hover());
-            if real {
-                let shown = RadioGroup::new(crate::i18n::tr("Overlay").to_owned(), Bind::given(selected))
-                    .id_salt(("crop-overlay-choices", owner))
-                    .nav(NavShape::Spatial)
-                    .enabled(interactive)
-                    .show_at(ui, rect, body);
-                shown.output.events.committed().copied().map(usize::from)
-            } else {
-                // External SDK measurement need not set egui's sizing flag. Measuring and
-                // allocating above is sufficient; never mount an arena or its members there.
-                None
-            }
-        };
-        if interactive && let Some((overlay, _, _)) = picked.and_then(|index| opts.get(index)) {
-            app.ui.crop_overlay = *overlay;
-        }
-        if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
-            && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
-        {
-            let _ = app.run("view.cropOverlayOrientation", json!({}));
-        }
-    });
-}
-
+/// The Remove panel for photo `id`: the Mode dropdown, where None (shown while no brush is chosen)
+/// lets spots be selected and moved without painting new ones, Find Dust Spots, the brush settings
+/// (which edit the selected spot too) and the Tool Overlay choice.
 pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let interactive = real && ui.is_enabled() && app.session.active() == Some(id);
@@ -540,13 +458,21 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     header(ui, "Remove");
     padded(ui, |ui| {
         ui.push_id(("remove-header", id), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
-                    if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() && interactive {
-                        app.ui.tool = tool.into();
-                    }
-                }
-            });
+            // None, the first item, is what shows while no brush is chosen: the photo then takes no new
+            // spots (`retouch.rs`), and existing ones can still be selected and moved
+            let modes = [
+                ("", "None", "none"),
+                ("remove", "Remove", "remove"),
+                ("fill", "Content-Aware", "fill"),
+                ("heal", "Heal", "heal"),
+                ("clone", "Clone", "clone"),
+            ];
+            let current = modes.iter().find(|(tool, _, _)| app.ui.tool == *tool).map_or("", |m| m.0);
+            if let Some(tool) = crate::widgets::labeled_dropdown(ui, "removeMode", "Mode", "", &modes, current)
+                && interactive
+            {
+                app.ui.tool = tool.into();
+            }
             ui.add_space(8.0);
             ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
             ui.add_space(4.0);

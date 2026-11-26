@@ -173,7 +173,8 @@ impl Fixture {
             // each callback pass, retaining only its final publication as the app does.
             let registry = crate::widgets::take_registries(ui.ctx());
             let owned = |name: &str| {
-                name.starts_with("button:removeMode-")
+                name == "dropdown:removeMode"
+                    || name.starts_with("removeMode:")
                     || matches!(name, "button:findDust" | "button:spotRefresh" | "button:spotDelete" | "button:removeClear" | VISUALIZE)
                     || [SIZE, FEATHER, OPACITY, THRESHOLD].iter().any(|control| name.ends_with(control))
             };
@@ -312,8 +313,11 @@ fn remove_panel_modes_and_unselected_brush_defaults_use_actual_controls_without_
     let mut f = Fixture::new(None, true, true);
     let before = f.document();
     for tool in ["heal", "clone", "fill", "remove"] {
-        f.click(&format!("button:removeMode-{tool}"));
+        // the Mode dropdown (the menu item keys are the tools)
+        f.click("dropdown:removeMode");
+        f.click(&format!("removeMode:{tool}"));
         assert_eq!(f.app.ui.tool, tool);
+        assert!(!f.has(&format!("removeMode:{tool}")), "the menu closed after the pick");
         assert_eq!(f.document(), before);
     }
     assert!(!f.has("button:spotRefresh") && !f.has("button:spotDelete"));
@@ -380,7 +384,16 @@ fn remove_natural_keyboard_modes_numeric_commit_and_slider_steps_use_the_real_fo
     let mut f = Fixture::new(Some(1), true, false);
     let other = f.other();
     let undo = f.app.session.undo.len();
-    f.tab_to("button:removeMode-heal");
+    f.tab_to("dropdown:removeMode");
+    f.key(Key::Enter);
+    assert!(f.has("removeMode:heal"), "Enter opens the Mode menu; trace={:#?}", f.trace);
+    for _ in 0..6 {
+        if craft::ui::runtime::focus::focused_rec(&f.ctx).is_some_and(|r| r.stop.id == f.hit("removeMode:heal").id) {
+            break;
+        }
+        f.key(Key::ArrowDown);
+    }
+    assert!(craft::ui::runtime::focus::focused_rec(&f.ctx).is_some_and(|r| r.stop.id == f.hit("removeMode:heal").id), "arrows reach Heal; trace={:#?}", f.trace);
     f.key(Key::Space);
     assert_eq!(f.app.ui.tool, "heal");
     assert_eq!(f.app.session.undo.len(), undo);
@@ -517,7 +530,7 @@ fn remove_disabled_measurement_and_sizing_do_not_edit_commands_defaults_or_repla
         let mut f = Fixture::new(Some(1), true, false);
         let before = f.state();
         let targets: Vec<_> = [
-            "button:removeMode-clone",
+            "dropdown:removeMode",
             "button:findDust",
             "button:spotDelete",
             "button:removeClear",

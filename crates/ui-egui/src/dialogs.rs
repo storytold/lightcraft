@@ -1977,7 +1977,13 @@ pub(crate) fn show_root(app: &mut LightcraftApp, root: &mut egui::Ui, blocked: b
         return;
     }
     use craft::ui::patterns::form_dialogs::{AboutDialog, AboutInfo, AboutLink};
-    let info = AboutInfo::new("LightCraft", crate::i18n::tr("A clean-room, pure-Rust photo library and raw developer."), env!("CARGO_PKG_VERSION"))
+    // The channel's name and version line (Nightly: `0.21.0 (nightly-v1)`), and on Nightly the exact source
+    // commit, so a report can name the build (plain text, as the catalogs carry no translated sentence for it).
+    let version = match crate::channel::commit() {
+        Some(commit) => format!("{} · Nightly build {}", crate::channel::display_version(), &commit[..commit.len().min(12)]),
+        None => crate::channel::display_version(),
+    };
+    let info = AboutInfo::new(crate::channel::name(), crate::i18n::tr("A clean-room, pure-Rust photo library and raw developer."), version)
         .community(AboutLink::new(crate::i18n::tr("Join the ArtCraft Discord"), crate::links::DISCORD))
         .links([
             AboutLink::new(crate::i18n::tr("LightCraft website"), crate::links::APP_PAGE),

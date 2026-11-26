@@ -16,6 +16,10 @@ fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp>
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
+    // as the app opens Remove (`panel.remove`): with a brush, so its canvas offers the New spot stop
+    if right == RightPanel::Remove {
+        app.ui.tool = "remove".into();
+    }
     // the framework runtime routes keys and AccessKit actions; it installs before the first pass, as the app's host does
     let mut builder = Harness::builder()
         .with_size(vec2(1500.0, 950.0))

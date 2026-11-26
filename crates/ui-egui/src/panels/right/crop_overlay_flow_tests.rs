@@ -1,4 +1,4 @@
-//! Actual common right Crop parent, standard SDK radios and real input only.
+//! Actual common right Crop parent, the Overlay dropdown (a framework value menu) and real input only.
 //! No canvas, files, forced focus, behavioral substitute or native/window visual acceptance.
 use super::*;
 use crate::headless::HeadlessView;
@@ -13,18 +13,20 @@ use std::sync::Arc;
 const OPTIONS: [(O, &str, &str); 7] = [
     (O::Thirds, "Thirds", "thirds"),
     (O::Grid, "Grid", "grid"),
-    (O::Golden, "Golden", "golden"),
+    (O::Golden, "Golden Ratio", "golden"),
     (O::Diagonal, "Diagonal", "diagonal"),
     (O::Triangle, "Triangle", "triangle"),
     (O::Spiral, "Spiral", "spiral"),
     (O::None, "None", "none"),
 ];
 const FLIP: &str = "button:cropOverlayOrient";
+const FACE: &str = "dropdown:cropOverlay";
+/// The menu row of choice `index`.
 fn locator(index: usize) -> String {
-    format!("button:cropOverlay-{}", OPTIONS[index].2)
+    format!("cropOverlay:{}", OPTIONS[index].2)
 }
 fn owned(name: &str) -> bool {
-    name.starts_with("button:cropOverlay-") || name == FLIP
+    name == FACE || name.starts_with("cropOverlay:") || name == FLIP
 }
 #[derive(Clone, Copy, Debug)]
 enum Probe {
@@ -299,69 +301,45 @@ impl Fixture {
         assert_eq!(elements.len(), 1, "one actual SDK owner for {name}");
         elements[0].facts.as_ref().unwrap()
     }
-    fn radio_geometry(&self) {
-        let record = self.record.as_ref().unwrap();
-        assert_eq!(
-            record.elements.iter().filter(|element| element.facts.as_ref().is_some_and(|facts| facts.role == "RadioGroup")).count(),
-            1,
-            "one common keyboard group, not a group per row"
-        );
-        assert_eq!(record.elements.iter().filter(|element| element.facts.as_ref().is_some_and(|facts| facts.role == "RadioButton")).count(), 7);
+    /// Whether the Overlay menu is open: its rows are live.
+    fn menu_open(&self) -> bool {
+        self.rects.iter().any(|(name, _)| name.starts_with("cropOverlay:"))
+    }
+    /// Opens the menu from its face with a real click (unless it is open already).
+    fn open(&mut self) {
+        if !self.menu_open() {
+            self.click(FACE);
+        }
+        assert!(self.menu_open(), "the face opens the menu; trace={:#?}", self.trace);
+        self.menu_geometry();
+    }
+    /// Picks choice `index` with real clicks: the face, then its row.
+    fn choose(&mut self, index: usize) {
+        self.open();
+        self.click(&locator(index));
+        assert!(!self.menu_open(), "a pick closes the menu; trace={:#?}", self.trace);
+    }
+    /// The face names the chosen overlay; each of the seven rows is one real, labelled SDK owner with its
+    /// localized label painted inside it.
+    fn menu_geometry(&self) {
+        let face = self.rect(FACE);
+        assert_eq!(Some(self.hit(FACE).layer_id), self.record_layer, "the face belongs to the actual parent's layer");
+        assert!(self.panel.expand(1.0).contains_rect(face), "no panel widening: {face:?} panel={:?}", self.panel);
+        let shown = OPTIONS.iter().find(|(choice, _, _)| *choice == self.app.ui.crop_overlay).map_or("", |(_, label, _)| crate::i18n::tr(label));
+        assert!(self.texts.iter().any(|text| text.text == shown && face.expand(1.0).intersects(text.rect)), "the face says {shown}; texts={:?}", self.texts);
         let mut owners = std::collections::HashSet::new();
         for (index, (_, label, _)) in OPTIONS.iter().enumerate() {
             let name = locator(index);
             let rect = self.rect(&name);
             let hit = self.hit(&name);
-            assert!(owners.insert(hit.id));
-            // Arena members have real SDK sensing owners, not separate native cache entries.
-            // Compare both alias boxes to the independently recorded, fully labelled real hit.
-            let elements: Vec<_> = record.elements.iter().filter(|element| element.id == hit.id && element.part.is_none()).collect();
-            assert_eq!(elements.len(), 1, "one actual SDK owner for {name}");
-            let element = elements[0];
-            let facts = element.facts.as_ref().unwrap();
-            let areas: Vec<_> = record.hits.iter().filter(|area| area.owner == hit.id && area.part.is_none()).collect();
-            assert_eq!(areas.len(), 1, "one actual SDK sensing area for {name}");
-            assert_eq!(areas[0].bounds, rect, "alias is the completed real labelled owner");
-            assert_eq!(areas[0].rect, hit.interact_rect, "alias retains the actual expanded/clipped interaction area");
-            assert_eq!(Some(hit.layer_id), self.record_layer, "record and alias belong to the actual parent's layer");
-            assert!(facts.interactive && facts.actions.contains(&"click") && facts.actions.contains(&"focus"));
-            assert!(element.stop.is_some() && !facts.disabled, "real enabled SDK focus stop for {name}");
-            assert!(self.panel.expand(1.0).contains_rect(rect), "no panel widening: {name} {rect:?} panel={:?}", self.panel);
-            assert!(hit.interact_rect.expand(1.0).contains_rect(rect), "full label row must really be clickable: {name}");
-            assert!(
-                record.elements.iter().any(|element| element.id == hit.id
-                    && element
-                        .facts
-                        .as_ref()
-                        .is_some_and(|facts| facts.role == "RadioButton" && facts.name.as_deref() == Some(crate::i18n::tr(label)))),
-                "actual labelled SDK radio owner {name}"
-            );
-            let painted: Vec<_> =
-                self.texts.iter().filter(|text| text.text == crate::i18n::tr(label) && rect.expand(1.0).intersects(text.rect)).collect();
+            assert!(owners.insert(hit.id), "one owner per row");
+            let painted: Vec<_> = self.texts.iter().filter(|text| text.text == crate::i18n::tr(label) && rect.expand(1.0).intersects(text.rect)).collect();
             assert_eq!(painted.len(), 1, "full localized label is painted once: {name}; texts={:?}", self.texts);
-            let text = painted[0];
-            assert!(rect.expand(1.0).contains_rect(text.rect), "wrapped label fits its real owner: {name} {text:?}");
-            assert!(text.clip.expand(1.0).contains_rect(text.rect), "localized label must not be clipped: {name} {text:?}");
-            assert!(
-                record.hits.iter().any(|part| part.owner == hit.id && part.bounds.contains(text.rect.center())),
-                "label belongs to actual sensing owner"
-            );
-            let columns = self.overlay_columns();
-            if index % columns != 0 {
-                assert!((rect.top() - self.rect(&locator(index - 1)).top()).abs() < 1.0, "preserve reading order in rows of {columns}");
-                assert!(rect.left() > self.rect(&locator(index - 1)).left());
+            assert!(painted[0].clip.expand(1.0).contains_rect(painted[0].rect), "localized label must not be clipped: {name} {:?}", painted[0]);
+            if index > 0 {
+                assert!(rect.top() >= self.rect(&locator(index - 1)).bottom() - 1.0, "rows keep their order: {name}");
             }
         }
-        let columns = self.overlay_columns();
-        let first_bottom = (0..columns).map(|index| self.rect(&locator(index)).bottom()).fold(f32::NEG_INFINITY, f32::max);
-        assert!(self.rect(&locator(columns)).top() >= first_bottom - 1.0, "second row cannot overlap first-row labels");
-    }
-    /// How many choices the first row holds: as many as fit whole (two to four), the rest following in rows of as many.
-    fn overlay_columns(&self) -> usize {
-        let top = self.rect(&locator(0)).top();
-        let columns = (0..OPTIONS.len()).take_while(|&index| (self.rect(&locator(index)).top() - top).abs() < 1.0).count();
-        assert!((2..=4).contains(&columns), "two to four choices a row, got {columns}");
-        columns
     }
 }
 impl Drop for Fixture {
@@ -378,12 +356,13 @@ impl Drop for Fixture {
 #[test]
 fn crop_overlay_actual_parent_all_seven_pointer_choices_change_only_the_view_preference() {
     let mut f = Fixture::normal();
+    assert!(f.has(FACE) && !f.menu_open());
     for (index, (choice, _, _)) in OPTIONS.iter().enumerate() {
-        f.radio_geometry();
         let before = f.state();
-        // Click at the label end, not a proxy square or a synthetic SDK activation.
-        let rect = f.rect(&locator(index));
-        f.click_at(egui::pos2(rect.right() - 2.0, rect.center().y));
+        f.open();
+        assert_eq!(f.state(), before, "opening the menu is not a choice");
+        f.click(&locator(index));
+        assert!(!f.menu_open());
         f.expect_choice(before, *choice);
         assert_eq!(f.has(FLIP), matches!(choice, O::Triangle | O::Spiral));
         f.idle();
@@ -397,52 +376,38 @@ fn crop_overlay_actual_parent_normal_and_minimum_panel_localized_labels_have_com
         for locale in [Locale::En, Locale::De, Locale::Fr, Locale::Ru, Locale::Fi] {
             let mut f = Fixture::new(width, locale);
             for (index, (choice, _, _)) in OPTIONS.iter().enumerate() {
-                f.radio_geometry();
                 assert_eq!(f.app.ui.right_width, width, "no widening the user's panel preference");
                 let before = f.state();
-                let rect = f.rect(&locator(index));
-                f.click_at(egui::pos2(rect.right() - 2.0, rect.center().y));
+                f.choose(index);
                 f.expect_choice(before, *choice);
+                // the closed face names the new choice in the user's language
+                f.open();
+                f.key(Key::Escape);
+                assert!(!f.menu_open());
             }
         }
     }
 }
 
 #[test]
-fn crop_overlay_actual_parent_one_tab_stop_spatial_arrows_and_real_space_enter_pick_observed_owners() {
-    let mut f = Fixture::normal();
-    let untouched = f.state();
-    f.radio_geometry();
-    f.tab_to(&locator(0));
-    assert_eq!(f.state(), untouched, "Tab traversal is not a develop or preference edit");
-    f.key(Key::ArrowRight);
-    assert!(f.focused(&locator(1)), "Right moves to actual Grid; trace={:#?}", f.trace);
-    assert_eq!(f.state(), untouched, "arrows focus without choosing");
-    f.key(Key::Space);
-    f.expect_choice(untouched, O::Grid);
-    let before = f.state();
-    // the rows hold as many choices as fit whole: Down from Grid is the choice below it in the next row
-    let columns = f.overlay_columns();
-    f.key(Key::ArrowDown);
-    assert!(f.focused(&locator(1 + columns)), "Down moves to the next row in the same column; trace={:#?}", f.trace);
-    assert_eq!(f.state(), before);
-    f.key(Key::Enter);
-    f.expect_choice(before, OPTIONS[1 + columns].0);
-    let before = f.state();
-    f.key(Key::ArrowLeft);
-    assert!(f.focused(&locator(columns)), "Left moves to the row's first choice; trace={:#?}", f.trace);
-    f.key(Key::ArrowUp);
-    assert!(f.focused(&locator(0)), "Up crosses rows to Thirds; trace={:#?}", f.trace);
-    assert_eq!(f.state(), before);
-    f.key(Key::Enter);
-    f.expect_choice(before, O::Thirds);
-    let before = f.state();
-    f.key(Key::Tab);
-    assert!(!(0..7).any(|index| f.focused(&locator(index))), "Tab leaves the one group, not the first row");
-    f.key_mod(Key::Tab, Modifiers::SHIFT);
-    assert!(f.focused(&locator(0)), "Shift-Tab returns to selected member");
-    assert_eq!(f.state(), before);
-    f.idle();
+fn crop_overlay_actual_parent_tab_enter_arrows_and_space_pick_observed_owners() {
+    for activate in [Key::Enter, Key::Space] {
+        let mut f = Fixture::normal();
+        let untouched = f.state();
+        f.tab_to(FACE);
+        assert_eq!(f.state(), untouched, "Tab traversal is not a develop or preference edit");
+        f.key(activate);
+        assert!(f.menu_open(), "the key opens the menu; trace={:#?}", f.trace);
+        assert!(f.focused(&locator(0)), "the chosen Thirds is the menu's first stop; trace={:#?}", f.trace);
+        assert_eq!(f.state(), untouched, "opening is not a choice");
+        f.key(Key::ArrowDown);
+        assert!(f.focused(&locator(1)), "Down moves to Grid; trace={:#?}", f.trace);
+        assert_eq!(f.state(), untouched, "arrows focus without choosing");
+        f.key(activate);
+        assert!(!f.menu_open());
+        f.expect_choice(untouched, O::Grid);
+        f.idle();
+    }
 }
 
 #[test]
@@ -450,7 +415,7 @@ fn crop_overlay_actual_parent_conditional_flip_cycles_once_and_retains_orientati
     let mut f = Fixture::normal();
     assert!(!f.has(FLIP));
     let before = f.state();
-    f.click(&locator(4));
+    f.choose(4);
     f.expect_choice(before, O::Triangle);
     assert!(f.has(FLIP));
     let before = f.state();
@@ -459,12 +424,12 @@ fn crop_overlay_actual_parent_conditional_flip_cycles_once_and_retains_orientati
     expected["ui"]["cropOverlayOrient"] = json!(0);
     assert_eq!(f.state(), expected, "retained empty-payload orientation command advances once");
     let before = f.state();
-    f.click(&locator(1));
+    f.choose(1);
     f.expect_choice(before, O::Grid);
     assert!(!f.has(FLIP));
     assert_eq!(f.app.ui.crop_overlay_orient, 0);
     let before = f.state();
-    f.click(&locator(5));
+    f.choose(5);
     f.expect_choice(before, O::Spiral);
     assert!(f.has(FLIP));
     assert_eq!(f.app.ui.crop_overlay_orient, 0);
@@ -488,9 +453,15 @@ fn crop_overlay_actual_parent_conditional_flip_cycles_once_and_retains_orientati
 #[test]
 fn crop_overlay_actual_parent_disabled_sizing_and_measurement_never_publish_speculative_choices_or_replay_releases() {
     for probe in [Probe::Disabled, Probe::Sizing, Probe::Measure] {
-        for target in [locator(1), FLIP.to_owned()] {
+        for row in [false, true] {
             let mut f = Fixture::normal();
-            f.click(&locator(4));
+            f.choose(4);
+            let target = if row {
+                f.open();
+                locator(1)
+            } else {
+                FLIP.to_owned()
+            };
             let before = f.state();
             let pos = f.rect(&target).center();
             f.frame(vec![Event::PointerMoved(pos)]);
@@ -502,27 +473,26 @@ fn crop_overlay_actual_parent_disabled_sizing_and_measurement_never_publish_spec
             if matches!(probe, Probe::Sizing | Probe::Measure) {
                 assert!(!f.rects.iter().any(|(name, _)| owned(name)), "speculative passes publish no targets");
                 assert!(!f.hits.iter().any(|(name, _)| owned(name)));
-            } else {
-                for (name, _) in f.hits.iter().filter(|(name, _)| owned(name)) {
-                    assert!(f.owner_facts(name).disabled, "disabled owner {name}");
-                }
+            } else if !row {
+                assert!(f.owner_facts(FLIP).disabled, "disabled owner {FLIP}");
             }
             f.probe = Probe::Real;
             f.settle();
             assert_eq!(f.state(), before, "reenabling cannot replay");
             let before = f.state();
-            f.click(&locator(1));
+            f.choose(1);
             f.expect_choice(before, O::Grid);
         }
     }
 }
 
 #[test]
-fn crop_overlay_actual_parent_speculative_or_disabled_keyboard_cannot_choose_an_unselected_focused_radio() {
+fn crop_overlay_actual_parent_speculative_or_disabled_keyboard_cannot_choose_a_focused_row() {
     for probe in [Probe::Disabled, Probe::Sizing, Probe::Measure] {
         let mut f = Fixture::normal();
-        f.tab_to(&locator(0));
-        f.key(Key::ArrowRight);
+        f.tab_to(FACE);
+        f.key(Key::Enter);
+        f.key(Key::ArrowDown);
         assert!(f.focused(&locator(1)));
         let before = f.state();
         f.probe = probe;
@@ -532,7 +502,7 @@ fn crop_overlay_actual_parent_speculative_or_disabled_keyboard_cannot_choose_an_
         f.settle();
         assert_eq!(f.state(), before, "no late keyboard replay");
         let before = f.state();
-        f.click(&locator(1));
+        f.choose(1);
         f.expect_choice(before, O::Grid);
     }
 }
@@ -541,6 +511,7 @@ fn crop_overlay_actual_parent_speculative_or_disabled_keyboard_cannot_choose_an_
 fn crop_overlay_actual_parent_stale_capture_cannot_cross_photo_hidden_parent_or_missing_selection() {
     for change in ["photo", "hidden", "selection"] {
         let mut f = Fixture::normal();
+        f.open();
         let pos = f.rect(&locator(1)).center();
         f.frame(vec![Event::PointerMoved(pos)]);
         f.pointer(pos, true);
@@ -563,7 +534,9 @@ fn crop_overlay_actual_parent_stale_capture_cannot_cross_photo_hidden_parent_or_
         let before = f.state();
         f.pointer(pos, false);
         assert_eq!(f.state(), before, "old release has no new owner action; trace={:#?}", f.trace);
-        if change != "photo" {
+        if change == "photo" {
+            assert!(!f.menu_open(), "the other photo's panel has no open menu; trace={:#?}", f.trace);
+        } else {
             assert!(!f.rects.iter().any(|(name, _)| owned(name)));
         }
         if change == "hidden" {
@@ -576,7 +549,7 @@ fn crop_overlay_actual_parent_stale_capture_cannot_cross_photo_hidden_parent_or_
         f.settle();
         assert_eq!(f.state(), before, "returning does not replay old capture");
         let before = f.state();
-        f.click(&locator(1));
+        f.choose(1);
         f.expect_choice(before, O::Grid);
         f.idle();
     }
@@ -587,6 +560,7 @@ fn crop_overlay_actual_parent_escape_and_release_outside_cancel_without_late_vie
     for escape in [false, true] {
         let mut f = Fixture::normal();
         let before = f.state();
+        f.open();
         let pos = f.rect(&locator(1)).center();
         f.frame(vec![Event::PointerMoved(pos)]);
         f.pointer(pos, true);
@@ -599,7 +573,7 @@ fn crop_overlay_actual_parent_escape_and_release_outside_cancel_without_late_vie
         assert_eq!(f.state(), before, "cancelled pointer capture must not activate; trace={:#?}", f.trace);
         f.idle();
         let before = f.state();
-        f.click(&locator(1));
+        f.choose(1);
         f.expect_choice(before, O::Grid);
     }
 }
@@ -607,7 +581,7 @@ fn crop_overlay_actual_parent_escape_and_release_outside_cancel_without_late_vie
 #[test]
 fn crop_overlay_actual_parent_retained_genuine_redo_and_undo_do_not_revert_view_preferences() {
     let mut f = Fixture::normal();
-    f.click(&locator(5));
+    f.choose(5);
     f.click(FLIP);
     let first = json!(f.app.session.catalog.photo(f.photos[0]).unwrap());
     let other = json!(f.app.session.catalog.photo(f.photos[1]).unwrap());

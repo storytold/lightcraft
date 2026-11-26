@@ -17,6 +17,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 
 pub mod brush_live;
 pub mod canvas_keys;
+pub mod channel;
 mod command_error;
 pub mod control;
 pub mod destination;
