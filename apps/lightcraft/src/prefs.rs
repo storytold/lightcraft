@@ -1,4 +1,4 @@
-use super::*;
+use super::{LibraryProblem, LightcraftApp, UiState};
 
 /// Where the system keeps monitor profiles, for the Choose Profile dialog to start in: the user's
 /// own profiles first (Linux: colord / DisplayCAL; macOS: ColorSync), then the system's.
@@ -67,6 +67,11 @@ fn decode_saved_ui(bytes: &[u8]) -> Result<(UiState, bool), String> {
     if recovered {
         fields.remove("docking");
     }
+    // A settings file from before the startup dialog existed has no `seenVersion` key: the file
+    // is there, so this is an installation that has been run, due What's New — never the
+    // first-run tour. Shared with the browser's loader, which runs the same migration on its
+    // stored `ui.json` (`startup::migrate_legacy_seen_version` carries the full story).
+    lightcraft_ui_egui::startup::migrate_legacy_seen_version(fields);
     let ui = serde_json::from_value(saved).map_err(|error| error.to_string())?;
     Ok((ui, recovered))
 }

@@ -1,4 +1,4 @@
-use super::*;
+use super::{LightcraftApp, SCREEN_PROFILE, theme};
 
 impl LightcraftApp {
     /// The system's appearance: the host's answer first, then egui's (none: unknown).
@@ -6,9 +6,32 @@ impl LightcraftApp {
         self.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
     }
 
+    /// Whether motion is reduced: the user's choice, else the system's Reduce Motion (off when unknown).
+    pub fn reduce_motion(&self) -> bool {
+        self.ui.settings.reduce_motion.unwrap_or(self.system_reduce_motion.unwrap_or(false))
+    }
+
+    /// Whether there is a system Reduce Motion to follow: a reader that has answered.
+    pub(crate) fn system_reduce_motion_available(&self) -> bool {
+        self.services.system_reduce_motion.is_some() && self.system_reduce_motion.is_some()
+    }
+
+    /// Read the system's Reduce Motion (`services.system_reduce_motion`) at most once a second.
+    fn follow_system_reduce_motion(&mut self) {
+        let now = self.tick_now();
+        if self.system_reduce_motion_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+            return;
+        }
+        let Some(read) = self.services.system_reduce_motion.as_mut() else { return };
+        self.system_reduce_motion_read = Some(now);
+        self.system_reduce_motion = read();
+    }
+
     /// Restyle `ctx` when the theme the settings select (Appearance Mode, the dark and light
     /// themes, the system's appearance in Auto) is not the one it shows. A no-op otherwise.
     pub fn sync_theme(&mut self, ctx: &egui::Context) {
+        self.follow_system_reduce_motion();
+        crate::motion::sync(ctx, self.reduce_motion());
         let wanted = self.ui.settings.theme(self.system_theme(ctx));
         if theme::current(ctx) != Some(wanted) {
             theme::apply_kind(ctx, wanted);
@@ -34,7 +57,7 @@ impl LightcraftApp {
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context) {
         if self.gpu_applied != Some(self.ui.settings.gpu) {
             self.gpu_applied = Some(self.ui.settings.gpu);
-            let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu}));
+            let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu, "wait": false}));
             // GPU device + kernels off the UI thread, once the window is up and only when GPU
             // rendering is on: a broken driver must not keep the window from appearing (issue #136)
             if self.ui.settings.gpu {
@@ -48,6 +71,12 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        let limit = self.ui.settings.hot_pixel_limit;
+        if self.hot_pixels_applied != Some(limit) {
+            self.hot_pixels_applied = Some(limit);
+            // (a value the engine refuses, from a hand-edited file, leaves its limit as it was)
+            let _ = self.session.execute("app.hotPixelLimit", &serde_json::json!({"percent": limit}));
+        }
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();
@@ -84,9 +113,14 @@ impl LightcraftApp {
     /// While no display profile is chosen, show previews through the profile of the screen the
     /// window is on (`services.screen_profile`), read about once a second so moving the window to
     /// another screen is followed. Without the service (or a profile) the display is sRGB.
-    fn follow_screen_profile(&mut self, _ctx: &egui::Context) {
+    fn follow_screen_profile(&mut self, ctx: &egui::Context) {
+        if self.services.screen_profile.is_none() {
+            return;
+        }
+        // an idle window draws no frames: wake up to read again, so a profile changed in Windows is followed
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
         let now = self.tick_now();
-        if self.services.screen_profile.is_none() || self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+        if self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
             return;
         }
         self.screen_profile_read = Some(now);

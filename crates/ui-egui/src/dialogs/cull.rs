@@ -1,4 +1,4 @@
-use super::*;
+use super::json;
 
 /// Apply a dialog's action (also used by `ui.dialog.confirm`).
 /// What [`fmt_gap`] writes, read back: `90`, `90 s`, `1 min 30 s`, `2 h 5 min`, `1 day`

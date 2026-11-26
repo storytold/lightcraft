@@ -110,6 +110,9 @@ fn count_text_by_unit() {
         cancellable: true,
         cancelling: false,
         age_ms: 600,
+        waiting: false,
+        place: 0,
+        lane: None,
     };
     assert_eq!(count_text(&t), "3 of 25");
     (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
@@ -170,6 +173,35 @@ fn quit_with_a_running_task_asks_and_quit_anyway_cancels() {
     assert!(!has(&h, "button:quitRetry"));
     click(&mut h, "button:quitAnyway");
     assert!(g.is_cancelled() && h.quit_requested());
+}
+
+/// Files waiting for a running import or Synchronize Folder (issue #2779) make quitting ask, and
+/// Quit Anyway gives them up instead of asking about them again and again.
+#[test]
+fn quit_anyway_gives_up_files_waiting_to_be_imported() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-quit-waiting-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..1000u32 {
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[(i % 251) as u8, (i / 251) as u8, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join(format!("{i}.png")), png).unwrap();
+    }
+    let mut h = demo();
+    // the file waits behind an import that is still running
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    h.app.waiting_import.files = vec![dir.join("0.png").to_string_lossy().to_string()];
+    wait_visible(&mut h);
+    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting");
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
+    h.step();
+    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting at the click");
+    click(&mut h, "button:quitAnyway");
+    assert!(h.app.quit_prompt.is_none(), "not asked again: {:?}", h.app.quit_prompt);
+    assert!(h.quit_requested());
+    assert!(h.app.waiting_import.files.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -414,6 +446,34 @@ fn merge_dialog_remembers_the_last_settings_per_kind() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Issue #2708: a preview that failed (a photo's file missing) is tried again when the dialog opens again; it used to
+/// show neither a preview nor an error until an option changed.
+#[test]
+fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
+    let (mut h, dir) = bracket("merge-retry");
+    let (file, away) = (dir.join("IMG_1.dng"), dir.join("IMG_1.away"));
+    std::fs::rename(&file, &away).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.error.is_some(), "the preview failed");
+    h.app.ui.dialog = None;
+    h.step();
+    // the file is back (a drive reconnected); the same photos and options again
+    std::fs::rename(&away, &file).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(
+        h.app.merge.preview.is_some() || h.app.merge.preview_task.is_some() || h.app.merge.error.is_some(),
+        "the dialog shows a preview, one being made, or why not"
+    );
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.preview.is_some(), "{:?}", h.app.merge.error);
+    h.app.ui.dialog = None;
+    h.step();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// HDR for Each Bracket Set runs the merges one after the other, each with its activity row; cancelling one stops the
 /// rest.
 #[test]
@@ -452,7 +512,7 @@ fn batch_merge_runs_each_set_in_turn() {
     let rows = h.app.session.activity.list();
     assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
     // the first merge finishes and the second starts by itself
-    assert!(h.step_until(T, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
     assert_eq!(h.app.session.catalog.len(), 10);
     // cancelling the second drops the third
     let rows = h.app.session.activity.list();
@@ -533,4 +593,93 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     h.app.ui.toast = None;
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
+}
+
+/// Given a preview build running and another waiting in line behind it, then the stack shows the running build only,
+/// and the waiting one starts by itself, in a frame, when the build ahead of it ends.
+#[test]
+fn a_task_waiting_in_line_has_no_row_and_starts_when_the_lane_frees() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let build = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(build.clone());
+    let running = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    let queued = h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    let waiting = queued["queued"].as_u64().expect("it waits");
+    assert_eq!(h.app.session.activity.list().len(), 2);
+    wait_visible(&mut h);
+    assert!(has(&h, &format!("activity:row:{}", running.id())));
+    assert!(!has(&h, &format!("activity:row:{waiting}")) && rows(&h) == 1, "a waiting task draws no row");
+    // the lane frees with no command asked: the frame loop starts it
+    build.finished.store(true, Ordering::Release);
+    drop(running);
+    let t0 = std::time::Instant::now();
+    while h.app.session.activity.list().iter().any(|t| t.id == waiting && t.label == "Building previews") && t0.elapsed() < T {
+        h.step();
+        let started = h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build));
+        if started {
+            break;
+        }
+    }
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build)), "the waiting build started");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
+}
+
+/// Given a build that ended and a build waiting behind it, when a command starts the waiting one before the frame that
+/// announces the first, then the first one's end is still announced, and once.
+#[test]
+fn a_build_replaced_by_the_one_waiting_behind_it_is_still_announced() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    first.done.store(2, Ordering::Relaxed);
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    // a command in the same frame, before the app looks at the finished build
+    h.app.session.execute("activity.list", &json!({})).unwrap();
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build replaced it");
+    h.step();
+    assert!(first.reported.load(Ordering::Relaxed), "its end was announced");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Previews ready for 2 photos"), "{toast}");
+    assert!(h.app.session.take_unreported_builds().is_empty());
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
+}
+
+/// Given a build that ended and a build waiting behind it, when the frame starts the waiting one, then the same frame
+/// asks to be drawn again to see how it goes: nothing else repaints an idle window (the list is closed, or Full Screen
+/// Preview hides it).
+#[test]
+fn the_frame_that_starts_a_waiting_build_asks_for_the_next_one() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    let ctx = egui::Context::default();
+    // (a few empty passes let the context's own first-frame requests go by)
+    for _ in 0..4 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+    }
+    assert!(!ctx.has_requested_repaint(), "an idle context asks for nothing");
+    h.app.tick_preview_builds(&ctx);
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build started");
+    assert!(ctx.has_requested_repaint(), "and the frame asked to look at it again");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
 }

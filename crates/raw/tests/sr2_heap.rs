@@ -3,7 +3,7 @@
 //! it must not cost memory sized by its other entries: a hostile file can give it fields that each alias most of the
 //! file. Only the block's offset, length and key may be read. One test per binary (dhat's profiler is global).
 
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, Tiff, TiffWriter, Value, tags as t};
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, Tiff, TiffWriter, Value, tags as t};
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;

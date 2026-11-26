@@ -1,6 +1,6 @@
+use super::ExportOptions;
 use super::place::Placer;
 use super::prepare::{Destination, Exported, PreparedExport};
-use super::*;
 
 /// Run prepared exports in order: pick each one's path, and hand the bytes (and sidecars) to
 /// `write`. `exists` tells whether a path is taken. The conflict policy applies to a file and its

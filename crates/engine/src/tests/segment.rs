@@ -17,7 +17,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 /// A folder that looks installed but holds no usable model.
-fn damaged_model(name: &str) -> std::path::PathBuf {
+pub(super) fn damaged_model(name: &str) -> std::path::PathBuf {
     let d = tmp(name);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{not json at all}").unwrap();
@@ -50,6 +50,17 @@ fn status_and_model_commands_without_the_model() {
     assert_eq!(st["installed"], false);
     assert_eq!(st["download"]["running"], false);
     assert!(st["license"].as_str().unwrap().contains("SAM License"));
+    // where it runs: nowhere yet (no model loaded), and nothing timed
+    if Segmenter::AVAILABLE {
+        let b = &st["backend"];
+        assert!(b["device"].is_null() && b["encodeMs"].is_null() && b["analyzeMs"].is_null(), "{b}");
+        // the GPU switches show before the model loads (macOS: Metal, which only the environment switches govern)
+        let off = if cfg!(target_os = "macos") { lightcraft_gpu::env_off_reason().map(str::to_string) } else { lightcraft_gpu::switched_off() };
+        assert_eq!(b["fallback"].as_str(), off.as_deref(), "{b}");
+    } else {
+        assert!(st["backend"].is_null());
+    }
+    assert_eq!(st["runOn"], "auto");
     // downloading needs the user's consent, and names the size and the licence
     let e = s.execute("segment.model.download", &json!({})).unwrap_err().to_string();
     assert!(e.contains("acknowledged") && e.contains("SAM License") && e.contains("GB"), "{e}");
@@ -240,6 +251,25 @@ fn object_clicks_are_capped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// In background mode a new Object mask with too many clicks is refused up front, not queued.
+#[test]
+fn background_object_clicks_over_the_cap_are_refused_before_queueing() {
+    if !Segmenter::AVAILABLE {
+        return;
+    }
+    let mut s = Session::with_demo();
+    s.segmenter.background = true;
+    let dir = damaged_model("later-clicks");
+    s.segmenter.dir = Some(dir.clone());
+    let id = s.active().unwrap();
+    let points: Vec<_> = (0..=crate::segment::MAX_CLICKS).map(|_| json!([0.5, 0.5])).collect();
+    let e = s.execute("mask.add", &json!({"kind": "object", "points": points})).unwrap_err().to_string();
+    assert!(e.contains("at most"), "{e}");
+    assert!(s.develop_of(id).unwrap().masks.is_empty());
+    assert!(!s.segmenter.busy());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(feature = "sam")]
 #[test]
 fn a_running_model_download_shows_in_activity_and_cancels() {
@@ -312,4 +342,38 @@ fn a_missing_model_is_model_missing_by_kind() {
             }
         }
     }
+}
+
+/// Where SAM 3 runs is the user's choice (`segment.settings`), shown by `segment.model.status`, kept in the settings
+/// file and read back by the next session; a bad value is refused and changes nothing.
+#[test]
+fn the_choice_of_where_ai_masks_run_is_kept() {
+    let dir = tmp("runon");
+    let file = dir.join("models").join("sam3-settings.json");
+    let mut s = Session::with_demo();
+    s.segmenter.settings_file = Some(file.clone());
+    assert_eq!(s.execute("segment.settings", &json!({})).unwrap()["runOn"], "auto");
+    assert_eq!(s.execute("segment.settings", &json!({"runOn": "cpu"})).unwrap()["runOn"], "cpu");
+    let st = s.execute("segment.model.status", &json!({})).unwrap();
+    assert_eq!(st["runOn"], "cpu");
+    if Segmenter::AVAILABLE {
+        assert_eq!(st["backend"]["fallback"], crate::segment::CPU_CHOSEN, "{st}");
+    }
+    let e = s.execute("segment.settings", &json!({"runOn": "gpu"})).unwrap_err().to_string();
+    assert!(e.contains("auto or cpu"), "{e}");
+    assert_eq!(s.segmenter.run_on(), crate::segment::RunOn::Cpu);
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved["runOn"], "cpu");
+    // the next session reads it; a damaged file is Automatic
+    let mut again = Session::with_demo();
+    again.segmenter.settings_file = Some(file.clone());
+    again.segmenter.load_settings();
+    assert_eq!(again.segmenter.run_on(), crate::segment::RunOn::Cpu);
+    std::fs::write(&file, b"{not json").unwrap();
+    again.segmenter.load_settings();
+    assert_eq!(again.segmenter.run_on(), crate::segment::RunOn::Auto);
+    // without a settings file the choice holds for the session
+    let mut memory = Session::with_demo();
+    assert_eq!(memory.execute("segment.settings", &json!({"runOn": "cpu"})).unwrap()["runOn"], "cpu");
+    let _ = std::fs::remove_dir_all(dir);
 }

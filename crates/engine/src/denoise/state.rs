@@ -1,7 +1,7 @@
 use super::model::{Loader, default_loader};
 use super::products::{Active, Progress};
 use super::settings::Settings;
-use super::*;
+use super::{Arc, Downloads, HashMap, Mutex, PathBuf, PhotoId, Serialize, VecDeque};
 
 /// Most photos waiting in the queue.
 pub(super) const MAX_QUEUE: usize = 5000;
@@ -54,8 +54,6 @@ impl Pace {
 pub enum PhotoState {
     /// Not a photo denoise applies to (not a raw, offline, a demo).
     NotApplicable,
-    /// No model is chosen: nothing can be made.
-    NoModel,
     /// Its picture is made: the Amount slider works.
     Ready,
     Queued {

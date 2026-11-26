@@ -1,4 +1,4 @@
-use super::*;
+use super::{LABEL_W, RichText, Tokens, register};
 
 /// `path` shortened to fit `max` (as `width` measures it) by dropping leading folders, after
 /// either kind of separator, so that its end stays (`…/Pictures/Library`,
@@ -47,6 +47,16 @@ pub(super) fn label_width(ui: &egui::Ui, text: &str, style: egui::TextStyle) -> 
 /// The same for a button, which has padding either side of its text.
 pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     label_width(ui, text, egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
+}
+
+/// A text box of the Settings window, shown: Esc in it gives its text back and is used up by
+/// that, so Settings stays open (a second Esc, with nothing being edited, closes it).
+pub(super) fn field(ui: &mut egui::Ui, field: crate::text_field::TextField<'_>) -> crate::text_field::TextFieldResponse {
+    let shown = field.show(ui);
+    if shown.cancelled() {
+        crate::widgets::take_escape(ui.ctx());
+    }
+    shown
 }
 
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {

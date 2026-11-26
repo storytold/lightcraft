@@ -1,4 +1,4 @@
-use super::*;
+use super::LightcraftApp;
 
 /// Rows the Rename dialog previews.
 pub(super) const RENAME_PREVIEW_ROWS: usize = 6;

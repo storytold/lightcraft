@@ -1,4 +1,4 @@
-use super::*;
+use super::{Session, Value, pick};
 
 pub type PickFiles = Box<dyn FnMut() -> Vec<String>>;
 
@@ -35,6 +35,9 @@ pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> +
 /// not known).
 pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
 
+/// Whether the system asks for reduced motion (`None`: not known).
+pub type SystemReduceMotionFn = Box<dyn FnMut() -> Option<bool>>;
+
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
@@ -51,6 +54,8 @@ pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
 pub struct Services {
+    /// Local's built-in places as (label, path). None uses the host's home folder.
+    pub local_places: Option<Vec<(String, String)>>,
     /// Native file dialogs for commands, shown off the UI thread and answered later
     /// (`pick`; #191). With it, the synchronous pickers below serve only the buttons inside
     /// dialogs; without it (the web, tests) they answer the commands too.
@@ -68,8 +73,13 @@ pub struct Services {
     /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Display; desktop only).
     pub pick_display_profile: Option<PickFiles>,
     /// The profile of the screen showing the window, used while none is chosen in Settings ▸
-    /// Display (macOS, whose windows aren't colour-managed: issue #787).
+    /// Display: macOS's screen profile (its windows aren't colour-managed: issue #787), colord's on
+    /// Linux, and on Windows the monitor's (none while Windows colour-manages the desktop itself).
     pub screen_profile: Option<ScreenProfileFn>,
+    /// The system's Reduce Motion setting (macOS), followed while Settings ▸ Interface ▸ Reduce motion
+    /// has not been changed by the user; read at most once a second, on frames the app draws (an idle
+    /// window notices on its next input), as people switch it while the app runs.
+    pub system_reduce_motion: Option<SystemReduceMotionFn>,
     /// Save dialog for an exported `.lcpreset` file.
     pub save_preset_file: Option<SaveFile>,
     /// Open dialog for a keyword list file (`.txt`, Photo Supreme's `.utf8`; File ▸ Import Keywords…).

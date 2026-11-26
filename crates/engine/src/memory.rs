@@ -99,7 +99,10 @@ pub fn cache_share(budget: usize) -> usize {
 /// A weighted semaphore over bytes of working memory: [`WorkGate::acquire`] waits while other
 /// holders already use the limit (one holder may always proceed, whatever its size).
 pub struct WorkGate {
-    state: Mutex<(usize, usize)>,
+    /// Bytes held and the limit. Held is a `u128`: callers weigh work with saturating maths, so a
+    /// permit may hold `usize::MAX`, and the exact total of several such permits still fits, so
+    /// releasing one in any order leaves the others counted (issue #2576).
+    state: Mutex<(u128, usize)>,
     cv: Condvar,
 }
 
@@ -114,7 +117,7 @@ impl WorkGate {
         WorkGate { state: Mutex::new((0, limit)), cv: Condvar::new() }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, (usize, usize)> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, (u128, usize)> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -123,24 +126,27 @@ impl WorkGate {
         self.cv.notify_all();
     }
 
-    /// Bytes held now and the limit.
+    /// Bytes held now (at most `usize::MAX`) and the limit.
     pub fn usage(&self) -> (usize, usize) {
-        *self.lock()
+        let g = self.lock();
+        (usize::try_from(g.0).unwrap_or(usize::MAX), g.1)
     }
 
-    /// Hold `bytes`, waiting until they fit (or nothing else is held).
+    /// Hold `bytes`, waiting until they fit (or nothing else is held). Even `usize::MAX` bytes on
+    /// a gate whose limit is `usize::MAX` make the next holder wait.
     pub fn acquire(&self, bytes: usize) -> Permit<'_> {
         let mut g = self.lock();
-        while g.0 > 0 && g.0 + bytes > g.1 {
+        while g.0 > 0 && g.0.saturating_add(bytes as u128) > g.1 as u128 {
             g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
         }
-        g.0 += bytes;
+        g.0 = g.0.saturating_add(bytes as u128);
         Permit { gate: self, bytes }
     }
 
     /// Hold `bytes` without waiting (interactive work): counted, so background work waits for it.
     pub fn acquire_urgent(&self, bytes: usize) -> Permit<'_> {
-        self.lock().0 += bytes;
+        let mut g = self.lock();
+        g.0 = g.0.saturating_add(bytes as u128);
         Permit { gate: self, bytes }
     }
 }
@@ -148,7 +154,7 @@ impl WorkGate {
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
         let mut g = self.gate.lock();
-        g.0 = g.0.saturating_sub(self.bytes);
+        g.0 = g.0.saturating_sub(self.bytes as u128);
         drop(g);
         self.gate.cv.notify_all();
     }

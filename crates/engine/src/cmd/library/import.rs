@@ -1,5 +1,5 @@
 use super::selection::strs;
-use super::*;
+use super::{AlbumId, PhotoId, Result, Selection, Session, Value, bad, bool_or, json, str_param};
 
 /// The auto-import folder's visible files with their sizes (the file-system half of
 /// `library.autoImportScan`; the app lists on a worker thread and passes `listing`).
@@ -60,24 +60,41 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
     {
         return Err(bad("library.import", format!("unknown metadata preset `{n}`")));
     }
+    // the chosen preset and the import defaults' preset (presets saved earlier are kept in prefs)
+    for n in metadata_preset.iter().chain(s.import_defaults.metadata_preset.iter()) {
+        if let Some(mp) = s.metadata_presets.iter().find(|m| m.name.eq_ignore_ascii_case(n)) {
+            crate::cmd::metadata::check_keywords(s, &mp.fields, "library.import")?;
+        }
+    }
     let on_deleted = match str_param(p, "onDeleted") {
         Some(v) => {
             crate::import::OnDeleted::parse(v).ok_or_else(|| bad("library.import", format!("unknown onDeleted `{v}` (restore|skip|fresh)")))?
         }
         None => Default::default(),
     };
+    let rename_start = match p.get("renameStart").and_then(Value::as_u64) {
+        Some(n) => usize::try_from(n).map_err(|_| bad("library.import", "renameStart is too large for this platform"))?,
+        None => 1,
+    };
+    let keywords = strs(p, "keywords");
+    for k in &keywords {
+        s.catalog.check_keyword_name(k).map_err(|e| bad("library.import", e.to_string()))?;
+    }
     let opts = crate::import::ImportOptions {
         on_deleted,
         mode,
         preset,
-        keywords: strs(p, "keywords"),
+        keywords,
         destination: str_param(p, "destination").map(str::to_string),
         organize,
         rename: str_param(p, "rename").map(str::to_string),
-        rename_start: p.get("renameStart").and_then(Value::as_u64).unwrap_or(1) as usize,
+        rename_start,
         metadata_preset,
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
+        // (only the Lightroom import makes records of duplicates)
+        read_duplicates: false,
+        recipe: crate::cmd::recipe_param(p, "library.import")?,
     };
     let album_name = str_param(p, "albumName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     Ok(ImportRequest { paths, opts, album, album_name })
