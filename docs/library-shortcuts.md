@@ -22,6 +22,7 @@ Select photos in Photo Grid or Square Grid, then use:
 | `\` (backslash) | Show / hide the Filter Bar |
 | ⌘K / Ctrl+K | Add Keywords: show the Keywords panel with the cursor in its Add keyword box |
 | ⌘L / Ctrl+L | Enable Filters: switch the filter off and on |
+| ⌘⌥X / Ctrl+Alt+X | Hide Rejected Photos: show only picks and unflagged photos; press again to show the rejects too. The rest of the filter stays |
 | ⌘⌥K / Ctrl+Alt+K | Enable Painting: paint the painter box's keyword, or stop painting |
 | ⌘⌥⇧C / Ctrl+Alt+Shift+C | Copy Metadata: copy the active photo's metadata |
 | ⌘⌥⇧V / Ctrl+Alt+Shift+V | Paste Metadata: paste the copied metadata on the selected photos |
