@@ -286,6 +286,12 @@ impl LightcraftApp {
                 break;
             }
         }
+        // The framework's frame input is not part of the forked memory: the window sets it before each pass
+        // (`shell::prepare`), so without it the shadow draws the framework's fallback root — light, the default sizes,
+        // no host, so the framework's own English words — over a window that is dark, sized and translated. Give the
+        // shadow the window's own input for its pass. It goes after the pass numbers agree, because the fork also
+        // brought the window's pass count and `set_input` expects the hooks to have run for this context's last pass.
+        super::shell::prepare(self, &view.ctx);
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();

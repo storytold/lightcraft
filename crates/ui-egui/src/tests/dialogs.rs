@@ -128,6 +128,44 @@ fn a_click_outside_closes_the_dialog_when_settings_allow_it() {
     assert!(h.app.ui.dialog.is_none(), "the next click on the backdrop does");
 }
 
+/// A drag that starts on the confirm button, travels past egui's click distance and comes back is not a click, even
+/// when the press and the release both land on the button in one pass: the footer must not confirm it. A host's
+/// one-pass click (press and release on the button, no travel between) still confirms.
+#[test]
+fn a_drag_that_ends_back_on_the_confirm_button_does_not_confirm() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    let active = h.app.session.active().unwrap();
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [active.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.key", json!({"key": "delete"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let asking = Some(crate::state::Dialog::ConfirmDelete { count: 1 });
+    assert_eq!(h.app.ui.dialog, asking, "Delete asks before moving photos to Recently Deleted");
+    let ok = h.app.widgets.iter().find(|(id, _)| id == "button:dialogOk").map(|(_, rect)| *rect).expect("the Delete button");
+    let at = ok.center();
+    let away = egui::pos2(at.x, at.y - 60.0);
+    let press = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    // one pass: press on Delete, drag well past egui's click distance and back, release on Delete
+    h.events.extend([
+        egui::Event::PointerMoved(at),
+        press(at, true),
+        egui::Event::PointerMoved(away),
+        egui::Event::PointerMoved(at),
+        press(at, false),
+    ]);
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.dialog, asking, "a drag that ends back on Delete is not a click");
+    assert!(!h.app.session.catalog.photo(active).unwrap().deleted, "the photo stays in the library");
+    // the host's one-pass click still confirms
+    h.events.extend([press(at, true), press(at, false)]);
+    h.step();
+    h.step();
+    assert!(h.app.session.catalog.photo(active).unwrap().deleted, "a click moves it to Recently Deleted");
+}
+
 /// With a dropdown open in the dialog, a click on the backdrop only closes the dropdown, even when
 /// it arrives pressed and released in one frame (the dropdown closes while the dialog is drawn).
 #[test]
