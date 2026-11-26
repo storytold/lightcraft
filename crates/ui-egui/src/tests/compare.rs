@@ -298,7 +298,7 @@ fn compare_zoom_window_tracks_the_zoomed_pane() {
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.app.ui.zoom = Zoom::Percent(100.0);
-    h.settle(SETTLE);
+    h.settle(super::ui_settle_timeout());
     let candidate = vis[1];
     let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(candidate)).cloned().expect("photo");
     let frame = lightcraft_pipeline::geometry::Frame::with_lens(
