@@ -102,6 +102,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.importThumbSize", "Import Thumbnail Size", None, ""),
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
     ("view.clipping", "Clipping", Some("J"), "View"),
+    // {on?, color?, sensitivity?}: sharp edges painted over the photo in Detail and Survey
+    ("view.focusPeaking", "Focus Peaking", None, "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),

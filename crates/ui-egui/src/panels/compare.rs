@@ -203,6 +203,11 @@ fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
 fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: usize, aspect: f32) {
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
     if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
+        let peaking = (app.ui.view == ViewMode::Survey).then(|| super::detail::peaking_overlay(app)).flatten();
+        let job = match peaking {
+            Some(o) => job.with_overlay(o),
+            None => job,
+        };
         app.renderer.request(slot, job, 60);
     }
     request_thumb(app, id);
