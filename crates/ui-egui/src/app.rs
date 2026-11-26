@@ -12,6 +12,7 @@ use super::{
 mod control;
 mod frame;
 mod input;
+mod paste;
 mod prefs;
 mod screenshot;
 
@@ -319,6 +320,9 @@ impl LightcraftApp {
                 }
             }
             Ok(_) => {}
+        }
+        if matches!(id, "develop.paste" | "develop.pastePrevious") {
+            self.paste_feedback(&r);
         }
         r
     }
