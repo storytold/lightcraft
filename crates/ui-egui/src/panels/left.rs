@@ -29,7 +29,9 @@ use keywords::keyword_rows;
 pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
 use local::{local_now, local_rows};
 pub(crate) use rows::disclosure_name;
-use rows::{LIBFOLDER_REVEALED, SCROLL_TO_ROW, SideEvent, SideRow, SideSpec, content_width, set_tree_open, settle_width, side_list};
+#[cfg(test)]
+pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP, indent_step, step_for};
+use rows::{LIBFOLDER_REVEALED, SCROLL_TO_ROW, SideEvent, SideRow, SideSpec, content_width, set_tree_open, settle_layout, side_list};
 pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
 #[cfg(test)]
@@ -154,7 +156,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.add_space(SECTION_GAP * 2.0);
             pinned_header(app, ui, &placed, view_top);
             section_drag(app, ui, &placed);
-            settle_width(ui.ctx(), viewport.width());
+            settle_layout(ui.ctx(), viewport.width());
             // a drag the lists started this frame is adopted at once
             sections::adopt_drags(app, ui);
         });

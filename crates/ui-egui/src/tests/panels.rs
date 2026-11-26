@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
+use crate::panels::left::{INDENT_STEP, MIN_INDENT_STEP, indent_step};
 use crate::state::{LEFT_WIDTH, MIN_PHOTO_WIDTH, RIGHT_WIDTH};
 use crate::{LightcraftApp, Services};
 
@@ -2121,27 +2122,47 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's middle is the row, not its chevron");
 }
 
-/// A library below a deep path (issue #2298): the deepest folder's name has room left of its
-/// count (the sidebar scrolls sideways to it in the default panel); a wide panel fits the path
-/// without scrolling, and the levels step the same either way.
+/// A library below a deep path (issue #2298): in the default panel the levels step in by less than
+/// a full step, so the deepest folder's name keeps its room; a wide panel steps in by the full step
+/// again, and a shallow tree never narrows.
 #[test]
-fn a_deep_library_path_keeps_the_names_readable() {
+fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
     let deep = "/Users/someone/Library/CloudStorage/Nextcloud-cloud.example.com/RAW/Club/2026-09-24 Team/RAW";
     let mut h = narrow_chain_of_folders_app(deep, [1400.0, 1200.0]);
+    assert_eq!(indent_step(&h.view.ctx), MIN_INDENT_STEP, "a deep path in the default panel steps in by the floor");
     let xs = chevron_xs(&h, deep);
     let step = xs[1] - xs[0];
-    assert!(step > 0.0 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level still steps right by the same amount: {xs:?}");
+    assert!(step > 0.0 && (step - MIN_INDENT_STEP).abs() < 0.5, "a level steps in by the narrow step: {step} in {xs:?}");
+    assert!(xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by the same amount: {xs:?}");
     let id = format!("libfolder:{deep}");
     let (label, count) = (widget(&h, &format!("label:{id}")), widget(&h, &format!("count:{id}")));
     assert!(label.width() > 20.0 && label.right() + 4.0 <= count.left(), "the deepest name shows, left of its count: {label:?} {count:?}");
-    // a wide panel has room for the whole path
+    // a wide panel has room for full steps again
     let r = h.request("ui.set", json!({"leftWidth": 480.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    let panel = widget(&h, "panel:left_panel");
-    assert!(widget(&h, "source:all").width() <= panel.width() + 0.5, "in a wide panel the deep path fits: nothing scrolls sideways");
+    assert_eq!(indent_step(&h.view.ctx), INDENT_STEP, "a wide panel indents by the full step");
     let xs = chevron_xs(&h, deep);
-    assert!(xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "the step is the same in a wider panel: {xs:?}");
+    assert!(xs.windows(2).all(|w| (w[1] - w[0] - INDENT_STEP).abs() < 0.5), "a wide panel's levels step by the full step: {xs:?}");
+    // a shallow tree keeps the full step in the default panel
+    let h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
+    assert_eq!(indent_step(&h.view.ctx), INDENT_STEP, "a shallow tree is drawn as before");
+}
+
+/// The step is chosen in whole bands from the panel's width and the deepest row: the widest rung of
+/// the old ladder (16, 14, 12, 10) at which the deepest row keeps a name's room and its count, never
+/// below the 12 pt floor (the sidebar scrolls sideways instead).
+#[test]
+fn the_indent_step_narrows_in_bands() {
+    use crate::panels::left::step_for;
+    // (room for the steps: the panel less what a row spends before its levels, a name's 80 pt and the count's 40)
+    assert_eq!(step_for(268.0, 0), INDENT_STEP, "top-level rows only");
+    assert_eq!(step_for(268.0, 5), INDENT_STEP, "five levels fit at full steps");
+    assert_eq!(step_for(268.0, 7), 14.0, "seven levels step in by 14 pt");
+    assert_eq!(step_for(268.0, 8), MIN_INDENT_STEP, "eight levels step in by the floor, 12 pt");
+    assert_eq!(step_for(268.0, 9), MIN_INDENT_STEP, "the 10 pt rung is below the floor, so the floor is drawn");
+    assert_eq!(step_for(268.0, 40), MIN_INDENT_STEP, "never below the floor: the sidebar scrolls instead");
+    assert_eq!(step_for(480.0, 9), INDENT_STEP, "a wide panel keeps full steps");
 }
 
 /// A sidebar that fits needs no sideways scrolling.
