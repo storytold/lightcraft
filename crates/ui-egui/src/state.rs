@@ -33,9 +33,6 @@ pub struct UiState {
     pub docking_version: u32,
     #[serde(default = "crate::i18n::default_language")]
     pub language: crate::i18n::Locale,
-    /// The Build Previews run last announced (its identity, finished?).
-    #[serde(skip)]
-    pub preview_build_seen: Option<(usize, bool)>,
     /// Saving the library is failing (announced with a toast; the top bar shows a warning until
     /// a later save succeeds).
     #[serde(skip)]
@@ -143,6 +140,9 @@ pub struct UiState {
     /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
     #[serde(skip)]
     pub cull_burst: Option<(f32, f32)>,
+    /// Whether Assisted Culling stacked its bursts the last time it was confirmed (this session).
+    #[serde(skip)]
+    pub cull_stack: bool,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -246,7 +246,8 @@ pub struct UiState {
     /// the photo that applies to: not an edit, and forgotten on moving to another photo or quitting.
     #[serde(skip)]
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
-    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
+    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove",
+    /// "lensBlurFocus" / "lensBlurBlur" (Lens Blur Brush Refinement, in the Edit panel).
     pub tool: String,
     /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
     /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
@@ -260,6 +261,9 @@ pub struct UiState {
     pub brush_auto_mask: bool,
     /// Brush Pen Pressure: a pen's pressure scales each dab's size and flow (a mouse paints at full pressure).
     pub brush_pressure: bool,
+    /// Lens Blur Brush Refinement: how far a stroke refines the focus, 1..100 (size, feather,
+    /// flow, Auto Mask and pressure are the brush's above).
+    pub lens_blur_brush_amount: f32,
     /// Remove tool brush: size (fraction of the long edge), feather and opacity (0..100).
     pub remove_size: f32,
     pub remove_feather: f32,
@@ -391,7 +395,6 @@ impl Default for UiState {
             docking: None,
             docking_version: crate::docking::DOCKING_VERSION,
             language: crate::i18n::default_language(),
-            preview_build_seen: None,
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             luminance_map_restore: None,
@@ -442,6 +445,7 @@ impl Default for UiState {
             person_from: None,
             last_person: None,
             cull_burst: None,
+            cull_stack: false,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
@@ -484,6 +488,7 @@ impl Default for UiState {
             brush_erase: false,
             brush_auto_mask: false,
             brush_pressure: true,
+            lens_blur_brush_amount: 100.0,
             remove_size: 0.02,
             remove_feather: 50.0,
             remove_opacity: 100.0,

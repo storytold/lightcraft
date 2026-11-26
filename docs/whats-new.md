@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Heal meets its surroundings (process 14)
+- A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
+  longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
+  into it. Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
+  turning blotchy in shadows or flat in highlights, and Heal and Remove scale the patch's grain to the area around it.
+  Heal, Remove and Clone read their source at whole pixels, so the patch is no longer softened by blending between
+  pixels. Very large spots keep the previous heal. This is rendering process 14: new photos (and Reset) get it, photos
+  you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [process versions](process-versions.md).
+
+### Cleaner edges in raw exports
+- Exports of raw photos and the 1:1 view no longer draw thin yellow, green or cyan outlines along sharp white edges
+  (a white boat against the sky, window frames), green and cyan rims around small bright reflections such as
+  sunlit wet rock or water, or magenta and green rims around blown-out lights and sky (issue #1328). The colours
+  were made while the sensor's red, green and blue samples were filled in to full pixels: that happened before
+  white balance, and the pixels next to blown-out samples were not recognised as blown out. Both are fixed.
+- Dark twigs, wires and leaf edges against a blown-out sky keep their brightness.
+- Bright coloured highlights (a setting sun, neon tubes) keep their brightness right up to their blown-out centre.
+- Previews of most cameras never showed it and don't change. Previews of cameras with smaller sensors (Bayer sensors
+  under about 4600 pixels on the long side; Fujifilm X-Trans under about 5760 pixels,
+  such as the 16 megapixel X-E1) were filled in the same way and are fixed too. Smart previews of raws that are out of
+  date are rebuilt from their originals once, in the background, when the library is next opened; ones whose original
+  is offline keep theirs until Build Smart Previews runs with it online. Exports and 1:1 views of photos you have already
+  edited change along such edges and in fine detail. Even areas change by about 0.5 ΔE on average (their noise grain is
+  rendered slightly differently), with no shift in colour.
+
+### Flatpak updates
+- Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
+  This permissions repair must first arrive through your existing host-side update method. Flatpaks
+  managed by a software repository continue to use its package manager, and launcher-pinned versions
+  keep their selected version.
+
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
+### Film grain that looks like film (process V7)
+- Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
+  rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
+  and blown highlights stay clean, and the fit-to-window preview shows the grain you will export. Amount, Size and
+  Roughness keep their meaning and Lightroom Classic's strength and grain size. This is rendering process 7: new photos
+  (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
+  See [film grain](grain.md).
+
+### Shadows, Texture and the Global wheel closer to Lightroom (process V13)
+- Global Shadows eases off at large amounts as Lightroom's does (issue #523): +100 acts at 0.43 of what it did, +52 at
+  0.6, and small amounts less so (about 12 % less at +10). Strong Shadows no longer lift the darkest tones about 6 L*
+  above Lightroom's render of the same edit. Highlights keeps its amounts, and masks keep theirs. New photos get it; photos edited before
+  keep their look until Update to Current Process.
+- A negative Texture smooths at two thirds of what it did: at −27 it took about 8 % more fine detail than Lightroom
+  does. The global colour-grading wheel tints at 0.45 of what it did: a Global tint of 16 made a photo visibly pinker
+  and warmer than Lightroom's (+2.8 a*, +2.2 b*). The shadows, midtones and highlights wheels are unchanged.
+- Fitted to 56 Lightroom exports of real portrait edits (Canon EOS R6 and R5 raws): mean ΔE to the exports 9.5 → 9.0,
+  and on the 16 landscape photos the sidecar fixes of #2239 don't touch, 8.4 → 7.8.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
@@ -17,6 +73,45 @@
 - A page can also run LightCraft in its own document, with no iframe: `data-host="page"` on the canvas carries the same
   messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
   when a page asks for both.
+
+### A library is written only to the folder it was opened from
+- LightCraft wrote a library's files to wherever the library's path led at that moment, not to the folder it had opened.
+  When a share was mounted over the library's folder, or the folder was moved away and another put in its place while
+  the library was open, it wrote into that other folder: it could replace another library's catalog (`catalog.snap`
+  and `catalog.log`) with its own, and closing the library removed the note another program had left in
+  `catalog.lock.owner` to say that it has the library open (issue #3240).
+- LightCraft now remembers the folder it opened (its device and inode number) and, before every save, checks that the
+  library's path still leads to it. If it doesn't, nothing is written: not the catalog, its log, the library's
+  settings, the lock note or a thumbnail. The not-saved warning says why, names the path and asks you to put the
+  original folder back; your changes are kept in memory, quitting asks first as it does for any unsaved change, and
+  saving goes on by itself once the original folder is at its path again. That holds for photos, albums and presets; a
+  preference that could not be saved is reported where you changed it, and is written with the next preference you
+  save. Opening the library at that path again takes the lock of the folder that is there now, so it is refused while
+  another program has that library open.
+- Saving keeps working after a drive or share is mounted again. A volume that is mounted again gets a new device
+  number, and some file systems number their folders anew at every mount (FAT and exFAT drives on Linux, sshfs). The
+  folder at the path still counts as the one that was opened when it holds exactly the lock note this session wrote
+  into the folder it opened (the note holds a value no other lock's note has), or when it is the same volume mounted
+  again: the same inode number and the same creation time under another device number (a system that doesn't know
+  when a folder was created can't tell that from another folder). On the same device an inode number is given again
+  to a folder made later, so two creation times that are known and differ are two folders. A copy of the library's
+  folder made while the library was open holds that note too and counts as the library, and so does a clone of its
+  volume; a share mounted over the folder, with another library in it or with nothing, never does. A copy lacks the
+  changes made after it was made: they are written to it by the next snapshot, which holds them all, and until then
+  they are kept in memory and reported as not saved. If neither tells, the folder counts as another one and nothing is
+  written.
+- Dropping the lock removes the lock note only if it is the one this session wrote, with the bytes it wrote, in the
+  folder it locked or one that holds that note; another program's note is left alone.
+- Import ▸ Move removes the originals from the card only after the library's catalog is on disk, not just handed over
+  to be written: when the library can't be saved, the originals stay on the card.
+- On Windows a folder's identity isn't available to the program yet (Rust's standard library offers it only on its
+  nightly builds), so there the check notices a path that no longer leads to a folder, not one that leads to another
+  folder; the lock note is protected there too.
+- On every system, files outside the library's catalog and settings are still written by path, some of them over what
+  is there: originals copied into the library (always under a new name), Smart Previews, profiles, the face-scan
+  record (`focus-scanned.bin`), the Lightroom import's `Interop` folder, and what is done to the photos stored in the
+  library's `Originals` folder (their sidecars, Save Metadata to File, rename, delete from disk, duplicate and
+  conversion to DNG).
 
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
@@ -65,6 +160,16 @@
   `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
   gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
   running), and what was read isn't read again.
+
+## 2026-11-01
+
+### Import a Lightroom catalog backup as it is
+- File ▸ Import Lightroom Catalog… also takes the `.zip` backups Lightroom Classic writes in its `Backups` folder
+  (issue #2592), for when Lightroom and its catalog are gone and only the backups and the photos are left. LightCraft
+  unpacks the catalog into a temporary folder in the library, imports it and deletes the copy; the zip is not
+  changed. Open Library given a `Backups` folder, or one of its dated folders, offers to import the backup.
+- Importing a backup of a catalog you already imported no longer adds every collection a second time: collections
+  are matched by the catalog's own id, which its backups keep, instead of by the catalog file's path.
 
 ## 2026-10-30
 
@@ -200,7 +305,7 @@
 
 ### The photo in Detail is named with its file for screen readers
 - With VoiceOver, the photo in Detail view is now announced with its file name, rating, flag and colour label ("Photo:
-  IMG_0042.JPG, 4 stars, picked") instead of only "Photo", as the grid names the same photo.
+  IMG_0042.JPG, rating 4 of 5, picked") instead of only "Photo", as the grid names the same photo.
 
 ### The grid's thumbnail size slider is a slider to screen readers
 - With VoiceOver, the Thumbnail size control at the right of the grid's bottom bar is now announced as a slider with its
@@ -217,6 +322,9 @@
 
 
 ## 2026-10-27
+
+### The Edit menu loses its Language submenu
+- Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
@@ -258,6 +366,12 @@
 - The number beside a slider is now named "Exposure value" (the slider's name and "value"), and "Click to type a value,
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
+
+### The Window menu lists the open windows
+- On macOS the Window menu now shows a row for each open window (the main window, and the second one from
+  Window ▸ Second Window while it is open), below Bring All to Front. Before, the menu ended at Bring All to Front
+  and listed no window. macOS also adds its own window items there: Fill, Center, Move & Resize and Full Screen Tile
+  on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
 
 ## 2026-10-29
 
@@ -313,6 +427,15 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
+## 2026-10-26
+
+### Pushed shadows of raws no longer turn magenta
+- Raw decoding no longer clips each colour channel at zero. Near black, sensor noise through the camera's colour
+  matrix has negative values, and clipping kept only the positive half of each channel's noise, so dark areas
+  pushed up came out purple or magenta, most visibly with saturating camera profiles. In the fitted view, thumbnails
+  and other views smaller than the photo, where neighbouring pixels are averaged first, pushed shadows now keep their
+  real colour (a lens-cap frame pushed 4 EV rendered magenta; it is now black), and cached thumbnails are rendered
+  again. At 100% and in full-size exports white balance still clips each channel before noise reduction (#840).
 
 ## 2026-10-25
 
@@ -346,6 +469,16 @@
 
 ## 2026-10-24
 
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
+
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
@@ -363,6 +496,19 @@
   it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
+### Imports and moves on a network share ask it less
+- Import no longer asks a network share about each photo's `.xmp` sidecar (up to nine names, each a round trip) when
+  the folder's listing, which the import or the Add Photos review has already read, shows there is none. A sidecar in
+  any letter case (`.xmp`, `.XMP`, `.Xmp`, or `<file name>.xmp`) is still found and read. A folder that changed since
+  it was listed, or was too recently changed to tell, is asked about photo by photo. For the folders that have not
+  changed since the review listed them, importing the photos picked in the review also stops asking the share
+  whether each one is a file or a folder before the first one is handled.
+- Renaming photos, moving them to another folder, and undoing either look for their sidecars in one listing of each
+  folder that eight or more photos leave, instead of asking for four names per photo. Sidecars the listing shows
+  still move with their photos (`.xmp` or `.XMP`, as before).
+- Folders that could not be listed completely or whose time can't be read, and files you add one by one, are checked
+  as before.
 
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
@@ -443,6 +589,26 @@
   left out of a new album made from the selection, out of Add to Album, and out of the target album (B), which does
   nothing and says nothing when none of them is left, and counts only the photos it changed.
 
+### Reorder rules and groups in the smart album editor
+- Every rule and every group in the New / Edit Smart Album window has a grip (six dots) at the start of its row. Drag it
+  to move the row: a line shows where it will land, the row's name follows the pointer, and Esc gives the drag up. Drop
+  on a rule inside a group to put it in that group, beside the group's frame to take it out; drag a whole group to
+  nest it in another. A group can't go inside itself or deeper than three levels: the pointer shows a not-allowed
+  cursor and says why, and nothing moves. A group a move leaves empty goes away.
+- With the keyboard, Tab to a grip and press ↑ or ↓ to move the row one place (at the end of a group it moves out of
+  the group), → to move it into the group above it (or below it, if that is the one next to it) and ← to move it out
+  of its group. The focus stays on the moved row's grip, and a screen reader says where the row is: "Rule 2 of 4:
+  Rating is ≥ 3. Move with the arrow keys".
+- OK saves the rules in the order shown, in one undo step like any other change to the rules.
+
+### Lightroom catalog import keeps the settings of each history step
+- Importing a Lightroom Classic catalog saves its history steps and snapshots in a recovery archive in the library.
+  For catalogs from Lightroom Classic 13 and later, the archive kept each step's name and date but not its
+  settings, because those versions store them compressed. They are now decoded and kept. A step whose settings
+  can't be read is kept without them, with a warning, and the import goes on.
+- When an archive with the history settings would be too big (over 32 MiB), it is now saved without them, with a
+  warning, instead of not at all.
+
 ## 2026-10-23
 
 ### AI Denoise works out of the box
@@ -467,6 +633,19 @@
   #2575). An agent or script driving LightCraft could name another folder and another server, and have that
   server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
   is in its place instead of writing through a link to somewhere else.
+
+### Open or fold a whole branch of the sidebar
+- Hold Option (Alt on Windows and Linux) and click a row's triangle in the left sidebar to open or fold that row
+  and all the rows inside it, however many: a folder of albums with the folders in it, a folder of the library
+  down to its last folder, a keyword with the keywords inside it, a year with its months. A plain click still
+  opens or folds the one row.
+- What you open or fold inside it afterwards holds for that row. A folder that appears inside it later is as
+  the last Option-click on a row above it left the rest.
+- In Local, Option-click folds everything inside the folder; opening opens the one folder (opening them all
+  would read every folder inside from the disk).
+- The sidebar's rows are not remembered between sessions, so a branch opened or folded this way starts again as
+  the sidebar starts.
+- For scripts: `ui.clickWidget` takes `alt: true` for this click.
 
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
@@ -733,6 +912,12 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Cleaner thumbnails in the grid
+- With Settings ▸ Interface ▸ Grid ▸ Ratings & flags set to Stars on hover (the default, which used to read "When rated
+  or hovered"), a photo now shows its stars and its edited mark only while the pointer is on it or it is selected.
+  Before, every rated photo wore the badge bar, which in a mostly rated library made it look like Always. Pick and
+  reject flags and colour labels stay on every thumbnail. Always and Never work as before.
+
 ### Selection rings you can see in the light themes
 - The active photo's white outline vanished on Silver and Paper's light grid, and told the active photo from the other
   selected ones by lightness alone. Now the active photo has a heavier ring (3 pt, with a thin line against the photo so
@@ -761,6 +946,31 @@
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
 
+### The same marks on every thumbnail
+- The filmstrip's thumbnails now carry what the grid's do: a virtual copy has its "Copy N" tag, so a copy and its
+  master tell apart; the stack badge can be clicked to expand or collapse the stack, with the same tooltip (now
+  translated); the colour label is a dot, and the grid's photo-shaped placeholder stands in until the picture is drawn.
+- A thumbnail that can't be drawn shows a warning icon instead of a bare "!". Hover it to read why, and where to go:
+  right-click ▸ Locate Missing File… when the original is gone, Reload from Disk otherwise.
+- In the Photo Grid a colour label is no longer a tinted band over the bottom of the picture; it is the dot in the
+  row of marks, as in the Square Grid and the filmstrip.
+- On a narrow thumbnail (a portrait photo at the smallest size) the marks no longer run over the photo's edge: the
+  copy tag drops its name, the edited mark goes, five stars become one star and the number, and what still doesn't fit is left out;
+  the stack badge sheds its icon and then the "1/" of "1/12". Nothing is painted outside the photo. The Preview pill sits
+  above the marks on the filmstrip too, and steps aside for the stack badge. In the Photo Grid, which has no tinted
+  surround, the label dot is kept before the stars on a narrow photo and stays when ratings and flags are turned off.
+- The filmstrip now dims rejected photos as the grid does, and in the grid the dim sits under the marks, so the red
+  reject flag stays clear. Right-clicking the stack badge opens the photo's menu.
+- Screen readers say "rating 3 of 5" in every language, instead of building "stars" from an English plural.
+
+### Find photos whose file is in the library twice
+- Smart albums and the library filter have a new rule, File ▸ Same Content as Another Photo. It finds the photos
+  whose file has the same content as another photo's, under another name or in another folder, such as a copy made
+  with Photo ▸ Duplicate. Virtual copies don't count, and neither do photos in Recently Deleted or only browsed in
+  Local. An album with the rule keeps its count up to date as copies are deleted, restored or removed.
+- The rule needs the library to have recorded each file's content. Photos added by an import have it; photos taken
+  over from a Lightroom catalog don't until you run Photo ▸ Reload from Disk on them, so they match nothing until
+  then, even when their files are identical.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
@@ -910,6 +1120,12 @@
 - While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
   every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
   for as long as the import ran. Changing one photo's capture time or crop is quicker too.
+
+### Menu paths without boxes
+- Messages that name a menu path, such as "View → Clear Filters to see all" or the External Editing help in
+  Settings, showed a box between the menu names: the interface font has no glyph for the small triangle used
+  there (issue #1950). They use → now, as the translations already did, and so do these notes. The remove
+  mark of each filter under "+N more" was a box too; it is an × now.
 
 ## 2026-10-15
 

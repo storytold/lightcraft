@@ -25,12 +25,15 @@
 
 pub mod auto;
 pub mod blemish;
+mod bridge;
 pub mod colorops;
+pub mod crystal;
 pub mod cull;
 pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]
@@ -41,8 +44,6 @@ pub mod lut;
 pub mod mask_space;
 pub mod masks;
 pub mod nrc_joint;
-#[cfg(test)]
-mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod profiles;
@@ -58,7 +59,7 @@ pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
-use lightcraft_develop::{DevelopSettings, Treatment};
+use lightcraft_develop::DevelopSettings;
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -218,6 +219,27 @@ pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
     let pixels = max_w.checked_mul(max_h);
     if max_w > MAX_OUTPUT_SIDE || max_h > MAX_OUTPUT_SIDE || pixels.is_none_or(|n| n > MAX_OUTPUT_PIXELS) {
         return Err(format!("output size {max_w}×{max_h} is too large (at most {MAX_OUTPUT_SIDE} px per side and {MAX_OUTPUT_PIXELS} pixels)"));
+    }
+    Ok(())
+}
+
+/// Fails when a visible brush mask holds more dabs than its budget ([`masks::MAX_STROKE_DABS`]) at this render's
+/// output size: the render would otherwise skip its later strokes and show a wrong mask.
+pub fn check_brush_budget(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Result<(), String> {
+    let brush =
+        |m: &lightcraft_develop::Mask| m.visible && m.components.iter().any(|c| matches!(c.shape, lightcraft_develop::MaskShape::Brush { .. }));
+    if !s.masks.iter().any(brush) {
+        return Ok(());
+    }
+    let p = plan(src, info, s, req);
+    for m in s.masks.iter().filter(|m| brush(m)) {
+        for c in &m.components {
+            if let lightcraft_develop::MaskShape::Brush { strokes } = &c.shape
+                && masks::brush_over_budget(strokes, &p.frame.for_mask(m.on_photo), p.w, p.h)
+            {
+                return Err(format!("mask \"{}\": the brush strokes hold more than {} dabs at this size", m.name, masks::MAX_STROKE_DABS));
+            }
+        }
     }
     Ok(())
 }
@@ -466,6 +488,8 @@ pub struct Plan<'a> {
     pub keep: Option<PixelWindow>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// The whole photo's subject estimate a lens blur focuses on ([`lens_blur::subject_estimate`]).
+    pub lens_subject: Option<Arc<lens_blur::SubjectEstimate>>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
 }
@@ -510,8 +534,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
             }
-            // (spots grow the rendered window of 8-bit renders; a grown window is cut back to the request)
-            let mut work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
+            // (spots grow the rendered window of 8-bit renders, the lens blur that of every
+            // render; a grown window is cut back to the request)
+            let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
+            let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
             if local::joint_colour_nr(s)
                 && let Some(params) = local::nrc_params(s, detail_scale)
             {
@@ -538,13 +564,19 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let pre_nr_key = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+        // the process picks checked vs legacy Bradford WB (Update to Current Process, undo)
+        local::checked_wb(s),
         format!("{:?}", s.spots),
+        // the process picks how spots heal (Update to Current Process, undo)
+        (!s.spots.is_empty()).then(|| spots::HealMethod::of(s)),
         format!("{eyes:?}"),
         // defringe runs in this stage
         format!("{:?}", s.optics),
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        // and the lens blur (after noise reduction, but a draft must not reuse planes without it)
+        lens_blur::key(s),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -553,6 +585,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
     ));
+    let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
     let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
     Plan {
         settings,
@@ -571,6 +604,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         fixed_air,
         keep,
         mattes: info.mattes.clone(),
+        lens_subject,
         full,
     }
 }
@@ -608,6 +642,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 fixed_air: None,
                 keep: None,
                 mattes: None,
+                lens_subject: None,
                 full: p.full.clone(),
                 ..*p
             };
@@ -639,7 +674,7 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply(img, &s.spots, &p.frame, p.px_per_long);
+    spots::apply(img, &s.spots, &p.frame, p.px_per_long, spots::HealMethod::of(s));
     redeye::apply(img, &p.eyes);
 }
 
@@ -682,7 +717,15 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
     };
     let deep = render(src, info, s, &hreq).deep?;
     let DeepSamples::F32(v) = &deep.samples else { return None };
-    Some(Histogram::of_hdr(v.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32))
+    let shared = craft_develop::raster::Histogram::of_hdr(v.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32);
+    Some(Histogram {
+        r: shared.r,
+        g: shared.g,
+        b: shared.b,
+        luma: shared.luma,
+        total: shared.total,
+        hdr: shared.hdr.map(|bins| lightcraft_raster::HdrBins { from: bins.from, stops: bins.stops }),
+    })
 }
 
 /// Render `src` with settings `s`.
@@ -745,6 +788,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
                 colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
+            lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
             Arc::new(img)
         }
     };
@@ -767,7 +811,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes });
     }
     if req.depth != OutputDepth::U8 {
-        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
+        let deep = finish::finish_deep(&prep, s, frame, info, req);
         let deep = match plan.keep {
             Some(k) => deep.crop(k.x, k.y, k.w, k.h),
             None => deep,
@@ -777,7 +821,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         lap("finish (deep)", &mut t);
         return Rendered { image, histogram, deep: Some(deep) };
     }
-    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof);
+    let image = finish::finish(&prep, s, frame, info, req);
     lap("finish", &mut t);
     let cut = |i: &Rgba8| match plan.keep {
         Some(k) => i.crop(k.x, k.y, k.w, k.h),
@@ -877,10 +921,6 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     b
 }
 
-pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
-    s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
-}
-
 /// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.
 pub fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -928,6 +968,8 @@ fn plan_preserves_matching_box_size() {
 mod tests;
 #[cfg(test)]
 mod tests_geometry;
+#[cfg(test)]
+mod tests_grain;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]

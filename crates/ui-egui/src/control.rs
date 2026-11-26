@@ -158,7 +158,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
         "tasks": app.tasks.labels(),
-        // every long-running task in flight, as the activity stack shows them (`activity.list`)
+        // every long-running task in flight and every task waiting in line (`activity.list`); the stack draws the running ones
         "activity": app.session.activity.list(),
         // commands waiting on a native file dialog shown off the UI thread (`pick`)
         "fileDialogs": app.pending_picks.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
@@ -466,6 +466,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.dialog.cancel" => {
             if matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. })) {
                 app.renderer.forget_imports();
+                app.review_listed = None;
             }
             app.ui.dialog = None;
             ok(Value::Null)

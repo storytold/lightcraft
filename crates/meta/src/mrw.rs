@@ -1,56 +1,7 @@
-//! Minolta / Konica Minolta MRW block container.
-//!
-//! Sources: the public prose description of the MRW layout (Dalibor Jelínek's MRW notes) and our own black-box
-//! analysis of the CC0 samples on raw.pixls.us. The file starts with `\0MRM` and a big-endian `u32` length; the
-//! sensor data begins right after that many bytes (at `8 + length`). In between is a sequence of blocks, each a
-//! four-byte name (`\0PRD`, `\0TTW`, `\0WBG`, `\0RIF`, `\0PAD`), a big-endian `u32` length and that many bytes.
-//! `\0TTW` holds a complete big-endian TIFF (IFD0, Exif, maker note) whose offsets are relative to the block.
+//! MRW container API retained for LightCraft callers; framing is implemented by craft-raw.
+//! The shared parser at the workspace pin preserves the original recovery and 64-record cap.
 
-/// The blocks and the offset of the sensor data in an MRW file.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Mrw<'a> {
-    /// `(name without the leading NUL, contents)`, in file order.
-    pub blocks: Vec<([u8; 3], &'a [u8])>,
-    /// Absolute offset of the sensor data.
-    pub data_offset: usize,
-}
-
-impl<'a> Mrw<'a> {
-    /// The first block called `name` (e.g. `b"PRD"`).
-    pub fn block(&self, name: &[u8; 3]) -> Option<&'a [u8]> {
-        self.blocks.iter().find(|(n, _)| n == name).map(|(_, d)| *d)
-    }
-}
-
-/// At most this many blocks are walked (real files have four or five).
-const MAX_BLOCKS: usize = 64;
-
-fn be32(b: &[u8], at: usize) -> Option<usize> {
-    let s = b.get(at..at.checked_add(4)?)?;
-    Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize)
-}
-
-/// Parse the block list of an MRW file. `None` when the magic is missing or the header length points past the
-/// file; a block that runs past the header is dropped together with everything after it.
-pub fn parse(bytes: &[u8]) -> Option<Mrw<'_>> {
-    if !bytes.starts_with(b"\0MRM") {
-        return None;
-    }
-    let data_offset = be32(bytes, 4)?.checked_add(8).filter(|&o| o <= bytes.len())?;
-    let mut blocks = Vec::new();
-    let mut at = 8usize;
-    while blocks.len() < MAX_BLOCKS && at.saturating_add(8) <= data_offset {
-        let (Some(name), Some(len)) = (bytes.get(at..at + 4), be32(bytes, at + 4)) else { break };
-        let start = at + 8;
-        let Some(end) = start.checked_add(len).filter(|&e| e <= data_offset) else { break };
-        let Some(data) = bytes.get(start..end) else { break };
-        if name[0] == 0 {
-            blocks.push(([name[1], name[2], name[3]], data));
-        }
-        at = end;
-    }
-    Some(Mrw { blocks, data_offset })
-}
+pub use craft_raw::mrw::{Mrw, parse};
 
 #[cfg(test)]
 mod tests {
@@ -62,6 +13,23 @@ mod tests {
         v.extend_from_slice(&(data.len() as u32).to_be_bytes());
         v.extend_from_slice(data);
         v
+    }
+
+    #[test]
+    fn shared_container_preserves_duplicates_cap_and_borrowed_payloads() {
+        let mut body = block(b"TTW", &[1, 2, 3]);
+        for _ in 0..65 {
+            body.extend(block(b"TTW", &[9]));
+        }
+        let mut bytes = b"\0MRM".to_vec();
+        bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        bytes.extend(body);
+        bytes.extend([7, 8]);
+        let parsed: Mrw<'_> = parse(&bytes).unwrap();
+        assert_eq!(parsed.blocks.len(), 64);
+        assert_eq!(parsed.block(b"TTW"), Some(&bytes[16..19]));
+        assert_eq!(parsed.block(b"TTW").unwrap().as_ptr(), bytes[16..].as_ptr());
+        assert_eq!(parsed.data_offset, bytes.len() - 2);
     }
 
     #[test]

@@ -82,7 +82,9 @@ pub fn covers(make: Option<&str>, model: &str) -> bool {
             .map_or(model, |(_, rest)| rest.trim_start())
     };
     let listed = MODELS.iter().any(|(b, m)| brand.is_none_or(|x| x.eq_ignore_ascii_case(b)) && bare_of(b).eq_ignore_ascii_case(m));
-    let fuji = brand.is_none_or(|b| b.eq_ignore_ascii_case("FUJIFILM")) && FUJI_MODELS.iter().any(|m| bare_of("FUJIFILM").eq_ignore_ascii_case(m));
+    // A DxO demosaiced DNG keeps the Fujifilm model but carries DxO as its make.
+    let fuji = brand.is_none_or(|b| b.eq_ignore_ascii_case("FUJIFILM") || b.eq_ignore_ascii_case("DxO"))
+        && FUJI_MODELS.iter().any(|m| bare_of("FUJIFILM").eq_ignore_ascii_case(m));
     listed || fuji
 }
 
@@ -406,6 +408,14 @@ mod tests {
         for c in ["FUJIFILM X-T3", "FUJIFILM X-T30", "SONY X-T20", "FUJIFILM GFX 100"] {
             assert!(!covers_camera(c), "{c}");
         }
+    }
+
+    #[test]
+    fn dxo_dng_fujifilm_model_is_covered_for_kelvin() {
+        // A DxO demosaiced DNG carries DxO as its make, not FUJIFILM, but it is still a Fujifilm model.
+        assert!(covers(Some("DxO"), "X-T2"));
+        assert!(covers(Some("DxO"), "FUJIFILM X-T2"));
+        assert!(covers_camera("DxO X-T2"));
     }
 
     #[test]
