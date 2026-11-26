@@ -7,9 +7,10 @@ use craft::ui::contract::{
     ActivateOn, Bind, CollectionEvent, CollectionResponse, ColumnSpec, ListDrag, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::display::Divider;
-use craft::ui::list::{List, ListRow, TreeLeaves};
+use craft::ui::list::{List, ListRow, TreeIndent, TreeLeaves};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::IconSpec;
+use craft::ui::runtime::env::with_env;
 use craft::ui::style::TypeRole;
 use egui::{Pos2, Rect};
 
@@ -76,15 +77,34 @@ const GAP: ColumnKey = ColumnKey::new("side-gap");
 const GAP_PLAIN: f32 = 4.0;
 const GAP_MARK: f32 = 16.0;
 
-/// How far one level of a tree steps in, as far as the sidebar plans its width: the deepest row
-/// asks for this many points a level, and the sidebar scrolls sideways when that exceeds the panel.
-const LEVEL_WIDTH: f32 = 16.0;
+/// How far one level of a tree steps in while the panel has room: the framework draws a level as
+/// wide as its icon slot, and the sidebar plans its width in this step.
+pub(crate) const INDENT_STEP: f32 = 16.0;
+
+/// The steps a level is tried at, widest first: the old app's ladder, handed to the framework as
+/// the tree's `TreeIndent`.
+const STEPS: [f32; 4] = [16.0, 14.0, 12.0, 10.0];
+
+/// The narrowest a level is drawn, whatever the ladder offers: at 8 pt (the old app's floor) a
+/// child's 16 pt chevron sits inside its parent's target. A level never steps in by less than this;
+/// past it the sidebar scrolls sideways instead.
+pub(crate) const MIN_INDENT_STEP: f32 = 12.0;
 
 /// What a row has before its name: the triangle's column and the icon.
 const LABEL_LEAD: f32 = 42.0;
 
+/// The most a row asks for its name: a longer one is cut with an ellipsis.
+const MAX_NAME_NEED: f32 = 140.0;
+
+/// The count's column, at the end of a row.
+const COUNT_WIDTH: f32 = 40.0;
+
+/// What a row keeps for its name when the step is chosen: the deepest row's name is not cut to
+/// less than this while a narrower step would still keep it.
+const MIN_NAME_ROOM: f32 = 80.0;
+
 /// What a row needs besides its levels: the icon and triangle, a name's share, the count.
-const ROW_ROOM: f32 = 42.0 + 140.0 + 40.0;
+const ROW_ROOM: f32 = LABEL_LEAD + MAX_NAME_NEED + COUNT_WIDTH;
 
 /// How wide the sidebar's content needs to be, from the deepest row of the last frame: the panel's
 /// width, or more when the levels leave too little room for the names. One frame behind, which
@@ -93,26 +113,57 @@ pub(super) fn content_width(ctx: &egui::Context) -> f32 {
     ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("left-content-width"))).unwrap_or(0.0)
 }
 
-/// A row `depth` levels deep asks the sidebar for its width.
-fn note_depth(ui: &egui::Ui, depth: usize) {
-    let need = depth as f32 * LEVEL_WIDTH + ROW_ROOM;
+/// A row `steps` levels of indent deep (see [`SideRow::steps`]) says how deep the tree goes, for
+/// this frame's step and width.
+fn note_steps(ui: &egui::Ui, steps: usize) {
     ui.data_mut(|d| {
-        let m = d.get_temp_mut_or_insert_with::<f32>(egui::Id::unique("left-content-need"), || 0.0);
-        *m = m.max(need);
+        let m = d.get_temp_mut_or_insert_with::<usize>(egui::Id::unique("left-deepest-steps"), || 0);
+        *m = (*m).max(steps);
     });
 }
 
-/// Called once a frame after the lists: the width the deepest row asked for becomes next frame's.
-/// Returns whether it changed.
-pub(super) fn settle_width(ctx: &egui::Context, panel: f32) -> bool {
-    let need = ctx.data_mut(|d| d.remove_temp::<f32>(egui::Id::unique("left-content-need"))).unwrap_or(0.0);
-    let wide = need.max(panel);
-    let changed = (wide - content_width(ctx)).abs() > 0.5;
-    if changed {
+/// The widest step of [`STEPS`] (at or above [`MIN_INDENT_STEP`]) at which a row `steps` levels of
+/// indent deep keeps [`MIN_NAME_ROOM`] for its name and room for its count in a panel `panel_w`
+/// wide. In steps rather than continuously, so a row does not slide about at every point the panel
+/// is dragged; when even the narrowest does not fit, the sidebar scrolls sideways as before.
+pub(crate) fn step_for(panel_w: f32, steps: usize) -> f32 {
+    if steps < 2 {
+        return INDENT_STEP;
+    }
+    let room = panel_w - LABEL_LEAD - MIN_NAME_ROOM - GAP_PLAIN - COUNT_WIDTH;
+    // (a rung below the floor is never drawn: the ladder above it is all there is, then the scroll)
+    STEPS.into_iter().find(|step| *step >= MIN_INDENT_STEP && steps as f32 * *step <= room).unwrap_or(MIN_INDENT_STEP)
+}
+
+/// The step a level is drawn with this frame: [`step_for`]'s choice of the last frame, so every
+/// list of one frame indents alike and nothing needs a second layout pass.
+pub(crate) fn indent_step(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("left-indent-step"))).unwrap_or(INDENT_STEP)
+}
+
+/// How far right a row `steps` levels of indent deep is drawn this frame.
+fn indent_x(ctx: &egui::Context, steps: usize) -> f32 {
+    steps as f32 * indent_step(ctx)
+}
+
+/// Called once a frame after the lists: the step the deepest row leaves room for, and the width it
+/// asks for, become next frame's. Returns whether either changed.
+pub(super) fn settle_layout(ctx: &egui::Context, panel: f32) -> bool {
+    let deepest = ctx.data_mut(|d| d.remove_temp::<usize>(egui::Id::unique("left-deepest-steps"))).unwrap_or(0);
+    let step = step_for(panel, deepest);
+    let step_changed = (step - indent_step(ctx)).abs() > 0.01;
+    if step_changed {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("left-indent-step"), step));
+    }
+    let wide = (deepest as f32 * step + ROW_ROOM).max(panel);
+    let width_changed = (wide - content_width(ctx)).abs() > 0.5;
+    if width_changed {
         ctx.data_mut(|d| d.insert_temp(egui::Id::unique("left-content-width"), wide));
+    }
+    if step_changed || width_changed {
         ctx.request_repaint();
     }
-    changed
+    step_changed || width_changed
 }
 
 /// One row of a sidebar list, as the framework's list shows it.
@@ -244,6 +295,11 @@ impl SideRow {
         self
     }
 
+    /// How many levels of indent the framework gives this row: a group steps in by its depth, a
+    /// leaf inside a group one more, past its parent's disclosure column (`tree_steps`).
+    pub(super) fn steps(&self) -> usize {
+        craft::ui::list::tree_steps(self.depth, self.group)
+    }
 }
 
 /// The rows a sidebar list shows, as the framework's item source.
@@ -490,7 +546,24 @@ fn list_row(item: &SideRow, cells: &[(ColumnKey, Rect)], tree: bool, show_counts
     row
 }
 
+/// The list, on the framework's tree rows, indenting a level by this frame's step (`TreeIndent`); a
+/// flat list has no levels and no scope of its own.
 fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> SideOut {
+    if spec.tree {
+        let step = indent_step(ui.ctx());
+        with_env(
+            ui,
+            |env| {
+                env.values.set(TreeIndent(step));
+            },
+            move |ui| side_list_rows(ui, spec, rows),
+        )
+    } else {
+        side_list_rows(ui, spec, rows)
+    }
+}
+
+fn side_list_rows(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> SideOut {
     if rows.is_empty() {
         return SideOut::default();
     }
@@ -499,8 +572,8 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     let (rows, above, below) = if !build_all && rows.len() > WINDOW_FROM { built_rows(ui, rows, salt, want.as_ref()) } else { (rows, 0.0, 0.0) };
     let has_notes = rows.iter().any(|row| row.note.is_some());
     let has_marks = rows.iter().any(|row| row.mark.is_some());
-    if tree && let Some(deepest) = rows.iter().map(|row| row.depth).max() {
-        note_depth(ui, deepest);
+    if tree && let Some(deepest) = rows.iter().map(SideRow::steps).max() {
+        note_steps(ui, deepest);
     }
     let source = SideRows::new(rows);
     const DISCLOSURE: PartKey = PartKey::new("disclosure");
@@ -621,7 +694,7 @@ fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count, gap): 
         // the name as far as it is drawn: its own width, or the whole column when it is cut short
         let font = Tokens::get(ui.ctx());
         let text = ui.painter().layout_no_wrap(item.label.clone(), font.font(13.5), font.text_label).size().x;
-        let lead = LABEL_LEAD + item.depth as f32 * LEVEL_WIDTH;
+        let lead = LABEL_LEAD + indent_x(ui.ctx(), item.steps());
         let width = (lead + text).min(label.width());
         register(ui, format!("label:{id}"), Rect::from_min_size(label.min, vec2(width, label.height())));
     }
