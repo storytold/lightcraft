@@ -158,6 +158,11 @@ fn a_newer_incompatible_proxy_at_the_write_destination_is_preserved() {
     let report = x.build();
     assert_eq!(report["built"], 0);
     assert_eq!(report["newerKept"], 1);
+    x.s.execute("library.smartPreviews", &json!({"id": x.id.0, "background": true})).unwrap();
+    wait_build(&x.s);
+    let progress = x.s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!(progress["failed"], 1);
+    assert!(progress["error"].as_str().unwrap().contains("Kept the newer smart preview"));
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
 }
 

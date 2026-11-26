@@ -878,7 +878,9 @@ fn smart_run(
                 if valid {
                     n.built += 1;
                 } else if let Some((st, _)) = state {
-                    st.skipped.fetch_add(1, Ordering::Relaxed);
+                    st.failed.fetch_add(1, Ordering::Relaxed);
+                    *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(format!("Kept the newer smart preview at {}. This build cannot read it.", path.display()));
                 }
             } else if valid && !stale {
                 n.built += 1;
