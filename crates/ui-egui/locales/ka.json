@@ -3742,6 +3742,8 @@
   "Folder name": "საქაღალდის სახელი",
   "Its templates move to User Templates.": "მისი შაბლონები გადავა „მომხმარებლის შაბლონებში“.",
   "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "This album is in a loop, so it shows nothing": "ეს ალბომი ციკლშია, ამიტომ არაფერს აჩვენებს",
+  "It tests itself: change its rules (Edit Smart Album…)": "ის საკუთარ თავს ამოწმებს: შეცვალეთ მისი წესები (სმარტ-ალბომის რედაქტირება…)",
   "Filter settings": "პარამეტრების გაფილტვრა",
   "No setting matches what is typed.": "აკრეფილს არც ერთი პარამეტრი არ ემთხვევა.",
   "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "სცადეთ ერთი სიტყვა ან მისი ნაწილი: იძებნება ჩანართებისა და სექციების სახელებში, წარწერებსა და განმარტებებში.",

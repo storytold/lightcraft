@@ -1101,7 +1101,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         Upright::Level => "No level correction",
                         Upright::Vertical => "No vertical correction",
                         Upright::Full => "No full correction",
-                        _ => "No Upright correction",
+                        _ => "No perspective correction",
                     };
                     // (and what it did instead, when it fell back to a lesser correction: "nothing" is only said of none)
                     let instead = instead.map(|i| format!(" {i}.")).unwrap_or_default();
