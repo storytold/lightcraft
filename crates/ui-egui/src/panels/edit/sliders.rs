@@ -486,9 +486,7 @@ pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize
                     ("▶▶", Icon::ChevronDoubleRight, big),
                 ] {
                     let tooltip = crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label));
-                    let clicked = {
-                        quick_arrow::show(ui, owner, ctl, txt, icon, tooltip)
-                    };
+                    let clicked = { quick_arrow::show(ui, owner, ctl, txt, icon, tooltip) };
                     if clicked && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                         let _ = app.run("develop.quickAdjust", json!({"control": ctl, "delta": d}));
                     }

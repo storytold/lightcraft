@@ -189,26 +189,14 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             row(ui, t, "Colour", |ui| colour(app, ui, "slideshowPlateColor", "Colour", p.color, &|c| plate(json!({"color": c}))));
         }
         row(ui, t, "Size", |ui| {
-            slider(
-                app,
-                ui,
-                "slideshowPlateSize",
-                "Size",
-                p.size,
-                Range { lo: 0.01, hi: PLATE_SIZE_MAX, unit: Unit::Percent },
-                &|v| plate(json!({"size": v})),
-            )
+            slider(app, ui, "slideshowPlateSize", "Size", p.size, Range { lo: 0.01, hi: PLATE_SIZE_MAX, unit: Unit::Percent }, &|v| {
+                plate(json!({"size": v}))
+            })
         });
         row(ui, t, "Opacity", |ui| {
-            slider(
-                app,
-                ui,
-                "slideshowPlateOpacity",
-                "Opacity",
-                p.opacity,
-                Range { lo: 0.0, hi: 1.0, unit: Unit::Percent },
-                &|v| plate(json!({"opacity": v})),
-            )
+            slider(app, ui, "slideshowPlateOpacity", "Opacity", p.opacity, Range { lo: 0.0, hi: 1.0, unit: Unit::Percent }, &|v| {
+                plate(json!({"opacity": v}))
+            })
         });
         placement(app, ui, t, "slideshowPlate", &p.place, true, &plate);
         toggle(app, ui, "slideshowPlateBehind", p.behind, "Render behind image", &|v| plate(json!({"behind": v})));
@@ -221,15 +209,9 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if toggle(app, ui, "slideshowStars", r.enabled, "Rating stars", &|v| stars(json!({"enabled": v}))) {
         row(ui, t, "Colour", |ui| colour(app, ui, "slideshowStarsColor", "Colour", r.color, &|c| stars(json!({"color": c}))));
         row(ui, t, "Size", |ui| {
-            slider(
-                app,
-                ui,
-                "slideshowStarsSize",
-                "Size",
-                r.size,
-                Range { lo: 0.01, hi: STAR_SIZE_MAX, unit: Unit::Percent },
-                &|v| stars(json!({"size": v})),
-            )
+            slider(app, ui, "slideshowStarsSize", "Size", r.size, Range { lo: 0.01, hi: STAR_SIZE_MAX, unit: Unit::Percent }, &|v| {
+                stars(json!({"size": v}))
+            })
         });
         placement(app, ui, t, "slideshowStars", &r.place, true, &stars);
     }
@@ -250,15 +232,9 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if toggle(app, ui, "slideshowWatermark", s.show_watermark, "Watermark", &|v| json!({"showWatermark": v})) {
         row(ui, t, "Text", |ui| text(app, ui, "slideshowWatermarkText", &w.text, "© Your Name", &|v| wm(json!({"text": v}))));
         row(ui, t, "Size", |ui| {
-            slider(
-                app,
-                ui,
-                "slideshowWatermarkSize",
-                "Size",
-                w.size as f64,
-                Range { lo: 0.01, hi: 0.15, unit: Unit::Percent },
-                &|v| wm(json!({"size": v})),
-            )
+            slider(app, ui, "slideshowWatermarkSize", "Size", w.size as f64, Range { lo: 0.01, hi: 0.15, unit: Unit::Percent }, &|v| {
+                wm(json!({"size": v}))
+            })
         });
         row(ui, t, "Opacity", |ui| {
             slider(app, ui, "slideshowWatermarkOpacity", "Opacity", w.opacity as f64, Range { lo: 0.05, hi: 1.0, unit: Unit::Percent }, &|v| {

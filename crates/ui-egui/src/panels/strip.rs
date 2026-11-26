@@ -14,13 +14,9 @@ const BUTTON_H: f32 = 40.0;
 /// Space between tool buttons.
 const GAP: f32 = 6.0;
 
-
 /// Keep one definition of the actual Panel frame for drawing and its intrinsic reservation.
 fn panel_frame(t: &Tokens) -> egui::Frame {
-    egui::Frame::NONE
-        .fill(t.chrome)
-        .inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 8 })
-        .stroke(egui::Stroke::new(1.0, t.divider))
+    egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 8 }).stroke(egui::Stroke::new(1.0, t.divider))
 }
 
 /// Panel's documented separator is outside the frame, in its inner-facing outer margin.
@@ -76,64 +72,59 @@ pub(crate) fn show_in_shell(app: &mut LightcraftApp, ui: &mut egui::Ui, rtl: boo
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::right("tool_strip")
-        .exact_size(t.strip_w)
-        .resizable(false)
-        .frame(panel_frame(&t))
-        .show(ui, |ui| {
-            crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
-            let has_photo = app.session.active().is_some();
-            ui.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
-                    let _ = app.run("panel.presets", json!({}));
+    egui::Panel::right("tool_strip").exact_size(t.strip_w).resizable(false).frame(panel_frame(&t)).show(ui, |ui| {
+        crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
+        let has_photo = app.session.active().is_some();
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = GAP;
+            let sz = vec2(t.strip_w, BUTTON_H);
+            if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
+                let _ = app.run("panel.presets", json!({}));
+            }
+            for (id, icon, panel, tip) in [
+                ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
+                ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
+                ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
+                ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
+                ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
+            ] {
+                let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
+                if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
+                    let _ = app.run(&format!("panel.{id}"), json!({}));
                 }
-                for (id, icon, panel, tip) in [
-                    ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
-                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
-                    ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
-                    ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
-                    ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
-                ] {
-                    let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-                    if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
-                        let _ = app.run(&format!("panel.{id}"), json!({}));
-                    }
-                    if id == "edit" {
-                        separator(ui, &t);
-                    }
+                if id == "edit" {
+                    separator(ui, &t);
                 }
-                separator(ui, &t);
-                if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
-                    let _ = app.run("panel.versions", json!({}));
-                }
-                if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
-                    let _ = app.run("panel.activity", json!({}));
-                }
-                if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::About);
-                }
-            });
-            // bottom icons: two buttons and one gap tall, so Info ends at the bottom margin as
-            // Presets starts at the top one
-            let bottom = ui.max_rect().bottom();
-            let mut child =
-                ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                    egui::pos2(ui.max_rect().left(), bottom - (2.0 * BUTTON_H + GAP)),
-                    ui.max_rect().right_bottom(),
-                )));
-            child.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
-                    let _ = app.run("panel.keywords", json!({}));
-                }
-                if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
-                    let _ = app.run("panel.info", json!({}));
-                }
-            });
+            }
+            separator(ui, &t);
+            if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
+                let _ = app.run("panel.versions", json!({}));
+            }
+            if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
+                let _ = app.run("panel.activity", json!({}));
+            }
+            if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {
+                app.ui.dialog = Some(crate::state::Dialog::About);
+            }
         });
+        // bottom icons: two buttons and one gap tall, so Info ends at the bottom margin as
+        // Presets starts at the top one
+        let bottom = ui.max_rect().bottom();
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), bottom - (2.0 * BUTTON_H + GAP)), ui.max_rect().right_bottom())),
+        );
+        child.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = GAP;
+            let sz = vec2(t.strip_w, BUTTON_H);
+            if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
+                let _ = app.run("panel.keywords", json!({}));
+            }
+            if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
+                let _ = app.run("panel.info", json!({}));
+            }
+        });
+    });
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {
@@ -183,13 +174,11 @@ mod intrinsic_reservation_tests {
                                 let frame = egui::Frame::NONE.stroke(egui::Stroke::new(stroke, egui::Color32::GRAY));
                                 let expected = centered_reservation(48.0, child_width, frame_with_separator(frame, ui.style()));
                                 let root = ui.available_rect_before_wrap();
-                                egui::Panel::right("intrinsic-regression")
-                                    .exact_size(48.0).resizable(false).frame(frame)
-                                    .show(ui, |ui| {
-                                        ui.vertical_centered(|ui| {
-                                            ui.allocate_exact_size(vec2(child_width, 40.0), egui::Sense::hover());
-                                        });
+                                egui::Panel::right("intrinsic-regression").exact_size(48.0).resizable(false).frame(frame).show(ui, |ui| {
+                                    ui.vertical_centered(|ui| {
+                                        ui.allocate_exact_size(vec2(child_width, 40.0), egui::Sense::hover());
                                     });
+                                });
                                 let actual = root.right() - ui.available_rect_before_wrap().right();
                                 assert_eq!(actual, expected, "width={width} scale={scale} child={child_width} stroke={stroke}");
                                 if child_width == 32.0 {

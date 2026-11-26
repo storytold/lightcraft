@@ -1,10 +1,10 @@
 use super::histogram::preview_histogram;
-use crate::panels::detail::host;
 use super::sliders::control;
 use super::{
     Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PARAM_AMOUNTS, ParametricCurve, PhotoId, Point, Pos2, Rect, RichText, Sense, Stroke,
     Tokens, Vertex, controls, hex, json, paint, pos2, text_button, vec2,
 };
+use crate::panels::detail::host;
 
 // ------------------------------------------------------------------------------ tone curve
 
@@ -428,7 +428,8 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let builtin = current.as_ref().is_none_or(|name| all_presets(&app.session).iter().any(|p| p.builtin && &p.name == name));
             let label = crate::i18n::builtin_label(current.as_deref().unwrap_or("Custom"), builtin);
             use craft::ui::contract::Show as _;
-            let face = craft::ui::buttons::Button::new(crate::i18n::tr("Point Curve preset")).painted(label.to_owned()).id_salt("curvePreset").show(ui);
+            let face =
+                craft::ui::buttons::Button::new(crate::i18n::tr("Point Curve preset")).painted(label.to_owned()).id_salt("curvePreset").show(ui);
             let activated = face.clicked();
             let r = face.response;
             if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
@@ -437,74 +438,89 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let active = ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
             // Keep traversal, contextual actions and dismissal in the same SDK menu system.
             // A framework-owned opener is reachable from other SDK controls before the menu is open.
-            use craft::ui::contract::{Props as _, ShowContainer as _};
             use craft::ui::contract::overlay::Trigger;
+            use craft::ui::contract::{Props as _, ShowContainer as _};
             use craft::ui::menu::Menu;
             if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                 // Use the button's SDK activation, not the external pointer-only press trigger.
                 // Forget the open state after the panel stops drawing, as in Presets options.
                 let pass = ui.ctx().cumulative_pass_nr();
                 let slot = r.id.with("menu-open");
-                let mut open = ui.data(|d| d.get_temp::<(u64, bool)>(slot))
+                let mut open = ui
+                    .data(|d| d.get_temp::<(u64, bool)>(slot))
                     .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
                     .is_some_and(|(_, open)| open);
-                if active && activated { open = !open; }
-                Menu::new(crate::i18n::tr("Point Curve")).id_salt("curve-preset-menu").tab_exits().opened_by(&r, Trigger::Manual)
-                    .open(craft::ui::contract::Bind::bound(&mut open)).show(ui, |ui, _| {
-                    ui.set_min_width(180.0);
-                    let presets = all_presets(&app.session);
-                    let mut user_seen = false;
-                    for p in &presets {
-                        if !p.builtin && !user_seen {
-                            user_seen = true;
-                            ui.separator();
+                if active && activated {
+                    open = !open;
+                }
+                Menu::new(crate::i18n::tr("Point Curve"))
+                    .id_salt("curve-preset-menu")
+                    .tab_exits()
+                    .opened_by(&r, Trigger::Manual)
+                    .open(craft::ui::contract::Bind::bound(&mut open))
+                    .show(ui, |ui, _| {
+                        ui.set_min_width(180.0);
+                        let presets = all_presets(&app.session);
+                        let mut user_seen = false;
+                        for p in &presets {
+                            if !p.builtin && !user_seen {
+                                user_seen = true;
+                                ui.separator();
+                            }
+                            let id = format!("curvePreset:{}", p.name);
+                            let (r, ran) = preset_item(
+                                ui,
+                                &id,
+                                crate::i18n::builtin_label(&p.name, p.builtin),
+                                Some(current.as_deref() == Some(p.name.as_str())),
+                                active,
+                                true,
+                            );
+                            if ran {
+                                let _ = app.run("curve.applyPreset", json!({"name": p.name}));
+                            }
+                            if active && !p.builtin && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+                                Menu::context(crate::i18n::tr("Delete Preset"), &r).id_salt(("curve-preset-context", &p.name)).show(ui, |ui, _| {
+                                    if preset_item(ui, &format!("curvePresetDelete:{}", p.name), crate::i18n::tr("Delete Preset"), None, active, true)
+                                        .1
+                                    {
+                                        let _ = app.run("curve.deletePreset", json!({"name":p.name}));
+                                    }
+                                });
+                            }
                         }
-                        let id = format!("curvePreset:{}", p.name);
-                        let (r, ran) = preset_item(
+                        ui.separator();
+                        let shaped = current.as_deref() != Some("Linear");
+                        if preset_item(ui, "curvePresetMenu:save", crate::i18n::tr("Save Point Curve…"), None, active, shaped).1 {
+                            crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
+                        }
+                        if preset_item(
                             ui,
-                            &id,
-                            crate::i18n::builtin_label(&p.name, p.builtin),
-                            Some(current.as_deref() == Some(p.name.as_str())),
+                            "curvePresetMenu:import",
+                            crate::i18n::tr("Import Presets…"),
+                            None,
                             active,
-                            true,
-                        );
-                        if ran {
-                            let _ = app.run("curve.applyPreset", json!({"name": p.name}));
+                            app.services.pick_curve_preset_files.is_some(),
+                        )
+                        .1
+                        {
+                            let _ = app.run("file.importCurvePresets", json!({}));
                         }
-                        if active && !p.builtin && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
-                            Menu::context(crate::i18n::tr("Delete Preset"), &r).id_salt(("curve-preset-context", &p.name)).show(ui, |ui, _| {
-                                if preset_item(ui, &format!("curvePresetDelete:{}", p.name), crate::i18n::tr("Delete Preset"), None, active, true).1 {
-                                    let _ = app.run("curve.deletePreset", json!({"name":p.name}));
-                                }
-                            });
+                        let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
+                        if preset_item(ui, "curvePresetMenu:export", crate::i18n::tr("Export Presets…"), None, active, can_export).1 {
+                            let _ = app.run("file.exportCurvePresets", json!({}));
                         }
-                    }
-                    ui.separator();
-                    let shaped = current.as_deref() != Some("Linear");
-                    if preset_item(ui, "curvePresetMenu:save", crate::i18n::tr("Save Point Curve…"), None, active, shaped).1 {
-                        crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
-                    }
-                    if preset_item(
-                        ui,
-                        "curvePresetMenu:import",
-                        crate::i18n::tr("Import Presets…"),
-                        None,
-                        active,
-                        app.services.pick_curve_preset_files.is_some(),
-                    )
-                    .1
-                    {
-                        let _ = app.run("file.importCurvePresets", json!({}));
-                    }
-                    let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
-                    if preset_item(ui, "curvePresetMenu:export", crate::i18n::tr("Export Presets…"), None, active, can_export).1 {
-                        let _ = app.run("file.exportCurvePresets", json!({}));
-                    }
-                    if presets.iter().any(|p| !p.builtin) {
-                        ui.label(RichText::new(crate::i18n::tr("Right-click a preset to delete it")).font(t.font(11.0)).color(t.text_dim));
+                        if presets.iter().any(|p| !p.builtin) {
+                            ui.label(RichText::new(crate::i18n::tr("Right-click a preset to delete it")).font(t.font(11.0)).color(t.text_dim));
+                        }
+                    });
+                ui.data_mut(|d| {
+                    if open {
+                        d.insert_temp(slot, (pass, true));
+                    } else {
+                        d.remove::<(u64, bool)>(slot);
                     }
                 });
-                ui.data_mut(|d| { if open { d.insert_temp(slot, (pass, true)); } else { d.remove::<(u64, bool)>(slot); } });
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let r = text_button(ui, "curveReset", crate::i18n::tr("Reset"), false).on_hover_text(crate::i18n::tr(

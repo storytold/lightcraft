@@ -500,7 +500,6 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
     });
 }
 
-
 /// Both layout systems can measure speculatively. Never publish automation hits or draft edits then.
 fn measuring(ui: &egui::Ui) -> bool {
     ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
@@ -530,17 +529,21 @@ fn choices(ui: &mut egui::Ui, id: &str, label: &str, options: &[(&str, &str)], v
                 register(ui, format!("button:{id}-{index}"), &response);
             }
         };
-        if horizontal { ui.horizontal_wrapped(members); } else { ui.vertical(members); }
+        if horizontal {
+            ui.horizontal_wrapped(members);
+        } else {
+            ui.vertical(members);
+        }
     };
     // Native columns and SDK containers do not share a flow cursor. Measure in the actual column,
     // then mount once there, rather than filling the enclosing dialog a second time.
     let width = ui.available_width().max(1.0);
     let mut probe = value.clone();
-    let child = ui.new_child(egui::UiBuilder::new()
-        .max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY)))
-        .sizing_pass().invisible());
-    let size = RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut probe))
-        .id_salt(id).measure_in(&child, Proposal::Width(width), body);
+    let child = ui.new_child(
+        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY))).sizing_pass().invisible(),
+    );
+    let size =
+        RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut probe)).id_salt(id).measure_in(&child, Proposal::Width(width), body);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size.y.max(24.0)), egui::Sense::hover());
     RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(value)).id_salt(id).show_at(ui, rect, body);
 }
@@ -549,26 +552,42 @@ fn choices(ui: &mut egui::Ui, id: &str, label: &str, options: &[(&str, &str)], v
 fn options(ui: &mut egui::Ui, opts: &mut MergeDialog, photo_count: usize) {
     let mut draft = opts.clone();
     if draft.is_pano() {
-        choices(ui, "mergeProjection", "Projection", &[("auto", "Auto Select"), ("spherical", "Spherical"),
-            ("cylindrical", "Cylindrical"), ("perspective", "Perspective")], &mut draft.projection, false);
+        choices(
+            ui,
+            "mergeProjection",
+            "Projection",
+            &[("auto", "Auto Select"), ("spherical", "Spherical"), ("cylindrical", "Cylindrical"), ("perspective", "Perspective")],
+            &mut draft.projection,
+            false,
+        );
         ui.add_space(4.0);
         let mut warp = draft.boundary_warp;
-        if num(ui, &BOUNDARY_WARP, &mut warp) { draft.boundary_warp = warp.round(); }
+        if num(ui, &BOUNDARY_WARP, &mut warp) {
+            draft.boundary_warp = warp.round();
+        }
         check(ui, "check:merge.fillEdges", "Fill Edges", &mut draft.fill_edges, true);
         check(ui, "check:merge.autoCrop", "Auto Crop", &mut draft.auto_crop, true);
         ui.add_space(4.0);
     }
     if draft.is_hdr() {
         check(ui, "check:merge.align", "Auto Align", &mut draft.align, true);
-        choices(ui, "mergeDeghost", "Deghost Amount", &[("none", "None"), ("low", "Low"), ("medium", "Med"), ("high", "High")],
-            &mut draft.deghost, true);
+        choices(
+            ui,
+            "mergeDeghost",
+            "Deghost Amount",
+            &[("none", "None"), ("low", "Low"), ("medium", "Med"), ("high", "High")],
+            &mut draft.deghost,
+            true,
+        );
         if draft.command == "merge.hdr" {
             let enabled = draft.deghost != "none";
             check(ui, "check:merge.showOverlay", "Show Deghost Overlay", &mut draft.show_overlay, enabled);
         }
         if draft.command == "merge.hdrPanorama" {
             let mut bracket = f64::from(draft.bracket);
-            if num(ui, &BRACKET, &mut bracket) { draft.bracket = bracket.round() as u32; }
+            if num(ui, &BRACKET, &mut bracket) {
+                draft.bracket = bracket.round() as u32;
+            }
         }
         ui.add_space(4.0);
     }
@@ -576,7 +595,9 @@ fn options(ui: &mut egui::Ui, opts: &mut MergeDialog, photo_count: usize) {
     check(ui, "check:merge.stack", "Create Stack", &mut draft.stack, true);
     ui.add_space(8.0);
     Text::new(crate::i18n::tr_format!("{} photos", photo_count)).shade(Shade::Muted).show(ui);
-    if !measuring(ui) { *opts = draft; }
+    if !measuring(ui) {
+        *opts = draft;
+    }
 }
 
 const BOUNDARY_WARP: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec {
@@ -605,8 +626,11 @@ const BRACKET: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec
 /// Keep the product's hover Up/Down shortcut (Shift = five steps) beside the SDK's
 /// focused slider navigation. Text editing always owns its own arrow keys.
 fn hover_keys(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, row: egui::Rect, track_key: egui::Id, value: &mut f64) {
-    if measuring(ui) || !ui.is_enabled() || !ui.rect_contains_pointer(row)
-        || craft::ui::runtime::focus::focused_rec(ui.ctx()).is_some_and(|focus| focus.stop.text) {
+    if measuring(ui)
+        || !ui.is_enabled()
+        || !ui.rect_contains_pointer(row)
+        || craft::ui::runtime::focus::focused_rec(ui.ctx()).is_some_and(|focus| focus.stop.text)
+    {
         return;
     }
     let (up, down, shift) = ui.input_mut(|input| {
@@ -619,11 +643,16 @@ fn hover_keys(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, row: eg
         // Settle only the matching move for this track: the app owns hovered Up/Down
         // (Shift = 5), while the SDK still owns other axes, editing and accessibility.
         use craft::ui::runtime::{focus, keys};
-        if let Some(track) = ui.data(|d| d.get_temp::<egui::Id>(track_key)).filter(|id| focus::focused_rec(ui.ctx()).is_some_and(|f| f.stop.id == *id)) {
+        if let Some(track) =
+            ui.data(|d| d.get_temp::<egui::Id>(track_key)).filter(|id| focus::focused_rec(ui.ctx()).is_some_and(|f| f.stop.id == *id))
+        {
             let mut intents = keys::intents_of(ui.ctx(), Some(track), false);
-            let took = intents.take_move_where(|mv, mods| mods.extend == shift && !mods.fine && !mods.lead
-                && ((up && mv == keys::NavMove::Up) || (down && mv == keys::NavMove::Down)));
-            if took.is_some() { keys::settle(ui.ctx(), Some(track), &intents); }
+            let took = intents.take_move_where(|mv, mods| {
+                mods.extend == shift && !mods.fine && !mods.lead && ((up && mv == keys::NavMove::Up) || (down && mv == keys::NavMove::Down))
+            });
+            if took.is_some() {
+                keys::settle(ui.ctx(), Some(track), &intents);
+            }
         }
         *value = crate::widgets::nudged(spec, *value, if up { 1.0 } else { -1.0 } * if shift { 5.0 } else { 1.0 });
     }
@@ -639,7 +668,9 @@ fn hover_keys(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, row: eg
     let total = (remainder + dx).clamp(-10.0 * unit, 10.0 * unit);
     let steps = (total / unit).trunc();
     ui.data_mut(|data| data.insert_temp(key, total - steps * unit));
-    if steps != 0.0 { *value = crate::widgets::nudged(spec, *value, f64::from(steps)); }
+    if steps != 0.0 {
+        *value = crate::widgets::nudged(spec, *value, f64::from(steps));
+    }
 }
 
 fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f64) -> bool {
@@ -655,7 +686,9 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f6
             crate::panels::detail::host::Target::new(crate::i18n::tr(spec.label)).pointer_only(),
         );
         crate::widgets::register_response(format!("sliderLabel:{}", spec.id), label.rect, &caption.response);
-        if caption.double_clicked() { current = spec.default; }
+        if caption.double_clicked() {
+            current = spec.default;
+        }
     }
     let row = egui::Rect::from_min_max(label.rect.min, egui::pos2(ui.max_rect().right(), ui.cursor().min.y + 24.0));
     let track_key = ui.scope_id().with(("merge-focused-track", spec.id));
@@ -666,15 +699,20 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f6
         let record_id = ui.scope_id().with(("merge-track", spec.id));
         let (shown, record) = craft::ui::runtime::inspect::record(ui, record_id, |ui| {
             Slider::new(Bind::bound(&mut current).reset(spec.default), spec.min..=spec.max)
-                .id_salt(("merge-slider", spec.id)).label(crate::i18n::tr(spec.label)).step(spec.step)
+                .id_salt(("merge-slider", spec.id))
+                .label(crate::i18n::tr(spec.label))
+                .step(spec.step)
                 // LightCraft's slider keys: Shift steps five times, as the develop sliders do (`widgets::slider`).
                 .key_policy(craft::ui::runtime::keys::ScalarKeyPolicy::new(spec.step).model_step(spec.step).shift_factor(5.0))
                 .show_at(ui, rect)
         });
         // Automation fractions describe the value span, which runs between the endpoint thumb centres.
-        let half_thumb = record.as_ref().and_then(|record| record.hits.iter().find(|hit| {
-            hit.owner == shown.response.id && hit.part.is_some_and(|part| part.key == Slider::THUMB)
-        })).map_or(0.0, |hit| hit.bounds.width() * 0.5);
+        let half_thumb = record
+            .as_ref()
+            .and_then(|record| {
+                record.hits.iter().find(|hit| hit.owner == shown.response.id && hit.part.is_some_and(|part| part.key == Slider::THUMB))
+            })
+            .map_or(0.0, |hit| hit.bounds.width() * 0.5);
         let span = shown.response.rect.shrink2(egui::vec2(half_thumb, 0.0));
         if !measuring(ui) {
             ui.data_mut(|d| d.insert_temp(track_key, shown.response.id));
@@ -683,8 +721,12 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f6
         let mut exact = Some(current);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 24.0), egui::Sense::hover());
         let shown = NumberField::new(crate::i18n::tr(spec.label), Bind::bound(&mut exact).reset(Some(spec.default)))
-            .id_salt(("merge-number", spec.id)).range(spec.min..=spec.max).step(spec.step)
-            .snap_typed(true).commit_decimals(spec.decimals as usize).fixed_decimals(spec.decimals as usize)
+            .id_salt(("merge-number", spec.id))
+            .range(spec.min..=spec.max)
+            .step(spec.step)
+            .snap_typed(true)
+            .commit_decimals(spec.decimals as usize)
+            .fixed_decimals(spec.decimals as usize)
             .show_at(ui, rect);
         register(ui, format!("sliderValue:{}", spec.id), &shown.response);
         register(ui, format!("sliderField:{}", spec.id), &shown.response);
@@ -692,9 +734,13 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f6
         if !measuring(ui) && shown.events.iter().any(|event| matches!(event, craft::behavior::EditEvent::Cancel { .. })) {
             crate::widgets::take_escape(ui.ctx());
         }
-        if let Some(exact) = exact.filter(|v| v.is_finite()) { current = exact; }
+        if let Some(exact) = exact.filter(|v| v.is_finite()) {
+            current = exact;
+        }
     });
-    if !measuring(ui) { *value = current; }
+    if !measuring(ui) {
+        *value = current;
+    }
     *value != before
 }
 

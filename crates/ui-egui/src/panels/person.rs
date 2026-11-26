@@ -177,10 +177,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(PAD - 4.0);
-            let photos = Button::new(crate::i18n::tr("Show photos"))
-                .id_salt("person:photos")
-                .tooltip(crate::i18n::tr("Their photos in the grid"))
-                .show(ui);
+            let photos =
+                Button::new(crate::i18n::tr("Show photos")).id_salt("person:photos").tooltip(crate::i18n::tr("Their photos in the grid")).show(ui);
             let clicked = photos.clicked();
             let response = photos.response;
             let real_pass = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
@@ -347,17 +345,23 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     }
     // the × is added after the tile, so it wins where they overlap
     let x_rect = Rect::from_min_size(pos2(r.right() - 24.0, r.top() + 4.0), vec2(20.0, 20.0));
-    let x_resp = more.then(|| {
-        super::detail::host::target(ui, ("more-face-x", f.photo, f.index), x_rect, host(crate::i18n::tr("Hide this face").to_string()))
-    });
+    let x_resp =
+        more.then(|| super::detail::host::target(ui, ("more-face-x", f.photo, f.index), x_rect, host(crate::i18n::tr("Hide this face").to_string())));
     let above_rect = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(24.0, 20.0));
     let above_resp = more.then(|| {
-        let tip = format!(
-            "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A."
-        );
-        super::detail::host::target(ui, ("more-face-above", f.photo, f.index), above_rect, host(crate::i18n::tr("Confirm all above").to_string()).tooltip(tip))
+        let tip =
+            format!("All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A.");
+        super::detail::host::target(
+            ui,
+            ("more-face-above", f.photo, f.index),
+            above_rect,
+            host(crate::i18n::tr("Confirm all above").to_string()).tooltip(tip),
+        )
     });
-    if more && real && let Some(above) = above_resp.as_ref() {
+    if more
+        && real
+        && let Some(above) = above_resp.as_ref()
+    {
         register_response(format!("more-face-above:{}:{}", f.photo, f.index), above_rect, above);
     }
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());

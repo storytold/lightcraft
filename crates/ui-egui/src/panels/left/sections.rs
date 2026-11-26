@@ -2,9 +2,7 @@ use craft::ui::contract::{Props as _, ShowContainer as _, Trigger};
 use craft::ui::menu::Menu;
 
 use super::albums::top_level_drop_target;
-use super::rows::{
-    AlbumDrag, MenuAt, ROW_HEIGHT, SectionDrag, SideEvent, SideRow, SideSpec, entry, host_menu, measuring, rule, side_list,
-};
+use super::rows::{AlbumDrag, MenuAt, ROW_HEIGHT, SectionDrag, SideEvent, SideRow, SideSpec, entry, host_menu, measuring, rule, side_list};
 use super::{Icon, LightcraftApp, Rect, SidebarSection, Tokens, icon_button, json, pos2, register, vec2};
 
 /// Space above a section's header.
@@ -253,7 +251,8 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
         .unregistered();
     let salt = format!("section-{widget}-{id}");
     let mut header = ui.new_child(egui::UiBuilder::new().max_rect(list));
-    let out = side_list(&mut header, SideSpec::new(&salt, crate::i18n::tr("Sidebar section"), false).keep_focus().section_drag(section, pinned), vec![row]);
+    let out =
+        side_list(&mut header, SideSpec::new(&salt, crate::i18n::tr("Sidebar section"), false).keep_focus().section_drag(section, pinned), vec![row]);
     let live = !measuring(ui) && ui.is_enabled();
     if live {
         register(ui, format!("{widget}:{id}"), r);
@@ -375,7 +374,8 @@ pub(super) fn sections_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, on: Opti
         rule(ui);
     }
     for s in app.ui.sidebar.sections().iter().filter(|s| s.id.available()) {
-        let shown = entry("sidebar-section", crate::i18n::tr(s.id.title())).checked(!s.hidden).widget(format!("sidebarMenu:section:{}", s.id.id())).show(ui);
+        let shown =
+            entry("sidebar-section", crate::i18n::tr(s.id.title())).checked(!s.hidden).widget(format!("sidebarMenu:section:{}", s.id.id())).show(ui);
         if shown {
             run = Some(("view.sidebarSection", json!({"section": s.id.id(), "show": s.hidden})));
         }
@@ -425,7 +425,12 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 pub(super) fn sidebar_title(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (_, hr) = ui.allocate_space(vec2(ui.available_width(), TITLE_HEIGHT));
     let library = crate::panels::settings::open_library_name(app);
-    let mut row = SideRow::new("sidebarTitle", "folder", crate::i18n::tr("My Photos")).no_icon().strong().role(craft::ui::style::TypeRole::Title).unregistered().detail(library.clone());
+    let mut row = SideRow::new("sidebarTitle", "folder", crate::i18n::tr("My Photos"))
+        .no_icon()
+        .strong()
+        .role(craft::ui::style::TypeRole::Title)
+        .unregistered()
+        .detail(library.clone());
     if library.is_some()
         && let Some(l) = app.session.library.as_ref()
     {

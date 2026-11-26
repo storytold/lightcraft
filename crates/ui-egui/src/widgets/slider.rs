@@ -157,7 +157,11 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
                                 NumberCodec::new(Reader::new(), usize::from(spec.decimals))
                                     .parse_with(move |text| super::typed_value(&number_spec, text)),
                             )
-                            .scale(if spec.id == "wb.temp" { SliderScale::Custom { position: kelvin_position, value_at: kelvin_value_at } } else { SliderScale::Linear })
+                            .scale(if spec.id == "wb.temp" {
+                                SliderScale::Custom { position: kelvin_position, value_at: kelvin_value_at }
+                            } else {
+                                SliderScale::Linear
+                            })
                             .fill(false)
                             .tooltip(crate::i18n::tr(VALUE_HINT).to_owned())
                             .enabled(enabled)
@@ -186,7 +190,14 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
 
 /// Names the row's real parts for automation, says how to reset it, keeps the shortcut gate's slider focus and
 /// gives the value field back after a typed edit ends. Returns the track's id.
-fn publish(ui: &Ui, row: &Row<'_>, id: egui::Id, name: &str, out: &SliderFieldOutput, record: &craft::ui::runtime::inspect::Recorded) -> Option<egui::Id> {
+fn publish(
+    ui: &Ui,
+    row: &Row<'_>,
+    id: egui::Id,
+    name: &str,
+    out: &SliderFieldOutput,
+    record: &craft::ui::runtime::inspect::Recorded,
+) -> Option<egui::Id> {
     let spec = row.spec;
     let ctx = ui.ctx();
     let focused = craft::ui::runtime::focus::focused_rec(ctx);
@@ -412,7 +423,8 @@ mod face {
                 let index = (along.floor() as usize).min(segments - 1);
                 if let (Some(from), Some(to)) = (self.stops.get(index), self.stops.get(index + 1)) {
                     let color = crate::widgets::lerp(*from, *to, along - index as f32);
-                    let strip = Rect::from_min_max(pos2(rect.left() + rect.width() * a, rect.top()), pos2(rect.left() + rect.width() * b, rect.bottom()));
+                    let strip =
+                        Rect::from_min_max(pos2(rect.left() + rect.width() * a, rect.top()), pos2(rect.left() + rect.width() * b, rect.bottom()));
                     draw.data_fill(&PaintShape::Rect(strip, CornerRadius::ZERO), DataColor::new(color));
                 }
             }

@@ -31,7 +31,12 @@ fn drive(click: Option<u8>, keys: &[egui::Key], build: impl Fn(&mut egui::Ui) ->
     let mut reported = Vec::new();
     let mut nodes = Vec::new();
     let mut rects: Vec<(String, Rect)> = Vec::new();
-    let button = |at: Pos2, pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let button = |at: Pos2, pressed: bool| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
     for frame in 0..10 {
         let mut events = Vec::new();
         if let Some(n) = click {

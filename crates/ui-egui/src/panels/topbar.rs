@@ -148,7 +148,8 @@ fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rec
         crate::i18n::tr("Filter bar").into()
     };
     let accent = if filtering { Some(t.accent) } else { None };
-    let (fresp, live) = bar_icon(ui, fr, ("top", "filter"), "icon:filter", Icon::Filter, 16, accent.unwrap_or(t.icon), accent.unwrap_or(t.text), &tip);
+    let (fresp, live) =
+        bar_icon(ui, fr, ("top", "filter"), "icon:filter", Icon::Filter, 16, accent.unwrap_or(t.icon), accent.unwrap_or(t.text), &tip);
     if live && active > 0 {
         let c = fr.right_top() + vec2(-3.0, 8.0);
         ui.painter().circle_filled(c, 7.0, t.accent);

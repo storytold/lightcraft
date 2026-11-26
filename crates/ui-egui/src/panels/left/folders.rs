@@ -15,7 +15,14 @@ struct Meta<'a> {
 }
 
 /// The rows of `nodes` and, for the open ones, of the folders inside them.
-fn flatten<'a>(app: &LightcraftApp, ui: &egui::Ui, nodes: &'a [FolderNode], depth: usize, rows: &mut Vec<SideRow>, meta: &mut HashMap<String, Meta<'a>>) {
+fn flatten<'a>(
+    app: &LightcraftApp,
+    ui: &egui::Ui,
+    nodes: &'a [FolderNode],
+    depth: usize,
+    rows: &mut Vec<SideRow>,
+    meta: &mut HashMap<String, Meta<'a>>,
+) {
     for n in nodes {
         let key = lightcraft_catalog::query::folder_key(&n.path);
         let open_id = egui::Id::unique(("libfolder-open", key));
@@ -144,7 +151,6 @@ pub(crate) fn folder_row_of<'a>(tree: &'a [FolderNode], dir: &str) -> Option<&'a
 /// How long photos dragged over a closed Folders row wait before it opens, so a folder inside it
 /// can be reached.
 const SPRING_OPEN_SECONDS: f64 = 0.7;
-
 
 /// A Folders row while photos are dragged from the grid: a release moves their files there on
 /// disk (`photo.moveToFolder`, one undo step). The row lights up and the dragged label says where
@@ -306,7 +312,6 @@ fn locate_missing_item(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNod
     }
 }
 
-
 /// The node Synchronize Folder… of a Local folder `path` works on, with the name its dialog shows:
 /// the Folders row for that very folder, else (a folder above rows) the folder itself, as a folder
 /// holding other folders. `None` when no library photo lies in `path` or inside it. Reads the
@@ -351,7 +356,6 @@ fn can_move_folder(app: &LightcraftApp) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 /// Move Folder To… of a folder row (widget `folderMoveTo`): asks for the destination through the
 /// shared folder dialog, off the UI thread where the host has one (issue #3140: a dialog on the UI

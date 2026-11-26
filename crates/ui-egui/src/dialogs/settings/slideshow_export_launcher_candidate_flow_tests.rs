@@ -426,15 +426,3 @@ fn slideshow_launcher_sdk_11_physical_escape_cancels_parent() {
 fn slideshow_launcher_sdk_12_natural_tab_and_activation() {
     case_12_natural_tab_and_activation(false);
 }
-
-
-
-
-
-
-
-
-
-
-
-

@@ -1,6 +1,6 @@
+use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, register, text_button, vec2};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Props as _, Show as _};
-use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, register, text_button, vec2};
 
 pub(super) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // (the box is the selection's: the active photo only says that there is one)
@@ -367,51 +367,68 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let face = crate::i18n::builtin_label(&current, current == recent).to_owned();
         // (the dropdown takes the rest of the line, so a long set name is not cut and the chevron stays)
         let room = ui.available_width();
-        crate::widgets::dropdown_menu_sized(ui, "keywordSetCombo", crate::i18n::tr("Keyword Set"), &face, Some(room), craft::theme::ControlSize::Sm, |ui| {
-            for set in sets["sets"].as_array().into_iter().flatten() {
-                let name = set["name"].as_str().unwrap_or_default();
-                if crate::widgets::menu_row(ui, ("keywordSet", name), None, crate::i18n::builtin_label(name, name == recent), None, name == current, true) {
-                    let _ = app.run("keyword.useSet", json!({"name": name}));
+        crate::widgets::dropdown_menu_sized(
+            ui,
+            "keywordSetCombo",
+            crate::i18n::tr("Keyword Set"),
+            &face,
+            Some(room),
+            craft::theme::ControlSize::Sm,
+            |ui| {
+                for set in sets["sets"].as_array().into_iter().flatten() {
+                    let name = set["name"].as_str().unwrap_or_default();
+                    if crate::widgets::menu_row(
+                        ui,
+                        ("keywordSet", name),
+                        None,
+                        crate::i18n::builtin_label(name, name == recent),
+                        None,
+                        name == current,
+                        true,
+                    ) {
+                        let _ = app.run("keyword.useSet", json!({"name": name}));
+                    }
                 }
-            }
-            crate::widgets::menu_divider(ui);
-            // Edit Set…: the current nine, slot by slot (named, Recent Keywords becomes a set)
-            if crate::widgets::menu_row(ui, "keywordSetMenu:edit", Some("keywordSetMenu:edit"), crate::i18n::tr("Edit Set…"), None, false, true) {
-                let mut slots: Vec<String> =
-                    sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
-                slots.resize(9, String::new());
-                let named = current != recent;
-                app.ui.dialog = Some(crate::state::Dialog::KeywordSet {
-                    replaces: named.then(|| current.clone()),
-                    name: if named { current.clone() } else { String::new() },
-                    slots,
-                    as_new: false,
-                });
-            }
-            if crate::widgets::menu_row(ui, "keywordSetMenu:save", None, crate::i18n::tr("Save Current Keywords as Set…"), None, false, true) {
-                app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                    title: "Save Keyword Set".into(),
-                    hint: "Set name".into(),
-                    value: String::new(),
-                    command: "keyword.saveSet".into(),
-                    params: json!({}),
-                    key: "name".into(),
-                });
-            }
-            if current != recent
-                && crate::widgets::menu_row(
-                    ui,
-                    "keywordSetMenu:delete",
-                    None,
-                    &crate::i18n::tr_format!("Delete “{current}”", current = current),
-                    None,
-                    false,
-                    true,
-                )
-            {
-                let _ = app.run("keyword.deleteSet", json!({"name": current}));
-            }
-        });
+                crate::widgets::menu_divider(ui);
+                // Edit Set…: the current nine, slot by slot (named, Recent Keywords becomes a set)
+                if crate::widgets::menu_row(ui, "keywordSetMenu:edit", Some("keywordSetMenu:edit"), crate::i18n::tr("Edit Set…"), None, false, true)
+                {
+                    let mut slots: Vec<String> =
+                        sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
+                    slots.resize(9, String::new());
+                    let named = current != recent;
+                    app.ui.dialog = Some(crate::state::Dialog::KeywordSet {
+                        replaces: named.then(|| current.clone()),
+                        name: if named { current.clone() } else { String::new() },
+                        slots,
+                        as_new: false,
+                    });
+                }
+                if crate::widgets::menu_row(ui, "keywordSetMenu:save", None, crate::i18n::tr("Save Current Keywords as Set…"), None, false, true) {
+                    app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+                        title: "Save Keyword Set".into(),
+                        hint: "Set name".into(),
+                        value: String::new(),
+                        command: "keyword.saveSet".into(),
+                        params: json!({}),
+                        key: "name".into(),
+                    });
+                }
+                if current != recent
+                    && crate::widgets::menu_row(
+                        ui,
+                        "keywordSetMenu:delete",
+                        None,
+                        &crate::i18n::tr_format!("Delete “{current}”", current = current),
+                        None,
+                        false,
+                        true,
+                    )
+                {
+                    let _ = app.run("keyword.deleteSet", json!({"name": current}));
+                }
+            },
+        );
     });
     let kws: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     if kws.is_empty() {

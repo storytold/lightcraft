@@ -256,7 +256,9 @@ pub(crate) fn capture_completion(app: &LightcraftApp) -> LibraryCompletion {
 }
 pub(crate) fn apply_completion(app: &mut LightcraftApp, completion: LibraryCompletion) {
     let LibraryCompletion(barrier, visible, absent) = completion;
-    if visible_mode(app) != visible || app.library_problem.as_ref().is_none_or(|p| p.dismissed) != absent { return; }
+    if visible_mode(app) != visible || app.library_problem.as_ref().is_none_or(|p| p.dismissed) != absent {
+        return;
+    }
     app.library_window_input = barrier;
     if let Some(mode) = visible {
         if app.library_window_input.drawn == Some(mode) && (!app.library_window_input.transition || app.library_window_input.shielded) {
@@ -1083,41 +1085,43 @@ fn blocking_window(
     let mut shown = None;
     // The dialog mounts its own modal layer; this area only gives it a parent `Ui`.
     // Above the dialog it covers on the dialog stack, below a prompt.
-    craft::ui::runtime::overlay::stack_place(ctx, crate::dialogs::STACK_LIBRARY, window_id(id), || crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
-        let output = Dialog::new(crate::i18n::tr(title).to_owned())
-            .id(window_id(id))
-            .opened(Bind::given(true))
-            .closable(false)
-            .backdrop(Backdrop::Scrim)
-            .footer(|ui, _| footer(ui))
-            .show(ui, |ui, _| {
-                // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-                ui.set_width(width);
-                ui.spacing_mut().item_spacing.y = 8.0;
-                // The framework sizes the window from a measuring run of the body, where the list's scroll area and
-                // its rows (host targets only in a real pass) come out shorter: reserve the height the real body
-                // took, so the footer's buttons sit below the last row instead of over it.
-                let height_id = window_id(id).with("body-height");
-                let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-                let top = ui.cursor().top();
-                if let Some(height) = ui.ctx().data(|d| d.get_temp::<f32>(height_id)) {
-                    ui.set_min_height(height);
-                }
-                body(ui);
-                if real {
-                    // where the content ends (the cursor, which the reserved height does not move), so it can shrink
-                    let height = (ui.cursor().top() - ui.spacing().item_spacing.y - top).max(0.0);
-                    if ui.ctx().data(|d| d.get_temp::<f32>(height_id)).is_none_or(|kept| (kept - height).abs() > 0.5) {
-                        ui.ctx().data_mut(|d| d.insert_temp(height_id, height));
-                        ui.ctx().request_repaint();
+    craft::ui::runtime::overlay::stack_place(ctx, crate::dialogs::STACK_LIBRARY, window_id(id), || {
+        crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
+            let output = Dialog::new(crate::i18n::tr(title).to_owned())
+                .id(window_id(id))
+                .opened(Bind::given(true))
+                .closable(false)
+                .backdrop(Backdrop::Scrim)
+                .footer(|ui, _| footer(ui))
+                .show(ui, |ui, _| {
+                    // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
+                    ui.set_width(width);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    // The framework sizes the window from a measuring run of the body, where the list's scroll area and
+                    // its rows (host targets only in a real pass) come out shorter: reserve the height the real body
+                    // took, so the footer's buttons sit below the last row instead of over it.
+                    let height_id = window_id(id).with("body-height");
+                    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                    let top = ui.cursor().top();
+                    if let Some(height) = ui.ctx().data(|d| d.get_temp::<f32>(height_id)) {
+                        ui.set_min_height(height);
                     }
-                }
-            })
-            .output;
-        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
-            shown = Some((output.closed, output.response));
-        }
-    }));
+                    body(ui);
+                    if real {
+                        // where the content ends (the cursor, which the reserved height does not move), so it can shrink
+                        let height = (ui.cursor().top() - ui.spacing().item_spacing.y - top).max(0.0);
+                        if ui.ctx().data(|d| d.get_temp::<f32>(height_id)).is_none_or(|kept| (kept - height).abs() > 0.5) {
+                            ui.ctx().data_mut(|d| d.insert_temp(height_id, height));
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                })
+                .output;
+            if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ctx) {
+                shown = Some((output.closed, output.response));
+            }
+        })
+    });
     shown
 }
 
@@ -1401,7 +1405,8 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         .color(t.canvas),
                 );
                 register(ui, "indicator:temporarySession", r.rect);
-                let b = Button::new(crate::i18n::tr("Open Library…").to_owned()).id_salt("libraryReopen").size(craft::theme::ControlSize::Sm).show(ui);
+                let b =
+                    Button::new(crate::i18n::tr("Open Library…").to_owned()).id_salt("libraryReopen").size(craft::theme::ControlSize::Sm).show(ui);
                 if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
                     crate::widgets::register_response("button:libraryReopen", b.response.rect, &b.response);
                     reopen = b.clicked() || crate::widgets::same_pass_click(&b.response);
@@ -1432,7 +1437,8 @@ mod completion_tests {
             app.library_window_input.drawn = Some(super::WindowMode::Error);
             app.library_window_input.shielded = true;
             app.capture_ui_completion(ui.ctx());
-        }).drop_without_applying_deltas();
+        })
+        .drop_without_applying_deltas();
         assert!(app.library_window_input.transition);
         app.library_window_input.drawn = None;
         app.drain_ui_completions(&ctx);

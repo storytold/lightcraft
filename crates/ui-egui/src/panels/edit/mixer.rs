@@ -174,9 +174,8 @@ fn point_color_swatches(ui: &mut egui::Ui, colors: &[Color32], selected: usize) 
     // Measured in an invisible sizing child, then shown at the room it takes in a real run only: the swatches join
     // their group's arena in a real run alone, never in egui's sizing pass or an SDK measure.
     let width = ui.available_width().max(1.0);
-    let child = ui.new_child(
-        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, vec2(width, f32::INFINITY))).sizing_pass().invisible(),
-    );
+    let child = ui
+        .new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, vec2(width, f32::INFINITY))).sizing_pass().invisible());
     let size = group().measure_in(&child, craft::behavior::Proposal::Ideal, body);
     let (rect, _) = ui.allocate_exact_size(vec2(size.x.min(width), size.y.max(24.0)), Sense::hover());
     if measuring {
@@ -193,10 +192,7 @@ fn point_color_swatches(ui: &mut egui::Ui, colors: &[Color32], selected: usize) 
 fn point_color_visualize(ui: &mut egui::Ui, value: &mut bool) {
     let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
     let mut local = *value;
-    let shown = Checkbox::new(Bind::bound(&mut local))
-        .id_salt("pointColorVisualize")
-        .label(crate::i18n::tr("Visualize range").to_owned())
-        .show(ui);
+    let shown = Checkbox::new(Bind::bound(&mut local)).id_salt("pointColorVisualize").label(crate::i18n::tr("Visualize range").to_owned()).show(ui);
     if measuring {
         return;
     }

@@ -157,12 +157,7 @@ pub fn favorite_button(ui: &mut Ui, widget: String, favorite: bool, name: &str) 
     // the layout's room, sensing nothing: the framework button owns the pointer
     let (id, rect) = ui.allocate_space(vec2(side, side));
     let star = FavoriteStar { favorite, lit: t.star, quiet: t.icon };
-    let out = IconButton::new(IconSpec::glyph(&star))
-        .id(id)
-        .label(name.to_owned())
-        .tooltip(name.to_owned())
-        .selected(favorite)
-        .show_at(ui, rect);
+    let out = IconButton::new(IconSpec::glyph(&star)).id(id).label(name.to_owned()).tooltip(name.to_owned()).selected(favorite).show_at(ui, rect);
     // (rows scrolled out of view can't be clicked)
     if ui.is_rect_visible(rect) && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
         crate::widgets::register_response(widget, rect, &out.response);

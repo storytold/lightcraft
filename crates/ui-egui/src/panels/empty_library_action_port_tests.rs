@@ -6,7 +6,14 @@ use egui_kittest::{Harness, kittest::Queryable};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy)]
-enum Mode { Returns, Owner, Disabled, Measure, Sizing, NoActionGrid }
+enum Mode {
+    Returns,
+    Owner,
+    Disabled,
+    Measure,
+    Sizing,
+    NoActionGrid,
+}
 
 struct Fixture {
     app: LightcraftApp,
@@ -40,7 +47,10 @@ fn fixture(width: f32, mode: Mode, busy: bool) -> Harness<'static, Fixture> {
     #[cfg(not(target_arch = "wasm32"))]
     let blocked = busy.then(|| crate::lightroom_import::stall_import(&mut app));
     #[cfg(target_arch = "wasm32")]
-    let blocked = { assert!(!busy); None };
+    let blocked = {
+        assert!(!busy);
+        None
+    };
     let state = Fixture { app, mode, returned: Vec::new(), asked, _busy: blocked };
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
@@ -59,11 +69,14 @@ fn fixture(width: f32, mode: Mode, busy: bool) -> Harness<'static, Fixture> {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());
                     draw_return(&mut child, state);
                 }
-                Mode::Disabled => { ui.add_enabled_ui(false, |ui| draw_return(ui, state)); }
+                Mode::Disabled => {
+                    ui.add_enabled_ui(false, |ui| draw_return(ui, state));
+                }
                 Mode::Returns => draw_return(ui, state),
             }
             (state.app.widgets, state.app.widget_hits) = crate::widgets::take_registries(ui.ctx());
-        }, state,
+        },
+        state,
     );
     h.run_steps(5);
     h
@@ -114,7 +127,9 @@ fn tab_to(h: &mut Harness<'_, Fixture>, id: &str) {
         let focus = h.ctx.memory(|memory| memory.focused());
         let current = focus.and_then(|id| h.ctx.read_response(id)).map(|response| response.rect);
         path.push((focus, current));
-        if current == Some(wanted) { return; }
+        if current == Some(wanted) {
+            return;
+        }
         key(h, egui::Key::Tab, false);
     }
     panic!("natural Tab did not reach {id}: {path:?}");
@@ -135,10 +150,9 @@ fn empty_action_pointer_returns_each_exact_command_once() {
 
 #[test]
 fn empty_action_natural_tab_enter_and_space_return_once() {
-    for (id, command, activation) in [
-        ("button:emptyImportPhotos", "file.addPhotos", egui::Key::Enter),
-        ("button:emptyImportLightroom", "file.importLightroom", egui::Key::Space),
-    ] {
+    for (id, command, activation) in
+        [("button:emptyImportPhotos", "file.addPhotos", egui::Key::Enter), ("button:emptyImportLightroom", "file.importLightroom", egui::Key::Space)]
+    {
         let mut h = fixture(1000.0, Mode::Returns, false);
         h.event(egui::Event::PointerGone);
         h.run_steps(2);
@@ -204,7 +218,10 @@ fn empty_action_disabled_measure_and_sizing_probes_are_inert() {
 fn empty_action_actual_owner_availability_labels_and_cancel_picker_once() {
     let mut h = fixture(1000.0, Mode::Owner, false);
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, crate::i18n::tr("Import Photos…").as_ref()).is_some());
-    assert_eq!(h.state().app.widgets.iter().filter(|(id, _)| id == "button:emptyImportLightroom").count(), usize::from(!cfg!(target_arch = "wasm32")));
+    assert_eq!(
+        h.state().app.widgets.iter().filter(|(id, _)| id == "button:emptyImportLightroom").count(),
+        usize::from(!cfg!(target_arch = "wasm32"))
+    );
     click(&mut h, "button:emptyImportPhotos");
     h.run_steps(10);
     {

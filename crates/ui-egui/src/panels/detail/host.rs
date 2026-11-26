@@ -9,10 +9,10 @@ use std::hash::Hash;
 use std::ops::Deref;
 
 use craft::behavior::{Metrics, PressPhase, Sense};
-use craft::ui::contract::{Common, Component, Cx, NoValue, Outcome, PaintUi, Pointer as _, Props as _, Role, Show as _};
-use craft::ui::runtime::access::Access;
-use craft::ui::menu::Menu;
 use craft::ui::contract::ShowContainer as _;
+use craft::ui::contract::{Common, Component, Cx, NoValue, Outcome, PaintUi, Pointer as _, Props as _, Role, Show as _};
+use craft::ui::menu::Menu;
+use craft::ui::runtime::access::Access;
 use craft::ui::style::{ComponentStyle, FocusLook, StyleCx};
 use egui::{Color32, Rect, Response, Ui};
 
@@ -122,7 +122,8 @@ impl HostOutput {
     /// A secondary-button click landed on the target this pass. The SDK rewrites the response's own click flags
     /// (`Response::clicked` is the primary activation), so this reads egui's raw verdict for the same widget.
     pub fn secondary_clicked(&self) -> bool {
-        self.response.secondary_clicked() || self.response.ctx.read_response(self.response.id).is_some_and(|raw| raw.enabled() && raw.secondary_clicked())
+        self.response.secondary_clicked()
+            || self.response.ctx.read_response(self.response.id).is_some_and(|raw| raw.enabled() && raw.secondary_clicked())
     }
 
     /// The activation was the second press of a double click.
@@ -206,7 +207,6 @@ impl<'a> Target<'a> {
         self.mode = Mode::Pointer;
         self
     }
-
 }
 
 /// Show a host-painted target over `rect`, named `key` for egui. The caller registers its automation name with

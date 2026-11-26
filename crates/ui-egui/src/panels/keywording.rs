@@ -27,21 +27,24 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use crate::state::KeywordingView as V;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-        for (view, id, label) in
-            [
+        for (view, id, label) in [
             (V::Enter, "enter", "Enter Keywords"),
             (V::Keywords, "keywords", "Keywords"),
             (V::Containing, "containing", "& Containing"),
             (V::WillExport, "willExport", "Will Export"),
-        ]
-        {
+        ] {
             let key = format!("keywordView:{id}");
             // (a toggle button: the chosen view stays pressed, in the framework's own on look)
-            let shown = craft::ui::buttons::ToggleButton::new(crate::i18n::tr(label).to_owned(), craft::ui::contract::Bind::given(app.ui.keywording_view == view))
-                .id_salt(&key)
-                .size(craft::theme::ControlSize::Sm)
-                .show(ui);
-            if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { continue; }
+            let shown = craft::ui::buttons::ToggleButton::new(
+                crate::i18n::tr(label).to_owned(),
+                craft::ui::contract::Bind::given(app.ui.keywording_view == view),
+            )
+            .id_salt(&key)
+            .size(craft::theme::ControlSize::Sm)
+            .show(ui);
+            if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+                continue;
+            }
             crate::widgets::register_response(key, shown.response.rect, &shown.response);
             if ui.is_enabled() && shown.events.committed().is_some() {
                 app.ui.keywording_view = view;
@@ -149,7 +152,8 @@ fn chip(ui: &mut egui::Ui, path: &str, name: &str, partial: bool, cross: bool, r
     // spans the whole chip so that its outline holds the ×, which sits over its end (the later widget takes the press).
     let body = Rect::from_min_max(rect.min, pos2(rect.right() - CROSS_W, rect.bottom()));
     let end = Rect::from_min_max(pos2(rect.right() - CROSS_W, rect.top()), rect.max);
-    let mut name = Button::new(full.clone()).painted(shown).id(id).size(craft::theme::ControlSize::Sm).align(HAlign::Start).tooltip(tip).show_at(ui, rect);
+    let mut name =
+        Button::new(full.clone()).painted(shown).id(id).size(craft::theme::ControlSize::Sm).align(HAlign::Start).tooltip(tip).show_at(ui, rect);
     // (the name answers as the part of the chip that is not the ×)
     name.response.rect = body;
     name.response.interact_rect = name.response.interact_rect.intersect(body);
@@ -278,9 +282,7 @@ fn chip_acts(app: &mut LightcraftApp, ui: &mut egui::Ui, c: &Chip, drawn: Drawn)
         return;
     }
     let c = c.clone();
-    Menu::context(crate::i18n::tr("Keyword"), &drawn.body)
-        .id_salt(("keyword-chip-menu", c.path.to_lowercase()))
-        .show(ui, |ui, _| menu(app, ui, &c));
+    Menu::context(crate::i18n::tr("Keyword"), &drawn.body).id_salt(("keyword-chip-menu", c.path.to_lowercase())).show(ui, |ui, _| menu(app, ui, &c));
 }
 
 /// When a list is shortened, only this many chips are measured for it: more than the lines it
@@ -358,7 +360,10 @@ fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], sel
             }
             Line::Fewer => {
                 ui.add_space(6.0);
-                let shown = Button::new(crate::i18n::tr("Show fewer")).id(egui::Id::unique(("keyword-chips-fewer", selection))).size(craft::theme::ControlSize::Sm).show(ui);
+                let shown = Button::new(crate::i18n::tr("Show fewer"))
+                    .id(egui::Id::unique(("keyword-chips-fewer", selection)))
+                    .size(craft::theme::ControlSize::Sm)
+                    .show(ui);
                 if !measuring(ui) {
                     crate::widgets::register_response("keywordChipsFewer", shown.response.rect, &shown.response);
                     if ui.is_enabled() && shown.clicked() {
@@ -546,12 +551,8 @@ pub(crate) fn offers_below(ui: &egui::Ui, below: egui::Rect, offers: &Offers, at
                 let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
                 let shown_name = chip_label(name, false, width - 16.0, |s| ui.painter().layout_no_wrap(s.to_string(), t.font(13.0), t.text).size().x);
                 let text = if place.is_empty() { shown_name } else { format!("{shown_name}   ·   {}", place.replace(SEP, " › ")) };
-                let mut button = Button::new(said.to_owned())
-                    .painted(text)
-                    .id(id)
-                    .variant(craft::theme::Variant::GHOST)
-                    .align(HAlign::Start)
-                    .selected(lit);
+                let mut button =
+                    Button::new(said.to_owned()).painted(text).id(id).variant(craft::theme::Variant::GHOST).align(HAlign::Start).selected(lit);
                 if let Some(tip) = tip {
                     button = button.tooltip(tip);
                 }

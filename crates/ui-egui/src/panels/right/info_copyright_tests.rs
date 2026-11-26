@@ -259,7 +259,10 @@ fn keyboard_escape_drops_draft_and_reopen_has_original_value() {
     assert_eq!(f.values(), [Status::PublicDomain, Status::PublicDomain, Status::Copyrighted]);
     assert_eq!(f.app.session.undo.len(), 1);
     assert_eq!(f.app.session.journal.len(), 1);
-    assert_eq!(f.app.session.journal[0], ("photo.setMeta".into(), json!({"ids":f.targets.iter().map(|id|id.0).collect::<Vec<_>>(),"copyrightStatus":Status::PublicDomain.id()})));
+    assert_eq!(
+        f.app.session.journal[0],
+        ("photo.setMeta".into(), json!({"ids":f.targets.iter().map(|id|id.0).collect::<Vec<_>>(),"copyrightStatus":Status::PublicDomain.id()}))
+    );
     f.app.session.undo_step().unwrap();
     assert_eq!(metadata_state(&f.app, &f.ids)["photos"], original["photos"]);
     assert_eq!(f.app.session.selection, selection);
@@ -419,7 +422,10 @@ fn measured_opener(pass: u8) {
     assert_eq!(f.values(), [Status::Unknown, Status::Unknown, Status::PublicDomain]);
     assert_eq!(f.app.session.undo.len(), 1);
     assert_eq!(f.app.session.journal.len(), 1, "one accepted command, not a speculative release and a real pick");
-    assert_eq!(f.app.session.journal[0], ("photo.setMeta".into(), json!({"ids":f.targets.iter().map(|id|id.0).collect::<Vec<_>>(),"copyrightStatus":Status::Unknown.id()})));
+    assert_eq!(
+        f.app.session.journal[0],
+        ("photo.setMeta".into(), json!({"ids":f.targets.iter().map(|id|id.0).collect::<Vec<_>>(),"copyrightStatus":Status::Unknown.id()}))
+    );
     f.app.session.undo_step().unwrap();
     assert_eq!(metadata_state(&f.app, &ids)["photos"], before["photos"], "Undo restores every photo, including the untouched third target");
     assert_eq!(f.app.session.selection, selection);

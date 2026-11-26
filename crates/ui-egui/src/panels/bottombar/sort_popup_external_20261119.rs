@@ -34,7 +34,11 @@ fn fixture(random: bool, held: bool) -> (LightcraftApp, PhotoId) {
 }
 
 #[derive(Clone, Copy)]
-enum Pass { Real, Measure, Sizing }
+enum Pass {
+    Real,
+    Measure,
+    Sizing,
+}
 
 struct Frames {
     ctx: egui::Context,
@@ -68,22 +72,21 @@ impl Frames {
         self.rows.clear();
         self.disabled.clear();
         let mut output = self.ctx.run_ui(raw, |ui| {
-            let (_, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("sort-popup-test-inspection"), |ui| {
-                match pass {
-                    Pass::Real => show(&mut self.app, ui),
-                    Pass::Measure => {
-                        let ctx = ui.ctx().clone();
-                        craft::ui::runtime::measure::run(&ctx, || show(&mut self.app, ui));
-                    }
-                    Pass::Sizing => {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());
-                        show(&mut self.app, &mut child);
-                    }
+            let (_, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("sort-popup-test-inspection"), |ui| match pass {
+                Pass::Real => show(&mut self.app, ui),
+                Pass::Measure => {
+                    let ctx = ui.ctx().clone();
+                    craft::ui::runtime::measure::run(&ctx, || show(&mut self.app, ui));
+                }
+                Pass::Sizing => {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).sizing_pass().invisible());
+                    show(&mut self.app, &mut child);
                 }
             });
             if let Some(record) = record {
                 for element in &record.elements {
-                    if element.component == "MenuItem" && element.part.is_none()
+                    if element.component == "MenuItem"
+                        && element.part.is_none()
                         && let Some(name) = element.facts.as_ref().and_then(|facts| facts.name.as_ref())
                         && let Some(response) = ui.ctx().read_response(element.id)
                     {
@@ -100,7 +103,9 @@ impl Frames {
     }
 
     fn settle(&mut self) {
-        for _ in 0..8 { self.frame(vec![], Pass::Real); }
+        for _ in 0..8 {
+            self.frame(vec![], Pass::Real);
+        }
     }
 
     fn row(&self, label: &str) -> &Response {
@@ -122,7 +127,10 @@ impl Frames {
     fn click_at(&mut self, pos: Pos2, long: bool) {
         self.frame(vec![Event::PointerMoved(pos)], Pass::Real);
         self.pointer(pos, true);
-        if long { self.time += 2.0; self.frame(vec![], Pass::Real); }
+        if long {
+            self.time += 2.0;
+            self.frame(vec![], Pass::Real);
+        }
         self.pointer(pos, false);
         self.settle();
     }
@@ -170,7 +178,9 @@ fn external_sort_popup_action_visibility_and_real_refresh_locator() {
                 assert_eq!(f.rows.iter().any(|(name, _)| name == "Reshuffle"), random);
                 assert_eq!(f.rows.iter().any(|(name, _)| name == "Refresh View"), held);
                 assert_eq!(f.rects.iter().any(|(name, _)| name == "button:refreshView"), held);
-                if random { assert!(f.row("Reshuffle").interact_rect.is_positive()); }
+                if random {
+                    assert!(f.row("Reshuffle").interact_rect.is_positive());
+                }
                 if held {
                     let row = f.row("Refresh View");
                     let hit = f.hit("button:refreshView");
@@ -260,9 +270,10 @@ fn external_sort_popup_measure_and_native_sizing_cannot_dispatch_actions() {
             let before = f.snapshot();
             let pos = response.interact_rect.center();
             for pressed in [true, false] {
-                f.frame(vec![Event::PointerMoved(pos), Event::PointerButton {
-                    pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE,
-                }], pass);
+                f.frame(
+                    vec![Event::PointerMoved(pos), Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }],
+                    pass,
+                );
             }
             for key in [Key::Enter, Key::Space] {
                 f.ctx.memory_mut(|memory| memory.request_focus(response.id));
@@ -273,7 +284,6 @@ fn external_sort_popup_measure_and_native_sizing_cannot_dispatch_actions() {
         }
     }
 }
-
 
 #[test]
 fn library_sort_choices_change_order_direction_and_group_without_photo_edits() {
@@ -290,7 +300,9 @@ fn library_sort_choices_change_order_direction_and_group_without_photo_edits() {
         ("sort:key:fileName", "File Name", json!({"key":"fileName"})),
         ("sort:ascending", "Ascending", json!({"ascending":true})),
     ] {
-        if !f.is_open() { f.open(); }
+        if !f.is_open() {
+            f.open();
+        }
         let row = f.row(label).clone();
         assert_eq!(f.hit(id).id, row.id);
         assert!(row.enabled() && row.sense.is_focusable());
@@ -303,7 +315,9 @@ fn library_sort_choices_change_order_direction_and_group_without_photo_edits() {
         assert_eq!(f.app.session.catalog.revision, revision);
         assert_eq!(f.app.session.undo.len(), undo);
         if id == "sort:key:random" {
-            if !f.is_open() { f.open(); }
+            if !f.is_open() {
+                f.open();
+            }
             let dir = f.row("Ascending").clone();
             assert!(f.disabled.iter().any(|name| name == "Ascending"), "a shuffle has no direction to choose: the row is disabled");
             f.click_at(dir.interact_rect.center(), false);
@@ -312,7 +326,6 @@ fn library_sort_choices_change_order_direction_and_group_without_photo_edits() {
         }
     }
 }
-
 
 #[test]
 fn library_sort_choices_measuring_release_is_inert_then_same_owner_changes_order() {
@@ -330,7 +343,9 @@ fn library_sort_choices_measuring_release_is_inert_then_same_owner_changes_order
         assert!(!f.hits.iter().any(|(n, _)| n.starts_with("sort:")), "measurement published a sort hit");
         f.settle();
         assert_eq!(f.snapshot(), before, "measuring release changed the library or replayed");
-        if !f.is_open() { f.open(); }
+        if !f.is_open() {
+            f.open();
+        }
         let recovered = f.hit(target);
         assert_eq!(recovered.id, hit.id);
         f.click_at(recovered.interact_rect.center(), false);
@@ -346,17 +361,20 @@ fn compact_view_sort_changes_rating_order_without_changing_photo_selection() {
     let (mut oracle, _) = fixture(false, false);
     oracle.run("library.sort", json!({"key":"rating"})).unwrap();
     let mut ready = false;
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(move |ui, app: &mut LightcraftApp| {
-        if !ready {
-            crate::theme::install_fonts(ui.ctx());
-            crate::theme::apply(ui.ctx());
-            app.install_framework(ui.ctx());
-            ready = true;
-            return;
-        }
-        let _ = take_registries(ui.ctx());
-        show(app, ui);
-    }, app);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(
+        move |ui, app: &mut LightcraftApp| {
+            if !ready {
+                crate::theme::install_fonts(ui.ctx());
+                crate::theme::apply(ui.ctx());
+                app.install_framework(ui.ctx());
+                ready = true;
+                return;
+            }
+            let _ = take_registries(ui.ctx());
+            show(app, ui);
+        },
+        app,
+    );
     h.run_steps(8);
     assert!(h.query_by_label("Sort").is_none(), "narrow layout should not show the wide Sort opener");
     h.get_by_label("View").click();
@@ -397,7 +415,8 @@ fn capture_external_sort_popup_matched_old_new() {
                         }
                         let _ = take_registries(ui.ctx());
                         show(app, ui);
-                    }, app,
+                    },
+                    app,
                 );
                 harness.input_mut().max_texture_side = Some(8192);
                 harness.run_steps(8);

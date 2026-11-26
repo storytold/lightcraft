@@ -49,7 +49,6 @@ fn focused(ctx: &egui::Context, field: egui::Id) -> bool {
     craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == field)
 }
 
-
 /// The painter is a real sibling SDK stop, so Tab can leave the add field's typing run.
 /// Its text remains an app preference; only Enter asks the existing Paint command to run.
 pub(crate) fn painter_field(ui: &mut egui::Ui, text: &mut String) -> bool {

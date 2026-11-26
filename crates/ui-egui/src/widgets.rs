@@ -686,7 +686,8 @@ pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str,
         // keyboard focus and dismissal.
         Menu::new(name.to_owned()).id_salt(("labeled-dropdown", id)).values().opened_by(&r, Trigger::Click).show(ui, |ui, _| {
             for (i, (v, l, key)) in items.iter().enumerate() {
-                let mut row = MenuItem::new(crate::i18n::tr(l).replace('&', "&&")).id_salt(("labeled-dropdown-item", id, *key)).entry_checked(i == active);
+                let mut row =
+                    MenuItem::new(crate::i18n::tr(l).replace('&', "&&")).id_salt(("labeled-dropdown-item", id, *key)).entry_checked(i == active);
                 if i == active {
                     row = row.default_stop();
                 }
@@ -971,17 +972,17 @@ pub mod date_picker;
 mod menu_field;
 pub(crate) use menu_field::{menu_field, menu_field_with_id};
 mod hit_area;
+mod icon_button;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;
 pub mod progress;
 pub mod rating;
-mod icon_button;
 mod slider;
-pub(crate) use slider::{Row as SliderRow, field as slider_field, slider_row, slider_salted};
-pub use slider::{SliderOut, slider};
 pub use hit_area::{HitArea, HitAreaOutput};
 pub use icon_button::IconButtonOutput;
+pub(crate) use slider::{Row as SliderRow, field as slider_field, slider_row, slider_salted};
+pub use slider::{SliderOut, slider};
 mod text_button;
 pub mod text_field;
 pub use text_button::TextButtonOutput;

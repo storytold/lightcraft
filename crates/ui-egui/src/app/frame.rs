@@ -1,9 +1,9 @@
+use super::completion::Snapshot;
 use super::{
     LightcraftApp, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, monotonic_ms, panels, pick, recheck, shortcuts,
     slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
 use crate::startup;
-use super::completion::Snapshot;
 
 impl LightcraftApp {
     /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
@@ -382,11 +382,14 @@ impl LightcraftApp {
 
     pub(super) fn presentation_snapshot(&mut self, ctx: &egui::Context) -> Snapshot {
         Snapshot {
-            widgets: std::mem::take(&mut self.next_widgets), hits: std::mem::take(&mut self.next_widget_hits),
-            image: self.image_rect, ui_time: ctx.input(|i| i.time),
+            widgets: std::mem::take(&mut self.next_widgets),
+            hits: std::mem::take(&mut self.next_widget_hits),
+            image: self.image_rect,
+            ui_time: ctx.input(|i| i.time),
             hidden: ctx.input(|i| i.viewport().visible() == Some(false)),
             gestures: self.completion_gestures(ctx, self.layout_epoch.wrapping_add(1), self.ui_passes.wrapping_add(1)),
-            notice: panels::notices::capture_completion(self), library: panels::library_problem::capture_completion(self),
+            notice: panels::notices::capture_completion(self),
+            library: panels::library_problem::capture_completion(self),
         }
     }
     pub(super) fn apply_ui_completion(&mut self, ctx: &egui::Context, body: Snapshot) {

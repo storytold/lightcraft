@@ -4269,28 +4269,57 @@ fn about_dialog_tabs_show_the_credits() {
     let r = h.request("ui.menu.invoke", json!({"id": "app.about"}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About));
-    let tree = |h: &Headless| craft::ui::runtime::inspect::recorded(&h.view.ctx, egui::Id::unique("about-app-contract")).expect("SDK About was painted");
+    let tree =
+        |h: &Headless| craft::ui::runtime::inspect::recorded(&h.view.ctx, egui::Id::unique("about-app-contract")).expect("SDK About was painted");
     for (tab, evidence) in [("Models", "Models"), ("Contributors", "Contributors"), ("About", "Join the ArtCraft Discord")] {
-        for _ in 0..5 { h.step(); }
+        for _ in 0..5 {
+            h.step();
+        }
         let nodes = tree(&h);
-        let target = nodes.elements.iter().find(|node| node.facts.as_ref().is_some_and(|f| f.role == "Tab" && f.name.as_deref() == Some(tab) && f.interactive && !f.disabled)).unwrap_or_else(|| panic!("missing enabled SDK tab {tab}"));
+        let target = nodes
+            .elements
+            .iter()
+            .find(|node| node.facts.as_ref().is_some_and(|f| f.role == "Tab" && f.name.as_deref() == Some(tab) && f.interactive && !f.disabled))
+            .unwrap_or_else(|| panic!("missing enabled SDK tab {tab}"));
         let at = target.rect.center();
         assert_eq!(h.request("ui.click", json!({"x":at.x,"y":at.y}), t)["ok"], true);
-        for _ in 0..4 { h.step(); }
+        for _ in 0..4 {
+            h.step();
+        }
         if tab == "Contributors" {
             // Initially the grab bag is visible. "Table" is a view selector, not the table name.
             let nodes = tree(&h);
-            let at = nodes.elements.iter().find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("Table") && f.interactive && !f.disabled)).expect("Table view selector").rect.center();
+            let at = nodes
+                .elements
+                .iter()
+                .find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("Table") && f.interactive && !f.disabled))
+                .expect("Table view selector")
+                .rect
+                .center();
             assert_eq!(h.request("ui.click", json!({"x":at.x,"y":at.y}), t)["ok"], true);
-            for _ in 0..4 { h.step(); }
+            for _ in 0..4 {
+                h.step();
+            }
         }
-        assert!(tree(&h).elements.iter().any(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(evidence) && (tab == "About" || f.role == "Table"))), "missing content after clicking {tab}");
+        assert!(
+            tree(&h)
+                .elements
+                .iter()
+                .any(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(evidence) && (tab == "About" || f.role == "Table"))),
+            "missing content after clicking {tab}"
+        );
         assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About));
     }
     let img = h.snapshot(SETTLE);
     assert_eq!(img.size, [1300, 820]);
     let nodes = tree(&h);
-    let ok = nodes.elements.iter().find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("OK") && f.interactive && !f.disabled)).expect("real SDK footer").rect.center();
+    let ok = nodes
+        .elements
+        .iter()
+        .find(|node| node.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some("OK") && f.interactive && !f.disabled))
+        .expect("real SDK footer")
+        .rect
+        .center();
     assert_eq!(h.request("ui.click", json!({"x":ok.x,"y":ok.y}), t)["ok"], true);
     assert!(h.step_until(t, |frame| frame.app.ui.dialog.is_none()), "SDK OK closes the application dialog");
 }

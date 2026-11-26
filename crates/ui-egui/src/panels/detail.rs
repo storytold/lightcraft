@@ -16,8 +16,8 @@ use crate::widgets::{register, register_geometry};
 
 mod crop;
 mod filmstrip;
-pub(crate) mod host;
 mod geometry;
+pub(crate) mod host;
 mod info;
 mod lens_blur;
 mod look_ahead;

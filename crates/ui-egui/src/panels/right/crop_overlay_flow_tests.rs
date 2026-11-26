@@ -326,14 +326,19 @@ impl Fixture {
         assert_eq!(Some(self.hit(FACE).layer_id), self.record_layer, "the face belongs to the actual parent's layer");
         assert!(self.panel.expand(1.0).contains_rect(face), "no panel widening: {face:?} panel={:?}", self.panel);
         let shown = OPTIONS.iter().find(|(choice, _, _)| *choice == self.app.ui.crop_overlay).map_or("", |(_, label, _)| crate::i18n::tr(label));
-        assert!(self.texts.iter().any(|text| text.text == shown && face.expand(1.0).intersects(text.rect)), "the face says {shown}; texts={:?}", self.texts);
+        assert!(
+            self.texts.iter().any(|text| text.text == shown && face.expand(1.0).intersects(text.rect)),
+            "the face says {shown}; texts={:?}",
+            self.texts
+        );
         let mut owners = std::collections::HashSet::new();
         for (index, (_, label, _)) in OPTIONS.iter().enumerate() {
             let name = locator(index);
             let rect = self.rect(&name);
             let hit = self.hit(&name);
             assert!(owners.insert(hit.id), "one owner per row");
-            let painted: Vec<_> = self.texts.iter().filter(|text| text.text == crate::i18n::tr(label) && rect.expand(1.0).intersects(text.rect)).collect();
+            let painted: Vec<_> =
+                self.texts.iter().filter(|text| text.text == crate::i18n::tr(label) && rect.expand(1.0).intersects(text.rect)).collect();
             assert_eq!(painted.len(), 1, "full localized label is painted once: {name}; texts={:?}", self.texts);
             assert!(painted[0].clip.expand(1.0).contains_rect(painted[0].rect), "localized label must not be clipped: {name} {:?}", painted[0]);
             if index > 0 {

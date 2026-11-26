@@ -71,10 +71,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         });
     });
-    let shown = Checkbox::new(Bind::bound(&mut show_all))
-        .id_salt(SHOW_ALL)
-        .label(crate::i18n::tr("Show commands without a shortcut").to_owned())
-        .show(ui);
+    let shown =
+        Checkbox::new(Bind::bound(&mut show_all)).id_salt(SHOW_ALL).label(crate::i18n::tr("Show commands without a shortcut").to_owned()).show(ui);
     register(ui, "check:shortcuts.showAll", &shown.response);
     if !measuring(ui) {
         ui.data_mut(|d| {
@@ -142,11 +140,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     };
     ui.label(name).on_hover_text(hover);
     let recording = app.recording_shortcut.as_deref() == Some(b.id);
-    let text = if recording {
-        crate::i18n::tr("Press keys…").to_owned()
-    } else {
-        sc.map_or_else(|| "—".to_owned(), |sc| menu_text(sc, mac))
-    };
+    let text = if recording { crate::i18n::tr("Press keys…").to_owned() } else { sc.map_or_else(|| "—".to_owned(), |sc| menu_text(sc, mac)) };
     // The SDK's stand-alone chord recorder is crate-private. A normal SDK Button
     // routes Tab, activation and Escape as intents instead of leaving raw chords
     // for capture(). Keep this one focus owner native until the recorder is public.
@@ -154,15 +148,14 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     register(ui, format!("button:shortcut-{}", b.id), &response);
     if !measuring(ui) && response.clicked() {
         app.recording_shortcut = if recording { None } else { Some(b.id.to_string()) };
-        if !recording { response.request_focus(); }
+        if !recording {
+            response.request_focus();
+        }
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let shown = Button::new(crate::i18n::tr("Remove shortcut").to_owned())
-            .painted("×")
-            .id_salt(("shortcutClear", b.id))
-            .enabled(sc.is_some())
-            .show(ui);
+        let shown =
+            Button::new(crate::i18n::tr("Remove shortcut").to_owned()).painted("×").id_salt(("shortcutClear", b.id)).enabled(sc.is_some()).show(ui);
         let clicked = !measuring(ui) && shown.clicked();
         let response = shown.response.on_hover_text(crate::i18n::tr("Remove shortcut"));
         register(ui, format!("button:shortcutClear-{}", b.id), &response);

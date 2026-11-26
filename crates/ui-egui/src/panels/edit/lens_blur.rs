@@ -138,7 +138,14 @@ fn lens_blur_focus(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettin
                 .values()
                 .opened_by(&r, Trigger::Click)
                 .show(ui, |ui, _| {
-                    if lens_blur_focus_item(ui, "lensBlurFocus:subject", crate::i18n::tr("Subject"), chosen.is_none() && auto, enabled, parent_measuring) {
+                    if lens_blur_focus_item(
+                        ui,
+                        "lensBlurFocus:subject",
+                        crate::i18n::tr("Subject"),
+                        chosen.is_none() && auto,
+                        enabled,
+                        parent_measuring,
+                    ) {
                         pick = Some(None);
                     }
                     for m in &d.masks {
@@ -149,7 +156,8 @@ fn lens_blur_focus(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettin
                     }
                 });
         }
-        if !lens_blur_measuring(ui) && ui.is_enabled()
+        if !lens_blur_measuring(ui)
+            && ui.is_enabled()
             && let Some(focus) = pick
         {
             // "Subject": the estimate again, not a fixed shape
@@ -240,8 +248,7 @@ fn focus_shape_row(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_de
                 paint_focus_shape(ui.painter(), out.response.rect.shrink(5.0), shape, colour);
                 // A selected preset is an action when moved, but a genuine no-op while already centered.
                 if interactive && app.session.active() == owner && out.clicked() && (!selected || b.area.is_some()) {
-                    let _ =
-                        app.run("develop.merge", json!({"settings": {"lens_blur": {"shape": name, "area": null}}, "label": "Lens Blur Shape"}));
+                    let _ = app.run("develop.merge", json!({"settings": {"lens_blur": {"shape": name, "area": null}}, "label": "Lens Blur Shape"}));
                 }
             }
         });

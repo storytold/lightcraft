@@ -270,7 +270,7 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
         // `escaped` also includes Escape-reason Revert; no such programmatic path is
         // installed here, and this is not a general physical-key discriminator.
         close |= eligible && shown.escaped;
-    
+
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
@@ -599,7 +599,15 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
                 let _ = crate::widgets::menu_row(ui, ("printProfile", "icc"), None, &shown, None, true, true);
             }
             if app.services.pick_display_profile.is_some() {
-                pick |= crate::widgets::menu_row(ui, ("printProfile", "other"), Some("item:printProfile-other"), crate::i18n::tr("Other…"), None, false, true);
+                pick |= crate::widgets::menu_row(
+                    ui,
+                    ("printProfile", "other"),
+                    Some("item:printProfile-other"),
+                    crate::i18n::tr("Other…"),
+                    None,
+                    false,
+                    true,
+                );
             }
         });
     });

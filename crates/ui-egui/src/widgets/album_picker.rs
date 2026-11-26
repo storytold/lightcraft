@@ -17,8 +17,8 @@ use craft::ui::contract::overlay::{Dismiss, Outside};
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::popover::Popover;
-use craft::ui::runtime::focus::Initial;
 use craft::ui::primitives::{Glyph, HAlign, IconSpec};
+use craft::ui::runtime::focus::Initial;
 use egui::{Rect, Response, RichText, Ui, vec2};
 
 use crate::icons::Icon;
@@ -435,7 +435,15 @@ impl<'a> AlbumPicker<'a> {
                         let by_id = index(entries);
                         for i in &hits {
                             let e = &entries[*i];
-                            row(ui, e, &path_in(entries, &by_id, e.id), 0.0, highlighted == Some(*i), (up || down) && highlighted == Some(*i), &mut picked);
+                            row(
+                                ui,
+                                e,
+                                &path_in(entries, &by_id, e.id),
+                                0.0,
+                                highlighted == Some(*i),
+                                (up || down) && highlighted == Some(*i),
+                                &mut picked,
+                            );
                         }
                     }
                 });

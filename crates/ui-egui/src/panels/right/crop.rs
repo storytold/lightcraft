@@ -95,7 +95,6 @@ fn custom_aspect(ui: &mut egui::Ui, owner: PhotoId) -> Option<serde_json::Value>
             crate::widgets::register_response("button:cropCustomApply", go.response.rect, &go.response);
             apply |= go.clicked();
         }
-    
     });
     if !aspect_real(ui) || !ui.is_enabled() {
         return None;
@@ -357,7 +356,9 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             (O::None, "None", "none"),
         ];
         // scoped to the photo: a menu opened (or a row held) for one photo never picks for another
-        let picked = ui.push_id(("crop-overlay", id), |ui| crate::widgets::labeled_dropdown(ui, "cropOverlay", "Overlay", "", &overlays, app.ui.crop_overlay)).inner;
+        let picked = ui
+            .push_id(("crop-overlay", id), |ui| crate::widgets::labeled_dropdown(ui, "cropOverlay", "Overlay", "", &overlays, app.ui.crop_overlay))
+            .inner;
         if let Some(o) = picked
             && interactive
         {

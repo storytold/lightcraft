@@ -1099,7 +1099,11 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             .collect();
         // The bar is placed in its room, so the titles that do not fit go into its "…" or "Menu" title. A measuring
         // or sizing run must never open a menu: disabled, its titles sense nothing.
-        MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles).id_salt("in-window-menu-bar").keyboard(keys).enabled(!measuring(ui)).show_at(ui, room)
+        MenuBar::new(crate::i18n::tr("Main menu").to_owned(), titles)
+            .id_salt("in-window-menu-bar")
+            .keyboard(keys)
+            .enabled(!measuring(ui))
+            .show_at(ui, room)
     });
     // the titles' own width is what the bar takes of the row
     let used = shown.titles.width().max(0.0);

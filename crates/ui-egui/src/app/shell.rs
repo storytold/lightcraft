@@ -17,7 +17,6 @@ use super::LightcraftApp;
 static SIZES: LazyLock<Arc<craft::theme::AppSizes>> =
     LazyLock::new(|| Arc::new(craft::theme::AppSizes::parse_or_default(br#"{ "all": { "size.bar.title": 42, "size.rail.width": 48 } }"#)));
 
-
 /// One current derived size set per context. Changes replace it rather than accumulating
 /// width/theme/scale entries, while an unchanged extent retains the SDK token-cache identity.
 fn shell_sizes(ctx: &egui::Context) -> Arc<craft::theme::AppSizes> {
@@ -138,8 +137,19 @@ mod intrinsic_shell_tests {
     /// of the source-level intrinsic formula. It compares the actual old and new drawing paths.
     #[test]
     fn shell_matches_actual_legacy_canvas_and_rail_rectangles() {
-        const RAIL: &[&str] = &["icon:presets", "icon:edit", "icon:crop", "icon:remove", "icon:masking", "icon:redeye",
-            "icon:versions", "icon:activity", "icon:more", "icon:keywords", "icon:info"];
+        const RAIL: &[&str] = &[
+            "icon:presets",
+            "icon:edit",
+            "icon:crop",
+            "icon:remove",
+            "icon:masking",
+            "icon:redeye",
+            "icon:versions",
+            "icon:activity",
+            "icon:more",
+            "icon:keywords",
+            "icon:info",
+        ];
         for width in [1025.0, 1400.0] {
             for scale in [1.0, 1.25] {
                 for zoom in [1.0, 1.25] {
@@ -163,9 +173,7 @@ mod intrinsic_shell_tests {
         let b = shell_sizes(&ctx);
         assert!(Arc::ptr_eq(&a, &b));
     }
-    fn capture_side(width: f32, scale: f32, zoom: f32, rtl: bool, adapted: bool)
-        -> (egui::Rect, Vec<(String, egui::Rect, egui::Rect)>)
-    {
+    fn capture_side(width: f32, scale: f32, zoom: f32, rtl: bool, adapted: bool) -> (egui::Rect, Vec<(String, egui::Rect, egui::Rect)>) {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
         let mut view = HeadlessView::new();
         view.ctx.set_zoom_factor(zoom);
@@ -183,14 +191,20 @@ mod intrinsic_shell_tests {
                 let host_style = ui.style().clone();
                 AppShell::new(WindowKey::main())
                     .screen_mode(Bind::given(ScreenMode::Standard))
-                    .allow_reveal(false).edge_reveal(false).document_tabs(false)
+                    .allow_reveal(false)
+                    .edge_reveal(false)
+                    .document_tabs(false)
                     .title_bar(|ui, _cx, app| {
-                        if craft::ui::runtime::measure::active(ui.ctx()) { return; }
+                        if craft::ui::runtime::measure::active(ui.ctx()) {
+                            return;
+                        }
                         ui.set_style(host_style.clone());
                         crate::panels::topbar::show(app, ui);
                     })
                     .end(Slot::new("lightcraft.tools"), |ui, cx, app| {
-                        if craft::ui::runtime::measure::active(ui.ctx()) { return; }
+                        if craft::ui::runtime::measure::active(ui.ctx()) {
+                            return;
+                        }
                         ui.set_style(host_style.clone());
                         if adapted {
                             crate::panels::strip::show_in_shell(app, ui, cx.env.direction().is_rtl());
@@ -199,14 +213,32 @@ mod intrinsic_shell_tests {
                         }
                     })
                     .body(|ui, cx, _app| {
-                        if craft::ui::runtime::measure::active(ui.ctx()) { return; }
+                        if craft::ui::runtime::measure::active(ui.ctx()) {
+                            return;
+                        }
                         body = cx.shell().expect("shell body").regions().body;
-                    }).show(ui, &mut app);
+                    })
+                    .show(ui, &mut app);
             });
             let (rects, registered) = crate::widgets::take_registries(&view.ctx);
-            hits = registered.iter().filter(|(id, _)| matches!(id.as_str(),
-                "icon:presets" | "icon:edit" | "icon:crop" | "icon:remove" | "icon:masking" |
-                "icon:redeye" | "icon:versions" | "icon:activity" | "icon:more" | "icon:keywords" | "icon:info"))
+            hits = registered
+                .iter()
+                .filter(|(id, _)| {
+                    matches!(
+                        id.as_str(),
+                        "icon:presets"
+                            | "icon:edit"
+                            | "icon:crop"
+                            | "icon:remove"
+                            | "icon:masking"
+                            | "icon:redeye"
+                            | "icon:versions"
+                            | "icon:activity"
+                            | "icon:more"
+                            | "icon:keywords"
+                            | "icon:info"
+                    )
+                })
                 .map(|(id, hit)| (id.clone(), rects.iter().find(|(name, _)| name == id).expect("registered rect").1, hit.interact_rect))
                 .collect();
         }
@@ -225,12 +257,14 @@ mod intrinsic_shell_tests {
                         assert_eq!(new_hits, old_hits, "rectangles AND clipped interaction areas: width={width} scale={scale} zoom={zoom} rtl={rtl}");
                         assert_eq!((old_body.top(), old_body.bottom()), (new_body.top(), new_body.bottom()));
                         assert!(new_body.width() >= old_body.width(), "the workspace cannot lose more width");
-                        if rtl { assert_eq!(old_body.right(), new_body.right()); }
-                        else { assert_eq!(old_body.left(), new_body.left()); }
+                        if rtl {
+                            assert_eq!(old_body.right(), new_body.right());
+                        } else {
+                            assert_eq!(old_body.left(), new_body.left());
+                        }
                     }
                 }
             }
         }
     }
-
 }

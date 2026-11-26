@@ -19,9 +19,13 @@ struct Nudges {
 }
 
 fn available(app: &LightcraftApp) -> bool {
-    app.ui.right == crate::state::RightPanel::Edit && !app.ui.fullscreen
-        && app.ui.section_open("light") && !app.ui.section_folded("light")
-        && app.ui.dialog.is_none() && app.ui.name_edit.is_none() && app.recording_shortcut.is_none()
+    app.ui.right == crate::state::RightPanel::Edit
+        && !app.ui.fullscreen
+        && app.ui.section_open("light")
+        && !app.ui.section_folded("light")
+        && app.ui.dialog.is_none()
+        && app.ui.name_edit.is_none()
+        && app.recording_shortcut.is_none()
         && !crate::panels::notices::blocks_input(app)
         && !crate::panels::library_problem::blocks_dialog_input(app)
         && !crate::updates_ui::blocks_input(app)
@@ -138,12 +142,16 @@ pub(super) fn apply_pending(app: &mut LightcraftApp, ui: &egui::Ui) {
     }
     ctx.data_mut(|data| data.remove::<Nudges>(key));
     for (id, steps) in TONAL.iter().zip(pending.steps) {
-        if steps == 0 { continue; }
+        if steps == 0 {
+            continue;
+        }
         let Some(spec) = controls::find(id) else { continue };
         let settings = app.session.develop_of(pending.photo).unwrap_or_default();
         let before = controls::get(&settings, id).unwrap_or(spec.default);
         let after = crate::widgets::nudged(spec, before, f64::from(steps));
-        if after == before { continue; }
+        if after == before {
+            continue;
+        }
         let event = EditEvent::set(craft::behavior::Mixed::Same(before), after, spec.label.into(), None);
         apply(app, ctx, spec, &event);
     }

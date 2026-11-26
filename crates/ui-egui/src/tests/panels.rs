@@ -1847,9 +1847,7 @@ fn the_masking_panel_has_no_widget_id_clashes() {
     h.settle(SETTLE);
     h.step();
     let clashes = id_clash_warnings(&h);
-    let near = |p: egui::Pos2| {
-        h.app.widgets.iter().filter(|(_, r)| r.expand(6.0).contains(p)).map(|(w, _)| w.clone()).collect::<Vec<_>>()
-    };
+    let near = |p: egui::Pos2| h.app.widgets.iter().filter(|(_, r)| r.expand(6.0).contains(p)).map(|(w, _)| w.clone()).collect::<Vec<_>>();
     let said: Vec<_> = clashes.iter().map(|(t, p)| format!("{t} at {p:?} near {:?}", near(*p))).collect();
     assert!(clashes.is_empty(), "{said:#?}");
 }

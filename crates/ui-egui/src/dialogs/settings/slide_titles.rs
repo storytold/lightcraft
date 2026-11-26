@@ -106,9 +106,8 @@ fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &
     let mem = egui::Id::unique(("slideshow-title-field", id));
     let pass = ui.ctx().cumulative_pass_nr();
     // A hidden/rebound field starts from its own authoritative screen, never a stale draft.
-    let remembered = ui
-        .data(|d| d.get_temp::<TitleDraft>(mem))
-        .filter(|d| d.model == value && (d.pass == pass || d.pass.checked_add(1) == Some(pass)));
+    let remembered =
+        ui.data(|d| d.get_temp::<TitleDraft>(mem)).filter(|d| d.model == value && (d.pass == pass || d.pass.checked_add(1) == Some(pass)));
     let mut draft = remembered.map_or_else(|| value.to_owned(), |d| d.text);
     let widget = format!("field:{id}");
     let width = ui.available_width().clamp(80.0, 260.0);

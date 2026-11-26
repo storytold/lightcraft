@@ -174,7 +174,8 @@ fn preset_entries(app: &LightcraftApp, ui: &egui::Ui) -> std::sync::Arc<Vec<craf
     let generation = app.session.presets.generation();
     let language = crate::i18n::language();
     let cache = egui::Id::unique("import-preset-entries");
-    if let Some((_, _, entries)) = ui.data(|data| data.get_temp::<Cached>(cache)).filter(|(old, locale, _)| *old == generation && *locale == language) {
+    if let Some((_, _, entries)) = ui.data(|data| data.get_temp::<Cached>(cache)).filter(|(old, locale, _)| *old == generation && *locale == language)
+    {
         return entries;
     }
     let mut entries = vec![Entry::new(String::new(), crate::i18n::tr("None").to_owned())];
@@ -252,7 +253,10 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
     // so resizing the dialog resizes the grid
     let below = ui.ctx().data(|m| m.get_temp::<f32>(egui::Id::unique(CONTENT_BOTTOM)));
     // the room left in the dialog's body below this point ([`note_body_room`]), else what the ui has
-    let room = ui.ctx().data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique((BODY_ROOM, controls::measuring(ui))))).map(|(top, room)| top + room - ui.cursor().top());
+    let room = ui
+        .ctx()
+        .data(|m| m.get_temp::<(f32, f32)>(egui::Id::unique((BODY_ROOM, controls::measuring(ui)))))
+        .map(|(top, room)| top + room - ui.cursor().top());
     // (the room alone: a measuring run's ui may offer less height than the real run's, and the grid must be as tall
     // in both, or the body measures shorter than it lays out and its last rows can't be scrolled to)
     // (less one row gap: the body's content counts the gap after its last row, and a body a gap too tall scrolls)
@@ -504,7 +508,15 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
     field(ui, "Preset", |ui| {
         // "" is no preset; a preset that has gone shows as None until another is chosen
         let entries = preset_entries(app, ui);
-        if let Some(pid) = crate::widgets::select(ui, "combo:importPreset", crate::i18n::tr("Preset"), d.preset.clone(), entries.as_slice(), Some(crate::i18n::tr("None").to_owned()), None) {
+        if let Some(pid) = crate::widgets::select(
+            ui,
+            "combo:importPreset",
+            crate::i18n::tr("Preset"),
+            d.preset.clone(),
+            entries.as_slice(),
+            Some(crate::i18n::tr("None").to_owned()),
+            None,
+        ) {
             d.preset = pid;
         }
     });

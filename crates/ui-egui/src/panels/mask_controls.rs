@@ -81,10 +81,8 @@ impl Component for MaskHit {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let plate = if cx.response.hovered() { self.fill.hover.or(self.fill.rest) } else { self.fill.rest };
-        let shapes: Vec<Shape> = plate
-            .map(|color| Shape::rect_filled(cx.rect, self.fill.radius, color.gamma_multiply(self.opacity)))
-            .into_iter()
-            .collect();
+        let shapes: Vec<Shape> =
+            plate.map(|color| Shape::rect_filled(cx.rect, self.fill.radius, color.gamma_multiply(self.opacity))).into_iter().collect();
         ui.reserve_slot(cx.visible).extend(&cx.response.ctx, shapes);
     }
 
@@ -180,7 +178,17 @@ pub(in crate::panels) struct Hit<'a> {
 impl<'a> Hit<'a> {
     /// A control registered for automation as `widget`, named `label` for a screen reader.
     pub fn new(widget: &'a str, label: impl Into<String>) -> Self {
-        Self { widget, label: label.into(), fill: Fill::NONE, selected: false, drag: false, pointer_only: false, enabled: true, visual: None, id: None }
+        Self {
+            widget,
+            label: label.into(),
+            fill: Fill::NONE,
+            selected: false,
+            drag: false,
+            pointer_only: false,
+            enabled: true,
+            visual: None,
+            id: None,
+        }
     }
 
     pub fn fill(mut self, fill: Fill) -> Self {
@@ -226,7 +234,15 @@ impl<'a> Hit<'a> {
 
     pub fn show_at(self, ui: &mut Ui, rect: Rect) -> HitOutput {
         let t = Tokens::get(ui.ctx());
-        let hit = MaskHit { common: Common::new(), accent: t.accent, fill: self.fill, selected: self.selected, drag: self.drag, pointer_only: self.pointer_only, opacity: ui.opacity() };
+        let hit = MaskHit {
+            common: Common::new(),
+            accent: t.accent,
+            fill: self.fill,
+            selected: self.selected,
+            drag: self.drag,
+            pointer_only: self.pointer_only,
+            opacity: ui.opacity(),
+        };
         let enabled = self.enabled && ui.is_enabled();
         let shown = hit.label(self.label).id(self.id.unwrap_or_else(|| egui::Id::unique(self.widget))).enabled(enabled).show_at(ui, rect);
         if !measuring(ui) {

@@ -105,12 +105,8 @@ fn library_launch_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         row(ui, t, crate::i18n::tr("At launch"), |ui| {
             let mut at_launch = app.ui.settings.at_launch;
             // Measurement/sizing may consume a native button result, but cannot change host UI state.
-            if choices(
-                ui,
-                "settingsAtLaunch",
-                &[(LaunchLibrary::Last, "Open the last library"), (LaunchLibrary::Ask, "Ask me")],
-                &mut at_launch,
-            ) && library_launch_input(ui)
+            if choices(ui, "settingsAtLaunch", &[(LaunchLibrary::Last, "Open the last library"), (LaunchLibrary::Ask, "Ask me")], &mut at_launch)
+                && library_launch_input(ui)
             {
                 app.ui.settings.at_launch = at_launch;
             }
@@ -128,10 +124,7 @@ fn library_launch_button(ui: &mut egui::Ui, alias: &str, label: &str, can: bool)
     use craft::ui::contract::{Props as _, Show as _};
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     let (response, clicked) = {
-        let shown = craft::ui::buttons::Button::new(crate::i18n::tr(label).to_owned())
-            .id_salt(alias)
-            .enabled(can && real)
-            .show(ui);
+        let shown = craft::ui::buttons::Button::new(crate::i18n::tr(label).to_owned()).id_salt(alias).enabled(can && real).show(ui);
         let clicked = shown.clicked();
         (shown.response, clicked)
     };

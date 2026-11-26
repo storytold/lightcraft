@@ -374,7 +374,11 @@ pub(crate) fn prompt_allows_event(app: &LightcraftApp, event: &egui::Event) -> b
 fn prompt_event(event: &egui::Event) -> bool {
     matches!(
         event,
-        egui::Event::Key { .. } | egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::PointerGone | egui::Event::AccessKitActionRequest(_)
+        egui::Event::Key { .. }
+            | egui::Event::PointerMoved(_)
+            | egui::Event::PointerButton { .. }
+            | egui::Event::PointerGone
+            | egui::Event::AccessKitActionRequest(_)
     )
 }
 
@@ -490,13 +494,17 @@ pub(crate) fn shield_pass(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 /// next host frame. A changed/dismissed prompt is reset here as well, so a queued next notice is
 /// treated as a new transition.
 pub(crate) struct PromptCompletion(Option<PromptKey>, bool);
-pub(crate) fn begin_draw(app: &mut LightcraftApp) { app.notice_input.drawn = false; }
+pub(crate) fn begin_draw(app: &mut LightcraftApp) {
+    app.notice_input.drawn = false;
+}
 pub(crate) fn capture_completion(app: &LightcraftApp) -> PromptCompletion {
     PromptCompletion(prompt_key(app), app.notice_input.drawn)
 }
 pub(crate) fn apply_completion(app: &mut LightcraftApp, completion: PromptCompletion) {
     let PromptCompletion(current, drawn) = completion;
-    if prompt_key(app) != current { return; }
+    if prompt_key(app) != current {
+        return;
+    }
     if app.notice_input.key != current {
         // A prompt can change during the draw itself (Tasks -> Unsaved, or OK -> next notice).
         // Leave it in its transition state so the next host frame shields the new prompt too.
@@ -525,7 +533,12 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
     let mut chosen = input.activate.take().filter(|index| *index <= last);
     let specs: Vec<crate::dialogs::FooterSpec> = buttons
         .iter()
-        .map(|(bid, label, _)| crate::dialogs::FooterSpec { label: crate::i18n::tr(label).to_string(), name: format!("button:{bid}"), enabled: true, primary: false })
+        .map(|(bid, label, _)| crate::dialogs::FooterSpec {
+            label: crate::i18n::tr(label).to_string(),
+            name: format!("button:{bid}"),
+            enabled: true,
+            primary: false,
+        })
         .collect();
     let picked = Cell::new(None);
     let shown_layer: Cell<Option<egui::LayerId>> = Cell::new(None);
@@ -538,55 +551,57 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
     }
     // The prompt is the top of the dialog stack (`STACK_PROMPT`), above a dialog or library window under it, however
     // the layers appeared.
-    craft::ui::runtime::overlay::stack_place(ctx, crate::dialogs::STACK_PROMPT, egui::Id::unique(id), || crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
-        let output = Dialog::new(crate::i18n::tr(title).to_owned())
-            .id(egui::Id::unique(id))
-            .opened(Bind::given(true))
-            .closable(false)
-            .backdrop(Backdrop::Scrim)
-            .footer(|ui, _| {
-                let (clicked, shown) = crate::dialogs::footer_button_responses(ui, id, &specs);
-                if clicked.is_some() {
-                    picked.set(clicked);
-                }
-                if !shown.is_empty() {
-                    *responses.borrow_mut() = shown;
-                }
-            })
-            .show(ui, |ui, _| {
-                // The first layout of a new layer is a sizing pass: finish its real hit areas in this same frame.
-                if ui.is_sizing_pass() {
-                    ctx.request_discard("notice prompt: settle its buttons before input");
-                } else if !craft::ui::runtime::measure::active(ui.ctx()) {
-                    shown_layer.set(Some(ui.layer_id()));
-                }
-                // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-                ui.set_width(420.0);
-                ui.spacing_mut().item_spacing.y = 8.0;
-                ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
-            })
-            .output;
-        if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
-            return;
-        }
-        if let Some(layer) = shown_layer.get() {
-            input.layer = Some(layer);
-        }
-        let responses = responses.borrow();
-        // The real response ids are the AccessKit nodes a screen reader targets.
-        input.button_ids = specs.iter().zip(responses.iter()).map(|(spec, response)| (spec.name.clone(), response.id)).collect();
-        // The safe Cancel/OK starts focused, and takes the focus back while nothing in the prompt has it.
-        if let Some(safe) = responses.get(cancel_index)
-            && !responses.iter().any(egui::Response::has_focus)
-        {
-            focus::request(ctx, FocusTarget::Id(safe.id));
-        }
-        crate::widgets::announce_dialog(ctx, &output.response, crate::widgets::Modal::Alert);
-        crate::widgets::describe_dialog(ctx, &output.response, text);
-        if chosen.is_none() {
-            chosen = picked.get().filter(|index| *index <= last).or(output.closed.map(|_| cancel_index));
-        }
-    }));
+    craft::ui::runtime::overlay::stack_place(ctx, crate::dialogs::STACK_PROMPT, egui::Id::unique(id), || {
+        crate::dialogs::host_ui(ctx, egui::Id::unique((id, "host")), |ui| {
+            let output = Dialog::new(crate::i18n::tr(title).to_owned())
+                .id(egui::Id::unique(id))
+                .opened(Bind::given(true))
+                .closable(false)
+                .backdrop(Backdrop::Scrim)
+                .footer(|ui, _| {
+                    let (clicked, shown) = crate::dialogs::footer_button_responses(ui, id, &specs);
+                    if clicked.is_some() {
+                        picked.set(clicked);
+                    }
+                    if !shown.is_empty() {
+                        *responses.borrow_mut() = shown;
+                    }
+                })
+                .show(ui, |ui, _| {
+                    // The first layout of a new layer is a sizing pass: finish its real hit areas in this same frame.
+                    if ui.is_sizing_pass() {
+                        ctx.request_discard("notice prompt: settle its buttons before input");
+                    } else if !craft::ui::runtime::measure::active(ui.ctx()) {
+                        shown_layer.set(Some(ui.layer_id()));
+                    }
+                    // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
+                    ui.set_width(420.0);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
+                })
+                .output;
+            if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
+                return;
+            }
+            if let Some(layer) = shown_layer.get() {
+                input.layer = Some(layer);
+            }
+            let responses = responses.borrow();
+            // The real response ids are the AccessKit nodes a screen reader targets.
+            input.button_ids = specs.iter().zip(responses.iter()).map(|(spec, response)| (spec.name.clone(), response.id)).collect();
+            // The safe Cancel/OK starts focused, and takes the focus back while nothing in the prompt has it.
+            if let Some(safe) = responses.get(cancel_index)
+                && !responses.iter().any(egui::Response::has_focus)
+            {
+                focus::request(ctx, FocusTarget::Id(safe.id));
+            }
+            crate::widgets::announce_dialog(ctx, &output.response, crate::widgets::Modal::Alert);
+            crate::widgets::describe_dialog(ctx, &output.response, text);
+            if chosen.is_none() {
+                chosen = picked.get().filter(|index| *index <= last).or(output.closed.map(|_| cancel_index));
+            }
+        })
+    });
     if gave_back {
         // and nothing drawn after the prompt sees it
         ctx.input_mut(|live| live.events.retain(|event| !prompt_event(event)));
@@ -839,7 +854,8 @@ mod tests {
             super::prepare_ui_pass(&mut app, ui.ctx());
             super::show(&mut app, ui.ctx());
             app.capture_ui_completion(ui.ctx());
-        }).drop_without_applying_deltas();
+        })
+        .drop_without_applying_deltas();
         assert!(!app.notice_input.laid_out);
         app.drain_ui_completions(&ctx);
         assert!(app.notice_input.laid_out);

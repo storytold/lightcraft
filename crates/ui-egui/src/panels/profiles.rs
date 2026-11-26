@@ -24,7 +24,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     show_with_thumbnail(app, ui, id, paint_thumbnail);
 }
 
-fn show_with_thumbnail(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, thumbnail: impl Fn(&mut LightcraftApp, &egui::Painter, PhotoId, &DevelopSettings, Rect)) {
+fn show_with_thumbnail(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    id: PhotoId,
+    thumbnail: impl Fn(&mut LightcraftApp, &egui::Painter, PhotoId, &DevelopSettings, Rect),
+) {
     let t = Tokens::get(ui.ctx());
     let d = (*app.session.develop_of(id).unwrap_or_default()).clone();
     // header: back + title
@@ -141,12 +146,12 @@ fn profile_group_header(ui: &mut egui::Ui, title: &str, imported: bool, count: u
 /// leaf keeps the original face while the public SDK pipeline owns the single hit/focus stop,
 /// binding, keyboard/AT activation, cancellation and expanded accessibility state.
 mod group_header {
-    use std::sync::Arc;
+    use crate::theme::Tokens;
     use craft::behavior::{Metrics, Sense};
     use craft::ui::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Pointer as _, Props as _, Role};
     use craft::ui::style::{ComponentStyle, FocusLook, StyleCx};
     use egui::{Color32, Galley, Stroke, Vec2, pos2, vec2};
-    use crate::theme::Tokens;
+    use std::sync::Arc;
 
     #[derive(Clone, Debug, PartialEq, ComponentStyle)]
     pub(super) struct HeaderStyle {
@@ -175,11 +180,16 @@ mod group_header {
             let t = Tokens::get(ui.ctx());
             let label = crate::i18n::builtin_label(title, !imported);
             Self {
-                common: Common::new(), open, focus: t.accent,
+                common: Common::new(),
+                open,
+                focus: t.accent,
                 label: ui.painter().layout_no_wrap(label.to_string(), t.semibold(13.0), t.text_label),
                 count: ui.painter().layout_no_wrap(count.to_string(), t.font(12.0), t.text_dim),
-                ink: t.text_label, dim: t.text_dim, opacity: ui.opacity(),
-            }.label(label.to_string())
+                ink: t.text_label,
+                dim: t.text_dim,
+                opacity: ui.opacity(),
+            }
+            .label(label.to_string())
         }
     }
 
@@ -193,11 +203,19 @@ mod group_header {
         fn style(_: &StyleCx<'_>, key: ProfileGroupHeaderStyleKey) -> HeaderStyle {
             HeaderStyle { metrics: Metrics::new(), focus: FocusLook::new(Stroke::new(2.0, key.focus), -2.0) }
         }
-        fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 { vec2(0.0, 32.0) }
-        fn sense(&self) -> Sense { Sense::CLICK | Sense::FOCUS }
-        fn bind(&mut self) -> Option<BindMut<'_, bool>> { Some(self.open.reborrow()) }
+        fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+            vec2(0.0, 32.0)
+        }
+        fn sense(&self) -> Sense {
+            Sense::CLICK | Sense::FOCUS
+        }
+        fn bind(&mut self) -> Option<BindMut<'_, bool>> {
+            Some(self.open.reborrow())
+        }
         fn update(&mut self, cx: &mut Cx<'_, Self>) {
-            if cx.activation().is_some() { cx.set(!cx.value().copied().unwrap_or(true)); }
+            if cx.activation().is_some() {
+                cx.set(!cx.value().copied().unwrap_or(true));
+            }
         }
         fn access(&self, access: &mut craft::ui::contract::Access, cx: &Cx<'_, Self>) {
             access.expanded(cx.value().copied().unwrap_or(true));
@@ -214,12 +232,18 @@ mod group_header {
             let label_at = pos2(r.left() + 36.0, r.center().y - self.label.size().y / 2.0);
             let count_at = pos2(r.right() - 22.0 - self.count.size().x, r.center().y - self.count.size().y / 2.0);
             let text = |at, galley, color| egui::epaint::TextShape::new(at, galley, color).with_opacity_factor(self.opacity).into();
-            ui.reserve_slot(cx.visible).extend(&cx.response.ctx, vec![
-                egui::Shape::line(offsets.map(|offset| center + offset).to_vec(), Stroke::new(1.2, self.ink.gamma_multiply(self.opacity))),
-                text(label_at, Arc::clone(&self.label), self.ink), text(count_at, Arc::clone(&self.count), self.dim),
-            ]);
+            ui.reserve_slot(cx.visible).extend(
+                &cx.response.ctx,
+                vec![
+                    egui::Shape::line(offsets.map(|offset| center + offset).to_vec(), Stroke::new(1.2, self.ink.gamma_multiply(self.opacity))),
+                    text(label_at, Arc::clone(&self.label), self.ink),
+                    text(count_at, Arc::clone(&self.count), self.dim),
+                ],
+            );
         }
-        fn finish(self, cx: Cx<'_, Self>) -> EditResponse<bool> { cx.edit_response() }
+        fn finish(self, cx: Cx<'_, Self>) -> EditResponse<bool> {
+            cx.edit_response()
+        }
     }
 }
 
@@ -318,37 +342,66 @@ struct ProfileCellControls {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProfileCellIntent { None, Favorite, Apply }
+enum ProfileCellIntent {
+    None,
+    Favorite,
+    Apply,
+}
 
 #[allow(clippy::too_many_arguments)]
-fn profile_cell_controls(ui: &mut egui::Ui, tag: &str, p_id: &str, p_name: &str, cell: Rect, star: Rect, applied: bool, fav: bool) -> ProfileCellControls {
+fn profile_cell_controls(
+    ui: &mut egui::Ui,
+    tag: &str,
+    p_id: &str,
+    p_name: &str,
+    cell: Rect,
+    star: Rect,
+    applied: bool,
+    fav: bool,
+) -> ProfileCellControls {
     use craft::ui::contract::{Props as _, Show as _};
     let tile_key = if tag.is_empty() { format!("profileCell:{p_id}") } else { format!("profileCell:{tag}:{p_id}") };
     let star_key = format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id);
     let label = crate::i18n::profile_label(p_id, p_name).to_string();
     let tile = cell_action::ProfileCellAction::new(ui)
-        .id_salt(("profile-tile", tile_key.as_str())).label(label.clone()).description(crate::i18n::tr(if applied { "On" } else { "Off" }).to_string()).selected(applied).show_at(ui, cell);
+        .id_salt(("profile-tile", tile_key.as_str()))
+        .label(label.clone())
+        .description(crate::i18n::tr(if applied { "On" } else { "Off" }).to_string())
+        .selected(applied)
+        .show_at(ui, cell);
     let star_out = cell_action::ProfileCellAction::new(ui)
         .id_salt(("profile-star", star_key.as_str()))
-        .label(format!("{}: {}", crate::i18n::tr("Favorite"), label)).description(crate::i18n::tr(if fav { "On" } else { "Off" }).to_string()).selected(fav).show_at(ui, star);
+        .label(format!("{}: {}", crate::i18n::tr("Favorite"), label))
+        .description(crate::i18n::tr(if fav { "On" } else { "Off" }).to_string())
+        .selected(fav)
+        .show_at(ui, star);
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
     if real {
         crate::widgets::register_response(tile_key, cell, &tile.response);
         crate::widgets::register_response(star_key, star, &star_out.response);
     }
     // A single command at most, even if an activation source is ever shared by mistake.
-    let intent = if !real { ProfileCellIntent::None }
-        else if craft::ui::contract::clicked(&star_out.response) { ProfileCellIntent::Favorite }
-        else if !applied && craft::ui::contract::clicked(&tile.response) { ProfileCellIntent::Apply }
-        else { ProfileCellIntent::None };
+    let intent = if !real {
+        ProfileCellIntent::None
+    } else if craft::ui::contract::clicked(&star_out.response) {
+        ProfileCellIntent::Favorite
+    } else if !applied && craft::ui::contract::clicked(&tile.response) {
+        ProfileCellIntent::Apply
+    } else {
+        ProfileCellIntent::None
+    };
     ProfileCellControls { tile: tile.response, star: star_out.response, star_focus_visible: star_out.focus_visible, intent }
 }
 
 /// Shared with in-memory tests: the real command boundary, not a model-mutating focus proxy.
 fn profile_cell_apply(app: &mut LightcraftApp, ui: &egui::Ui, p_id: &str, intent: ProfileCellIntent) {
-    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) { return; }
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
     match intent {
-        ProfileCellIntent::Favorite => { let _ = app.run("profile.favorite", json!({"id": p_id})); }
+        ProfileCellIntent::Favorite => {
+            let _ = app.run("profile.favorite", json!({"id": p_id}));
+        }
         ProfileCellIntent::Apply => {
             let _ = app.run("develop.profile", json!({"id": p_id, "amount": 100}));
             ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::unique("last-profile-hover")));
@@ -389,7 +442,9 @@ mod cell_action {
     }
     impl Outcome for ActionOutput {
         type Value = NoValue;
-        fn response(&self) -> &egui::Response { &self.response }
+        fn response(&self) -> &egui::Response {
+            &self.response
+        }
     }
     impl Component for ProfileCellAction {
         const ROLE: Role = Role::BUTTON;
@@ -400,7 +455,9 @@ mod cell_action {
         fn style(_: &StyleCx<'_>, key: ProfileCellActionStyleKey) -> ActionStyle {
             ActionStyle { metrics: Metrics::new(), focus: FocusLook::new(Stroke::new(2.0, key.accent), -2.0) }
         }
-        fn sense(&self) -> Sense { Sense::CLICK | Sense::FOCUS }
+        fn sense(&self) -> Sense {
+            Sense::CLICK | Sense::FOCUS
+        }
         fn paint(&mut self, _: &mut PaintUi<'_>, _: &Cx<'_, Self>) {}
         fn finish(self, cx: Cx<'_, Self>) -> ActionOutput {
             ActionOutput { response: cx.response.clone(), focus_visible: cx.focus_visible() }

@@ -932,14 +932,7 @@ fn library_recovery_actions_155_retry_reaches_existing_switch_guard_without_disk
     let (keep_pending, rx) = std::sync::mpsc::channel();
     let mut rx = Some(rx);
     h.app.services.picker = Some(Box::new(move |_| Ok(rx.take().expect("one fake pending picker"))));
-    let picked = crate::pick::ask(
-        &mut h.app,
-        "folder.move",
-        &json!({}),
-        "path",
-        crate::pick::PickRequest::folder("Fake pending move"),
-        |_| None,
-    );
+    let picked = crate::pick::ask(&mut h.app, "folder.move", &json!({}), "path", crate::pick::PickRequest::folder("Fake pending move"), |_| None);
     assert!(matches!(picked, crate::pick::Picked::Later));
     recovery_actions_155_click(&mut h, "button:libraryRetry");
     let problem = h.app.library_problem.as_ref().expect("Retry keeps the error window");

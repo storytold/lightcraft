@@ -69,7 +69,8 @@ pub(crate) fn template_field(ui: &mut egui::Ui, name: &str, label: &str, value: 
     use craft::ui::contract::{Bind, Props as _, Show as _};
     use craft::ui::text::TextField;
     let live = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let pending = if live { ui.ctx().data_mut(|d| d.remove_temp::<String>(edit_id.with("lc-pending-tag"))).filter(|tag| !tag.is_empty()) } else { None };
+    let pending =
+        if live { ui.ctx().data_mut(|d| d.remove_temp::<String>(edit_id.with("lc-pending-tag"))).filter(|tag| !tag.is_empty()) } else { None };
     let width = width.min(ui.available_width()).max(1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
     let mut field = TextField::new(label.to_owned(), Bind::bound(value)).id(edit_id).placeholder(hint.to_owned()).limit(None);

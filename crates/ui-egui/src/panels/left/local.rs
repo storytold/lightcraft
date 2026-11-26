@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use super::folders::{library_node_for, move_folder_item, reveal_item, synchronize_item};
-use super::rows::{
-    MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, tree_open,
-};
+use super::rows::{MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, tree_open};
 use super::{LibrarySource, LightcraftApp, SidebarSection, json};
 
 /// Local's folders as they stand this frame, and the folder being browsed among them.

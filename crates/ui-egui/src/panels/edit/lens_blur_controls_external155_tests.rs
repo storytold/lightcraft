@@ -52,7 +52,6 @@ fn controls(app: &mut LightcraftApp, ui: &mut Ui, adapter: Adapter) {
     });
 }
 
-
 /// A popup is open: the previous native candidate's egui popup, or the framework menu that replaced it (a layer of
 /// the framework's that takes keys).
 fn popup_open(ctx: &egui::Context) -> bool {

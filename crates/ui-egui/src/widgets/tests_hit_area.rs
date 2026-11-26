@@ -59,9 +59,7 @@ impl Frames {
 /// A key pressed and released in one frame: the framework shows a focus ring only for focus a key reached, so a test
 /// that only asks for the focus paints none.
 fn key(key: egui::Key) -> Vec<egui::Event> {
-    [true, false]
-        .map(|pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE })
-        .to_vec()
+    [true, false].map(|pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE }).to_vec()
 }
 
 /// An area's face fills the very rectangle its leaf paints the inset keyboard focus ring in: painted after the leaf,

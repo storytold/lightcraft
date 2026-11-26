@@ -41,7 +41,8 @@ fn camera_entries(app: &LightcraftApp, ui: &egui::Ui, raw_default: &str) -> std:
     let generation = app.session.presets.generation();
     let language = crate::i18n::language();
     let cache = egui::Id::unique("settings-camera-entries");
-    if let Some((_, _, entries)) = ui.data(|data| data.get_temp::<Cached>(cache)).filter(|(old, locale, _)| *old == generation && *locale == language) {
+    if let Some((_, _, entries)) = ui.data(|data| data.get_temp::<Cached>(cache)).filter(|(old, locale, _)| *old == generation && *locale == language)
+    {
         return entries;
     }
     let mut entries = vec![
@@ -151,7 +152,15 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             let cur = d.metadata_preset.clone().unwrap_or_default();
             let mut entries = vec![craft::ui::contract::Entry::new(String::new(), crate::i18n::tr("None").to_owned())];
             entries.extend(app.session.metadata_presets.iter().map(|m| craft::ui::contract::Entry::new(m.name.clone(), m.name.clone())));
-            let pick = crate::widgets::select(ui, "combo:settingsMetaPreset", crate::i18n::tr("Metadata preset"), cur.clone(), &entries, Some(cur), Some(240.0));
+            let pick = crate::widgets::select(
+                ui,
+                "combo:settingsMetaPreset",
+                crate::i18n::tr("Metadata preset"),
+                cur.clone(),
+                &entries,
+                Some(cur),
+                Some(240.0),
+            );
             if let Some(n) = pick {
                 let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
             }

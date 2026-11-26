@@ -9,7 +9,10 @@ const QUEUE: &str = "denoise:queueAll";
 const STOP: &str = "denoise:stop";
 
 #[derive(Clone, Copy, Default)]
-struct Pass { sizing: bool, measuring: bool }
+struct Pass {
+    sizing: bool,
+    measuring: bool,
+}
 
 struct Frames {
     ctx: egui::Context,
@@ -36,10 +39,22 @@ impl Frames {
         craft::ui::install(
             &ctx,
             craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows)),
-        ).unwrap();
+        )
+        .unwrap();
         Self {
-            ctx, time: 0.0, running, queued, disabled: false, pass: Pass::default(), size: vec2(1000.0, 300.0), scale: 1.0,
-            commands: vec![], rects: vec![], hits: vec![], elements: vec![], nodes: vec![],
+            ctx,
+            time: 0.0,
+            running,
+            queued,
+            disabled: false,
+            pass: Pass::default(),
+            size: vec2(1000.0, 300.0),
+            scale: 1.0,
+            commands: vec![],
+            rects: vec![],
+            hits: vec![],
+            elements: vec![],
+            nodes: vec![],
         }
     }
 
@@ -58,7 +73,9 @@ impl Frames {
                                 self.commands.push((command.into(), params));
                             });
                         });
-                        if let Some(record) = record { self.elements = record.elements.clone(); }
+                        if let Some(record) = record {
+                            self.elements = record.elements.clone();
+                        }
                     };
                     if self.pass.sizing {
                         let mut child = ui.new_child(egui::UiBuilder::new().sizing_pass().max_rect(ui.max_rect()));
@@ -81,14 +98,19 @@ impl Frames {
         (self.rects, self.hits) = take_registries(&ctx);
     }
 
-    fn settle(&mut self) { for _ in 0..3 { self.frame(vec![]); } }
+    fn settle(&mut self) {
+        for _ in 0..3 {
+            self.frame(vec![]);
+        }
+    }
 
     fn target(&self, id: &str) -> (Rect, WidgetHit) {
         assert_eq!(self.rects.iter().filter(|(name, _)| name == id).count(), 1);
         assert_eq!(self.hits.iter().filter(|(name, _)| name == id).count(), 1);
         let rect = self.rects.iter().find(|(name, _)| name == id).unwrap().1;
         let hit = self.hits.iter().find(|(name, _)| name == id).unwrap().1;
-        let element = self.elements.iter().find(|element| element.id == hit.id && element.part.is_none()).expect("real SDK response owner, not hover probe");
+        let element =
+            self.elements.iter().find(|element| element.id == hit.id && element.part.is_none()).expect("real SDK response owner, not hover probe");
         assert_eq!(element.component, "Button");
         assert_eq!(element.rect, rect);
         assert!(rect.is_finite() && rect.is_positive());
@@ -127,8 +149,7 @@ fn pointer(pos: Pos2, button: PointerButton, pressed: bool) -> Event {
 }
 
 fn expected(id: &str) -> (String, Value) {
-    if id == QUEUE { ("denoise.queue".into(), json!({"scope": "withAmount"})) }
-    else { ("denoise.cancel".into(), json!({})) }
+    if id == QUEUE { ("denoise.queue".into(), json!({"scope": "withAmount"})) } else { ("denoise.cancel".into(), json!({})) }
 }
 
 #[test]
@@ -140,7 +161,9 @@ fn photos_queue_stop_visibility_is_running_or_queued_and_queue_is_always_present
         let busy = running.is_some() || queued > 0;
         assert_eq!(f.rects.iter().any(|(id, _)| id == STOP), busy);
         assert_eq!(f.hits.iter().any(|(id, _)| id == STOP), busy);
-        if busy { f.target(STOP); }
+        if busy {
+            f.target(STOP);
+        }
         assert!(f.commands.is_empty());
     }
 }

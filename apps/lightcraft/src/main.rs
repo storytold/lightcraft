@@ -223,7 +223,9 @@ impl eframe::App for App {
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if let Some(window) = &self.2 { self.0.drain_ui_completions(&window.ctx); }
+        if let Some(window) = &self.2 {
+            self.0.drain_ui_completions(&window.ctx);
+        }
         // (a size the window was just given is remembered too)
         self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
         if let Err(e) = self.1.save(&self.0) {
@@ -734,7 +736,11 @@ fn native_exit_drains_the_final_owned_output_before_shutdown() {
         inner.install_framework(&ctx);
         let mut app = App(inner, PrefsWriter::default(), Some(HostWindow { ctx: ctx.clone(), textures: None }), NightlyExit::none());
         for _ in 0..3 {
-            ctx.run_ui(egui::RawInput::default(), |ui| { app.0.logic(ui.ctx()); app.0.ui(ui); }).drop_without_applying_deltas();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.0.logic(ui.ctx());
+                app.0.ui(ui);
+            })
+            .drop_without_applying_deltas();
         }
         app.0.widgets.clear(); // make the last pending publication observable at the actual exit seam
         eframe::App::on_exit(&mut app, None);
@@ -744,6 +750,9 @@ fn native_exit_drains_the_final_owned_output_before_shutdown() {
     // Shutdown is process-global: isolate it just like the existing native on_exit tests.
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "native_exit_drains_the_final_owned_output_before_shutdown", "--nocapture"])
-        .env("LIGHTCRAFT_TEST_COMPLETION_EXIT", "1").env("LIGHTCRAFT_NO_PREFS", "1").output().unwrap();
+        .env("LIGHTCRAFT_TEST_COMPLETION_EXIT", "1")
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
 }

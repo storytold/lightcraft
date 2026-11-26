@@ -290,7 +290,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     let plus = text_button(ui, &format!("maskPlus:{}", m.id), "+", false).on_hover_text(crate::i18n::tr("Add to this mask"));
                     opener_menu(ui, &plus, ("maskPlus", m.id), "Add to this mask", |ui| component_menu(app, ui, "add", ("maskPlus", m.id)));
                     let minus = text_button(ui, &format!("maskMinus:{}", m.id), "−", false).on_hover_text(crate::i18n::tr("Subtract from this mask"));
-                    opener_menu(ui, &minus, ("maskMinus", m.id), "Subtract from this mask", |ui| component_menu(app, ui, "subtract", ("maskMinus", m.id)));
+                    opener_menu(ui, &minus, ("maskMinus", m.id), "Subtract from this mask", |ui| {
+                        component_menu(app, ui, "subtract", ("maskMinus", m.id))
+                    });
                 });
                 describe_field(app, ui, false);
             }
@@ -804,7 +806,6 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = app.run("view.maskOverlayMode", json!({"mode": mode}));
             }
         }
-    
     });
     let colored = matches!(view, MaskView::Color | MaskView::ColorOnBw);
     if colored {
@@ -849,8 +850,8 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let label_rect = Rect::from_min_size(pos2(row.left() + 24.0, row.top() + 4.0), vec2(w - 46.0, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + 24.0, row.top() + 22.0), pos2(row.right() - 22.0, row.top() + 40.0));
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
-        // the reset hit area is the caption: the value field over the end of the row keeps its own presses
-        let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
+    // the reset hit area is the caption: the value field over the end of the row keeps its own presses
+    let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
     let id = ui.scope_id().with(spec.id);
     let mut value = app.ui.mask_overlay_opacity as f64;
     let label = Hit::new("maskOverlayOpacityLabel", crate::i18n::tr_format!("Reset {name}", name = crate::i18n::tr("Opacity")))
@@ -1294,7 +1295,6 @@ impl ComponentMenuTarget {
     }
 }
 
-
 enum ComponentRowAction {
     Command(serde_json::Value),
     Rename,
@@ -1438,7 +1438,9 @@ fn component_row_menu(
     }
     // Keep the existing component-creation menus and their model/download policy unchanged.
     for (label, op) in [("Intersect with", "intersect"), ("Subtract", "subtract")] {
-        Menu::submenu_row_enabled(ui, crate::i18n::tr(label), ui.is_enabled(), |ui, _| component_menu(app, ui, op, ("mask-component-row", op, target.key())));
+        Menu::submenu_row_enabled(ui, crate::i18n::tr(label), ui.is_enabled(), |ui, _| {
+            component_menu(app, ui, op, ("mask-component-row", op, target.key()))
+        });
     }
     Divider::horizontal().show(ui);
     if component_action(ui, target, "rename", crate::i18n::tr("Rename…"), targets) {
@@ -1454,7 +1456,6 @@ fn component_row_menu(
     }
     action
 }
-
 
 /// Whether the SAM 3 model is missing in a build that could use it: then the download is
 /// offered (with `then` to start afterwards) instead of starting an AI mask.
@@ -1604,7 +1605,13 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
 /// The menu a button opens: the framework's, opened by the button's own activation (the pointer, a long
 /// press and the keyboard alike) and closed by Escape, a click away or a pick. `key` tells this opener's
 /// menu from the others'. Nothing is drawn while only measuring.
-fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key: impl std::hash::Hash + std::fmt::Debug, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
+fn opener_menu(
+    ui: &mut egui::Ui,
+    opener: &crate::widgets::TextButtonOutput,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    mut body: impl FnMut(&mut egui::Ui),
+) {
     use craft::ui::contract::{Bind, Trigger};
     if measuring(ui) {
         return;
@@ -1612,7 +1619,10 @@ fn opener_menu(ui: &mut egui::Ui, opener: &crate::widgets::TextButtonOutput, key
     // The open state lives here, a pass at a time: a menu whose opener stops drawing closes.
     let pass = ui.ctx().cumulative_pass_nr();
     let open_id = opener.response.id.with("mask-opener-menu-open");
-    let mut open = ui.data(|d| d.get_temp::<(u64, bool)>(open_id)).filter(|(last, _)| *last == pass || last.saturating_add(1) == pass).is_some_and(|(_, open)| open);
+    let mut open = ui
+        .data(|d| d.get_temp::<(u64, bool)>(open_id))
+        .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
+        .is_some_and(|(_, open)| open);
     // Escape closes it while the keyboard is still on the button, outside the menu: a long press opens it there, and
     // the button has no use for the Escape the runtime hands it.
     let opener_id = opener.response.id;

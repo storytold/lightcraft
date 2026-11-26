@@ -432,7 +432,6 @@ fn component_parent_disabled_measurement_and_sizing_refuse_actions_without_repla
     }
 }
 
-
 /// Narrow first step: run only this selector before repeating the full eight journeys.
 #[test]
 fn component_parent_both_openers_binding_discriminator_and_shifted_owner_safety() {

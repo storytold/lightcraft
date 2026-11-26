@@ -529,7 +529,17 @@ pub(super) struct SideSpec<'a> {
 
 impl<'a> SideSpec<'a> {
     pub(super) fn new(salt: &'a str, name: &'a str, show_counts: bool) -> Self {
-        SideSpec { salt, name, selected: None, show_counts, tree: true, build_all: false, focus_on_press: true, section_drag: None, album_drag: false }
+        SideSpec {
+            salt,
+            name,
+            selected: None,
+            show_counts,
+            tree: true,
+            build_all: false,
+            focus_on_press: true,
+            section_drag: None,
+            album_drag: false,
+        }
     }
 
     pub(super) fn selected(mut self, key: Option<&'a str>) -> Self {

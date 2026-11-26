@@ -30,7 +30,12 @@ fn fixture() -> (egui::Context, LightcraftApp, PhotoId) {
 
 fn frame(ctx: &egui::Context, events: Vec<egui::Event>, mut body: impl FnMut(&mut egui::Ui)) -> Registries {
     let time = ctx.input(|i| i.time) + 1.0 / 60.0;
-    let input = egui::RawInput { time: Some(time), screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(360.0, 640.0))), events, ..Default::default() };
+    let input = egui::RawInput {
+        time: Some(time),
+        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(360.0, 640.0))),
+        events,
+        ..Default::default()
+    };
     let mut output = ctx.run_ui(input, |root_ui| {
         crate::widgets::take_registries(root_ui.ctx());
         egui::CentralPanel::default().show(root_ui, |ui| body(ui));
@@ -47,7 +52,11 @@ fn at(reg: &Registries, name: &str) -> egui::Pos2 {
 fn click(ctx: &egui::Context, pos: egui::Pos2, mut body: impl FnMut(&mut egui::Ui)) {
     frame(ctx, vec![egui::Event::PointerMoved(pos)], &mut body);
     for pressed in [true, false] {
-        frame(ctx, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }], &mut body);
+        frame(
+            ctx,
+            vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }],
+            &mut body,
+        );
     }
     frame(ctx, Vec::new(), body);
 }
@@ -67,11 +76,22 @@ fn wave155_production_device_gate_and_real_sdk_hit_owners() {
             });
         }
         let record = observed.expect("SDK region recorded");
-        for (name, label, role) in [(COPY, "Create Proof Copy", "Button"), (PERCEPTUAL, "Perceptual", "Button"), (RELATIVE, "Relative", "Button"), (PAPER, "Simulate Paper & Ink", "CheckBox")] {
+        for (name, label, role) in [
+            (COPY, "Create Proof Copy", "Button"),
+            (PERCEPTUAL, "Perceptual", "Button"),
+            (RELATIVE, "Relative", "Button"),
+            (PAPER, "Simulate Paper & Ink", "CheckBox"),
+        ] {
             let expected = device || name == COPY;
             assert_eq!(reg.0.iter().filter(|(id, _)| id == name).count(), usize::from(expected), "{name} device={device}");
-            if !expected { continue; }
-            let element = record.elements.iter().find(|e| e.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(label) && f.role == role)).unwrap_or_else(|| panic!("missing SDK {role} {label}"));
+            if !expected {
+                continue;
+            }
+            let element = record
+                .elements
+                .iter()
+                .find(|e| e.facts.as_ref().is_some_and(|f| f.name.as_deref() == Some(label) && f.role == role))
+                .unwrap_or_else(|| panic!("missing SDK {role} {label}"));
             let hit = reg.1.iter().find(|(id, _)| id == name).unwrap().1;
             assert_eq!(hit.id, element.id, "{name}: automation must own the real component, not a hover probe");
             assert!(hit.interact_rect.contains(at(&reg, name)), "{name}: click center outside hit");
@@ -84,8 +104,16 @@ fn wave155_local_options_select_both_intents_and_toggle_paper_twice() {
     let (ctx, _app, _) = fixture();
     let (mut intent, mut paper) = (ProofIntent::Perceptual, false);
     let mut reg = (Vec::new(), Vec::new());
-    for _ in 0..4 { reg = frame(&ctx, Vec::new(), |ui| proof_options(ui, &mut intent, &mut paper)); }
-    for (name, expected_intent, expected_paper) in [(RELATIVE, ProofIntent::Relative, false), (PERCEPTUAL, ProofIntent::Perceptual, false), (PERCEPTUAL, ProofIntent::Perceptual, false), (PAPER, ProofIntent::Perceptual, true), (PAPER, ProofIntent::Perceptual, false)] {
+    for _ in 0..4 {
+        reg = frame(&ctx, Vec::new(), |ui| proof_options(ui, &mut intent, &mut paper));
+    }
+    for (name, expected_intent, expected_paper) in [
+        (RELATIVE, ProofIntent::Relative, false),
+        (PERCEPTUAL, ProofIntent::Perceptual, false),
+        (PERCEPTUAL, ProofIntent::Perceptual, false),
+        (PAPER, ProofIntent::Perceptual, true),
+        (PAPER, ProofIntent::Perceptual, false),
+    ] {
         click(&ctx, at(&reg, name), |ui| proof_options(ui, &mut intent, &mut paper));
         assert_eq!((intent, paper), (expected_intent, expected_paper), "{name}");
         reg = frame(&ctx, Vec::new(), |ui| proof_options(ui, &mut intent, &mut paper));
@@ -145,7 +173,9 @@ fn wave155_real_copy_uses_displayed_photo_profile_name_and_success_toast() {
         let source = app.session.catalog.photo(id).unwrap().clone();
         let count = app.session.catalog.photos().count();
         let mut reg = (Vec::new(), Vec::new());
-        for _ in 0..4 { reg = frame(&ctx, Vec::new(), |ui| soft_proofing(&mut app, ui, id)); }
+        for _ in 0..4 {
+            reg = frame(&ctx, Vec::new(), |ui| soft_proofing(&mut app, ui, id));
+        }
         click(&ctx, at(&reg, COPY), |ui| soft_proofing(&mut app, ui, id));
         assert_eq!(app.session.catalog.photos().count(), count + 1, "one activation, one copy");
         let copy = app.session.catalog.photos().find(|p| p.copy_of == Some(id)).expect("copy of displayed photo");
@@ -168,7 +198,9 @@ fn wave155_disabled_sdk_controls_ignore_pointer_activation() {
         });
     };
     let mut reg = (Vec::new(), Vec::new());
-    for _ in 0..4 { reg = frame(&ctx, Vec::new(), &mut draw); }
+    for _ in 0..4 {
+        reg = frame(&ctx, Vec::new(), &mut draw);
+    }
     for name in [RELATIVE, PAPER, COPY] {
         click(&ctx, at(&reg, name), &mut draw);
         reg = frame(&ctx, Vec::new(), &mut draw);
@@ -180,7 +212,9 @@ fn wave155_disabled_sdk_controls_ignore_pointer_activation() {
 fn proof_copy_after_selection_change_undo_restores_both_original_photos() {
     let (ctx, mut app, previous) = fixture();
     let next = *app.session.selection.ids.iter().find(|id| **id != previous).unwrap();
-    for _ in 0..4 { frame(&ctx, vec![], |ui| soft_proofing(&mut app, ui, previous)); }
+    for _ in 0..4 {
+        frame(&ctx, vec![], |ui| soft_proofing(&mut app, ui, previous));
+    }
     app.session.execute("library.select", &json!({"ids": [next.0], "active": next.0})).unwrap();
     let originals = [previous, next].map(|id| json!(app.session.catalog.photo(id).unwrap()));
     let before_count = app.session.catalog.photos().count();

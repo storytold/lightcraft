@@ -20,12 +20,12 @@ fn grid() -> Harness<'static, LightcraftApp> {
         .with_size(vec2(1500.0, 950.0))
         .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
         .build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     h
 }

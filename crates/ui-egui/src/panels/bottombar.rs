@@ -302,20 +302,20 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         let zr = dropdown_face(&mut child, "zoom", crate::i18n::tr(&zoom_label));
         let mut zoom_pick = None;
         if !measuring(&child) {
-        Menu::new(crate::i18n::tr("Zoom")).id_salt("zoom-menu").values().opened_by(&zr, Trigger::Click).show(&mut child, |ui, _| {
-            for (label, z) in [
-                ("Fit", Zoom::Fit),
-                ("Fill", Zoom::Fill),
-                ("50%", Zoom::Percent(50.0)),
-                ("100%", Zoom::Percent(100.0)),
-                ("200%", Zoom::Percent(200.0)),
-                ("400%", Zoom::Percent(400.0)),
-            ] {
-                if value_row(ui, ("zoom", label), crate::i18n::tr(label), app.ui.zoom == z) {
-                    zoom_pick = Some(z);
+            Menu::new(crate::i18n::tr("Zoom")).id_salt("zoom-menu").values().opened_by(&zr, Trigger::Click).show(&mut child, |ui, _| {
+                for (label, z) in [
+                    ("Fit", Zoom::Fit),
+                    ("Fill", Zoom::Fill),
+                    ("50%", Zoom::Percent(50.0)),
+                    ("100%", Zoom::Percent(100.0)),
+                    ("200%", Zoom::Percent(200.0)),
+                    ("400%", Zoom::Percent(400.0)),
+                ] {
+                    if value_row(ui, ("zoom", label), crate::i18n::tr(label), app.ui.zoom == z) {
+                        zoom_pick = Some(z);
+                    }
                 }
-            }
-        });
+            });
         }
         if let Some(z) = zoom_pick {
             app.ui.zoom = z;

@@ -50,7 +50,10 @@ pub(super) fn choices<V: PartialEq + Copy + Send + Sync + 'static>(ui: &mut egui
         let measure = |ui: &mut egui::Ui, width: f32| {
             let mut measuring = *value;
             let child = ui.new_child(
-                egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY))).sizing_pass().invisible(),
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, f32::INFINITY)))
+                    .sizing_pass()
+                    .invisible(),
             );
             RadioGroup::new(crate::i18n::tr(label).to_owned(), Bind::bound(&mut measuring)).id_salt(id).measure_in(&child, Proposal::Ideal, body)
         };

@@ -393,7 +393,11 @@ fn remove_natural_keyboard_modes_numeric_commit_and_slider_steps_use_the_real_fo
         }
         f.key(Key::ArrowDown);
     }
-    assert!(craft::ui::runtime::focus::focused_rec(&f.ctx).is_some_and(|r| r.stop.id == f.hit("removeMode:heal").id), "arrows reach Heal; trace={:#?}", f.trace);
+    assert!(
+        craft::ui::runtime::focus::focused_rec(&f.ctx).is_some_and(|r| r.stop.id == f.hit("removeMode:heal").id),
+        "arrows reach Heal; trace={:#?}",
+        f.trace
+    );
     f.key(Key::Space);
     assert_eq!(f.app.ui.tool, "heal");
     assert_eq!(f.app.session.undo.len(), undo);

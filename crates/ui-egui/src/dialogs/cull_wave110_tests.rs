@@ -94,7 +94,11 @@ fn production_cull_body_mounts_sdk_controls_without_clamping_typed_values() {
                 let (_, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique("wave110-cull-probe"), |ui| {
                     crate::dialogs::cull_body(&mut app, ui, &t, &mut dialog);
                 });
-                roles = record.iter().flat_map(|record| record.elements.iter()).filter_map(|element| element.facts.as_ref().map(|facts| facts.role.clone())).collect();
+                roles = record
+                    .iter()
+                    .flat_map(|record| record.elements.iter())
+                    .filter_map(|element| element.facts.as_ref().map(|facts| facts.role.clone()))
+                    .collect();
             });
         });
         frame_out.textures_delta.clear();

@@ -33,7 +33,8 @@ pub(super) fn button(ui: &mut egui::Ui, id: &str, glyph: &str, label: &str, widt
 
 /// The width [`button`] takes: at least `width`, else what its painted text needs.
 pub(super) fn button_width(ui: &egui::Ui, glyph: &str, label: &str, width: f32) -> f32 {
-    let ideal = Button::new(crate::i18n::tr(label).to_owned()).painted(crate::i18n::tr(glyph).to_owned()).measure_in(ui, craft::behavior::Proposal::Ideal).x;
+    let ideal =
+        Button::new(crate::i18n::tr(label).to_owned()).painted(crate::i18n::tr(glyph).to_owned()).measure_in(ui, craft::behavior::Proposal::Ideal).x;
     width.max(ideal.ceil())
 }
 

@@ -21,12 +21,12 @@ fn sidebar() -> Harness<'static, LightcraftApp> {
         .with_size(vec2(1500.0, 950.0))
         .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
         .build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     h
 }
@@ -64,12 +64,12 @@ fn a_month_triangle_names_its_year() {
         .with_size(vec2(1500.0, 950.0))
         .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
         .build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     for year in ["Expand 2025", "Expand 2026"] {
         h.get_by_label(year).click();
@@ -104,12 +104,12 @@ fn a_keyword_list_triangle_names_its_keyword() {
         .with_size(vec2(1500.0, 950.0))
         .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
         .build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(10);
     let names = button_names(&h);
     assert!(names.iter().any(|n| n == "Collapse Trips"), "the open keyword's triangle: {names:?}");

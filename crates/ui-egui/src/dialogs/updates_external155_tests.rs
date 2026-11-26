@@ -223,9 +223,15 @@ fn updates155_click_widget_hits_the_real_result_footer() {
     let mut h = Headless::new(app, [1300.0, 820.0], 1.0);
     let limit = Duration::from_secs(10);
     check(&mut h.app).unwrap();
-    assert!(h.step_until(limit, |h| matches!(h.app.updates_rt.updater.status(), Status::UpToDate)
-        && h.app.widget_hits.iter().any(|(id, _)| id == "button:updatesOk")), "missing registered result footer");
+    assert!(
+        h.step_until(limit, |h| matches!(h.app.updates_rt.updater.status(), Status::UpToDate)
+            && h.app.widget_hits.iter().any(|(id, _)| id == "button:updatesOk")),
+        "missing registered result footer"
+    );
     let answer = h.request("ui.clickWidget", serde_json::json!({"id":"button:updatesOk"}), limit);
     assert_eq!(answer["ok"], true, "{answer}");
-    assert!(h.step_until(limit, |h| !blocks_input(&h.app) && !h.app.widgets.iter().any(|(id, _)| id == "button:updatesOk")), "registered click did not dismiss the actual result");
+    assert!(
+        h.step_until(limit, |h| !blocks_input(&h.app) && !h.app.widgets.iter().any(|(id, _)| id == "button:updatesOk")),
+        "registered click did not dismiss the actual result"
+    );
 }

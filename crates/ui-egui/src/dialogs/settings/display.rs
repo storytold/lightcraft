@@ -172,12 +172,9 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
             if ui.is_enabled() && craft::ui::contract::clicked(&face) {
                 open = !open;
             }
-            Menu::new(name)
-                .id_salt(("view-options-menu", &id))
-                .values()
-                .opened_by(&face, Trigger::Manual)
-                .open(Bind::bound(&mut open))
-                .show(ui, |ui, _| {
+            Menu::new(name).id_salt(("view-options-menu", &id)).values().opened_by(&face, Trigger::Manual).open(Bind::bound(&mut open)).show(
+                ui,
+                |ui, _| {
                     for f in F::ALL {
                         let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
                         let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
@@ -193,26 +190,25 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
                             }
                         }
                     }
-                });
+                },
+            );
             ui.data_mut(|data| data.insert_temp(slot, (pass, open)));
             if ui.is_enabled()
                 && let Some(field) = picked
             {
                 *line = field;
             }
-        
         }
         use craft::ui::buttons::Button;
         use craft::ui::contract::{Props as _, Show as _};
-        let r =
-            Button::new(crate::i18n::tr("Use Defaults").to_owned()).id_salt(("view-options-defaults", n)).enabled(*lines != defaults).show(ui);
+        let r = Button::new(crate::i18n::tr("Use Defaults").to_owned()).id_salt(("view-options-defaults", n)).enabled(*lines != defaults).show(ui);
         if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
             crate::widgets::register_response(format!("button:viewOptionsDefaults{n}"), r.response.rect, &r.response);
             if ui.is_enabled() && *lines != defaults && r.clicked() {
                 *lines = defaults;
             }
         }
-    
+
         // one Info at most shows briefly: ticking one unticks the other
         let info = if n == 1 { I::Basic } else { I::Exposure };
         let mut briefly = app.ui.settings.loupe_info.briefly == info;

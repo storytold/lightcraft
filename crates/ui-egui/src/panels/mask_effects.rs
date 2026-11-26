@@ -260,10 +260,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
     ui.set_max_width(320.0);
     let mut st: MenuState = ui.data(|d| d.get_temp(state_id())).unwrap_or_default();
     let before = st.search.clone();
-    let r = crate::text_field::TextField::singleline(SEARCH, &mut st.search)
-        .hint(crate::i18n::tr("Search effects"))
-        .width(f32::INFINITY)
-        .show(ui);
+    let r = crate::text_field::TextField::singleline(SEARCH, &mut st.search).hint(crate::i18n::tr("Search effects")).width(f32::INFINITY).show(ui);
     // the search field takes the keyboard when the menu opens, in a live pass: a measuring run moves nothing
     if !measuring(ui) && !st.focused {
         crate::text_field::focus_id(ui.ctx(), r.response.id);
@@ -312,9 +309,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
                 ui.painter().rect_filled(rect, 3.0, t.hover);
             }
             // (rows scrolled out of view can't be clicked)
-            let hit = ui
-                .is_rect_visible(rect)
-                .then(|| Hit::new(widget, display_name(name)).fill(Fill::on_hover(t.hover, 3.0)).show_at(ui, rect));
+            let hit = ui.is_rect_visible(rect).then(|| Hit::new(widget, display_name(name)).fill(Fill::on_hover(t.hover, 3.0)).show_at(ui, rect));
             if current == Some(name.as_str()) {
                 ui.painter().text(rect.left_center() + vec2(4.0, 0.0), egui::Align2::LEFT_CENTER, "✓", t.font(12.0), t.accent);
             }
@@ -841,7 +836,6 @@ pub fn manage_body(
                     }
                     ui.add(egui::Label::new(egui::RichText::new(info).color(t.text_dim).size(11.0)).truncate());
                 });
-
             }
         }
     });

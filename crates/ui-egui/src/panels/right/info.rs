@@ -433,10 +433,8 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     ui.label(egui::RichText::new(label).size(11.5).color(t.text_dim));
     let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
     let editable = ui.is_enabled() && !targets.is_empty() && !measuring;
-    let entries: Vec<_> = lightcraft_catalog::CopyrightStatus::ALL
-        .into_iter()
-        .map(|status| Entry::new(status, crate::i18n::tr(status.label())))
-        .collect();
+    let entries: Vec<_> =
+        lightcraft_catalog::CopyrightStatus::ALL.into_iter().map(|status| Entry::new(status, crate::i18n::tr(status.label()))).collect();
     let value = if mixed { Mixed::Mixed } else { Mixed::Same(current) };
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), 24.0), Sense::hover());
     // The fixed field has already reserved its measured size. A speculative pass must not
@@ -447,12 +445,11 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     }
     // Keep LightCraft's translated Mixed label without replacing the SDK's mixed binding.
     let words = WordRows::new().row(Word::keyed("select.mixed", MIXED), crate::i18n::tr(MIXED));
-    let shown = with_env(ui, |scope| scope.words = Some(WordsOverride::Overlay(words)), |ui| {
-        Select::new(label, Bind::given(value), &entries)
-            .id_salt("info-copyright-status")
-            .enabled(editable)
-            .show_at(ui, rect)
-    });
+    let shown = with_env(
+        ui,
+        |scope| scope.words = Some(WordsOverride::Overlay(words)),
+        |ui| Select::new(label, Bind::given(value), &entries).id_salt("info-copyright-status").enabled(editable).show_at(ui, rect),
+    );
     if !measuring {
         crate::widgets::register_response("field:copyrightStatus", shown.response.rect, &shown.response);
         // The SDK owns drafts, keyboard navigation and dismissal. Only its commit edits the

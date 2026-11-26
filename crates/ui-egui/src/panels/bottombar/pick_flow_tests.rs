@@ -288,11 +288,7 @@ impl Review {
         for alias in ["flag:unflag", PICK, "flag:reject"] {
             // the three flags are framework buttons: none publishes a target in a measuring or sizing pass
             let expected = usize::from(!(SDK_PICK && matches!(self.pass, Pass::Measure | Pass::Sizing)));
-            assert_eq!(
-                rects.iter().filter(|(name, _)| name == alias).count(),
-                expected,
-                "only real passes publish an interactive flag target"
-            );
+            assert_eq!(rects.iter().filter(|(name, _)| name == alias).count(), expected, "only real passes publish an interactive flag target");
         }
         self.rects = rects.into_iter().collect();
         self.hits = hits.into_iter().collect();

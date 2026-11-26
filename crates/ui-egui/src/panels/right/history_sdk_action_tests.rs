@@ -2,13 +2,17 @@
 //! Authored for the existing integrator’s normal test consumer; execution results are reported separately.
 
 use super::*;
-use std::sync::Arc;
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Ui};
 use crate::headless::HeadlessView;
 use crate::widgets::{WidgetHit, take_registries};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Ui};
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
-enum Pass { Real, Measure, Sizing }
+enum Pass {
+    Real,
+    Measure,
+    Sizing,
+}
 
 struct Frames {
     ctx: egui::Context,
@@ -32,10 +36,13 @@ impl Frames {
     }
 
     fn frame(&mut self, events: Vec<Event>, mut draw: impl FnMut(&mut Ui)) {
-        let requested: Vec<_> = events.iter().filter_map(|event| match event {
-            Event::Key { key, pressed, .. } => Some((*key, *pressed)),
-            _ => None,
-        }).collect();
+        let requested: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Key { key, pressed, .. } => Some((*key, *pressed)),
+                _ => None,
+            })
+            .collect();
         let mut live = Vec::new();
         let mut published = (vec![], vec![]);
         let mut publication = Vec::new();
@@ -47,10 +54,16 @@ impl Frames {
         let enabled = self.enabled;
         let mut output = self.ctx.run_ui(raw, |ui| {
             if !requested.is_empty() {
-                let events: Vec<_> = ui.input(|input| input.events.iter().filter_map(|event| match event {
-                    Event::Key { key, pressed, .. } => Some((*key, *pressed)),
-                    _ => None,
-                }).collect());
+                let events: Vec<_> = ui.input(|input| {
+                    input
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            Event::Key { key, pressed, .. } => Some((*key, *pressed)),
+                            _ => None,
+                        })
+                        .collect()
+                });
                 live.push((ui.ctx().cumulative_pass_nr(), events));
             }
             ui.set_max_width(350.0);
@@ -71,7 +84,12 @@ impl Frames {
             let discarded = ui.ctx().will_discard();
             if publication.len() < 8 {
                 let menus: Vec<_> = hits.iter().filter(|(name, _)| name.contains("Menu:")).map(|(name, hit)| (name.clone(), hit.id)).collect();
-                publication.push(format!("pass={} discarded={discarded} sdk_keys_open_last_pass={} native_popup={} menu_owners={menus:?}", ui.ctx().cumulative_pass_nr(), craft::ui::runtime::overlay::any_open(ui.ctx(), craft::ui::runtime::overlay::OpenFilter::Keys), egui::Popup::is_any_open(ui.ctx())));
+                publication.push(format!(
+                    "pass={} discarded={discarded} sdk_keys_open_last_pass={} native_popup={} menu_owners={menus:?}",
+                    ui.ctx().cumulative_pass_nr(),
+                    craft::ui::runtime::overlay::any_open(ui.ctx(), craft::ui::runtime::overlay::OpenFilter::Keys),
+                    egui::Popup::is_any_open(ui.ctx())
+                ));
             }
             published = if discarded { (vec![], vec![]) } else { (rects, hits) };
         });
@@ -85,7 +103,10 @@ impl Frames {
             if self.key_trace.len() == 64 {
                 self.key_trace.remove(0);
             }
-            self.key_trace.push(format!("requested={requested:?} live_after_hook={live:?} native={native:?} sdk={sdk:?} native_popup={} owners={owners:?}", egui::Popup::is_any_open(&self.ctx)));
+            self.key_trace.push(format!(
+                "requested={requested:?} live_after_hook={live:?} native={native:?} sdk={sdk:?} native_popup={} owners={owners:?}",
+                egui::Popup::is_any_open(&self.ctx)
+            ));
         }
     }
 
@@ -108,9 +129,9 @@ impl Frames {
     }
 
     fn escape(&mut self, mut draw: impl FnMut(&mut Ui)) {
-        let events = [true, false].map(|pressed| Event::Key {
-            key: Key::Escape, physical_key: Some(Key::Escape), pressed, repeat: false, modifiers: Modifiers::NONE,
-        }).to_vec();
+        let events = [true, false]
+            .map(|pressed| Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed, repeat: false, modifiers: Modifiers::NONE })
+            .to_vec();
         self.frame(events, &mut draw);
         self.settle(draw);
     }
@@ -151,7 +172,14 @@ impl Frames {
     }
 
     fn assert_dismissed(&self) {
-        assert!(!self.rects.iter().any(|(id, _)| id.starts_with("versionMenu:") || id.starts_with("historyMenu:")), "action popup must be dismissed; sdk_keys_open={} sdk_top={:?} native_popup={} publication={:?}", craft::ui::runtime::overlay::any_open(&self.ctx, craft::ui::runtime::overlay::OpenFilter::Keys), craft::ui::runtime::overlay::top(&self.ctx), egui::Popup::is_any_open(&self.ctx), self.publication);
+        assert!(
+            !self.rects.iter().any(|(id, _)| id.starts_with("versionMenu:") || id.starts_with("historyMenu:")),
+            "action popup must be dismissed; sdk_keys_open={} sdk_top={:?} native_popup={} publication={:?}",
+            craft::ui::runtime::overlay::any_open(&self.ctx, craft::ui::runtime::overlay::OpenFilter::Keys),
+            craft::ui::runtime::overlay::top(&self.ctx),
+            egui::Popup::is_any_open(&self.ctx),
+            self.publication
+        );
     }
 }
 
@@ -346,16 +374,24 @@ fn sdk_history_missing_photo_is_a_control_and_command_no_op() {
     assert_eq!(state(&app, active), before);
 }
 
-
 #[derive(Clone, Copy)]
-enum Panel { Snapshots, History }
+enum Panel {
+    Snapshots,
+    History,
+}
 
 fn draw_panel(panel: Panel, app: &mut LightcraftApp, ui: &mut Ui, id: PhotoId) {
-    match panel { Panel::Snapshots => versions(app, ui, id), Panel::History => activity(app, ui, id) }
+    match panel {
+        Panel::Snapshots => versions(app, ui, id),
+        Panel::History => activity(app, ui, id),
+    }
 }
 
 fn open_panel_menu(panel: Panel, f: &mut Frames, app: &mut LightcraftApp, id: PhotoId, index: usize) {
-    match panel { Panel::Snapshots => version_menu(f, app, id, index), Panel::History => history_menu(f, app, id, index) }
+    match panel {
+        Panel::Snapshots => version_menu(f, app, id, index),
+        Panel::History => history_menu(f, app, id, index),
+    }
 }
 
 fn document(app: &LightcraftApp) -> serde_json::Value {
@@ -529,7 +565,11 @@ fn history_actions_unforced_tab_enter_space_cancel_exit_and_real_reopen() {
                     assert_eq!(app.session.before.get(&id), Some(settings));
                     assert_eq!(photo(&app, id), initial);
                     assert_eq!(app.session.undo.len(), undo);
-                    let params = if action == "history-before" { json!({"source":"history", "index":index}) } else { json!({"source":"version", "name":initial.versions[0].name}) };
+                    let params = if action == "history-before" {
+                        json!({"source":"history", "index":index})
+                    } else {
+                        json!({"source":"version", "name":initial.versions[0].name})
+                    };
                     assert_one_command(&app, journal, "beforeAfter.setBefore", params);
                 }
             }
@@ -544,8 +584,14 @@ fn history_already_open_disabled_popup_refuses_pointer_and_keys_then_recovers() 
     for panel in [Panel::Snapshots, Panel::History] {
         let (mut app, id) = fixture();
         let initial = photo(&app, id);
-        let index = match panel { Panel::Snapshots => 0, Panel::History => initial.history.len() - 3 };
-        let target = match panel { Panel::Snapshots => "versionMenu:0:restore".to_owned(), Panel::History => format!("historyMenu:{index}:before") };
+        let index = match panel {
+            Panel::Snapshots => 0,
+            Panel::History => initial.history.len() - 3,
+        };
+        let target = match panel {
+            Panel::Snapshots => "versionMenu:0:restore".to_owned(),
+            Panel::History => format!("historyMenu:{index}:before"),
+        };
         let mut f = Frames::new();
         open_panel_menu(panel, &mut f, &mut app, id, index);
         f.tab_to(&target, |ui| draw_panel(panel, &mut app, ui, id));
@@ -577,19 +623,32 @@ fn history_measured_release_is_inert_then_the_same_row_and_action_recover() {
         for pass in [Pass::Sizing, Pass::Measure] {
             let (mut app, id) = fixture();
             let initial = photo(&app, id);
-            let index = match panel { Panel::Snapshots => 0, Panel::History => initial.history.len() - 3 };
-            let target = match panel { Panel::Snapshots => "versionMenu:0:restore".to_owned(), Panel::History => format!("historyMenu:{index}:before") };
-            let row = match panel { Panel::Snapshots => "version:0".to_owned(), Panel::History => format!("history:{index}") };
+            let index = match panel {
+                Panel::Snapshots => 0,
+                Panel::History => initial.history.len() - 3,
+            };
+            let target = match panel {
+                Panel::Snapshots => "versionMenu:0:restore".to_owned(),
+                Panel::History => format!("historyMenu:{index}:before"),
+            };
+            let row = match panel {
+                Panel::Snapshots => "version:0".to_owned(),
+                Panel::History => format!("history:{index}"),
+            };
             let mut f = Frames::new();
             open_panel_menu(panel, &mut f, &mut app, id, index);
             let owner = f.hit(&row).id;
             let at = f.rect(&target).center();
             let baseline = document(&app);
             f.frame(vec![Event::PointerMoved(at)], |ui| draw_panel(panel, &mut app, ui, id));
-            f.frame(vec![Event::PointerButton { pos:at, button:PointerButton::Primary, pressed:true, modifiers:Modifiers::NONE }], |ui| draw_panel(panel, &mut app, ui, id));
+            f.frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }], |ui| {
+                draw_panel(panel, &mut app, ui, id)
+            });
             assert_eq!(document(&app), baseline, "ordinary action press is not its release");
             f.pass = pass;
-            f.frame(vec![Event::PointerButton { pos:at, button:PointerButton::Primary, pressed:false, modifiers:Modifiers::NONE }], |ui| draw_panel(panel, &mut app, ui, id));
+            f.frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }], |ui| {
+                draw_panel(panel, &mut app, ui, id)
+            });
             assert_eq!(document(&app), baseline);
             assert!(!f.rects.iter().any(|(id, _)| id.starts_with("version:") || id.starts_with("history:") || id.contains("Menu:")));
             assert!(!f.hits.iter().any(|(id, _)| id.starts_with("version:") || id.starts_with("history:") || id.contains("Menu:")));
@@ -629,8 +688,8 @@ fn history_stale_photo_and_other_panel_cannot_retarget_an_existing_popup() {
     let (mut app, id) = fixture();
     let other = app.session.catalog.photos().find(|p| p.id != id).unwrap().id;
     let template = photo(&app, id);
-    app.session.catalog.apply(lightcraft_catalog::Op::SetVersions { id:other, versions:template.versions.clone() }).unwrap();
-    app.session.catalog.apply(lightcraft_catalog::Op::SetHistory { id:other, history:template.history.clone() }).unwrap();
+    app.session.catalog.apply(lightcraft_catalog::Op::SetVersions { id: other, versions: template.versions.clone() }).unwrap();
+    app.session.catalog.apply(lightcraft_catalog::Op::SetHistory { id: other, history: template.history.clone() }).unwrap();
     let mut f = Frames::new();
     version_menu(&mut f, &mut app, id, 0);
     let owner = f.hit("version:0").id;
@@ -664,7 +723,6 @@ fn history_stale_photo_and_other_panel_cannot_retarget_an_existing_popup() {
     assert_eq!(document(&app), baseline);
 }
 
-
 #[test]
 fn history_sdk_context_layer_keeps_carry_move_and_no_settle_escape_reopen_on_the_same_target() {
     for panel in [Panel::Snapshots, Panel::History] {
@@ -675,9 +733,18 @@ fn history_sdk_context_layer_keeps_carry_move_and_no_settle_escape_reopen_on_the
         let baseline = document(&app);
         let undo = app.session.undo.len();
         let journal = app.session.journal.len();
-        let index = match panel { Panel::Snapshots => 0, Panel::History => initial.history.len() - 3 };
-        let row = match panel { Panel::Snapshots => "version:0".to_owned(), Panel::History => format!("history:{index}") };
-        let target = match panel { Panel::Snapshots => "versionMenu:0:restore".to_owned(), Panel::History => format!("historyMenu:{index}:before") };
+        let index = match panel {
+            Panel::Snapshots => 0,
+            Panel::History => initial.history.len() - 3,
+        };
+        let row = match panel {
+            Panel::Snapshots => "version:0".to_owned(),
+            Panel::History => format!("history:{index}"),
+        };
+        let target = match panel {
+            Panel::Snapshots => "versionMenu:0:restore".to_owned(),
+            Panel::History => format!("historyMenu:{index}:before"),
+        };
         let mut f = Frames::new();
         f.settle(|ui| draw_panel(panel, &mut app, ui, id));
         let bounds = f.rect(&row);
@@ -700,14 +767,22 @@ fn history_sdk_context_layer_keeps_carry_move_and_no_settle_escape_reopen_on_the
         eprintln!("History first-Tab boundary {target}: {:?}", f.key_trace);
 
         // No idle/settle frame between cancel and the next genuine secondary press/release.
-        f.frame(vec![Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: true, repeat: false, modifiers: Modifiers::NONE }], |ui| draw_panel(panel, &mut app, ui, id));
+        f.frame(
+            vec![Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+            |ui| draw_panel(panel, &mut app, ui, id),
+        );
         assert_eq!(document(&app), baseline, "Escape cannot replay the focused action");
-        f.frame(vec![
-            Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: false, repeat: false, modifiers: Modifiers::NONE },
-            Event::PointerMoved(right),
-            Event::PointerButton { pos: right, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
-        ], |ui| draw_panel(panel, &mut app, ui, id));
-        f.frame(vec![Event::PointerButton { pos: right, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }], |ui| draw_panel(panel, &mut app, ui, id));
+        f.frame(
+            vec![
+                Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: false, repeat: false, modifiers: Modifiers::NONE },
+                Event::PointerMoved(right),
+                Event::PointerButton { pos: right, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+            ],
+            |ui| draw_panel(panel, &mut app, ui, id),
+        );
+        f.frame(vec![Event::PointerButton { pos: right, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }], |ui| {
+            draw_panel(panel, &mut app, ui, id)
+        });
         assert!(!egui::Popup::is_any_open(&f.ctx));
         assert_eq!(document(&app), baseline, "immediate reopening is not activation or restoration");
         f.tab_to(&target, |ui| draw_panel(panel, &mut app, ui, id));
@@ -734,7 +809,6 @@ fn history_sdk_context_layer_keeps_carry_move_and_no_settle_escape_reopen_on_the
     }
 }
 
-
 #[test]
 fn history_popup_publication_tracks_completed_pass_on_pointer_cancel_and_activate() {
     for panel in [Panel::Snapshots, Panel::History] {
@@ -745,8 +819,14 @@ fn history_popup_publication_tracks_completed_pass_on_pointer_cancel_and_activat
         let selection = app.session.selection.clone();
         let undo = app.session.undo.len();
         let journal = app.session.journal.len();
-        let index = match panel { Panel::Snapshots => 0, Panel::History => initial.history.len() - 3 };
-        let target = match panel { Panel::Snapshots => "versionMenu:0:restore".to_owned(), Panel::History => format!("historyMenu:{index}:before") };
+        let index = match panel {
+            Panel::Snapshots => 0,
+            Panel::History => initial.history.len() - 3,
+        };
+        let target = match panel {
+            Panel::Snapshots => "versionMenu:0:restore".to_owned(),
+            Panel::History => format!("historyMenu:{index}:before"),
+        };
         let mut f = Frames::new();
         open_panel_menu(panel, &mut f, &mut app, id, index);
         assert!(craft::ui::runtime::overlay::any_open(&f.ctx, craft::ui::runtime::overlay::OpenFilter::Keys));
@@ -765,7 +845,11 @@ fn history_popup_publication_tracks_completed_pass_on_pointer_cancel_and_activat
         eprintln!("History publication open {target}: {:?}", f.publication);
 
         f.escape(|ui| draw_panel(panel, &mut app, ui, id));
-        eprintln!("History publication cancelled {target}: sdk_keys_open={} passes={:?}", craft::ui::runtime::overlay::any_open(&f.ctx, craft::ui::runtime::overlay::OpenFilter::Keys), f.publication);
+        eprintln!(
+            "History publication cancelled {target}: sdk_keys_open={} passes={:?}",
+            craft::ui::runtime::overlay::any_open(&f.ctx, craft::ui::runtime::overlay::OpenFilter::Keys),
+            f.publication
+        );
         f.assert_dismissed();
         assert!(!craft::ui::runtime::overlay::any_open(&f.ctx, craft::ui::runtime::overlay::OpenFilter::Keys));
         assert_eq!(document(&app), baseline, "cancel may neither edit nor replay an action");
@@ -788,7 +872,11 @@ fn history_popup_publication_tracks_completed_pass_on_pointer_cancel_and_activat
                 assert_one_command(&app, journal, "beforeAfter.setBefore", json!({"source": "history", "index": index}));
             }
         }
-        eprintln!("History publication activated {target}: sdk_keys_open={} passes={:?}", craft::ui::runtime::overlay::any_open(&f.ctx, craft::ui::runtime::overlay::OpenFilter::Keys), f.publication);
+        eprintln!(
+            "History publication activated {target}: sdk_keys_open={} passes={:?}",
+            craft::ui::runtime::overlay::any_open(&f.ctx, craft::ui::runtime::overlay::OpenFilter::Keys),
+            f.publication
+        );
         f.assert_dismissed();
         assert!(!craft::ui::runtime::overlay::any_open(&f.ctx, craft::ui::runtime::overlay::OpenFilter::Keys));
         assert_eq!(other_photos(&app, id), others);

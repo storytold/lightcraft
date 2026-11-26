@@ -39,12 +39,18 @@ fn pointer(h: &mut Headless, widget: &str, before_release: impl Fn(&Headless)) {
     h.app.synthetic.push(egui::Event::PointerMoved(at));
     h.step();
     h.app.synthetic.push(egui::Event::PointerButton {
-        pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE,
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
     });
     h.step();
     before_release(h);
     h.app.synthetic.push(egui::Event::PointerButton {
-        pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE,
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
     });
     h.step();
     h.step();
@@ -231,10 +237,13 @@ fn filterbar_actions_external155_inherited_disabled_button_keeps_target_but_cann
     let mut at = egui::Pos2::ZERO;
     for frame in 0..5 {
         let events = if frame == 2 || frame == 3 {
-            vec![egui::Event::PointerMoved(at), egui::Event::PointerButton {
-                pos: at, button: egui::PointerButton::Primary, pressed: frame == 2, modifiers: egui::Modifiers::NONE,
-            }]
-        } else { vec![] };
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: frame == 2, modifiers: egui::Modifiers::NONE },
+            ]
+        } else {
+            vec![]
+        };
         let raw = HeadlessView::raw_input(egui::vec2(500.0, 200.0), 1.0, frame as f64 / 60.0, events);
         view.run(raw, |ui| {
             crate::widgets::take_registries(ui.ctx());

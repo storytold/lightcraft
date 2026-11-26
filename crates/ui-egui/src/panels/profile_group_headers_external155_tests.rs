@@ -5,12 +5,14 @@ use crate::widgets::{WidgetHit, take_registries};
 use egui::{Event, Key, Modifiers, PointerButton};
 
 #[derive(Clone, Copy)]
-enum Pass { Real, EguiSizing, SdkSizing }
+enum Pass {
+    Real,
+    EguiSizing,
+    SdkSizing,
+}
 
 // Two groups deliberately share a title; count and source are independent of their display name.
-const GROUPS: [(&str, bool, usize); 4] = [
-    ("Artistic", false, 3), ("Artistic", true, 1), ("Favorites", false, 2), ("Empty folder", true, 0),
-];
+const GROUPS: [(&str, bool, usize); 4] = [("Artistic", false, 3), ("Artistic", true, 1), ("Favorites", false, 2), ("Empty folder", true, 0)];
 
 struct Frames {
     view: HeadlessView,
@@ -54,14 +56,21 @@ impl Frames {
                 });
                 if let Some(recorded) = recorded {
                     elements = recorded.elements.clone();
-                    expanded = elements.iter().filter(|e| e.component == "ProfileGroupHeader" && e.part.is_none())
-                        .map(|e| (e.id, ui.ctx().accesskit_node_builder(e.id, |n| n.is_expanded()).flatten())).collect();
+                    expanded = elements
+                        .iter()
+                        .filter(|e| e.component == "ProfileGroupHeader" && e.part.is_none())
+                        .map(|e| (e.id, ui.ctx().accesskit_node_builder(e.id, |n| n.is_expanded()).flatten()))
+                        .collect();
                 }
             };
             match pass {
                 Pass::Real => draw(ui),
-                Pass::EguiSizing => { ui.scope_builder(egui::UiBuilder::new().sizing_pass().invisible(), |ui| draw(ui)); }
-                Pass::SdkSizing => { craft::ui::runtime::measure::run(&ui.ctx().clone(), || draw(ui)); }
+                Pass::EguiSizing => {
+                    ui.scope_builder(egui::UiBuilder::new().sizing_pass().invisible(), |ui| draw(ui));
+                }
+                Pass::SdkSizing => {
+                    craft::ui::runtime::measure::run(&ui.ctx().clone(), || draw(ui));
+                }
             }
         });
         (self.rects, self.hits) = take_registries(&self.view.ctx);
@@ -70,11 +79,18 @@ impl Frames {
         self.bodies = bodies;
     }
 
-    fn settle(&mut self) { for _ in 0..3 { self.frame(vec![], Pass::Real); } }
+    fn settle(&mut self) {
+        for _ in 0..3 {
+            self.frame(vec![], Pass::Real);
+        }
+    }
     fn key(&mut self, key: Key, shift: bool) {
         let modifiers = Modifiers { shift, ..Modifiers::NONE };
         for pressed in [true, false] {
-            self.frame(vec![Event::ModifiersChanged(modifiers), Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }], Pass::Real);
+            self.frame(
+                vec![Event::ModifiersChanged(modifiers), Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }],
+                Pass::Real,
+            );
         }
     }
     fn target(&self, key: &str) -> (Rect, WidgetHit) {
@@ -92,12 +108,19 @@ impl Frames {
     }
     fn click(&mut self, at: egui::Pos2, button: PointerButton) {
         self.frame(vec![Event::PointerMoved(at)], Pass::Real);
-        for pressed in [true, false] { self.frame(vec![pointer(at, button, pressed)], Pass::Real); }
+        for pressed in [true, false] {
+            self.frame(vec![pointer(at, button, pressed)], Pass::Real);
+        }
     }
     fn snapshot(&self) -> (serde_json::Value, usize, usize, u64, Vec<String>) {
         let id = self.app.session.catalog.photos().next().unwrap().id;
-        (serde_json::to_value(self.app.session.develop_of(id).unwrap_or_default().as_ref()).unwrap(),
-         self.app.session.undo.len(), self.app.session.redo.len(), self.app.session.catalog.revision, self.app.session.profile_favorites.clone())
+        (
+            serde_json::to_value(self.app.session.develop_of(id).unwrap_or_default().as_ref()).unwrap(),
+            self.app.session.undo.len(),
+            self.app.session.redo.len(),
+            self.app.session.catalog.revision,
+            self.app.session.profile_favorites.clone(),
+        )
     }
 }
 
@@ -108,7 +131,9 @@ fn pointer(pos: egui::Pos2, button: PointerButton, pressed: bool) -> Event {
 #[test]
 fn profile_groups_default_open_empty_and_same_named_sources_have_single_real_owner() {
     for width in [280.0, 420.0, 760.0] {
-        let mut f = Frames::new(); f.width = width; f.settle();
+        let mut f = Frames::new();
+        f.width = width;
+        f.settle();
         assert_eq!(f.bodies, [true; 4]);
         assert_eq!(f.rects.len(), 4);
         assert_eq!(f.hits.len(), 4);
@@ -131,7 +156,8 @@ fn profile_groups_default_open_empty_and_same_named_sources_have_single_real_own
 #[test]
 fn profile_groups_chevron_title_count_and_blank_row_toggle_same_response_independently() {
     for offset in [22.0, 48.0, 200.0, 370.0] {
-        let mut f = Frames::new(); f.settle();
+        let mut f = Frames::new();
+        f.settle();
         let before = f.snapshot();
         let (rect, hit) = f.target("profileGroup:Artistic");
         let at = if offset == 370.0 { pos2(rect.right() - 22.0, rect.center().y) } else { pos2(rect.left() + offset, rect.center().y) };
@@ -143,12 +169,15 @@ fn profile_groups_chevron_title_count_and_blank_row_toggle_same_response_indepen
         assert_eq!(f.target("profileGroup:Artistic").1.id, hit.id);
         assert_eq!(f.expanded.iter().find(|(id, _)| *id == hit.id).unwrap().1, Some(false));
         let imported = f.target("profileGroup:lut:Artistic").0.center();
-        f.click(imported, PointerButton::Primary); f.frame(vec![], Pass::Real);
+        f.click(imported, PointerButton::Primary);
+        f.frame(vec![], Pass::Real);
         assert_eq!(f.bodies, [false, false, true, true]);
-        f.click(at, PointerButton::Primary); f.frame(vec![], Pass::Real);
+        f.click(at, PointerButton::Primary);
+        f.frame(vec![], Pass::Real);
         assert_eq!(f.bodies, [true, false, true, true]);
         let empty = f.target("profileGroup:lut:Empty folder").0.center();
-        f.click(empty, PointerButton::Primary); f.frame(vec![], Pass::Real);
+        f.click(empty, PointerButton::Primary);
+        f.frame(vec![], Pass::Real);
         assert_eq!(f.state(true, "Empty folder"), Some(false));
         assert_eq!(f.bodies, [true, false, true, false]);
         assert!(f.view.painted_text().iter().any(|s| s == "0"));
@@ -158,7 +187,8 @@ fn profile_groups_chevron_title_count_and_blank_row_toggle_same_response_indepen
 
 #[test]
 fn profile_groups_unforced_tab_enter_space_and_shift_tab_visit_each_owner_once() {
-    let mut f = Frames::new(); f.settle();
+    let mut f = Frames::new();
+    f.settle();
     let before = f.snapshot();
     let first = f.target("profileGroup:Artistic").1.id;
     let second = f.target("profileGroup:lut:Artistic").1.id;
@@ -181,7 +211,8 @@ fn profile_groups_unforced_tab_enter_space_and_shift_tab_visit_each_owner_once()
 
 #[test]
 fn profile_groups_secondary_cancelled_and_disabled_clicks_do_not_toggle() {
-    let mut f = Frames::new(); f.settle();
+    let mut f = Frames::new();
+    f.settle();
     let at = f.target("profileGroup:Artistic").0.center();
     f.click(at, PointerButton::Secondary);
     assert_eq!(f.state(false, "Artistic"), None);
@@ -190,7 +221,8 @@ fn profile_groups_secondary_cancelled_and_disabled_clicks_do_not_toggle() {
     f.frame(vec![Event::PointerMoved(outside)], Pass::Real);
     f.frame(vec![pointer(outside, PointerButton::Primary, false)], Pass::Real);
     assert_eq!(f.state(false, "Artistic"), None);
-    f.enabled = false; f.settle();
+    f.enabled = false;
+    f.settle();
     f.click(at, PointerButton::Primary);
     assert_eq!(f.state(false, "Artistic"), None);
 }
@@ -198,14 +230,17 @@ fn profile_groups_secondary_cancelled_and_disabled_clicks_do_not_toggle() {
 #[test]
 fn profile_groups_both_sizing_modes_publish_nothing_and_cannot_persist_release() {
     for pass in [Pass::EguiSizing, Pass::SdkSizing] {
-        let mut f = Frames::new(); f.settle();
+        let mut f = Frames::new();
+        f.settle();
         let before = f.snapshot();
         let at = f.target("profileGroup:Artistic").0.center();
         f.frame(vec![Event::PointerMoved(at)], Pass::Real);
         f.frame(vec![pointer(at, PointerButton::Primary, true)], Pass::Real);
         f.frame(vec![pointer(at, PointerButton::Primary, false)], pass);
         assert!(f.rects.is_empty() && f.hits.is_empty());
-        for (title, imported, _) in GROUPS { assert_eq!(f.state(imported, title), None); }
+        for (title, imported, _) in GROUPS {
+            assert_eq!(f.state(imported, title), None);
+        }
         assert_eq!(f.snapshot(), before);
         // Existing closed state also survives measurement without being reinitialized.
         f.view.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("profile-group", true, "Artistic")), false));
@@ -218,24 +253,41 @@ fn profile_groups_both_sizing_modes_publish_nothing_and_cannot_persist_release()
 #[test]
 fn profile_groups_translation_count_and_original_face_positions_are_preserved() {
     struct Restore(crate::i18n::Locale);
-    impl Drop for Restore { fn drop(&mut self) { crate::i18n::set_language(self.0); } }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::i18n::set_language(self.0);
+        }
+    }
     let _restore = Restore(crate::i18n::language());
     crate::i18n::set_language(crate::i18n::Locale::De);
-    let mut f = Frames::new(); f.settle();
+    let mut f = Frames::new();
+    f.settle();
     let painted = f.view.painted_text();
     assert!(painted.iter().any(|s| s == crate::i18n::builtin_label("Favorites", true)));
     assert!(painted.iter().any(|s| s == "Artistic"), "imported label stays literal");
-    for count in ["3", "1", "2", "0"] { assert!(painted.iter().any(|s| s == count)); }
+    for count in ["3", "1", "2", "0"] {
+        assert!(painted.iter().any(|s| s == count));
+    }
     fn shapes<'a>(shape: &'a egui::Shape, texts: &mut Vec<&'a egui::epaint::TextShape>, paths: &mut Vec<&'a egui::epaint::PathShape>) {
         match shape {
-            egui::Shape::Vec(v) => for s in v { shapes(s, texts, paths); },
-            egui::Shape::Text(s) => texts.push(s), egui::Shape::Path(s) => paths.push(s), _ => {},
+            egui::Shape::Vec(v) => {
+                for s in v {
+                    shapes(s, texts, paths);
+                }
+            }
+            egui::Shape::Text(s) => texts.push(s),
+            egui::Shape::Path(s) => paths.push(s),
+            _ => {}
         }
     }
-    let mut texts = vec![]; let mut paths = vec![];
-    for s in &f.view.shapes { shapes(&s.shape, &mut texts, &mut paths); }
+    let mut texts = vec![];
+    let mut paths = vec![];
+    for s in &f.view.shapes {
+        shapes(&s.shape, &mut texts, &mut paths);
+    }
     let r = f.target("profileGroup:Artistic").0;
     assert!(texts.iter().any(|s| s.galley.job.text == "3" && (s.pos.x + s.galley.size().x - (r.right() - 22.0)).abs() < 0.01));
     assert!(texts.iter().any(|s| (s.pos.x - (r.left() + 36.0)).abs() < 0.01 && (s.pos.y + s.galley.size().y / 2.0 - r.center().y).abs() < 0.01));
-    assert!(paths.iter().any(|s| s.points == vec![pos2(r.left() + 18.0, r.center().y - 2.0), pos2(r.left() + 22.0, r.center().y + 2.0), pos2(r.left() + 26.0, r.center().y - 2.0)]));
+    assert!(paths.iter().any(|s| s.points
+        == vec![pos2(r.left() + 18.0, r.center().y - 2.0), pos2(r.left() + 22.0, r.center().y + 2.0), pos2(r.left() + 26.0, r.center().y - 2.0)]));
 }

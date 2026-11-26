@@ -1,7 +1,7 @@
+use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Tokens, header, json, padded, paint, pos2, text_button, vec2};
+use crate::panels::detail::host;
 use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
-use crate::panels::detail::host;
-use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Tokens, header, json, padded, paint, pos2, text_button, vec2};
 
 pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
@@ -94,9 +94,9 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                     let mut targets = Vec::new();
                     let mut layer = None;
                     let mut action = None;
-                    craft::ui::menu::Menu::context(crate::i18n::tr("Version"), &resp)
-                        .id_salt(("history-menu", "version", id.0, i))
-                        .show(ui, |ui, menu| {
+                    craft::ui::menu::Menu::context(crate::i18n::tr("Version"), &resp).id_salt(("history-menu", "version", id.0, i)).show(
+                        ui,
+                        |ui, menu| {
                             layer = Some(ui.layer_id());
                             if !interactive {
                                 ui.disable();
@@ -122,15 +122,34 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                                 action = Some(VersionMenuAction::Delete);
                                 menu.request_close();
                             }
-                        });
+                        },
+                    );
                     let eligible = publish_history_menu(ui.ctx(), layer, targets);
                     if interactive && eligible {
                         match action {
-                            Some(VersionMenuAction::Restore) => { let _ = app.run("version.restore", json!({"index": i})); }
-                            Some(VersionMenuAction::Update) => { let _ = app.run("version.update", json!({"index": i})); }
-                            Some(VersionMenuAction::Rename) => { crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name"); }
-                            Some(VersionMenuAction::Before) => { let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name})); }
-                            Some(VersionMenuAction::Delete) => { let _ = app.run("version.delete", json!({"index": i})); }
+                            Some(VersionMenuAction::Restore) => {
+                                let _ = app.run("version.restore", json!({"index": i}));
+                            }
+                            Some(VersionMenuAction::Update) => {
+                                let _ = app.run("version.update", json!({"index": i}));
+                            }
+                            Some(VersionMenuAction::Rename) => {
+                                crate::panels::dialogs::prompt(
+                                    app,
+                                    "Rename Version",
+                                    "Version name",
+                                    &v.name,
+                                    "version.rename",
+                                    json!({"index": i}),
+                                    "name",
+                                );
+                            }
+                            Some(VersionMenuAction::Before) => {
+                                let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
+                            }
+                            Some(VersionMenuAction::Delete) => {
+                                let _ = app.run("version.delete", json!({"index": i}));
+                            }
                             None => {}
                         }
                     }
@@ -221,9 +240,9 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                     let mut targets = Vec::new();
                     let mut layer = None;
                     let mut action = None;
-                    craft::ui::menu::Menu::context(crate::i18n::tr("History"), &resp)
-                        .id_salt(("history-menu", "history", id.0, i))
-                        .show(ui, |ui, menu| {
+                    craft::ui::menu::Menu::context(crate::i18n::tr("History"), &resp).id_salt(("history-menu", "history", id.0, i)).show(
+                        ui,
+                        |ui, menu| {
                             layer = Some(ui.layer_id());
                             if !interactive {
                                 ui.disable();
@@ -241,14 +260,21 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                                 action = Some(HistoryMenuAction::Clear);
                                 menu.request_close();
                             }
-                        });
+                        },
+                    );
                     let eligible = publish_history_menu(ui.ctx(), layer, targets);
                     if interactive && eligible {
                         match action {
-                            Some(HistoryMenuAction::Before) => { let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i})); }
-                            Some(HistoryMenuAction::CreateVersion) => { let _ = app.run("history.restore", json!({"index": i}));
-                                let _ = app.run("version.create", json!({"name": h.label})); }
-                            Some(HistoryMenuAction::Clear) => { let _ = app.run("history.clear", json!({})); }
+                            Some(HistoryMenuAction::Before) => {
+                                let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
+                            }
+                            Some(HistoryMenuAction::CreateVersion) => {
+                                let _ = app.run("history.restore", json!({"index": i}));
+                                let _ = app.run("version.create", json!({"name": h.label}));
+                            }
+                            Some(HistoryMenuAction::Clear) => {
+                                let _ = app.run("history.clear", json!({}));
+                            }
                             None => {}
                         }
                     }
@@ -258,20 +284,22 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
     });
 }
 
-enum VersionMenuAction { Restore, Update, Rename, Before, Delete }
-enum HistoryMenuAction { Before, CreateVersion, Clear }
+enum VersionMenuAction {
+    Restore,
+    Update,
+    Rename,
+    Before,
+    Delete,
+}
+enum HistoryMenuAction {
+    Before,
+    CreateVersion,
+    Clear,
+}
 
 /// Draw real SDK actions, but do not publish or run app effects from a fading exit body.
-fn history_menu_action(
-    ui: &mut egui::Ui,
-    key: (&str, u64, usize, &str),
-    label: &'static str,
-    targets: &mut Vec<(String, egui::Response)>,
-) -> bool {
-    let shown = craft::ui::menu::MenuItem::new(crate::i18n::tr(label))
-        .id_salt(("history-action", key))
-        .enabled(ui.is_enabled())
-        .show(ui);
+fn history_menu_action(ui: &mut egui::Ui, key: (&str, u64, usize, &str), label: &'static str, targets: &mut Vec<(String, egui::Response)>) -> bool {
+    let shown = craft::ui::menu::MenuItem::new(crate::i18n::tr(label)).id_salt(("history-action", key)).enabled(ui.is_enabled()).show(ui);
     let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
     if measuring {
         return false;
@@ -283,11 +311,7 @@ fn history_menu_action(
 
 /// The Area stores its CURRENT interactability after its body returns. Querying it inside
 /// the closure would use the previous pass and break same-target reopen during the exit.
-fn publish_history_menu(
-    ctx: &egui::Context,
-    layer: Option<egui::LayerId>,
-    targets: Vec<(String, egui::Response)>,
-) -> bool {
+fn publish_history_menu(ctx: &egui::Context, layer: Option<egui::LayerId>, targets: Vec<(String, egui::Response)>) -> bool {
     let eligible = layer.and_then(|layer| egui::AreaState::load(ctx, layer.id)).is_some_and(|state| state.interactable);
     if eligible {
         for (name, response) in targets {

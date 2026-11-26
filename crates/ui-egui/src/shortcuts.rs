@@ -297,12 +297,11 @@ pub(crate) fn framework_commands(keymap: &Keymap) -> craft::ui::runtime::command
             && (bindable().iter().any(|b| binding(keymap, b.id, b.default).and_then(parse) == chord)
                 || ALIASES.iter().any(|(alias, _, _)| parse(alias) == chord))
     };
-    let unbound: Vec<&'static str> =
-        [(NavCommand::NextPane, "F6"), (NavCommand::PreviousPane, "Shift+F6"), (NavCommand::FocusMenuBar, "F10")]
-            .into_iter()
-            .filter(|(_, sc)| uses(sc))
-            .map(|(command, _)| command.id())
-            .collect();
+    let unbound: Vec<&'static str> = [(NavCommand::NextPane, "F6"), (NavCommand::PreviousPane, "Shift+F6"), (NavCommand::FocusMenuBar, "F10")]
+        .into_iter()
+        .filter(|(_, sc)| uses(sc))
+        .map(|(command, _)| command.id())
+        .collect();
     // One `Arc` per unbound set: the runtime rebuilds its keymap only when the `Arc` changes.
     static LAST: std::sync::Mutex<Option<(Vec<&'static str>, std::sync::Arc<craft::keymap::Overrides>)>> = std::sync::Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -575,14 +574,19 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// The keys pressed this frame: the commands to fire, the aliases (command and params) to run, and
 /// whether an unmodified H that no keymap assignment has claimed was pressed (the Masking panel's
 /// pin toggle, see `handle`).
-fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context, clips: Vec<egui::Event>) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
+fn pressed_commands(
+    app: &LightcraftApp,
+    ctx: &egui::Context,
+    clips: Vec<egui::Event>,
+) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
     let mut fire: Vec<String> = Vec::new();
     // An Escape no framework component took reaches the app as the window's Cancel (the runtime keeps the raw key):
     // the app's own Escape bindings (View ▸ Back and the like) read it there, last in the pass.
     // While a framework popup (a menu, a dropdown) is open the Escape is the popup's: the runtime lends the focused
     // row's unused Escape to the window, so taking it here, before the popup is drawn, would leave the menu open.
     let popup_owns_escape = craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Keys);
-    let window_escape = !popup_owns_escape && craft::ui::runtime::keys::with_window_intents(ctx, false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
+    let window_escape =
+        !popup_owns_escape && craft::ui::runtime::keys::with_window_intents(ctx, false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
     // The same for the clipboard events the runtime routed to the window as edit commands.
     let mut window_edits: Vec<egui::Event> = clips;
     craft::ui::runtime::keys::with_window_intents(ctx, false, |w| {

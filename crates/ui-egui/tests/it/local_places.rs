@@ -42,12 +42,12 @@ fn harness(places: Vec<(String, String)>, kept: Vec<String>) -> Harness<'static,
         .with_size(vec2(1000.0, 800.0))
         .with_context_setup(|ctx| LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()).install_framework(ctx))
         .build_ui_state(
-        |ui, app: &mut LightcraftApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        app,
-    );
+            |ui, app: &mut LightcraftApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(8);
     h
 }

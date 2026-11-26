@@ -692,12 +692,24 @@ impl ClipboardFacts {
         }
         Ok(())
     }
-    pub(crate) fn append_paste(self, output: &mut egui::FullOutput, owner: egui::ViewportId, claim: &std::sync::atomic::AtomicU8, eligible: bool) -> bool {
+    pub(crate) fn append_paste(
+        self,
+        output: &mut egui::FullOutput,
+        owner: egui::ViewportId,
+        claim: &std::sync::atomic::AtomicU8,
+        eligible: bool,
+    ) -> bool {
         use std::sync::atomic::Ordering::SeqCst;
         // State is an output fact, NOT identity: 0 unclaimed, 1 claimed/no paste, 2 appended.
-        if claim.compare_exchange(0, 1, SeqCst, SeqCst).is_err() { return claim.load(SeqCst) == 2; }
-        if !eligible { return false; }
-        if self.check().is_err() { return false; }
+        if claim.compare_exchange(0, 1, SeqCst, SeqCst).is_err() {
+            return claim.load(SeqCst) == 2;
+        }
+        if !eligible {
+            return false;
+        }
+        if self.check().is_err() {
+            return false;
+        }
         let Some(viewport) = output.viewport_output.get_mut(&owner) else { return false };
         viewport.commands.push(egui::ViewportCommand::RequestPaste);
         claim.store(2, SeqCst);
@@ -723,7 +735,12 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
 }
 
 pub(crate) fn gesture_events_at(
-    app: &mut LightcraftApp, ctx: &egui::Context, method: &str, p: &Value, clipboard: ClipboardFacts, paste: PasteDispatch,
+    app: &mut LightcraftApp,
+    ctx: &egui::Context,
+    method: &str,
+    p: &Value,
+    clipboard: ClipboardFacts,
+    paste: PasteDispatch,
 ) -> Result<GestureOutcome, String> {
     check_gesture_numbers(method, p)?;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -737,7 +754,11 @@ pub(crate) fn gesture_events_at(
             let mut at = egui::pos2(r.left() + r.width() * fx as f32, r.top() + r.height() * fy as f32);
             // With no point asked for, aim at the middle of the part a person can see: a row wider than its
             // scrolled panel, or a control half under the edge of its pane, still takes a click there.
-            if f("fx").is_none() && f("fy").is_none() && let Some(seen) = visible_part(ctx, widget_hit(app, id), r) && !seen.contains(at) {
+            if f("fx").is_none()
+                && f("fy").is_none()
+                && let Some(seen) = visible_part(ctx, widget_hit(app, id), r)
+                && !seen.contains(at)
+            {
                 at = seen.center();
             }
             if !fx.is_finite() || !fy.is_finite() || !at.is_finite() {
@@ -848,7 +869,9 @@ pub(crate) fn gesture_events_at(
             // below cannot promise dispatch or delivery. With `text`, the synthetic
             // Event::Paste is filtered and canceled like other injected input.
             // The exact request's successful own-output witness already passed this one eligibility engine.
-            if !(matches!(paste, PasteDispatch::OwnOutput(true)) && s("action") == Some("paste") && s("text").is_none()) { clipboard.check()?; }
+            if !(matches!(paste, PasteDispatch::OwnOutput(true)) && s("action") == Some("paste") && s("text").is_none()) {
+                clipboard.check()?;
+            }
             match s("action") {
                 Some("cut") => app.synthetic.push(egui::Event::Cut),
                 Some("copy") => app.synthetic.push(egui::Event::Copy),
@@ -856,7 +879,7 @@ pub(crate) fn gesture_events_at(
                     Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
                     None => match paste {
                         PasteDispatch::Context => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
-                        PasteDispatch::OwnOutput(true) => {},
+                        PasteDispatch::OwnOutput(true) => {}
                         PasteDispatch::OwnOutput(false) => return Err("ui.clipboard: its own paste output is unavailable".into()),
                     },
                 },
@@ -989,6 +1012,9 @@ mod completion_clipboard_tests {
         assert!(app.synthetic.is_empty());
         let claim = std::sync::atomic::AtomicU8::new(0);
         assert!(!own.append_paste(&mut output, egui::ViewportId::ROOT, &claim, false));
-        assert!(!own.append_paste(&mut output, egui::ViewportId::ROOT, &claim, true), "a later candidate cannot revive the earlier refused completion");
+        assert!(
+            !own.append_paste(&mut output, egui::ViewportId::ROOT, &claim, true),
+            "a later candidate cannot revive the earlier refused completion"
+        );
     }
 }

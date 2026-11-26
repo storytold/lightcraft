@@ -189,7 +189,6 @@ fn filter_kind_tab_enter_navigation_preserves_opener_focus() {
     assert_ne!(h.view.ctx.memory(|memory| memory.focused()), Some(focused), "Tab can leave the opener");
 }
 
-
 #[test]
 fn filter_kind_pointer_cancel_keeps_the_grid_keyboard_owner() {
     let mut h = fixture(1900.0);

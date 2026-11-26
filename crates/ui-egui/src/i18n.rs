@@ -266,7 +266,10 @@ pub(crate) fn framework_catalogs() -> &'static std::sync::Arc<craft::i18n::I18n>
     static CATALOGS: OnceLock<std::sync::Arc<craft::i18n::I18n>> = OnceLock::new();
     CATALOGS.get_or_init(|| {
         let offered: Vec<&str> = Locale::ALL.iter().filter(|language| !language.catalog().is_empty()).map(|language| language.code()).collect();
-        let catalogs = offered.iter().filter_map(|code| Locale::parse(code)).map(|language| (language.code().to_owned(), String::new(), craft_catalog(language)));
+        let catalogs = offered
+            .iter()
+            .filter_map(|code| Locale::parse(code))
+            .map(|language| (language.code().to_owned(), String::new(), craft_catalog(language)));
         let (i18n, problems) = craft::i18n::I18n::from_owned(catalogs.collect::<Vec<_>>(), &offered);
         for problem in problems {
             log::debug!("framework words: {problem}");

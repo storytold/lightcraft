@@ -57,7 +57,9 @@ impl Controls {
     }
 
     fn settle(&mut self) {
-        for _ in 0..3 { self.frame(vec![]); }
+        for _ in 0..3 {
+            self.frame(vec![]);
+        }
     }
 
     fn click(&mut self, id: &str) {
@@ -87,7 +89,9 @@ impl Controls {
         self.key(Key::Enter, Modifiers::NONE);
     }
 
-    fn has(&self, id: &str) -> bool { self.frames.rects.iter().any(|(name, _)| name == id) }
+    fn has(&self, id: &str) -> bool {
+        self.frames.rects.iter().any(|(name, _)| name == id)
+    }
 
     /// The framework convention: a pointer press activates a control without taking the keyboard, so a keyboard step
     /// starts from a control given the focus.
@@ -219,12 +223,15 @@ fn sdk155_merge_cancel_discards_draft_and_invalid_confirm_cannot_start_or_save()
     app.install_framework(&frames.ctx);
     let opts = MergeDialog { stack: true, deghost: "high".into(), ..Default::default() };
     app.ui.dialog = Some(crate::state::Dialog::Merge { opts: opts.clone() });
-    for _ in 0..3 { frames.frame(vec![], |ui| crate::dialogs::show(&mut app, ui.ctx(), false)); }
+    for _ in 0..3 {
+        frames.frame(vec![], |ui| crate::dialogs::show(&mut app, ui.ctx(), false));
+    }
     let pos = frames.rect("button:dialogCancel").center();
     frames.frame(vec![Event::PointerMoved(pos)], |ui| crate::dialogs::show(&mut app, ui.ctx(), false));
     for pressed in [true, false] {
-        frames.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }],
-            |ui| crate::dialogs::show(&mut app, ui.ctx(), false));
+        frames.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }], |ui| {
+            crate::dialogs::show(&mut app, ui.ctx(), false)
+        });
     }
     assert!(app.ui.dialog.is_none());
     assert!(app.merge.final_task.is_none() && app.merge.preview_task.is_none());

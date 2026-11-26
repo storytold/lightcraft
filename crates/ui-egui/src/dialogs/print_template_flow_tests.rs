@@ -48,7 +48,8 @@ impl Review {
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
         app.install_framework(&ctx);
-        let mut this = Self { app, ctx, tick: 0, rects: vec![], hits: vec![], old_language: crate::i18n::language(), sdk_name_owner: false, covered: false };
+        let mut this =
+            Self { app, ctx, tick: 0, rects: vec![], hits: vec![], old_language: crate::i18n::language(), sdk_name_owner: false, covered: false };
         // Production command opening, not menu-enabled/selected-photo acceptance.
         this.app.run("dialog.print", json!({})).unwrap();
         this.idle();

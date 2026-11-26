@@ -145,7 +145,10 @@ fn scenes() -> Vec<(&'static str, Scene)> {
     // the menu bar with a menu open, and the photo menu
     for title in ["File", "Edit", "Photo", "View", "Help"] {
         all.push((
-            { let name: &'static str = Box::leak(format!("menubar-{}", title.to_lowercase()).into_boxed_str()); name },
+            {
+                let name: &'static str = Box::leak(format!("menubar-{}", title.to_lowercase()).into_boxed_str());
+                name
+            },
             Box::new(move |h| {
                 select(h, 2)?;
                 ui(h, json!({"view": "photoGrid", "leftPanel": true}))?;
@@ -252,9 +255,15 @@ fn scenes() -> Vec<(&'static str, Scene)> {
     all.push(open_dialog("dlg-whats-new", json!({"kind": "whatsNew"})));
     all.push(open_dialog("dlg-welcome-1", json!({"kind": "welcome", "page": 0})));
     all.push(open_dialog("dlg-welcome-3", json!({"kind": "welcome", "page": 2})));
-    all.push(open_dialog("dlg-system-info", json!({"kind": "systemInfo", "rows": [["Version", "1.0"], ["Platform", "Linux"], ["Memory", "16 GiB"]]})));
+    all.push(open_dialog(
+        "dlg-system-info",
+        json!({"kind": "systemInfo", "rows": [["Version", "1.0"], ["Platform", "Linux"], ["Memory", "16 GiB"]]}),
+    ));
     all.push(open_dialog("dlg-confirm-delete", json!({"kind": "confirmDelete", "count": 3})));
-    all.push(open_dialog("dlg-remove-folder", json!({"kind": "removeFolder", "path": "/pics/trip", "name": "pics/trip", "count": 12, "disk": false})));
+    all.push(open_dialog(
+        "dlg-remove-folder",
+        json!({"kind": "removeFolder", "path": "/pics/trip", "name": "pics/trip", "count": 12, "disk": false}),
+    ));
     all.push(open_dialog(
         "dlg-move-photos",
         json!({"kind": "movePhotos", "ids": [1, 2], "folder": "/pics/trip", "name": "trip", "dont_ask": false, "library": 0}),
@@ -293,7 +302,10 @@ fn scenes() -> Vec<(&'static str, Scene)> {
     all.push(open_dialog("dlg-denoise-model", json!({"kind": "denoiseModel", "info": {}, "accepted": false})));
     all.push(open_dialog("dlg-sam-model", json!({"kind": "samModel", "then": null})));
     all.push(open_dialog("dlg-lens-database", json!({"kind": "lensDatabase", "dir": "/tmp/lens", "mirrors": []})));
-    all.push(open_dialog("dlg-lightroom-catalog", json!({"kind": "lightroomCatalog", "folder": "/Lightroom", "catalog": "/Lightroom/Catalog.lrcat"})));
+    all.push(open_dialog(
+        "dlg-lightroom-catalog",
+        json!({"kind": "lightroomCatalog", "folder": "/Lightroom", "catalog": "/Lightroom/Catalog.lrcat"}),
+    ));
     all.push(open_dialog(
         "dlg-lightroom-destination",
         json!({"kind": "lightroomDestination", "catalog": "/Lightroom/Catalog.lrcat", "library": "Photos", "photos": 120, "new_library": false,
@@ -321,7 +333,8 @@ fn scenes() -> Vec<(&'static str, Scene)> {
             let _ = std::fs::remove_dir_all(&folder);
             std::fs::create_dir_all(folder.join("day 2")).map_err(|e| e.to_string())?;
             for i in 0..8usize {
-                let img = lightcraft_raster::Rgba8::from_fn(96, 64, |x, y| [((x * 2 + i * 30) % 256) as u8, (y * 4 % 256) as u8, (60 + i * 25) as u8, 255]);
+                let img =
+                    lightcraft_raster::Rgba8::from_fn(96, 64, |x, y| [((x * 2 + i * 30) % 256) as u8, (y * 4 % 256) as u8, (60 + i * 25) as u8, 255]);
                 let png = lightcraft_engine::export::encode_image(
                     &img,
                     &lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() },
@@ -378,7 +391,10 @@ fn port_screenshots() {
         let why = match done {
             Ok(Ok(())) => continue,
             Ok(Err(e)) => e,
-            Err(panic) => format!("panicked: {}", panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()),
+            Err(panic) => format!(
+                "panicked: {}",
+                panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
+            ),
         };
         eprintln!("SHOT-MISSING {file}: {why}");
         missing.push(format!("{file}: {}", why.lines().next().unwrap_or("")));

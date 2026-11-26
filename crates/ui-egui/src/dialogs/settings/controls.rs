@@ -193,31 +193,32 @@ pub(crate) fn colour(ui: &mut egui::Ui, owner: egui::Id, name: &str, label: &str
     }
 
     let mut saved = false;
-    let _editor = Popover::new(words, Bind::bound(&mut open)).id_salt(("settings-colour-editor", name)).opened_by(&chip.response).show(ui, |ui, _| {
-        ui.set_min_width(240.0);
-        for (i, channel) in ["Red", "Green", "Blue"].into_iter().enumerate() {
-            let shape = Shape { label: channel, lo: 0.0, hi: 255.0, unit: "", step: 1.0, log: false };
-            let steps = ui
-                .horizontal(|ui| {
-                    ui.add_sized(vec2(48.0, 24.0), egui::Label::new(crate::i18n::tr(channel)));
-                    slider(ui, owner, &format!("{name}{channel}"), &shape, f64::from(rgb[i]))
-                })
-                .inner;
-            for step in steps {
-                match step {
-                    Step::Begin(_) | Step::End => {}
-                    Step::Preview(v) | Step::Save(v) => {
-                        rgb[i] = v.round().clamp(0.0, 255.0) as u8;
-                        saved |= matches!(step, Step::Save(_));
+    let _editor =
+        Popover::new(words, Bind::bound(&mut open)).id_salt(("settings-colour-editor", name)).opened_by(&chip.response).show(ui, |ui, _| {
+            ui.set_min_width(240.0);
+            for (i, channel) in ["Red", "Green", "Blue"].into_iter().enumerate() {
+                let shape = Shape { label: channel, lo: 0.0, hi: 255.0, unit: "", step: 1.0, log: false };
+                let steps = ui
+                    .horizontal(|ui| {
+                        ui.add_sized(vec2(48.0, 24.0), egui::Label::new(crate::i18n::tr(channel)));
+                        slider(ui, owner, &format!("{name}{channel}"), &shape, f64::from(rgb[i]))
+                    })
+                    .inner;
+                for step in steps {
+                    match step {
+                        Step::Begin(_) | Step::End => {}
+                        Step::Preview(v) | Step::Save(v) => {
+                            rgb[i] = v.round().clamp(0.0, 255.0) as u8;
+                            saved |= matches!(step, Step::Save(_));
+                        }
                     }
                 }
             }
-        }
-        if let Some(typed) = hex_field(ui, owner, name, rgb) {
-            rgb = typed;
-            saved = true;
-        }
-    });
+            if let Some(typed) = hex_field(ui, owner, name, rgb) {
+                rgb = typed;
+                saved = true;
+            }
+        });
     let editing = open;
     ui.data_mut(|d| {
         d.insert_temp(open_key, open);

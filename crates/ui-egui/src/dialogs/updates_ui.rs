@@ -339,7 +339,12 @@ fn show_web_result(ctx: &egui::Context, message: Option<&str>) -> bool {
     use std::cell::Cell;
     let dismissed = Cell::new(false);
     crate::dialogs::host_ui(ctx, egui::Id::unique("lightcraft.updates.host"), |ui| {
-        let ok = [crate::dialogs::FooterSpec { label: crate::i18n::tr("OK").to_owned(), name: "button:updatesWebOk".into(), enabled: true, primary: true }];
+        let ok = [crate::dialogs::FooterSpec {
+            label: crate::i18n::tr("OK").to_owned(),
+            name: "button:updatesWebOk".into(),
+            enabled: true,
+            primary: true,
+        }];
         let output = Dialog::new(crate::i18n::tr("LightCraft Updates").to_owned())
             .id_salt("lightcraft.updates.web")
             .opened(Bind::given(true))

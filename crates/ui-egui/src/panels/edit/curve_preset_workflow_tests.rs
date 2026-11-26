@@ -113,7 +113,7 @@ impl PresetFrames {
         self.settle();
     }
     fn menu_open(&self) -> bool {
-        use craft::ui::runtime::overlay::{any_open, OpenFilter};
+        use craft::ui::runtime::overlay::{OpenFilter, any_open};
         any_open(&self.ctx, OpenFilter::Keys)
     }
     fn open(&mut self) {
@@ -190,9 +190,13 @@ fn secondary_delete_cancel_does_not_leak_to_reopened_or_builtin_preset() {
     key(&mut f, Key::Escape);
     assert_ne!(craft::ui::runtime::overlay::top(&f.ctx), Some(context), "Escape must dismiss the context menu");
     // The exiting layer can still paint, but must remove its registered row after the fade.
-    for _ in 0..20 { f.frame(vec![]); }
+    for _ in 0..20 {
+        f.frame(vec![]);
+    }
     assert!(!f.hits.iter().any(|(name, _)| name.starts_with("curvePresetDelete:")));
-    if f.menu_open() { key(&mut f, Key::Escape); }
+    if f.menu_open() {
+        key(&mut f, Key::Escape);
+    }
     assert!(!f.menu_open());
     f.open();
     assert!(!f.hits.iter().any(|(name, _)| name.starts_with("curvePresetDelete:")));
@@ -253,7 +257,9 @@ fn escape_dismisses_then_keyboard_reopens_and_applies_focused_preset() {
     assert!(f.menu_open());
     let owner = f.hit("curvePreset:Medium Contrast").id;
     for _ in 0..3 {
-        if f.ctx.memory(|m| m.has_focus(owner)) { break; }
+        if f.ctx.memory(|m| m.has_focus(owner)) {
+            break;
+        }
         key(&mut f, Key::ArrowDown);
     }
     assert!(f.ctx.memory(|m| m.has_focus(owner)));
@@ -294,7 +300,9 @@ fn tab_to_closed_opener_then_enter_arrows_and_enter_apply_once() {
     let before = snapshot(&f.app);
     f.frame(vec![Event::PointerGone]);
     for _ in 0..40 {
-        if f.ctx.memory(|m| m.has_focus(opener)) { break; }
+        if f.ctx.memory(|m| m.has_focus(opener)) {
+            break;
+        }
         key(&mut f, Key::Tab);
     }
     assert!(f.ctx.memory(|m| m.has_focus(opener)), "Tab must reach the closed preset opener");
@@ -303,7 +311,9 @@ fn tab_to_closed_opener_then_enter_arrows_and_enter_apply_once() {
     assert!(f.menu_open());
     let row = f.hit("curvePreset:Medium Contrast").id;
     for _ in 0..3 {
-        if f.ctx.memory(|m| m.has_focus(row)) { break; }
+        if f.ctx.memory(|m| m.has_focus(row)) {
+            break;
+        }
         key(&mut f, Key::ArrowDown);
     }
     assert!(f.ctx.memory(|m| m.has_focus(row)));
@@ -317,7 +327,10 @@ fn tab_to_closed_opener_then_enter_arrows_and_enter_apply_once() {
 fn tab_direction(f: &mut PresetFrames, reverse: bool) {
     let modifiers = Modifiers { shift: reverse, ..Modifiers::NONE };
     for pressed in [true, false] {
-        f.frame(vec![Event::ModifiersChanged(modifiers), Event::Key { key: Key::Tab, physical_key: Some(Key::Tab), pressed, repeat: false, modifiers }]);
+        f.frame(vec![
+            Event::ModifiersChanged(modifiers),
+            Event::Key { key: Key::Tab, physical_key: Some(Key::Tab), pressed, repeat: false, modifiers },
+        ]);
     }
     f.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
     f.settle();
@@ -325,7 +338,9 @@ fn tab_direction(f: &mut PresetFrames, reverse: bool) {
 fn tab_to_opener(f: &mut PresetFrames) -> egui::Id {
     let owner = f.hit("dropdown:curvePreset").id;
     for _ in 0..40 {
-        if f.ctx.memory(|m| m.has_focus(owner)) { return owner; }
+        if f.ctx.memory(|m| m.has_focus(owner)) {
+            return owner;
+        }
         key(f, Key::Tab);
     }
     panic!("Tab did not reach the closed Curve opener");
@@ -354,11 +369,17 @@ fn check_curve_exit(reverse: bool, escape: bool) {
     assert_eq!(focus, Some(neighbor), "focus must continue to the real closed-menu neighbor");
 }
 #[test]
-fn tab_leaves_curve_menu_for_next_control_without_applying() { check_curve_exit(false, false); }
+fn tab_leaves_curve_menu_for_next_control_without_applying() {
+    check_curve_exit(false, false);
+}
 #[test]
-fn shift_tab_leaves_curve_menu_for_previous_control_without_applying() { check_curve_exit(true, false); }
+fn shift_tab_leaves_curve_menu_for_previous_control_without_applying() {
+    check_curve_exit(true, false);
+}
 #[test]
-fn escape_returns_to_opener_then_tab_reaches_next_control() { check_curve_exit(false, true); }
+fn escape_returns_to_opener_then_tab_reaches_next_control() {
+    check_curve_exit(false, true);
+}
 
 fn live_preset(mode: u8) {
     let mut f = PresetFrames::new("master");

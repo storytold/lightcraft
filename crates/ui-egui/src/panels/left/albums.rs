@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use super::rows::{
-    AlbumDrag, MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, submenu, tree_open,
-};
+use super::rows::{AlbumDrag, MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, submenu, tree_open};
 use super::{Album, AlbumId, Align2, LibrarySource, LightcraftApp, Rect, Tokens, json, pos2, register, vec2};
 
 /// How far each level of the albums' tree steps in, for the line that shows where a dragged album
@@ -267,10 +265,9 @@ fn import_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, a: &Album) {
                 app.toast(ui.ctx(), e);
             }
         };
-        for (label, command, widget) in [
-            ("Import Photos…", "file.addPhotos", "button:albumImportPhotos"),
-            ("Import from Folder…", "file.addFolder", "button:albumImportFolder"),
-        ] {
+        for (label, command, widget) in
+            [("Import Photos…", "file.addPhotos", "button:albumImportPhotos"), ("Import from Folder…", "file.addFolder", "button:albumImportFolder")]
+        {
             if entry("import", crate::i18n::tr(label)).widget(widget).show(ui) {
                 run(app, ui, command, json!({"album": a.id.0}));
             }

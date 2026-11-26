@@ -229,11 +229,8 @@ fn kind_picker(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// Framework buttons own both pointer and keyboard activation; sizing must not publish targets or run actions.
 fn filter_action(ui: &mut egui::Ui, widget: &str, label: &str, enabled: bool) -> bool {
     let enabled = enabled && ui.is_enabled();
-    let shown = Button::new(crate::i18n::tr(label).to_owned())
-        .id(egui::Id::unique(widget))
-        .size(craft::theme::ControlSize::Sm)
-        .enabled(enabled)
-        .show(ui);
+    let shown =
+        Button::new(crate::i18n::tr(label).to_owned()).id(egui::Id::unique(widget)).size(craft::theme::ControlSize::Sm).enabled(enabled).show(ui);
     if measuring(ui) {
         return false;
     }

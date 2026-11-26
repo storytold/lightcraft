@@ -51,9 +51,13 @@ fn eye_owns_pointer(ui: &egui::Ui, key: &str, eye: Rect) -> bool {
         return false;
     }
     let id = egui::Id::unique(("wheelEyePress", key));
-    let began = ui.input(|input| input.events.iter().any(|event| matches!(event,
-        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if eye.contains(*pos)
-    )));
+    let began = ui.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(event,
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if eye.contains(*pos)
+            )
+        })
+    });
     let owned = began || ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
     let down = ui.input(|input| input.pointer.primary_down());
     ui.data_mut(|data| data.insert_temp(id, owned && down));
@@ -230,7 +234,8 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     if wheel_input && resp.drag_started() {
         let _ = app.run("develop.beginInteraction", json!({"label": crate::i18n::tr_format!("{label} Grading", label = label)}));
     }
-    if wheel_input && (resp.dragged() || resp.clicked())
+    if wheel_input
+        && (resp.dragged() || resp.clicked())
         && let Some(q) = pointer
     {
         let (hue, sat) = grab.map_or_else(|| wheel_pick(q - c, rad, None), |g| g.pick(q - c, rad));

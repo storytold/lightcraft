@@ -543,54 +543,28 @@ fn label_names_actual_parent_publishes_six_enabled_sdk_text_field_owners() {
     for _ in 0..8 {
         f.safe();
         f.tick += 1;
-        let raw = HeadlessView::raw_input(
-            egui::vec2(1400.0, 1000.0),
-            1.0,
-            f64::from(f.tick) / 60.0,
-            vec![],
-        );
+        let raw = HeadlessView::raw_input(egui::vec2(1400.0, 1000.0), 1.0, f64::from(f.tick) / 60.0, vec![]);
         let app = &mut f.app;
         let ctx = f.ctx.clone();
         let _drain = Drain(ctx.run_ui(raw, |root| {
             crate::widgets::take_registries(&ctx);
-            let (_, recorded) = craft::ui::runtime::inspect::record(
-                root,
-                egui::Id::unique("label-names-sdk-route"),
-                |_| crate::dialogs::show(app, &ctx, false),
-            );
-            elements = recorded
-                .map(|recording| recording.elements.clone())
-                .unwrap_or_default();
+            let (_, recorded) =
+                craft::ui::runtime::inspect::record(root, egui::Id::unique("label-names-sdk-route"), |_| crate::dialogs::show(app, &ctx, false));
+            elements = recorded.map(|recording| recording.elements.clone()).unwrap_or_default();
         }));
         crate::widgets::take_registries(&ctx);
         assert_eq!(document(&f.app), f.baseline);
         assert_eq!(f.draft(), initial_draft);
         f.safe();
     }
-    let inputs = elements
-        .iter()
-        .filter(|element| element.part.is_none() && element.component.starts_with("TextField"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        inputs.len(),
-        6,
-        "six actual SDK text input owners; records={elements:#?}"
-    );
+    let inputs = elements.iter().filter(|element| element.part.is_none() && element.component.starts_with("TextField")).collect::<Vec<_>>();
+    assert_eq!(inputs.len(), 6, "six actual SDK text input owners; records={elements:#?}");
     for name in ["Red", "Yellow", "Green", "Blue", "Purple", "Save as set"] {
         let owners = inputs
             .iter()
-            .filter(|element| {
-                element
-                    .facts
-                    .as_ref()
-                    .is_some_and(|facts| facts.name.as_deref() == Some(name) && !facts.disabled)
-            })
+            .filter(|element| element.facts.as_ref().is_some_and(|facts| facts.name.as_deref() == Some(name) && !facts.disabled))
             .collect::<Vec<_>>();
-        assert_eq!(
-            owners.len(),
-            1,
-            "one actual enabled SDK owner for {name}; records={elements:#?}"
-        );
+        assert_eq!(owners.len(), 1, "one actual enabled SDK owner for {name}; records={elements:#?}");
     }
 }
 
@@ -617,11 +591,7 @@ fn label_names_reverse_tab_all_twelve_owners_preserves_draft_and_escapes() {
     assert!(f.focused(order[0]));
     for target in order.iter().rev() {
         f.key_mod(Key::Tab, Modifiers::SHIFT);
-        assert!(
-            f.focused(target),
-            "reverse Tab requires {target}; trace={:#?}",
-            f.trace
-        );
+        assert!(f.focused(target), "reverse Tab requires {target}; trace={:#?}", f.trace);
         assert_eq!(f.draft(), draft);
     }
     f.key(Key::Escape);

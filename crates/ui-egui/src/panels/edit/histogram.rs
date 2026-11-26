@@ -79,7 +79,12 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     // measuring run senses nothing.
     let live = crate::panels::detail::host::live(ui);
     let target = live.then(|| {
-        crate::panels::detail::host::target(ui, ("edit-histogram", id), r, crate::panels::detail::host::Target::new(crate::i18n::tr("Histogram")).drag())
+        crate::panels::detail::host::target(
+            ui,
+            ("edit-histogram", id),
+            r,
+            crate::panels::detail::host::Target::new(crate::i18n::tr("Histogram")).drag(),
+        )
     });
     let resp = target.as_ref().map_or_else(|| ui.response(), |target| target.response.clone());
     if let Some(target) = &target {
@@ -277,29 +282,39 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let shown = device.clone().unwrap_or_else(|| cur.label().to_string());
             let mut pick = false;
             let (_, face_rect) = ui.allocate_space(vec2(170.0, 24.0));
-            let face = Button::new(crate::i18n::tr("Profile")).painted(shown).trailing_icon(DisclosureGlyph::dropdown()).id_salt("proof-space").show_at(ui, face_rect);
+            let face = Button::new(crate::i18n::tr("Profile"))
+                .painted(shown)
+                .trailing_icon(DisclosureGlyph::dropdown())
+                .id_salt("proof-space")
+                .show_at(ui, face_rect);
             let real = !proof_measuring(ui);
             if real {
                 crate::widgets::register_response("dropdown:proofProfile", face_rect, &face.response);
             }
-            Menu::new(crate::i18n::tr("Profile").to_owned()).id_salt("proof-space-menu").values().opened_by(&face.response, Trigger::Click).show(ui, |ui, _| {
-                let real = !proof_measuring(ui);
-                for s in OutputSpace::ALL {
-                    let row = MenuItem::new(s.label().to_owned()).id_salt(("proof-space-item", s.label())).entry_checked(device.is_none() && cur == s).show(ui);
-                    if real && row.ran {
-                        let _ = app.run("view.softProof", json!({"space": s}));
+            Menu::new(crate::i18n::tr("Profile").to_owned()).id_salt("proof-space-menu").values().opened_by(&face.response, Trigger::Click).show(
+                ui,
+                |ui, _| {
+                    let real = !proof_measuring(ui);
+                    for s in OutputSpace::ALL {
+                        let row = MenuItem::new(s.label().to_owned())
+                            .id_salt(("proof-space-item", s.label()))
+                            .entry_checked(device.is_none() && cur == s)
+                            .show(ui);
+                        if real && row.ran {
+                            let _ = app.run("view.softProof", json!({"space": s}));
+                        }
                     }
-                }
-                if let Some(n) = &device {
-                    let _ = MenuItem::new(n.clone()).id_salt("proof-space-device").entry_checked(true).show(ui);
-                }
-                if app.services.pick_display_profile.is_some() {
-                    let row = MenuItem::new(crate::i18n::tr("Other…").to_owned()).id_salt("proof-space-other").show(ui);
-                    if real && row.ran {
-                        pick = true;
+                    if let Some(n) = &device {
+                        let _ = MenuItem::new(n.clone()).id_salt("proof-space-device").entry_checked(true).show(ui);
                     }
-                }
-            });
+                    if app.services.pick_display_profile.is_some() {
+                        let row = MenuItem::new(crate::i18n::tr("Other…").to_owned()).id_salt("proof-space-other").show(ui);
+                        if real && row.ran {
+                            pick = true;
+                        }
+                    }
+                },
+            );
             if pick
                 && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
                 && let Err(e) = app.run("view.softProof", json!({"profile": path}))

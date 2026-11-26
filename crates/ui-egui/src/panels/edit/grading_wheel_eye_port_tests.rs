@@ -82,9 +82,13 @@ impl Frames {
                         self.last_eye_down = Some(hit.id);
                     }
                     // a button-role toggle reports its state as pressed (toggled), not selected
-                    if let Some(node) =
-                        ctx.accesskit_node_builder(hit.id, |n| (n.label().map(str::to_owned), n.toggled().and_then(|t| (t == egui::accesskit::Toggled::True).then_some(true)), n.description().map(str::to_owned)))
-                    {
+                    if let Some(node) = ctx.accesskit_node_builder(hit.id, |n| {
+                        (
+                            n.label().map(str::to_owned),
+                            n.toggled().and_then(|t| (t == egui::accesskit::Toggled::True).then_some(true)),
+                            n.description().map(str::to_owned),
+                        )
+                    }) {
                         self.nodes.insert(hit.id, node);
                     }
                 }

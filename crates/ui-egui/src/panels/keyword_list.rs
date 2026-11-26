@@ -3,9 +3,9 @@
 //! keyword gives it to the selected photos or takes it away; the arrow shows the photos with it.
 
 use craft::ui::buttons::IconButton;
-use craft::ui::primitives::IconSpec;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::primitives::IconSpec;
 use craft::ui::text::TextField;
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::keywords::{KeywordInfo, KeywordNode, same};
@@ -384,7 +384,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
             ui,
             ("keyword-list-shortcut", r.path.to_lowercase()),
             plus,
-            crate::panels::detail::host::Target::new(crate::i18n::tr("Part of the keyword shortcut")).tooltip(crate::i18n::tr("Part of the keyword shortcut")).hover_only(),
+            crate::panels::detail::host::Target::new(crate::i18n::tr("Part of the keyword shortcut"))
+                .tooltip(crate::i18n::tr("Part of the keyword shortcut"))
+                .hover_only(),
         );
         register(ui, format!("keywordShortcut:{}", r.path), plus);
     }

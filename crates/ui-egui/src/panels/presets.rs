@@ -124,7 +124,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if !measuring && !ui.is_sizing_pass() {
             let pass = ui.ctx().cumulative_pass_nr();
             let open_id = more.response.id.with("preset-options-open");
-            let mut open = ui.data(|data| data.get_temp::<(u64, bool)>(open_id))
+            let mut open = ui
+                .data(|data| data.get_temp::<(u64, bool)>(open_id))
                 .filter(|(last, _)| *last == pass || last.saturating_add(1) == pass)
                 .is_some_and(|(_, open)| open);
             // Use the compact SDK button's activation, including keyboard and long release.
@@ -171,10 +172,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     let any_user = app.session.presets.iter().any(|p| !p.builtin);
-                    let export = MenuItem::new(crate::i18n::tr("Export User Presets…"))
-                        .id_salt("preset-options-export")
-                        .enabled(any_user)
-                        .show(ui);
+                    let export = MenuItem::new(crate::i18n::tr("Export User Presets…")).id_salt("preset-options-export").enabled(any_user).show(ui);
                     if !measuring {
                         if crate::widgets::on_live_layer(&export.response) {
                             crate::widgets::register_response("presetMenu:export", export.response.rect, &export.response);

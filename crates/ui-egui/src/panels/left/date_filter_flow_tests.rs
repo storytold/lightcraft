@@ -659,7 +659,12 @@ fn date_actual_section_has_supported_list_and_identity_keyed_tree_row_owners() {
         .filter(|element| !element.facts.as_ref().is_some_and(|facts| facts.name.as_deref() == Some("By Date")))
         .collect::<Vec<_>>();
     assert_eq!(rows.len(), 5, "two roots and their three actual months; trace={:#?}", f.trace);
-    assert_eq!(rows.iter().filter(|element| element.facts.as_ref().is_some_and(|facts| facts.name.as_deref().is_some_and(|n| n.starts_with("March")))).count(), 2);
+    assert_eq!(
+        rows.iter()
+            .filter(|element| element.facts.as_ref().is_some_and(|facts| facts.name.as_deref().is_some_and(|n| n.starts_with("March"))))
+            .count(),
+        2
+    );
     let root = lists[0];
     let root_facts = root.facts.as_ref().expect("real collection root facts");
     assert!(!root_facts.disabled && root_facts.interactive, "enabled actionable collection root: {root:#?}");

@@ -35,13 +35,17 @@ fn open(h: &mut Headless, photo: u64, row: &str) {
     // Aim at the part of this specific photo visible inside its real pane response.
     let name = format!("cull:{photo}");
     let image = h.app.widgets.iter().find(|(key, _)| key == &name).unwrap().1;
-    let pane = (0..=1u8).find_map(|slot| h.view.ctx.read_response(egui::Id::unique(("cull-tile", slot, photo))))
-        .expect("real pane for requested photo");
+    let pane =
+        (0..=1u8).find_map(|slot| h.view.ctx.read_response(egui::Id::unique(("cull-tile", slot, photo)))).expect("real pane for requested photo");
     let visible = pane.interact_rect.intersect(image);
     assert!(visible.is_positive(), "requested photo has no visible image area");
     let at = visible.center();
-    ask(h, "ui.clickWidget", json!({"id": name, "button": "right",
-        "fx": (at.x - image.left()) / image.width(), "fy": (at.y - image.top()) / image.height()}));
+    ask(
+        h,
+        "ui.clickWidget",
+        json!({"id": name, "button": "right",
+        "fx": (at.x - image.left()) / image.width(), "fy": (at.y - image.top()) / image.height()}),
+    );
     assert!(craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any));
     assert!(h.app.widget_hits.iter().any(|(id, _)| id == row), "real menu response registered for {row}");
 }
@@ -71,9 +75,7 @@ fn compare_external155_swap_real_press_release_preserves_active_pin_and_navigati
     h.app.synthetic.push(egui::Event::PointerMoved(at));
     h.step();
     for pressed in [true, false] {
-        h.app.synthetic.push(egui::Event::PointerButton {
-            pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
-        });
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
         h.step();
         h.step();
     }
@@ -148,10 +150,7 @@ fn compare_external155_clear_reference_keyboard_activation_keeps_active_selectio
 #[test]
 fn compare_external155_escape_cancels_both_menus_without_retargeting_photos() {
     let (mut h, ids) = setup();
-    for (view, photo, row) in [
-        (ViewMode::Compare, ids[0], "compare:swap"),
-        (ViewMode::Reference, ids[3], "compare:clearReference"),
-    ] {
+    for (view, photo, row) in [(ViewMode::Compare, ids[0], "compare:swap"), (ViewMode::Reference, ids[3], "compare:clearReference")] {
         h.app.ui.view = view;
         h.settle(WAIT);
         let before = snapshot(&h);
@@ -174,10 +173,13 @@ fn compare_external155_disabled_real_row_does_not_activate() {
     let mut at = egui::Pos2::ZERO;
     for frame in 0..5 {
         let events = if frame == 2 || frame == 3 {
-            vec![egui::Event::PointerMoved(at), egui::Event::PointerButton {
-                pos: at, button: egui::PointerButton::Primary, pressed: frame == 2, modifiers: egui::Modifiers::NONE,
-            }]
-        } else { vec![] };
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: frame == 2, modifiers: egui::Modifiers::NONE },
+            ]
+        } else {
+            vec![]
+        };
         let raw = HeadlessView::raw_input(egui::vec2(400.0, 200.0), 1.0, frame as f64 / 60.0, events);
         view.run(raw, |ui| {
             crate::widgets::take_registries(ui.ctx());

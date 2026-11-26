@@ -370,7 +370,8 @@ impl<'a> DatePicker<'a> {
             if open {
                 // open on the value (or today), at its precision when it is one of those offered
                 let at = value.or(today).unwrap_or(PickedDate::year(2026));
-                let fallback = if precisions.contains(&Precision::Day) { Precision::Day } else { precisions.first().copied().unwrap_or(Precision::Day) };
+                let fallback =
+                    if precisions.contains(&Precision::Day) { Precision::Day } else { precisions.first().copied().unwrap_or(Precision::Day) };
                 let precision = value.map(|v| v.precision()).filter(|p| precisions.contains(p)).unwrap_or(fallback);
                 ui.data_mut(|d| {
                     d.insert_temp(state, View::open(at, precision));

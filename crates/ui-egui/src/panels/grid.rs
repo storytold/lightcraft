@@ -1,11 +1,11 @@
 //! Photo Grid (justified rows) and Square Grid. Virtualized: only visible cells request thumbnails.
 
 #[cfg(test)]
+mod folder_header_boundary_flow_tests;
+#[cfg(test)]
 mod folder_header_flow_tests;
 #[cfg(test)]
 mod folder_header_sdk_flow_tests;
-#[cfg(test)]
-mod folder_header_boundary_flow_tests;
 #[cfg(test)]
 mod header_tests;
 

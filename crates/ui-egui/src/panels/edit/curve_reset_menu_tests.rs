@@ -31,8 +31,14 @@ impl CurveResetFrames {
             app.run("develop.curve", json!({"channel": channel, "points": [[0.0, 0.05], [0.4, 0.6], [1.0, 0.95]]})).unwrap();
         }
         for (control, value) in [
-            ("curve.shadows", 25), ("curve.darks", -20), ("curve.lights", 30), ("curve.highlights", -35),
-            ("curve.splitShadows", 20), ("curve.splitMid", 45), ("curve.splitHighlights", 80), ("curve.refineSaturation", 42),
+            ("curve.shadows", 25),
+            ("curve.darks", -20),
+            ("curve.lights", 30),
+            ("curve.highlights", -35),
+            ("curve.splitShadows", 20),
+            ("curve.splitMid", 45),
+            ("curve.splitHighlights", 80),
+            ("curve.refineSaturation", 42),
         ] {
             app.run("develop.set", json!({"control": control, "value": value})).unwrap();
         }
@@ -64,7 +70,9 @@ impl CurveResetFrames {
     }
 
     fn settle(&mut self) {
-        for _ in 0..3 { self.frame(vec![]); }
+        for _ in 0..3 {
+            self.frame(vec![]);
+        }
     }
 
     fn rect(&self, id: &str) -> Rect {
@@ -140,8 +148,11 @@ fn expected_current(mut before: ToneCurve, channel: &str) -> ToneCurve {
 #[test]
 fn sdk_curve_reset_current_keeps_channel_payload_and_restores_full_settings_on_undo() {
     for (channel, label) in [
-        ("parametric", "Reset Parametric Curve"), ("master", "Reset RGB Channel"),
-        ("red", "Reset Red Channel"), ("green", "Reset Green Channel"), ("blue", "Reset Blue Channel"),
+        ("parametric", "Reset Parametric Curve"),
+        ("master", "Reset RGB Channel"),
+        ("red", "Reset Red Channel"),
+        ("green", "Reset Green Channel"),
+        ("blue", "Reset Blue Channel"),
     ] {
         let mut f = CurveResetFrames::new(channel);
         let before = f.settings();
@@ -242,13 +253,19 @@ fn sdk_curve_reset_each_sizing_mode_suppresses_automation_and_commands() {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let mut draw = || {
                 let mut builder = egui::UiBuilder::new().max_rect(ui.max_rect());
-                if egui_sizing { builder = builder.sizing_pass(); }
+                if egui_sizing {
+                    builder = builder.sizing_pass();
+                }
                 let mut child = ui.new_child(builder);
                 assert_eq!(child.is_sizing_pass(), egui_sizing);
                 assert_eq!(craft::ui::runtime::measure::active(child.ctx()), sdk_measure);
                 curve_reset_menu(&mut f.app, &mut child, "parametric");
             };
-            if sdk_measure { craft::ui::runtime::measure::run(&ctx, draw); } else { draw(); }
+            if sdk_measure {
+                craft::ui::runtime::measure::run(&ctx, draw);
+            } else {
+                draw();
+            }
         });
         output.textures_delta.clear();
         let (rects, hits) = take_registries(&ctx);

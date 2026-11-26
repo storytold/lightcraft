@@ -1,6 +1,6 @@
+use super::completion::GestureFacts;
 use super::{ControlResponse, GESTURE_TIMEOUT_MS, GestureFrame, LightcraftApp, MAX_PENDING_GESTURES, PendingGesture, Sender, Value};
 use crate::control;
-use super::completion::GestureFacts;
 
 impl LightcraftApp {
     /// Take the control receiver for this frame, run every queued request whose sender still
@@ -81,16 +81,31 @@ impl LightcraftApp {
     /// completed. A changed view/document/dialog/panel state cancels instead of retargeting.
     pub(super) fn completion_gestures(&self, ctx: &egui::Context, epoch: u64, passes: u64) -> GestureFacts {
         let mut facts = GestureFacts {
-            now_ms: self.tick_now_ms(), frame: self.gesture_frame(), epoch, passes,
+            now_ms: self.tick_now_ms(),
+            frame: self.gesture_frame(),
+            epoch,
+            passes,
             deadlines: self.pending_gestures.iter().map(|gesture| (std::sync::Arc::downgrade(&gesture.completion), gesture.deadline_ms)).collect(),
-            clipboard: control::ClipboardFacts::capture(self, ctx), pastes: Some(Vec::new()),
+            clipboard: control::ClipboardFacts::capture(self, ctx),
+            pastes: Some(Vec::new()),
         };
-        facts.pastes = Some(self.pending_gestures.iter().filter_map(|gesture| {
-            (gesture.resolved_pass.is_none() && gesture.method == "ui.clipboard"
-                && gesture.params.get("action").and_then(Value::as_str) == Some("paste")
-                && gesture.params.get("text").and_then(Value::as_str).is_none()).then(||
-                    (std::sync::Arc::downgrade(&gesture.completion), facts.ready(gesture) && control::check_gesture_numbers(&gesture.method, &gesture.params).is_ok()))
-        }).collect());
+        facts.pastes = Some(
+            self.pending_gestures
+                .iter()
+                .filter_map(|gesture| {
+                    (gesture.resolved_pass.is_none()
+                        && gesture.method == "ui.clipboard"
+                        && gesture.params.get("action").and_then(Value::as_str) == Some("paste")
+                        && gesture.params.get("text").and_then(Value::as_str).is_none())
+                    .then(|| {
+                        (
+                            std::sync::Arc::downgrade(&gesture.completion),
+                            facts.ready(gesture) && control::check_gesture_numbers(&gesture.method, &gesture.params).is_ok(),
+                        )
+                    })
+                })
+                .collect(),
+        );
         facts
     }
     pub(crate) fn resolve_pending_gestures(&mut self, ctx: &egui::Context) {
@@ -107,8 +122,11 @@ impl LightcraftApp {
         let mut keep = Vec::with_capacity(gestures.len());
         for mut gesture in gestures.drain(..) {
             // Allocation identity survives earlier removals; never undo a later progress refresh.
-            let Some((_, deadline)) = facts.deadlines.iter().find(|(id, _)| id.upgrade().is_some_and(|id| std::sync::Arc::ptr_eq(&id, &gesture.completion))) else {
-                keep.push(gesture); continue; // admitted after this body: wait for its own captured layout
+            let Some((_, deadline)) =
+                facts.deadlines.iter().find(|(id, _)| id.upgrade().is_some_and(|id| std::sync::Arc::ptr_eq(&id, &gesture.completion)))
+            else {
+                keep.push(gesture);
+                continue; // admitted after this body: wait for its own captured layout
             };
             gesture.deadline_ms = gesture.deadline_ms.max(*deadline);
             if gesture.resolved_pass.is_some() {
@@ -138,8 +156,16 @@ impl LightcraftApp {
             let before = self.synthetic.len();
             let outcome = match &facts.pastes {
                 None => control::gesture_events(self, ctx, &gesture.method, &gesture.params),
-                Some(claims) => control::gesture_events_at(self, ctx, &gesture.method, &gesture.params,
-                    facts.clipboard, control::PasteDispatch::OwnOutput(claims.iter().any(|(id, _)| id.upgrade().is_some_and(|id| std::sync::Arc::ptr_eq(&id, &gesture.completion))))),
+                Some(claims) => control::gesture_events_at(
+                    self,
+                    ctx,
+                    &gesture.method,
+                    &gesture.params,
+                    facts.clipboard,
+                    control::PasteDispatch::OwnOutput(
+                        claims.iter().any(|(id, _)| id.upgrade().is_some_and(|id| std::sync::Arc::ptr_eq(&id, &gesture.completion))),
+                    ),
+                ),
             };
             match outcome {
                 Ok(outcome) => {

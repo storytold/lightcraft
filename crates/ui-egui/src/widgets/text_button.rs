@@ -164,4 +164,3 @@ pub(super) fn show(ui: &mut Ui, id: &str, label: &str, active: bool) -> TextButt
 #[cfg(test)]
 #[path = "tests_text_button.rs"]
 mod tests;
-

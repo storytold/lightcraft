@@ -32,11 +32,8 @@ fn number(ui: &mut egui::Ui, id: &str, label: &str, value: &mut f32, similarity:
         // editor remains immediately after the track for existing typed-entry clients.
         let width = ui.spacing().slider_width;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
-        let slider = Slider::new(Bind::bound(&mut current), drag)
-            .id_salt((id, "track"))
-            .label(crate::i18n::tr(label).to_owned())
-            .step(step)
-            .show_at(ui, rect);
+        let slider =
+            Slider::new(Bind::bound(&mut current), drag).id_salt((id, "track")).label(crate::i18n::tr(label).to_owned()).step(step).show_at(ui, rect);
         register(ui, &format!("slider:{id}"), &slider.response);
         let mut exact = Some(current);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(68.0, 24.0), egui::Sense::hover());

@@ -119,7 +119,8 @@ pub(crate) fn text_id(id: egui::Id) -> egui::Id {
 }
 
 fn has_focus(ctx: &egui::Context, id: egui::Id) -> bool {
-    craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == id || rec.stop.root == id) || ctx.memory(|m| m.has_focus(id) || m.has_focus(text_id(id)))
+    craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == id || rec.stop.root == id)
+        || ctx.memory(|m| m.has_focus(id) || m.has_focus(text_id(id)))
 }
 
 /// What a field remembers between passes: the pass it was last drawn in and whether an edit was under way.
@@ -288,8 +289,8 @@ impl<'a> TextField<'a> {
         }
         // The field's own Cut / Copy / Paste menu takes the focus while it is open, but the edit goes on under it: the
         // typing stays, and Esc closes only the menu.
-        let editing = ending.is_none()
-            && (has_focus(ui.ctx(), id) || (real && was_editing(ui.ctx(), widget) && edit_menu_open(ui.ctx(), record.as_deref())));
+        let editing =
+            ending.is_none() && (has_focus(ui.ctx(), id) || (real && was_editing(ui.ctx(), widget) && edit_menu_open(ui.ctx(), record.as_deref())));
         if real {
             ui.data_mut(|d| d.insert_temp(id.with("memo"), Memo { editing, pass }));
         }

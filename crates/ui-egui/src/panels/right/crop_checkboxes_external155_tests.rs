@@ -8,10 +8,18 @@ const VISUALIZE: &str = "check:remove.visualizeSpots";
 const CATCHLIGHT: &str = "check:redeye.catchlight";
 
 #[derive(Clone, Copy)]
-enum Panel { Crop, Remove, Eye }
+enum Panel {
+    Crop,
+    Remove,
+    Eye,
+}
 
 #[derive(Clone, Copy)]
-enum Pass { Normal, NativeSizing, SdkMeasure }
+enum Pass {
+    Normal,
+    NativeSizing,
+    SdkMeasure,
+}
 
 struct Controls {
     app: LightcraftApp,
@@ -68,7 +76,9 @@ impl Controls {
     }
 
     fn settle(&mut self) {
-        for _ in 0..3 { self.frame(vec![], Pass::Normal); }
+        for _ in 0..3 {
+            self.frame(vec![], Pass::Normal);
+        }
     }
 
     fn has(&self, id: &str) -> bool {
@@ -212,7 +222,9 @@ fn crop_checkboxes_external155_catchlight_is_pet_only_and_uses_selected_index() 
 fn crop_checkboxes_external155_both_measurement_modes_publish_no_checkbox_targets_or_edits() {
     for (panel, id) in [(Panel::Crop, CONSTRAIN), (Panel::Remove, VISUALIZE), (Panel::Eye, CATCHLIGHT)] {
         let mut h = Controls::new(panel);
-        if matches!(panel, Panel::Eye) { h.eyes(); }
+        if matches!(panel, Panel::Eye) {
+            h.eyes();
+        }
         for pass in [Pass::NativeSizing, Pass::SdkMeasure] {
             h.settle();
             h.focus(id);

@@ -31,10 +31,8 @@ impl Frames {
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
         ctx.enable_accesskit();
-        craft::ui::install(
-            &ctx,
-            craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), Arc::new(craft::window::system::NoWindows)),
-        ).unwrap();
+        craft::ui::install(&ctx, craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), Arc::new(craft::window::system::NoWindows)))
+            .unwrap();
         let mut session = lightcraft_engine::Session::new();
         for (n, name) in [(1, CANONICAL), (2, REQUESTED), (3, "John Roe")] {
             let mut photo = Photo::new(PhotoId(n), Source::Demo { scene: 0 }, "synthetic.jpg", "JPEG", 32, 32, "2026-01-01T00:00:00");
@@ -50,7 +48,10 @@ impl Frames {
         app.ui.view = ViewMode::People;
         app.ui.person_page = Some(REQUESTED.into());
         app.caches.person_page = Some((
-            REQUESTED.into(), app.session.catalog.revision, app.caches.faces_indexed, 0.0,
+            REQUESTED.into(),
+            app.session.catalog.revision,
+            app.caches.faces_indexed,
+            0.0,
             Arc::new(PersonPage { name: CANONICAL.into(), ..Default::default() }),
         ));
         Self { ctx, app, time: 0.0, rects: vec![], hits: vec![], sizing: false, measuring: false, disabled: false, nodes: vec![] }
@@ -86,7 +87,9 @@ impl Frames {
     }
 
     fn settle(&mut self) {
-        for _ in 0..3 { self.frame(vec![]); }
+        for _ in 0..3 {
+            self.frame(vec![]);
+        }
     }
 
     fn at(&self, id: &str) -> Pos2 {

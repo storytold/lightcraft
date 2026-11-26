@@ -414,7 +414,6 @@ fn photos_queue_actions(ui: &mut egui::Ui, running: Option<(u64, u64)>, queued: 
     });
 }
 
-
 /// "Denoising {photo}: {done} of {total} tiles", and how many photos wait.
 fn running_text(app: &LightcraftApp, status: &Value, done: u64, total: u64, queued: u64) -> String {
     let name =
@@ -895,7 +894,6 @@ mod queue_actions_tests;
 #[cfg(test)]
 #[path = "denoise_qualified_work_flow_tests.rs"]
 mod qualified_work_flow_tests;
-
 
 #[cfg(test)]
 #[path = "denoise_per_photo_qualified_flow_tests.rs"]

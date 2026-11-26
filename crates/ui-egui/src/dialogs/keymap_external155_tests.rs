@@ -113,13 +113,7 @@ fn keymap_external155_measuring_does_not_take_capture_or_register_controls() {
     app.install_framework(&ctx);
     app.recording_shortcut = Some("view.survey".into());
     let raw = egui::RawInput {
-        events: vec![egui::Event::Key {
-            key: egui::Key::F9,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }],
+        events: vec![egui::Event::Key { key: egui::Key::F9, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
         ..Default::default()
     };
     let mut output = ctx.run_ui(raw, |ui| {

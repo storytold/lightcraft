@@ -499,7 +499,9 @@ pub(crate) fn reveal_command(app: &mut crate::LightcraftApp, id: &str) -> Result
 /// Check the target's actual egui layer even while a different widget owns the drag.
 pub(crate) fn drop_target(ui: &egui::Ui, rect: egui::Rect, pointer: Option<egui::Pos2>) -> bool {
     pointer.is_some_and(|pos| {
-        rect.intersect(ui.clip_rect()).contains(pos) && ui.ctx().layer_id_at(pos) == Some(ui.layer_id()) && !under_floating_window(ui.ctx(), rect.intersect(ui.clip_rect()), pos)
+        rect.intersect(ui.clip_rect()).contains(pos)
+            && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
+            && !under_floating_window(ui.ctx(), rect.intersect(ui.clip_rect()), pos)
     })
 }
 
