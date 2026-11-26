@@ -482,7 +482,7 @@ fn expose(c: vec3<f32>, gain: f32, knee: f32) -> vec3<f32> {
         return c * gain;
     }
     let zw = (gain - knee) / (1.0 - knee);
-    let z = min((y - knee) / (1.0 - knee), zw);
+    let z = (y - knee) / (1.0 - knee);
     let f = knee + (1.0 - knee) * z * (1.0 + z / (zw * zw)) / (1.0 + z);
     return c * (f / m);
 }

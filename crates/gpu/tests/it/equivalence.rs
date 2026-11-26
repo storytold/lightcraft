@@ -813,6 +813,26 @@ fn display_exposure_shoulder_matches() {
         s.process = Process::V14.version();
         check(&format!("V14 display Exposure +{ev}, Highlights -60"), &src, &info, &s, &req);
     }
+    // a warm white balance lifting channels past white, brought back by a mask darkening the whole frame: both
+    // keep the order above white, also at a tiny Exposure
+    let mut s = DevelopSettings { process: Process::V15.version(), ..Default::default() };
+    (s.wb.mode, s.wb.temp) = (WbMode::Custom, 12000.0);
+    s.masks.push(Mask {
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 4.0, ry: 4.0, angle: 0.0, feather: 0.0, invert: false },
+        }],
+        adjust: lightcraft_develop::LocalAdjustments { exposure: -1.5, ..Default::default() },
+        ..Default::default()
+    });
+    // (a bright ramp, so the white balance lifts its top past white)
+    let bright = Arc::new(Rgb32f::from_fn(960, 640, |x, _| [(0.6 + 0.4 * x as f32 / 959.0).powf(2.2); 3]));
+    for ev in [0.01, 0.5] {
+        s.light.exposure = ev;
+        check(&format!("V15 warm white balance, Exposure +{ev}, mask -1.5"), &bright, &info, &s, &req);
+    }
 }
 
 /// Calibrated Contrast and Blacks, legacy Whites, combined edits, windows and cache reuse.

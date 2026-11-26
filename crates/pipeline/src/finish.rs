@@ -375,7 +375,9 @@ pub const EXPOSURE_KNEE: f32 = 0.5;
 /// an extended Reinhard shoulder, `knee + (1 − knee)·z·(1 + z / z_w²) / (1 + z)` for `z = (y − knee) / (1 − knee)` and
 /// `z_w = (gain − knee) / (1 − knee)`: slope 1 at the knee (no kink), the source's white (`m = 1`) on white, every
 /// brighter tone still brighter and spread over the highlights (no flat white), and the identity as the gain
-/// approaches 1. The pixel is scaled by `f(y) / m`, keeping its hue and saturation.
+/// approaches 1. The curve rises on past white, so a channel white balance lifted above 1 keeps its order (a local
+/// darkening after it brings the tones back apart), and a tiny gain renders like none. The pixel is scaled by
+/// `f(y) / m`, keeping its hue and saturation.
 pub fn expose(c: [f32; 3], gain: f32, knee: f32) -> [f32; 3] {
     let m = c[0].max(c[1]).max(c[2]);
     let y = m * gain;
@@ -383,7 +385,7 @@ pub fn expose(c: [f32; 3], gain: f32, knee: f32) -> [f32; 3] {
         return c.map(|v| v * gain);
     }
     let zw = (gain - knee) / (1.0 - knee);
-    let z = ((y - knee) / (1.0 - knee)).min(zw);
+    let z = (y - knee) / (1.0 - knee);
     let f = knee + (1.0 - knee) * z * (1.0 + z / (zw * zw)) / (1.0 + z);
     let scale = f / m;
     c.map(|v| v * scale)
@@ -970,6 +972,12 @@ mod tests {
         let near = expose([0.8, 0.6, 0.95], 1.0001, knee);
         assert!(near.iter().zip([0.8, 0.6, 0.95]).all(|(a, b)| (a - b).abs() < 1e-3), "{near:?}");
         assert_eq!(expose([0.9, 0.9, 0.9], gain, 0.0), [1.8, 1.8, 1.8]);
+        // past the source's white (white balance can lift a channel there): still rising, so the order stays, and
+        // the identity as the gain approaches 1
+        let (a, b) = (expose([1.1; 3], gain, knee)[0], expose([1.3; 3], gain, knee)[0]);
+        assert!(1.0 < a && a < b, "{a} {b}");
+        let near = expose([1.3, 1.1, 0.9], 1.0001, knee);
+        assert!(near.iter().zip([1.3, 1.1, 0.9]).all(|(a, b)| (a - b).abs() < 1e-3), "{near:?}");
         // no kink at the knee: the slope just past it is the gain's
         let (a, b) = (expose([0.25; 3], gain, knee)[0], expose([0.2501; 3], gain, knee)[0]);
         assert!(((b - a) / 0.0001 - gain).abs() < 0.01);
@@ -1000,6 +1008,38 @@ mod tests {
         let masked = crate::render(&src, &SourceInfo::default(), &s, &req).image;
         let worst = (0..256).map(|x| plain.get(x, 2)[1].abs_diff(masked.get(x, 2)[1])).max().unwrap_or(0);
         assert!(worst <= 2, "a negligible mask moved a tone by {worst} codes");
+    }
+
+    #[test]
+    fn above_white_from_white_balance_keeps_its_order_under_local_darkening() {
+        // a warm white balance lifts a bright JPEG's red past white before Exposure, and a mask darkening the whole
+        // frame brings it back below: the shoulder keeps those tones apart, and a tiny Exposure renders like none
+        use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, WbMode};
+        let src = lightcraft_raster::Rgb32f::from_fn(256, 4, |x, _| [(0.6 + 0.4 * x as f32 / 255.0).powf(2.2); 3]);
+        let mut s = DevelopSettings { process: Process::V15.version(), ..Default::default() };
+        (s.wb.mode, s.wb.temp) = (WbMode::Custom, 12000.0);
+        s.masks.push(Mask {
+            components: vec![MaskComponent {
+                name: None,
+                op: MaskOp::Add,
+                invert: false,
+                shape: MaskShape::Radial { center: lightcraft_geom::Point::new(0.5, 0.5), rx: 4.0, ry: 4.0, angle: 0.0, feather: 0.0, invert: false },
+            }],
+            adjust: LocalAdjustments { exposure: -1.5, ..Default::default() },
+            ..Default::default()
+        });
+        let row = |s: &mut DevelopSettings, ev: f64| {
+            s.light.exposure = ev;
+            let r = crate::render(&src, &SourceInfo::default(), s, &crate::RenderRequest::fit(256, 4));
+            (0..256).map(|x| r.image.get(x, 2)).collect::<Vec<_>>()
+        };
+        let (zero, tiny, up) = (row(&mut s, 0.0), row(&mut s, 0.01), row(&mut s, 0.5));
+        let worst = zero.iter().zip(&tiny).flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c]))).max().unwrap_or(0);
+        assert!(worst <= 2, "a tiny Exposure moved a tone by {worst} codes");
+        // the brightest quarter (red past white after the white balance) stays a gradient after the darkening
+        let red: Vec<u8> = up[192..].iter().map(|p| p[0]).collect();
+        assert!(red.windows(2).all(|p| u16::from(p[1]) + 1 >= u16::from(p[0])), "{red:?}");
+        assert!(red.last().copied().unwrap_or(0) > red[0].saturating_add(8), "flattened: {red:?}");
     }
 
     #[test]
