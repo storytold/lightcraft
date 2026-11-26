@@ -48,8 +48,31 @@ struct Reader {
     db: Database,
     tables: Vec<LiveTable>,
 }
+/// Most bytes of history-step or snapshot settings decoded from one table. They are only archived, and an archive
+/// holds at most [`crate::lightroom_archive::MAX_ARCHIVE_BYTES`] of JSON, so this keeps all a catalog can archive while
+/// a hostile one can't make the reader allocate without bound (each row alone may decode to 16 MiB).
+const MAX_DECODED_SETTINGS: usize = crate::lightroom_archive::MAX_ARCHIVE_BYTES as usize;
+
+/// The column of table `name` that Lightroom Classic 13 and later store as compressed text (see [`decode_compressed`]),
+/// and what a warning calls one and several of its rows.
+fn compressed_settings(name: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    match name {
+        "Adobe_libraryImageDevelopHistoryStep" => Some(("text", "history step", "history steps")),
+        "Adobe_libraryImageDevelopSnapshot" => Some(("text", "snapshot", "snapshots")),
+        _ => None,
+    }
+}
+
 impl Reader {
-    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
+    fn table(&self, name: &str, required: bool, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
+        self.table_within(name, required, MAX_DECODED_SETTINGS, warnings)
+    }
+
+    /// The rows of table `name`. Its compressed settings column ([`compressed_settings`]) is decoded within `budget`
+    /// bytes for the whole table: each value is charged its declared length before it is inflated, even one that then
+    /// fails to decode. A value that can't be decoded is left out of its row with a warning naming the image, and
+    /// those past the budget with one warning for all. Other BLOB columns are always left out.
+    fn table_within(&self, name: &str, required: bool, budget: usize, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
         let Some(t) = self.tables.iter().find(|t| t.name == name) else {
             return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
         };
@@ -58,37 +81,69 @@ impl Reader {
         if rows.len() > 1_000_000 {
             return Err(format!("{name}: more than one million records"));
         }
-        Ok(rows
-            .into_iter()
-            .map(|r| {
-                columns
-                    .iter()
-                    .cloned()
-                    .zip(r.values.into_iter().map(|v| match v {
-                        SqlValue::Null => Some(Value::Null),
-                        SqlValue::Integer(n) => Some(json!(n)),
-                        SqlValue::Real(n) => Some(json!(n)),
-                        SqlValue::Text(s) => Some(json!(s)),
-                        // Opaque Lightroom payloads never become JSON byte arrays.
-                        SqlValue::Blob(_) => None,
-                    }))
-                    .filter_map(|(column, value)| value.map(|value| (column, value)))
-                    .collect()
-            })
-            .collect())
+        let compressed = compressed_settings(name);
+        let mut left = budget;
+        let mut over_budget = 0usize;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let mut row = Row::new();
+            let mut settings = None;
+            for (column, value) in columns.iter().zip(r.values) {
+                let value = match value {
+                    SqlValue::Null => Value::Null,
+                    SqlValue::Integer(n) => json!(n),
+                    SqlValue::Real(n) => json!(n),
+                    SqlValue::Text(s) => json!(s),
+                    SqlValue::Blob(bytes) => {
+                        if compressed.is_some_and(|(settings_column, _, _)| settings_column == column) {
+                            settings = Some((column, bytes));
+                        }
+                        // Other opaque Lightroom payloads never become JSON byte arrays.
+                        continue;
+                    }
+                };
+                row.insert(column.clone(), value);
+            }
+            if let (Some((column, bytes)), Some((_, what, _))) = (settings, compressed) {
+                // charged at its declared length before it is inflated (which never goes past that length), so
+                // a row that then fails to decode counts too; past the budget, the rest aren't inflated at all
+                let declared = compressed_len(&bytes);
+                if declared.is_some_and(|n| over_budget > 0 || n > left) {
+                    over_budget += 1;
+                } else {
+                    left -= declared.unwrap_or(0);
+                    match decode_compressed(&bytes, "settings") {
+                        Ok(text) => {
+                            row.insert(column.clone(), Value::String(text));
+                        }
+                        Err(why) => warnings.push(format!(
+                            "image {}: {what} {}: {why}; archived without its settings",
+                            number(&row, "image"),
+                            number(&row, "id_local")
+                        )),
+                    }
+                }
+            }
+            out.push(row);
+        }
+        if let (Some((_, one, many)), 1..) = (compressed, over_budget) {
+            let what = if over_budget == 1 { one } else { many };
+            warnings.push(format!("{over_budget} {what} archived without their settings: more than {} MiB of settings in {name}", budget >> 20));
+        }
+        Ok(out)
     }
 
     /// The catalog's `Adobe_storeProviderID` (a UUID), kept by Lightroom in its backups; `None`
     /// when the table or the value is missing or doesn't look like an id.
     fn catalog_id(&self) -> Option<String> {
-        let rows = self.table("Adobe_variablesTable", false).ok()?;
+        let rows = self.table("Adobe_variablesTable", false, &mut Vec::new()).ok()?;
         let row = rows.iter().find(|r| text(r, "name") == "Adobe_storeProviderID")?;
         let id = text(row, "value").trim();
         (!id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| id.to_string())
     }
 
     fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
-        match self.table(name, false) {
+        match self.table(name, false, warnings) {
             Ok(rows) => Ok(rows),
             Err(error) => {
                 warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
@@ -125,7 +180,7 @@ impl Reader {
                     SqlValue::Integer(n) => Some(json!(n)),
                     SqlValue::Real(n) => Some(json!(n)),
                     SqlValue::Text(s) => Some(json!(s)),
-                    SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
+                    SqlValue::Blob(bytes) if column == "xmp" => match decode_compressed(&bytes, "XMP") {
                         Ok(packet) => Some(Value::String(packet)),
                         Err(error) => {
                             warnings.push(format!("image {image}: {error}"));
@@ -352,17 +407,27 @@ fn xmp(v: Option<&Value>) -> Result<String, String> {
     }
 }
 
-fn decode_xmp_bytes(bytes: &[u8]) -> Result<String, String> {
-    let size = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes).ok_or("truncated XMP header")?;
-    if size > 16 << 20 {
-        return Err("XMP packet exceeds 16 MiB".into());
+/// The decoded length [`decode_compressed`] reads from `bytes`' header, when it has one of at most 16 MiB.
+fn compressed_len(bytes: &[u8]) -> Option<usize> {
+    let size = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes)?;
+    usize::try_from(size).ok().filter(|size| *size <= 16 << 20)
+}
+
+/// Lightroom's compressed text (`Adobe_AdditionalMetadata.xmp`, and history-step and snapshot settings since Lightroom
+/// Classic 13): the decoded length as 4 big-endian bytes, then a zlib stream, at most 16 MiB decoded. Errors name it
+/// `what`.
+fn decode_compressed(bytes: &[u8], what: &str) -> Result<String, String> {
+    if bytes.len() < 4 {
+        return Err(format!("truncated {what} header"));
     }
-    let decoded = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes.get(4..).ok_or("truncated XMP")?, 16 << 20)
-        .map_err(|_| "invalid compressed XMP")?;
-    if decoded.len() != size as usize {
-        return Err("XMP packet length mismatch".into());
+    let size = compressed_len(bytes).ok_or_else(|| format!("{what} longer than 16 MiB"))?;
+    // inflated no further than its declared length: a stream that goes on is invalid, at no more cost than a valid one
+    let decoded = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes.get(4..).ok_or_else(|| format!("truncated {what}"))?, size)
+        .map_err(|_| format!("invalid compressed {what}"))?;
+    if decoded.len() != size {
+        return Err(format!("{what} length mismatch"));
     }
-    String::from_utf8(decoded).map_err(|e| e.to_string())
+    String::from_utf8(decoded).map_err(|e| format!("{what} not UTF-8: {e}"))
 }
 
 // SQLite file format §4: validate the live checksum chain in constant space, then overlay
@@ -482,9 +547,9 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     }
     let reader = Reader { tables: db.live_tables()?, db };
     let mut warnings = Vec::new();
-    let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
+    let table = |name: &str, required: bool, warnings: &mut Vec<String>| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
-        let rows = reader.table(name, required)?;
+        let rows = reader.table(name, required, warnings)?;
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
@@ -494,9 +559,9 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
-    let roots: HashMap<_, _> = table("AgLibraryRootFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let folders: HashMap<_, _> = table("AgLibraryFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let files: HashMap<_, _> = table("AgLibraryFile", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let roots: HashMap<_, _> = table("AgLibraryRootFolder", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let folders: HashMap<_, _> = table("AgLibraryFolder", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let files: HashMap<_, _> = table("AgLibraryFile", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let develops: HashMap<_, _> = optional_table("Adobe_imageDevelopSettings", &mut warnings)?
         .into_iter()
         .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
@@ -580,7 +645,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     // these behind and ignores them); they and their virtual copies are skipped and reported
     // instead of failing the import
     let mut orphans = HashSet::new();
-    for image in table("Adobe_images", true)? {
+    for image in table("Adobe_images", true, &mut out.warnings)? {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
         let record = files.get(&number(&image, "rootFile")).ok_or(SkipReason::MissingFile).and_then(|file| {
@@ -947,7 +1012,7 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
     let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
     let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
     let mut index = load_index(index_path.as_deref())?;
-    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(error)).transpose()?;
+    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(|e| error(e.to_string()))).transpose()?;
     let undo0 = s.undo.len();
     let existing: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
@@ -1255,8 +1320,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // The new record takes only what the bytes determine from the photo with the same
             // bytes, never that photo's own state: not its Recently Deleted (#2589), virtual copy,
             // edits, history, versions, ratings, capture time or the metadata a person writes. Its
-            // metadata and capture time are what its own file gives it, as a file import reads them
-            // (copyright, creator…); the catalog's capture time, when it has one, applies on top.
+            // metadata and capture time are what its own file and XMP sidecar give it, as a file
+            // import reads them (copyright, caption, creator…); the catalog's apply on top.
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
             let mut p = Photo::new(
                 s.catalog.alloc_photo_id(),
@@ -1272,28 +1337,30 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.duration = duplicate.duration;
             p.as_shot_wb = duplicate.as_shot_wb;
             p.content_hash = duplicate.content_hash.clone();
-            p.embedded_lens = duplicate.embedded_lens;
+            p.embedded_lens = duplicate.embedded_lens.clone();
             p.preview_only = duplicate.preview_only.clone();
             p.preview_checked = duplicate.preview_checked.clone();
-            if let Some(file) = file {
-                p.meta = file.meta.clone();
-                p.captured = file.captured.clone();
-            } else {
+            let file = file.cloned().unwrap_or_else(|| {
                 // (the file wasn't read: only the exposure description, which no command edits;
                 // not GPS, which placing a photo on the map does, nor the capture time, which
                 // Edit Capture Time does)
                 let m = &duplicate.meta;
-                p.meta.camera = m.camera.clone();
-                p.meta.lens = m.lens.clone();
-                p.meta.focal_mm = m.focal_mm;
-                p.meta.aperture = m.aperture;
-                p.meta.shutter = m.shutter.clone();
-                p.meta.iso = m.iso;
-                p.meta.focus = m.focus.clone();
-            }
-            // the settings a file import gives it (as-shot white balance, embedded lens
-            // corrections, the default preset); the catalog's settings apply on top
-            crate::import::apply_import_defaults(s, &mut p);
+                let meta = lightcraft_catalog::Meta {
+                    camera: m.camera.clone(),
+                    lens: m.lens.clone(),
+                    focal_mm: m.focal_mm,
+                    aperture: m.aperture,
+                    shutter: m.shutter.clone(),
+                    iso: m.iso,
+                    focus: m.focus.clone(),
+                    ..Default::default()
+                };
+                crate::import::FileFacts { meta, ..Default::default() }
+            });
+            // as a file import of it: its file's metadata and capture time, the import defaults
+            // (as-shot white balance, embedded lens corrections, the default preset), its XMP
+            // sidecar; the catalog's settings and metadata apply on top
+            crate::import::start_from_file(s, &mut p, file, &now);
             p
         } else {
             let id = s.catalog.alloc_photo_id();

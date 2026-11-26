@@ -50,7 +50,9 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
    Fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never here; a
    missing face is added there, not worked around in this repository. Sentence-cased messages go
    through `i18n::upper_first`, which leaves Georgian lowercase (upper-casing Mkhedruli would make
-   Mtavruli).
+   Mtavruli). Menu paths in messages use → ("View → Clear Filters"), in English and in
+   translations: Inter has no ▸ or ▾, so those paint as boxes (issue #1950).
+   `source_strings_use_paintable_symbols` checks every symbol in the code's string literals.
 4. Run `cargo xtask ci` (it includes `fmt`, `clippy`, the tests, `parity` and the wasm check).
 
 ## How a message is found
@@ -123,4 +125,5 @@ Help ▸ What's New shows `docs/whats-new.md`, and each of its lines (a heading,
 bullet, without the `- ` or `### `) is looked up like any message, so a catalog can translate the notes
 line by line (German does). A line that is re-wrapped or edited no longer matches its translation and
 shows in English until the catalog is updated; the translation gaps report counts the untranslated
-lines.
+lines. The notes may write menu paths with ▸ like the other docs: the dialog shows it as → (and the
+activity stack's ✕ as ×, the sidebar's ＋ as +), since Inter has none of them.

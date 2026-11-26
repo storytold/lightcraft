@@ -36,9 +36,7 @@ impl Stale {
 
     /// The photo is still as it was listed: same file, flag and stamp.
     fn current(&self, p: &Photo) -> bool {
-        crate::cmd::missing::checked_path(p) == Some(self.path.as_str())
-            && p.preview_only == self.preview_only
-            && p.preview_checked == self.preview_checked
+        p.library_file() == Some(self.path.as_str()) && p.preview_only == self.preview_only && p.preview_checked == self.preview_checked
     }
 }
 
@@ -48,7 +46,7 @@ impl Stale {
 pub fn stale(cat: &Catalog, all: bool) -> Vec<Stale> {
     cat.photos()
         .filter(|p| p.copy_of.is_none() && (p.preview_only_stale() || (all && (p.preview_only.is_some() || p.format.eq_ignore_ascii_case("orf")))))
-        .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Stale::of(p, path)))
+        .filter_map(|p| p.library_file().map(|path| Stale::of(p, path)))
         .collect()
 }
 

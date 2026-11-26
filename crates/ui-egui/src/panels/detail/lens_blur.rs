@@ -102,18 +102,18 @@ pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
         let force = if app.ui.brush_pressure { ui.input(pen_force) } else { None };
         match &mut app.gesture {
             Some(Gesture::Brush { points, .. }) if points.last() == Some(&n) => {}
-            Some(Gesture::Brush { points, pressure }) => {
+            Some(Gesture::Brush { points, pressure, .. }) => {
                 record_pressure(pressure, points.len(), force);
                 points.push(n);
             }
             _ => {
                 let mut pressure = Vec::new();
                 record_pressure(&mut pressure, 0, force);
-                app.gesture = Some(Gesture::Brush { points: vec![n], pressure });
+                app.gesture = Some(Gesture::Brush { points: vec![n], pressure, live: None });
             }
         }
     }
-    if let Some(Gesture::Brush { points, pressure }) = &app.gesture {
+    if let Some(Gesture::Brush { points, pressure, .. }) = &app.gesture {
         let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
         let params = crate::brush_live::LiveParams {
             clip,
@@ -130,7 +130,7 @@ pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
         app.brush_live = None;
     }
     if (resp.drag_stopped() || resp.clicked())
-        && let Some(Gesture::Brush { points, pressure }) = app.gesture.take()
+        && let Some(Gesture::Brush { points, pressure, .. }) = app.gesture.take()
     {
         app.brush_live = None;
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();

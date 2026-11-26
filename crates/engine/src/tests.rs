@@ -8,6 +8,8 @@ mod album_order;
 mod album_remove;
 mod albums_local;
 mod autosync_wb;
+mod batch_sidebar;
+mod bursts;
 mod color;
 mod constrain_crop;
 mod crop_angle;
@@ -36,6 +38,7 @@ mod lens_refresh;
 mod libops;
 mod library;
 mod lightroom_folder;
+mod lightroom_history;
 mod mask_effects;
 mod mask_geometry;
 mod merge;
@@ -50,6 +53,7 @@ mod preview_prep;
 mod print;
 mod process;
 mod recheck;
+mod relocate;
 mod segment;
 mod settings_files;
 mod shelved_folder;
@@ -59,6 +63,7 @@ mod slideshow_export;
 mod slow_drive;
 mod spots;
 mod sync;
+mod task_queue;
 mod view_follow;
 pub(super) mod xmp;
 
@@ -501,6 +506,24 @@ fn connected_brush_strokes_start_where_the_last_one_ended() {
     // all of it is one undo step
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(strokes(&s).len(), 2);
+}
+
+/// A stroke sent again as it grows (its effect shows while painting) replaces itself; earlier strokes stay.
+#[test]
+fn a_stroke_sent_again_as_it_grows_replaces_itself() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+    s.execute("mask.brushStroke", &json!({"points": [[0.1, 0.1]]})).unwrap();
+    s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.2]]})).unwrap();
+    for n in [3, 4] {
+        let pts: Vec<[f64; 2]> = (0..n).map(|i| [0.2 + 0.1 * i as f64, 0.2]).collect();
+        s.execute("mask.brushStroke", &json!({"points": pts, "continue": true})).unwrap();
+    }
+    let dev = active_dev(&s);
+    let Some(lightcraft_develop::MaskShape::Brush { strokes }) = dev.masks.first().and_then(|m| m.components.first()).map(|c| &c.shape) else {
+        panic!("a brush mask")
+    };
+    assert_eq!(strokes.iter().map(|s| s.points.len()).collect::<Vec<_>>(), vec![1, 4], "the earlier stroke stays, the live one is replaced");
 }
 
 #[test]
@@ -2186,4 +2209,27 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
         assert_eq!(s.selection, selection, "selection and active photo must survive enabled={enabled}");
         assert!(s.auto_sync, "Auto Sync must remain enabled");
     }
+}
+
+/// Upright that finds nothing to correct says why instead of silently doing nothing.
+#[test]
+fn upright_says_why_it_found_nothing_to_correct() {
+    let mut s = demo();
+    let mut noted = 0;
+    for id in s.visible().iter().copied().take(4).collect::<Vec<_>>() {
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        let r = s.execute("geometry.upright", &json!({"mode": "vertical"})).unwrap();
+        let identity = r["transform"] == serde_json::to_value(lightcraft_geom::Homography::IDENTITY).unwrap();
+        match r["note"].as_str() {
+            Some(note) => {
+                noted += 1;
+                assert!(identity || note.contains(" instead."), "a correction was applied but the note doesn't say which: {r}");
+                assert!(note.starts_with("No vertical correction: "), "{note}");
+            }
+            None => assert!(!identity, "a vertical correction was found: {r}"),
+        }
+    }
+    assert!(noted > 0, "the demo's natural scenes have no verticals to correct");
+    let r = s.execute("geometry.upright", &json!({"mode": "off"})).unwrap();
+    assert!(r["note"].is_null());
 }
