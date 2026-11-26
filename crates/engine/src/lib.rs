@@ -199,10 +199,11 @@ pub struct Interaction {
     /// photo shows was fitted by Constrain Crop, and the final commit starts again from the original
     /// crop, so Auto Sync carries the edit and not the active photo's fitted crop.
     pub crop_edited: bool,
-    /// The photo was edited by a committed command while the interaction was open (Reset Edits,
-    /// say): the snapshot is older than that edit, so cancelling the interaction keeps it rather
-    /// than bringing back the settings from before it.
-    pub superseded: bool,
+    /// What an edit committed to this photo during the interaction left (its settings and its
+    /// timestamp: Reset Edits, say), when there was one. It is newer than `original`, which stays
+    /// untouched — the interaction is still told apart by it — so ending or cancelling the
+    /// interaction comes back to this state, not to the settings from before the drag.
+    pub superseded: Option<(Arc<DevelopSettings>, Option<String>)>,
 }
 
 /// Whether `op` sets photo `id`'s develop settings, itself or inside a batch.
@@ -678,12 +679,15 @@ impl Session {
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
         let inv = self.apply_through(op, Catalog::apply_new)?;
-        // A committed edit of the photo a drag is previewing comes after the drag's snapshot: it is
-        // not restored over when the drag is cancelled (CodeRabbit #4750).
-        if let Some(i) = &mut self.interaction
-            && sets_develop(&fwd, i.photo)
-        {
-            i.superseded = true;
+        // A committed edit of the photo a drag is previewing comes after the drag's snapshot: what
+        // it leaves is where the interaction comes back to, and the drag's own previews from then
+        // on are drawn on top of it (CodeRabbit #4750).
+        if let Some(id) = self.interaction.as_ref().filter(|i| sets_develop(&fwd, i.photo)).map(|i| i.photo) {
+            let after = self.develop_of(id);
+            let edited = self.catalog.photo(id).and_then(|photo| photo.edited.clone());
+            if let (Some(after), Some(i)) = (after, self.interaction.as_mut()) {
+                i.superseded = Some((after, edited));
+            }
         }
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
@@ -1164,7 +1168,7 @@ impl Session {
             self.apply_silent(Op::SetDevelop { id, settings: Arc::new(on), label: label.into(), edited: original_edited.clone() })?;
         }
         let original = self.develop_of(id).unwrap_or_default();
-        self.interaction = Some(Interaction { label: label.into(), photo: id, original, original_edited, crop_edited: false, superseded: false });
+        self.interaction = Some(Interaction { label: label.into(), photo: id, original, original_edited, crop_edited: false, superseded: None });
         Ok(())
     }
 
@@ -1172,31 +1176,39 @@ impl Session {
     pub fn end_interaction(&mut self) -> Result<()> {
         let Some(i) = self.interaction.take() else { return Ok(()) };
         let Some(cur) = self.develop_of(i.photo) else { return Ok(()) };
-        if *cur == *i.original {
+        // What the drag started from: its own snapshot, or the edit committed over it mid-drag
+        // (which is then what Undo of this step goes back to).
+        let (start, start_edited) = match i.superseded {
+            Some((settings, edited)) => (settings, edited),
+            None => (i.original, i.original_edited),
+        };
+        if *cur == *start {
             // Live previews can change only the timestamp when a drag returns to its start.
-            if self.catalog.photo(i.photo).is_some_and(|photo| photo.edited != i.original_edited) {
-                self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: i.original_edited })?;
+            if self.catalog.photo(i.photo).is_some_and(|photo| photo.edited != start_edited) {
+                self.apply_silent(Op::SetDevelop { id: i.photo, settings: start, label: i.label, edited: start_edited })?;
             }
             return Ok(());
         }
-        // Restore the original silently, then commit the final value as one step. A crop nobody
+        // Restore the start silently, then commit the final value as one step. A crop nobody
         // edited goes back to the original's: Constrain Crop fits it again for the final warp, and
         // Auto Sync carries the edit, not the active photo's fitted crop (review of #1990).
-        self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original.clone(), label: i.label.clone(), edited: i.original_edited })?;
+        self.apply_silent(Op::SetDevelop { id: i.photo, settings: start.clone(), label: i.label.clone(), edited: start_edited })?;
         let mut last = (*cur).clone();
         if !i.crop_edited {
-            last.crop.geometry = i.original.crop.geometry;
+            last.crop.geometry = start.crop.geometry;
         }
         self.set_develop(i.photo, last, &i.label)
     }
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
-        // A snapshot an edit was committed over is not the photo's: the drag's preview is given up
-        // and that edit stays (CodeRabbit #4750).
-        if let Some(i) = self.interaction.take()
-            && !i.superseded
-        {
-            self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: i.original_edited })?;
+        // A snapshot an edit was committed over is not the photo's: the previews drawn after that
+        // edit are given up and the photo comes back to what it left (CodeRabbit #4750).
+        if let Some(i) = self.interaction.take() {
+            let (settings, edited) = match i.superseded {
+                Some((settings, edited)) => (settings, edited),
+                None => (i.original, i.original_edited),
+            };
+            self.apply_silent(Op::SetDevelop { id: i.photo, settings, label: i.label, edited })?;
         }
         Ok(())
     }
