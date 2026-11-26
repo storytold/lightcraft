@@ -46,3 +46,16 @@ and the `.desktop` file into `applications/`.
 
 Edit `lightcraft.svg` (or `lightcraft-small.svg`), then run `packaging/icons.sh` (needs `resvg`; `iconutil`
 on macOS for the `.icns`; the `.ico` is packed by `cargo xtask ico`). Every output is committed.
+
+## Nightly channel
+
+The Nightly derivatives keep the foreground artwork, alpha and Mac padding unchanged: only the
+amber field moves to the deeper Nightly amber. There is no letter, crescent or badge; the app, the
+window title and the Launcher name the channel in text.
+
+`lightcraft-nightly.png` and its nine-frame ICO use the existing full-bleed 256 px render. The
+separate `lightcraft-nightly-1024.png` and eleven-slot ICNS use the actual padded Mac master, never
+an upscale. The palette recipe, the input/output hashes and the container sizes are recorded in
+[`nightly-provenance.json`](nightly-provenance.json); `packaging/nightly-icons.py` derives them
+(no `resvg` or `iconutil` needed) and `packaging/nightly-icons-tests.py` re-derives the committed
+bytes. Stable source files are not recoloured.
