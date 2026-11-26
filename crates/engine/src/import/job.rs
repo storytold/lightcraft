@@ -1,7 +1,7 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
+use super::files::{Seen, expand_knowing, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
-use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, ListedFolders, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// Import files/folders. See the module docs.
 pub fn import(s: &mut Session, paths: &[String], mode: ImportMode) -> crate::Result<ImportReport> {
@@ -45,7 +45,9 @@ pub struct ImportJob {
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
     pub(super) cache: HashMap<String, ProbeInfo>,
-    naming: crate::sidecar::SidecarNaming,
+    pub(super) naming: crate::sidecar::SidecarNaming,
+    /// The `.xmp` names in the folders [`ImportJob::expand`] listed.
+    pub(super) listed: ListedFolders,
     now: String,
     /// Next rename number; `None` once the final representable value has been reserved.
     seq: Option<usize>,
@@ -144,7 +146,7 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
                 items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
@@ -163,6 +165,8 @@ impl ImportJob {
     /// Snapshot what an import with `opts` needs from the session (no file-system calls). Takes
     /// the probes a preceding scan left ([`Session::import_probes`]).
     pub fn new(s: &mut Session, opts: ImportOptions) -> crate::Result<Self> {
+        // a recipe is checked before any file is read or placed, not when the photos are committed
+        crate::cmd::check_recipe(&opts.recipe).map_err(|e| crate::cmd::bad("library.import", e))?;
         let mode = opts.mode;
         // Only a library on disk has an `Originals/` folder. The browser build keeps the bytes of
         // every added file in its own storage already, so "copy" there means "add".
@@ -196,6 +200,7 @@ impl ImportJob {
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
+            listed: ListedFolders::default(),
             now: (s.clock)(),
             total: Default::default(),
             done: Default::default(),
@@ -213,10 +218,35 @@ impl ImportJob {
         self.prepare_files(files, cancel)
     }
 
+    /// Hand the job the folders the review that started it listed ([`ScanOutput::listed`]).
+    #[must_use]
+    pub fn with_listed(mut self, listed: ListedFolders) -> Self {
+        self.listed = listed;
+        self
+    }
+
     /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
-    pub fn expand(&self, paths: &[String]) -> Vec<String> {
-        let files = expand(paths, self.lib_dir.as_deref());
+    pub fn expand(&mut self, paths: &[String]) -> Vec<String> {
+        // (a file the review listed is a file: no round trip to a share to ask)
+        let mut listed = std::mem::take(&mut self.listed);
+        let mut walked = ListedFolders::default();
+        // (the folders' times are looked at now, not as an earlier batch found them)
+        listed.new_batch();
+        let (files, _) = expand_knowing(
+            paths,
+            self.lib_dir.as_deref(),
+            crate::walk::Limits::default(),
+            Some(&mut |dir, names, complete, modified| {
+                walked.note(dir, names, complete, modified);
+                true
+            }),
+            true,
+            &|p| listed.is_known_file(p),
+        );
+        listed.absorb(walked);
+        listed.forget_files();
+        self.listed = listed;
         self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
         files
     }
@@ -252,6 +282,7 @@ impl ImportJob {
         use std::sync::atomic::Ordering::Relaxed;
         // the library as it was, kept for the ownership of the shared stem sidecars below
         let library = self.look_up_library();
+        self.listed.new_batch();
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
@@ -297,16 +328,17 @@ impl ImportJob {
         // names asked of the disk, which on a network share made a folder of thousands of photos wait
         // a round trip per name, one name after another.
         let asked: Vec<&str> = todo.iter().zip(&probed).filter(|(_, p)| p.is_ok()).map(|(f, _)| f.as_str()).collect();
-        // (a file whose content the library has is skipped below as a duplicate: it asks the disk nothing)
+        // (a file whose content the library has is skipped below as a duplicate: it asks the disk
+        // nothing, unless the import makes a record of it from its file and sidecar, #2589)
+        let skipped = !opts.local && !opts.read_duplicates;
         let known: std::collections::HashSet<&str> = todo
             .iter()
             .zip(&probed)
-            .filter(|(_, p)| !opts.local && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
+            .filter(|(_, p)| skipped && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
             .map(|(f, _)| f.as_str())
             .collect();
         let mut found =
-            sidecars_of(&asked, cancel, |f| if known.contains(f) { None } else { crate::sidecar::find_sidecar_for_import(&stems, self.naming, f) })
-                .into_iter();
+            sidecars_of(&asked, cancel, |f| if known.contains(f) { None } else { self.listed.find_for_import(&stems, self.naming, f) }).into_iter();
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
@@ -336,13 +368,14 @@ impl ImportJob {
                     break;
                 }
             }
-            // same bytes as a library photo: skipped below, once its capture time is known
+            // same bytes as a library photo: skipped below, once its capture time is known (and,
+            // when the import makes a record of it, once it is read as a file import reads it)
             let duplicate_of =
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
-            // and names the copy when the file itself has none (a duplicate needs only that time)
+            // and names the copy when the file itself has none (a skipped duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
-            let packet = if duplicate_of.is_some() && info.captured.is_some() {
+            let packet = if duplicate_of.is_some() && info.captured.is_some() && !opts.read_duplicates {
                 None
             } else {
                 found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
@@ -369,7 +402,7 @@ impl ImportJob {
                     existing,
                     reason: "content",
                     hash: Some(hash),
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 }));
                 continue;
             }
@@ -512,6 +545,7 @@ impl Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut: None,
             display_fit: None,
@@ -527,6 +561,8 @@ impl Session {
             key,
             cached: Vec::new(),
             embedded,
+            embedded_cache: None,
+            embedded_on_disk: false,
             minimum_embedded_edge,
             small: Some(Box::new(small)),
         })

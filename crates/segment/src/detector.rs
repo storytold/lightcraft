@@ -7,12 +7,14 @@
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 
 use candle_core::{D, Device, IndexOp, Module, Tensor};
-use candle_nn::{Conv2d, Conv2dConfig, GroupNorm, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Conv2d, Conv2dConfig, LayerNorm, Linear, VarBuilder};
 
 use crate::clip::TextEncoder;
 use crate::neck::{FPN, Neck};
-use crate::nn::{Attention, DecoderMlp, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec};
-use crate::{Error, Prediction, Result};
+use crate::nn::{
+    Attention, DecoderMlp, GroupNormRelu, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec,
+};
+use crate::{Error, Prediction, Result, cpu};
 
 const HIDDEN: usize = FPN;
 const HEADS: usize = 8;
@@ -92,7 +94,7 @@ pub struct Detector {
     prompt_attn: Attention,
     prompt_ln: LayerNorm,
     pixel_convs: Vec<Conv2d>,
-    pixel_norms: Vec<GroupNorm>,
+    pixel_norms: Vec<GroupNormRelu>,
     instance_proj: Conv2d,
     semantic_proj: Conv2d,
     mask_embedder: Vec<Linear>,
@@ -157,7 +159,7 @@ impl Detector {
             prompt_attn: Attention::new(HIDDEN, HIDDEN, HEADS, m.pp("prompt_cross_attn"))?,
             prompt_ln: ln(HIDDEN, TORCH_LN_EPS, m.pp("prompt_cross_attn_norm"))?,
             pixel_convs: (0..3).map(|i| Ok(candle_nn::conv2d(HIDDEN, HIDDEN, 3, conv3, p.pp(format!("conv_layers.{i}")))?)).collect::<Result<_>>()?,
-            pixel_norms: (0..3).map(|i| Ok(candle_nn::group_norm(8, HIDDEN, 1e-5, p.pp(format!("norms.{i}")))?)).collect::<Result<_>>()?,
+            pixel_norms: (0..3).map(|i| GroupNormRelu::new(8, HIDDEN, 1e-5, p.pp(format!("norms.{i}")))).collect::<Result<_>>()?,
             instance_proj: candle_nn::conv2d(HIDDEN, HIDDEN, 1, Conv2dConfig::default(), m.pp("instance_projection"))?,
             semantic_proj: candle_nn::conv2d(HIDDEN, 1, 1, Conv2dConfig::default(), m.pp("semantic_projection"))?,
             mask_embedder: (0..3).map(|i| linear(HIDDEN, HIDDEN, m.pp(format!("mask_embedder.layers.{i}")))).collect::<Result<_>>()?,
@@ -188,6 +190,9 @@ impl Detector {
         let dx = log_scale(coords.broadcast_sub(&pick(0, 2)?)?)?;
         let ey = self.rpb_y.forward(&dy)?; // [200, side, heads]
         let ex = self.rpb_x.forward(&dx)?;
+        if self.device.is_cpu() {
+            return cpu::box_bias(&ey, &ex);
+        }
         let m = ey.unsqueeze(2)?.broadcast_add(&ex.unsqueeze(1)?)?; // [200, side, side, heads]
         let m = m.reshape((QUERIES, side * side, HEADS))?.permute((2, 0, 1))?; // [heads, 200, side²]
         let m = m.pad_with_zeros(1, 1, 0)?; // the presence token attends everywhere
@@ -222,7 +227,7 @@ impl Detector {
             let h = l.ln2.forward(&x)?;
             x = (&x + l.cross_attn.forward(&h, &text, &text, Some(&text_bias))?)?;
             let h = l.ln3.forward(&x)?;
-            x = (&x + l.mlp.forward(&h)?)?;
+            x = l.mlp.forward_add(&h, &x)?;
         }
         let memory = x;
 
@@ -241,7 +246,7 @@ impl Detector {
             h = l.text_ln.forward(&(&h + l.text_attn.forward(&q, &text, &text, Some(&text_bias))?)?)?;
             let q = (&h + &qpos)?;
             h = l.vision_ln.forward(&(&h + l.vision_attn.forward(&q, &key_pos, &memory, Some(&bias))?)?)?;
-            h = l.mlp_ln.forward(&(&h + l.mlp.forward(&h)?)?)?;
+            h = l.mlp_ln.forward(&l.mlp.forward_add(&h, &h)?)?;
             let qh = self.out_ln.forward(&h.narrow(1, 1, QUERIES)?)?;
             boxes = candle_nn::ops::sigmoid(&(self.box_head.forward(&qh)? + inverse_sigmoid(&boxes)?)?)?;
             let p = self.presence_head.forward(&self.presence_ln.forward(&h.narrow(1, 0, 1)?)?)?;
@@ -270,7 +275,7 @@ impl Detector {
             let (Some(conv), Some(norm)) = (self.pixel_convs.get(i), self.pixel_norms.get(i)) else {
                 return Err(Error::Model("pixel decoder".into()));
             };
-            prev = norm.forward(&conv.forward(&prev)?)?.relu()?;
+            prev = norm.forward(&conv.forward(&prev)?)?;
         }
         let inst = self.instance_proj.forward(&prev)?; // [1, 256, 288, 288]
         let semantic = to_vec(&self.semantic_proj.forward(&prev)?)?;
@@ -333,9 +338,116 @@ pub fn merge(out: &Output, threshold: f32) -> Option<Prediction> {
     merged.map(|logits| Prediction { logits, score: best })
 }
 
+/// Share of the largest candidate's area another needs to count among the photo's main subjects
+/// (people in front, not the crowd behind them).
+pub const PROMINENT: f32 = 0.25;
+
+/// Which candidates are the photo's subject, given each one's area (cells it selects) and, when the
+/// camera recorded where it focused, whether it covers that point. The focus decides: the
+/// candidates it falls on, with the others about as large either way (a group at the same
+/// distance); a focus on none of them means the subject is something else (empty: the caller
+/// selects what is at the point).
+/// Without a focus: the largest, and the others about as large.
+pub fn pick_prominent(areas: &[usize], on_focus: Option<&[bool]>) -> Vec<usize> {
+    let largest = |ks: &mut dyn Iterator<Item = usize>| ks.filter_map(|k| areas.get(k).copied()).max().unwrap_or(0);
+    let near = |a: usize, of: usize| of > 0 && a as f32 >= PROMINENT * of as f32;
+    match on_focus {
+        Some(hit) => {
+            let focused: Vec<usize> = (0..areas.len()).filter(|k| hit.get(*k).copied().unwrap_or(false) && areas[*k] > 0).collect();
+            if focused.is_empty() {
+                return Vec::new();
+            }
+            // about as large as what is in focus, either way: much larger is nearer the camera
+            // than the focus, so out of focus too
+            let of = largest(&mut focused.iter().copied());
+            let alike = |a: usize| near(a, of) && (a as f32) * PROMINENT <= of as f32;
+            (0..areas.len()).filter(|k| focused.contains(k) || alike(areas[*k])).collect()
+        }
+        None => {
+            let of = largest(&mut (0..areas.len()));
+            (0..areas.len()).filter(|k| near(areas[*k], of)).collect()
+        }
+    }
+}
+
+/// The instances of several detector outputs (one per concept: "person", "animal") above
+/// `threshold` that [`pick_prominent`] keeps, each with its share of its concept's semantic mask,
+/// merged into one mask. `focus`: where the camera focused (normalized). `None` when nothing is kept.
+pub fn subject(outs: &[Output], threshold: f32, focus: Option<(f32, f32)>) -> Option<Prediction> {
+    let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+    // (mask, score, concept)
+    let mut cands: Vec<(Vec<f32>, f32, usize)> = Vec::new();
+    for (c, out) in outs.iter().enumerate() {
+        let presence = s(out.presence);
+        for (i, l) in out.logits.iter().enumerate() {
+            let p = s(*l) * presence;
+            if p > threshold
+                && let Some(m) = out.masks.i(i).ok().and_then(|t| to_vec(&t).ok())
+            {
+                cands.push((m, p, c));
+            }
+        }
+    }
+    let n = cands.first()?.0.len();
+    let side = (n as f64).sqrt() as usize;
+    if side == 0 || side * side != n || cands.iter().any(|c| c.0.len() != n) {
+        return None;
+    }
+    let areas: Vec<usize> = cands.iter().map(|c| c.0.iter().filter(|l| **l > 0.0).count()).collect();
+    let cell = focus.filter(|(x, y)| x.is_finite() && y.is_finite()).map(|(x, y)| {
+        let at = |v: f32| ((v.clamp(0.0, 1.0) * side as f32) as usize).min(side - 1);
+        at(y) * side + at(x)
+    });
+    let hits: Option<Vec<bool>> = cell.map(|i| cands.iter().map(|c| c.0.get(i).is_some_and(|l| *l > 0.0)).collect());
+    let keep = pick_prominent(&areas, hits.as_deref());
+    if keep.is_empty() {
+        return None;
+    }
+    let best = keep.iter().filter_map(|k| cands.get(*k)).map(|c| c.1).fold(0f32, f32::max);
+    let mut merged: Option<Vec<f32>> = None;
+    for (c, out) in outs.iter().enumerate() {
+        let mut masks: Vec<Vec<f32>> = keep.iter().filter_map(|k| cands.get(*k)).filter(|x| x.2 == c).map(|x| x.0.clone()).collect();
+        if masks.is_empty() {
+            continue;
+        }
+        share(&mut masks, &out.semantic);
+        for m in masks {
+            merged = Some(match merged {
+                Some(acc) => acc.iter().zip(&m).map(|(a, b)| a.max(*b)).collect(),
+                None => m,
+            });
+        }
+    }
+    merged.map(|logits| Prediction { logits, score: best })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A group in front is kept, the crowd behind isn't; the camera's focus decides: on a person,
+    /// that person and the others as large; on nobody, nothing (the object there is the subject).
+    #[test]
+    fn prominent_subjects() {
+        // four people in front, two small ones far behind
+        let areas = [900, 1000, 800, 950, 60, 40];
+        assert_eq!(pick_prominent(&areas, None), vec![0, 1, 2, 3]);
+        // focused on the first: the group
+        let hit = [true, false, false, false, false, false];
+        assert_eq!(pick_prominent(&areas, Some(&hit)), vec![0, 1, 2, 3]);
+        // focused on someone small behind: that one and whoever is about as large, not the
+        // (much larger, so nearer and out of focus) group in front
+        let hit = [false, false, false, false, true, false];
+        assert_eq!(pick_prominent(&areas, Some(&hit)), vec![4, 5]);
+        // a product in front of people: the focus is on none of them
+        assert!(pick_prominent(&areas, Some(&[false; 6])).is_empty());
+        // nobody at all, or empty masks
+        assert!(pick_prominent(&[], None).is_empty());
+        assert!(pick_prominent(&[0, 0], None).is_empty());
+        assert!(pick_prominent(&[0, 5], Some(&[true, false])).is_empty());
+        // a mismatched focus list is read as "not on it"
+        assert_eq!(pick_prominent(&[10, 9], Some(&[true])), vec![0, 1]);
+    }
 
     /// Two people side by side on a row of cells, each only weakly sure of themself and both fading where
     /// they touch; the semantic mask is sure of both and runs across. Each takes the semantic logits where

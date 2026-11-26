@@ -6,7 +6,7 @@ use super::{
     MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
     SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
     TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    merge, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
 
 mod control;
@@ -56,6 +56,7 @@ impl LightcraftApp {
             max_texture_side: MAX_TEXTURE_SIDE,
             clock: AppClock::new(),
             accesskit_language: None,
+            selection_seen: (0, 0),
             slideshow_hidden_at: None,
             slideshow_auto_paused: false,
             dropped_files: vec![],
@@ -64,6 +65,8 @@ impl LightcraftApp {
             ui_passes: 0,
             #[cfg(test)]
             library_passes: vec![],
+            #[cfg(test)]
+            prep_ticks: 0,
             #[cfg(test)]
             missing_count_test_delay: None,
             shadow: None,
@@ -94,6 +97,9 @@ impl LightcraftApp {
             space_hand: None,
             brush_live: None,
             loupe_shown: None,
+            loupe_timing: Default::default(),
+            prep_synced: false,
+            look_ahead: Default::default(),
             region_view: None,
             region_before_view: None,
             size_hold: Default::default(),
@@ -103,10 +109,13 @@ impl LightcraftApp {
             compare_windows: [None; 2],
             compare_tiles: Default::default(),
             compare_hold_until: f64::NEG_INFINITY,
+            survey_motion: Default::default(),
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            scans_stopping: Default::default(),
             waiting_import: Default::default(),
+            review_listed: None,
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
@@ -114,6 +123,7 @@ impl LightcraftApp {
             lightroom_last: None,
             lightroom_result: None,
             review_pending: None,
+            review_pending_listed: None,
             shown_library: None,
             export: None,
             tasks: Default::default(),
@@ -123,17 +133,21 @@ impl LightcraftApp {
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_notice: false,
+            disk_space_notice: false,
+            disk_notice: None,
             memory_applied: None,
+            hot_pixels_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,
             screen_profile_read: None,
+            system_reduce_motion: None,
+            system_reduce_motion_read: None,
             library_problem: None,
             library_window_input: Default::default(),
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
-            model_setup: Default::default(),
         }
     }
 
@@ -194,9 +208,26 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
-        if let Some(result) = model_setup::intercept(self, id, &params) {
-            return result.map_err(CommandError::from);
+        // (seen before and after each command, so a selection changed and changed back between two
+        // UI passes still counts as changed)
+        self.selection_changes();
+        let r = self.run_command(id, params);
+        self.selection_changes();
+        r
+    }
+
+    /// How many times the selection has been seen to change, counting a change to other photos and
+    /// back as two. Each command and each finished UI pass looks at the selection.
+    pub(crate) fn selection_changes(&mut self) -> u64 {
+        let s = &self.session.selection;
+        let key = if s.ids.is_empty() { crate::key_of(s.active.as_slice()) } else { crate::key_of(s.ids.as_slice()) };
+        if key != self.selection_seen.0 {
+            self.selection_seen = (key, self.selection_seen.1.wrapping_add(1));
         }
+        self.selection_seen.1
+    }
+
+    fn run_command(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
@@ -488,6 +519,41 @@ impl LightcraftApp {
         }
     }
 
+    /// The app-wide background preparation settings live with the app settings (`ui.json`): taken
+    /// into the session once, then a change made through `prefs.setBackgroundPrep` is saved with
+    /// them. Run at the start of every logic pass, before any command of that pass (also before
+    /// the fonts are ready and the window is drawn).
+    fn sync_prep_settings(&mut self) {
+        if !self.prep_synced {
+            self.session.prep.app = self.ui.settings.background_prep.sanitized();
+            self.prep_synced = true;
+        } else if self.session.prep.app != self.ui.settings.background_prep {
+            self.ui.settings.background_prep = self.session.prep.app;
+        }
+    }
+
+    /// Preparing photos in the background ([`lightcraft_engine::prep`]): the whole view's previews
+    /// once the user is culling in the loupe, built from the photo on screen in the direction of travel.
+    /// Advanced on every logic pass, the hidden ones too (a minimised window keeps preparing).
+    fn background_prep(&mut self, ctx: &egui::Context) {
+        #[cfg(test)]
+        {
+            self.prep_ticks += 1;
+        }
+        let mode = panels::detail::prep_mode(self);
+        let loupe = self.ui.fullscreen || self.ui.view == state::ViewMode::Detail;
+        let at = if loupe { self.session.active() } else { None };
+        let backward = self.look_ahead.backward();
+        self.session.prep_tick(mode, at, backward);
+        if self.session.preview_build.as_ref().is_some_and(|b| b.running()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        // a build that couldn't start tries again at its time, also when nothing else draws a frame
+        if let Some(wait) = self.session.prep_retry_in() {
+            ctx.request_repaint_after(wait);
+        }
+    }
+
     /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
     /// show their errors; start a zoomed-in detail pass once the clicking stops
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
@@ -584,6 +650,7 @@ impl LightcraftApp {
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.sync_prep_settings();
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and
@@ -614,6 +681,7 @@ impl LightcraftApp {
             frame_rate::forget(ctx);
         }
         panels::edit::wheel_pointer_frame_end(ctx);
+        panels::right::forget_stale_enter_keywords(self, ctx);
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {
