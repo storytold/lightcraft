@@ -790,6 +790,17 @@ struct SmartCounts {
     failed: Vec<Value>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl SmartCounts {
+    fn fail(&mut self, id: lightcraft_catalog::PhotoId, why: String, state: Option<(&PreviewBuild, &TaskGuard)>) {
+        if let Some((st, _)) = state {
+            st.failed.fetch_add(1, Ordering::Relaxed);
+            *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why.clone());
+        }
+        self.failed.push(json!([id.0, why]));
+    }
+}
+
 /// `source` if it reads the photo's original, else `None`. A source decoded from a smart preview
 /// (it now carries the proxy's stored facts), a proxy standing in for an offline original, and the
 /// proxy fallback of a file source are not the original: building or repairing a proxy from one
@@ -853,12 +864,7 @@ fn smart_run(
                 }
             }
             if !errors.is_empty() {
-                let why = errors.join("\n");
-                if let Some((st, _)) = state {
-                    st.failed.fetch_add(1, Ordering::Relaxed);
-                    *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why.clone());
-                }
-                n.failed.push(json!([id.0, why]));
+                n.fail(id, errors.join("\n"), state);
             }
         } else {
             let reusable = path.load_with_path().ok().map(|(path, _)| path);
@@ -877,10 +883,8 @@ fn smart_run(
                 n.newer_kept += 1;
                 if valid {
                     n.built += 1;
-                } else if let Some((st, _)) = state {
-                    st.failed.fetch_add(1, Ordering::Relaxed);
-                    *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(format!("Kept the newer smart preview at {}. This build cannot read it.", path.display()));
+                } else {
+                    n.fail(id, format!("Kept the newer smart preview at {}. This build cannot read it.", path.display()), state);
                 }
             } else if valid && !stale {
                 n.built += 1;
@@ -946,13 +950,7 @@ fn smart_run(
                         n.built += 1;
                         n.stale_kept += 1;
                     }
-                    Err(e) => {
-                        if let Some((st, _)) = state {
-                            st.failed.fetch_add(1, Ordering::Relaxed);
-                            *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e.clone());
-                        }
-                        n.failed.push(json!([id.0, e]));
-                    }
+                    Err(e) => n.fail(id, e, state),
                 }
             }
         }

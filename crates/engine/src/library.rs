@@ -638,7 +638,11 @@ impl Session {
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(discard) = self.preview_build.as_ref().filter(|b| b.discard_retention.is_some()) {
+        if let Some(discard) = &self.preview_build
+            && let Some(retention) = &discard.discard_retention
+        {
+            // Serialize cancellation with the worker's check and unlink before switching catalogs.
+            let _guard = retention.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             discard.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.catalog = catalog;

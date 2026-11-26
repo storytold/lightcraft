@@ -158,6 +158,9 @@ fn a_newer_incompatible_proxy_at_the_write_destination_is_preserved() {
     let report = x.build();
     assert_eq!(report["built"], 0);
     assert_eq!(report["newerKept"], 1);
+    assert!(report["failed"][0][1].as_str().unwrap().contains("Kept the newer smart preview"));
+    assert!(crate::cmd::previews::refresh_stale_smart_previews(&mut x.s).unwrap().join().is_ok());
+    assert!(!crate::smart::look_checked(&x.smart_dir()), "an unreadable proxy leaves the refresh pending");
     x.s.execute("library.smartPreviews", &json!({"id": x.id.0, "background": true})).unwrap();
     wait_build(&x.s);
     let progress = x.s.execute("library.previewProgress", &json!({})).unwrap();
