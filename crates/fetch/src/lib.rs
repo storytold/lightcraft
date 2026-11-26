@@ -59,7 +59,8 @@ pub fn mirrors(env: Option<&str>, file: Option<&Path>, defaults: &[&str]) -> Vec
         let s = s.trim();
         // a local folder (an absolute path) is the same as its `file://` URL
         let s = if Path::new(s).is_absolute() { format!("file://{}", s.replace('%', "%25")) } else { s.to_string() };
-        let s = s.trim_end_matches('/');
+        let s = keep_root(s.trim_end_matches('/'));
+        let s = s.as_str();
         let usable = local_path(s).is_some() || Url::parse(s).is_ok();
         if !s.is_empty() && usable && !out.iter().any(|m| m == s) && out.len() < MAX_MIRRORS {
             out.push(s.to_string());
@@ -202,7 +203,7 @@ fn download_source(
         let mut errors = Vec::new();
         let mut ok = false;
         'mirrors: for m in mirrors {
-            let url = if exact_urls { m.clone() } else { format!("{m}/{}", f.name) };
+            let url = if exact_urls { m.clone() } else { file_url_in(m, f.name) };
             for _ in 0..opts.attempts.clamp(1, 16) {
                 if cancel.load(Ordering::Relaxed) {
                     return Err(DownloadError::Cancelled);
@@ -467,6 +468,23 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
 }
 
 /// The local path of a `file://` URL (absolute only; `file:///C:/x` → `C:/x` on Windows).
+/// A mirror with its trailing separators taken off, except a filesystem root's: `file:///` and `file:///D:/` stay
+/// as they are (without it neither is an absolute path).
+fn keep_root(s: &str) -> String {
+    match s {
+        "file:" => "file:///".to_string(),
+        s if s.starts_with("file://") && s.ends_with(':') => format!("{s}/"),
+        s => s.to_string(),
+    }
+}
+
+/// The URL of file `name` on mirror `m`: one separator between them (a root mirror already ends with one), and on a
+/// local mirror the name's own `%` escaped, so the decoded path is that very name.
+fn file_url_in(m: &str, name: &str) -> String {
+    let name = if local_path(m).is_some() { name.replace('%', "%25") } else { name.to_string() };
+    if m.ends_with('/') { format!("{m}{name}") } else { format!("{m}/{name}") }
+}
+
 fn local_path(url: &str) -> Option<PathBuf> {
     let rest = url.strip_prefix("file://")?;
     let rest = if rest.get(2..3) == Some(":") { rest.strip_prefix('/').unwrap_or(rest) } else { rest };
@@ -504,7 +522,8 @@ fn copy_local(src: &Path, part: &Path, limit: u64, size: Option<u64>, cancel: &A
         return Err(Fail::NextMirror(format!("{} has the wrong size ({} bytes)", src.display(), meta.len())));
     }
     let mut input = File::open(src).map_err(|e| Fail::NextMirror(format!("{}: {e}", src.display())))?;
-    let mut out = File::create(part).map_err(disk)?;
+    // (a fresh file: an old one at that name may be a hard link to the source, which truncating would empty)
+    let mut out = new_part(part).map_err(disk)?;
     let announced = size.unwrap_or(meta.len());
     let mut have = 0u64;
     report(0, announced);

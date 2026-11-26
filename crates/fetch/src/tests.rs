@@ -435,7 +435,7 @@ fn copies_from_a_local_folder_mirror_and_checks_the_hash() {
     // a bare absolute path and a file:// URL are both mirrors (passed as a default, which is not split on spaces
     // or commas the way the environment's list is: the temp folder may hold either)
     let m = mirrors(None, None, &[src.to_str().unwrap()]);
-    assert_eq!(m, vec![format!("file://{}", src.display())]);
+    assert_eq!(m, vec![file_url(&src)]);
     let (r, prog) = run(&[pinned()], &m, &dst, &AtomicBool::new(false));
     r.unwrap();
     assert_eq!(std::fs::read(dst.join("model.bin")).unwrap(), payload());
@@ -448,7 +448,7 @@ fn copies_from_a_local_folder_mirror_and_checks_the_hash() {
     damaged[7] ^= 1;
     std::fs::write(bad.join("model.bin"), damaged).unwrap();
     let dst2 = tmp("local-dst2");
-    let (r, _) = run(&[pinned()], &[format!("file://{}", bad.display())], &dst2, &AtomicBool::new(false));
+    let (r, _) = run(&[pinned()], &[file_url(&bad)], &dst2, &AtomicBool::new(false));
     assert!(matches!(r, Err(DownloadError::AllMirrorsFailed { .. })), "{r:?}");
     assert!(!dst2.join("model.bin").exists() && !dst2.join("model.bin.part").exists());
 
@@ -458,9 +458,66 @@ fn copies_from_a_local_folder_mirror_and_checks_the_hash() {
     assert!(mirrors(Some("file://relative/dir"), None, &[]).is_empty());
     std::fs::create_dir_all(src.join("dir.bin")).unwrap();
     let dir_spec = FileSpec { name: "dir.bin", size: None, sha256: None, max: 10 };
-    let (r, _) = run(&[dir_spec], &[format!("file://{}", src.display())], &dst2, &AtomicBool::new(false));
+    let (r, _) = run(&[dir_spec], &[file_url(&src)], &dst2, &AtomicBool::new(false));
     assert!(r.is_err());
     for d in [&src, &dst, &bad, &dst2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// The `file://` URL of a local folder (its own `%` escaped, as [`mirrors`] does: the temp folder may hold one).
+fn file_url(p: &Path) -> String {
+    format!("file://{}", p.display().to_string().replace('%', "%25"))
+}
+
+/// A filesystem root is a usable mirror, and a file in it is found under one separator (CodeRabbit on #3010).
+#[test]
+fn a_root_folder_mirror_keeps_its_separator() {
+    assert_eq!(keep_root("file:"), "file:///");
+    assert_eq!(keep_root("file:///D:"), "file:///D:/");
+    assert_eq!(keep_root("file:///models"), "file:///models");
+    assert_eq!(file_url_in("file:///", "model.bin"), "file:///model.bin");
+    #[cfg(unix)]
+    {
+        assert_eq!(mirrors(None, None, &["/"]), ["file:///"]);
+        assert_eq!(local_path("file:///model.bin"), Some(PathBuf::from("/model.bin")));
+    }
+}
+
+/// A file name with a literal `%20` in it is copied from a local mirror under that very name, not as a space
+/// (CodeRabbit on #3010).
+#[test]
+fn a_local_mirror_keeps_a_file_names_percent_signs() {
+    let src = tmp("local-percent-src");
+    let dst = tmp("local-percent-dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("model%20.bin"), payload()).unwrap();
+    let p = payload();
+    let spec = FileSpec { name: "model%20.bin", size: Some(p.len() as u64), sha256: Some(leak(sha_hex(&p))), max: p.len() as u64 };
+    let (r, _) = run(&[spec], &[file_url(&src)], &dst, &AtomicBool::new(false));
+    r.unwrap();
+    assert_eq!(std::fs::read(dst.join("model%20.bin")).unwrap(), payload());
+    for d in [&src, &dst] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// A leftover `.part` that is a hard link to the local mirror's file is replaced, never truncated through: the
+/// mirror's file keeps its bytes (CodeRabbit on #3010).
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_part_never_empties_the_local_source() {
+    let src = tmp("local-link-src");
+    let dst = tmp("local-link-dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    std::fs::write(src.join("model.bin"), payload()).unwrap();
+    std::fs::hard_link(src.join("model.bin"), dst.join("model.bin.part")).unwrap();
+    let (r, _) = run(&[pinned()], &[file_url(&src)], &dst, &AtomicBool::new(false));
+    r.unwrap();
+    assert_eq!(std::fs::read(src.join("model.bin")).unwrap(), payload(), "the mirror's file is untouched");
+    assert_eq!(std::fs::read(dst.join("model.bin")).unwrap(), payload());
+    for d in [&src, &dst] {
         let _ = std::fs::remove_dir_all(d);
     }
 }
@@ -473,7 +530,7 @@ fn file_urls_are_percent_decoded_but_bare_paths_keep_their_percent_signs() {
     assert_eq!(bare.len(), 1);
     assert_eq!(local_path(&bare[0]), Some(percent));
     let spaced = std::env::temp_dir().join("my sam3");
-    assert_eq!(local_path(&format!("file://{}", spaced.to_str().unwrap().replace(' ', "%20"))), Some(spaced));
+    assert_eq!(local_path(&format!("file://{}", spaced.to_str().unwrap().replace('%', "%25").replace(' ', "%20"))), Some(spaced));
     for hostile in ["file:///x%", "file:///x%2", "file:///x%zz", "file:///x%ff", "file:///x%0a"] {
         assert_eq!(local_path(hostile), None, "{hostile}");
     }
