@@ -1538,6 +1538,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 }
 
 #[cfg(test)]
+mod lightroom_fixture;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
