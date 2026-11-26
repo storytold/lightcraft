@@ -526,7 +526,7 @@ impl Review {
                 d.wb.temp = value;
                 d.wb.mode = WbMode::Custom;
             }
-            _ => unreachable!(),
+            _ => panic!("{ctl} is not a numeric develop control"),
         }
         assert!(d.masks.is_empty());
         d

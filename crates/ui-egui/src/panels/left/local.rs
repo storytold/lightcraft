@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::folders::{library_node_for, move_folder_item, reveal_item, synchronize_item};
-use super::rows::{MAX_DEPTH, MenuAt, SideEvent, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, tree_open};
+use super::rows::{MAX_DEPTH, MenuAt, SideEvent, SideOut, SideRow, SideSpec, entry, host_menu, rule, set_tree_open, side_list, tree_open};
 use super::{LibrarySource, LightcraftApp, SidebarSection, json};
 
 /// Local's folders as they stand this frame, and the folder being browsed among them.
@@ -179,6 +179,25 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
     let selected = meta.iter().find(|(_, m)| current.is_some_and(|c| same_folder(c, &m.path))).map(|(key, _)| key.clone());
     let spec = SideSpec::new("local", crate::i18n::tr("Local"), app.ui.show_counts).selected(selected.as_deref());
     let out = side_list(ui, spec, rows);
+    let request = apply_row_events(app, ui, &out, &meta, &now.hidden);
+    host_menu(ui, "local", crate::i18n::tr("Local"), out.response.as_ref(), request, |ui, key| {
+        if key == RESTORE {
+            hidden_menu(app, ui, &now.hidden);
+        } else if let Some(m) = meta.get(key) {
+            folder_menu(app, ui, m);
+        }
+    });
+}
+
+/// Apply the list's row events: open or close a folder's tree, Browse Folder…, bring the hidden
+/// places back, or ask for a folder's menu. Returns the menu a row asked for, if one did.
+fn apply_row_events(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    out: &SideOut,
+    meta: &HashMap<String, Meta>,
+    hidden: &[(String, String)],
+) -> Option<(String, MenuAt)> {
     let mut request = None;
     for event in &out.events {
         match event {
@@ -201,7 +220,7 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
                 }
             }
             SideEvent::Activate(key) if key == RESTORE => {
-                if let [(_, only)] = now.hidden.as_slice() {
+                if let [(_, only)] = hidden {
                     let _ = app.run("local.restoreHidden", json!({"path": only}));
                 } else if let Some(rect) = out.rect_of(RESTORE) {
                     request = Some((key.clone(), MenuAt::Rect(rect)));
@@ -221,13 +240,7 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
             }
         }
     }
-    host_menu(ui, "local", crate::i18n::tr("Local"), out.response.as_ref(), request, |ui, key| {
-        if key == RESTORE {
-            hidden_menu(app, ui, &now.hidden);
-        } else if let Some(m) = meta.get(key) {
-            folder_menu(app, ui, m);
-        }
-    });
+    request
 }
 
 /// The context menu of a Local folder row.

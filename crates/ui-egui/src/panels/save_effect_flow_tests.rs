@@ -126,6 +126,38 @@ const NATIVE_FOCUS: &[(&str, &str, bool, bool)] = &[
 const NAME: &str = "field:effectName";
 const GROUP: &str = "field:effectGroup";
 const PICKER: &str = "button:effectGroupPick";
+
+/// What the dialog holds: name, group, the included fields, amount and brush.
+type Draft = (String, String, Vec<String>, bool, bool);
+
+/// Every develop field the Include checklist offers, in its display order.
+fn include_keys() -> Vec<String> {
+    [
+        "temp",
+        "tint",
+        "exposure",
+        "contrast",
+        "highlights",
+        "shadows",
+        "whites",
+        "blacks",
+        "texture",
+        "clarity",
+        "dehaze",
+        "hue",
+        "saturation",
+        "sharpness",
+        "noise",
+        "moire",
+        "defringe",
+        "lens_blur",
+        "color_sat",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
 struct Output(egui::FullOutput);
 impl Drop for Output {
     fn drop(&mut self) {
@@ -305,7 +337,7 @@ impl Review {
         self.focused_field(NAME);
         self.observe("opened-name-autofocus");
     }
-    fn draft(&self) -> (String, String, Vec<String>, bool, bool) {
+    fn draft(&self) -> Draft {
         let Some(Dialog::SaveEffect { name, group, fields, amount, brush }) = &self.app.ui.dialog else {
             panic!("Save Effect parent disappeared: {:?}", self.app.ui.dialog)
         };
@@ -696,30 +728,30 @@ fn save_effect_actual_include_controls_physical_selection_bulk_and_flags_keep_dr
     r.replace(GROUP, "  Group draft  ");
     let initial = r.draft();
     let unchanged_store = r.saved();
-    let all: Vec<String> = [
-        "temp",
-        "tint",
-        "exposure",
-        "contrast",
-        "highlights",
-        "shadows",
-        "whites",
-        "blacks",
-        "texture",
-        "clarity",
-        "dehaze",
-        "hue",
-        "saturation",
-        "sharpness",
-        "noise",
-        "moire",
-        "defringe",
-        "lens_blur",
-        "color_sat",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
+    let all = include_keys();
+    pointer_then_tab_keeps_the_click(&mut r);
+    keyboard_toggles_include_rows(&mut r);
+    let changed = pointer_bulk_commands(&mut r, &all);
+    let before_bulk_keys = r.draft();
+    keyboard_bulk_and_flags(&mut r, &all, &changed, &initial, before_bulk_keys);
+    let end = r.draft();
+    assert_eq!((end.0, end.1, end.2, end.3, end.4), (initial.0, initial.1, changed, initial.3, initial.4));
+    assert_eq!(r.saved(), unchanged_store);
+    assert!(!save_popup_open(&r.ctx));
+    r.safety();
+    println!(
+        "SAVE_EFFECT_INCLUDE_FLOW {}",
+        json!({"stage":"physical-checklist-and-bulk-complete","draft":r.draft(),"saved":r.saved(),"focus":r.focus_name()})
+    );
+    r.click("button:dialogCancel");
+    assert!(r.app.ui.dialog.is_none());
+    assert_eq!(r.saved(), unchanged_store);
+    r.safety();
+}
+
+/// A pointer click on one include row, then natural Tab from the name field through the group
+/// picker back to that row, leaves the draft as the click left it.
+fn pointer_then_tab_keeps_the_click(r: &mut Review) {
     r.click("effectInclude:none");
     assert!(r.draft().2.is_empty());
     r.click("effectInclude:temp");
@@ -734,6 +766,10 @@ fn save_effect_actual_include_controls_physical_selection_bulk_and_flags_keep_dr
         assert_eq!(r.focus_name(), target, "natural acquisition after the pointer value check");
         assert_eq!(r.draft(), pointer_selected);
     }
+}
+
+/// Space toggles the focused include row, forward and back, one row at a time.
+fn keyboard_toggles_include_rows(r: &mut Review) {
     r.key(Key::Space, Modifiers::NONE);
     assert!(r.draft().2.is_empty());
     r.key(Key::Space, Modifiers::NONE);
@@ -746,6 +782,10 @@ fn save_effect_actual_include_controls_physical_selection_bulk_and_flags_keep_dr
     assert_eq!(r.focus_name(), "effectInclude:temp");
     r.key(Key::Space, Modifiers::NONE);
     assert_eq!(r.draft().2, vec!["tint".to_owned()]);
+}
+
+/// All three bulk commands by pointer; returns the fields Changed selects.
+fn pointer_bulk_commands(r: &mut Review, all: &[String]) -> Vec<String> {
     // Keep pointer checks for all three bulk commands, then independently reach
     // their actual SDK stops with ordinary Tab and activate each with Space.
     r.click("effectInclude:all");
@@ -755,7 +795,11 @@ fn save_effect_actual_include_controls_physical_selection_bulk_and_flags_keep_dr
     r.click("effectInclude:changed");
     let changed = vec!["exposure".to_owned(), "shadows".to_owned(), "color_sat".to_owned()];
     assert_eq!(r.draft().2, changed);
-    let before_bulk_keys = r.draft();
+    changed
+}
+
+/// The same bulk commands and the two flags, reached by natural Tab from the name field.
+fn keyboard_bulk_and_flags(r: &mut Review, all: &[String], changed: &[String], initial: &Draft, before_bulk_keys: Draft) {
     r.click(NAME);
     r.focused_field(NAME);
     let path = [GROUP.to_owned(), PICKER.to_owned()]
@@ -789,19 +833,6 @@ fn save_effect_actual_include_controls_physical_selection_bulk_and_flags_keep_dr
     assert_eq!(r.draft().3, initial.3);
     r.click("check:effectBrush");
     assert_eq!(r.draft().4, initial.4);
-    let end = r.draft();
-    assert_eq!((end.0, end.1, end.2, end.3, end.4), (initial.0, initial.1, changed, initial.3, initial.4));
-    assert_eq!(r.saved(), unchanged_store);
-    assert!(!save_popup_open(&r.ctx));
-    r.safety();
-    println!(
-        "SAVE_EFFECT_INCLUDE_FLOW {}",
-        json!({"stage":"physical-checklist-and-bulk-complete","draft":r.draft(),"saved":r.saved(),"focus":r.focus_name()})
-    );
-    r.click("button:dialogCancel");
-    assert!(r.app.ui.dialog.is_none());
-    assert_eq!(r.saved(), unchanged_store);
-    r.safety();
 }
 
 // Observation-only continuation: this is not a replacement for the unchanged
@@ -831,6 +862,72 @@ fn save_effect_trace_frame_snapshot(r: &Review, stage: &str) {
     );
 }
 
+/// A genuine currently visible option interior, within the parent and ordinary viewport. This is
+/// not a fabricated or offscreen future target.
+fn former_option_interior(r: &Review) -> (&'static str, egui::Id, egui::Pos2, Rect) {
+    ["popup:Existing Group", "popup:None"]
+        .into_iter()
+        .find_map(|label| {
+            let hit = r.hits.iter().find(|(name, _)| name == label)?.1;
+            let response = r.ctx.read_response(hit.id)?;
+            let rect = response.rect.intersect(response.interact_rect).intersect(r.rect("dialog:window")).intersect(r.ctx.content_rect());
+            let point = rect.center();
+            (rect.is_finite()
+                && rect.is_positive()
+                && Review::point_inside(rect, point)
+                && response.enabled()
+                && r.ctx.layer_id_at(point) == Some(response.layer_id))
+            .then_some((label, hit.id, point, rect))
+        })
+        .expect("a genuine visible option interior over the parent, not an offscreen point")
+}
+
+/// The real parent actions the last pass painted under `point`, in registration order.
+fn parent_targets_at(r: &Review, point: egui::Pos2) -> Vec<(String, egui::Id)> {
+    let shapes = craft::ui::runtime::pointer::shapes_at(&r.ctx, point);
+    r.hits
+        .iter()
+        .filter(|(name, hit)| {
+            !name.starts_with("popup:")
+                && (name == NAME
+                    || name == GROUP
+                    || name == PICKER
+                    || name.starts_with("effectInclude:")
+                    || name.starts_with("check:effect")
+                    || name == "button:dialogCancel"
+                    || name == "button:dialogOk")
+                && shapes.iter().any(|(owner, _)| *owner == hit.id)
+                && r.ctx.read_response(hit.id).is_some_and(|response| response.enabled())
+        })
+        .map(|(name, hit)| (name.clone(), hit.id))
+        .collect()
+}
+
+/// What the dialog's own rules make of the parent action `action`: the only change the dismissed
+/// option's old coordinate may produce.
+fn expected_after_parent(expected: &mut Draft, action: &str, all: &[String]) {
+    match action {
+        NAME | GROUP => {} // caret/focus is legitimate; there is no text event
+        "effectInclude:all" => expected.2 = all.to_vec(),
+        "effectInclude:none" => expected.2.clear(),
+        "effectInclude:changed" => expected.2 = vec!["exposure".to_owned(), "shadows".to_owned(), "color_sat".to_owned()],
+        "check:effectAmount" => expected.3 = !expected.3,
+        "check:effectBrush" => expected.4 = !expected.4,
+        action if action.starts_with("effectInclude:") => {
+            let key = action.strip_prefix("effectInclude:").unwrap().to_owned();
+            assert!(all.contains(&key), "independently known field key");
+            if expected.2.contains(&key) {
+                expected.2.retain(|field| field != &key);
+            } else {
+                expected.2.push(key);
+            }
+        }
+        action => panic!(
+            "former option lies over a legitimate open/close parent action {action}; this coordinate cannot establish the requested parent-survival probe"
+        ),
+    }
+}
+
 #[test]
 fn save_effect_group_popup_close_frame_provenance_diagnostic() {
     let mut r = Review::new();
@@ -855,23 +952,7 @@ fn save_effect_group_popup_close_frame_provenance_diagnostic() {
         }
     }
     assert_eq!(r.focus_name(), start);
-    // Record a genuine currently visible option interior, within the parent and
-    // ordinary viewport. This is not a fabricated/offscreen future target.
-    let (former_label, former_id, former_point, former_rect) = ["popup:Existing Group", "popup:None"]
-        .into_iter()
-        .find_map(|label| {
-            let hit = r.hits.iter().find(|(name, _)| name == label)?.1;
-            let response = r.ctx.read_response(hit.id)?;
-            let rect = response.rect.intersect(response.interact_rect).intersect(r.rect("dialog:window")).intersect(r.ctx.content_rect());
-            let point = rect.center();
-            (rect.is_finite()
-                && rect.is_positive()
-                && Review::point_inside(rect, point)
-                && response.enabled()
-                && r.ctx.layer_id_at(point) == Some(response.layer_id))
-            .then_some((label, hit.id, point, rect))
-        })
-        .expect("a genuine visible option interior over the parent, not an offscreen point");
+    let (former_label, former_id, former_point, former_rect) = former_option_interior(&r);
     println!(
         "SAVE_EFFECT_FORMER_OPTION {}",
         json!({"alias":former_label,"actualId":format!("{:?}",former_id),
@@ -900,70 +981,12 @@ fn save_effect_group_popup_close_frame_provenance_diagnostic() {
     save_effect_trace_frame_snapshot(&r, "former-option-pointer-move");
     assert_eq!(r.draft(), unchanged);
     let shapes = craft::ui::runtime::pointer::shapes_at(&r.ctx, former_point);
-    let parent_targets: Vec<_> = r
-        .hits
-        .iter()
-        .filter(|(name, hit)| {
-            !name.starts_with("popup:")
-                && (name == NAME
-                    || name == GROUP
-                    || name == PICKER
-                    || name.starts_with("effectInclude:")
-                    || name.starts_with("check:effect")
-                    || name == "button:dialogCancel"
-                    || name == "button:dialogOk")
-                && shapes.iter().any(|(owner, _)| *owner == hit.id)
-                && r.ctx.read_response(hit.id).is_some_and(|response| response.enabled())
-        })
-        .map(|(name, hit)| (name.clone(), hit.id))
-        .collect();
+    let parent_targets = parent_targets_at(&r, former_point);
     assert!(parent_targets.len() <= 1, "ambiguous real parent action; diagnostic cannot fabricate an expected winner: {parent_targets:?}");
     let mut expected = unchanged.clone();
-    let all: Vec<String> = [
-        "temp",
-        "tint",
-        "exposure",
-        "contrast",
-        "highlights",
-        "shadows",
-        "whites",
-        "blacks",
-        "texture",
-        "clarity",
-        "dehaze",
-        "hue",
-        "saturation",
-        "sharpness",
-        "noise",
-        "moire",
-        "defringe",
-        "lens_blur",
-        "color_sat",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
+    let all = include_keys();
     if let Some((name, _)) = parent_targets.first() {
-        match name.as_str() {
-            NAME | GROUP => {} // caret/focus is legitimate; there is no text event
-            "effectInclude:all" => expected.2 = all,
-            "effectInclude:none" => expected.2.clear(),
-            "effectInclude:changed" => expected.2 = vec!["exposure".to_owned(), "shadows".to_owned(), "color_sat".to_owned()],
-            "check:effectAmount" => expected.3 = !expected.3,
-            "check:effectBrush" => expected.4 = !expected.4,
-            action if action.starts_with("effectInclude:") => {
-                let key = action.strip_prefix("effectInclude:").unwrap().to_owned();
-                assert!(all.contains(&key), "independently known field key");
-                if expected.2.contains(&key) {
-                    expected.2.retain(|field| field != &key);
-                } else {
-                    expected.2.push(key);
-                }
-            }
-            action => panic!(
-                "former option lies over a legitimate open/close parent action {action}; this coordinate cannot establish the requested parent-survival probe"
-            ),
-        }
+        expected_after_parent(&mut expected, name, &all);
     }
     println!(
         "SAVE_EFFECT_FORMER_OPTION_EXPECTATION {}",

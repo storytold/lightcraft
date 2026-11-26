@@ -805,7 +805,7 @@ fn transition(f: &mut Fixture, which: u8) {
         }
         2 => f.select(&[2], 2),
         3 => f.select(&[1], 1),
-        _ => unreachable!(),
+        _ => panic!("transition {which} has no parent change"),
     }
     f.settle();
     assert_eq!(f.has(KEY), which == 3);

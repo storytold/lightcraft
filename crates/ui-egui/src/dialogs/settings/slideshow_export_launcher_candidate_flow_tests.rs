@@ -139,11 +139,7 @@ impl Fixture {
                             }
                         }
                     };
-                    if native {
-                        (present)();
-                    } else {
-                        present();
-                    }
+                    present();
                 });
             }
         }));

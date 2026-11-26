@@ -4,13 +4,13 @@
 use std::cell::Cell;
 
 use craft::ui::contract::overlay::Outside;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Props as _, ShowContainer as _};
 use craft::ui::dialog::Dialog as FrameworkDialog;
 
 use crate::LightcraftApp;
 use crate::state::Dialog;
 
-pub(super) fn active(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+pub(super) fn active(app: &LightcraftApp, _ctx: &egui::Context) -> bool {
     matches!(app.ui.dialog, Some(Dialog::SaveEffect { .. }))
 }
 

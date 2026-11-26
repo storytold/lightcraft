@@ -3,7 +3,7 @@ use craft::ui::contract::{Bind, Props as _, Show as _};
 
 use super::curve::set_tat;
 use super::sliders::{control, sub_title};
-use super::{BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, hex, json, paint, register, text_button, vec2};
+use super::{BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Tokens, hex, json, paint, text_button, vec2};
 
 // ------------------------------------------------------------------------------ colour mixer
 
@@ -83,10 +83,10 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
     let t = Tokens::get(ui.ctx());
     let bands = lightcraft_develop::MIXER_BANDS;
     let sel = bands.iter().position(|b| *b == app.ui.mixer_mode).unwrap_or(0);
-    if let Some(index) = mixer_band_picker(ui, sel, crate::is_bw(d)) {
-        if let Some(band) = bands.get(index) {
-            app.ui.mixer_mode = (*band).to_owned();
-        }
+    if let Some(index) = mixer_band_picker(ui, sel, crate::is_bw(d))
+        && let Some(band) = bands.get(index)
+    {
+        app.ui.mixer_mode = (*band).to_owned();
     }
     // targeted adjustment: pick the attribute, then drag on the photo
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {

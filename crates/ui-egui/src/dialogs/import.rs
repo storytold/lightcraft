@@ -21,7 +21,6 @@ use std::sync::atomic::Ordering;
 use crate::LightcraftApp;
 use crate::render::Slot;
 use crate::theme::Tokens;
-use crate::widgets::register;
 
 mod body;
 mod controls;
@@ -49,7 +48,9 @@ pub(crate) use scan::cards_seen;
 #[cfg(test)]
 pub(crate) use scan::{HELD_RESOLVES, ScanEnd, scan_by_hand, stall_scan, stall_scan_of};
 pub use scan::{ScanTask, browse, open, poll_scan, running};
-pub(crate) use tags::{tag_help, tag_toggle, template_field, unknown_tags_warning};
+#[cfg(test)]
+pub(crate) use tags::tag_toggle;
+pub(crate) use tags::{tag_help, template_field, unknown_tags_warning};
 pub use task::{ImportTask, start, start_paths, tick};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

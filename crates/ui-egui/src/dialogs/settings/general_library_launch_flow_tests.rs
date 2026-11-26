@@ -197,7 +197,6 @@ impl Fixture {
         let _ = crate::widgets::take_registries(&self.ctx);
         self.ctx.data_mut(|data| data.remove::<Vec<Value>>(observation_key()));
         let raw = HeadlessView::raw_input(vec2(1200.0, 1000.0), 1.0, f64::from(self.tick) / 60.0, input);
-        let native = self.native;
         let window = self.window;
         let pass = self.pass;
         let app = &mut self.app;
@@ -225,11 +224,7 @@ impl Fixture {
                             draw(&mut child);
                         }
                     };
-                    if native {
-                        (|| run(ui))();
-                    } else {
-                        run(ui);
-                    }
+                    run(ui);
                 });
             }
         }));

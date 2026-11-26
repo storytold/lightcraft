@@ -547,10 +547,10 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
             ui.add(egui::Label::new(RichText::new(format!("•  {a}")).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
     }
-    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
-        if face_link(ui, "faceModel:page", "Open the model's page") {
-            open_page(app, url);
-        }
+    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str())
+        && face_link(ui, "faceModel:page", "Open the model's page")
+    {
+        open_page(app, url);
     }
     ui.add_space(4.0);
     check(ui, "faceModel.accept", accepted, "I have read these terms and accept them for my own use");

@@ -130,11 +130,19 @@ fn png_pixels(bytes: &[u8]) -> lightcraft_raster::Rgb32f {
     decoded.image
 }
 
-#[test]
-#[ignore = "needs a private TMPDIR and LIGHTCRAFT_REAL_JOURNEY_ROOT; run with --ignored (see the module docs)"]
-#[cfg(not(target_arch = "wasm32"))]
-fn persistent_selected_import_develop_undo_redo_reopen_export() {
-    let root = fresh_root();
+/// The journey's private folders and fixture files, made once before any session opens.
+struct Stage {
+    library: PathBuf,
+    out: PathBuf,
+    chosen_input: PathBuf,
+    other_input: PathBuf,
+    excluded_input: PathBuf,
+    chosen_bytes: Vec<u8>,
+    other_bytes: Vec<u8>,
+    excluded_bytes: Vec<u8>,
+}
+
+fn stage(root: &Path) -> Stage {
     let incoming = root.join("incoming");
     let library = root.join("library");
     let out = root.join("export");
@@ -147,19 +155,50 @@ fn persistent_selected_import_develop_undo_redo_reopen_export() {
     let other_bytes = fixture(&other_input, 1);
     let excluded_bytes = fixture(&excluded_input, 2);
     assert_ne!(chosen_bytes, other_bytes);
+    Stage { library, out, chosen_input, other_input, excluded_input, chosen_bytes, other_bytes, excluded_bytes }
+}
 
+/// The journey's own library and what each phase checks against.
+struct Journey {
+    stage: Stage,
+    chosen: PhotoId,
+    other: PhotoId,
+    untouched: Photo,
+    options: ExportOptions,
+    options_json: Value,
+}
+
+/// What the develop edit produced, so Undo, Redo and the export compare against it.
+struct Rendered {
+    baseline: Vec<u8>,
+    reference: Vec<u8>,
+    reference_pixels: lightcraft_raster::Rgb32f,
+    before_edit: Photo,
+    edited: Photo,
+    undo_count: usize,
+}
+
+/// What survives the close and is checked again after reopening.
+struct Persisted {
+    chosen_before_close: Photo,
+    snapshot_bytes: Vec<u8>,
+}
+
+/// Total light in a rendered image: a brighter render must sum higher.
+fn energy(img: &lightcraft_raster::Rgb32f) -> f64 {
+    img.data.iter().flatten().map(|v| f64::from(*v)).sum()
+}
+
+/// Open a real library in the journey's private folders and import the chosen files through the
+/// engine; the third fixture stays out.
+fn open_and_import(stage: Stage) -> (Headless, Journey) {
     let mut session = Session::new().with_fs();
-    assert!(session.open_library(&library, false).unwrap().created);
+    assert!(session.open_library(&stage.library, false).unwrap().created);
     assert_eq!(session.catalog.len(), 0, "no demo seed or memory-only catalog");
-    let mut h = headless(session, &out);
+    let mut h = headless(session, &stage.out);
     // Explicit engine action: selected paths, not a directory scan or a host file picker.
-    let imported = execute(
-        &mut h,
-        "library.import",
-        json!({
-            "paths": [chosen_input.to_string_lossy(), other_input.to_string_lossy()], "mode": "copy"
-        }),
-    );
+    let paths = [stage.chosen_input.to_string_lossy(), stage.other_input.to_string_lossy()];
+    let imported = execute(&mut h, "library.import", json!({"paths": paths, "mode": "copy"}));
     assert_eq!(imported["scanned"], 2, "{imported}");
     assert_eq!(imported["imported"].as_array().unwrap().len(), 2, "{imported}");
     assert_eq!(imported["failed"], json!([]), "{imported}");
@@ -169,121 +208,159 @@ fn persistent_selected_import_develop_undo_redo_reopen_export() {
     let chosen = h.app.session.catalog.photos().find(|p| p.file_name == "chosen.png").unwrap().id;
     let other = h.app.session.catalog.photos().find(|p| p.file_name == "unchosen.png").unwrap().id;
     assert_ne!(chosen, other);
-    let chosen_copy = copied_path(&photo(&h, chosen), &library, &chosen_bytes);
-    let other_copy = copied_path(&photo(&h, other), &library, &other_bytes);
+    let chosen_copy = copied_path(&photo(&h, chosen), &stage.library, &stage.chosen_bytes);
+    let other_copy = copied_path(&photo(&h, other), &stage.library, &stage.other_bytes);
     assert_ne!(chosen_copy, other_copy);
     let untouched = photo(&h, other);
-
-    ask(&mut h, "ui.set", json!({"view": "photoGrid", "right": "edit"}));
-    // Actual pointer activation of the exact photo's registered grid widget.
-    ask(&mut h, "ui.clickWidget", json!({"id": format!("thumb:{}", chosen.0)}));
-    selected(&h, chosen, other);
-    execute(&mut h, "photo.rate", json!({"rating": 4})); // implicit selection, NOT explicit ids
-    assert_eq!(photo(&h, chosen).rating, 4);
-    assert_eq!(photo(&h, other), untouched, "rating must not affect the unchosen photo");
-    execute(&mut h, "library.filter", json!({"rating": 4}));
-    assert_eq!(h.app.session.visible_cloned(), vec![chosen]);
-    selected(&h, chosen, other);
-
-    // Explicit presentation action to the real Develop panel, not a native shortcut assertion.
-    ask(&mut h, "ui.set", json!({"view": "detail", "right": "edit"}));
-    h.app.ui.open_sections = vec!["light".into()];
-    assert!(h.settle(SETTLE), "Develop panel did not settle");
     let options_json = json!({"format": "png", "longEdge": 32, "bitDepth": 8, "colorSpace": "srgb", "metadata": "none"});
     let options = ExportOptions::from_params(&options_json).unwrap();
-    let baseline = export_photo(&mut h.app.session, chosen, &options, 1).unwrap();
+    (h, Journey { stage, chosen, other, untouched, options, options_json })
+}
+
+/// Rate the chosen photo by pointer, filter on the rating, and keep the selection.
+fn rate_and_filter(h: &mut Headless, j: &Journey) {
+    ask(h, "ui.set", json!({"view": "photoGrid", "right": "edit"}));
+    // Actual pointer activation of the exact photo's registered grid widget.
+    ask(h, "ui.clickWidget", json!({"id": format!("thumb:{}", j.chosen.0)}));
+    selected(h, j.chosen, j.other);
+    execute(h, "photo.rate", json!({"rating": 4})); // implicit selection, NOT explicit ids
+    assert_eq!(photo(h, j.chosen).rating, 4);
+    assert_eq!(photo(h, j.other), j.untouched, "rating must not affect the unchosen photo");
+    execute(h, "library.filter", json!({"rating": 4}));
+    assert_eq!(h.app.session.visible_cloned(), vec![j.chosen]);
+    selected(h, j.chosen, j.other);
+}
+
+/// Render the baseline, type the exposure into the real slider field, and render the reference.
+fn develop(h: &mut Headless, j: &Journey) -> Rendered {
+    // Explicit presentation action to the real Develop panel, not a native shortcut assertion.
+    ask(h, "ui.set", json!({"view": "detail", "right": "edit"}));
+    h.app.ui.open_sections = vec!["light".into()];
+    assert!(h.settle(SETTLE), "Develop panel did not settle");
+    let baseline = export_photo(&mut h.app.session, j.chosen, &j.options, 1).unwrap();
     let baseline_pixels = png_pixels(&baseline.bytes);
-    let before_edit = photo(&h, chosen);
+    let before_edit = photo(h, j.chosen);
     assert_eq!(before_edit.develop.light.exposure, 0.0);
     let undo_count = h.app.session.undo.len();
     // Actual widget click + text input + Enter, with no develop.set bypass.
-    ask(&mut h, "ui.clickWidget", json!({"id": "sliderValue:light.exposure"}));
-    ask(&mut h, "ui.text", json!({"text": "1.25"}));
-    ask(&mut h, "ui.key", json!({"key": "Enter"}));
-    assert_eq!(photo(&h, chosen).develop.light.exposure, EXPOSURE);
+    ask(h, "ui.clickWidget", json!({"id": "sliderValue:light.exposure"}));
+    ask(h, "ui.text", json!({"text": "1.25"}));
+    ask(h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(photo(h, j.chosen).develop.light.exposure, EXPOSURE);
     assert_eq!(h.app.session.undo.len(), undo_count + 1, "one committed typed-value edit");
-    let edited = photo(&h, chosen);
+    let edited = photo(h, j.chosen);
     assert_ne!(edited.develop, before_edit.develop);
-    assert_eq!(photo(&h, other), untouched);
-    let reference = export_photo(&mut h.app.session, chosen, &options, 1).unwrap();
+    assert_eq!(photo(h, j.other), j.untouched);
+    let reference = export_photo(&mut h.app.session, j.chosen, &j.options, 1).unwrap();
     let reference_pixels = png_pixels(&reference.bytes);
     assert_ne!(reference.bytes, baseline.bytes, "Develop must change encoded output");
     assert_ne!(reference_pixels, baseline_pixels, "Develop must change actual decoded pixels, not just metadata");
-    let energy = |img: &lightcraft_raster::Rgb32f| img.data.iter().flatten().map(|v| f64::from(*v)).sum::<f64>();
     assert!(energy(&reference_pixels) > energy(&baseline_pixels) * 1.1, "positive Exposure must brighten the pixels");
+    Rendered { baseline: baseline.bytes, reference: reference.bytes, reference_pixels, before_edit, edited, undo_count }
+}
 
-    // Explicit engine Undo/Redo actions; no claim about OS keyboard accelerator handling.
-    execute(&mut h, "edit.undo", json!({}));
-    assert_eq!(photo(&h, chosen).develop, before_edit.develop);
-    let undone = export_photo(&mut h.app.session, chosen, &options, 1).unwrap();
-    assert_eq!(undone.bytes, baseline.bytes, "Undo restores exact rendered PNG bytes");
-    assert_eq!(h.app.session.undo.len(), undo_count);
-    execute(&mut h, "edit.redo", json!({}));
-    assert_eq!(photo(&h, chosen).develop, edited.develop);
-    let redone = export_photo(&mut h.app.session, chosen, &options, 1).unwrap();
-    assert_eq!(redone.bytes, reference.bytes, "Redo restores exact rendered PNG bytes");
-    assert_eq!(h.app.session.undo.len(), undo_count + 1);
-    assert_eq!(photo(&h, other), untouched);
-    selected(&h, chosen, other);
+/// Explicit engine Undo/Redo actions; no claim about OS keyboard accelerator handling.
+fn undo_redo(h: &mut Headless, j: &Journey, r: &Rendered) {
+    execute(h, "edit.undo", json!({}));
+    assert_eq!(photo(h, j.chosen).develop, r.before_edit.develop);
+    let undone = export_photo(&mut h.app.session, j.chosen, &j.options, 1).unwrap();
+    assert_eq!(undone.bytes, r.baseline, "Undo restores exact rendered PNG bytes");
+    assert_eq!(h.app.session.undo.len(), r.undo_count);
+    execute(h, "edit.redo", json!({}));
+    assert_eq!(photo(h, j.chosen).develop, r.edited.develop);
+    let redone = export_photo(&mut h.app.session, j.chosen, &j.options, 1).unwrap();
+    assert_eq!(redone.bytes, r.reference, "Redo restores exact rendered PNG bytes");
+    assert_eq!(h.app.session.undo.len(), r.undo_count + 1);
+    assert_eq!(photo(h, j.other), j.untouched);
+    selected(h, j.chosen, j.other);
+}
+
+/// Persist, close and drop the old app, then reopen a fresh session on the same folders.
+fn persist_and_reopen(mut h: Headless, j: &Journey) -> (Headless, Persisted) {
     let document_before_close = h.app.session.catalog.to_snapshot();
-    let chosen_before_close = photo(&h, chosen);
+    let chosen_before_close = photo(&h, j.chosen);
     h.app.session.persist().unwrap();
     assert!(h.app.session.unsaved().is_none());
     h.app.session.close_library().unwrap();
-    assert!(library.join("catalog.snap").is_file());
-    assert!(library.join("view.json").is_file());
-    let snapshot_bytes = std::fs::read(library.join("catalog.snap")).unwrap();
+    assert!(j.stage.library.join("catalog.snap").is_file());
+    assert!(j.stage.library.join("view.json").is_file());
+    let snapshot_bytes = std::fs::read(j.stage.library.join("catalog.snap")).unwrap();
     assert!(!snapshot_bytes.is_empty());
     drop(h); // old app, Session, MediaCache and journal are discarded BEFORE reopening
 
     let mut reopened = Session::new().with_fs();
-    assert!(!reopened.open_library(&library, false).unwrap().created);
-    assert_eq!(reopened.library.as_ref().unwrap().dir, library.canonicalize().unwrap());
+    assert!(!reopened.open_library(&j.stage.library, false).unwrap().created);
+    assert_eq!(reopened.library.as_ref().unwrap().dir, j.stage.library.canonicalize().unwrap());
     assert_eq!(reopened.catalog.to_snapshot(), document_before_close, "whole persisted document, not a hand-built catalog");
     assert!(reopened.undo.is_empty() && reopened.redo.is_empty(), "Undo stacks are session-local, not persisted");
-    let mut h = headless(reopened, &out);
-    assert_eq!(photo(&h, chosen), chosen_before_close, "exact chosen identity/settings/rating/history from disk");
-    assert_eq!(photo(&h, other), untouched, "exact unchosen document remains unchanged");
-    selected(&h, chosen, other); // view.json selection persisted; no selection injection after reopen
-    copied_path(&photo(&h, chosen), &library, &chosen_bytes);
-    copied_path(&photo(&h, other), &library, &other_bytes);
+    let mut h = headless(reopened, &j.stage.out);
+    assert_eq!(photo(&h, j.chosen), chosen_before_close, "exact chosen identity/settings/rating/history from disk");
+    assert_eq!(photo(&h, j.other), j.untouched, "exact unchosen document remains unchanged");
+    selected(&h, j.chosen, j.other); // view.json selection persisted; no selection injection after reopen
+    copied_path(&photo(&h, j.chosen), &j.stage.library, &j.stage.chosen_bytes);
+    copied_path(&photo(&h, j.other), &j.stage.library, &j.stage.other_bytes);
     // Filters aren't in view.json: reapply deliberately, do NOT claim filter persistence.
     execute(&mut h, "library.filter", json!({"rating": 4}));
-    assert_eq!(h.app.session.visible_cloned(), vec![chosen]);
-    selected(&h, chosen, other);
-    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0, "references never wrote delivery files");
-    let mut params = options_json;
-    params["dir"] = json!(out.to_string_lossy());
+    assert_eq!(h.app.session.visible_cloned(), vec![j.chosen]);
+    selected(&h, j.chosen, j.other);
+    assert_eq!(std::fs::read_dir(&j.stage.out).unwrap().count(), 0, "references never wrote delivery files");
+    (h, Persisted { chosen_before_close, snapshot_bytes })
+}
+
+/// Export the persisted selection through the app command and check the one delivered file.
+fn export_selection(h: &mut Headless, j: &Journey, r: &Rendered, p: &Persisted) -> Vec<u8> {
+    let mut params = j.options_json.clone();
+    params["dir"] = json!(j.stage.out.to_string_lossy());
     // No ids/path override: app.export must use the actual persisted selection.
-    let exported = execute(&mut h, "app.export", params);
+    let exported = execute(h, "app.export", params);
     let delivered = exported["files"].as_array().unwrap();
     assert_eq!(delivered.len(), 1, "{exported}");
-    let target = out.join("chosen.png");
+    let target = j.stage.out.join("chosen.png");
     assert_eq!(delivered[0]["path"], json!(target.to_string_lossy()), "{exported}");
     assert_eq!((delivered[0]["width"].as_u64(), delivered[0]["height"].as_u64()), (Some(32), Some(24)));
-    assert_eq!(delivered[0]["bytes"], json!(reference.bytes.len()));
+    assert_eq!(delivered[0]["bytes"], json!(r.reference.len()));
     let bytes = std::fs::read(&target).unwrap();
-    assert_eq!(bytes, reference.bytes, "fresh-Session selected-only disk delivery is byte-for-byte the edited reference");
-    assert_eq!(png_pixels(&bytes), reference_pixels);
-    let files: Vec<_> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(bytes, r.reference, "fresh-Session selected-only disk delivery is byte-for-byte the edited reference");
+    assert_eq!(png_pixels(&bytes), r.reference_pixels);
+    let files: Vec<_> = std::fs::read_dir(&j.stage.out).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert_eq!(files, vec![std::ffi::OsString::from("chosen.png")], "no unselected output or hidden sidecars");
-    assert!(!out.join("unchosen.png").exists());
-    assert!(!out.join("not-imported.png").exists());
-    assert_eq!(photo(&h, chosen), chosen_before_close, "export does not edit the document");
-    assert_eq!(photo(&h, other), untouched);
-    assert_eq!(std::fs::read(&chosen_input).unwrap(), chosen_bytes);
-    assert_eq!(std::fs::read(&other_input).unwrap(), other_bytes);
-    assert_eq!(std::fs::read(&excluded_input).unwrap(), excluded_bytes);
+    assert!(!j.stage.out.join("unchosen.png").exists());
+    assert!(!j.stage.out.join("not-imported.png").exists());
+    assert_eq!(photo(h, j.chosen), p.chosen_before_close, "export does not edit the document");
+    assert_eq!(photo(h, j.other), j.untouched);
+    assert_eq!(std::fs::read(&j.stage.chosen_input).unwrap(), j.stage.chosen_bytes);
+    assert_eq!(std::fs::read(&j.stage.other_input).unwrap(), j.stage.other_bytes);
+    assert_eq!(std::fs::read(&j.stage.excluded_input).unwrap(), j.stage.excluded_bytes);
     h.app.session.close_library().unwrap();
-    drop(h);
-    std::fs::write(root.join("PASS.json"), serde_json::to_vec_pretty(&json!({
+    bytes
+}
+
+/// The evidence the executor keeps after the journey passed.
+fn write_evidence(root: &Path, j: &Journey, p: &Persisted, delivered: &[u8]) {
+    let evidence = json!({
         "boundary": "headless UI + real Session/FsStore + real PNG codec and private disk writer",
-        "chosenId": chosen.0, "unchosenId": other.0,
+        "chosenId": j.chosen.0, "unchosenId": j.other.0,
         "exposure": EXPOSURE, "rating": 4, "width": 32, "height": 24,
-        "exportBytes": bytes.len(), "catalogSnapshotBytes": snapshot_bytes.len(),
+        "exportBytes": delivered.len(), "catalogSnapshotBytes": p.snapshot_bytes.len(),
         "exportedFiles": ["chosen.png"], "oldSessionDroppedBeforeReopen": true,
         "widgetInput": ["thumb:<chosenId>", "sliderValue:light.exposure", "ui.text 1.25", "Enter"],
         "engineActions": ["library.import copy two paths", "photo.rate 4", "library.filter rating 4", "edit.undo", "edit.redo", "app.export selection"]
-    })).unwrap()).unwrap();
+    });
+    std::fs::write(root.join("PASS.json"), serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+}
+
+#[test]
+#[ignore = "needs a private TMPDIR and LIGHTCRAFT_REAL_JOURNEY_ROOT; run with --ignored (see the module docs)"]
+#[cfg(not(target_arch = "wasm32"))]
+fn persistent_selected_import_develop_undo_redo_reopen_export() {
+    let root = fresh_root();
+    let (mut h, j) = open_and_import(stage(&root));
+    rate_and_filter(&mut h, &j);
+    let rendered = develop(&mut h, &j);
+    undo_redo(&mut h, &j, &rendered);
+    let (mut h, persisted) = persist_and_reopen(h, &j);
+    let delivered = export_selection(&mut h, &j, &rendered, &persisted);
+    drop(h);
+    write_evidence(&root, &j, &persisted, &delivered);
     eprintln!("real journey passed; retained evidence: {}", root.display());
 }
