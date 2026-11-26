@@ -807,8 +807,7 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         let retention = self.preview_build.as_ref().filter(|b| b.running()).and_then(|b| b.discard_retention.as_ref());
         #[cfg(not(target_arch = "wasm32"))]
-        let mut discard =
-            retention.filter(|_| !invalidated.is_empty()).map(|r| r.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        let mut discard = retention.filter(|_| !invalidated.is_empty()).map(|r| r.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let applied = apply(&mut self.catalog, op);
         if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
             return applied.map_err(Into::into);
