@@ -2479,6 +2479,8 @@
   "Welcome": "ようこそ",
   "Next": "次へ",
   "Get Started": "始める",
+  "This album is in a loop, so it shows nothing": "このアルバムは循環しているため、何も表示されません",
+  "It tests itself: change its rules (Edit Smart Album…)": "自分自身を条件にしています。条件を変更してください（スマートアルバムを編集…）",
   "Can't add to an album folder": "アルバムフォルダには追加できません",
   "An album folder holds albums, not photos: drop on an album inside it": "アルバムフォルダに入れられるのはアルバムだけです：中のアルバムにドロップしてください",
   "Can't add to a smart album": "スマートアルバムには追加できません",

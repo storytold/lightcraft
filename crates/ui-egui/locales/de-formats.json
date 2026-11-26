@@ -329,6 +329,7 @@
   "Bring photos in with File › Import Photos… ({keys}).": "Fotos holen Sie mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
   "View › Detail View ({keys}).": "Ansicht › Detailansicht ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys}).",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Es führt über das Album „{}“ zu sich selbst zurück: Ändere die Regeln eines Albums im Kreis (Smart-Album bearbeiten…)",
   "Add {n} photo{} to “{}”": "{n} Foto{0} zu „{1}“ hinzufügen",
   "{n} already there": "{n} bereits enthalten",
   "Add “{keyword}” to {n} photo{}": "„{keyword}“ zu {n} Foto{} hinzufügen",

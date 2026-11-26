@@ -2526,6 +2526,8 @@
   "Next": "Další",
   "Get Started": "Začít",
   "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "This album is in a loop, so it shows nothing": "Toto album je ve smyčce, a proto nic nezobrazuje",
+  "It tests itself: change its rules (Edit Smart Album…)": "Testuje samo sebe: změňte jeho pravidla (Upravit inteligentní album…)",
   "Can't add to an album folder": "Nelze přidat do složky alb",
   "An album folder holds albums, not photos: drop on an album inside it": "Složka alb obsahuje alba, ne fotografie: pusťte je na album uvnitř",
   "Can't add to a smart album": "Nelze přidat do inteligentního alba",

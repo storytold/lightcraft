@@ -2686,6 +2686,8 @@
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
   "Get Started": "Начать",
+  "This album is in a loop, so it shows nothing": "Этот альбом попал в цикл, поэтому ничего не показывает",
+  "It tests itself: change its rules (Edit Smart Album…)": "Он проверяет сам себя: измените его условия (Изменить смарт-альбом…)",
   "Can't add to an album folder": "Нельзя добавить в папку альбомов",
   "An album folder holds albums, not photos: drop on an album inside it": "В папке альбомов лежат альбомы, а не фото: бросьте на альбом внутри неё",
   "Can't add to a smart album": "Нельзя добавить в смарт-альбом",

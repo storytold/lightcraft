@@ -2324,6 +2324,8 @@
   "Welcome": "Bem-vindo",
   "Next": "Próximo",
   "Get Started": "Começar",
+  "This album is in a loop, so it shows nothing": "Este álbum está em um ciclo, então não mostra nada",
+  "It tests itself: change its rules (Edit Smart Album…)": "Ele testa a si mesmo: mude as regras dele (Editar álbum inteligente…)",
   "Can't add to an album folder": "Não é possível adicionar a uma pasta de álbuns",
   "An album folder holds albums, not photos: drop on an album inside it": "Uma pasta de álbuns contém álbuns, não fotos: solte em um álbum dentro dela",
   "Can't add to a smart album": "Não é possível adicionar a um álbum inteligente",

@@ -2479,6 +2479,8 @@
   "Welcome": "欢迎",
   "Next": "下一步",
   "Get Started": "开始使用",
+  "This album is in a loop, so it shows nothing": "此相册处于循环中，因此不显示任何内容",
+  "It tests itself: change its rules (Edit Smart Album…)": "它引用了自身：请更改其规则（编辑智能相册…）",
   "Can't add to an album folder": "无法添加到相册文件夹",
   "An album folder holds albums, not photos: drop on an album inside it": "相册文件夹里放的是相册，不是照片：请拖到其中的某个相册上",
   "Can't add to a smart album": "无法添加到智能相册",

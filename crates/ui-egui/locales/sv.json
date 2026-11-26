@@ -3859,6 +3859,8 @@
   "Folder name": "Mappnamn",
   "Its templates move to User Templates.": "Dess mallar flyttas till Användarmallar.",
   "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "This album is in a loop, so it shows nothing": "Det här albumet ingår i en loop och visar därför ingenting",
+  "It tests itself: change its rules (Edit Smart Album…)": "Det testar sig självt: ändra dess regler (Redigera smart album…)",
   "Filter settings": "Filtrera inställningar",
   "No setting matches what is typed.": "Ingen inställning matchar det som skrivits.",
   "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Prova ett ord eller en del av ett: namnen på flikar och avsnitt, etiketter och förklaringar genomsöks.",

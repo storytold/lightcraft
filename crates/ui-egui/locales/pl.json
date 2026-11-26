@@ -2404,6 +2404,8 @@
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
   "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "This album is in a loop, so it shows nothing": "Ten album jest w pętli, więc niczego nie pokazuje",
+  "It tests itself: change its rules (Edit Smart Album…)": "Sprawdza samego siebie: zmień jego reguły (Edytuj album inteligentny…)",
   "Can't add to an album folder": "Nie można dodać do folderu albumów",
   "An album folder holds albums, not photos: drop on an album inside it": "Folder albumów zawiera albumy, nie zdjęcia: upuść na album w jego wnętrzu",
   "Can't add to a smart album": "Nie można dodać do albumu inteligentnego",
