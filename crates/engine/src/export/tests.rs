@@ -1572,3 +1572,74 @@ fn a_graphic_past_the_pixel_cap_is_refused_before_it_is_decoded() {
     assert!(e.contains("too large") || e.contains("10000"), "{e}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #4717: which exported photos become favourites in Apple Photos. Only when the export adds
+/// to Photos and its metadata policy exports the rating; picked or rated at least the threshold.
+#[test]
+fn photos_favourites_follow_pick_rating_and_metadata_policy() {
+    use lightcraft_catalog::Flag;
+    let photo = |rating: u8, flag: Flag| {
+        let mut p = named("a.jpg");
+        (p.rating, p.flag) = (rating, flag);
+        p
+    };
+    let (plain, picked, four, five) = (photo(0, Flag::None), photo(0, Flag::Pick), photo(4, Flag::None), photo(5, Flag::Reject));
+    let o = ExportOptions { add_to_photos: true, photos_favorite_picked: true, photos_favorite_rating: 5, ..Default::default() };
+    let fav = |p: &lightcraft_catalog::Photo, o: &ExportOptions| prepare::photos_favorite(p, o);
+    assert!(!fav(&plain, &o) && fav(&picked, &o) && !fav(&four, &o) && fav(&five, &o));
+    let lower = ExportOptions { photos_favorite_rating: 4, ..o.clone() };
+    assert!(fav(&four, &lower), "at or above the threshold");
+    assert!(!fav(&picked, &ExportOptions { photos_favorite_picked: false, ..o.clone() }));
+    assert!(!fav(&five, &ExportOptions { photos_favorite_rating: 0, ..o.clone() }), "0 = off");
+    // not added to Photos, or the rating isn't exported: never a favourite
+    assert!(!fav(&five, &ExportOptions { add_to_photos: false, ..o.clone() }));
+    for metadata in [MetadataPolicy::Copyright, MetadataPolicy::None] {
+        assert!(!fav(&picked, &ExportOptions { metadata, ..o.clone() }) && !fav(&five, &ExportOptions { metadata, ..o.clone() }));
+    }
+    assert!(fav(&five, &ExportOptions { metadata: MetadataPolicy::AllExceptCamera, ..o.clone() }));
+}
+
+/// Issue #4717: the favourite options are checked before anything is written, kept by presets and
+/// Export with Previous, and refused with a metadata policy that leaves the rating out.
+#[test]
+fn photos_favourite_options_are_checked_and_kept() {
+    let err = |p: serde_json::Value| ExportOptions::from_params(&p).unwrap_err().to_string();
+    assert!(err(json!({"photosFavoriteRating": 6})).contains("`photosFavoriteRating` must be an integer 0..5"));
+    assert!(err(json!({"photosFavoritePicked": "yes"})).contains("must be true or false"));
+    assert!(err(json!({"photosFavoritRating": 3})).contains("did you mean `photosFavoriteRating`"));
+    let o = ExportOptions { photos_favorite_picked: true, photos_favorite_rating: 4, ..Default::default() };
+    assert_eq!(ExportOptions::from_params(&o.to_json()).unwrap(), o);
+    assert_eq!(ExportOptions::from_json(&o.to_json()), o);
+    // without addToPhotos they do nothing and are kept (a preset's own settings)
+    ExportOptions::from_params(&json!({"photosFavoritePicked": true, "metadata": "none"})).unwrap();
+    if cfg!(target_os = "macos") {
+        for metadata in ["copyright", "none"] {
+            let e = err(json!({"addToPhotos": true, "photosFavoriteRating": 3, "metadata": metadata}));
+            assert!(e.contains("need `metadata` all or allExceptCamera"), "{e}");
+        }
+        ExportOptions::from_params(&json!({"addToPhotos": true, "photosFavoriteRating": 3, "metadata": "allExceptCamera"})).unwrap();
+        ExportOptions::from_params(&json!({"addToPhotos": true, "photosFavoriteRating": 0, "metadata": "none"})).unwrap();
+    }
+}
+
+/// With `conflict` overwrite, a later photo that replaces an earlier one's file takes the favourite
+/// decision with it: the earlier entry no longer marks that path (PR #4719 review).
+#[test]
+fn a_replaced_file_keeps_only_the_replacing_photos_favourite() {
+    use lightcraft_catalog::PhotoId;
+    let o = ExportOptions::from_params(&json!({"conflict": "overwrite"})).unwrap();
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut write = |_: &str, _: &[u8]| Ok(());
+    let guard = crate::originals::OriginalGuard::new(&lightcraft_catalog::Catalog::default());
+    let mut placer = Placer::new(&o, &to, &mut write, &|_| false, true);
+    let exported = || -> Result<Exported, String> {
+        Ok(Exported { file_name: "same.jpg".into(), bytes: vec![1], width: 1, height: 1, sidecars: vec![], gpu_fallback: None })
+    };
+    let favourites = |out: &[serde_json::Value]| out.iter().filter(|f| f["photosFavorite"] == json!(true)).count();
+    placer.place(PhotoId(1), "same.jpg".into(), None, &guard, true, exported()).unwrap();
+    assert_eq!(favourites(&placer.out), 1);
+    placer.place(PhotoId(2), "same.jpg".into(), None, &guard, false, exported()).unwrap();
+    assert_eq!(favourites(&placer.out), 0, "photo 2 replaced photo 1's file: {:?}", placer.out);
+    placer.place(PhotoId(3), "same.jpg".into(), None, &guard, true, exported()).unwrap();
+    assert_eq!(favourites(&placer.out), 1, "the replacing photo's own decision stands");
+}

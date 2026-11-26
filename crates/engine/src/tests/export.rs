@@ -1331,16 +1331,16 @@ mod apple_photos {
         let c = calls.clone();
         let r: Runner = Arc::new(move |args: &[String], _| {
             c.lock().unwrap().push(args.to_vec());
-            let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 3;
             let ids: Vec<String> = (0..files.min(keep)).map(|i| format!("ID-{i}/L0/001")).collect();
             Ok(Output { status: Some(0), stdout: ids.join("\n") + "\n", stderr: String::new() })
         });
         (r, calls)
     }
 
-    /// The paths after the album: the files Photos was asked to import.
+    /// The paths after the album and the favourite flag: the files Photos was asked to import.
     fn imported_paths(args: &[String]) -> Vec<String> {
-        args[args.iter().position(|a| a == MARKER).unwrap() + 2..].to_vec()
+        args[args.iter().position(|a| a == MARKER).unwrap() + 3..].to_vec()
     }
 
     fn export_two(s: &mut Session, tag: &str) -> Vec<Value> {
@@ -1487,7 +1487,7 @@ mod apple_photos {
         let runner: Runner = Arc::new(move |args: &[String], _| {
             // a regression (waiting on the caller's thread) fails after 20 s instead of hanging
             let _ = wait.lock().unwrap().recv_timeout(std::time::Duration::from_secs(20));
-            let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 3;
             Ok(Output { status: Some(0), stdout: (0..n).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
         });
         s.apple_photos = Some(runner);

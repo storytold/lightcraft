@@ -41,6 +41,8 @@ pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoI
 pub struct PreparedExport {
     pub photo: lightcraft_catalog::PhotoId,
     pub file_name: String,
+    /// Added to Apple Photos, it becomes a favourite there ([`photos_favorite`]).
+    pub photos_favorite: bool,
     /// The folder of the photo's original on disk ([`DestinationMode::SameAsOriginal`]); `None`
     /// for a demo photo or one in the browser's storage.
     pub source_dir: Option<String>,
@@ -115,6 +117,7 @@ fn prepare_guarded(
     } else {
         o
     };
+    let photos_favorite = photos_favorite(p, o);
     let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
     let (work, weight) = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
@@ -162,7 +165,21 @@ fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight })
+    Ok(PreparedExport { photo: id, file_name, photos_favorite, source_dir, work, guard, weight })
+}
+
+/// Whether photo `p`, added to Apple Photos by an export with `o`, becomes a favourite there
+/// (issue #4717): picked with `photos_favorite_picked`, or rated at least `photos_favorite_rating`.
+/// Never when the export doesn't add to Photos, or when its metadata policy leaves the rating out
+/// of the file (`copyright`, `none`): what the files don't carry doesn't reach Photos either.
+pub fn photos_favorite(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> bool {
+    use crate::export::MetadataPolicy;
+    if !o.add_to_photos || matches!(o.metadata, MetadataPolicy::Copyright | MetadataPolicy::None) {
+        return false;
+    }
+    let picked = o.photos_favorite_picked && p.flag == lightcraft_catalog::Flag::Pick;
+    let rated = o.photos_favorite_rating > 0 && p.rating >= o.photos_favorite_rating;
+    picked || rated
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo

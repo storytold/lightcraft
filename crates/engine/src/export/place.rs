@@ -102,13 +102,16 @@ impl<'a> Placer<'a> {
     }
 
     /// Place photo `photo`'s export result (file `name`, its original in `source_dir`): write it
-    /// and record the outcome. `Err` only when it failed and `stop_on_error` is set.
+    /// and record the outcome, with `photosFavorite: true` when it becomes a favourite in Apple
+    /// Photos (`favorite`; see [`super::prepare::photos_favorite`]). `Err` only when it failed and
+    /// `stop_on_error` is set.
     pub(super) fn place(
         &mut self,
         photo: lightcraft_catalog::PhotoId,
         name: String,
         source_dir: Option<&str>,
         guard: &crate::originals::OriginalGuard,
+        favorite: bool,
         e: Result<Exported, String>,
     ) -> Result<(), String> {
         use serde_json::json;
@@ -168,10 +171,20 @@ impl<'a> Placer<'a> {
         });
         match written {
             Ok((path, files, sidecars)) => {
+                // `conflict` overwrite: an earlier entry whose file this one just replaced no longer
+                // holds that photo, so it can't make the path a favourite; only this photo's decision counts
+                for earlier in self.out.iter_mut().filter(|x| x.get("path").and_then(serde_json::Value::as_str) == Some(path.as_str())) {
+                    if let Some(m) = earlier.as_object_mut() {
+                        m.remove("photosFavorite");
+                    }
+                }
                 self.taken.extend(files);
                 let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars});
                 if let Some(why) = &e.gpu_fallback {
                     entry["gpuFallback"] = json!(why);
+                }
+                if favorite {
+                    entry["photosFavorite"] = json!(true);
                 }
                 self.out.push(entry);
             }

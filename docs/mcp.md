@@ -328,7 +328,8 @@ lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (d
 
 `app.export` (MCP `export` tool, `lightcraft-cli run`, the desktop app) takes `addToPhotos: true` and
 `photosAlbum` to hand the files it wrote to Apple Photos, into that album (a top-level album of exactly that
-name, made when missing). The result's `applePhotos` is the import job: `{job, running, requested, album}`
+name, made when missing); `photosFavoritePicked` and `photosFavoriteRating` (0..5) make picked or highly rated
+photos favourites there ([apple-photos.md](apple-photos.md#favourites)). The result's `applePhotos` is the import job: `{job, running, requested, album}`
 plus `{imported, ids, warning?}`, `{error}` or `{skipped}` (with `cancelled: true` when the export was cancelled) once Photos is done; the files are written either
 way. Headless (this server, `lightcraft-cli`) waits for Photos by default; the desktop app (connect mode)
 answers with the running job and `export.photosImports {job}` gives the outcome. `export.addToPhotos {paths,

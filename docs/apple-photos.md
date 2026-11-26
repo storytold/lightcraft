@@ -68,6 +68,24 @@ each one's parent folder.)
 Photos either copies the files into its library or references them where they are, as set in Photos ▸
 Settings ▸ General ▸ *Copy items to the Photos library*. When it references them, keep the exported files.
 
+### Favourites
+
+Photos shows the star rating an exported file carries (`xmp:Rating`; seen in Photos 12 on macOS 27.2.1), but
+it never makes a photo a favourite from it, and a pick has no place in Photos at all. Two export options turn
+a photo's pick or rating into a Photos favourite (issue #4717):
+
+- `photosFavoritePicked: true`: picked photos become favourites.
+- `photosFavoriteRating: N` (1 to 5; 0 = off): photos rated N stars or more become favourites.
+
+They are export options like the others (presets, Export with Previous, `app.export`, `--opt`) and only apply
+with `addToPhotos`. They need `metadata` `all` or `allExceptCamera`: with `copyright` or `none` the rating and
+pick are left out of the files, so they are not passed to Photos either, and an export asking for both is
+refused before it writes anything. The export sends its favourites to Photos first, as an import of their own,
+and marks the media items that import returns; the other files follow in a second import. If Photos adds the
+files but won't mark them, the outcome says so (the files are in Photos; mark them there). A file Photos skips
+as a duplicate isn't marked. Title, caption and keywords are embedded in the files (XMP, with `metadata` `all`
+or `allExceptCamera`), not set through these options. The Export dialog doesn't show these options yet.
+
 ## How it works
 
 LightCraft runs `/usr/bin/osascript` with a constant AppleScript (`SCRIPT` in
@@ -156,6 +174,13 @@ new empty library first: hold ⌥ while opening Photos ▸ Create New).
     the terminal under Automation when asked). Expected: `applePhotos.imported` in the printed result.
 12. Files on disk: `lightcraft-cli run export.addToPhotos 'paths=["/tmp/lc-photos/<file>.jpg"]' album=CLI`.
     Expected: the command waits for Photos and prints `{"job": …, "running": false, "imported": 1, …}`.
+13. Favourites: in a new, empty Photos library (hold Option while opening Photos), run `lightcraft-cli run
+    --demo photo.flag flag=pick 'ids=[1]' photo.flag flag=none 'ids=[2,3]' photo.rate rating=0 'ids=[1]'
+    photo.rate rating=5 'ids=[2]' photo.rate rating=2 'ids=[3]' app.export dir=/tmp/lc-fav 'ids=[1,2,3]'
+    addToPhotos=true photosAlbum=Favs photosFavoritePicked=true photosFavoriteRating=5` (the demo photos come
+    rated and picked, so every one is set here). Expected: in the album `Favs`, photos 1 (picked, unrated) and
+    2 (5 stars) show the heart, photo 3 (2 stars) doesn't. Again with `metadata=none`: refused, nothing
+    written.
 
 Report the toast or JSON, and the macOS and Photos versions.
 
@@ -166,5 +191,7 @@ Report the toast or JSON, and the macOS and Photos versions.
 - Cancelling a running export cancels the Photos step too; a Photos import already started can't be stopped
   from LightCraft.
 - One import runs (or is reserved by an export) at a time; a session remembers its last 32.
+- Favourites are only ever set, never cleared: exporting a photo again after unpicking it doesn't remove the
+  heart from the copy already in Photos.
 - Quitting the desktop app while Photos is importing doesn't wait for it: Photos may still finish the import,
   but LightCraft won't show the outcome.

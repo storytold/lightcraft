@@ -38,17 +38,18 @@ fn names_and_paths_are_arguments_never_script() {
         "日本の写真 📷 Ünïcödé",
         "'single' & \"double\" » «",
     ];
-    let base = osascript_args("", &["/tmp/a.jpg".into()]);
+    let base = osascript_args("", false, &["/tmp/a.jpg".into()]);
     for album in hostile {
         let paths = vec!["/tmp/with \"quotes\".jpg".to_string(), "/tmp/new\nline/é\\x.jpg".to_string(), format!("/tmp/-{album}.jpg")];
-        let args = osascript_args(album, &paths);
+        let args = osascript_args(album, false, &paths);
         // the script is the same whatever the input…
         assert_eq!(script_of(&args), script_of(&base));
         assert!(script_of(&args).chunks(2).all(|c| c[0] == "-e" && SCRIPT.lines().any(|l| l == c[1])));
         // …and the input follows the marker as whole arguments, unchanged
         let at = args.iter().position(|a| a == MARKER).unwrap();
         assert_eq!(&args[at + 1], album);
-        assert_eq!(&args[at + 2..], &paths[..]);
+        assert_eq!(&args[at + 2], "0");
+        assert_eq!(&args[at + 3..], &paths[..]);
     }
     // the script reads them from argv only
     assert!(SCRIPT.starts_with("on run argv") && SCRIPT.contains("item 2 of argv") && SCRIPT.contains("item i of argv"));
@@ -130,7 +131,7 @@ fn an_import_passes_the_files_and_returns_the_ids() {
     assert_eq!(got.warning(), None);
     let args = calls.lock().unwrap()[0].clone();
     let at = args.iter().position(|a| a == MARKER).unwrap();
-    assert_eq!(&args[at + 1..], &[vec!["Trip “2026”".to_string()], paths.clone()].concat()[..]);
+    assert_eq!(&args[at + 1..], &[vec!["Trip “2026”".to_string(), "0".to_string()], paths.clone()].concat()[..]);
     // fewer back than asked: a partial import, said so
     let (runner, _) = fake(ok("ID-1/L0/001\n"));
     let got = import(&runner, &paths, "").unwrap();
@@ -155,11 +156,11 @@ fn big_imports_run_in_batches_within_the_argument_limit() {
     let runs = Arc::new(Mutex::new(Vec::<(usize, usize, Duration)>::new()));
     let r = runs.clone();
     let runner: Runner = Arc::new(move |args: &[String], limit| {
-        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 3;
         r.lock().unwrap().push((files, args.iter().map(|a| a.len() + 1).sum(), limit));
         Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
     });
-    let got = execute(&runner, &paths, "Big").unwrap();
+    let got = execute(&runner, &paths, 0, "Big").unwrap();
     assert_eq!((got.ids.len(), got.requested, got.warning()), (10_000, 10_000, None));
     let runs = runs.lock().unwrap().clone();
     assert_eq!(runs.len(), 10_000 / BATCH);
@@ -175,13 +176,13 @@ fn big_imports_run_in_batches_within_the_argument_limit() {
     let runner: Runner = Arc::new(move |args: &[String], _| {
         let mut n = c.lock().unwrap();
         *n += 1;
-        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 3;
         if *n == 2 {
             return Ok(failed("execution error: Photos got an error: User canceled. (-128)"));
         }
         Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
     });
-    let e = execute(&runner, &paths[..450], "Big").unwrap_err();
+    let e = execute(&runner, &paths[..450], 0, "Big").unwrap_err();
     assert!(e.contains("cancelled") && e.contains("200 of the 450 files"), "{e}");
     assert_eq!(*calls.lock().unwrap(), 2, "nothing more is sent after a failed batch");
 
@@ -191,10 +192,10 @@ fn big_imports_run_in_batches_within_the_argument_limit() {
     let runner: Runner = Arc::new(move |args: &[String], limit| {
         l.lock().unwrap().push(limit);
         std::thread::sleep(Duration::from_millis(300));
-        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 3;
         Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
     });
-    execute(&runner, &paths[..450], "Big").unwrap();
+    execute(&runner, &paths[..450], 0, "Big").unwrap();
     let limits = limits.lock().unwrap().clone();
     assert_eq!(limits.len(), 3);
     let whole = timeout_for(450);
@@ -352,7 +353,7 @@ fn shutdown_follows_an_export_into_its_import() {
     let taking = |ms: u64| -> Runner {
         Arc::new(move |args: &[String], _| {
             std::thread::sleep(Duration::from_millis(ms));
-            let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 3;
             Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
         })
     };
@@ -404,7 +405,7 @@ fn delayed() -> (Runner, std::sync::mpsc::Sender<()>) {
     let wait = Mutex::new(wait);
     let r: Runner = Arc::new(move |args: &[String], _| {
         let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
-        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+        let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 3;
         Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
     });
     (r, go)
@@ -473,7 +474,7 @@ fn imports_of_their_own_show_in_the_activity_stack() {
     let runner: Runner = Arc::new(move |args: &[String], _| {
         rows.lock().unwrap().push(a.list());
         let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
-        let n = args.len() - args.iter().position(|x| x == MARKER).unwrap() - 2;
+        let n = args.len() - args.iter().position(|x| x == MARKER).unwrap() - 3;
         Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
     });
     let imports = Imports::default();
@@ -518,4 +519,46 @@ fn timeouts_grow_with_the_batch_and_stay_bounded() {
     assert_eq!(timeout_for(1), Duration::from_secs(605));
     assert_eq!(timeout_for(100), Duration::from_secs(1100));
     assert_eq!(timeout_for(usize::MAX), Duration::from_secs(7200));
+}
+
+/// Issue #4717: an export's favourites (`photosFavorite: true`) go to Photos first, in runs of
+/// their own that ask the script to mark them, and the other files after them in runs that don't;
+/// a file name is never matched back to a media item.
+#[test]
+fn favourites_are_imported_in_runs_of_their_own() {
+    let (dir, paths) = files("favorites", 4);
+    let exported = vec![
+        json!({"path": paths[0]}),
+        json!({"path": paths[1], "photosFavorite": true}),
+        json!({"skipped": "/elsewhere/x.jpg", "photosFavorite": true}),
+        json!({"path": paths[2]}),
+        json!({"path": paths[3], "photosFavorite": true}),
+    ];
+    let (runner, calls) = fake(ok("A/L0/001\nB/L0/001"));
+    let out = Imports::default().reserve(runner, "Trip").unwrap().run(&exported, false);
+    assert_eq!(out["requested"], 4, "{out}");
+    let calls = calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2, "one run of favourites, one of the others");
+    let tail = |args: &[String]| args[args.iter().position(|a| a == MARKER).unwrap() + 1..].to_vec();
+    assert_eq!(tail(&calls[0]), ["Trip", "1", &paths[1], &paths[3]]);
+    assert_eq!(tail(&calls[1]), ["Trip", "0", &paths[0], &paths[2]]);
+    // without favourites nothing changes: one run, not marked
+    let (runner, calls) = fake(ok("A/L0/001"));
+    Imports::default().reserve(runner, "").unwrap().run(&exported[..1], false);
+    assert_eq!(tail(&calls.lock().unwrap()[0])[1], "0");
+    // the script marks the items this run imported, after importing them, only when asked
+    let import = SCRIPT.find("import mediaFiles into targetAlbum").unwrap();
+    let mark = SCRIPT.find("set favorite of mediaItem to true").unwrap();
+    assert!(import < mark && SCRIPT[..mark].contains("if markFavorite then"));
+    assert!(SCRIPT.contains("set markFavorite to (item 3 of argv is \"1\")"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Photos imported the favourites but refused to mark them, so the run stopped before the other
+/// files: the user is told what is in Photos, that the rest may be missing, and what to do.
+#[test]
+fn a_refused_favourite_is_explained() {
+    assert!(SCRIPT.contains(&format!("number {FAVORITE_FAILED}")));
+    let m = explain(&failed(&format!("execution error: LightCraft: added, but not marked as favourites: x ({FAVORITE_FAILED})")), "");
+    assert!(m.contains("added the favourites") && m.contains("may not have been added") && m.contains("Check Photos"), "{m}");
 }

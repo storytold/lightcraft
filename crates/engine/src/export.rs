@@ -40,6 +40,7 @@ pub use params::{
 #[cfg(test)]
 use place::Placer;
 pub use place::{write_file, write_file_durable, write_file_new};
+pub use prepare::photos_favorite;
 pub use prepare::{
     AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };
@@ -110,6 +111,10 @@ pub struct ExportOptions {
     pub add_to_photos: bool,
     /// The Photos album they go into, made when missing (empty = none).
     pub photos_album: String,
+    /// With `add_to_photos`: picked photos become favourites in Photos (issue #4717).
+    pub photos_favorite_picked: bool,
+    /// With `add_to_photos`: photos rated at least this become favourites in Photos (0 = off).
+    pub photos_favorite_rating: u8,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
 }

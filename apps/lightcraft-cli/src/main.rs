@@ -68,6 +68,8 @@ USAGE:
                              --opt format=original (copy + XMP sidecar) --opt metadata=none
                              --opt addToPhotos=true --opt photosAlbum=NAME (macOS: then add
                              the file to Apple Photos, into that album)
+                             --opt photosFavoritePicked=true --opt photosFavoriteRating=4
+                             (with addToPhotos: picked / 4+ star photos become favourites)
   lightcraft-cli snapshot [OPTIONS] [FILES/FOLDERS…]
       Run the full app UI headlessly (no window, no GPU: CPU-rasterized egui) and write PNGs.
       Options:
@@ -837,7 +839,11 @@ fn render(args: &[String]) -> Result<(), String> {
         eprintln!("lightcraft-cli: wrote {sc}");
     }
     eprintln!("lightcraft-cli: wrote {output} ({}×{})", e.width, e.height);
-    if let Some(photos) = after.run(&[json!({"path": output})], false) {
+    let mut entry = json!({"path": output});
+    if s.catalog.photo(lightcraft_engine::catalog::PhotoId(id)).is_some_and(|p| lightcraft_engine::export::photos_favorite(p, &o)) {
+        entry["photosFavorite"] = json!(true);
+    }
+    if let Some(photos) = after.run(&[entry], false) {
         if let Some(err) = photos.get("error").and_then(Value::as_str) {
             return Err(format!("render: {output} was written, but {err}"));
         }
