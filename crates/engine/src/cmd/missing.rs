@@ -139,9 +139,11 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
         let format = if known_type { &info.format } else { &ph.format };
         ops.extend(crate::cmd::convert::content_facts_op(id, ph, format, &info));
         let camera = if info.meta.camera.is_empty() { &ph.meta.camera } else { &info.meta.camera };
-        if *camera != ph.meta.camera {
+        let make = if info.meta.make.is_empty() { &ph.meta.make } else { &info.meta.make };
+        if *camera != ph.meta.camera || *make != ph.meta.make {
             let mut meta = ph.meta.clone();
             meta.camera.clone_from(camera);
+            meta.make.clone_from(make);
             ops.push(Op::SetMeta { id, meta: Box::new(meta) });
         }
         ops.extend(crate::cmd::convert::reload_wb_op(ph, &info, camera));

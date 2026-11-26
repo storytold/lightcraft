@@ -490,6 +490,41 @@ fn review_a_new_reload_supersedes_an_older_recheck() {
 }
 
 #[test]
+fn undo_of_source_metadata_rejects_a_pending_reload() {
+    use crate::cmd::reload;
+    let mut x = checked_orf("undone-source-metadata");
+    x.s.commit("Source white balance", Op::SetAsShotWb { id: x.id, wb: Some((4300.0, 7.0)) }).unwrap();
+    let items = reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap();
+    let probe = reload::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    x.s.execute("edit.undo", &json!({})).unwrap();
+    let out = reload::apply(&mut x.s, items, vec![Ok(probe)]).unwrap();
+    assert!(out.checked.is_empty());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_stamp_only_recheck_keeps_the_face_scan() {
+    let mut x = checked_orf("face-stamp");
+    let p = x.s.catalog.photo(x.id).unwrap().clone();
+    x.s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: None,
+        preview_checked: OTHER.into(),
+    })
+    .unwrap();
+    x.s.faces.scanned.insert(x.id.0);
+    x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert!(x.s.faces.scanned.contains(x.id.0));
+    replace_checked_orf(&x.file);
+    x.s.execute("library.recheckPreviewOnly", &json!({"all": true})).unwrap();
+    assert!(!x.s.faces.scanned.contains(x.id.0));
+}
+
+#[test]
 fn an_older_reload_finishing_first_keeps_a_newer_pending_read() {
     use crate::cmd::reload;
     let mut x = checked_orf("older-first");

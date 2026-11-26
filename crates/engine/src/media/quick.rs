@@ -175,11 +175,13 @@ pub fn content_key(p: &Photo) -> String {
 /// Source facts that affect pixels and can change when the source bytes stay the same.
 /// Include lens data even with the correction off: fitting a raw's starting colour uses the profile.
 pub(super) fn source_metadata_key(p: &Photo) -> u64 {
-    let wb = p.as_shot_wb.filter(|_| p.develops_raw() && !p.relative_wb());
-    if p.embedded_lens.is_none() && wb.is_none() {
+    let raw = p.develops_raw();
+    let wb = p.as_shot_wb.filter(|_| raw && !p.relative_wb());
+    if !raw && p.embedded_lens.is_none() && wb.is_none() {
         return 0;
     }
     let mut key = Hasher128::new();
+    key.str("source-mode").u64(u64::from(raw));
     if let Some(lens) = &p.embedded_lens {
         key.str("lens").str(&format!("{lens:?}"));
     }

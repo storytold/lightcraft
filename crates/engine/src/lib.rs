@@ -770,13 +770,21 @@ impl Session {
         let mut pending = vec![&op];
         while let Some(op) = pending.pop() {
             match op {
-                Op::SetContent { id, .. } => {
-                    invalidated.push((*id, true));
-                    replaced.push(*id);
+                Op::SetContent { id, width, height, file_size, content_hash, preview_only, .. } => {
+                    invalidated.push(*id);
+                    if self.catalog.photo(*id).is_some_and(|p| {
+                        (p.width, p.height, p.file_size, &p.content_hash, p.preview_only.is_some())
+                            != (*width, *height, *file_size, content_hash, preview_only.is_some())
+                    }) {
+                        replaced.push(*id);
+                    }
                 }
-                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push((*id, true)),
-                Op::AddPhoto { photo } => invalidated.push((photo.id, true)),
-                Op::SetAsShotWb { id, .. } | Op::SetEmbeddedLens { id, .. } => invalidated.push((*id, false)),
+                Op::SetFile { id, .. }
+                | Op::Relink { id, .. }
+                | Op::RemovePhoto { id }
+                | Op::SetAsShotWb { id, .. }
+                | Op::SetEmbeddedLens { id, .. } => invalidated.push(*id),
+                Op::AddPhoto { photo } => invalidated.push(photo.id),
                 Op::Batch { ops } => pending.extend(ops),
                 _ => {}
             }
@@ -786,8 +794,8 @@ impl Session {
         if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
             return applied.map_err(Into::into);
         }
-        for (id, source_changed) in invalidated {
-            if source_changed && invalidate_reads {
+        for id in invalidated {
+            if invalidate_reads {
                 self.reload_tickets.invalidate(id);
             }
             self.media.forget(id);
