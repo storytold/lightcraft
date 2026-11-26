@@ -94,30 +94,85 @@ pub(super) struct RestoreStamp {
     created: u64,
 }
 
-pub(super) fn restore_stamp(path: &str) -> Option<RestoreStamp> {
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
-    #[cfg(windows)]
-    use std::os::windows::fs::MetadataExt;
-    let meta = std::fs::metadata(path).ok()?;
-    if !meta.is_file() {
-        return None;
-    }
-    Some(RestoreStamp {
-        len: meta.len(),
-        modified: meta.modified().ok()?,
+impl RestoreStamp {
+    fn from_metadata(meta: std::fs::Metadata) -> Option<Self> {
         #[cfg(unix)]
-        identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+        use std::os::unix::fs::MetadataExt;
         #[cfg(windows)]
-        created: meta.creation_time(),
-    })
+        use std::os::windows::fs::MetadataExt;
+        if !meta.is_file() {
+            return None;
+        }
+        #[cfg(unix)]
+        if meta.ino() == 0 {
+            return None;
+        }
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok()?,
+            #[cfg(unix)]
+            identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+            #[cfg(windows)]
+            created: meta.creation_time(),
+        })
+    }
+}
+
+pub(super) fn restore_stamp(path: &str) -> Option<RestoreStamp> {
+    RestoreStamp::from_metadata(std::fs::metadata(path).ok()?)
+}
+
+/// Identity from the transfer's own file handle, so another file at its destination is never
+/// considered a redundant copy just because the path or bytes match.
+#[derive(Debug)]
+pub(super) struct CopyOutput {
+    stamp: Option<RestoreStamp>,
+    #[cfg(windows)]
+    identity: Option<(u64, u64)>,
+}
+
+impl CopyOutput {
+    pub(super) fn new(file: std::fs::File) -> Self {
+        Self {
+            stamp: file.metadata().ok().and_then(RestoreStamp::from_metadata),
+            #[cfg(windows)]
+            identity: lightcraft_catalog::safe_file::open_file_id(&file),
+        }
+    }
+
+    pub(super) fn is_current(&self, path: &str, expected: Option<&str>) -> bool {
+        // In particular, a symlink to the file we wrote is not an output that we own.
+        let Some(stamp) = std::fs::symlink_metadata(path).ok().and_then(RestoreStamp::from_metadata) else { return false };
+        #[cfg(unix)]
+        {
+            let _ = expected;
+            Some(stamp) == self.stamp
+        }
+        #[cfg(windows)]
+        {
+            let identity = std::fs::File::open(path).ok().and_then(|f| lightcraft_catalog::safe_file::open_file_id(&f));
+            // On Windows the last write time can update when the writer closes, and a later
+            // writer can restore it. When a content hash is available, check the actual bytes.
+            identity.is_some()
+                && identity == self.identity
+                && self.stamp.is_some_and(|old| old.len == stamp.len)
+                && expected.map_or(self.stamp == Some(stamp), |hash| {
+                    crate::cmd::missing::file_hash(path).as_deref() == Some(hash) && restore_stamp(path) == Some(stamp)
+                })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (self.stamp, stamp, expected);
+            false
+        }
+    }
 }
 
 #[derive(Debug)]
 pub(super) enum RestoreTarget {
     Decide,
     Keep,
-    Relink,
+    Relink(Option<CopyOutput>),
 }
 
 #[derive(Debug)]
@@ -146,6 +201,7 @@ pub(super) struct ReadyFile {
     pub(super) info: ProbeInfo,
     /// Copy as DNG's original input identity, only for this job's duplicate lookup.
     pub(super) input_hash: Option<String>,
+    pub(super) copy: Option<CopyOutput>,
     pub(super) sidecar: Option<crate::sidecar::SidecarData>,
     pub(super) placed: Option<crate::import_move::Placed>,
 }
@@ -191,7 +247,7 @@ impl Prepared {
                 items.push(item);
                 continue;
             };
-            let ReadyFile { path, stored, info, input_hash, sidecar, placed } = *ready;
+            let ReadyFile { path, stored, info, input_hash, copy, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
             let existing_hash = info.content_hash.iter().chain(&input_hash).find_map(|hash| hashes.get(hash).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
@@ -207,7 +263,7 @@ impl Prepared {
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
-                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, sidecar, placed })));
+                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, copy, sidecar, placed })));
             }
         }
         self.items = items;
@@ -644,7 +700,15 @@ impl ImportJob {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
-            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash: None, sidecar, placed: None }))));
+            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile {
+                path,
+                stored,
+                info,
+                input_hash: None,
+                copy: None,
+                sidecar,
+                placed: None,
+            }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
         // Input hashes are aliases only while this batch can resolve them to a verified

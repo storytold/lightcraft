@@ -5233,7 +5233,7 @@ fn copy_as_dng_with_local_match(promote: bool) {
     let dir = super::TestDir::new(&format!("copy-dng-local-output-{promote}"));
     let input = dir.join("sensor.nef");
     std::fs::write(&input, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
-    let (generated, _) = crate::cmd::convert::write_dng_with(None, &input.to_string_lossy(), String::new()).unwrap();
+    let (generated, _, _) = crate::cmd::convert::write_dng_with(None, &input.to_string_lossy(), String::new()).unwrap();
     let browsed = dir.join("browsed.dng");
     std::fs::rename(generated, &browsed).unwrap();
     let expected = std::fs::read(&browsed).unwrap();
@@ -5493,7 +5493,7 @@ fn assert_copy_as_dng_restores(s: &mut Session, id: PhotoId, paths: &[String], o
 fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
     use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
     use lightcraft_catalog::{Op, Source};
-    for case in if cfg!(unix) { &[0, 1, 2][..] } else { &[0][..] } {
+    for case in if cfg!(unix) { &[0, 1, 2, 3][..] } else { &[0][..] } {
         let dir = super::TestDir::new(&format!("copy-dng-restore-batch-{case}"));
         let destination = dir.join("copies");
         let source = ["first.nef", "second.nef"].map(|name| dir.join(name).to_string_lossy().into_owned());
@@ -5538,6 +5538,10 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
             f.write_all(&different).unwrap();
             f.set_modified(mtime).unwrap();
             assert_eq!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
+        } else if *case == 3 {
+            let mtime = std::fs::metadata(&old).unwrap().modified().unwrap();
+            std::fs::File::options().write(true).open(&old).unwrap().set_modified(mtime - std::time::Duration::from_secs(60)).unwrap();
+            assert_ne!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
         }
         let r = commit_prepared(&mut session, &opts, job.now(), second).unwrap();
         assert_eq!(r.restored, [id.0], "{r:?}");
@@ -5547,6 +5551,55 @@ fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
         assert_eq!(Path::new(path).extension().unwrap(), "dng");
         assert_eq!(std::fs::read(path).unwrap(), output);
         assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&output).to_string()));
+        if *case == 3 {
+            assert_eq!(path, &old, "a new modification time alone does not move the restored photo");
+            assert_eq!(copy_dng_output_names(&destination).len(), 1);
+        }
+    }
+}
+
+#[test]
+fn copy_as_dng_preserves_a_replaced_duplicate_output_and_refuses_it_for_restore() {
+    use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
+    use lightcraft_catalog::Op;
+    for deleted in [false, true] {
+        let dir = super::TestDir::new(&format!("copy-dng-replaced-output-{deleted}"));
+        let destination = dir.join("copies");
+        let first = dir.join("first.nef").to_string_lossy().into_owned();
+        let second = dir.join("second.nef").to_string_lossy().into_owned();
+        let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        for path in [&first, &second] {
+            std::fs::write(path, &raw).unwrap();
+        }
+        let mut session = Session::new().with_fs();
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(destination.to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let report = crate::import::import_with(&mut session, &[first], &opts).unwrap();
+        let id = PhotoId(report.imported[0]);
+        let original = file_source_path(session.catalog.photo(id).unwrap());
+        if deleted {
+            session.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+            std::fs::remove_file(&original).unwrap();
+        }
+        let mut job = ImportJob::new(&mut session, opts.clone()).unwrap();
+        let batch = job.prepare(&[second], &std::sync::atomic::AtomicBool::new(false));
+        let generated = destination.join("second.dng");
+        let displaced = dir.join("displaced.dng");
+        std::fs::rename(&generated, &displaced).unwrap();
+        // A byte-identical replacement is still somebody else's file.
+        let bytes = std::fs::read(&displaced).unwrap();
+        std::fs::write(&generated, &bytes).unwrap();
+        let report = commit_prepared(&mut session, &opts, job.now(), batch).unwrap();
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert!(report.restored.is_empty() && report.imported.is_empty(), "{report:?}");
+        assert_eq!(std::fs::read(&generated).unwrap(), bytes);
+        let photo = session.catalog.photo(id).unwrap();
+        assert_eq!((photo.deleted, file_source_path(photo)), (deleted, original));
     }
 }
 

@@ -529,12 +529,12 @@ pub(super) fn browsed_files_changed(files: &[(&str, u64)], cancel: &std::sync::a
 /// new path. The copy is verified ([`crate::import_move::copy_new`]: a new file, synced and
 /// checked against `probe_hash`, the content hash the probe computed — or compared byte for byte
 /// with the source when there is none); a bad one is removed and the photo reported as failed.
-pub(super) fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>) -> Result<String, String> {
+pub(super) fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>) -> Result<(String, std::fs::File), String> {
     let name = name
         .map(str::to_string)
         .unwrap_or_else(|| Path::new(src).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "photo".into()));
     let expect = probe_hash.and_then(lightcraft_preview::Hash128::parse);
-    crate::import_move::copy_new(Path::new(src), dir, &name, expect).map(|p| p.to_string_lossy().to_string())
+    crate::import_move::copy_new(Path::new(src), dir, &name, expect).map(|(p, file)| (p.to_string_lossy().to_string(), file))
 }
 
 #[cfg(test)]
@@ -661,6 +661,7 @@ mod prepared_tests {
             stored: path.to_string_lossy().into(),
             info: ProbeInfo { format: "JPG".into(), ..ProbeInfo::default() },
             input_hash: None,
+            copy: None,
             sidecar: None,
             placed: None,
         };
