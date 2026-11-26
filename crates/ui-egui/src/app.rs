@@ -213,6 +213,9 @@ impl LightcraftApp {
         // UI passes still counts as changed)
         self.selection_changes();
         let r = self.run_command(id, params);
+        // the panel a command left on show is noted now, not at the next frame, success or not: the next command
+        // of the same frame (a script, queued shortcuts) sees it (Close Panel, B, Done = the column stays hidden)
+        self.ui.note_right();
         self.selection_changes();
         r
     }
