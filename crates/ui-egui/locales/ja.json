@@ -1947,6 +1947,9 @@
   "Not saved": "保存されていません",
   "A folder is being synchronized": "フォルダを同期中です",
   "Wait for the import to finish": "読み込みが終わるまでお待ちください",
+  "Filter settings": "設定を絞り込む",
+  "No setting matches what is typed.": "入力に一致する設定はありません。",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "単語またはその一部で試してください。タブとセクションの名前、ラベル、説明文が検索されます。",
   "Appearance": "外観",
   "Appearance Mode": "外観モード",
   "Sync with System": "システムと同期",
@@ -2501,5 +2504,11 @@
   "Stack — click to collapse (S)": "スタック — クリックして折りたたむ (S)",
   "Virtual copy": "仮想コピー",
   "Right-click ▸ Locate Missing File… to find it again.": "右クリック → 見つからないファイルを指定… で、ファイルをもう一度指定できます。",
-  "Right-click ▸ Reload from Disk to try again.": "右クリック → ディスクから再読み込み で、もう一度試せます。"
+  "Right-click ▸ Reload from Disk to try again.": "右クリック → ディスクから再読み込み で、もう一度試せます。",
+  "Album name (empty outside an album view)": "アルバム名（アルバム表示外では空）",
+  "Export date (YYYYMMDD)": "書き出し日 (YYYYMMDD)",
+  "Export time (HHMM)": "書き出し時刻 (HHMM)",
+  "Insert variable": "変数を挿入",
+  "Insert…": "挿入…",
+  "none  ({album}, {date}, {hour})": "なし  ({album}, {date}, {hour})"
 }

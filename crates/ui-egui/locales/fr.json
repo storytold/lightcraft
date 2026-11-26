@@ -2001,6 +2001,9 @@
   "Appearance Settings…": "Réglages d’apparence…",
   "Add to favorites": "Ajouter aux favoris",
   "Remove from favorites": "Retirer des favoris",
+  "Filter settings": "Filtrer les réglages",
+  "No setting matches what is typed.": "Aucun réglage ne correspond à la saisie.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Essayez un mot ou une partie de mot : la recherche porte sur les noms des onglets et des sections, les libellés et les explications.",
   "Appearance": "Apparence",
   "Appearance Mode": "Mode d’apparence",
   "Sync with System": "Synchroniser avec le système",
@@ -3683,5 +3686,11 @@
   "Stack — click to collapse (S)": "Pile — cliquer pour replier (S)",
   "Virtual copy": "Copie virtuelle",
   "Right-click ▸ Locate Missing File… to find it again.": "Clic droit → Localiser le fichier manquant… pour le retrouver.",
-  "Right-click ▸ Reload from Disk to try again.": "Clic droit → Recharger depuis le disque pour réessayer."
+  "Right-click ▸ Reload from Disk to try again.": "Clic droit → Recharger depuis le disque pour réessayer.",
+  "Album name (empty outside an album view)": "Nom de l'album (vide hors vue d'album)",
+  "Export date (YYYYMMDD)": "Date d'export (YYYYMMDD)",
+  "Export time (HHMM)": "Heure d'export (HHMM)",
+  "Insert variable": "Insérer une variable",
+  "Insert…": "Insérer…",
+  "none  ({album}, {date}, {hour})": "aucun  ({album}, {date}, {hour})"
 }

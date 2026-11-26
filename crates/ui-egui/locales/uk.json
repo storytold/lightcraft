@@ -2195,6 +2195,9 @@
   "Appearance Settings…": "Налаштування вигляду…",
   "Add to favorites": "Додати до вибраного",
   "Remove from favorites": "Видалити з вибраного",
+  "Filter settings": "Фільтр налаштувань",
+  "No setting matches what is typed.": "Немає налаштувань, що відповідають введеному.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Спробуйте одне слово або його частину: пошук ведеться за назвами вкладок і розділів, підписами та поясненнями.",
   "Appearance": "Вигляд",
   "Appearance Mode": "Режим вигляду",
   "Sync with System": "Як у системі",
@@ -2498,5 +2501,11 @@
   "Stack — click to collapse (S)": "Стос — клацніть, щоб згорнути (S)",
   "Virtual copy": "Віртуальна копія",
   "Right-click ▸ Locate Missing File… to find it again.": "Клацніть правою кнопкою → Знайти відсутній файл…, щоб знайти його знову.",
-  "Right-click ▸ Reload from Disk to try again.": "Клацніть правою кнопкою → Перезавантажити з диска, щоб спробувати ще раз."
+  "Right-click ▸ Reload from Disk to try again.": "Клацніть правою кнопкою → Перезавантажити з диска, щоб спробувати ще раз.",
+  "Album name (empty outside an album view)": "Назва альбому (порожньо поза переглядом альбому)",
+  "Export date (YYYYMMDD)": "Дата експорту (YYYYMMDD)",
+  "Export time (HHMM)": "Час експорту (HHMM)",
+  "Insert variable": "Вставити змінну",
+  "Insert…": "Вставити…",
+  "none  ({album}, {date}, {hour})": "немає  ({album}, {date}, {hour})"
 }

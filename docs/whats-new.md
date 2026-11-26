@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+### Export subfolder variables
+- The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
@@ -465,6 +467,16 @@
   a keyword a line; LightCraft now reads it as one keyword a line, and repairs libraries that already hold such a
   keyword when they open. A name with a line break in it is drawn on one line in the sidebar and the Keyword List.
 
+### The mask overlay shows when it helps
+- One rule now decides when a mask's overlay covers the photo: when you switch it on with **O** (or the eye by the
+  Masks title), while the pointer is on one of the mask's parts (the rows under its name) or its pin, or by itself for a mask that
+  has no settings yet, so you see what it selects. The pointer on the mask's own row shows nothing, so its eye
+  switches the effect on and off with nothing over the photo. A mask with settings (its own or a preset's) never shows the overlay by itself, so you can
+  judge its effect: picking, creating, duplicating or adding to such a mask no longer covers the photo. While a
+  slider is at work nothing covers the photo, not even an overlay switched on with O; it comes back when you let go.
+  During a mask drag or a brush stroke, hovering shows no overlay; an overlay switched on with O, or a mask without
+  settings, keeps showing what it selects. While an Object click or a description is still being computed, no stand-in
+  overlay shows.
 ### Color Mixer: HSL
 - **Color Mixer: HSL**, laid out as in Lightroom Classic: **Mixer | Point Color** tabs, then
   **Adjust: HSL / Color**. HSL shows **Hue, Saturation, Luminance** or **All** (the three stacked,
@@ -506,6 +518,14 @@
   system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
   now (off by default). Pinch and scroll zoom were never animated.
 
+### Settings has a filter that finds a section on whatever tab it is
+- Settings has a filter above its tabs. Type a word, or part of one, and the sections that have it are listed with
+  the tab each is on, whichever tab was open: the names of tabs and sections, labels, buttons and explanations
+  are all looked through, and every word typed has to be there. Click a section (or press Return for the first, or ↓
+  to go down to them) and its tab opens at it. Esc empties the filter; a second Esc closes Settings. The choices of a
+  closed list and tooltips are not looked through. Scripts: `field:settingsFilter`, `settingsFound:<tab>:<section>`
+  for each section found, and `heading:<its English name>` for where a section starts, whatever the interface
+  language.
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel

@@ -1945,6 +1945,9 @@
   "Not saved": "未儲存",
   "A folder is being synchronized": "正在同步資料夾",
   "Wait for the import to finish": "請等待匯入完成",
+  "Filter settings": "篩選設定",
+  "No setting matches what is typed.": "沒有符合輸入內容的設定。",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "請嘗試一個詞或詞的一部分：會搜尋分頁和區段的名稱、標籤和說明。",
   "Appearance": "外觀",
   "Appearance Mode": "外觀模式",
   "Sync with System": "與系統同步",
@@ -2502,5 +2505,11 @@
   "Stack — click to collapse (S)": "堆疊 — 按一下以收合 (S)",
   "Virtual copy": "虛擬副本",
   "Right-click ▸ Locate Missing File… to find it again.": "按右鍵 → 尋找遺失的檔案…，即可重新找到它。",
-  "Right-click ▸ Reload from Disk to try again.": "按右鍵 → 從磁碟重新載入，即可重試。"
+  "Right-click ▸ Reload from Disk to try again.": "按右鍵 → 從磁碟重新載入，即可重試。",
+  "Album name (empty outside an album view)": "相簿名稱（在相簿檢視外為空）",
+  "Export date (YYYYMMDD)": "匯出日期 (YYYYMMDD)",
+  "Export time (HHMM)": "匯出時間 (HHMM)",
+  "Insert variable": "插入變數",
+  "Insert…": "插入…",
+  "none  ({album}, {date}, {hour})": "無  ({album}, {date}, {hour})"
 }

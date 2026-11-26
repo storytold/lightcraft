@@ -2432,6 +2432,9 @@
   "Folder name": "Kansion nimi",
   "Its templates move to User Templates.": "Sen mallipohjat siirretään kansioon Käyttäjän mallipohjat.",
   "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Filter settings": "Suodata asetuksia",
+  "No setting matches what is typed.": "Mikään asetus ei vastaa kirjoitettua.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Kokeile yhtä sanaa tai sen osaa: haku kattaa välilehtien ja osioiden nimet, otsikot ja selitykset.",
   "A smart album's rules choose its photos: change them with Edit Smart Album…": "Älyalbumin säännöt valitsevat sen kuvat: muuta niitä komennolla Muokkaa älyalbumia…",
   "Add keywords in the Keyword List": "Lisää avainsanoja avainsanaluettelossa",
   "Already on these photos": "Jo näissä kuvissa",
@@ -2456,5 +2459,11 @@
   "Stack — click to expand (S)": "Pino — napsauta laajentaaksesi (S)",
   "Stars on hover": "Tähdet osoitettaessa",
   "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Tähdet osoitettaessa: liput ja värimerkinnät näkyvät aina; tähdet ja muokattu-merkki näkyvät, kun kuvaa osoitetaan tai se on valittuna.",
-  "Virtual copy": "Virtuaalikopio"
+  "Virtual copy": "Virtuaalikopio",
+  "Album name (empty outside an album view)": "Albumin nimi (tyhjä albumnäkymän ulkopuolella)",
+  "Export date (YYYYMMDD)": "Vientipäivämäärä (YYYYMMDD)",
+  "Export time (HHMM)": "Vientiaika (HHMM)",
+  "Insert variable": "Lisää muuttuja",
+  "Insert…": "Lisää…",
+  "none  ({album}, {date}, {hour})": "ei mitään  ({album}, {date}, {hour})"
 }

@@ -3742,6 +3742,9 @@
   "Folder name": "საქაღალდის სახელი",
   "Its templates move to User Templates.": "მისი შაბლონები გადავა „მომხმარებლის შაბლონებში“.",
   "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Filter settings": "პარამეტრების გაფილტვრა",
+  "No setting matches what is typed.": "აკრეფილს არც ერთი პარამეტრი არ ემთხვევა.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "სცადეთ ერთი სიტყვა ან მისი ნაწილი: იძებნება ჩანართებისა და სექციების სახელებში, წარწერებსა და განმარტებებში.",
   "Can't add to an album folder": "ალბომების საქაღალდეში დამატება შეუძლებელია",
   "An album folder holds albums, not photos: drop on an album inside it": "ალბომების საქაღალდეში ალბომებია, არა ფოტოები: ჩააგდეთ მასში არსებულ ალბომზე",
   "Can't add to a smart album": "სმარტ-ალბომში დამატება შეუძლებელია",
@@ -3764,5 +3767,11 @@
   "Stack — click to collapse (S)": "დასტა — დააწკაპუნეთ ჩასაკეცად (S)",
   "Virtual copy": "ვირტუალური ასლი",
   "Right-click ▸ Locate Missing File… to find it again.": "მარჯვენა დაწკაპუნება → დაკარგული ფაილის მოძებნა… ფაილის ხელახლა საპოვნელად.",
-  "Right-click ▸ Reload from Disk to try again.": "მარჯვენა დაწკაპუნება → დისკიდან ხელახლა ჩატვირთვა, ხელახლა საცდელად."
+  "Right-click ▸ Reload from Disk to try again.": "მარჯვენა დაწკაპუნება → დისკიდან ხელახლა ჩატვირთვა, ხელახლა საცდელად.",
+  "Album name (empty outside an album view)": "ალბომის სახელი (ცარიელია ალბომის ხედის გარეთ)",
+  "Export date (YYYYMMDD)": "ექსპორტის თარიღი (YYYYMMDD)",
+  "Export time (HHMM)": "ექსპორტის დრო (HHMM)",
+  "Insert variable": "ცვლადის ჩასმა",
+  "Insert…": "ჩასმა…",
+  "none  ({album}, {date}, {hour})": "არცერთი  ({album}, {date}, {hour})"
 }
