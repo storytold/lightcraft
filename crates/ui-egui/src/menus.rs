@@ -102,7 +102,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
             id: id.to_string(),
             label: label.to_string(),
             menu: m.split('>').map(str::to_string).collect(),
-            shortcut: crate::shortcuts::binding(&app.ui.settings.keymap, id, *sc).map(str::to_string),
+            shortcut: crate::shortcuts::binding(app.ui.settings.profile(), &app.ui.settings.keymap, id, *sc).map(str::to_string),
             enabled: ui_enabled(app, id),
         })
         .collect();
@@ -112,7 +112,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
                 id: c.id.into(),
                 label: c.label.into(),
                 menu: c.menu.iter().map(|s| s.to_string()).collect(),
-                shortcut: crate::shortcuts::shortcut_of(&app.ui.settings.keymap, c.id).map(str::to_string),
+                shortcut: crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, c.id).map(str::to_string),
                 enabled: c.enabled,
             });
         }

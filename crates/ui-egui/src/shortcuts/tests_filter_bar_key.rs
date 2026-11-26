@@ -95,15 +95,15 @@ fn saved_keymap_wins_over_the_grid_backslash() {
     app.ui.view = ViewMode::PhotoGrid;
     let ctx = egui::Context::default();
     // Show Original moved to F2: F2 keeps that meaning in the grid, \ does nothing
-    super::assign(&mut app.ui.settings.keymap, "view.showOriginal", Some("F2")).unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "view.showOriginal", Some("F2")).unwrap();
     frame(&mut app, &ctx, Some(Key::F2), None);
     assert!(!app.ui.filter_bar, "a remapped Show Original key is not the Filter Bar key");
     assert_eq!(app.ui.before_after, BeforeAfter::Original);
     frame(&mut app, &ctx, Some(Key::Backslash), None);
     assert!(!app.ui.filter_bar);
     // \ given to another command runs that command
-    super::reset(&mut app.ui.settings.keymap, "view.showOriginal").unwrap();
-    super::assign(&mut app.ui.settings.keymap, "photo.pick", Some("\\")).unwrap();
+    super::reset(app.ui.settings.profile(), &mut app.ui.settings.keymap, "view.showOriginal").unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "photo.pick", Some("\\")).unwrap();
     frame(&mut app, &ctx, Some(Key::Backslash), None);
     assert_eq!(app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Pick);
     assert!(!app.ui.filter_bar);

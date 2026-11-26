@@ -303,6 +303,7 @@ pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, 
 
 /// Which of the Edit header's buttons were clicked.
 #[derive(Default)]
+#[allow(dead_code)]
 pub(super) struct HeaderClicks {
     pub(super) auto: bool,
     pub(super) bw: bool,
@@ -313,6 +314,7 @@ pub(super) struct HeaderClicks {
 /// The Edit header's buttons: Auto, B&W and HDR on the left, Reset on the right. A button that doesn't fit on the
 /// row starts the next one (long translations in a narrow panel, such as German *Zurücksetzen* beside HDR), so none
 /// covers another; Reset stays right-aligned on whichever row it lands.
+#[allow(dead_code)]
 pub(super) fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: &str) -> HeaderClicks {
     const GAP: f32 = 8.0;
     let mut clicks = HeaderClicks::default();
@@ -371,9 +373,9 @@ pub(super) fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: 
 }
 
 /// The Reset button's tooltip with the reset shortcut as this platform writes it (issue #1751).
-pub(super) fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
+pub(super) fn reset_tip(profile: crate::keymap_profiles::KeyProfile, keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
     let base = crate::i18n::tr("Reset all edits");
-    match crate::shortcuts::shortcut_of(keymap, "develop.reset") {
+    match crate::shortcuts::shortcut_of(profile, keymap, "develop.reset") {
         Some(sc) => format!("{base} ({})", crate::menubar::shortcut_text(sc, mac)),
         None => base.to_string(),
     }
