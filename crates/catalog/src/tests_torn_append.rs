@@ -7,14 +7,17 @@ use std::sync::{Arc, Mutex};
 use crate::journal::{LOG, RESYNC_CANDIDATES};
 use crate::*;
 
-/// A store whose next append writes only a prefix of its data, then fails.
+/// A store whose next append writes only a prefix of its data, then fails. Also the failing
+/// store of other tests in the crate (`folder_fails`: #3962).
 #[derive(Clone, Default)]
-struct Torn {
-    files: MemStore,
+pub(crate) struct Torn {
+    pub(crate) files: MemStore,
     /// The next append writes this many bytes, then returns an error.
     torn_at: Arc<Mutex<Option<usize>>>,
     /// `truncate` fails (the cut-back after a failed append can't be done right away).
     truncate_fails: Arc<AtomicBool>,
+    /// `has_folder` can't tell (an unreadable directory, a storage backend that won't answer).
+    pub(crate) folder_fails: Arc<AtomicBool>,
 }
 
 impl Torn {
@@ -45,6 +48,12 @@ impl Store for Torn {
     }
     fn describe(&self) -> String {
         "torn".into()
+    }
+    fn has_folder(&mut self, name: &str) -> std::io::Result<bool> {
+        if self.folder_fails.load(Ordering::SeqCst) {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "folder listing refused"));
+        }
+        self.files.has_folder(name)
     }
 }
 

@@ -114,6 +114,8 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 ## Progress log
 
+- 2026-11-08: The catalog loader refuses a library with an unknown layout before anything is written (#3962): an unrecognized top-level key in `catalog.snap` (named in the error) or a `segments/` folder beside it now gets the "written by a newer version" refusal, at the current format and the previous one, instead of opening as an empty catalog and being overwritten on save. The `segments/` folder is refused with no `catalog.snap` present too, where a new empty snapshot would otherwise be written beside it, and a store that can't tell whether the folder is there stops the open with that error.
+
 - 2026-11-07: Compressed ORF support withdrawn pending provenance review; uncompressed support remains. Regenerated camera coverage: 557 verified, 665 unverified, 187 preview-only and 37 unsupported; 94% use-weighted coverage. See [ORF status](docs/orf-compression.md).
 
 - 2026-11-04: Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available.
@@ -199,6 +201,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | patch | Catalog loader refuses an unknown layout (unrecognized `catalog.snap` key or a `segments/` folder) before any write, #3962; headline numbers unchanged |
 | 2026-11-15 | minor | Lens Blur with AI subject focus and per-mask bokeh; survey tiles fit the photos' shapes and glide to their new places; direct import of Lightroom backup zips (#2592); legacy shutter repair in virtual copies; the opened-library folder-safety fix; v0.21.0 and v0.21.1 released; craft-libs cutover for TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata and gain maps, plus a security-hardening batch; headline numbers not re-measured |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |

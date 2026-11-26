@@ -430,17 +430,36 @@ async fn boot(opts: Options, bridge: Option<crate::host::Bridge>) -> Boot {
             // not knowing which library is in use, any library opened could be the wrong one
             Err(e) => load_error = Some(format!("couldn't read which library is in use from browser storage ({e})")),
         }
-        if load_error.is_none() {
-            let mut reads = Vec::new();
-            for name in LIBRARY_FILES {
-                reads.push((name, b.read(&library_key(&lib_dir, name)).await));
-            }
-            if let Err(e) = crate::files::preload_library(&files, reads) {
-                log::error!("{e}");
-                load_error = Some(e);
-            }
+        // The rest of start-up's reads all at once (#3989), joined before the library opens:
+        // the library files, the `segments` folder probe, the thumbnail index and listing.
+        // A `segments` folder beside the library files is a layout this version doesn't read
+        // (#3962): `preload_start_up` notes it on the mirror, so the catalog store's
+        // `has_folder` check refuses the library before anything is written, as the native
+        // store does. Only a folder counts — a regular file named `segments` is not one, on
+        // either backend. A file that couldn't be read or a probe that couldn't be made stops
+        // start-up rather than risk overwriting the library (#1507). Not knowing which library
+        // is in use, neither is read.
+        let library_known = load_error.is_none();
+        let library_reads: Vec<crate::join::Local<'_, (&str, Result<Option<Vec<u8>>, String>)>> = if library_known {
+            let lib_dir = &lib_dir;
+            LIBRARY_FILES
+                .iter()
+                .map(|&name| Box::pin(async move { (name, b.read(&library_key(lib_dir, name)).await) }) as crate::join::Local<'_, _>)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let segments_key = format!("{lib_dir}/segments");
+        let segments_probe = async { if library_known { b.is_folder(&segments_key).await } else { Ok(false) } };
+        let ((reads, segments), (index_read, thumbs)) = crate::join::join2(
+            crate::join::join2(crate::join::join_all(library_reads), segments_probe),
+            crate::join::join2(b.read(THUMB_INDEX), b.list("thumbs")),
+        )
+        .await;
+        if library_known && let Err(e) = crate::files::preload_start_up(&files, reads, segments) {
+            log::error!("{e}");
+            load_error = Some(e);
         }
-        let index_read = b.read(THUMB_INDEX).await;
         match &index_read {
             Ok(Some(j)) => index = ThumbIndex::from_json(j),
             Ok(None) => {}
@@ -457,14 +476,8 @@ async fn boot(opts: Options, bridge: Option<crate::host::Bridge>) -> Boot {
         // thumbnails stored without an index entry (index saved late, or lost): delete them; not
         // when the index couldn't be read, which would make every thumbnail look unindexed
         let b2 = b.clone();
-        let known: std::collections::HashSet<String> = b
-            .list("thumbs")
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|n| n.ends_with(".jpg"))
-            .map(|n| n.trim_end_matches(".jpg").to_string())
-            .collect();
+        let known: std::collections::HashSet<String> =
+            thumbs.unwrap_or_default().into_iter().filter(|n| n.ends_with(".jpg")).map(|n| n.trim_end_matches(".jpg").to_string()).collect();
         let orphans: Vec<String> = if index_read.is_ok() { known.into_iter().filter(|k| !index.contains(k)).collect() } else { Vec::new() };
         if !orphans.is_empty() {
             wasm_bindgen_futures::spawn_local(async move {
