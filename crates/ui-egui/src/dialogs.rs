@@ -773,8 +773,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
             }
             closed = true;
         }
-        // a prompt (Rename Folder, …) that is refused closes and says why
-        Err(e) if matches!(dlg, Dialog::MovePhotos { .. } | Dialog::TextPrompt { .. }) => {
+        Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
             app.toast(ctx, e);
             closed = true;
         }

@@ -537,6 +537,14 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if s.library.as_ref().is_some_and(|l| same_folder(&l.dir)) {
         return Err("the library's own folders can't be moved here".into());
     }
+    // a folder inside the library reached through a link (or another spelling of the library's path) would move on
+    // disk, but its photos are stored under the library's own spelling, so the relink below couldn't find them
+    if let Some(l) = s.library.as_ref() {
+        let (lib, chosen) = (l.dir.canonicalize().unwrap_or_else(|_| l.dir.clone()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
+        if chosen.starts_with(&lib) && !src.starts_with(&l.dir) {
+            return Err(format!("{from}: give the folder's path inside the library as {}", l.dir.display()));
+        }
+    }
     // Repairs retain their exact old paths, including those on surviving history entries.
     // Complete them before the directory moves; an unavailable repair leaves it in place.
     s.repair_sidecars_with(&crate::rename::RealFs).map_err(|e| e.to_string())?;

@@ -729,6 +729,35 @@ fn a_date_folder_inside_the_library_can_be_renamed_but_the_librarys_own_folders_
     assert!(lib.join("Originals").is_dir());
 }
 
+/// A date folder inside the library named through a link to the library would move on disk while its photos,
+/// stored under the library's own path, kept pointing at the old folder: it is refused and nothing moves.
+#[cfg(unix)]
+#[test]
+fn a_folder_inside_the_library_named_through_a_link_is_refused_and_its_photos_keep_their_paths() {
+    let dir = Scratch::new("in-library-link");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    let photo = day.join("a.jpg").to_string_lossy().to_string();
+    std::fs::write(&photo, b"jpeg").unwrap();
+    add(&mut s, &photo);
+    std::os::unix::fs::symlink(&lib, dir.0.join("lib-link")).unwrap();
+    let linked = dir.0.join("lib-link").join("Originals").join("2026-10-16").to_string_lossy().to_string();
+    assert!(s.execute("folder.rename", &json!({"path": linked, "name": "Beach"})).is_err(), "a linked spelling is refused");
+    assert!(day.is_dir() && !lib.join("Originals/Beach").exists(), "nothing moved on disk");
+    let paths: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(paths.iter().all(|p| Path::new(p).exists()), "every photo still points at a file: {paths:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn the_library_folder_is_protected_however_its_path_is_spelled() {
