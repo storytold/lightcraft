@@ -411,6 +411,30 @@ pub fn wait_warm_up(timeout: std::time::Duration) -> bool {
     }
 }
 
+/// The guard [`hold_warm_up_for_test`] returns: the substitute warm-up, held until it is dropped.
+#[cfg(not(target_arch = "wasm32"))]
+struct WarmUpHold(Option<exit::Work<'static>>);
+
+/// A substitute device warm-up in flight, held until the returned guard is dropped — the same
+/// gate the real [`warm_up`] enters, so a caller can prove a warm-up is pending and that a wait
+/// waits for it, without a GPU, a device or a race. Test support for one test,
+/// `tests::gpu_warm_up::dropping_the_app_waits_for_a_warm_up_that_is_in_flight` in
+/// lightcraft-ui-egui (a `#[cfg(test)]` helper here would not be visible to that crate's test
+/// build); not for production code — a real warm-up is started with [`warm_up`]. `None` only
+/// when the process is ending, when no warm-up can be in flight anyway.
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub fn hold_warm_up_for_test() -> Option<impl Drop> {
+    WARM_UP.enter().map(|work| WarmUpHold(Some(work)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for WarmUpHold {
+    fn drop(&mut self) {
+        drop(self.0.take());
+    }
+}
+
 /// Whether a usable GPU adapter exists and GPU rendering is enabled (creates the device on first
 /// use).
 pub fn available() -> bool {
