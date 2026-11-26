@@ -112,6 +112,9 @@ pub(crate) fn plan_ids(s: &mut Session, ids: Vec<PhotoId>) -> Vec<Item> {
             items.push(Item { id, path: path.clone(), metadata_targets: vec![id], source_targets: vec![id], family, ticket });
         }
     }
+    if groups.is_empty() {
+        return items;
+    }
     for ph in s.catalog.photos().filter(|p| !p.deleted) {
         if let Source::File { path } = &ph.source
             && let Some(index) = groups.get(&(ph.copy_of.unwrap_or(ph.id), path.as_str()))
