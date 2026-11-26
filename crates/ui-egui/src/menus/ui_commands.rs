@@ -6,7 +6,8 @@ use super::UiCommand;
 pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
     ("app.language.english", crate::i18n::Locale::En.name(), None, ""),
     // The picker order (`Locale::for_picker`): alphabetical by the language's own name after
-    // English; Cyrillic, Georgian, then CJK names follow the Latin ones. A test keeps them equal.
+    // English; Cyrillic, Tamil, Georgian, then CJK names follow the Latin ones. A test keeps them
+    // equal.
     ("app.language.indonesian", crate::i18n::Locale::Id.name(), None, ""),
     ("app.language.czech", crate::i18n::Locale::Cs.name(), None, ""),
     ("app.language.german", crate::i18n::Locale::De.name(), None, ""),
@@ -20,6 +21,7 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
     ("app.language.vietnamese", crate::i18n::Locale::Vi.name(), None, ""),
     ("app.language.russian", crate::i18n::Locale::Ru.name(), None, ""),
     ("app.language.ukrainian", crate::i18n::Locale::Uk.name(), None, ""),
+    ("app.language.tamil", crate::i18n::Locale::Ta.name(), None, ""),
     ("app.language.georgian", crate::i18n::Locale::Ka.name(), None, ""),
     ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, ""),
     ("app.language.simplifiedChinese", crate::i18n::Locale::ZhHans.name(), None, ""),
@@ -50,6 +52,7 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
         "app.language.czech" => Some(crate::i18n::Locale::Cs),
         "app.language.italian" => Some(crate::i18n::Locale::It),
         "app.language.georgian" => Some(crate::i18n::Locale::Ka),
+        "app.language.tamil" => Some(crate::i18n::Locale::Ta),
         "app.language.swedish" => Some(crate::i18n::Locale::Sv),
         "app.language.finnish" => Some(crate::i18n::Locale::Fi),
         "app.language.indonesian" => Some(crate::i18n::Locale::Id),
