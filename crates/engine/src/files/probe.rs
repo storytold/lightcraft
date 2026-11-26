@@ -174,6 +174,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         let embedded_lens = crate::lens_profiles::for_raw(&raw, || m.clone());
         return Ok(ProbeInfo {
             embedded_lens,
+            gain_table_map: raw.color.profile.gain_table_map.is_some(),
             width: w,
             height: h,
             format: ext_upper(name),
@@ -230,6 +231,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         as_shot_wb: None,
         content_hash,
         embedded_lens: None,
+        gain_table_map: false,
         xmp: None,
         orientation: m.orientation,
         preview_only: None,

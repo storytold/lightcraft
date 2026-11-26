@@ -519,6 +519,7 @@ impl Session {
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
             p.embedded_lens = info.embedded_lens.map(Box::new);
+            p.gain_table_map = info.gain_table_map;
             p.preview_only = info.preview_only.clone();
         }
         p.develop = std::sync::Arc::new(p.import_defaults());

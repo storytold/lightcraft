@@ -12,11 +12,12 @@
 //!   weight); `ProfileLookTableData` comes after exposure compensation and before any tone curve.
 //! - `ProfileToneCurve`: (input, output) pairs in linear gamma from (0, 0) to (1, 1).
 //! - `ProfileGainTableMap*` ([`crate::gaintable`]) is read and kept (a DNG export writes it back)
-//!   but not rendered by default (the photo's "Camera local tone mapping" option renders it, in the
-//!   pipeline): Lightroom Classic renders Apple ProRAW without it (measured on the iPhone
-//!   12 Pro corpus file against Lightroom Classic 15.6: with the map the default render is far
-//!   brighter than Lightroom's, mean ΔE00 19; without it Lightroom's output is a tight function of
-//!   the hue/saturation map, exposure compensation and tone curve alone).
+//!   and rendered by the photo's "Camera local tone mapping" option, in the pipeline. Import turns
+//!   the option on for a raw that carries a map (`lightcraft_catalog::Photo::camera_defaults`):
+//!   Apple's tone curve is made to follow it, and recent ProRAW renders far too dark without it.
+//!   Lightroom Classic rendered the iPhone 12 Pro corpus file without a look without the map
+//!   (measured against Lightroom Classic 15.6: with the map, mean ΔE00 19), while its "Apple
+//!   ProRaw" look applies it.
 //!
 //! The data is read from the user's own file at run time; nothing here ships profile data.
 //! Values above 1.0 (highlight headroom) keep their headroom: the table's value scale only ever

@@ -311,6 +311,11 @@ pub struct Photo {
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedded_lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
+    /// The raw carries its camera's local tone mapping (DNG `ProfileGainTableMap`, Apple ProRAW): new
+    /// photos start with "Camera local tone mapping" on ([`Photo::camera_defaults`]). Omitted when
+    /// false, so photos imported before it existed keep their defaults.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gain_table_map: bool,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -448,6 +453,7 @@ impl Photo {
             as_shot_wb: None,
             content_hash: None,
             embedded_lens: None,
+            gain_table_map: false,
             copy_of: None,
             copy_name: None,
             import_look: None,
@@ -516,7 +522,10 @@ impl Photo {
         }
     }
     /// The built-in defaults for this photo, before any user default preset: raws start from
-    /// their as-shot white balance; embedded lens corrections on when the file has them. They
+    /// their as-shot white balance; embedded lens corrections on when the file has them; the
+    /// camera's local tone mapping on when the raw carries it (Apple ProRAW: its `ProfileToneCurve`
+    /// is made to follow the gain table map, so without the map the photo renders far too dark;
+    /// Lightroom's default "Apple ProRaw" look applies the map at full strength). They
     /// carry the photo's own rendering process ([`lightcraft_develop::ProcessVersion`]): which
     /// process a photo renders with is not an edit, so comparisons with its defaults (edited?
     /// still as imported?) don't change when a newer process exists. A new photo has the latest.
@@ -532,6 +541,9 @@ impl Photo {
         }
         if self.embedded_lens.is_some() {
             d.optics.lens_profile = true;
+        }
+        if self.gain_table_map && self.develops_raw() {
+            d.profile.camera_local_tone = true;
         }
         d.process = self.develop.process;
         d
@@ -712,6 +724,29 @@ mod edited_tests {
         d.light.exposure = 1.0;
         p.develop = Arc::new(d);
         assert!(p.is_edited(), "an edit still is one");
+    }
+
+    #[test]
+    fn a_raw_with_a_gain_table_map_starts_with_the_camera_local_tone_mapping_on() {
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.dng", "DNG", 10, 10, "2026-10-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.as_shot_wb = Some((5200.0, 4.0));
+        assert!(!p.camera_defaults().profile.camera_local_tone, "no map: off, as before");
+        p.gain_table_map = true;
+        assert!(p.camera_defaults().profile.camera_local_tone, "Apple ProRAW: on");
+        p.develop = Arc::new(p.import_defaults());
+        assert!(!p.is_edited(), "the option on is part of the import look, not an edit");
+        // shown from its embedded preview, the photo isn't developed from its raw data: nothing to map
+        p.preview_only = Some("unsupported".into());
+        assert!(!p.camera_defaults().profile.camera_local_tone);
+        // the flag is left out of the catalog when false, so older photos read back unchanged
+        let mut plain = Photo::new(PhotoId(2), Source::Demo { scene: 0 }, "b.dng", "DNG", 10, 10, "2026-10-01T00:00:00");
+        plain.kind = MediaKind::Raw;
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("gain_table_map") && !json.contains("gainTableMap"), "{json}");
+        let back: Photo = serde_json::from_str(&json).unwrap();
+        assert!(!back.gain_table_map && !back.camera_defaults().profile.camera_local_tone);
+        assert!(serde_json::from_str::<Photo>(&serde_json::to_string(&p).unwrap()).unwrap().gain_table_map, "kept when true");
     }
 
     #[test]

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Apple ProRAW no longer opens far too dark
+- Apple ProRAW photos you add now start with Profile ▸ Camera local tone mapping on, so they open looking as the
+  iPhone shows them. Apple's tone curve in these files is made to work together with the camera's local tone map;
+  with the map off, the curve alone closed the shadows and midtones, and recent iPhones' ProRAW (JPEG XL compressed)
+  opened about 1.5 stops too dark. Lightroom's default look for ProRAW applies the map as well. Photos already in
+  your library keep their settings: turn the option on in the Profile panel, or add them again.
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
