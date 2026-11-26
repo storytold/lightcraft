@@ -22,46 +22,25 @@
 //! Values above 1.0 (highlight headroom) keep their headroom: the table's value scale only ever
 //! lowers them, so a lookup can't clip what the scene-referred pipeline still needs.
 
-use crate::gaintable::GainTableMap;
+pub use craft_raw::profile::{HsvTable, ProfileLook, ToneCurve};
 use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
-use serde::{Deserialize, Serialize};
 
-/// Upper bound on table entries (Adobe profiles use ≤ 90 × 30 × 16; guards header-driven sizes).
-const MAX_ENTRIES: usize = 1 << 20;
-
-/// A DNG hue/saturation/value mapping table (`ProfileHueSatMapData*` / `ProfileLookTableData`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct HsvTable {
-    pub hue_divisions: usize,
-    pub sat_divisions: usize,
-    pub val_divisions: usize,
-    /// `(hue shift °, saturation scale, value scale)`, value-major, hue-middle, saturation-minor.
-    pub data: Vec<[f32; 3]>,
-    /// The value axis is indexed through the sRGB encoding curve (`…Encoding` = 1).
-    pub srgb_value: bool,
+/// Applying a hue/saturation/value table (the table, and reading it from its tags, is `craft-raw`'s).
+pub trait HsvTableApply: Sized {
+    /// The entry-wise blend `g · a + (1 − g) · b` of two tables of the same shape (`None` otherwise).
+    fn blend(a: &Self, b: &Self, g: f64) -> Option<Self>;
+    /// Tri-linear lookup at hue `h` (degrees), saturation `s` and value `v` (table coordinates).
+    fn lookup(&self, h: f32, s: f32, v: f32) -> [f32; 3];
+    /// Apply the table to one linear ProPhoto RGB colour.
+    fn apply(&self, rgb: [f32; 3]) -> [f32; 3];
+    /// [`Self::apply`] to `N` colours at once (`rgb[channel][lane]`), bit for bit.
+    fn apply_lanes<const N: usize>(&self, rgb: [[f32; N]; 3]) -> [[f32; N]; 3];
 }
 
-impl HsvTable {
-    /// A table from its `…Dims` (hue, saturation, value divisions), data floats and encoding.
-    /// `None` when the dimensions are out of range, the data length doesn't match or a value is
-    /// not finite.
-    pub fn from_tags(dims: &[u64], data: &[f64], encoding: u64) -> Option<HsvTable> {
-        let [h, s, v] = <[u64; 3]>::try_from(dims).ok()?;
-        let (h, s, v) = (usize::try_from(h).ok()?, usize::try_from(s).ok()?, usize::try_from(v).ok()?);
-        if h < 1 || s < 2 || v < 1 || h > 4096 || s > 4096 || v > 4096 {
-            return None;
-        }
-        let n = h.checked_mul(s)?.checked_mul(v)?;
-        if n > MAX_ENTRIES || data.len() != n * 3 || data.iter().any(|x| !x.is_finite()) {
-            return None;
-        }
-        let data = data.as_chunks::<3>().0.iter().map(|c| [c[0] as f32, (c[1] as f32).max(0.0), (c[2] as f32).max(0.0)]).collect();
-        Some(HsvTable { hue_divisions: h, sat_divisions: s, val_divisions: v, data, srgb_value: encoding == 1 && v > 1 })
-    }
-
+impl HsvTableApply for HsvTable {
     /// The entry-wise blend `g · a + (1 − g) · b` of two tables of the same shape (`None` otherwise).
-    pub fn blend(a: &HsvTable, b: &HsvTable, g: f64) -> Option<HsvTable> {
+    fn blend(a: &HsvTable, b: &HsvTable, g: f64) -> Option<HsvTable> {
         if (a.hue_divisions, a.sat_divisions, a.val_divisions) != (b.hue_divisions, b.sat_divisions, b.val_divisions) {
             return None;
         }
@@ -70,12 +49,8 @@ impl HsvTable {
         Some(HsvTable { data, ..a.clone() })
     }
 
-    fn entry(&self, v: usize, h: usize, s: usize) -> [f32; 3] {
-        self.data.get((v * self.hue_divisions + h) * self.sat_divisions + s).copied().unwrap_or([0.0, 1.0, 1.0])
-    }
-
     /// Tri-linear lookup at hue `h` (degrees), saturation `s` and value `v` (table coordinates).
-    pub fn lookup(&self, h: f32, s: f32, v: f32) -> [f32; 3] {
+    fn lookup(&self, h: f32, s: f32, v: f32) -> [f32; 3] {
         let hf = (wrap(h, 360.0) / 360.0 * self.hue_divisions as f32).clamp(0.0, self.hue_divisions as f32);
         let h0 = (hf as usize).min(self.hue_divisions - 1);
         let h1 = (h0 + 1) % self.hue_divisions;
@@ -90,15 +65,15 @@ impl HsvTable {
         let (v0, v1, tv) = if self.val_divisions > 1 { axis(v, self.val_divisions) } else { (0, 0, 0.0) };
         let lerp = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) };
         let plane = |vi: usize| {
-            let lo = lerp(self.entry(vi, h0, s0), self.entry(vi, h0, s1), ts);
-            let hi = lerp(self.entry(vi, h1, s0), self.entry(vi, h1, s1), ts);
+            let lo = lerp(entry(self, vi, h0, s0), entry(self, vi, h0, s1), ts);
+            let hi = lerp(entry(self, vi, h1, s0), entry(self, vi, h1, s1), ts);
             lerp(lo, hi, th)
         };
         if v0 == v1 { plane(v0) } else { lerp(plane(v0), plane(v1), tv) }
     }
 
     /// Apply the table to one linear ProPhoto RGB colour.
-    pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
+    fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
         let max = rgb[0].max(rgb[1]).max(rgb[2]);
         if max.is_nan() || max <= 0.0 || !max.is_finite() {
             return rgb;
@@ -127,9 +102,9 @@ impl HsvTable {
     /// [`Self::apply`] to `N` colours at once (`rgb[channel][lane]`), bit for bit: the same operations, with the
     /// branches on the data (largest channel, hue sector, wrap-around) turned into selects so the compiler
     /// vectorises them. The table reads, `powf` and the rare `rem_euclid` run lane by lane.
-    pub fn apply_lanes<const N: usize>(&self, rgb: [[f32; N]; 3]) -> [[f32; N]; 3] {
+    fn apply_lanes<const N: usize>(&self, rgb: [[f32; N]; 3]) -> [[f32; N]; 3] {
         let [r, g, b] = rgb;
-        if !self.fits_lanes() {
+        if !fits_lanes(self) {
             let mut out = rgb;
             for l in 0..N {
                 [out[0][l], out[1][l], out[2][l]] = self.apply([r[l], g[l], b[l]]);
@@ -172,7 +147,7 @@ impl HsvTable {
                 }
             }
         }
-        let [shift, ss, vs] = self.lookup_lanes(&hue, &sat, &v_index, active);
+        let [shift, ss, vs] = lookup_lanes(self, &hue, &sat, &v_index, active);
         let (mut s2, mut v2, mut curve) = ([0.0f32; N], [0.0f32; N], [false; N]);
         for l in 0..N {
             s2[l] = limited_select(sat[l], ss[l]);
@@ -228,72 +203,76 @@ impl HsvTable {
         }
         out
     }
+}
 
-    /// Whether [`Self::lookup_lanes`] can do this table's index arithmetic in `f32`: every index below 2²³.
-    fn fits_lanes(&self) -> bool {
-        let entries = self.hue_divisions.checked_mul(self.sat_divisions).and_then(|n| n.checked_mul(self.val_divisions.max(1)));
-        self.hue_divisions >= 1 && self.sat_divisions >= 1 && entries.is_some_and(|n| n <= 1 << 23)
+fn entry(table: &HsvTable, v: usize, h: usize, s: usize) -> [f32; 3] {
+    table.data.get((v * table.hue_divisions + h) * table.sat_divisions + s).copied().unwrap_or([0.0, 1.0, 1.0])
+}
+
+/// Whether [`lookup_lanes`] can do this table's index arithmetic in `f32`: every index below 2²³.
+fn fits_lanes(table: &HsvTable) -> bool {
+    let entries = table.hue_divisions.checked_mul(table.sat_divisions).and_then(|n| n.checked_mul(table.val_divisions.max(1)));
+    table.hue_divisions >= 1 && table.sat_divisions >= 1 && entries.is_some_and(|n| n <= 1 << 23)
+}
+
+/// [`HsvTableApply::lookup`] at `N` points (`(shift, saturation scale, value scale)[lane]`), bit for bit for the lanes
+/// `wanted`, on a table that [`fits_lanes`]. The indices are computed as `f32` (exact integers below 2²³:
+/// `x as usize` is a saturating conversion that doesn't vectorise).
+fn lookup_lanes<const N: usize>(table: &HsvTable, h: &[f32; N], s: &[f32; N], v: &[f32; N], wanted: [bool; N]) -> [[f32; N]; 3] {
+    const EXACT: f32 = 8_388_608.0; // 2²³: ulp 1 from here
+    // `x as usize` for `0 ≤ x < 2²³`: rounded to an integer, minus 1 if it rounded up; NaN is 0
+    let floor = |x: f32| {
+        let nearest = (x + EXACT) - EXACT;
+        let floor = if nearest > x { nearest - 1.0 } else { nearest };
+        if x.is_nan() { 0.0 } else { floor }
+    };
+    let (hn, sn, vn) = (table.hue_divisions as f32, table.sat_divisions as f32, table.val_divisions as f32);
+    let axis = |x: f32, n: f32| {
+        let f = x.clamp(0.0, 1.0) * (n - 1.0);
+        let i0 = floor(f).min((n - 2.0).max(0.0));
+        let i1 = (i0 + 1.0).min(n - 1.0);
+        (i0, i1, (f - i0).clamp(0.0, 1.0))
+    };
+    let h = wrap_lanes(*h, 360.0, wanted);
+    // the corners' indices (v, h, s), s fastest, and the weights between them
+    let (mut at, mut t) = ([[0u32; N]; 8], [[0.0f32; N]; 3]);
+    for l in 0..N {
+        let hf = (h[l] / 360.0 * hn).clamp(0.0, hn);
+        let h0 = floor(hf).min(hn - 1.0);
+        // (h0 + 1) % hn
+        let h1 = if h0 + 1.0 == hn { 0.0 } else { h0 + 1.0 };
+        let (s0, s1, ts) = axis(s[l], sn);
+        let (v0, v1, tv) = axis(v[l], vn);
+        let (v0, v1, tv) = if table.val_divisions > 1 { (v0, v1, tv) } else { (0.0, 0.0, 0.0) };
+        for (k, (vi, hi)) in [(v0, h0), (v0, h1), (v1, h0), (v1, h1)].into_iter().enumerate() {
+            let row = (vi * hn + hi) * sn;
+            // an exact integer below 2²³ plus 2²³ has it as its mantissa
+            at[2 * k][l] = (row + s0 + EXACT).to_bits().wrapping_sub(EXACT.to_bits());
+            at[2 * k + 1][l] = (row + s1 + EXACT).to_bits().wrapping_sub(EXACT.to_bits());
+        }
+        [t[0][l], t[1][l], t[2][l]] = [(hf - h0).clamp(0.0, 1.0), ts, tv];
     }
-
-    /// [`Self::lookup`] at `N` points (`(shift, saturation scale, value scale)[lane]`), bit for bit for the lanes
-    /// `wanted`, on a table that [`Self::fits_lanes`]. The indices are computed as `f32` (exact integers below 2²³:
-    /// `x as usize` is a saturating conversion that doesn't vectorise).
-    fn lookup_lanes<const N: usize>(&self, h: &[f32; N], s: &[f32; N], v: &[f32; N], wanted: [bool; N]) -> [[f32; N]; 3] {
-        const EXACT: f32 = 8_388_608.0; // 2²³: ulp 1 from here
-        // `x as usize` for `0 ≤ x < 2²³`: rounded to an integer, minus 1 if it rounded up; NaN is 0
-        let floor = |x: f32| {
-            let nearest = (x + EXACT) - EXACT;
-            let floor = if nearest > x { nearest - 1.0 } else { nearest };
-            if x.is_nan() { 0.0 } else { floor }
-        };
-        let (hn, sn, vn) = (self.hue_divisions as f32, self.sat_divisions as f32, self.val_divisions as f32);
-        let axis = |x: f32, n: f32| {
-            let f = x.clamp(0.0, 1.0) * (n - 1.0);
-            let i0 = floor(f).min((n - 2.0).max(0.0));
-            let i1 = (i0 + 1.0).min(n - 1.0);
-            (i0, i1, (f - i0).clamp(0.0, 1.0))
-        };
-        let h = wrap_lanes(*h, 360.0, wanted);
-        // the corners' indices (v, h, s), s fastest, and the weights between them
-        let (mut at, mut t) = ([[0u32; N]; 8], [[0.0f32; N]; 3]);
-        for l in 0..N {
-            let hf = (h[l] / 360.0 * hn).clamp(0.0, hn);
-            let h0 = floor(hf).min(hn - 1.0);
-            // (h0 + 1) % hn
-            let h1 = if h0 + 1.0 == hn { 0.0 } else { h0 + 1.0 };
-            let (s0, s1, ts) = axis(s[l], sn);
-            let (v0, v1, tv) = axis(v[l], vn);
-            let (v0, v1, tv) = if self.val_divisions > 1 { (v0, v1, tv) } else { (0.0, 0.0, 0.0) };
-            for (k, (vi, hi)) in [(v0, h0), (v0, h1), (v1, h0), (v1, h1)].into_iter().enumerate() {
-                let row = (vi * hn + hi) * sn;
-                // an exact integer below 2²³ plus 2²³ has it as its mantissa
-                at[2 * k][l] = (row + s0 + EXACT).to_bits().wrapping_sub(EXACT.to_bits());
-                at[2 * k + 1][l] = (row + s1 + EXACT).to_bits().wrapping_sub(EXACT.to_bits());
-            }
-            [t[0][l], t[1][l], t[2][l]] = [(hf - h0).clamp(0.0, 1.0), ts, tv];
+    let mut corner = [[[0.0f32; N]; 3]; 8];
+    for l in 0..N {
+        for (corner, at) in corner.iter_mut().zip(&at) {
+            [corner[0][l], corner[1][l], corner[2][l]] = table.data.get(at[l] as usize).copied().unwrap_or([0.0, 1.0, 1.0]);
         }
-        let mut corner = [[[0.0f32; N]; 3]; 8];
+    }
+    let lerp = |a: &[f32; N], b: &[f32; N], t: &[f32; N]| {
+        let mut out = [0.0f32; N];
         for l in 0..N {
-            for (corner, at) in corner.iter_mut().zip(&at) {
-                [corner[0][l], corner[1][l], corner[2][l]] = self.data.get(at[l] as usize).copied().unwrap_or([0.0, 1.0, 1.0]);
-            }
-        }
-        let lerp = |a: &[f32; N], b: &[f32; N], t: &[f32; N]| {
-            let mut out = [0.0f32; N];
-            for l in 0..N {
-                out[l] = a[l] + (b[l] - a[l]) * t[l];
-            }
-            out
-        };
-        let [th, ts, tv] = &t;
-        let mut out = [[0.0f32; N]; 3];
-        for (c, out) in out.iter_mut().enumerate() {
-            let plane = |k: usize| lerp(&lerp(&corner[k][c], &corner[k + 1][c], ts), &lerp(&corner[k + 2][c], &corner[k + 3][c], ts), th);
-            // `lookup`'s `v0 == v1` for every lane: `axis` gives `v1 = v0 + 1` whenever there are two values or more
-            *out = if self.val_divisions > 1 { lerp(&plane(0), &plane(4), tv) } else { plane(0) };
+            out[l] = a[l] + (b[l] - a[l]) * t[l];
         }
         out
+    };
+    let [th, ts, tv] = &t;
+    let mut out = [[0.0f32; N]; 3];
+    for (c, out) in out.iter_mut().enumerate() {
+        let plane = |k: usize| lerp(&lerp(&corner[k][c], &corner[k + 1][c], ts), &lerp(&corner[k + 2][c], &corner[k + 3][c], ts), th);
+        // `lookup`'s `v0 == v1` for every lane: `axis` gives `v1 = v0 + 1` whenever there are two values or more
+        *out = if table.val_divisions > 1 { lerp(&plane(0), &plane(4), tv) } else { plane(0) };
     }
+    out
 }
 
 /// `x · k` clipped to 1, for `x ≤ 1`; above 1, only scale factors below 1 apply (continuous at 1).
@@ -378,26 +357,15 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
-/// A DNG tone curve (`ProfileToneCurve`): linear-gamma (input, output) pairs, increasing input.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ToneCurve {
-    pub points: Vec<[f32; 2]>,
+/// Evaluating a profile tone curve.
+pub trait ToneCurveEval {
+    /// The curve at `x` (0..=1): monotone cubic (Fritsch–Carlson) through the samples.
+    fn eval(&self, x: f32) -> f32;
 }
 
-impl ToneCurve {
-    /// From the tag's flat float pairs. `None` unless there are 2..=65536 finite pairs within
-    /// 0..=1 with strictly increasing inputs.
-    pub fn from_tag(v: &[f64]) -> Option<ToneCurve> {
-        if !v.len().is_multiple_of(2) || v.len() < 4 || v.len() > 131_072 {
-            return None;
-        }
-        let points: Vec<[f32; 2]> = v.as_chunks::<2>().0.iter().map(|p| [p[0] as f32, p[1] as f32]).collect();
-        let ok = points.iter().all(|p| p.iter().all(|x| x.is_finite() && (0.0..=1.0).contains(x))) && points.windows(2).all(|w| w[1][0] > w[0][0]);
-        ok.then_some(ToneCurve { points })
-    }
-
+impl ToneCurveEval for ToneCurve {
     /// The curve at `x` (0..=1): monotone cubic (Fritsch–Carlson) through the samples.
-    pub fn eval(&self, x: f32) -> f32 {
+    fn eval(&self, x: f32) -> f32 {
         let p = &self.points;
         let n = p.len();
         let x = x.clamp(p[0][0], p[n - 1][0]);
@@ -425,27 +393,15 @@ impl ToneCurve {
     }
 }
 
-/// The DNG profile look tags of a file (all optional).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ProfileLook {
-    /// `ProfileHueSatMapData1/2` (same shape, `ProfileHueSatMapDims`).
-    pub hue_sat_map: [Option<HsvTable>; 2],
-    /// `ProfileLookTableData`.
-    pub look_table: Option<HsvTable>,
-    /// `ProfileToneCurve`.
-    pub tone_curve: Option<ToneCurve>,
-    /// `ProfileGainTableMap2`, else `ProfileGainTableMap`.
-    #[serde(default)]
-    pub gain_table_map: Option<GainTableMap>,
+/// The hue/saturation map of a profile look for a white balance.
+pub trait ProfileLookHueSat {
+    /// The hue/saturation map for calibration-1 weight `g` (one table: used for any white).
+    fn hue_sat_for(&self, g: f64) -> Option<HsvTable>;
 }
 
-impl ProfileLook {
-    pub fn is_empty(&self) -> bool {
-        self.hue_sat_map.iter().all(Option::is_none) && self.look_table.is_none() && self.tone_curve.is_none() && self.gain_table_map.is_none()
-    }
-
+impl ProfileLookHueSat for ProfileLook {
     /// The hue/saturation map for calibration-1 weight `g` (one table: used for any white).
-    pub fn hue_sat_for(&self, g: f64) -> Option<HsvTable> {
+    fn hue_sat_for(&self, g: f64) -> Option<HsvTable> {
         match &self.hue_sat_map {
             [Some(a), Some(b)] => HsvTable::blend(a, b, g).or_else(|| Some(a.clone())),
             [Some(a), None] | [None, Some(a)] => Some(a.clone()),

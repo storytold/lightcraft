@@ -1,334 +1,30 @@
-//! A small PDF writer for print output: pages of a given size in points, each with raster images
-//! placed on it, tagged with their ICC profile (`ICCBased`) so the numbers mean the same colour in
-//! every reader and RIP, Flate-compressed (lossless) at 8 or 16 bits per component, or carried as
-//! JPEG (`DCTDecode`) where small files matter more than exact samples. Optionally an output intent:
-//! the printing condition (the printer / paper profile) the file was made for, as PDF/X readers
-//! expect it in the catalog. Profiles shared by several images are written once.
-//!
-//! The file is PDF 1.6 (16-bit images need 1.5): classic cross-reference table, no object streams,
-//! deterministic (no dates or IDs), so the same pages always give the same bytes.
-//!
-//! Sources: ISO 32000-1:2008 (§7.3 objects, §7.5 file structure, §8.6.5.5 ICCBased colour spaces,
-//! §8.9 images, §14.11.5 output intents). Own design.
-
-use std::collections::HashMap;
+//! Print-page policy and adaptation to shared PDF raster serialization.
+//! Layout, rendering, profile choice and job limits stay in the app.
+pub use craft_pdf_print::write_raster::print::{ImageData, OutputIntent, PdfImage, PdfPage, Placement};
+#[cfg(test)]
 use std::sync::Arc;
 
-/// Pages per document: a print job beyond this is a mistake, not a book.
-pub const MAX_PAGES: usize = 1000;
-/// Images per page.
-pub const MAX_IMAGES_PER_PAGE: usize = 256;
-/// Largest page side in points (200 inches): more than any printer's roll.
-pub const MAX_PAGE_POINTS: f64 = 14_400.0;
-/// Largest image, in pixels per side.
-pub const MAX_IMAGE_SIDE: u32 = 65_535;
-
-/// How an image's samples are stored.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ImageData {
-    /// Interleaved samples, `bits` (8 or 16) per component, 16-bit values big-endian: compressed
-    /// losslessly in the file.
-    Raw { bits: u8, samples: Vec<u8> },
-    /// A baseline JPEG stream, copied into the file as it is.
-    Jpeg(Vec<u8>),
-    /// Samples already compressed with zlib (see [`PdfImage::deflated`]), `bits` per component.
-    Flate { bits: u8, data: Vec<u8> },
-}
-
-/// A raster image and the colour space its samples are in.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PdfImage {
-    pub width: u32,
-    pub height: u32,
-    /// Components per pixel: 1 (grey), 3 (RGB) or 4 (CMYK).
-    pub channels: u8,
-    pub data: ImageData,
-    /// The ICC profile the samples are in; without one the image is device colour.
-    pub icc: Option<Arc<Vec<u8>>>,
-}
-
-impl PdfImage {
-    /// An image from interleaved 16-bit samples.
-    pub fn from_u16(width: u32, height: u32, channels: u8, samples: &[u16], icc: Option<Arc<Vec<u8>>>) -> PdfImage {
-        let bytes = samples.iter().flat_map(|v| v.to_be_bytes()).collect();
-        PdfImage { width, height, channels, data: ImageData::Raw { bits: 16, samples: bytes }, icc }
-    }
-
-    /// The same image with its samples compressed now (checked first), so a long print doesn't
-    /// hold every page's uncompressed samples until the file is written.
-    pub fn deflated(self) -> Result<PdfImage, String> {
-        self.check()?;
-        let data = match self.data {
-            ImageData::Raw { bits, samples } => ImageData::Flate { bits, data: deflate(&samples) },
-            other => other,
-        };
-        Ok(PdfImage { data, ..self })
-    }
-
-    fn check(&self) -> Result<(), String> {
-        if self.width == 0 || self.height == 0 || self.width > MAX_IMAGE_SIDE || self.height > MAX_IMAGE_SIDE {
-            return Err(format!("an image of {} × {} pixels can't be written", self.width, self.height));
-        }
-        if !matches!(self.channels, 1 | 3 | 4) {
-            return Err(format!("images have 1, 3 or 4 components, not {}", self.channels));
-        }
-        match &self.data {
-            ImageData::Raw { bits, samples } => {
-                if !matches!(bits, 8 | 16) {
-                    return Err(format!("images have 8 or 16 bits per component, not {bits}"));
-                }
-                let want = u64::from(self.width) * u64::from(self.height) * u64::from(self.channels) * u64::from(bits / 8);
-                if samples.len() as u64 != want {
-                    return Err(format!("the image needs {want} bytes of samples, not {}", samples.len()));
-                }
-            }
-            ImageData::Jpeg(data) => {
-                if !data.starts_with(&[0xFF, 0xD8]) {
-                    return Err("the image isn't a JPEG stream".into());
-                }
-            }
-            ImageData::Flate { bits, data } => {
-                if !matches!(bits, 8 | 16) || data.is_empty() {
-                    return Err("a compressed image has 8 or 16 bits per component and some data".into());
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Where an image goes on its page, in points from the page's bottom-left corner.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Placement {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-/// One page: its size in points and the images on it, drawn in order (later ones on top).
-#[derive(Clone, Debug, PartialEq)]
-pub struct PdfPage {
-    pub width: f64,
-    pub height: f64,
-    pub images: Vec<(PdfImage, Placement)>,
-}
-
-/// The printing condition the document is made for (PDF/X-style output intent).
-#[derive(Clone, Debug, PartialEq)]
-pub struct OutputIntent {
-    /// The printer / paper profile.
-    pub icc: Arc<Vec<u8>>,
-    /// Its components: 1, 3 or 4.
-    pub channels: u8,
-    /// A name for the condition (the profile's description).
-    pub condition: String,
-}
-
-/// Document-level settings.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PdfInfo {
     pub title: Option<String>,
     pub output_intent: Option<OutputIntent>,
 }
 
-fn finite(v: f64) -> bool {
-    v.is_finite()
-}
-
-/// A number as PDF writes it: up to four decimals, no exponent, no trailing zeros.
-fn num(v: f64) -> String {
-    let s = format!("{:.4}", if finite(v) { v } else { 0.0 });
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" || s.is_empty() { "0".into() } else { s.into() }
-}
-
-/// A text string: plain ASCII as a literal string, anything else as UTF-16BE with a byte order mark.
-fn text(s: &str) -> String {
-    if s.bytes().all(|b| (0x20..0x7f).contains(&b)) {
-        let mut out = String::with_capacity(s.len() + 2);
-        out.push('(');
-        for c in s.chars() {
-            if matches!(c, '(' | ')' | '\\') {
-                out.push('\\');
-            }
-            out.push(c);
-        }
-        out.push(')');
-        out
-    } else {
-        let mut out = String::from("<FEFF");
-        for unit in s.encode_utf16() {
-            out.push_str(&format!("{unit:04X}"));
-        }
-        out.push('>');
-        out
-    }
-}
-
-struct Writer {
-    out: Vec<u8>,
-    offsets: Vec<usize>,
-}
-
-impl Writer {
-    /// Reserve an object number (filled later by [`Writer::object`]).
-    fn reserve(&mut self) -> usize {
-        self.offsets.push(0);
-        self.offsets.len()
-    }
-
-    fn object(&mut self, id: usize, dict: &str, stream: Option<&[u8]>) {
-        if let Some(slot) = self.offsets.get_mut(id.wrapping_sub(1)) {
-            *slot = self.out.len();
-        }
-        self.out.extend_from_slice(format!("{id} 0 obj\n{dict}").as_bytes());
-        if let Some(data) = stream {
-            self.out.extend_from_slice(b"\nstream\n");
-            self.out.extend_from_slice(data);
-            self.out.extend_from_slice(b"\nendstream");
-        }
-        self.out.extend_from_slice(b"\nendobj\n");
-    }
-}
-
-fn deflate(data: &[u8]) -> Vec<u8> {
-    miniz_oxide::deflate::compress_to_vec_zlib(data, 6)
-}
-
-/// Write a document. Errors name the first page or image that can't be written.
 pub fn write(pages: &[PdfPage], info: &PdfInfo) -> Result<Vec<u8>, String> {
-    if pages.is_empty() {
-        return Err("there are no pages to write".into());
-    }
-    if pages.len() > MAX_PAGES {
-        return Err(format!("a document holds at most {MAX_PAGES} pages"));
-    }
-    for (n, page) in pages.iter().enumerate() {
-        let n = n + 1;
-        if !(finite(page.width) && finite(page.height))
-            || page.width <= 0.0
-            || page.height <= 0.0
-            || page.width > MAX_PAGE_POINTS
-            || page.height > MAX_PAGE_POINTS
-        {
-            return Err(format!("page {n} has no usable size"));
-        }
-        if page.images.len() > MAX_IMAGES_PER_PAGE {
-            return Err(format!("page {n} has more than {MAX_IMAGES_PER_PAGE} images"));
-        }
-        for (image, at) in &page.images {
-            image.check().map_err(|e| format!("page {n}: {e}"))?;
-            if ![at.x, at.y, at.width, at.height].into_iter().all(finite) || at.width <= 0.0 || at.height <= 0.0 {
-                return Err(format!("page {n}: an image has no usable placement"));
-            }
-        }
-    }
-    if let Some(intent) = &info.output_intent
-        && !matches!(intent.channels, 1 | 3 | 4)
-    {
-        return Err("the output intent's profile has 1, 3 or 4 components".into());
-    }
-
-    let mut w = Writer { out: Vec::new(), offsets: Vec::new() };
-    w.out.extend_from_slice(b"%PDF-1.6\n%\xE2\xE3\xCF\xD3\n");
-    let catalog = w.reserve();
-    let pages_id = w.reserve();
-    let info_id = w.reserve();
-
-    // ICC profiles, each written once (keyed by content) with its component count
-    let mut profiles: HashMap<Vec<u8>, usize> = HashMap::new();
-    let mut profile = |w: &mut Writer, icc: &Arc<Vec<u8>>, n: u8| -> usize {
-        if let Some(&id) = profiles.get(icc.as_slice()) {
-            return id;
-        }
-        let id = w.reserve();
-        let data = deflate(icc);
-        let alternate = match n {
-            1 => "/DeviceGray",
-            4 => "/DeviceCMYK",
-            _ => "/DeviceRGB",
-        };
-        w.object(id, &format!("<< /N {n} /Alternate {alternate} /Filter /FlateDecode /Length {} >>", data.len()), Some(&data));
-        profiles.insert(icc.to_vec(), id);
-        id
-    };
-
-    let intent_id = info.output_intent.as_ref().map(|intent| profile(&mut w, &intent.icc, intent.channels));
-
-    let mut kids = Vec::with_capacity(pages.len());
-    for page in pages {
-        let page_id = w.reserve();
-        let mut xobjects = String::new();
-        let mut content = String::new();
-        for (k, (image, at)) in page.images.iter().enumerate() {
-            let space = match &image.icc {
-                Some(icc) => format!("[/ICCBased {} 0 R]", profile(&mut w, icc, image.channels)),
-                None => match image.channels {
-                    1 => "/DeviceGray".into(),
-                    4 => "/DeviceCMYK".into(),
-                    _ => "/DeviceRGB".into(),
-                },
-            };
-            let id = w.reserve();
-            let (bits, filter, data): (u8, &str, std::borrow::Cow<[u8]>) = match &image.data {
-                ImageData::Raw { bits, samples } => (*bits, "/FlateDecode", deflate(samples).into()),
-                ImageData::Flate { bits, data } => (*bits, "/FlateDecode", data.as_slice().into()),
-                ImageData::Jpeg(jpeg) => (8, "/DCTDecode", jpeg.as_slice().into()),
-            };
-            w.object(
-                id,
-                &format!(
-                    "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {space} /BitsPerComponent {bits} /Filter {filter} /Length {} >>",
-                    image.width,
-                    image.height,
-                    data.len()
-                ),
-                Some(&data),
-            );
-            xobjects.push_str(&format!("/Im{k} {id} 0 R "));
-            content.push_str(&format!("q {} 0 0 {} {} {} cm /Im{k} Do Q\n", num(at.width), num(at.height), num(at.x), num(at.y)));
-        }
-        let content_id = w.reserve();
-        let stream = deflate(content.as_bytes());
-        w.object(content_id, &format!("<< /Filter /FlateDecode /Length {} >>", stream.len()), Some(&stream));
-        w.object(
-            page_id,
-            &format!(
-                "<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {} {}] /Resources << /XObject << {xobjects}>> >> /Contents {content_id} 0 R >>",
-                num(page.width),
-                num(page.height)
-            ),
-            None,
-        );
-        kids.push(format!("{page_id} 0 R"));
-    }
-    w.object(pages_id, &format!("<< /Type /Pages /Count {} /Kids [{}] >>", kids.len(), kids.join(" ")), None);
-
-    let intents = match (&info.output_intent, intent_id) {
-        (Some(intent), Some(id)) => format!(
-            " /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (Custom) /Info {} /DestOutputProfile {id} 0 R >>]",
-            text(&intent.condition)
-        ),
-        _ => String::new(),
-    };
-    w.object(catalog, &format!("<< /Type /Catalog /Pages {pages_id} 0 R{intents} >>"), None);
-    let title = info.title.as_deref().map(|t| format!(" /Title {}", text(t))).unwrap_or_default();
-    w.object(info_id, &format!("<< /Producer (LightCraft){title} >>"), None);
-
-    let xref = w.out.len();
-    let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", w.offsets.len() + 1);
-    for offset in &w.offsets {
-        table.push_str(&format!("{offset:010} 00000 n \n"));
-    }
-    table.push_str(&format!("trailer\n<< /Size {} /Root {catalog} 0 R /Info {info_id} 0 R >>\nstartxref\n{xref}\n%%EOF\n", w.offsets.len() + 1));
-    w.out.extend_from_slice(table.as_bytes());
-    Ok(w.out)
+    craft_pdf_print::write_raster::print::write(
+        pages,
+        &craft_pdf_print::write_raster::print::PdfInfo {
+            title: info.title.clone(),
+            output_intent: info.output_intent.clone(),
+            producer: "LightCraft".into(),
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_pdf_print::write_raster::print::MAX_PAGES;
     use lightcraft_codecs::NamedSpace;
 
     /// The body of object `id` (dictionary and raw stream bytes), found through the xref table.
@@ -505,16 +201,5 @@ mod tests {
         assert!(bad(too_many));
         let info = PdfInfo { title: None, output_intent: Some(OutputIntent { icc: srgb(), channels: 2, condition: String::new() }) };
         assert!(write(&[page(vec![])], &info).is_err());
-    }
-
-    #[test]
-    fn numbers_and_strings() {
-        assert_eq!(num(612.0), "612");
-        assert_eq!(num(72.5), "72.5");
-        assert_eq!(num(-0.00001), "0");
-        assert_eq!(num(f64::NAN), "0");
-        assert_eq!(num(1.0 / 3.0), "0.3333");
-        assert_eq!(text("a(b)c\\"), "(a\\(b\\)c\\\\)");
-        assert_eq!(text("é"), "<FEFF00E9>");
     }
 }

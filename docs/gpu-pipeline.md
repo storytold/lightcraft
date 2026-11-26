@@ -189,9 +189,13 @@ walks the drive.
   `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
   guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
   proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
-  space or a display). These render on the CPU: high-bit-depth exports and Visualize HDR (both
-  need float output), soft proofs to an output device's profile (a printer or paper profile), and
-  photos with a content-aware Fill spot (no GPU kernel for it).
+  space or a display). The float HDR render (`OutputDepth::F32Hdr`) takes the GPU path too: the
+  `finish` kernel keeps values up to the edit's peak, encodes with the exact sRGB curve and writes
+  three linear floats per pixel into `out` (within 1 step of 8 on the sRGB curve of the CPU's float
+  render, 0.02 on average: `hdr_float_render_matches`). These render on the CPU: 16-bit and linear float exports,
+  Visualize HDR (it draws the float render over the 8-bit one), soft proofs to an output device's
+  profile (a printer or paper profile), and photos with a content-aware Fill spot (no GPU kernel
+  for it).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`
@@ -306,7 +310,7 @@ real failure still stops the whole process. Such a test asserts on its own rende
 `crates/gpu/tests/it/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
 bounds **mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB** per channel. Measured (Apple M4 Pro, Metal):
 **max 1 LSB, mean ≤ 0.0003 LSB** for every case — 26 settings cases (all tone/colour/effects tools,
-3 vignette styles, grain, curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
+3 vignette styles, grain (value noise and crystal layers), curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
 three mask sets incl. CPU-evaluated shapes, spots + defringe), all 8 orientations ± crop, embedded
 DNG lens data, display-referred sources, draft quality, full-size renders; the 24 MP export in
 `render_bench` also differs by max 1 LSB. Cached (slider-drag) GPU renders are bit-identical to
@@ -432,7 +436,10 @@ view shows a GPU-resident draft reads that texture back for the picture (`Screen
   current settings, else (raws with their import look) the embedded camera JPEG, else a
   thumbnail-level render; the full render replaces it in place.
 - Raw sources for previews (2560 px) and thumbnails are binned straight from the mosaic
-  (`RawImage::develop_binned`, 2× for a 24 MP preview); only exports / 1:1 demosaic at full size.
+  (`RawImage::develop_binned`, 2× for a 24 MP preview); exports / 1:1, and previews `files::bin_factor` can't bin
+  (Bayer sensors under about 4600 px on the long side, X-Trans under about 5760 px, such as 16 MP X-Trans), demosaic
+  at full size, on the CPU, with the mosaic white balanced as shot (`RawImage::develop_balanced_masked`, issue #1328).
+  The GPU starts from the decoded source either way.
 - The next and previous photos in filmstrip order are prepared in the background once the current
   one is rendered (decoded source kept, view render cached): stepping through photos shows the
   developed image in ~50 ms.

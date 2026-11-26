@@ -6,8 +6,13 @@ through Metal on macOS, on the CPU elsewhere (for now). If the Mac's GPU can't r
 the CPU (see the worker below).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
-Object and Describe offer to download it, every other feature (and every existing mask, see
-below) works, and no render, export or command ever waits for it.
+Object, Describe and Lens Blur's **Find Subject** offer to download it, every other feature (and
+every existing mask, see below) works, and no render, export or command ever waits for it.
+
+Lens Blur reuses this same optional SAM 3 model for **Find Subject**; it does not add or download a
+separate model. The automatic subject estimate used before Find Subject finishes (or when **Auto**
+is selected) uses existing person mattes when available, otherwise a local saliency heuristic, so
+that fallback does not require SAM 3.
 
 ## Using them
 
@@ -74,7 +79,9 @@ ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:8793:127.0.0.1:8793 user@your
 LIGHTCRAFT_SAM3_REMOTE=127.0.0.1:8793 lightcraft
 ```
 
-Object clicks, Describe prompts, and detail refinement use the remote worker. Only the
+Object clicks, Describe prompts, detail refinement and Lens Blur's Find Subject (people and animals,
+from the camera's focus point when the file records it) use the remote worker; a worker older than the
+app rejects a request it doesn't know with an error, so update both together. Only the
 rendered model input (long edge at most 1008 pixels) and prompts cross the tunnel. The
 worker caches the current photo; detail crops do not replace that cache. Returned masks
 stay in the local library, so later adjustments and exports work without the connection.
@@ -96,9 +103,9 @@ not RAW development, denoising, or upscaling. The model licence below still appl
 
 ### In the app (recommended)
 
-The first time you pick Object or Describe without the model, LightCraft asks:
+The first time you pick Object, Describe or Lens Blur's Find Subject without the model, LightCraft asks:
 
-> **Download the SAM 3 model?** Object and Describe masks use SAM 3, Meta's segmentation model.
+> **Download the SAM 3 model?** Object, Describe and Lens Blur's Find Subject use SAM 3, Meta's segmentation model.
 > It isn't part of LightCraft, and everything else works without it. Download it once (about
 > 3.4 GB) · *folder*. Licence: SAM License (Meta) — Meta's terms, not LightCraft's. Downloading
 > it means accepting them. [Read the SAM License] — **Not Now** / **Download**
@@ -232,8 +239,9 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   two-way mask decoder for clicks, and the CLIP text encoder, DETR encoder/decoder (box
   relative-position bias, presence token), pixel decoder and semantic head for text. The CLIP tokenizer is a
   small BPE in `tokenizer.rs`. The downloader (original code) is the `lightcraft-fetch` crate, shared by any model that is downloaded; `fetch/` here says what SAM 3 needs.
-- candle is pinned at 0.9.2: later releases make `candle-core` depend on `tokenizers` with the
-  Oniguruma C library, and the product is pure Rust. Weights are read with positional reads (no
+- candle is pinned at 0.11.1. Releases 0.10.0 to 0.11.0 make `candle-core` depend on `tokenizers`
+  with the Oniguruma C library; 0.11.1 builds it with the pure-Rust `fancy-regex` backend, and the
+  product is pure Rust. Weights are read with positional reads (no
   memory map: `unsafe` stays in `lightcraft-sysmem`), only the tensors a path needs, and every
   tensor's byte range is checked against the file's length when it is opened (a truncated or
   damaged file is an error, never a crash).

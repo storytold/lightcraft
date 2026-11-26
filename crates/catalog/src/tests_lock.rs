@@ -84,6 +84,41 @@ fn a_link_at_the_owner_note_is_never_written_through() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The note is what tells the folder that was locked from every other folder (issue #3240), so no two
+/// locks write the same one, also when one process takes them in the same second. A note written
+/// before it had a value of its own is still read.
+#[test]
+fn every_lock_writes_a_note_of_its_own() {
+    let notes: std::collections::HashSet<Vec<u8>> =
+        (0..2_000).map(|_| serde_json::to_vec_pretty(&LockOwner::this_process("LightCraft")).unwrap()).collect();
+    assert_eq!(notes.len(), 2_000, "one note for each lock");
+    let old: LockOwner = serde_json::from_slice(br#"{"pid":7,"host":"elsewhere","program":"LightCraft","version":"0.2.0","since":1}"#).unwrap();
+    assert!(old.pid == 7 && old.token.is_empty());
+}
+
+/// Two libraries locked by one process in the same second: the folder of the second, put at the
+/// path of the first, doesn't hold the first lock's note, so it isn't taken for the folder that was
+/// locked.
+#[cfg(unix)]
+#[test]
+fn the_folder_of_another_lock_taken_in_the_same_second_is_not_the_folder_that_was_locked() {
+    let _serial = serial();
+    let (first_dir, second_dir) = (temp_dir("same-second-one"), temp_dir("same-second-two"));
+    let first = LibraryLock::acquire(&first_dir, "LightCraft").unwrap();
+    let second = LibraryLock::acquire(&second_dir, "LightCraft").unwrap();
+    assert_ne!(first.note(), second.note(), "each lock wrote its own note");
+
+    let away = first_dir.with_extension("away");
+    std::fs::rename(&first_dir, &away).unwrap();
+    std::fs::rename(&second_dir, &first_dir).unwrap();
+    let msg = first.folder().unwrap().check().expect_err("another library's folder is at the path now").to_string();
+    assert!(msg.contains("is no longer the folder this library was opened from"), "{msg}");
+    drop(second);
+    drop(first);
+    let _ = std::fs::remove_dir_all(&first_dir);
+    let _ = std::fs::remove_dir_all(&away);
+}
+
 /// Another process holds the lock; when it is killed (a crash), the OS releases it.
 #[test]
 fn lock_held_by_another_process_is_released_when_it_dies() {
@@ -198,4 +233,91 @@ fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
         refused.len(),
         &refused[..refused.len().min(3)]
     );
+}
+
+/// Issue #3240: dropping the lock removes the owner note it wrote, and only that one. Another
+/// process that has the folder open (the library on a share that the folder was mounted over)
+/// wrote the note in the folder at the path now; removing it, as dropping the lock did before,
+/// took away the only hint of who holds that library.
+#[cfg(unix)]
+#[test]
+fn dropping_the_lock_keeps_the_owner_note_of_a_folder_that_replaced_the_locked_one() {
+    let _serial = serial();
+    let base = temp_dir("owner-replaced");
+    let dir = base.join("lib");
+    std::fs::create_dir(&dir).unwrap();
+    let lock = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(lock.held());
+    std::fs::rename(&dir, base.join("lib.away")).unwrap();
+    std::fs::create_dir(&dir).unwrap();
+    let theirs = br#"{"pid":999999,"host":"elsewhere","program":"LightCraft","version":"0.2.0","since":1}"#;
+    std::fs::write(dir.join(OWNER), theirs).unwrap();
+    drop(lock);
+    assert_eq!(std::fs::read(dir.join(OWNER)).ok().as_deref(), Some(&theirs[..]), "the note of the folder at the path now is theirs");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A folder that holds this lock's note, byte for byte, is the locked folder whatever its numbers say
+/// ([`OpenedFolder::vouch`]): a copy of the library's folder made while it was open, put where the
+/// locked one was, counts as it. So the note goes from there too, as from the locked folder.
+/// (A note with other bytes is another's, as the test above has it.)
+#[cfg(unix)]
+#[test]
+fn dropping_the_lock_removes_a_copy_of_its_note_from_the_folder_that_holds_it() {
+    let _serial = serial();
+    let base = temp_dir("owner-copied");
+    let dir = base.join("lib");
+    std::fs::create_dir(&dir).unwrap();
+    let lock = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    let note = std::fs::read(dir.join(OWNER)).unwrap();
+    std::fs::rename(&dir, base.join("lib.away")).unwrap();
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join(OWNER), note).unwrap();
+    drop(lock);
+    assert!(!dir.join(OWNER).exists(), "the folder at the path holds exactly this lock's note: it is the locked folder");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The lock vouches for the note it wrote in the record of its folder: that is what recognizes the
+/// folder when a file system numbers it anew (a drive mounted again), and what the library takes
+/// over for its stores.
+#[test]
+fn the_lock_vouches_for_the_note_it_wrote_in_the_record_of_its_folder() {
+    let _serial = serial();
+    let dir = temp_dir("vouch");
+    let lock = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    let written = std::fs::read(dir.join(OWNER)).unwrap();
+    assert_eq!(lock.note(), Some(written.as_slice()), "the bytes in the folder");
+    assert_eq!(lock.folder().and_then(OpenedFolder::note), Some(written.as_slice()), "are what its folder's record vouches for");
+    drop(lock);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// In the locked folder itself, a note another process wrote over this lock's is theirs too (a
+/// share that lost this lock's hold and gave it to another computer): it stays when this lock
+/// is dropped. On every system.
+#[test]
+fn dropping_the_lock_keeps_an_owner_note_another_process_wrote() {
+    let _serial = serial();
+    let dir = temp_dir("owner-theirs");
+    let lock = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(lock.held());
+    let theirs = br#"{"pid":999999,"host":"elsewhere","program":"LightCraft","version":"0.2.0","since":1}"#;
+    std::fs::write(dir.join(OWNER), theirs).unwrap();
+    drop(lock);
+    assert_eq!(std::fs::read(dir.join(OWNER)).ok().as_deref(), Some(&theirs[..]), "a note another process wrote is not ours to remove");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The inverse: the folder is the locked one and the note is as this lock wrote it, so it goes
+/// (the library can be opened by the next program, with no note left naming this one).
+#[test]
+fn dropping_the_lock_removes_its_own_note_from_its_own_folder() {
+    let _serial = serial();
+    let dir = temp_dir("owner-own");
+    let lock = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(dir.join(OWNER).is_file());
+    drop(lock);
+    assert!(!dir.join(OWNER).exists());
+    let _ = std::fs::remove_dir_all(&dir);
 }

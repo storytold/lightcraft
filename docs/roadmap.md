@@ -21,7 +21,7 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
 4. **Full-resolution zoom** (gap 4, 8–15 h): visible-region rendering so 100% shows original pixels.
 5. **AI masks** (gap 5, 40–70 h): Subject / Sky / People on licensable weights; configure the SAM 3
    mirror. Needs the maintainer's model decision.
-6. **~~Compressed ORF~~ (done 2026-11-04) and HE NEF** (gap 7, 20–40 h).
+6. **Compressed ORF** (gap 6 reopened; estimate pending provenance review) and **HE NEF** (gap 7, 20–40 h).
 7. **Lens profiles of our own** (gap 8, 40–80 h).
 8. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
 9. **Per-model verification** (gap 10, 20–35 h).
@@ -72,7 +72,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
 | M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs, HDR gain map JPEG / PQ AVIF ✅; JXL encode ⬜) |
-| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed, compressed and 12.8 bpp, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); compressed SRW, HE NEF, IIQ, X3F ⬜) |
+| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed and 12.8 bpp, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); compressed ORF / SRW, HE NEF, IIQ, X3F ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | 🚧 (faces: detection, recognition, People view ✅; Object / Describe masks via SAM 3 🟡; Subject / Sky / People masks, semantic search ⬜) |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
