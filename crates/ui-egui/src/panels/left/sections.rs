@@ -57,7 +57,13 @@ pub(super) fn section(
 /// Where what the panel shows of the sidebar's content ends (screen x): the content is wider
 /// than the panel while the sidebar scrolls sideways.
 pub(super) fn visible_right(ui: &egui::Ui) -> f32 {
-    ui.data(|d| d.get_temp(egui::Id::unique("left-visible-right"))).unwrap_or(f32::MAX)
+    visible_right_of(ui.ctx())
+}
+
+/// [`visible_right`] for a caller that has the context and not the `Ui` (a row's item closure, which
+/// runs inside the list that owns the `Ui`).
+pub(super) fn visible_right_of(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp(egui::Id::unique("left-visible-right"))).unwrap_or(f32::MAX)
 }
 
 /// The header of the open section whose own header has scrolled out of sight stays at the top of

@@ -34,6 +34,13 @@ pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP, indent_step, step_for};
 use rows::{LIBFOLDER_REVEALED, SCROLL_TO_ROW, SideEvent, SideRow, SideSpec, content_width, set_tree_open, settle_layout, side_list};
 pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
+
+/// Where the sidebar's visible part ends this frame (its inner right edge while the sidebar
+/// scrolls sideways): the tests read it to say what "at the edge" means.
+#[cfg(test)]
+pub(crate) fn sidebar_visible_right(ctx: &egui::Context) -> f32 {
+    sections::visible_right_of(ctx)
+}
 #[cfg(test)]
 pub(crate) use sections::section_drop_before;
 use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sidebar_title};
