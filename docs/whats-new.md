@@ -367,6 +367,12 @@
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
 
+### The Window menu lists the open windows
+- On macOS the Window menu now shows a row for each open window (the main window, and the second one from
+  Window ▸ Second Window while it is open), below Bring All to Front. Before, the menu ended at Bring All to Front
+  and listed no window. macOS also adds its own window items there: Fill, Center, Move & Resize and Full Screen Tile
+  on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
+
 ## 2026-10-29
 
 ### A dialog no longer dims the macOS title bar
@@ -454,6 +460,16 @@
 
 ## 2026-10-24
 
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
+
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
@@ -471,6 +487,19 @@
   it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
+### Imports and moves on a network share ask it less
+- Import no longer asks a network share about each photo's `.xmp` sidecar (up to nine names, each a round trip) when
+  the folder's listing, which the import or the Add Photos review has already read, shows there is none. A sidecar in
+  any letter case (`.xmp`, `.XMP`, `.Xmp`, or `<file name>.xmp`) is still found and read. A folder that changed since
+  it was listed, or was too recently changed to tell, is asked about photo by photo. For the folders that have not
+  changed since the review listed them, importing the photos picked in the review also stops asking the share
+  whether each one is a file or a folder before the first one is handled.
+- Renaming photos, moving them to another folder, and undoing either look for their sidecars in one listing of each
+  folder that eight or more photos leave, instead of asking for four names per photo. Sidecars the listing shows
+  still move with their photos (`.xmp` or `.XMP`, as before).
+- Folders that could not be listed completely or whose time can't be read, and files you add one by one, are checked
+  as before.
 
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
@@ -550,6 +579,18 @@
   that changed nothing. Photos the library no longer has (a selection kept after an Undo took them away) are also
   left out of a new album made from the selection, out of Add to Album, and out of the target album (B), which does
   nothing and says nothing when none of them is left, and counts only the photos it changed.
+
+### Reorder rules and groups in the smart album editor
+- Every rule and every group in the New / Edit Smart Album window has a grip (six dots) at the start of its row. Drag it
+  to move the row: a line shows where it will land, the row's name follows the pointer, and Esc gives the drag up. Drop
+  on a rule inside a group to put it in that group, beside the group's frame to take it out; drag a whole group to
+  nest it in another. A group can't go inside itself or deeper than three levels: the pointer shows a not-allowed
+  cursor and says why, and nothing moves. A group a move leaves empty goes away.
+- With the keyboard, Tab to a grip and press ↑ or ↓ to move the row one place (at the end of a group it moves out of
+  the group), → to move it into the group above it (or below it, if that is the one next to it) and ← to move it out
+  of its group. The focus stays on the moved row's grip, and a screen reader says where the row is: "Rule 2 of 4:
+  Rating is ≥ 3. Move with the arrow keys".
+- OK saves the rules in the order shown, in one undo step like any other change to the rules.
 
 ## 2026-10-23
 
@@ -1053,6 +1094,12 @@
 - While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
   every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
   for as long as the import ran. Changing one photo's capture time or crop is quicker too.
+
+### Menu paths without boxes
+- Messages that name a menu path, such as "View → Clear Filters to see all" or the External Editing help in
+  Settings, showed a box between the menu names: the interface font has no glyph for the small triangle used
+  there (issue #1950). They use → now, as the translations already did, and so do these notes. The remove
+  mark of each filter under "+N more" was a box too; it is an × now.
 
 ## 2026-10-15
 
