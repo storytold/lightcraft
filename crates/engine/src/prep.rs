@@ -214,6 +214,10 @@ pub struct PrepState {
     pub library: Option<PrepSettings>,
     /// The background build this preparation started.
     build: Option<Arc<PreviewBuild>>,
+    /// The last completed or refused pass, kept after `build` is cleared.
+    last: Option<Value>,
+    /// Why this preparation asked its running build to stop, captured before settings can change.
+    stop_reason: Option<&'static str>,
     /// The view (its signature) whose build was started, or that the user stopped.
     started_for: Option<u64>,
     declined_for: Option<u64>,
@@ -334,6 +338,26 @@ pub fn marked(s: &Session, id: PhotoId) -> bool {
     s.catalog.photo(id).is_some_and(|p| p.flag == lightcraft_catalog::Flag::Pick || p.rating > 0 || p.label.is_some())
 }
 
+/// A finished background pass, with the counts the build already reports and why it ended.
+fn last_build_json(build: &PreviewBuild, reason: &str) -> Value {
+    let done = build.done.load(Ordering::Relaxed);
+    let skipped = build.skipped.load(Ordering::Relaxed) + build.shared.load(Ordering::Relaxed);
+    let failed = build.failed.load(Ordering::Relaxed);
+    let outcome = if build.ended_cancelled() {
+        "stopped"
+    } else if failed > 0 || build.error().is_some() {
+        "failed"
+    } else if done == skipped {
+        "skipped"
+    } else {
+        "built"
+    };
+    let mut value = build.json();
+    value["outcome"] = json!(outcome);
+    value["reason"] = json!(reason);
+    value
+}
+
 impl Session {
     /// How long until a view whose build couldn't start tries again ([`RETRY_AFTER`]), while one
     /// waits: the app asks for a frame then, so the retry doesn't wait for the next input
@@ -363,21 +387,35 @@ impl Session {
         if let Some(b) = self.prep.build.clone() {
             if b.running() {
                 if !wanted {
-                    b.cancel.store(true, Ordering::Relaxed);
+                    if b.cancel_if_running() {
+                        self.prep.stop_reason.get_or_insert("switchedOff");
+                    }
                 } else if self.prep.started_for.is_some_and(|sig| sig != signature(&self.visible_cloned(), self, want.scope)) {
                     // another view (a folder, a filter, another library): this build's photos are
                     // not the ones shown; stopped, and the view now shown is prepared in its place
                     // (not counted as stopped by the user)
-                    b.cancel.store(true, Ordering::Relaxed);
-                    self.prep.started_for = None;
+                    if b.cancel_if_running() {
+                        self.prep.stop_reason.get_or_insert("viewChanged");
+                        self.prep.started_for = None;
+                    }
                 } else if let Some(id) = at {
                     b.focus_on(id, backward);
                 }
                 return;
             }
-            self.prep.build = None;
             let mine = self.preview_build.as_ref().is_some_and(|p| Arc::ptr_eq(p, &b));
-            if b.cancel.load(Ordering::Relaxed) {
+            let cancelled = b.ended_cancelled();
+            let reason = match self.prep.stop_reason.take() {
+                Some(reason) => reason,
+                None if !cancelled => "completed",
+                None if !mine => "replaced",
+                None if !wanted => "switchedOff",
+                None if self.prep.started_for.is_none() => "viewChanged",
+                None => "cancelled",
+            };
+            self.prep.last = Some(last_build_json(&b, reason));
+            self.prep.build = None;
+            if cancelled {
                 if mine && wanted {
                     // stopped from its row: not again for this view
                     self.prep.declined_for = self.prep.started_for;
@@ -418,6 +456,8 @@ impl Session {
         };
         self.prep.started_for = Some(sig);
         if ids.is_empty() {
+            self.prep.last =
+                Some(json!({"total": 0, "done": 0, "failed": 0, "skipped": 0, "running": false, "outcome": "skipped", "reason": "noPhotos"}));
             return;
         }
         let p = json!({"ids": ids, "background": true, "from": at.0, "backward": backward});
@@ -440,6 +480,7 @@ impl Session {
                 // not started: this view tries again after a while (not on every tick)
                 self.prep.started_for = None;
                 self.prep.retry_at = web_time::Instant::now().checked_add(RETRY_AFTER).map(|at| (sig, at));
+                self.prep.last = Some(json!({"running": false, "outcome": "failed", "reason": "startFailed", "error": e.to_string()}));
                 log::info!("background preparation: {e}");
             }
         }
@@ -488,6 +529,7 @@ impl Session {
             "settings": self.prep.settings(),
             "own": self.prep.library.is_some(),
             "building": self.prep.build.as_ref().filter(|b| b.running()).map(|b| b.json()),
+            "last": self.prep.last,
         })
     }
 }
@@ -495,6 +537,17 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_late_cancel_flag_does_not_rewrite_a_completed_build() {
+        let build = PreviewBuild::default();
+        build.done.store(1, Ordering::Relaxed);
+        build.finished.store(true, Ordering::Relaxed);
+        // The activity row's flag can arrive after completion; the terminal result must not change.
+        build.cancel.store(true, Ordering::Relaxed);
+        let last = last_build_json(&build, "completed");
+        assert_eq!(last["outcome"], "built", "{last}");
+    }
 
     #[test]
     fn a_patch_changes_only_what_it_names_and_is_kept_in_range() {
