@@ -239,8 +239,9 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   two-way mask decoder for clicks, and the CLIP text encoder, DETR encoder/decoder (box
   relative-position bias, presence token), pixel decoder and semantic head for text. The CLIP tokenizer is a
   small BPE in `tokenizer.rs`. The downloader (original code) is the `lightcraft-fetch` crate, shared by any model that is downloaded; `fetch/` here says what SAM 3 needs.
-- candle is pinned at 0.9.2: later releases make `candle-core` depend on `tokenizers` with the
-  Oniguruma C library, and the product is pure Rust. Weights are read with positional reads (no
+- candle is pinned at 0.11.1. Releases 0.10.0 to 0.11.0 make `candle-core` depend on `tokenizers`
+  with the Oniguruma C library; 0.11.1 builds it with the pure-Rust `fancy-regex` backend, and the
+  product is pure Rust. Weights are read with positional reads (no
   memory map: `unsafe` stays in `lightcraft-sysmem`), only the tensors a path needs, and every
   tensor's byte range is checked against the file's length when it is opened (a truncated or
   damaged file is an error, never a crash).

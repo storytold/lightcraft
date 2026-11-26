@@ -2042,8 +2042,16 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
         1 => crate::credits::contributors_ui(app, ui),
         2 => crate::credits::models_ui(ui),
         _ => {
-            ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
-            ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
+            ui.label(egui::RichText::new(crate::channel::name()).font(t.semibold(20.0)).color(t.text));
+            ui.label(crate::i18n::tr_format!(
+                "Version {} — a clean-room, pure-Rust photo library and raw developer.",
+                crate::channel::display_version()
+            ));
+            // Nightly only: the exact source commit, so a report can name the build (plain text, as the
+            // catalogs carry no translated sentence for a build identity).
+            if let Some(commit) = crate::channel::commit() {
+                ui.label(format!("Nightly build {}", &commit[..commit.len().min(12)]));
+            }
             ui.label(crate::i18n::tr_format!(
                 "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
                 crate::theme::font_credits(app.chinese_font.is_some())
