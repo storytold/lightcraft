@@ -2537,9 +2537,10 @@ fn a_frame_whose_hovered_mask_changed_asks_for_another() {
     assert!(!asks(&mut h, None, None), "nowhere near");
 }
 
-/// Picking another mask or another photo while a live Brush stroke is held ends the stroke first: its next live
-/// update or its release can't replace the picked mask's strokes or start a mask on the new photo, and the
-/// pointer still held paints nothing more until it is let go (CodeRabbit on #2920).
+/// Picking another mask or another photo (also with the arrow keys), Undo, or a Brush request that makes a new mask
+/// while a live Brush stroke is held ends the stroke first: its next live update or its release can't replace the
+/// picked mask's strokes, the stroke before the undone one, or start a mask on the new photo, and the pointer
+/// still held paints nothing more until it is let go (CodeRabbit on #2920).
 #[test]
 fn picking_another_mask_or_photo_mid_stroke_ends_the_stroke() {
     let stroke_count = |h: &Headless, id: u32| -> usize {
@@ -2550,7 +2551,7 @@ fn picking_another_mask_or_photo_mid_stroke_ends_the_stroke() {
             .map(|m| m.components.iter().map(|c| if let MaskShape::Brush { strokes } = &c.shape { strokes.len() } else { 0 }).sum())
             .unwrap_or(0)
     };
-    for pick in ["mask", "photo"] {
+    for pick in ["mask", "photo", "next", "undo", "new"] {
         let mut h = detail("panel.masking");
         h.settle(SETTLE);
         exec(&mut h, "tool.brush", json!({"new": true}));
@@ -2563,29 +2564,54 @@ fn picking_another_mask_or_photo_mid_stroke_ends_the_stroke() {
         exec(&mut h, "mask.adjust", json!({"values": {"exposure": -1.0}}));
         let second = h.app.session.active_mask.expect("the second mask");
         assert_ne!(first, second);
+        let second_before = develop(&h).masks.iter().find(|m| m.id == second).cloned();
         // a live stroke on the second mask (it has settings: its effect shows while painting)
         pointer(&mut h, json!([{"kind": "down", "x": 0.6, "y": 0.7}, {"kind": "drag", "x": 0.65, "y": 0.7}, {"kind": "drag", "x": 0.7, "y": 0.7}]));
         h.step();
         assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { live: Some(_), .. })), "{pick}: a live stroke");
         let photo = h.app.session.active().expect("a photo");
         let (first_strokes, masks) = (stroke_count(&h, first), develop(&h).masks.len());
-        if pick == "mask" {
-            exec(&mut h, "mask.select", json!({"id": first}));
-        } else {
-            let other = h.app.session.visible_cloned().into_iter().find(|p| *p != photo).expect("another photo");
-            exec(&mut h, "library.select", json!({"ids": [other.0]}));
+        match pick {
+            "mask" => {
+                exec(&mut h, "mask.select", json!({"id": first}));
+            }
+            "photo" => {
+                let other = h.app.session.visible_cloned().into_iter().find(|p| *p != photo).expect("another photo");
+                exec(&mut h, "library.select", json!({"ids": [other.0]}));
+            }
+            "next" => {
+                exec(&mut h, "library.next", json!({}));
+                assert_ne!(h.app.session.active(), Some(photo), "stepped to the next photo");
+            }
+            "undo" => {
+                exec(&mut h, "edit.undo", json!({}));
+            }
+            _ => {
+                exec(&mut h, "tool.brush", json!({"new": true}));
+            }
         }
+        let (third, second_now) = (h.app.session.active_mask, stroke_count(&h, second));
         assert!(h.app.gesture.is_none(), "{pick}: the stroke ended");
         assert!(h.app.session.interaction.is_none(), "{pick}: its undo step closed");
         // the pointer carries on and lets go: nothing lands on what was picked
         pointer(&mut h, json!([{"kind": "drag", "x": 0.75, "y": 0.7}, {"kind": "drag", "x": 0.8, "y": 0.7}, {"kind": "up", "x": 0.8, "y": 0.7}]));
         h.step();
         h.step();
-        if pick == "mask" {
-            assert_eq!(stroke_count(&h, first), first_strokes, "the picked mask's strokes are untouched");
-            assert_eq!(develop(&h).masks.len(), masks, "no new mask");
-        } else {
-            assert!(develop(&h).masks.is_empty(), "no mask started on the new photo: {:?}", develop(&h).masks.len());
+        match pick {
+            "mask" => {
+                assert_eq!(stroke_count(&h, first), first_strokes, "the picked mask's strokes are untouched");
+                assert_eq!(develop(&h).masks.len(), masks, "no new mask");
+            }
+            "undo" => {
+                let second_after = develop(&h).masks.iter().find(|m| m.id == second).cloned();
+                assert_eq!(second_after, second_before, "the stroke before the undone one is kept as it was");
+            }
+            "new" => {
+                assert_ne!(third, Some(second), "a new mask");
+                assert_eq!(stroke_count(&h, second), second_now, "what was painted stays on its mask, nothing more");
+                assert_eq!(third.map_or(0, |m| stroke_count(&h, m)), 0, "nothing of the old stroke lands on the new mask");
+            }
+            _ => assert!(develop(&h).masks.is_empty(), "{pick}: no mask started on the new photo: {:?}", develop(&h).masks.len()),
         }
         // and the next press paints again (the brush armed again: picking a mask or photo puts it down)
         exec(&mut h, "tool.brush", json!({}));

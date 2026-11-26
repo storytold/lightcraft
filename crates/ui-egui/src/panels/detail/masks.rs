@@ -401,9 +401,12 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
             }
         }
     }
-    // the pointer on a pin shows that mask's overlay (as Lightroom Classic)
+    // the pointer on a pin shows that mask's overlay (as Lightroom Classic); of pins on top of each other, the
+    // selected mask's, then the nearest: the one a drag there would move ([`grip_gestures`])
     if let Some(h) = resp.hover_pos()
-        && let Some((mid, ..)) = grips.iter().find(|(_, _, handle, q)| *handle == 0 && q.distance(h) < 9.0)
+        && let Some((mid, ..)) = grips.iter().filter(|(_, _, handle, q)| *handle == 0 && q.distance(h) < 9.0).min_by(|a, b| {
+            (Some(a.0) != active, a.3.distance(h)).partial_cmp(&(Some(b.0) != active, b.3.distance(h))).unwrap_or(std::cmp::Ordering::Equal)
+        })
     {
         app.ui.mask_hover = app.session.active().map(|photo| (photo, *mid));
     }

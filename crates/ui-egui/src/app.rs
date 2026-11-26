@@ -222,9 +222,11 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
-        // a brush stroke being painted belongs to the mask and photo it started on: picking another ends it
-        // first, so its next live update or its release can't land on the one picked
-        if matches!(id, "mask.select" | "library.select") {
+        // a brush stroke being painted belongs to the mask and photo it started on: picking another (also by
+        // stepping through the photos with the arrow keys) ends it first, so its next live update or its release
+        // can't land on the one picked; so does Undo, which takes the live stroke away (the next update would
+        // otherwise replace the stroke before it)
+        if brush_stroke_ends_before(id) {
             self.cancel_brush_gesture();
         }
         // (seen before and after each command, so a selection changed and changed back between two
@@ -795,4 +797,22 @@ pub(crate) fn sam_download_ended(download: &lightcraft_engine::segment::Download
         None if download.finished => Some((crate::i18n::tr("The SAM 3 model is installed: Object and Describe masks are ready.").to_string(), true)),
         None => None,
     }
+}
+
+/// Commands that end a Brush stroke being painted before they run ([`LightcraftApp::run_typed`]): the ones that pick
+/// another mask or photo, and Undo / Redo, which change the strokes under it.
+pub(crate) fn brush_stroke_ends_before(id: &str) -> bool {
+    matches!(
+        id,
+        "mask.select"
+            | "library.select"
+            | "library.next"
+            | "library.previous"
+            | "library.up"
+            | "library.down"
+            | "slideshow.next"
+            | "slideshow.previous"
+            | "edit.undo"
+            | "edit.redo"
+    )
 }

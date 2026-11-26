@@ -1124,9 +1124,11 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         s if s.starts_with("tool.") => {
             let tool = &s["tool.".len()..];
             // a Brush stroke ends before another tool takes over (its release would go unseen: the next
-            // stroke would carry on from it); a live one closes its undo step, so a new mask isn't folded
-            // into the "Brush" step
-            if tool != "brush"
+            // stroke would carry on from it), and before a Brush request that makes a new mask or component
+            // (what was painted stays on the mask it was painted on); a live one closes its undo step, so a
+            // new mask isn't folded into the "Brush" step
+            let creates = p.get("new").and_then(Value::as_bool) == Some(true) || p.get("op").is_some();
+            if (tool != "brush" || creates)
                 && let Some(crate::panels::detail::Gesture::Brush { live, .. }) = &app.gesture
             {
                 let went_live = live.is_some();
