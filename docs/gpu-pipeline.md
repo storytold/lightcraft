@@ -326,6 +326,11 @@ bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002%
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
 (`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
 
+**Intel Iris Xe (RPL-U, ANV, Mesa 26.0.8, Linux 7.0), 2026-11-22**, the first Intel GPU verified: all
+33 tests pass with an empty skip log, 316 compared cases. 17 are bit-identical and every 8-bit case
+differs by max 1 LSB. The float HDR cases differ by at most 0.135 of an 8-bit step (the banded
+3000 × 2000 render), the others by at most 0.028.
+
 **Running them without a GPU (issue #1050).** `Gpu::new` turns down software adapters, so on a
 machine without a hardware GPU (a VM, a container) every GPU test skips.
 `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` lets them through for one run (tests only: the app never sets it):
