@@ -216,6 +216,8 @@ pub struct PrepState {
     build: Option<Arc<PreviewBuild>>,
     /// The last completed or refused pass, kept after `build` is cleared.
     last: Option<Value>,
+    /// Why this preparation asked its running build to stop, captured before settings can change.
+    stop_reason: Option<&'static str>,
     /// The view (its signature) whose build was started, or that the user stopped.
     started_for: Option<u64>,
     declined_for: Option<u64>,
@@ -386,11 +388,13 @@ impl Session {
             if b.running() {
                 if !wanted {
                     b.cancel.store(true, Ordering::Relaxed);
+                    self.prep.stop_reason = Some("switchedOff");
                 } else if self.prep.started_for.is_some_and(|sig| sig != signature(&self.visible_cloned(), self, want.scope)) {
                     // another view (a folder, a filter, another library): this build's photos are
                     // not the ones shown; stopped, and the view now shown is prepared in its place
                     // (not counted as stopped by the user)
                     b.cancel.store(true, Ordering::Relaxed);
+                    self.prep.stop_reason = Some("viewChanged");
                     self.prep.started_for = None;
                 } else if let Some(id) = at {
                     b.focus_on(id, backward);
@@ -399,16 +403,13 @@ impl Session {
             }
             let mine = self.preview_build.as_ref().is_some_and(|p| Arc::ptr_eq(p, &b));
             let cancelled = b.cancel.load(Ordering::Relaxed);
-            let reason = if !cancelled {
-                "completed"
-            } else if !mine {
-                "replaced"
-            } else if !wanted {
-                "switchedOff"
-            } else if self.prep.started_for.is_none() {
-                "viewChanged"
-            } else {
-                "cancelled"
+            let reason = match self.prep.stop_reason.take() {
+                Some(reason) => reason,
+                None if !cancelled => "completed",
+                None if !mine => "replaced",
+                None if !wanted => "switchedOff",
+                None if self.prep.started_for.is_none() => "viewChanged",
+                None => "cancelled",
             };
             self.prep.last = Some(last_build_json(&b, reason));
             self.prep.build = None;

@@ -992,7 +992,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "library.previewProgress", "Preview Build Progress", [], None, "{} → {total, done, failed, repaired, skipped, shared, background, running, cancelled, what, error} | null", always, |s, _| {
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
         }),
-        cmd!(query "prefs.backgroundPrep", "Background Preparation Settings", [], None, "{} → {app, library|null, settings (in use), own: bool (this library keeps its own), building, last: {outcome: built|skipped|failed|stopped, reason, counts}|null} — what is prepared in the background per mode (culling | library: previews of every photo in view, ahead = photos ahead rendered for the loupe, eyeAhead = photos ahead whose eye focus strip is worked out, scope all|marked|onScreen; develop: ahead = photos kept decoded ready to edit, scope)", always, |s, _| {
+        cmd!(query "prefs.backgroundPrep", "Background Preparation Settings", [], None, "{} → {app, library|null, settings (in use), own: bool (this library keeps its own), building, last: {outcome: built|skipped|failed|stopped, reason, error?, total?, done?, failed?, skipped?, shared?}|null (build counts are flat and present only when a build ran)} — what is prepared in the background per mode (culling | library: previews of every photo in view, ahead = photos ahead rendered for the loupe, eyeAhead = photos ahead whose eye focus strip is worked out, scope all|marked|onScreen; develop: ahead = photos kept decoded ready to edit, scope)", always, |s, _| {
             Ok(s.prep_json())
         }),
         cmd!(
@@ -1023,7 +1023,9 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("library.cancelPreviews", "Cancel Preview Build", [], None, "{}", always, |s, _| {
-            if let Some(b) = &s.preview_build {
+            if let Some(b) = &s.preview_build
+                && b.running()
+            {
                 b.cancel.store(true, Ordering::Relaxed);
             }
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))

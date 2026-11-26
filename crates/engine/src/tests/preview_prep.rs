@@ -342,6 +342,47 @@ fn the_last_background_preparation_reports_previews_already_built() {
 }
 
 #[test]
+fn cancelling_after_a_background_pass_finishes_keeps_its_completed_outcome() {
+    let (mut s, root, ids) = library("prep-late-cancel", 2);
+    let mode = crate::prep::Mode::Library;
+    for k in 0..3 {
+        s.prep_tick(mode, Some(ids[k % ids.len()]), false);
+    }
+    let b = s.preview_build.clone().expect("the background pass started");
+    assert!(wait_finished(&b));
+    let cancelled = s.execute("library.cancelPreviews", &json!({})).unwrap();
+    assert_eq!(cancelled["cancelled"], false, "a finished pass cannot be cancelled: {cancelled}");
+    s.prep_tick(mode, Some(ids[0]), false);
+    let last = s.prep_json()["last"].clone();
+    assert_eq!(last["outcome"], "built", "{last}");
+    assert_eq!(last["reason"], "completed", "{last}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_automatic_stop_keeps_its_reason_when_settings_change_before_harvest() {
+    let (mut s, root, ids) = library("prep-stop-reason", 2);
+    let hold = crate::prep::TestHold::new();
+    let mode = crate::prep::Mode::Library;
+    for k in 0..3 {
+        s.prep_tick(mode, Some(ids[k % ids.len()]), false);
+    }
+    let b = s.preview_build.clone().expect("the background pass started");
+    assert!(b.running());
+    s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"previews": false}}})).unwrap();
+    s.prep_tick(mode, Some(ids[0]), false);
+    assert!(b.cancel.load(Ordering::Relaxed), "switching preparation off stops the running pass");
+    s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"previews": true}}})).unwrap();
+    drop(hold);
+    assert!(wait_finished(&b));
+    s.prep_tick(mode, Some(ids[0]), false);
+    let last = s.prep_json()["last"].clone();
+    assert_eq!(last["outcome"], "stopped", "{last}");
+    assert_eq!(last["reason"], "switchedOff", "later settings must not rewrite why it stopped: {last}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn the_last_background_preparation_reports_an_empty_scope() {
     let (mut s, root, ids) = library("prep-last-empty", 2);
     s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"scope": "marked"}}})).unwrap();
