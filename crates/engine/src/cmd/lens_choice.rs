@@ -28,7 +28,7 @@ fn profiles(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(db) = crate::lens_profiles::database() else {
         return Ok(json!({"profiles": [], "chosen": null, "database": false}));
     };
-    let chosen = ph.embedded_lens.is_some_and(|l| l.source == LensSource::Chosen).then(|| ph.meta.lens.clone());
+    let chosen = ph.embedded_lens.as_ref().is_some_and(|l| l.source == LensSource::Chosen).then(|| ph.meta.lens.clone());
     Ok(json!({"profiles": crate::lens_profiles::choices(&db, &ph.meta.make, &ph.meta.camera), "chosen": chosen, "database": true}))
 }
 
@@ -109,7 +109,7 @@ fn choose(s: &mut Session, p: &Value) -> Result<Value> {
     let mut chosen = Vec::new();
     let mut skipped = Vec::new();
     for id in targets {
-        let path = match s.catalog.photo(id).map(|p| crate::cmd::missing::checked_path(p)) {
+        let path = match s.catalog.photo(id).map(|p| p.library_file()) {
             Some(Some(path)) => path.to_string(),
             Some(None) => {
                 skipped.push(json!({"id": id.0, "why": "its file isn't available"}));

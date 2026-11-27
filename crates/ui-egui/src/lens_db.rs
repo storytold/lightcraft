@@ -236,7 +236,7 @@ mod tests {
         let id = app.session.active().expect("a photo");
         let mut p = (**app.session.catalog.photo(id).expect("the photo")).clone();
         p.meta.lens = "Canon EF-S 18-55mm f/3.5-5.6".into();
-        p.embedded_lens = Some(EmbeddedLens { source: LensSource::Chosen, ..Default::default() });
+        p.embedded_lens = Some(Box::new(EmbeddedLens { source: LensSource::Chosen, ..Default::default() }));
         assert_eq!(super::readout(&app, &p), "Profile: Canon EF-S 18-55mm f/3.5-5.6 (chosen)");
     }
 

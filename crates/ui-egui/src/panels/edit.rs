@@ -414,7 +414,7 @@ fn lens_profile_choice(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, 
     if !p.develops_raw() || lightcraft_engine::lens_profiles::database().is_none() {
         return;
     }
-    let chosen = p.embedded_lens.is_some_and(|l| l.source == lightcraft_develop::LensSource::Chosen);
+    let chosen = p.embedded_lens.as_ref().is_some_and(|l| l.source == lightcraft_develop::LensSource::Chosen);
     let t = Tokens::get(ui.ctx());
     let current = if chosen { p.meta.lens.trim().to_string() } else { crate::i18n::tr("Choose…").to_string() };
     ui.horizontal(|ui| {

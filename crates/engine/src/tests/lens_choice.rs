@@ -84,7 +84,7 @@ fn choosing_gives_the_photo_and_its_copies_the_profile_in_one_undo_step() {
     s.commit("Choose Lens Profile", Op::Batch { ops }).unwrap();
     for id in [1, 2] {
         let p = s.catalog.photo(PhotoId(id)).unwrap();
-        assert_eq!(p.embedded_lens.map(|l| l.source), Some(LensSource::Chosen), "photo {id}");
+        assert_eq!(p.embedded_lens.as_ref().map(|l| l.source), Some(LensSource::Chosen), "photo {id}");
         assert_eq!(p.meta.lens, "Testcam 18-55mm f/3.5-5.6");
         assert!(p.develop.optics.lens_profile);
     }
@@ -110,7 +110,7 @@ fn chosen_lens() -> EmbeddedLens {
 #[test]
 fn a_chosen_profile_is_kept_when_the_file_is_read_again() {
     let mut p = raw(1, "Testcam 18-55mm f/3.5-5.6");
-    p.embedded_lens = Some(chosen_lens());
+    p.embedded_lens = Some(Box::new(chosen_lens()));
     let db_lens = EmbeddedLens { source: LensSource::Database, ..chosen_lens() };
     for from_file in [None, Some(db_lens)] {
         let info = crate::media::ProbeInfo { embedded_lens: from_file, ..file(Some(18.0)) };
