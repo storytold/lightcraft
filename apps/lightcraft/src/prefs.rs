@@ -1,4 +1,4 @@
-use super::*;
+use super::{LibraryProblem, LightcraftApp, UiState};
 
 /// Where the system keeps monitor profiles, for the Choose Profile dialog to start in: the user's
 /// own profiles first (Linux: colord / DisplayCAL; macOS: ColorSync), then the system's.
@@ -24,12 +24,23 @@ pub(crate) fn config_dir() -> Option<std::path::PathBuf> {
 /// The window at the size it was last used at, zoomed if it was (`window`), or at the usual size
 /// when nothing is remembered. A zoomed window is given the size it goes back to. Where it
 /// opens is the system's to say.
-pub(crate) fn as_remembered(builder: egui::ViewportBuilder, window: Option<lightcraft_ui_egui::window_place::WindowPlace>) -> egui::ViewportBuilder {
+///
+/// Windows: a window built maximized could open covering half the screen while
+/// the system took it for maximized, so there (`maximize_later`) it is built at its size and
+/// maximized once it shows ([`lightcraft_ui_egui::window_place::StartPlace`]).
+pub(crate) fn as_remembered(
+    builder: egui::ViewportBuilder,
+    window: Option<lightcraft_ui_egui::window_place::WindowPlace>,
+    maximize_later: bool,
+) -> egui::ViewportBuilder {
     let builder = builder.with_inner_size(window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size));
     // (only ever asked to zoom: asked not to, macOS un-zooms a window whose size fills the screen
     // to a size of its own choosing)
-    if window.is_some_and(|w| w.zoomed) { builder.with_maximized(true) } else { builder }
+    if window.is_some_and(|w| w.zoomed) && !maximize_later { builder.with_maximized(true) } else { builder }
 }
+
+/// Windows maximizes a remembered maximized window once it shows (see [`as_remembered`]).
+pub(crate) const MAXIMIZE_LATER: bool = cfg!(target_os = "windows");
 
 /// `<config>/ui.json`, the saved UI state and app settings — `None` when nothing is read or
 /// written: `LIGHTCRAFT_NO_PREFS` (tests, scripts) or no home folder.
@@ -67,6 +78,11 @@ fn decode_saved_ui(bytes: &[u8]) -> Result<(UiState, bool), String> {
     if recovered {
         fields.remove("docking");
     }
+    // A settings file from before the startup dialog existed has no `seenVersion` key: the file
+    // is there, so this is an installation that has been run, due What's New — never the
+    // first-run tour. Shared with the browser's loader, which runs the same migration on its
+    // stored `ui.json` (`startup::migrate_legacy_seen_version` carries the full story).
+    lightcraft_ui_egui::startup::migrate_legacy_seen_version(fields);
     let ui = serde_json::from_value(saved).map_err(|error| error.to_string())?;
     Ok((ui, recovered))
 }
@@ -156,6 +172,9 @@ pub(crate) struct PrefsWriter {
     /// When the window was first looked at: its watch goes by the clock from then on, not by
     /// the interface's time, which stands still while the window is hidden.
     pub(crate) window_since: Option<std::time::Instant>,
+    /// The window as it first shows: maximized then on Windows, fitted to a smaller screen.
+    /// `None` once done, and in tests.
+    pub(crate) start: Option<lightcraft_ui_egui::window_place::StartPlace>,
 }
 
 impl PrefsWriter {
@@ -216,7 +235,24 @@ impl PrefsWriter {
         // `run_logic` pass has no fresh content rect: keep the last known placement.
         let remembered = app.ui.window.and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
         let at = self.window_since.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f64();
-        if !hidden {
+        // (while the window is being placed it is not remembered: it may not be as it will be; a
+        // hidden pass's stale size places nothing)
+        let placing = self.start.is_some();
+        if let Some(start) = &mut self.start {
+            if !hidden {
+                for command in start.step(&seen, at, zoom) {
+                    ctx.send_viewport_cmd(command);
+                }
+            } else {
+                // (hidden: nothing to place by, but the time limit still runs)
+                start.idle(at);
+            }
+            match start.waits() {
+                Some(wait) => ctx.request_repaint_after(wait),
+                None => self.start = None,
+            }
+        }
+        if !hidden && !placing {
             app.ui.window = self.window.note(remembered, &seen, at);
         }
         if let Some(wait) = self.window.waits(at) {

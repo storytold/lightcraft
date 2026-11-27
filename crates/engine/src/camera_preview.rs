@@ -36,8 +36,8 @@ use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]
 use look_fit::{
-    FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, sony_dro_off_tone, with_dro_off_tone,
-    without_clipped,
+    FIT_PREVIEW_MAX_PIXELS, ProxyFrame, SENSOR_CLIP, at_most, camera_vignetting_amount, clips_more, correct_vignetting, fit_dng_tone, fit_look,
+    fit_look_with, sony_dro_off_tone, vignetting_gains, with_dro_off_tone, with_pooled_tone, with_profile_colour, without_clipped,
 };
 #[cfg(test)]
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
@@ -50,9 +50,10 @@ use pairs::{
 pub(crate) use proxy::LensGeometry;
 #[cfg(test)]
 use proxy::{
-    Cr3Framing, MIN_PREVIEW_FRACTION, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at, sensor_proxy, structure_agrees,
+    Cr3Framing, MIN_PREVIEW_FRACTION, THIN_TOLERANCE, alignment, estimate_cr3_framing, extend_tone, into_lens_geometry, proxies, reference_at,
+    samples_from_proxies, sensor_proxy, structure_agrees,
 };
-pub(crate) use proxy::{fit_profile, lens_geometry, profile_pairs};
+pub(crate) use proxy::{fit_profile, fit_profile_tone, lens_geometry, profile_samples};
 #[cfg(test)]
 use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 
@@ -79,7 +80,21 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// a tone-only fallback for near-black scenes with too few colour pairs (#1587); DNG tone fitting uses a
 /// lens-corrected proxy when the file carries lens opcodes; validated A7CR distortion, including the lens data
 /// stored with each smart preview.
-pub const LOOK_VERSION: u32 = 12;
+/// 13: tone curves no steeper than a log-log slope of 4 between knots (#1904).
+/// 13: the Canon CR3/CR2 camera JPEG read in the colour space of the Canon maker note (#2654).
+/// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
+/// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
+/// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
+/// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
+/// so previews made without the profile are rebuilt.
+/// 15: a photo no look fits keeps its camera profile's colour instead of the neutral fallback.
+/// 16: a camera profile's pooled tone curve continues a photo's own past what its JPEG showed.
+/// 17: only a look with the profile's colour continues along its pooled tone curve.
+/// 18: continuing a photo's curve keeps it as it was where its JPEG taught it (`thinned_knots`).
+/// 26: a lens database's vignetting correction reaches the sensor proxy only in the share the camera JPEG shows
+/// (`camera_vignetting_amount`, ranked within chromaticity classes), not whole: JPEGs that show less of it fitted looks too
+/// dark, with skewed colour. The same for a DNG's tone fit; a CR3 proxy gets the gain where its framed pixels come from.
+pub const LOOK_VERSION: u32 = 26;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

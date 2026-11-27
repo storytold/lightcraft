@@ -1,5 +1,5 @@
-use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::*;
+use super::widgets::{check, choices, field, heading, hint, path_label, row};
+use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 // ------------------------------------------------------------------------------------- General
 
@@ -12,7 +12,7 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         });
         crate::i18n::set_language(app.ui.language);
     });
-    heading(ui, t, crate::i18n::tr("Library"));
+    heading(ui, t, "Library");
     let location = match &app.session.library {
         Some(l) => l.dir.display().to_string(),
         None => crate::i18n::tr("In memory — nothing is saved").to_string(),
@@ -60,7 +60,7 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.lightroom_import,
         );
     });
-    heading(ui, t, crate::i18n::tr("Startup"));
+    heading(ui, t, "Startup");
     row(ui, t, crate::i18n::tr("Open in"), |ui| {
         choices(
             ui,
@@ -69,32 +69,36 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.startup_view,
         );
     });
-    heading(ui, t, crate::i18n::tr("Culling"));
+    heading(ui, t, "Culling");
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
-    heading(ui, t, crate::i18n::tr("Dialogs"));
+    heading(ui, t, "Dialogs");
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
-    heading(ui, t, crate::i18n::tr("External Editing"));
+    heading(ui, t, "External Editing");
     row(ui, t, crate::i18n::tr("PhotoCraft"), |ui| {
-        crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
-            .hint(crate::i18n::tr("Found automatically"))
-            .width(220.0)
-            .show(ui);
+        field(
+            ui,
+            crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
+                .hint(crate::i18n::tr("Found automatically"))
+                .width(220.0),
+        );
     });
     edit_file_rows(ui, t, "photocraftFile", &mut app.ui.settings.photocraft_file);
     hint(
         ui,
         t,
         crate::i18n::tr(
-            "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
+            "Photo → Edit In → Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
         ),
     );
     row(ui, t, crate::i18n::tr("Other editor"), |ui| {
-        crate::text_field::TextField::singleline("field:externalEditor", &mut app.ui.settings.external_editor)
-            .hint(crate::i18n::tr("System default"))
-            .width(220.0)
-            .show(ui);
+        field(
+            ui,
+            crate::text_field::TextField::singleline("field:externalEditor", &mut app.ui.settings.external_editor)
+                .hint(crate::i18n::tr("System default"))
+                .width(220.0),
+        );
     });
     edit_file_rows(ui, t, "externalFile", &mut app.ui.settings.external_file);
     hint(ui, t, crate::i18n::tr("Edit in Other Editor (⌥⌘E) opens the copy in this application (an app name on macOS, a program path elsewhere)."));
@@ -103,6 +107,50 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         t,
         crate::i18n::tr(
             "To hand this editor the original file itself instead (the raw, without a copy: DxO PhotoLab, for example), right-click a photo → Edit In → Open Original in Other Editor (RAW, no copy).",
+        ),
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    lens_profiles(app, ui, t);
+}
+
+/// Lens profiles: whether the lens database is here, a button that downloads it (nothing is fetched without a
+/// click: the first launch offers it once, [`crate::lens_db`]), and the startup offer turned back on or off.
+#[cfg(not(target_arch = "wasm32"))]
+fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use lightcraft_engine::lensfun_download::{self, Offer};
+    heading(ui, t, "Lens profiles");
+    let running = app.session.lensfun.running();
+    // (the user's own folder, LIGHTCRAFT_LENSFUN_DIR, is read instead and never replaced)
+    let own = std::env::var_os(lightcraft_engine::lens_profiles::ENV).is_some_and(|v| !v.is_empty());
+    let installed = lensfun_download::default_dir().is_some_and(|d| lensfun_download::installed(&d));
+    let status = if own {
+        crate::i18n::tr("Lens profiles are read from the folder LIGHTCRAFT_LENSFUN_DIR names.").to_string()
+    } else if running {
+        crate::i18n::tr("Downloading the lens database…").to_string()
+    } else if installed {
+        crate::i18n::tr("The lens database is installed.").to_string()
+    } else {
+        crate::i18n::tr_format!("The lens database is not installed (about {size} MB).", size = lensfun_download::download_megabytes())
+    };
+    row(ui, t, crate::i18n::tr("Lens database"), |ui| {
+        ui.label(RichText::new(status).color(t.text));
+        let r = ui.add_enabled(!own && !running && !installed, egui::Button::new(crate::i18n::tr("Download Lens Database")));
+        register(ui, "button:settingsLensDatabase", r.rect);
+        if r.clicked()
+            && let Err(e) = crate::lens_db::download_default(app)
+        {
+            app.toast(ui.ctx(), e);
+        }
+    });
+    let mut offer = app.ui.settings.lens_database != Offer::Declined;
+    if check(ui, "settings.lensDatabaseOffer", &mut offer, "Offer the lens database download when LightCraft starts") {
+        app.ui.settings.lens_database = if offer { Offer::Ask } else { Offer::Declined };
+    }
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "lensfun's open lens database (CC BY-SA 3.0) corrects distortion and vignetting for many lenses. It is only downloaded when you choose to.",
         ),
     );
 }

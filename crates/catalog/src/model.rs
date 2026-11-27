@@ -157,7 +157,10 @@ impl CopyrightStatus {
 pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
     let s = s.trim().trim_end_matches(['s', '"']).trim();
     match s.split_once('/') {
-        Some((n, d)) => Some(n.trim().parse::<f64>().ok()? / d.trim().parse::<f64>().ok()?),
+        Some((n, d)) => {
+            let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?);
+            if n > 0.0 && d > 0.0 { Some(n / d) } else { None }
+        }
         None => s.parse().ok(),
     }
     .filter(|v: &f64| v.is_finite() && *v > 0.0)
@@ -168,11 +171,32 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 #[serde(default)]
 pub struct Meta {
     pub camera: String,
+    /// The camera's maker, from Exif `Make` (`camera` is maker and model together).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub make: String,
     pub lens: String,
+    /// The lens's maker, from Exif `LensMake`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lens_make: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
+    /// Shutter speed for display, from [`lightcraft_meta::format_exposure_time`] (`1/3`, `0.3571`, `2.5`).
     pub shutter: String,
+    /// The file's exact exposure time in seconds, kept beside the rounded `shutter` text so export
+    /// writes the original duration; read through [`Meta::shutter_seconds`]. Left out of the catalog
+    /// JSON when unknown, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_time: Option<f64>,
     pub iso: Option<u32>,
+    /// Whether the flash fired, from Exif `Flash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flash: Option<bool>,
+    /// Exposure compensation in EV, from Exif `ExposureBiasValue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_bias: Option<f32>,
+    /// The camera body's serial number.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub serial_number: String,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -206,10 +230,97 @@ pub struct Meta {
     pub focus: Option<lightcraft_meta::FocusPoint>,
 }
 
+impl Meta {
+    /// Shutter speed in seconds: the exact [`Meta::exposure_time`] while `shutter` still shows it,
+    /// otherwise whatever `shutter` says (set by hand, or a catalog from before the exact time was kept).
+    pub fn shutter_seconds(&self) -> Option<f64> {
+        self.exposure_time
+            .filter(|t| lightcraft_meta::format_exposure_time(*t).is_some_and(|text| text == self.shutter.trim()))
+            .or_else(|| parse_shutter_seconds(&self.shutter))
+    }
+
+    /// The camera's maker and model as people name them, for display; None when the file names no camera. The maker
+    /// loses its company words ("OLYMPUS IMAGING CORP." is Olympus) and a name in capitals is written as a name
+    /// ("SONY" is Sony; an initialism such as "DJI" stays); the model is kept as the camera writes it, without the
+    /// maker said again ("NIKON CORPORATION NIKON Z 8" is Nikon Z 8). [`Meta::make`] says which words of `camera` are
+    /// the maker's; for a photo added before it was kept, the first word is.
+    pub fn camera_name(&self) -> Option<String> {
+        let (camera, make) = (self.camera.trim(), self.make.trim());
+        let after_make = camera.strip_prefix(make).filter(|rest| !make.is_empty() && (rest.is_empty() || rest.starts_with(char::is_whitespace)));
+        let (maker, model) = match after_make {
+            Some(model) => (make, model),
+            None => camera.split_once(char::is_whitespace).unwrap_or((camera, "")),
+        };
+        let maker: Vec<&str> = maker.split_whitespace().filter(|w| !company_word(w)).collect();
+        let said: Vec<String> = maker.iter().map(|w| word_key(w)).collect();
+        let model: Vec<&str> = if after_make.is_some() {
+            // drop the end of the make said again, with or without its company words ("NIKON", "ACME CAMERA SYSTEMS",
+            // or "KODAK" after "EASTMAN KODAK COMPANY"), then the make's own company words ("NIKON CORPORATION"); any
+            // other word, a company word included, is the model's; an end of company words alone is not the make
+            // ("ACME COMPUTER Computer 1000")
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let keys: Vec<String> = model.iter().map(|w| word_key(w)).collect();
+            let named = |end: &&[String]| keys.starts_with(end) && end.iter().any(|w| !company_word(w));
+            let longest = |of: &[String]| (0..of.len()).filter_map(|i| of.get(i..)).find(named).map_or(0, <[String]>::len);
+            let full: Vec<String> = make.split_whitespace().map(word_key).collect();
+            let run = longest(&full).max(longest(&said));
+            let own: Vec<String> = make.split_whitespace().filter(|w| company_word(w)).map(word_key).collect();
+            let rest = model.get(run..).unwrap_or_default();
+            rest.iter().skip_while(|w| run > 0 && own.contains(&word_key(w))).copied().collect()
+        } else {
+            // the maker taken from the first word: drop the company words it left behind when they hold a legal form
+            // ("CASIO COMPUTER CO.,LTD.", with the maker said again among them), otherwise only the maker said again
+            // ("ACME Computer 1000" keeps Computer)
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let run: Vec<&str> = model.iter().copied().take_while(|w| said.contains(&word_key(w)) || company_word(w)).collect();
+            let drop = if run.iter().any(|w| legal_form(w)) { run.len() } else { run.iter().take_while(|w| said.contains(&word_key(w))).count() };
+            model.get(drop..).unwrap_or_default().to_vec()
+        };
+        let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.into_iter().map(str::to_string)).collect();
+        (!words.is_empty()).then(|| words.join(" "))
+    }
+}
+
+/// A word of a camera's name as words are compared: its letters and digits in lower case ("CORP." is corp, "CO.,LTD."
+/// coltd).
+fn word_key(w: &str) -> String {
+    w.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// Is `w` a word of a maker's company name ("IMAGING CORP.", "COMPANY, LTD.", "CAMERA AG"), or punctuation alone?
+fn company_word(w: &str) -> bool {
+    const DESCRIPTIVE: &str = "imaging camera computer optical electronics";
+    let key = word_key(w);
+    key.is_empty() || legal_form(w) || DESCRIPTIVE.split(' ').any(|c| c == key)
+}
+
+/// Is `w` the legal form of a company ("CORP.", "CO.,LTD.", "AG")? Unlike "CAMERA" or "COMPUTER", no model starts
+/// with one.
+fn legal_form(w: &str) -> bool {
+    const FORMS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag";
+    let key = word_key(w);
+    FORMS.split(' ').any(|c| c == key)
+}
+
+/// A word of a maker's name as a name: one in capitals of more than three letters ("OLYMPUS") or in lower case
+/// ("samsung") with only its first letter a capital; an initialism ("DJI"), a name in mixed case ("GoPro") and a word
+/// with digits or punctuation as written.
+fn maker_word(w: &str) -> String {
+    let letters = w.chars().all(char::is_alphabetic);
+    let capitals = w.chars().all(char::is_uppercase) && w.chars().count() > 3;
+    let lower = w.chars().all(char::is_lowercase);
+    if !(letters && (capitals || lower)) {
+        return w.to_string();
+    }
+    let mut chars = w.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars.flat_map(char::to_lowercase)).collect()).unwrap_or_default()
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Version {
     pub name: String,
     pub created: String,
+    #[serde(deserialize_with = "crate::shared::deserialize")]
     pub settings: Arc<DevelopSettings>,
     #[serde(default)]
     pub auto: bool,
@@ -218,6 +329,7 @@ pub struct Version {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HistoryStep {
     pub label: String,
+    #[serde(deserialize_with = "crate::shared::deserialize")]
     pub settings: Arc<DevelopSettings>,
 }
 
@@ -245,6 +357,7 @@ pub struct Photo {
     pub flag: Flag,
     #[serde(default)]
     pub label: Option<ColorLabel>,
+    #[serde(deserialize_with = "crate::shared::deserialize_current")]
     pub develop: Arc<DevelopSettings>,
     #[serde(default)]
     pub edited: Option<String>,
@@ -276,7 +389,7 @@ pub struct Photo {
     /// Lens corrections embedded in the file (DNG `WarpRectilinear` / `FixVignetteRadial`), applied when
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub embedded_lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,7 +400,7 @@ pub struct Photo {
     /// The settings import gave the photo when a user default (a raw/JPEG default preset, see
     /// the engine's import defaults) changed them from [`Photo::camera_defaults`]. They count as
     /// unedited, and Reset returns to them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::shared::deserialize_optional")]
     pub import_look: Option<Arc<DevelopSettings>>,
     /// Assisted culling scores (`None` until analysed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -298,10 +411,10 @@ pub struct Photo {
     /// picture style baked in — so it is treated as a rendered (non-raw) source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_only: Option<String>,
-    /// The app version (`CARGO_PKG_VERSION`) whose decoder set [`Photo::preview_only`]; empty when
-    /// it isn't set, and in catalogs from before format v9. A preview-only photo whose stamp
-    /// differs from the running version is rechecked when its library opens (issue #662): newer
-    /// builds may decode the file, older ones may decode less.
+    /// The app version (`CARGO_PKG_VERSION`) whose decoder checked [`Photo::preview_only`].
+    /// Also set for supported ORF files: compressed ORF support was withdrawn after #3775, so
+    /// old sensor-decodable records need rechecking too. Empty for other supported formats and
+    /// legacy records. A stale stamp is rechecked when the library opens (issue #662).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preview_checked: String,
     /// A Local record: the fingerprint of its state when the browse catalogued it, to tell
@@ -321,6 +434,20 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// Set when the person arranged this photo's burst by hand (Window ▸ Bursts, or
+    /// `photo.moveToBurst`): its place in [`Analysis::group`], 0 being the pick, or `Some(0)` for
+    /// a photo taken out of every burst. Culling run again keeps such a photo's burst, place and
+    /// pick (unless asked to regroup). `None` while the burst is as culling made it; left out of the
+    /// catalog JSON then, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+}
+
+impl Analysis {
+    /// Whether the person placed this photo by hand (see [`Analysis::rank`]).
+    pub fn by_hand(&self) -> bool {
+        self.rank.is_some()
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting
@@ -329,7 +456,9 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW"].iter().any(|f| format.eq_ignore_ascii_case(f))
+    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW", "CRW"]
+        .iter()
+        .any(|f| format.eq_ignore_ascii_case(f))
 }
 
 /// Whether a raw of `format` shot on `camera` (Exif make and model, as [`Meta::camera`] keeps them) is developed
@@ -354,6 +483,17 @@ pub fn preview_stamp(preview_only: &Option<String>) -> String {
 }
 
 impl Photo {
+    /// Keep the newest [`HISTORY_LIMIT`](crate::HISTORY_LIMIT) History steps; the cursor moves with
+    /// its step, or to the oldest step kept when its own is dropped. Returns how many were dropped.
+    pub fn trim_history(&mut self) -> usize {
+        let n = self.history.len().saturating_sub(crate::HISTORY_LIMIT);
+        if n > 0 {
+            self.history.drain(..n);
+            self.history_cursor = self.history_cursor.map(|c| c.saturating_sub(n));
+        }
+        n
+    }
+
     /// The History step the settings are at (the cursor, clamped to the list; `None` = no history).
     pub fn history_index(&self) -> Option<usize> {
         let last = self.history.len().checked_sub(1)?;
@@ -376,7 +516,7 @@ impl Photo {
             rating: 0,
             flag: Flag::None,
             label: None,
-            develop: Arc::new(DevelopSettings::default()),
+            develop: crate::shared::default_settings(),
             edited: None,
             versions: Vec::new(),
             history: Vec::new(),
@@ -398,13 +538,18 @@ impl Photo {
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
     pub fn set_preview_only(&mut self, preview_only: Option<String>) {
-        self.preview_checked = preview_stamp(&preview_only);
+        self.preview_checked = self.preview_stamp(&preview_only);
         self.preview_only = preview_only;
     }
-    /// A preview-only photo whose flag was set by another app version (or before stamps existed),
-    /// so this build should probe its file again (issue #662).
+    /// The stamp for a fresh probe. Supported ORFs keep it too, so the support-withdrawal
+    /// recheck runs once, without repeatedly probing uncompressed ORFs on every library open.
+    pub fn preview_stamp(&self, preview_only: &Option<String>) -> String {
+        if self.format.eq_ignore_ascii_case("orf") { APP_VERSION.to_string() } else { preview_stamp(preview_only) }
+    }
+    /// A preview-only photo or ORF whose support was checked by another app version (or before
+    /// stamps existed), so this build should probe its file again (issues #662 and #3775).
     pub fn preview_only_stale(&self) -> bool {
-        self.preview_only.is_some() && self.preview_checked != APP_VERSION
+        (self.preview_only.is_some() || self.format.eq_ignore_ascii_case("orf")) && self.preview_checked != APP_VERSION
     }
     /// A raw file developed from its sensor data: not a rendered image, and not a raw shown from
     /// its embedded preview ([`Photo::preview_only`]).
@@ -422,6 +567,23 @@ impl Photo {
     /// ([`relative_wb_camera`]). Other raws edit white balance in Kelvin.
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
+    }
+    /// Every settings holder of this photo that can carry segmentation grids: the develop
+    /// settings, the versions', the history steps' and the import look. A snapshot's shared grid
+    /// table ([`crate::Catalog`]'s `grids`) covers all of them, so a new holder belongs here.
+    pub(crate) fn settings_holders(&self) -> impl Iterator<Item = &Arc<DevelopSettings>> {
+        std::iter::once(&self.develop)
+            .chain(self.versions.iter().map(|v| &v.settings))
+            .chain(self.history.iter().map(|h| &h.settings))
+            .chain(self.import_look.iter())
+    }
+    /// [`Photo::settings_holders`] with mutable access (resolving a snapshot's grid references).
+    pub(crate) fn settings_holders_mut(&mut self) -> impl Iterator<Item = &mut Arc<DevelopSettings>> {
+        let Photo { develop, versions, history, import_look, .. } = self;
+        std::iter::once(develop)
+            .chain(versions.iter_mut().map(|v| &mut v.settings))
+            .chain(history.iter_mut().map(|h| &mut h.settings))
+            .chain(import_look.as_mut())
     }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]). Like the camera defaults,
@@ -457,6 +619,15 @@ impl Photo {
     /// when the name has none (`README`, a dot file such as `.hidden`).
     pub fn extension(&self) -> &str {
         self.file_name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map_or("", |(_, ext)| ext)
+    }
+    /// A video clip (an MP4, a MOV, …), which the image decoders can't read. Besides the kind, the
+    /// format and the extension count: a Lightroom catalog lists its videos with the format `VIDEO`,
+    /// and libraries made before they were imported as videos hold them as images.
+    pub fn is_video(&self) -> bool {
+        const EXTENSIONS: [&str; 12] = ["mp4", "mov", "m4v", "avi", "mts", "m2ts", "3gp", "mkv", "webm", "wmv", "mpg", "mpeg"];
+        self.kind == MediaKind::Video
+            || self.format.eq_ignore_ascii_case("VIDEO")
+            || EXTENSIONS.iter().any(|e| self.extension().eq_ignore_ascii_case(e))
     }
     /// Width and height in pixels as the photo is shown: turned by its orientation and cut by its
     /// crop. Straightening and Constrain Crop shrink the crop without changing its shape, so the
@@ -496,6 +667,18 @@ impl Photo {
     /// In the library: not deleted and not only browsed (Local).
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
+    }
+    /// The file Missing Photos checks for this photo, if it is in scope: a library photo (not in
+    /// Recently Deleted, not a Local-only record seen while browsing a folder) whose original is a
+    /// file. Browse records are out of scope on purpose: browsing can leave tens of thousands of
+    /// them in the catalog, they never show in library views (Missing Photos included), and a
+    /// folder that is gone is simply not browsed again. The sidebar count, the Missing Photos view,
+    /// `library.missing` and Find Missing Photos all use this one rule.
+    pub fn library_file(&self) -> Option<&str> {
+        match &self.source {
+            Source::File { path } if self.in_library() => Some(path),
+            _ => None,
+        }
     }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
@@ -553,6 +736,22 @@ impl Album {
 mod edited_tests {
     use super::*;
     use lightcraft_develop::WbScale;
+
+    #[test]
+    fn a_video_is_known_by_its_kind_format_or_extension() {
+        let file = |name: &str, format: &str| Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
+        let mut clip = file("a.jpg", "JPEG");
+        clip.kind = MediaKind::Video;
+        assert!(clip.is_video(), "by its kind");
+        assert!(file("clip", "video").is_video(), "by the format a Lightroom catalog gives videos");
+        for name in ["VID_1.mp4", "a.MOV", "b.m4v", "c.mts", "d.webm"] {
+            assert!(file(name, "").is_video(), "{name}");
+        }
+        // (a name without an extension, or a dot file, has none)
+        for (name, format) in [("a.jpg", "JPEG"), ("a.arw", "ARW"), ("a.heic", "HEIC"), ("mp4", ""), (".mov", "")] {
+            assert!(!file(name, format).is_video(), "{name}");
+        }
+    }
 
     #[test]
     fn raw_with_import_settings_is_not_edited() {
@@ -678,5 +877,101 @@ mod edited_tests {
             assert_eq!(p.camera_defaults().wb.mode, WbMode::AsShot);
             assert!(!p.is_edited());
         }
+    }
+}
+
+#[cfg(test)]
+mod shutter_tests {
+    use super::*;
+
+    #[test]
+    fn shutter_seconds_prefers_the_exact_time_while_the_text_still_shows_it() {
+        let mut m = Meta { shutter: "0.3571".into(), exposure_time: Some(1.0 / 2.8), ..Default::default() };
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 2.8));
+        m.shutter = "1/3".into();
+        m.exposure_time = Some(1.0 / 3.0);
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 3.0));
+        // the text no longer matches the stored time (edited elsewhere): the text wins
+        m.shutter = "1/250".into();
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 250.0));
+        // an older catalog without the exact time
+        m.exposure_time = None;
+        m.shutter = "2.5".into();
+        assert_eq!(m.shutter_seconds(), Some(2.5));
+        // the exact time stays out of the JSON when unknown, and round-trips when known
+        assert!(!serde_json::to_string(&m).unwrap().contains("exposure_time"));
+        m.exposure_time = Some(2.5);
+        let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.exposure_time, Some(2.5));
+    }
+
+    #[test]
+    fn a_fraction_needs_a_positive_numerator_and_denominator() {
+        for s in ["-1/-250", "1/-250", "-1/250", "0/250"] {
+            assert_eq!(parse_shutter_seconds(s), None, "{s}");
+        }
+        assert_eq!(parse_shutter_seconds("1/250"), Some(0.004));
+    }
+}
+
+#[cfg(test)]
+mod camera_name_tests {
+    use super::*;
+
+    fn name(make: &str, camera: &str) -> Option<String> {
+        Meta { make: make.into(), camera: camera.into(), ..Default::default() }.camera_name()
+    }
+
+    #[test]
+    fn a_cameras_name_is_its_maker_once_without_company_words_then_its_model_as_written() {
+        for (make, camera) in [
+            ("OLYMPUS IMAGING CORP.", "OLYMPUS IMAGING CORP. E-M5MarkII"),
+            ("NIKON CORPORATION", "NIKON CORPORATION NIKON Z 8"),
+            ("RICOH IMAGING COMPANY, LTD.", "RICOH IMAGING COMPANY, LTD. PENTAX K-1"),
+            ("LEICA CAMERA AG", "LEICA CAMERA AG LEICA Q3"),
+            ("Canon", "Canon Canon EOS R5"),
+        ] {
+            // the maker known, and a photo added before it was kept (its first word taken for the maker)
+            for make in [make, ""] {
+                let shown = name(make, camera).unwrap_or_else(|| panic!("{camera}: no name"));
+                let (maker, model) = shown.split_once(' ').unwrap_or_else(|| panic!("{shown}: no model"));
+                assert!(camera.ends_with(model), "{shown}: the model as {camera:?} writes it");
+                assert!(!model.to_lowercase().contains(&maker.to_lowercase()), "{shown}: the maker said once");
+                assert!(camera.to_lowercase().starts_with(&maker.to_lowercase()), "{shown}");
+            }
+        }
+        // a maker in capitals is written as a name, an initialism or a name in mixed case as it is
+        assert!(name("SONY", "SONY ILCE-7M4").is_some_and(|n| n.starts_with("Sony ")));
+        assert!(name("DJI", "DJI FC3582").is_some_and(|n| n.starts_with("DJI ")));
+        assert_eq!(name("", "Apple iPhone 15 Pro").as_deref(), Some("Apple iPhone 15 Pro"));
+        // a maker of several words, and a model with no maker before it, as written
+        assert_eq!(name("OM Digital Solutions", "OM Digital Solutions OM-1").as_deref(), Some("OM Digital Solutions OM-1"));
+        assert_eq!(name("", "ILCE-7M4").as_deref(), Some("ILCE-7M4"));
+        assert_eq!(name("", " "), None, "no camera");
+        // a maker whose company words follow its name ("COMPUTER CO.,LTD."), known or taken from the first word
+        for make in ["CASIO COMPUTER CO.,LTD.", ""] {
+            assert_eq!(name(make, "CASIO COMPUTER CO.,LTD. EX-Z1050").as_deref(), Some("Casio EX-Z1050"), "make {make:?}");
+        }
+        // with the maker known, a company word that starts the model is the model's
+        assert_eq!(name("ACME", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // but the maker said again in full, company words and all, is dropped
+        let repeated = "NIKON CORPORATION NIKON CORPORATION Z 8";
+        assert_eq!(name("NIKON CORPORATION", repeated).as_deref(), Some("Nikon Z 8"));
+        // a model word that is only some word of the maker, or a company word the make never had, is the model's
+        let om = "OM Digital Solutions Digital 1000";
+        assert_eq!(name("OM Digital Solutions", om).as_deref(), Some("OM Digital Solutions Digital 1000"));
+        assert_eq!(name("ACME", "ACME ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("ACME COMPUTER", "ACME COMPUTER Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // with the maker taken from the first word, a company word with no legal form after it is the model's, and
+        // the first word ends at any space
+        assert_eq!(name("", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("", "CANON\tALPHA R5").as_deref(), Some("Canon ALPHA R5"));
+        // the end of the maker said again is dropped ("EASTMAN KODAK" then "KODAK")
+        let kodak = "EASTMAN KODAK COMPANY KODAK EASYSHARE C875 ZOOM DIGITAL CAMERA";
+        let shown = name("EASTMAN KODAK COMPANY", kodak);
+        assert_eq!(shown.as_deref(), Some("Eastman Kodak EASYSHARE C875 ZOOM DIGITAL CAMERA"));
+        // the make said again with a company word inside it is dropped whole
+        let systems = "ACME CAMERA SYSTEMS ACME CAMERA SYSTEMS 1000";
+        assert_eq!(name("ACME CAMERA SYSTEMS", systems).as_deref(), Some("Acme Systems 1000"));
     }
 }

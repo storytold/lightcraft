@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    ControlResponse, LightcraftApp, MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, PendingShot, SCREENSHOT_FALLBACK_MS,
+    SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, ShotGeometry, headless,
+};
 use crate::control;
 
 impl LightcraftApp {
@@ -264,7 +267,9 @@ impl LightcraftApp {
         // same scroll offsets, open sections, style… as the window
         let memory = main.memory(|m| m.clone());
         view.ctx.memory_mut(|m| *m = memory);
+        self.drawing_offscreen = true;
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
+        self.drawing_offscreen = false;
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {

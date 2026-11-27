@@ -3,7 +3,7 @@ use super::proxy::DARK_FLOOR;
 #[cfg(test)]
 use super::tone::highlights;
 use super::tone::{HighlightCheck, ToneFit, highlights_hold};
-use super::*;
+use super::{CameraLook, CameraTone, HsvTable, Mat3, Rgb32f, ToneMap, luminance_2020};
 
 /// A fit must cut the held-out squared error to below this share of the fallback's.
 pub(super) const MIN_IMPROVEMENT: f64 = 0.7;

@@ -3,7 +3,8 @@ use super::prefs::config_dir;
 pub(crate) const HELP: &str = "\
 lightcraft — photo library + raw developer
 
-USAGE: lightcraft [OPTIONS] [FILES/FOLDERS…]   (files and folders are imported)
+USAGE: lightcraft [OPTIONS] [FILES/FOLDERS…]   (files and folders are imported; a library's catalog.snap or
+                                               folder opens that library)
 
 OPTIONS:
   --library DIR    open (or create) this library (env LIGHTCRAFT_LIBRARY; default: the last library opened, or
@@ -30,27 +31,58 @@ ENVIRONMENT:
 
 /// The launch arguments' files and folders to import (absolute), and a notice for each one that
 /// is not imported (see [`lightcraft_engine::import::launch_path`]; issue #374).
-pub(crate) fn launch_imports(args: &[String]) -> (Vec<String>, Vec<String>) {
+pub(crate) fn launch_imports(args: &[String]) -> LaunchArgs {
     let cwd = std::env::current_dir().ok();
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
     launch_imports_in(args, cwd.as_deref(), home.as_deref())
 }
 
-pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> (Vec<String>, Vec<String>) {
-    use lightcraft_engine::import::{LaunchPath, launch_path};
-    let (mut files, mut notices) = (Vec::new(), Vec::new());
+/// The library a launch argument names, after `--library` (`flag`) and `LIGHTCRAFT_LIBRARY` (`env`):
+/// the library to pass on as the flag, and whether the argument chose it (it is then remembered).
+pub(crate) fn launch_library_choice(
+    flag: Option<std::path::PathBuf>,
+    env: Option<&std::path::PathBuf>,
+    argument: Option<std::path::PathBuf>,
+) -> (Option<std::path::PathBuf>, bool) {
+    match (flag, env, argument) {
+        (Some(flag), _, _) => (Some(flag), false),
+        (None, None, Some(argument)) => (Some(argument), true),
+        _ => (None, false),
+    }
+}
+
+/// What the launch arguments ask for: files and folders to import, a library to open (a library's `catalog.snap`
+/// or folder, double-clicked in the file manager), and a notice for each argument
+/// left alone.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LaunchArgs {
+    pub(crate) files: Vec<String>,
+    pub(crate) library: Option<std::path::PathBuf>,
+    pub(crate) notices: Vec<String>,
+}
+
+pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> LaunchArgs {
+    use lightcraft_engine::import::{LaunchPath, launch_deadline, launch_path_until};
+    let (mut files, mut notices, mut library) = (Vec::new(), Vec::new(), None);
+    // one deadline for every argument's library check: they all run before the window opens
+    let deadline = launch_deadline();
     for a in args {
-        match launch_path(a, cwd, home, lightcraft_engine::devices::dcim_in) {
+        match launch_path_until(a, cwd, home, lightcraft_engine::devices::dcim_in, deadline) {
+            Some(LaunchPath::Library(dir)) if library.is_none() => library = Some(std::path::PathBuf::from(dir)),
+            Some(LaunchPath::Library(dir)) => {
+                log::warn!("one library at a time: not opening {dir} given at launch");
+                notices.push(format!("{dir} was not opened: LightCraft opens one library at a time. Open it with File ▸ Open Library…"));
+            }
             Some(LaunchPath::Import(p)) => files.push(p),
             Some(LaunchPath::Refused { path, why }) => {
                 log::warn!("not importing {path} given at launch: {why}");
                 notices
-                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File ▸ Import Photos…"));
+                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File → Import Photos…"));
             }
             None => {}
         }
     }
-    (files, notices)
+    LaunchArgs { files, library, notices }
 }
 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
@@ -73,9 +105,18 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
     port
 }
 
-/// An isolated profile keeps the emergency crash log with its other app data. With no
-/// override (or an empty override), retain the historical system-temp location.
-pub(crate) fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, temp: std::path::PathBuf) -> std::path::PathBuf {
+/// An isolated profile keeps the emergency crash log with its other app data: the Nightly profile's
+/// settings folder, else `LIGHTCRAFT_CONFIG_DIR`, else (no override, or an empty one) the historical
+/// system-temp location. The profile wins because Nightly refuses `LIGHTCRAFT_CONFIG_DIR`, and a
+/// shared temp file would put a Nightly crash in Stable's log.
+pub(crate) fn panic_log_path_with(
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    temp: std::path::PathBuf,
+    profile: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    if let Some(root) = profile.filter(|root| !root.as_os_str().is_empty()) {
+        return root.join("Settings").join("lightcraft-panics.log");
+    }
     env("LIGHTCRAFT_CONFIG_DIR").filter(|value| !value.is_empty()).map(std::path::PathBuf::from).unwrap_or(temp).join("lightcraft-panics.log")
 }
 
@@ -85,7 +126,7 @@ pub(crate) fn stopped_text(error: &str, lost: Option<&str>) -> String {
     match lost {
         Some(reason) => format!(
             "{error}. The graphics driver reset the GPU ({reason}). LightCraft renders on the CPU from its next start; \
-             Settings ▸ Performance ▸ Use the GPU for rendering turns the GPU back on"
+             Settings → Performance → Use the GPU for rendering turns the GPU back on"
         ),
         None => error.to_string(),
     }
@@ -131,8 +172,22 @@ mod config_path_tests {
     #[test]
     fn config_override_keeps_panic_log_in_isolated_profile() {
         let temp = std::path::PathBuf::from("temp");
-        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone()), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| None, temp.clone()), temp.join("lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone()), temp.join("lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone(), None), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| None, temp.clone(), None), temp.join("lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone(), None), temp.join("lightcraft-panics.log"));
+    }
+
+    /// Nightly's crash log lives in its own profile's settings folder, never in Stable's temp file,
+    /// and an inherited LIGHTCRAFT_CONFIG_DIR cannot move it out again.
+    #[test]
+    fn nightly_profile_owns_the_panic_log() {
+        let temp = std::path::PathBuf::from("temp");
+        let profile = std::path::PathBuf::from("/launcher/profiles/lightcraft");
+        assert_eq!(
+            panic_log_path_with(|_| Some("stable settings".into()), temp.clone(), Some(profile.clone())),
+            profile.join("Settings/lightcraft-panics.log")
+        );
+        assert_eq!(panic_log_path_with(|_| None, temp.clone(), Some(profile.clone())), profile.join("Settings/lightcraft-panics.log"));
+        assert_eq!(panic_log_path_with(|_| None, temp.clone(), Some("".into())), temp.join("lightcraft-panics.log"));
     }
 }

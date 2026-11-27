@@ -1,5 +1,6 @@
 use super::albums::MARK_W;
-use super::*;
+use super::sections::visible_right;
+use super::{Align2, Icon, LightcraftApp, Rect, Sense, Tokens, paint, pos2, register, vec2};
 
 /// How wide the sidebar's content needs to be, from the widest row of the last frame: rows are
 /// drawn at this width (or the panel's, if wider), and the sidebar scrolls sideways when it
@@ -22,12 +23,30 @@ pub(super) const SCROLL_TO_ROW: &str = "left-scroll-to-row";
 /// removed, they open again.
 pub(super) const LIBFOLDER_REVEALED: &str = "libfolder-revealed";
 
+/// The least of its name a row shows before its count gives way (about three letters and an
+/// ellipsis).
+const MIN_COUNT_NAME_ROOM: f32 = 36.0;
+
 /// A row says how wide it needs to be.
 pub(super) fn note_width(ui: &egui::Ui, w: f32) {
     ui.data_mut(|d| {
         let m = d.get_temp_mut_or_insert_with::<f32>(egui::Id::unique("left-content-width-next"), || 0.0);
         *m = m.max(w);
     });
+}
+
+/// Where a row's count (and label dot) go when the visible `edge` leaves too little room for the
+/// name: after the name (at least a bit of it, [`MIN_COUNT_NAME_ROOM`], or all of a shorter name)
+/// and wholly past the edge, never cut in two by it, reached by scrolling sideways. `None` when
+/// they stay at the edge, which a row with room (or with neither count nor dot, which has
+/// nothing to keep whole) always does. A row asks for that much width, drawn or not, so from the
+/// next frame on the content reaches it and the clamp to the row no longer bites; the name's
+/// share is at most what [`row_need`] already asks for, so scrolling to the count never narrows
+/// the content and sends it back.
+fn count_past_edge(label_left: f32, name_w: f32, mark_w: f32, count_w: Option<f32>, has_mark: bool, edge: f32) -> Option<f32> {
+    let w = count_w.unwrap_or(0.0);
+    let after_name = label_left + name_w.min(MIN_COUNT_NAME_ROOM) + 8.0 + mark_w + w + 18.0;
+    (after_name > edge && (count_w.is_some() || has_mark)).then(|| after_name.max(edge + 4.0 + mark_w + w + 18.0))
 }
 
 /// One level of a sidebar tree when the panel has room: callers pass `indent` in these steps.
@@ -77,51 +96,71 @@ pub(crate) fn step_for(panel_w: f32, deepest: f32) -> f32 {
     [16.0, 14.0, 12.0, 10.0].into_iter().find(|step| levels * step <= room).unwrap_or(MIN_INDENT_STEP)
 }
 
-pub(super) fn row(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    id: &str,
+/// One row of the sidebar, as it is drawn: build it with [`Row::new`] and the setters, then [`Row::show`] it.
+pub(super) struct Row<'a> {
+    id: &'a str,
     icon: Icon,
-    label: &str,
+    label: &'a str,
+    /// the spoken name when the painted `label` is a shortened form of it
+    spoken: Option<&'a str>,
     count: Option<usize>,
     selected: bool,
     indent: f32,
-) -> egui::Response {
-    row_named(app, ui, id, icon, label, None, count, selected, indent)
-}
-
-/// [`row`] whose spoken name is `spoken` when the painted `label` is a shortened form of it.
-fn row_named(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    id: &str,
-    icon: Icon,
-    label: &str,
-    spoken: Option<&str>,
-    count: Option<usize>,
-    selected: bool,
-    indent: f32,
-) -> egui::Response {
-    row_sensed(app, ui, id, icon, label, spoken, count, selected, indent, Sense::click(), None)
-}
-
-/// [`row_named`] with the given `sense` (rows that can be dragged add `drag`) and a colour
-/// label's dot (`mark`) before the count.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn row_sensed(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    id: &str,
-    icon: Icon,
-    label: &str,
-    spoken: Option<&str>,
-    count: Option<usize>,
-    selected: bool,
-    indent: f32,
+    /// rows that can be dragged add `drag`
     sense: Sense,
+    /// a colour label's dot, before the count
     mark: Option<egui::Color32>,
-) -> egui::Response {
+}
+
+impl<'a> Row<'a> {
+    pub(super) fn new(id: &'a str, icon: Icon, label: &'a str) -> Self {
+        Row { id, icon, label, spoken: None, count: None, selected: false, indent: 0.0, sense: Sense::click(), mark: None }
+    }
+
+    pub(super) fn spoken(mut self, spoken: &'a str) -> Self {
+        self.spoken = Some(spoken);
+        self
+    }
+
+    pub(super) fn count(mut self, count: Option<usize>) -> Self {
+        self.count = count;
+        self
+    }
+
+    pub(super) fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub(super) fn indent(mut self, indent: f32) -> Self {
+        self.indent = indent;
+        self
+    }
+
+    pub(super) fn sense(mut self, sense: Sense) -> Self {
+        self.sense = sense;
+        self
+    }
+
+    pub(super) fn mark(mut self, mark: Option<egui::Color32>) -> Self {
+        self.mark = mark;
+        self
+    }
+
+    /// Draw the row; the response is the row's.
+    pub(super) fn show(self, app: &mut LightcraftApp, ui: &mut egui::Ui) -> egui::Response {
+        draw_row(app, ui, self)
+    }
+}
+
+/// Draw a [`Row`].
+fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Response {
+    let Row { id, icon, label, spoken, count, selected, indent, sense, mark } = row;
     let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
+    // a name is drawn on one line: one holding line breaks (a whole keyword list read as one
+    // keyword) would spill over the rows around it
+    let one_line = lightcraft_catalog::keywords::one_line(label);
+    let label: &str = &one_line;
     let t = Tokens::get(ui.ctx());
     let indent = drawn_indent(ui, indent);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
@@ -159,8 +198,15 @@ pub(super) fn row_sensed(
     let count_color = |n: usize| if n == 0 { t.text_dim.gamma_multiply(0.55) } else { t.text_dim };
     let count_galley = count.filter(|_| app.ui.show_counts).map(|n| ui.painter().layout_no_wrap(n.to_string(), t.font(12.5), count_color(n)));
     let label_left = r.left() + 42.0 + indent;
-    let count_left = count_galley.as_ref().map_or(edge - 18.0, |g| edge - 18.0 - g.size().x);
+    let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x;
+    let full_w = measure(label);
     // a label's dot sits just before the count
+    let count_w = count_galley.as_ref().map(|g| g.size().x);
+    let past_edge = count_past_edge(label_left, full_w, mark_w, count_w, mark.is_some(), edge);
+    // (held to the row's end only when that ends inside the panel: a row that reaches past the
+    // panel's edge keeps the count wholly past it, not cut by it)
+    let edge = past_edge.map_or(edge, |e| if r.right() < visible_right { e.min(r.right()) } else { e });
+    let count_left = edge - 18.0 - count_w.unwrap_or(0.0);
     if let Some(c) = mark {
         let dot = Rect::from_center_size(pos2(count_left - MARK_W / 2.0, r.center().y), vec2(8.0, 8.0));
         ui.painter().circle_filled(dot.center(), 4.0, c);
@@ -168,18 +214,20 @@ pub(super) fn row_sensed(
     }
     // the name gives way to the count: cut with an ellipsis, in full on hover
     let room = count_left - mark_w - 8.0 - label_left;
-    let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x;
-    let full_w = measure(label);
     let shown = if full_w <= room { label.to_string() } else { crate::widgets::elide_head(label, room.max(0.0), measure) };
     let label_rect = ui.painter().text(pos2(label_left, r.center().y), Align2::LEFT_CENTER, &shown, font.clone(), color);
     register(ui, format!("label:{id}"), label_rect);
     let resp = if shown != label { resp.on_hover_text(label) } else { resp };
-    note_width(ui, row_need(indent, full_w, mark_w, count_galley.as_ref().map(|g| g.size().x)));
+    let mut needed = row_need(indent, full_w, mark_w, count_galley.as_ref().map(|g| g.size().x));
     if let Some(galley) = count_galley {
         let rect = Rect::from_min_size(pos2(edge - 18.0 - galley.size().x, r.center().y - galley.size().y / 2.0), galley.size());
         register(ui, format!("count:{id}"), rect);
         ui.painter().galley(rect.min, galley, t.text_dim);
     }
+    if let Some(e) = past_edge {
+        needed = needed.max(e - r.left());
+    }
+    note_width(ui, needed);
     resp
 }
 
@@ -198,9 +246,17 @@ pub(super) fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, lab
     let indent = drawn_indent(ui, indent);
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter();
-    let name_w = painter.layout_no_wrap(label.to_string(), t.font(13.5), t.text_label).size().x;
+    // measured as the row paints it: on one line
+    let name_w = painter.layout_no_wrap(lightcraft_catalog::keywords::one_line(label).into_owned(), t.font(13.5), t.text_label).size().x;
     let count_w = count.filter(|_| app.ui.show_counts).map(|n| painter.layout_no_wrap(n.to_string(), t.font(12.5), t.text_dim).size().x);
-    note_width(ui, row_need(indent, name_w, if mark { MARK_W } else { 0.0 }, count_w));
+    let mark_w = if mark { MARK_W } else { 0.0 };
+    let mut needed = row_need(indent, name_w, mark_w, count_w);
+    // a row that drawn would keep its count past the edge asks for the same width as when drawn
+    let edge = r.right().min(visible_right(ui));
+    if let Some(e) = count_past_edge(r.left() + 42.0 + indent, name_w, mark_w, count_w, mark, edge) {
+        needed = needed.max(e - r.left());
+    }
+    note_width(ui, needed);
     true
 }
 
@@ -213,7 +269,9 @@ fn scroll_asked(ui: &egui::Ui, id: &str) -> bool {
 /// room for its name up to a share of a panel, so one very long name does not make everything
 /// scroll: depth does that.
 fn row_need(indent: f32, name_w: f32, mark_w: f32, count_w: Option<f32>) -> f32 {
-    42.0 + indent + name_w.min(MAX_NAME_NEED) + 18.0 + mark_w + count_w.map_or(0.0, |w| w + 16.0)
+    // (a colour dot with no count keeps the gap after the name that a count's 16 pt includes)
+    let after = count_w.map_or(if mark_w > 0.0 { 8.0 } else { 0.0 }, |w| w + 16.0);
+    42.0 + indent + name_w.min(MAX_NAME_NEED) + 18.0 + mark_w + after
 }
 
 /// The disclosure chevron at the left of a tree row (`indent` is the row's): right-pointing
@@ -230,26 +288,105 @@ fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open
     tr
 }
 
-/// Whether the tree row `key` is open: what the user last chose this session, else `default`.
-pub(super) fn tree_open(ui: &egui::Ui, key: egui::Id, default: bool) -> bool {
-    ui.data(|d| d.get_temp(key)).unwrap_or(default)
+/// What a disclosure triangle is called: "Expand Travel" / "Collapse Travel".
+pub(crate) fn disclosure_name(open: bool, name: &str) -> String {
+    if open { crate::i18n::tr_format!("Collapse {name}", name = name) } else { crate::i18n::tr_format!("Expand {name}", name = name) }
+}
+
+/// What was last said of a tree row (or of all the rows inside one), and when: `at` counts what
+/// the user said this session, so what was said last holds.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct Said {
+    open: bool,
+    at: u64,
+}
+
+/// The later of two sayings.
+fn newest(a: Option<Said>, b: Option<Said>) -> Option<Said> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if b.at > a.at { b } else { a }),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Where what is said of the rows inside the tree row `key` is kept.
+fn inside_key(key: egui::Id) -> egui::Id {
+    key.with("inside")
+}
+
+/// Say `open` of the tree row `key` (and of the rows inside it, when `with_inside`) from now on.
+fn say(ui: &egui::Ui, key: egui::Id, open: bool, with_inside: bool) {
+    ui.data_mut(|d| {
+        let now = d.get_temp_mut_or_default::<u64>(egui::Id::unique("tree-said"));
+        *now += 1;
+        let said = Said { open, at: *now };
+        d.insert_temp(key, said);
+        if with_inside {
+            d.insert_temp(inside_key(key), said);
+        }
+    });
+}
+
+/// Whether the tree row `key` is open: the last thing said of it this session, or of a row above
+/// it (`above`, see [`tree_inside`]), whichever is later, else `default`. A row that is not drawn
+/// yet is as it is said when it is.
+pub(super) fn tree_open(ui: &egui::Ui, key: egui::Id, default: bool, above: Option<Said>) -> bool {
+    newest(ui.data(|d| d.get_temp(key)), above).map_or(default, |s| s.open)
+}
+
+/// What holds for the rows inside the tree row `key`: what was last said of all of them, or of
+/// all the rows above `key` (`above`), whichever is later.
+pub(super) fn tree_inside(ui: &egui::Ui, key: egui::Id, above: Option<Said>) -> Option<Said> {
+    newest(ui.data(|d| d.get_temp(inside_key(key))), above)
 }
 
 /// Open or close the tree row `key` from now on.
 pub(super) fn set_tree_open(ui: &egui::Ui, key: egui::Id, open: bool) {
-    ui.data_mut(|d| d.insert_temp(key, open));
+    say(ui, key, open, false);
+}
+
+/// What a click on a triangle with Option (Alt) held does to the rows inside its row.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Inside {
+    /// Nothing: they have no rows inside them, so there is nothing to say of them (a month's
+    /// days, keywords that hold none).
+    Alone,
+    /// They open and fold with it.
+    OpensAndFolds,
+    /// They fold with it; opened, it opens alone (Local: opening every folder inside would read
+    /// them all from the disk, down to the last).
+    Folds,
 }
 
 /// The chevron of a tree row that has rows inside it (Albums' folders, Local, By Date, Folders,
-/// Keywords): a click flips `open` and remembers it under `key`. Returns the chevron's response
-/// (it sits on the row and takes its clicks, so a row's context menu is attached to it too).
-pub(super) fn tree_toggle(ui: &mut egui::Ui, row: &egui::Response, indent: f32, key: egui::Id, open: &mut bool, widget: String) -> egui::Response {
+/// Keywords): a click flips `open` and remembers it under `key`. With Option (Alt) held, it opens
+/// or folds all the rows inside the row too, however many (`inside`): that is said once, of all
+/// of them, and each row checks it when it is drawn. Returns the chevron's response (it sits on
+/// the row and takes its clicks, so a row's context menu is attached to it too).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn tree_toggle(
+    ui: &mut egui::Ui,
+    row: &egui::Response,
+    indent: f32,
+    key: egui::Id,
+    open: &mut bool,
+    widget: String,
+    name: &str,
+    inside: Inside,
+) -> egui::Response {
     let tri = disclosure_chevron(ui, row, indent, *open, key.with("triangle"), widget);
     if tri.clicked() {
         *open = !*open;
-        set_tree_open(ui, key, *open);
+        let option = ui.input(|i| i.modifiers.alt);
+        let all = option && (inside == Inside::OpensAndFolds || (inside == Inside::Folds && !*open));
+        say(ui, key, *open, all);
+        if option && inside == Inside::Alone {
+            // (what was said of the rows inside it when it had some with rows of their own)
+            ui.data_mut(|d| d.remove::<Said>(inside_key(key)));
+        }
     }
-    let label = if *open { crate::i18n::tr("Collapse") } else { crate::i18n::tr("Expand") };
-    tri.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    // (the name of the row it opens: a screen reader lists the triangles one after another)
+    let label = disclosure_name(*open, name);
+    tri.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
     tri
 }

@@ -1,28 +1,29 @@
-use super::*;
+use super::UiCommand;
 
-/// The "Edit → Language" entries, one per language in [`crate::i18n::Locale::ALL`], so a language
-/// has a matching menu command (also listed through the control channel). Tests check coverage.
+/// One command per language in [`crate::i18n::Locale::ALL`], so a language has a matching command
+/// (also listed through the control channel). They are in no menu: Settings ▸ General has the
+/// language choice. Tests check coverage.
 pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
-    ("app.language.english", crate::i18n::Locale::En.name(), None, "Edit>Language"),
+    ("app.language.english", crate::i18n::Locale::En.name(), None, ""),
     // The picker order (`Locale::for_picker`): alphabetical by the language's own name after
     // English; Cyrillic, Georgian, then CJK names follow the Latin ones. A test keeps them equal.
-    ("app.language.indonesian", crate::i18n::Locale::Id.name(), None, "Edit>Language"),
-    ("app.language.czech", crate::i18n::Locale::Cs.name(), None, "Edit>Language"),
-    ("app.language.german", crate::i18n::Locale::De.name(), None, "Edit>Language"),
-    ("app.language.spanish", crate::i18n::Locale::Es.name(), None, "Edit>Language"),
-    ("app.language.french", crate::i18n::Locale::Fr.name(), None, "Edit>Language"),
-    ("app.language.italian", crate::i18n::Locale::It.name(), None, "Edit>Language"),
-    ("app.language.polish", crate::i18n::Locale::Pl.name(), None, "Edit>Language"),
-    ("app.language.portuguese", crate::i18n::Locale::PtBr.name(), None, "Edit>Language"),
-    ("app.language.finnish", crate::i18n::Locale::Fi.name(), None, "Edit>Language"),
-    ("app.language.swedish", crate::i18n::Locale::Sv.name(), None, "Edit>Language"),
-    ("app.language.vietnamese", crate::i18n::Locale::Vi.name(), None, "Edit>Language"),
-    ("app.language.russian", crate::i18n::Locale::Ru.name(), None, "Edit>Language"),
-    ("app.language.ukrainian", crate::i18n::Locale::Uk.name(), None, "Edit>Language"),
-    ("app.language.georgian", crate::i18n::Locale::Ka.name(), None, "Edit>Language"),
-    ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, "Edit>Language"),
-    ("app.language.simplifiedChinese", crate::i18n::Locale::ZhHans.name(), None, "Edit>Language"),
-    ("app.language.traditionalChinese", crate::i18n::Locale::ZhHant.name(), None, "Edit>Language"),
+    ("app.language.indonesian", crate::i18n::Locale::Id.name(), None, ""),
+    ("app.language.czech", crate::i18n::Locale::Cs.name(), None, ""),
+    ("app.language.german", crate::i18n::Locale::De.name(), None, ""),
+    ("app.language.spanish", crate::i18n::Locale::Es.name(), None, ""),
+    ("app.language.french", crate::i18n::Locale::Fr.name(), None, ""),
+    ("app.language.italian", crate::i18n::Locale::It.name(), None, ""),
+    ("app.language.polish", crate::i18n::Locale::Pl.name(), None, ""),
+    ("app.language.portuguese", crate::i18n::Locale::PtBr.name(), None, ""),
+    ("app.language.finnish", crate::i18n::Locale::Fi.name(), None, ""),
+    ("app.language.swedish", crate::i18n::Locale::Sv.name(), None, ""),
+    ("app.language.vietnamese", crate::i18n::Locale::Vi.name(), None, ""),
+    ("app.language.russian", crate::i18n::Locale::Ru.name(), None, ""),
+    ("app.language.ukrainian", crate::i18n::Locale::Uk.name(), None, ""),
+    ("app.language.georgian", crate::i18n::Locale::Ka.name(), None, ""),
+    ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, ""),
+    ("app.language.simplifiedChinese", crate::i18n::Locale::ZhHans.name(), None, ""),
+    ("app.language.traditionalChinese", crate::i18n::Locale::ZhHant.name(), None, ""),
 ];
 
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
@@ -31,8 +32,8 @@ pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
     LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS)
 }
 
-/// The language a Language-menu command selects, if the id is one. The engine and the UI both go
-/// through here, so the menu, the settings row and the control channel agree on the mapping.
+/// The language a language command selects, if the id is one. The engine and the UI both go
+/// through here, so the settings row and the control channel agree on the mapping.
 pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
     match id {
         "app.language.english" => Some(crate::i18n::Locale::En),
@@ -60,35 +61,35 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
-    ("modelSetup.cancel", "Cancel Pending Photo Action", None, ""),
     ("view.photoGrid", "Photo Grid", None, "View"),
     ("view.squareGrid", "Square Grid", None, "View"),
     // G: Photo Grid ↔ Square Grid (from other views: the photo grid)
     ("view.gridToggle", "Grid", Some("G"), ""),
     ("library.selectOnlyActive", "Select Only Active Photo", Some("Cmd+Shift+D"), "Edit"),
-    ("tool.guidedUpright", "Guided Upright", Some("Shift+G"), "Window>Tools"),
+    ("tool.guidedUpright", "Guided Perspective", Some("Shift+G"), "Window>Tools"),
     ("view.detail", "Detail View", Some("D"), "View"),
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
     ("view.person", "Show Person", None, ""),
-    ("view.faceBoxes", "Face Boxes", None, "View"),
-    ("view.focusPoint", "Focus Point", Some("Alt+F"), "View"),
-    ("view.zoomToFocus", "Zoom to Focus Point", None, "View"),
+    ("view.faceBoxes", "Face Boxes", None, "View>Loupe Overlay"),
+    ("view.focusPoint", "Focus Point", Some("Alt+F"), "View>Loupe Overlay"),
+    ("view.zoomToFocus", "Zoom to Focus Point", None, "View>Loupe Overlay"),
+    ("view.reduceMotion", "Reduce Motion", None, ""),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
     ("compare.swap", "Swap Compare Photos", None, "View"),
     ("compare.set", "Show in Compare", None, ""),
     ("compare.makeSelect", "Make Candidate the Select", None, "View"),
     ("view.autoAdvance", "Auto Advance", None, "Photo"),
-    ("view.filmstrip", "Filmstrip", Some("/"), "View"),
-    ("view.leftPanel", "My Photos Panel", Some("Cmd+Shift+L"), "View"),
-    ("view.rightPanel", "Right Panel", None, "View"),
-    ("view.beforeAfter", "Before/After Side by Side", Some("Y"), "View"),
-    ("view.beforeAfterSplit", "Before/After Split", Some("Shift+Y"), "View"),
-    ("view.beforeAfterTopBottom", "Before/After Top/Bottom", Some("Alt+Y"), "View"),
-    ("view.beforeAfterSplitTopBottom", "Before/After Split Top/Bottom", Some("Alt+Shift+Y"), "View"),
-    ("view.showOriginal", "Show Original", Some("\\"), "View"),
+    ("view.filmstrip", "Filmstrip", Some("/"), "Window"),
+    ("view.leftPanel", "My Photos Panel", Some("Cmd+Shift+L"), "Window"),
+    ("view.rightPanel", "Right Panel", None, "Window"),
+    ("view.beforeAfter", "Before/After Side by Side", Some("Y"), "View>Before/After"),
+    ("view.beforeAfterSplit", "Before/After Split", Some("Shift+Y"), "View>Before/After"),
+    ("view.beforeAfterTopBottom", "Before/After Top/Bottom", Some("Alt+Y"), "View>Before/After"),
+    ("view.beforeAfterSplitTopBottom", "Before/After Split Top/Bottom", Some("Alt+Shift+Y"), "View>Before/After"),
+    ("view.showOriginal", "Show Original", Some("\\"), "View>Before/After"),
     ("view.zoomFit", "Zoom to Fit", Some("Cmd+0"), "View"),
     ("view.zoom100", "Zoom 100%", Some("Cmd+Alt+0"), "View"),
     ("view.zoomToggle", "Toggle Zoom", Some("Z"), "View"),
@@ -99,19 +100,20 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.zoomOut", "Zoom Out", Some("Cmd+-"), "View"),
     // Library grids only (Photo Grid, Square Grid, People): the bottom-bar slider's step by key
     ("view.thumbSizeUp", "Increase Grid Thumbnail Size", Some("="), "View"),
+    ("view.importThumbSize", "Import Thumbnail Size", None, ""),
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
     ("view.clipping", "Clipping", Some("J"), "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
-    ("view.histogram", "Histogram", Some("Cmd+Shift+H"), "View"),
-    ("view.maskOverlay", "Mask Overlay", Some("O"), "View"),
+    ("view.histogram", "Histogram", Some("Cmd+Shift+H"), "Window"),
+    ("view.maskOverlay", "Mask Overlay", Some("O"), "View>Mask Overlay"),
     // Ctrl+Shift+O / Cmd+Shift+O: every mask's region at once, not just the selected one
-    ("view.maskOverlayAll", "All Mask Overlays", Some("Cmd+Shift+O"), "View"),
+    ("view.maskOverlayAll", "All Mask Overlays", Some("Cmd+Shift+O"), "View>Mask Overlay"),
     // Shift+O in the Masking panel (elsewhere it cycles the crop overlay)
-    ("view.maskOverlayMode", "Cycle Mask Overlay Mode", None, "View"),
-    ("view.maskOverlayColor", "Cycle Mask Overlay Color", None, "View"),
-    ("view.maskPins", "Mask Pins", None, "View"),
+    ("view.maskOverlayMode", "Cycle Mask Overlay Mode", None, "View>Mask Overlay"),
+    ("view.maskOverlayColor", "Cycle Mask Overlay Color", None, "View>Mask Overlay"),
+    ("view.maskPins", "Mask Pins", None, "View>Mask Overlay"),
     // {mode?: auto | always | selected | never}: when spot and mask pins show (steps to the next
     // mode when omitted; Shift+H, like Classic's H for pins, since H opens Remove). View ▸ Tool
     // Overlay and the Remove panel list the modes.
@@ -120,8 +122,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // A while the Crop panel is open: the aspect lock as a first-class row. Visualize Spots keeps
     // the key outside the panel; the two are a contextual pair in shortcuts::handle
     ("crop.lockAspect", "Lock Aspect Ratio", Some("A"), ""),
-    ("view.cropOverlay", "Cycle Crop Overlay", Some("Shift+O"), "View"),
-    ("view.cropOverlayOrientation", "Cycle Crop Overlay Orientation", None, "View"),
+    ("view.cropOverlay", "Cycle Crop Overlay", Some("Shift+O"), "View>Crop Overlay"),
+    ("view.cropOverlayOrientation", "Cycle Crop Overlay Orientation", None, "View>Crop Overlay"),
     ("view.back", "Back to Grid", Some("Escape"), ""),
     ("tool.done", "Done", Some("Enter"), ""),
     ("view.filterBar", "Filter Bar", Some("Shift+F"), "View"),
@@ -133,13 +135,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.fullScreenPreview", "Full Screen Preview", Some("F"), "View"),
     ("view.lightsOut", "Lights Out", Some("Shift+L"), "View"),
     ("view.enterFullScreen", "Enter Full Screen", Some("Cmd+Shift+F"), "View"),
-    ("view.infoOverlay", "Cycle Info Overlay", Some("Cmd+I"), "View"),
-    ("view.viewOptions", "View Options…", Some("Cmd+J"), "View"),
+    ("view.infoOverlay", "Cycle Info Overlay", Some("Cmd+I"), "View>Loupe Overlay"),
+    ("view.viewOptions", "View Options…", Some("Cmd+J"), "View>Loupe Overlay"),
     ("view.chooseLayoutImage", "Choose Layout Image…", None, "View"),
     ("view.layoutImage", "Layout Image", Some("Cmd+Alt+O"), "View"),
     ("view.layoutImageOpacity", "Layout Image Opacity", None, ""),
     ("view.layoutImageMatte", "Layout Image Matte", None, ""),
-    ("view.navigator", "Navigator", None, "View"),
+    ("view.navigator", "Navigator", None, "Window"),
     ("panel.edit", "Edit Panel", Some("E"), "Window"),
     ("panel.profiles", "Profile Browser", None, "Window"),
     ("panel.crop", "Crop & Rotate", Some("C"), "Window"),
@@ -152,14 +154,21 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // the Keywords panel with the cursor in its Add keyword box
     ("panel.addKeywords", "Add Keywords", Some("Cmd+K"), ""),
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
+    // Edit Keyword Tag for the keyword picked in the Keyword List
+    ("panel.editKeywords", "Edit Keywords", Some("Cmd+Shift+K"), ""),
     ("panel.activity", "History", None, "Window"),
+    ("panel.bursts", "Bursts", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
+    // the Color Mixer's layout {tab?: mixer|point, adjust?: hsl|color, group?: hue|sat|lum|all,
+    // band?: red…magenta}: opens it in the Edit panel (the sliders are the mixer.* controls)
+    ("view.colorMixer", "Color Mixer Layout", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it
     ("section.light", "Light", Some("Cmd+1"), "Window>Edit Sections"),
     ("section.color", "Color", Some("Cmd+2"), "Window>Edit Sections"),
     ("section.effects", "Effects", Some("Cmd+3"), "Window>Edit Sections"),
     ("section.detail", "Detail", Some("Cmd+4"), "Window>Edit Sections"),
     ("section.optics", "Optics", Some("Cmd+5"), "Window>Edit Sections"),
+    ("section.lensBlur", "Lens Blur", Some("Cmd+6"), "Window>Edit Sections"),
     ("section.calibration", "Calibration", None, ""),
     // {on?}; no params toggles. Opening one Edit section closes the others.
     ("view.soloSections", "Solo Mode", None, "Window>Edit Sections"),
@@ -176,13 +185,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.newAlbum", "New Album…", Some("Cmd+N"), "File"),
     ("dialog.newFolder", "New Folder…", Some("Cmd+Shift+N"), "File"),
     ("dialog.smartAlbum", "New Smart Album…", None, "File"),
-    ("view.photoCounts", "Photo Counts", None, "View"),
+    ("view.photoCounts", "Photo Counts", None, "Window"),
     ("view.sidebarSection", "Show Sidebar Section", None, ""),
     ("view.sidebarMoveSection", "Move Sidebar Section", None, ""),
     ("view.sidebarReset", "Reset Sidebar Sections", None, ""),
-    ("view.slideshow", "Slideshow", Some("Cmd+Alt+Enter"), "View"),
-    ("view.slideshowOptions", "Slideshow Options…", None, "View"),
-    ("dialog.slideshowExport", "Export Slideshow…", None, "View"),
+    ("view.slideshow", "Slideshow", Some("Cmd+Alt+Enter"), "View>Slideshow"),
+    ("view.slideshowOptions", "Slideshow Options…", None, "View>Slideshow"),
+    ("dialog.slideshowExport", "Export Slideshow…", None, "View>Slideshow"),
     ("app.slideshowExport", "Export Slideshow", None, ""),
     // the slideshow's playback controls (Space, ←/→ and Esc while it plays)
     ("slideshow.togglePause", "Pause / Resume Slideshow", None, ""),
@@ -191,13 +200,14 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("slideshow.end", "End Slideshow", None, ""),
     ("view.secondWindow", "Second Window", Some("Cmd+F11"), "Window"),
     ("tool.keywordPainter", "Keyword Painter", None, ""),
+    ("tool.enablePainting", "Enable Painting", Some("Cmd+Alt+K"), "Photo"),
     ("view.gridInfo", "Grid Info", None, ""),
     // {mode?: auto | light | dark}: Appearance Mode (cycles Auto, Light, Dark when omitted; the
     // top bar's appearance button). View ▸ Appearance lists the modes.
     ("view.appearance", "Next Appearance Mode", None, ""),
     // {theme: charcoal | midnight | silver | paper}: pick a theme and fix the mode to its family.
     ("view.theme", "Theme", None, ""),
-    ("dialog.allMetadata", "All Metadata…", None, "Photo"),
+    ("dialog.allMetadata", "All Metadata…", None, "Photo>Metadata"),
     ("dialog.faceModel", "Add Face Model…", None, ""),
     ("dialog.newSmartAlbum", "New Smart Album from Filter…", Some("Cmd+Alt+N"), "File"),
     ("dialog.createPreset", "Create Preset…", Some("Cmd+Shift+P"), "Photo"),
@@ -232,6 +242,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
     ("dialog.saveMetadataPreset", "Save Metadata Preset…", None, ""),
+    // the keywords ⇧K adds or removes, typed with commas between them
+    ("dialog.keywordShortcut", "Set Keyword Shortcut…", Some("Cmd+Alt+Shift+K"), ""),
     ("app.quit", "Quit LightCraft", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
     ("file.exportPresets", "Export Presets…", None, "File"),
@@ -274,7 +286,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.openSamModelFolder", "Show in File Manager", None, ""),
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
     ("dialog.labelNames", "Edit Color Label Names…", None, ""),
-    ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
-    ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
+    ("dialog.captureTime", "Edit Capture Time…", None, "Photo>Metadata"),
+    ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo>Metadata"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
 ];

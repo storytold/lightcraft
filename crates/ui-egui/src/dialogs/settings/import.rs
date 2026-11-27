@@ -1,10 +1,10 @@
 use super::general::{cameras, preset_combo};
-use super::widgets::{button_width, check, choices, heading, hint, path_label, row};
-use super::*;
+use super::widgets::{button_width, check, choices, field, heading, hint, path_label, row};
+use super::{LightcraftApp, RichText, Tokens, json, register};
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
-    heading(ui, t, crate::i18n::tr("Raw defaults"));
+    heading(ui, t, "Raw defaults");
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the library."));
     row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsRawPreset", crate::i18n::tr("Raw default"), d.raw_preset.as_deref(), "LightCraft Default") {
@@ -65,13 +65,13 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
-    heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
+    heading(ui, t, "Other images (JPEG, PNG, TIFF, HEIC…)");
     row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Other preset"), d.other_preset.as_deref(), "None") {
             let _ = app.run("library.preferences", json!({"import": {"otherPreset": v}}));
         }
     });
-    heading(ui, t, crate::i18n::tr("Metadata"));
+    heading(ui, t, "Metadata");
     hint(ui, t, crate::i18n::tr("Added to photos you import that don't already have it."));
     for (key, label, hint_text, value) in
         [("copyright", "Copyright", "© 2026 Your Name", d.copyright.clone()), ("creator", "Creator", "Your Name", d.creator.clone())]
@@ -79,12 +79,14 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         row(ui, t, label, |ui| {
             let id = egui::Id::unique(("settingsMeta", key));
             let mut text: String = ui.data(|m| m.get_temp(id)).unwrap_or(value.clone());
-            let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint_text).desired_width(240.0));
-            register(ui, format!("field:settings.{key}"), r.rect);
-            if r.lost_focus() && text.trim() != value {
+            // (the project's text field: Esc gives the text back and stays in Settings, and with
+            // the text back the line below has nothing to save)
+            let widget = format!("field:settings.{key}");
+            let shown = field(ui, crate::text_field::TextField::singleline(&widget, &mut text).hint(hint_text).width(240.0));
+            if shown.committed() && text.trim() != value {
                 let _ = app.run("library.preferences", json!({"import": {key: text.trim()}}));
             }
-            if r.has_focus() {
+            if shown.editing {
                 ui.data_mut(|m| m.insert_temp(id, text));
             } else {
                 ui.data_mut(|m| m.remove::<String>(id));
@@ -115,7 +117,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
-    heading(ui, t, crate::i18n::tr("XMP sidecars"));
+    heading(ui, t, "XMP sidecars");
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
         let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
@@ -129,14 +131,14 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         }
     });
     if !cfg!(target_arch = "wasm32") {
-        heading(ui, t, crate::i18n::tr("Dropped Files"));
+        heading(ui, t, "Dropped Files");
         check(ui, "settings.importDropped", &mut app.ui.settings.import_dropped_directly, "Import dropped files without review");
-        heading(ui, t, crate::i18n::tr("Cameras and Cards"));
+        heading(ui, t, "Cameras and Cards");
         let mut on_card = d.show_on_card;
         if check(ui, "settings.importOnCard", &mut on_card, "Show the import review when a camera or card is connected") {
             let _ = app.run("library.preferences", json!({"import": {"showOnCard": on_card}}));
         }
-        heading(ui, t, crate::i18n::tr("Auto Import"));
+        heading(ui, t, "Auto Import");
         hint(ui, t, crate::i18n::tr("Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete."));
         row(ui, t, crate::i18n::tr("Watched folder"), |ui| {
             match &d.auto_folder {
@@ -163,6 +165,15 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 let _ = app.run("library.autoImport", json!({"folder": null}));
             }
         });
+        // the last listing of the watched folder failed: say why (it reads "OS error: reason")
+        if let (Some(folder), Some((failed, e))) = (&d.auto_folder, &app.ui.auto_import_error)
+            && folder == failed
+        {
+            let reason = e.strip_prefix(folder.as_str()).and_then(|r| r.strip_prefix(": ")).unwrap_or(e);
+            row(ui, t, "", |ui| {
+                ui.label(RichText::new(crate::i18n::tr_format!("Can't read this folder: {}", reason)).size(11.0).color(t.caution));
+            });
+        }
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
                 let mut copy = d.auto_copy;
@@ -171,10 +182,14 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 }
             });
             row(ui, t, crate::i18n::tr("Album"), |ui| {
-                let id = egui::Id::unique("auto-album");
+                // (per library: a name left here by one library is not another's)
+                let id = egui::Id::unique(("auto-album", app.session.library.as_ref().map(|l| l.dir.clone())));
                 let mut name = ui.data(|m| m.get_temp::<String>(id)).unwrap_or_else(|| d.auto_album.clone().unwrap_or_default());
-                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("None")).desired_width(180.0));
-                if r.lost_focus() {
+                let shown = field(
+                    ui,
+                    crate::text_field::TextField::singleline("field:settingsAutoAlbum", &mut name).hint(crate::i18n::tr("None")).width(180.0),
+                );
+                if shown.committed() {
                     let _ = app.run("library.autoImport", json!({"album": name.trim()}));
                 }
                 ui.data_mut(|m| m.insert_temp(id, name));

@@ -1,6 +1,6 @@
 use super::display::duration_slider;
 use super::widgets::{check, choices, heading, hint, row};
-use super::*;
+use super::{LightcraftApp, Tokens, Value, json, register};
 
 /// The Slideshow tab: the slide preview, then the settings, in one column the width of the page
 /// (the page scrolls; a column beside the preview would be wider than the window). Without
@@ -23,9 +23,9 @@ pub(super) fn slideshow_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
     export_section(app, ui, t);
 }
 
-/// Export: PDF, JPEG sequence or video of the slideshow (View ▸ Export Slideshow…).
+/// Export: PDF, JPEG sequence or video of the slideshow (View ▸ Slideshow ▸ Export Slideshow…).
 fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    heading(ui, t, crate::i18n::tr("Export"));
+    heading(ui, t, "Export");
     let running = app.session.slideshow_export.as_ref().is_some_and(|r| r.running());
     ui.horizontal_wrapped(|ui| {
         for (id, label, format) in [
@@ -45,7 +45,7 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::slideshow::{FADE_MAX, SLIDE_MAX, SLIDE_MIN};
-    heading(ui, t, crate::i18n::tr("Playback"));
+    heading(ui, t, "Playback");
     let s = app.session.slideshow.clone();
     let mut v = s.manual;
     if check(ui, "settings.slideshowManual", &mut v, "Manual slideshow") {
@@ -93,6 +93,33 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         }
     });
+    let mut v = s.pan_and_zoom;
+    if check(ui, "settings.slideshowPanAndZoom", &mut v, "Pan and zoom") {
+        let _ = app.run("slideshow.playback", json!({"panAndZoom": v}));
+    }
+    row(ui, t, crate::i18n::tr("Amount"), |ui| {
+        ui.add_enabled_ui(s.pan_and_zoom, |ui| {
+            ui.label(crate::i18n::tr("Low"));
+            let mut a = s.pan_and_zoom_amount;
+            let r = ui.add(egui::Slider::new(&mut a, 0.0..=1.0).show_value(false));
+            register(ui, "slider:slideshowPanAndZoom", r.rect);
+            ui.label(crate::i18n::tr("High"));
+            if r.changed()
+                && let Ok(next) = app.session.slideshow.merged(&json!({"panAndZoomAmount": a}))
+            {
+                app.session.slideshow = next;
+            }
+            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                let _ = app.run("slideshow.playback", json!({"panAndZoomAmount": a}));
+                // the live value above already holds the amount, so the command finds no change
+                // to save: save it here
+                if let Err(e) = app.session.save_prefs() {
+                    log::warn!("slideshow: {e}");
+                }
+            }
+        });
+    });
+    hint(ui, t, crate::i18n::tr("Each photo moves and zooms slowly while it is up, on a path of its own. Exports show the photos still."));
     let mut v = s.random_order;
     if check(ui, "settings.slideshowRandom", &mut v, "Random order") {
         let _ = app.run("slideshow.playback", json!({"randomOrder": v}));

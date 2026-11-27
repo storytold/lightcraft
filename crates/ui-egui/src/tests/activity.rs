@@ -12,6 +12,7 @@ use crate::{LightcraftApp, Services};
 // generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
 const T: Duration = Duration::from_secs(60);
 
+/// Build a headless instance with the procedural demo library loaded.
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
@@ -21,14 +22,17 @@ fn demo() -> Headless {
     h
 }
 
+/// Check whether a widget with the given identifier is registered.
 fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
+/// Count the number of activity row widgets registered.
 fn rows(h: &Headless) -> usize {
     h.app.widgets.iter().filter(|(w, _)| w.starts_with("activity:row:")).count()
 }
 
+/// Return the bounding rectangle of the registered widget with `id`.
 fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
@@ -110,6 +114,9 @@ fn count_text_by_unit() {
         cancellable: true,
         cancelling: false,
         age_ms: 600,
+        waiting: false,
+        place: 0,
+        lane: None,
     };
     assert_eq!(count_text(&t), "3 of 25");
     (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
@@ -170,6 +177,35 @@ fn quit_with_a_running_task_asks_and_quit_anyway_cancels() {
     assert!(!has(&h, "button:quitRetry"));
     click(&mut h, "button:quitAnyway");
     assert!(g.is_cancelled() && h.quit_requested());
+}
+
+/// Files waiting for a running import or Synchronize Folder (issue #2779) make quitting ask, and
+/// Quit Anyway gives them up instead of asking about them again and again.
+#[test]
+fn quit_anyway_gives_up_files_waiting_to_be_imported() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-quit-waiting-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..1000u32 {
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[(i % 251) as u8, (i / 251) as u8, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join(format!("{i}.png")), png).unwrap();
+    }
+    let mut h = demo();
+    // the file waits behind an import that is still running
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    h.app.waiting_import.files = vec![dir.join("0.png").to_string_lossy().to_string()];
+    wait_visible(&mut h);
+    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting");
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
+    h.step();
+    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting at the click");
+    click(&mut h, "button:quitAnyway");
+    assert!(h.app.quit_prompt.is_none(), "not asked again: {:?}", h.app.quit_prompt);
+    assert!(h.quit_requested());
+    assert!(h.app.waiting_import.files.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -414,6 +450,34 @@ fn merge_dialog_remembers_the_last_settings_per_kind() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Issue #2708: a preview that failed (a photo's file missing) is tried again when the dialog opens again; it used to
+/// show neither a preview nor an error until an option changed.
+#[test]
+fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
+    let (mut h, dir) = bracket("merge-retry");
+    let (file, away) = (dir.join("IMG_1.dng"), dir.join("IMG_1.away"));
+    std::fs::rename(&file, &away).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.error.is_some(), "the preview failed");
+    h.app.ui.dialog = None;
+    h.step();
+    // the file is back (a drive reconnected); the same photos and options again
+    std::fs::rename(&away, &file).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(
+        h.app.merge.preview.is_some() || h.app.merge.preview_task.is_some() || h.app.merge.error.is_some(),
+        "the dialog shows a preview, one being made, or why not"
+    );
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.preview.is_some(), "{:?}", h.app.merge.error);
+    h.app.ui.dialog = None;
+    h.step();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// HDR for Each Bracket Set runs the merges one after the other, each with its activity row; cancelling one stops the
 /// rest.
 #[test]
@@ -452,7 +516,7 @@ fn batch_merge_runs_each_set_in_turn() {
     let rows = h.app.session.activity.list();
     assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
     // the first merge finishes and the second starts by itself
-    assert!(h.step_until(T, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
     assert_eq!(h.app.session.catalog.len(), 10);
     // cancelling the second drops the third
     let rows = h.app.session.activity.list();
@@ -516,6 +580,150 @@ fn rows_added_later_grow_the_stack() {
     }
 }
 
+/// Verify that dragging the activity stack moves the panel across frames and respects viewport constraints.
+#[test]
+fn activity_stack_area_is_movable() {
+    let mut h = demo();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    wait_visible(&mut h);
+    let id = egui::Id::unique("activity-stack");
+    let initial_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(initial_rect.min.x >= 7.0 && initial_rect.min.x <= 9.0, "default pos at x=8: {initial_rect:?}");
+
+    // Hover cancel cross -> PointingHand
+    let cancel_id = format!("activity:cancel:{}", g.id());
+    let r = h.request("ui.hoverWidget", json!({"id": cancel_id}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::PointingHand, "cancel cross shows pointing hand");
+
+    // Hover frame padding -> Grab
+    let r = h.request("ui.move", json!({"x": initial_rect.min.x + 4.0, "y": initial_rect.min.y + 4.0}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::Grab, "frame padding hover shows grab cursor");
+
+    // Drag the activity stack from non-interactive frame padding, verifying Grabbing cursor mid-drag
+    let start_pos = initial_rect.min + egui::vec2(4.0, 4.0);
+    let target_pos = start_pos + egui::vec2(100.0, 60.0);
+    let modifiers = egui::Modifiers::NONE;
+    h.app.synthetic.push(egui::Event::PointerMoved(start_pos));
+    h.app.synthetic.push(egui::Event::PointerButton { pos: start_pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.step();
+    for i in 1..=4 {
+        h.app.synthetic.push(egui::Event::PointerMoved(start_pos + (target_pos - start_pos) * (i as f32 / 4.0)));
+        h.step();
+    }
+    assert_eq!(h.last_cursor, egui::CursorIcon::Grabbing, "cursor is Grabbing mid-drag");
+    h.app.synthetic.push(egui::Event::PointerButton { pos: target_pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.step();
+    h.step();
+    let updated_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!((updated_rect.min.x - (initial_rect.min.x + 100.0)).abs() < 5.0, "stack moved in x: {updated_rect:?}");
+    assert!((updated_rect.min.y - (initial_rect.min.y + 60.0)).abs() < 5.0, "stack moved in y: {updated_rect:?}");
+    assert!(!g.is_cancelled(), "dragging the stack does not cancel the task");
+
+    // Dragging beyond the right and bottom viewport edges moves toward edges and is constrained on screen
+    let content = h.view.ctx.content_rect();
+    let before_rb = updated_rect;
+    let r = h.request(
+        "ui.drag",
+        json!({"x": updated_rect.min.x + 4.0, "y": updated_rect.min.y + 4.0, "toX": content.max.x + 500.0, "toY": content.max.y + 500.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let constrained_rb = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(constrained_rb.min.x > before_rb.min.x, "stack moved right toward edge: {constrained_rb:?} vs {before_rb:?}");
+    assert!(constrained_rb.min.y > before_rb.min.y, "stack moved down toward edge: {constrained_rb:?} vs {before_rb:?}");
+    assert!(constrained_rb.max.x <= content.max.x + 1.0, "constrained in right: {constrained_rb:?} vs {content:?}");
+    assert!(constrained_rb.max.y <= content.max.y + 1.0, "constrained in bottom: {constrained_rb:?} vs {content:?}");
+
+    // Dragging past the left and top edges moves toward top-left and is constrained
+    let before_lt = constrained_rb;
+    let r = h.request(
+        "ui.drag",
+        json!({"x": constrained_rb.min.x + 4.0, "y": constrained_rb.min.y + 4.0, "toX": content.min.x - 500.0, "toY": content.min.y - 500.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let constrained_lt = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(constrained_lt.min.x < before_lt.min.x, "stack moved left toward edge: {constrained_lt:?} vs {before_lt:?}");
+    assert!(constrained_lt.min.y < before_lt.min.y, "stack moved up toward edge: {constrained_lt:?} vs {before_lt:?}");
+    assert!(constrained_lt.min.x >= content.min.x - 1.0, "constrained in left: {constrained_lt:?} vs {content:?}");
+    assert!(constrained_lt.min.y >= content.min.y - 1.0, "constrained in top: {constrained_lt:?} vs {content:?}");
+}
+
+/// Verify that dragging the stack near the bottom in a short viewport keeps controls reachable and within bounds.
+#[test]
+fn activity_stack_short_viewport_near_bottom_keeps_controls_reachable() {
+    // 300 pt tall viewport exercises the height-budget path.
+    // Do NOT use h.settle(T): demo renders asynchronously and blocks 60 s.
+    // Two steps suffice for a pure-UI / height-constraint test.
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [600.0, 300.0], 1.0);
+    h.step();
+    h.step();
+    let guards: Vec<_> = (0..5).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
+    wait_visible(&mut h);
+
+    let content = h.view.ctx.content_rect();
+    let id = egui::Id::unique("activity-stack");
+
+    // At the default position the cancel and "+more" controls are within the viewport.
+    let cancel_id = format!("activity:cancel:{}", guards[0].id());
+    assert!(has(&h, &cancel_id), "cancel button is present at default position");
+    assert!(content.contains_rect(rect(&h, &cancel_id)), "cancel button within viewport at default position");
+    assert!(has(&h, "activity:more"), "+more button is present at default position");
+    assert!(content.contains_rect(rect(&h, "activity:more")), "+more button within viewport at default position");
+
+    // Cancel task 0 while controls are reachable at the default position.
+    click(&mut h, &cancel_id);
+    assert!(guards[0].is_cancelled(), "cancel button was clickable and worked");
+
+    // Drag the stack to 40 pt above the bottom edge.  When only 40 pt remain the
+    // height-budget path clamps available_h to footer_reserve, so rows disappear —
+    // that is expected.  What must hold is that the stack does not exceed the
+    // viewport: its max.y must stay at or below content.bottom().
+    let initial_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    let r = h.request(
+        "ui.drag",
+        json!({"x": initial_rect.min.x + 4.0, "y": initial_rect.min.y + 4.0, "toX": initial_rect.min.x + 4.0, "toY": content.bottom() - 40.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let dragged_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(dragged_rect.max.y <= content.bottom() + 1.0, "stack stays within viewport after near-bottom drag: {dragged_rect:?} vs {content:?}");
+}
+
+/// The grip at the top of the stack sits outside the task list: dragging it moves the stack even when the list
+/// overflows (a drag over the rows would scroll the list instead).
+#[test]
+fn the_grip_moves_the_stack_when_the_list_overflows() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [600.0, 300.0], 1.0);
+    h.step();
+    h.step();
+    let _guards: Vec<_> = (0..8).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
+    wait_visible(&mut h);
+    click(&mut h, "activity:more");
+    assert!(h.app.activity_expanded, "the stack shows every task");
+    let grip = rect(&h, "activity:handle");
+    let first_row = h.app.widgets.iter().filter(|(w, _)| w.starts_with("activity:row:")).map(|(_, r)| r.min.y).fold(f32::MAX, f32::min);
+    assert!(grip.max.y <= first_row, "the grip is above the list: {grip:?} vs first row at {first_row}");
+    let id = egui::Id::unique("activity-stack");
+    let before = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    let from = grip.center();
+    let r = h.request("ui.drag", json!({"x": from.x, "y": from.y, "toX": from.x + 120.0, "toY": from.y, "steps": 6}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    h.step();
+    let after = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!((after.min.x - (before.min.x + 120.0)).abs() < 5.0, "the grip moved the stack: {before:?} -> {after:?}");
+}
+
 #[test]
 fn immediate_library_commands_and_auto_sync_show_completion() {
     let mut h = demo();
@@ -533,4 +741,93 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     h.app.ui.toast = None;
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
+}
+
+/// Given a preview build running and another waiting in line behind it, then the stack shows the running build only,
+/// and the waiting one starts by itself, in a frame, when the build ahead of it ends.
+#[test]
+fn a_task_waiting_in_line_has_no_row_and_starts_when_the_lane_frees() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let build = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(build.clone());
+    let running = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    let queued = h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    let waiting = queued["queued"].as_u64().expect("it waits");
+    assert_eq!(h.app.session.activity.list().len(), 2);
+    wait_visible(&mut h);
+    assert!(has(&h, &format!("activity:row:{}", running.id())));
+    assert!(!has(&h, &format!("activity:row:{waiting}")) && rows(&h) == 1, "a waiting task draws no row");
+    // the lane frees with no command asked: the frame loop starts it
+    build.finished.store(true, Ordering::Release);
+    drop(running);
+    let t0 = std::time::Instant::now();
+    while h.app.session.activity.list().iter().any(|t| t.id == waiting && t.label == "Building previews") && t0.elapsed() < T {
+        h.step();
+        let started = h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build));
+        if started {
+            break;
+        }
+    }
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build)), "the waiting build started");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
+}
+
+/// Given a build that ended and a build waiting behind it, when a command starts the waiting one before the frame that
+/// announces the first, then the first one's end is still announced, and once.
+#[test]
+fn a_build_replaced_by_the_one_waiting_behind_it_is_still_announced() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    first.done.store(2, Ordering::Relaxed);
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    // a command in the same frame, before the app looks at the finished build
+    h.app.session.execute("activity.list", &json!({})).unwrap();
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build replaced it");
+    h.step();
+    assert!(first.reported.load(Ordering::Relaxed), "its end was announced");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Previews ready for 2 photos"), "{toast}");
+    assert!(h.app.session.take_unreported_builds().is_empty());
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
+}
+
+/// Given a build that ended and a build waiting behind it, when the frame starts the waiting one, then the same frame
+/// asks to be drawn again to see how it goes: nothing else repaints an idle window (the list is closed, or Full Screen
+/// Preview hides it).
+#[test]
+fn the_frame_that_starts_a_waiting_build_asks_for_the_next_one() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    let ctx = egui::Context::default();
+    // (a few empty passes let the context's own first-frame requests go by)
+    for _ in 0..4 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+    }
+    assert!(!ctx.has_requested_repaint(), "an idle context asks for nothing");
+    h.app.tick_preview_builds(&ctx);
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build started");
+    assert!(ctx.has_requested_repaint(), "and the frame asked to look at it again");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
 }

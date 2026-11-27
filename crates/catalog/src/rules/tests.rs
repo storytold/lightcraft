@@ -215,6 +215,82 @@ fn file_source_description_and_location_rules() {
     assert!(m(&p, "location", "contains", json!("portugal")), "Location still covers the country");
 }
 
+/// Same Content as Another Photo: another photo of the library has the same file content, under another name
+/// or in another folder (a Duplicate's `:dup` key included).
+/// * A virtual copy is the same photo, not another one: it never matches and never makes a match.
+/// * Neither does a photo in Recently Deleted or one only browsed in Local, nor a photo with no content hash.
+/// * It follows the library: a twin deleted, restored, removed or given other content changes the others.
+#[test]
+fn same_content_as_another_photo() {
+    use crate::Op;
+    let mut cat = Catalog::new();
+    let with = |id: u64, hash: Option<&str>| {
+        let mut p = photo(id);
+        p.content_hash = hash.map(str::to_string);
+        p
+    };
+    let mut v = with(5, Some("cc"));
+    v.copy_of = Some(PhotoId(4));
+    let mut local = with(7, Some("dd"));
+    local.local = true;
+    for p in [with(1, Some("aa")), with(2, Some("aa:dup2")), with(3, None), with(4, Some("cc")), v, with(6, Some("dd")), local, with(8, None)] {
+        cat.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let same = |cat: &Catalog| -> Vec<u64> {
+        let r = rs(json!({"rules": [{"field": "sameContent", "op": "is", "value": true}]}));
+        let not = rs(json!({"rules": [{"field": "sameContent", "op": "is", "value": false}]}));
+        let mut ids: Vec<u64> = cat.photos().filter(|p| r.matches(p, cat)).map(|p| p.id.0).collect();
+        ids.sort_unstable();
+        assert!(cat.photos().all(|p| r.matches(p, cat) != not.matches(p, cat)), "is no is the opposite");
+        ids
+    };
+    assert_eq!(same(&cat), vec![1, 2], "a Duplicate's key is the same content; a virtual copy and a Local photo don't count");
+    // the twin goes to Recently Deleted: the other is alone, and counts as touched (album counts and views
+    // follow an edit through the photos it touched); restored, both again
+    let before = cat.revision;
+    cat.apply(Op::SetDeleted { id: PhotoId(2), deleted: true }).unwrap();
+    assert_eq!(same(&cat), Vec::<u64>::new());
+    assert_eq!(cat.touched_since(before), Some(vec![PhotoId(1), PhotoId(2)]));
+    cat.apply(Op::SetDeleted { id: PhotoId(2), deleted: false }).unwrap();
+    assert_eq!(same(&cat), vec![1, 2]);
+    // a batch that fails midway is undone as a whole: nothing changed
+    let bad = Op::Batch { ops: vec![Op::SetDeleted { id: PhotoId(2), deleted: true }, Op::SetRating { id: PhotoId(2), rating: 9 }] };
+    assert!(cat.apply(bad).is_err());
+    assert_eq!(same(&cat), vec![1, 2]);
+    // a copy of the catalog (made to count in the background) knows nothing yet, and while no smart album asks
+    // its edits follow no contents; once one asks, they touch the twins, so counts made before them can follow
+    let mut copy = cat.clone();
+    copy.apply(Op::SetDeleted { id: PhotoId(3), deleted: true }).unwrap();
+    let mut album = crate::Album::new(crate::AlbumId(1), "Twins");
+    album.smart = Some(Box::new(crate::Filter {
+        rule_set: Some(rs(json!({"rules": [{"field": "sameContent", "op": "is", "value": true}]}))),
+        ..Default::default()
+    }));
+    copy.apply(Op::AddAlbum { album }).unwrap();
+    let before = copy.revision;
+    copy.apply(Op::SetDeleted { id: PhotoId(2), deleted: true }).unwrap();
+    assert_eq!(copy.touched_since(before), Some(vec![PhotoId(1), PhotoId(2)]));
+    // the Local photo is imported for real
+    cat.apply(Op::SetLocal { id: PhotoId(7), local: false }).unwrap();
+    assert_eq!(same(&cat), vec![1, 2, 6, 7]);
+    // a file's content changed (Reload): it leaves one pair and joins another
+    let p = cat.photo(PhotoId(1)).unwrap().clone();
+    let set = |hash: &str| Op::SetContent {
+        id: PhotoId(1),
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some(hash.into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    };
+    cat.apply(set("dd")).unwrap();
+    assert_eq!(same(&cat), vec![1, 6, 7]);
+    // gone for good
+    cat.apply(Op::RemovePhoto { id: PhotoId(6) }).unwrap();
+    assert_eq!(same(&cat), vec![1, 7]);
+}
+
 /// In a Stack, Video Duration (seconds; photos have none), Cropped and Treatment.
 #[test]
 fn source_file_and_develop_rules() {
@@ -383,6 +459,27 @@ fn in_the_last_survives_hostile_counts() {
     }
     assert!(m("inLast", json!(1e30), "hours") && m("inLast", json!(30), "days"));
     set_now(None);
+}
+
+/// Flash, exposure bias and camera serial number can be tested by a rule, like the other
+/// camera info; an unrecorded one is empty (or zero bias is no bias).
+#[test]
+fn flash_exposure_bias_and_serial_rules() {
+    let cat = Catalog::new();
+    // the values arrive with the photo's metadata, as fields on its meta, as probed from a file
+    let mut v = serde_json::to_value(photo(1)).unwrap();
+    let meta = v.get_mut("meta").unwrap();
+    meta["flash"] = json!(true);
+    meta["exposure_bias"] = json!(-0.67);
+    meta["serial_number"] = json!("SN-X2");
+    let p: Photo = serde_json::from_value(v).unwrap();
+    let m = |field: &str, op: &str, value: serde_json::Value| rs(json!({"rules": [{"field": field, "op": op, "value": value}]})).matches(&p, &cat);
+    assert!(m("flash", "is", json!(true)) && !m("flash", "is", json!(false)));
+    assert!(m("exposureBias", "lt", json!(0)) && m("exposureBias", "between", json!([-1.0, -0.3])));
+    assert!(m("cameraSerial", "contains", json!("x2")));
+    assert_eq!(field_group("flash"), Some("Camera Info"));
+    assert_eq!(field_group("exposureBias"), Some("Camera Info"));
+    assert_eq!(field_group("cameraSerial"), Some("Camera Info"));
 }
 
 /// Every rule's value is checked against its field, so a rule that can't mean anything is
@@ -642,7 +739,7 @@ fn related_fields_share_a_group() {
             assert_eq!(field_group(f), Some(group), "{f}");
         }
     };
-    same(&["fileName", "extension", "filePath", "kind", "format", "duration"], "File");
+    same(&["fileName", "extension", "filePath", "kind", "format", "duration", "sameContent"], "File");
     same(&["album", "virtualCopy", "copyName", "stacked"], "Source");
     same(&["longEdge", "shortEdge", "aspect", "megapixels"], "Size");
     same(&["edited", "cropped", "treatment"], "Develop");
@@ -773,4 +870,20 @@ fn file_path_contains_finds_every_piece_of_a_long_path() {
             }
         }
     }
+}
+
+#[test]
+fn shutter_speed_rules_match_the_shown_value() {
+    let cat = Catalog::new();
+    let mut p = photo(1);
+    let m =
+        |p: &Photo, op: &str, value: serde_json::Value| rs(json!({"rules": [{"field": "shutterSpeed", "op": op, "value": value}]})).matches(p, &cat);
+    p.meta.exposure_time = Some(1.0 / 2.8);
+    p.meta.shutter = "0.3571".into();
+    assert!(m(&p, "is", json!("0.3571")) && !m(&p, "isNot", json!("0.3571")), "1/2.8 s is the 0.3571 it shows");
+    assert!(m(&p, "lte", json!("0.3571")) && m(&p, "gte", json!("0.3571")));
+    p.meta.exposure_time = Some(3333.0 / 10000.0);
+    p.meta.shutter = "1/3".into();
+    assert!(m(&p, "is", json!("1/3")) && !m(&p, "isNot", json!("1/3")), "3333/10000 s is the 1/3 it shows");
+    assert!(m(&p, "gte", json!("1/3")) && m(&p, "lte", json!("1/3")) && !m(&p, "lt", json!("1/3")));
 }

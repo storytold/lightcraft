@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, monotonic_ms, panels, pick, recheck, shortcuts,
+    slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+};
+use crate::startup;
 
 impl LightcraftApp {
     /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
@@ -24,6 +28,24 @@ impl LightcraftApp {
         } else {
             self.fonts_ready = true;
         }
+        // First run ever, or a fresh version: the tour, or What's New. Never headless —
+        // snapshots and scripted runs hold session-local state and must not gain a modal.
+        // Every frame until it shows: another dialog open on the first frame (a delivered file)
+        // keeps its place, and so does the blocking library window (the launch chooser or a
+        // library error — it is not in `ui.dialog`). The startup dialog opens once that window
+        // closes or is dismissed. Choosing it here is only dueing it: the version is recorded
+        // when the dialog is actually presented (`dialogs::show`), so a host that runs `logic`
+        // and quits before a visible frame does not burn the tour.
+        if self.ui.dialog.is_none()
+            && self.library_problem.as_ref().is_none_or(|p| p.dismissed)
+            && let Some(dialog) = startup::open_at_startup(self.ui.seen_version.as_deref(), self.headless_host)
+        {
+            self.ui.dialog = Some(dialog);
+            // a drop queued on this same frame (a delivered file, a host drop on the first pass)
+            // arrived before the dialog did: mark it, so it waits behind the dialog and imports
+            // once it closes instead of taking the close-the-dialog refusal on the first UI pass
+            self.defer_dropped_files();
+        }
     }
 
     /// 0.36 stored each `PanelState` under the panel's exact `Id`; 0.37 stores it under
@@ -41,7 +63,8 @@ impl LightcraftApp {
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
-        panels::notices::logic(self);
+        self.background_prep(ctx);
+        panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -63,37 +86,72 @@ impl LightcraftApp {
         if import_tick_allowed(ctx) {
             import::tick(self, ctx);
         }
+        panels::library_problem::import_waiting(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
+        // after the poll: a lookup that just finished is cleared, so photos queued meanwhile are looked up now
+        crate::lens_db::tick(self);
         updates_ui::tick(self, ctx);
-        self.preview_build_status(ctx);
+        self.tick_preview_builds(ctx);
         self.save_status(ctx);
         self.ai_mask_detail(ctx, now);
         self.place_names_outcome(ctx);
+        panels::detail::settle_wheel_edit(self, ctx);
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
-        model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
+        // a folder that couldn't be read stops being one once another is watched (or none)
+        if self.ui.auto_import_error.as_ref().is_some_and(|(f, _)| self.session.import_defaults.auto_folder.as_ref() != Some(f)) {
+            self.ui.auto_import_error = None;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
             const LABEL: &str = "Auto Import";
             if now - self.ui.auto_import_at >= 3.0
-                && self.import.is_none()
+                && !import::running(self)
+                && self.sync.is_none()
                 && self.sync_run.is_none()
                 && self.lightroom.is_none()
                 && !self.tasks.is_running(LABEL)
             {
                 self.ui.auto_import_at = now;
-                let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
-                let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
+                let listed = folder.clone();
+                let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&listed);
+                let done = move |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
+                    // the watched folder changed while this one was listed: its result is for nothing on screen
+                    if app.session.import_defaults.auto_folder.as_ref() != Some(&folder) {
+                        return;
+                    }
                     let listing = match listing {
-                        Ok(l) => l,
-                        Err(e) => return log::debug!("auto import: {e}"),
+                        Ok(l) => {
+                            if app.ui.auto_import_error.as_ref().is_some_and(|(f, _)| *f == folder) {
+                                app.ui.auto_import_error = None;
+                                log::info!("auto import: the watched folder can be read again: {folder}");
+                            }
+                            l
+                        }
+                        // removed, renamed, unmounted or not allowed: said once, not every few seconds
+                        Err(e) => {
+                            let error = Some((folder, e));
+                            if app.ui.auto_import_error != error {
+                                if let Some((_, e)) = &error {
+                                    log::warn!("auto import: can't read the watched folder {e}");
+                                }
+                                app.ui.auto_import_error = error;
+                            }
+                            return;
+                        }
                     };
+                    // an import, a scan (a finished Local browse replaces `app.import`), a Synchronize Folder (its scan
+                    // or its run) or a Lightroom migration that started while the folder was listed: scanning now would
+                    // mark the new files as tried without importing them; the next listing picks them up
+                    if import::running(app) || app.sync.is_some() || app.sync_run.is_some() || app.lightroom.is_some() {
+                        return;
+                    }
                     let p = serde_json::json!({"listing": listing, "start": false});
                     let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
                     let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
@@ -227,6 +285,9 @@ impl LightcraftApp {
             self.import_dropped_files(ctx);
         }
         self.check_external_editor(ctx);
+        theme::refresh_window_on_first_focus(ctx);
+        // Alt (Option on macOS) while a slider is dragged shows its temporary preview
+        self.ui.alt_held = ctx.input(|i| i.modifiers.alt);
         // Recent-library checks and launch-list keys read focus/time/keys: they belong to the UI
         // phase, not the hidden-capable `logic` tick (plan §4.5 / migration input contract).
         panels::library_problem::logic(self, ctx);
@@ -266,6 +327,10 @@ impl LightcraftApp {
         if self.shown_library == Some(generation) {
             return;
         }
+        // (the first library shown takes the place of none: nothing was searching another one)
+        if self.shown_library.is_some() {
+            crate::find_similar::library_changed(self);
+        }
         self.shown_library = Some(generation);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
@@ -280,12 +345,9 @@ impl LightcraftApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
     }
 
-    /// "LightCraft — <library name>" (just "LightCraft" for a library that isn't saved).
+    /// "LightCraft — <library name>" (just the channel's name for a library that isn't saved).
     pub fn window_title(&self) -> String {
-        match panels::settings::open_library_name(self) {
-            Some(name) => format!("LightCraft — {name}"),
-            None => "LightCraft".to_string(),
-        }
+        crate::channel::window_title(panels::settings::open_library_name(self).as_deref())
     }
 
     /// The browser page's title: "<file name>[ •] — LightCraft" for the active photo (• while
@@ -295,7 +357,7 @@ impl LightcraftApp {
     pub fn page_title(&self, unsaved: bool) -> String {
         let dot = if unsaved { " •" } else { "" };
         match self.session.active().and_then(|id| self.session.catalog.photo(id)) {
-            Some(p) => format!("{}{dot} — LightCraft", p.file_name),
+            Some(p) => format!("{}{dot} — {}", p.file_name, crate::channel::name()),
             None => format!("{}{dot}", self.window_title()),
         }
     }
@@ -314,6 +376,8 @@ impl LightcraftApp {
         }
         self.widgets = std::mem::take(&mut self.next_widgets);
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        // a frame without the loupe (grid, Compare, Survey, slideshow…) ends the loupe's step timing
+        self.loupe_timing.end_frame(ctx.input(|i| i.time));
         panels::notices::finish_ui_pass(self, ctx);
         panels::library_problem::finish_ui_pass(self, ctx);
         self.ui_passes = self.ui_passes.wrapping_add(1);
@@ -367,12 +431,19 @@ impl LightcraftApp {
         // Freeze this frame's notice barrier before `notices::show` can dismiss a prompt: the same
         // click or key must never be acted on again by the dialog drawn after it.
         let notice_blocks = panels::notices::blocks_input(self);
+        // what the panels below read to refuse a right-click's menu while photos are carried
+        widgets::set_carrying(&ctx, self.ui.dragging_photos.is_some() && ctx.input(|i| i.pointer.primary_down()));
         if std::mem::take(&mut self.ui.quit) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.library_changed(&ctx);
+        // (a tool panel opened some other way still remembers the panel it took the place of)
+        self.ui.note_right();
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
+        // (and the mask pin or component row under the pointer: the overlay shows that mask)
+        self.ui.mask_hover_prev = self.ui.mask_hover.take();
+        self.end_drags(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
@@ -396,6 +467,7 @@ impl LightcraftApp {
                 // host frames, and resetting it above must only hide it from this pass's dialogs.
                 panels::notices::restore_prompt_pointer(self, &ctx);
             }
+            self.repaint_on_mask_hover_change(&ctx);
             (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
             self.end_frame(&ctx, t0);
             return;
@@ -425,10 +497,13 @@ impl LightcraftApp {
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
-        panels::grid::drag_feedback(self, &ctx);
-        panels::left::album_drag_feedback(self, &ctx);
-        panels::left::section_drag_feedback(self, &ctx);
-        panels::keyword_list::drag_feedback(self, &ctx);
+        // (each ends its drag when the button is up, which an offscreen frame's pointer never is)
+        if !self.drawing_offscreen {
+            panels::grid::drag_feedback(self, &ctx);
+            panels::left::album_drag_feedback(self, &ctx);
+            panels::left::section_drag_feedback(self, &ctx);
+            panels::keyword_list::drag_feedback(self, &ctx);
+        }
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         // AppKit moves the window on a drag anywhere in the title-bar band unless the window isn't
@@ -440,9 +515,19 @@ impl LightcraftApp {
             // frames, and resetting it above must only hide it from this pass's dialogs.
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
+        self.repaint_on_mask_hover_change(&ctx);
         (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         self.end_frame(&ctx, t0);
+    }
+
+    /// The pointer moved onto another mask pin or component row, or off them, this frame: the overlay drawn earlier in the
+    /// frame still showed the last one (it falls back to it while panels set the new one), so one more frame shows
+    /// the new one at once rather than at the next input (CodeRabbit on #2920).
+    pub(crate) fn repaint_on_mask_hover_change(&self, ctx: &egui::Context) {
+        if self.ui.mask_hover != self.ui.mask_hover_prev {
+            ctx.request_repaint();
+        }
     }
 }
 

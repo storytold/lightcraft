@@ -3,7 +3,7 @@
 //! The rule engine works on a small, metadata-independent model so it can be
 //! unit-tested; `from_metadata` builds that model from `cargo metadata`.
 
-use super::*;
+use super::{layers, metadata};
 use serde_json::Value;
 
 /// Where a workspace crate sits.
@@ -37,16 +37,16 @@ pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),
-    ("tiff", Class::Layer(0)),
     ("sysmem", Class::Layer(0)),
+    ("wincolor", Class::Layer(0)),
     ("fetch", Class::Layer(0)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
-    ("heif", Class::Layer(0)),
     ("raw", Class::Layer(1)),
     ("codecs", Class::Layer(1)),
     ("meta", Class::Layer(1)),
     ("develop", Class::Layer(1)),
+    ("film", Class::Layer(1)),
     ("lensdb", Class::Layer(2)),
     ("inpaint", Class::Layer(1)),
     ("faces", Class::Layer(1)),
@@ -74,15 +74,16 @@ pub const TABLE: &[(&str, Class)] = &[
 /// Explicit orderings *within* a layer (earlier may be used by later).
 /// L0: `raster` builds on `color` and `geom`; `color` uses `geom` for matrices.
 /// L1: `raw` and `codecs` read metadata through `meta`; `develop` uses `meta` for XMP.
+/// L3: `gpu` runs the SAM 3 backbone of `segment` (its `sam` feature).
 pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["geom", "color", "raster"],
-    &["tiff", "raster"],
     &["denoise-core", "denoise"],
     &["meta", "raw"],
     &["meta", "codecs"],
     &["meta", "develop"],
     &["develop", "scenes"],
     &["codecs", "raw"],
+    &["segment", "gpu"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

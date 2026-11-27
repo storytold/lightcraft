@@ -3,12 +3,14 @@
 //! a grid of thumbnails with checkboxes (duplicates marked and unchecked; Shift-click sets a
 //! range), the destination (add in place / copy or move into the library's `Originals/` or a
 //! chosen folder, filed by day, by month, into one folder or by a custom folder template,
-//! optionally renamed), an album (existing or new), a preset and keywords to apply. Importing
-//! runs on a worker thread (files are probed, copied or moved there) and its batches join the
-//! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
-//! one undo step.
+//! optionally renamed), an album (existing or new), a preset, an optional batch-edit recipe
+//! ("Batch edits": develop controls set on every new photo) and keywords to apply. When the scan
+//! left something out (a walk cut at its limit, folders it couldn't read, files that are not
+//! photos) one line under the count says so ([`scan_note`]). Importing runs on a worker thread
+//! (files are probed, copied or moved there) and its batches join the catalog between frames, with
+//! a row and ✕ in the activity stack (issue #345); the whole import is one undo step.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lightcraft_engine::import::{
     ImportCandidate, ImportUprightMode, ImportWarning, ImportWarningCode, ScanInput, ScanOutput, ScanProgress, scan_with,
 };
@@ -28,16 +30,23 @@ mod task;
 
 #[cfg(test)]
 pub(crate) use body::grid_height;
+use body::recipe_items;
+pub(crate) use body::scan_note;
+#[cfg(test)]
+pub(crate) use body::thumb_edge;
 #[cfg(test)]
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
-pub(crate) use body::{DIALOG_SIZE, note_dialog_bottom};
+pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_dialog_bottom, thumb_size};
+#[cfg(test)]
+use body::{RECIPE_CONTROLS, note_recipe_value};
+pub(crate) use scan::StoppingScans;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use scan::cards_seen;
-pub use scan::{ScanTask, browse, open, poll_scan, running};
 #[cfg(test)]
-pub(crate) use scan::{stall_scan, stall_scan_of};
-pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
+pub(crate) use scan::{HELD_RESOLVES, ScanEnd, scan_by_hand, stall_scan, stall_scan_of};
+pub use scan::{ScanTask, browse, open, poll_scan, running};
+pub(crate) use tags::{insert_at_cursor, tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
 pub use task::{ImportTask, start, start_paths, tick};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -58,6 +67,12 @@ pub struct ImportDialog {
     pub new_album: String,
     /// Preset id ("" = none).
     pub preset: String,
+    /// An optional batch-edit recipe: develop control id → value (only controls moved off their
+    /// default are kept), set on every photo this import adds, on top of its sidecar, camera
+    /// default and preset (the `recipe` param of `library.import`).
+    pub recipe: std::collections::BTreeMap<String, f64>,
+    /// Name typed for "Save as Preset" (the recipe saved for reuse).
+    pub recipe_name: String,
     /// Comma-separated keywords.
     pub keywords: String,
     /// Copy: destination folder ("" = the library's Originals/).
@@ -77,6 +92,14 @@ pub struct ImportDialog {
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
+    /// The scan's folder walk stopped at a depth or entry limit: there may be more photos than the
+    /// review lists ([`ScanOutput::truncated`]; `scanLimited` in the `library.importPreview` reply).
+    pub scan_limited: bool,
+    /// Folders the scan couldn't list ([`ScanOutput::unreadable`]).
+    pub unreadable: usize,
+    /// Files in the scanned folders that are not a supported photo type, XMP sidecars not counted
+    /// ([`ScanOutput::unsupported`]).
+    pub unsupported: usize,
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
@@ -127,10 +150,46 @@ impl ImportDialog {
             }
         }
     }
+    /// Candidate `i` is a file whose photo is only browsed (Local): the scan offers it (it isn't in the
+    /// library). Importing it brings that record into the library where
+    /// the file is, whatever the transfer mode.
+    pub fn is_browsed(&self, i: usize) -> bool {
+        self.candidates.get(i).is_some_and(|c| c.error.is_none() && c.duplicate.is_none() && c.local)
+    }
     /// Candidate `i` can be checked: a readable file the library doesn't have, or one whose photo
-    /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285).
+    /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285). A browsed
+    /// photo can't be copied or moved: the engine would add it in place, so copying leaves it out
+    /// (and brings in its first twin instead, [`ImportDialog::is_copy_twin`]).
     pub fn importable(&self, i: usize) -> bool {
         self.candidates.get(i).is_some_and(|c| c.error.is_none() && (c.duplicate.is_none() || self.is_trashed(i)))
+            && !(self.copy && self.candidates.get(i).is_some_and(|c| c.local))
+            || self.is_copy_twin(i)
+    }
+    /// Copying leaves a browsed photo out, so a file with the same bytes that no library photo has
+    /// is what brings that content in: candidate `i` is that file (the scan names the browsed photo
+    /// it stands in for, `browsed_twin`, on the first one only).
+    pub fn is_copy_twin(&self, i: usize) -> bool {
+        self.copy
+            && self.candidates.get(i).is_some_and(|c| {
+                c.browsed_twin.is_some() && !c.local && c.error.is_none() && c.duplicate.as_deref() == Some("content") && c.existing.is_none()
+            })
+    }
+    /// Choose how the files are brought in. Switching to copying offers the file that stands in for
+    /// a browsed photo ([`ImportDialog::is_copy_twin`]), checked; switching to adding in place takes
+    /// it away again.
+    pub fn set_transfer(&mut self, copy: bool, move_files: bool) {
+        let switched = copy != self.copy;
+        self.copy = copy;
+        self.move_files = copy && move_files;
+        for i in (0..self.candidates.len()).filter(|_| switched) {
+            if self.candidates[i].browsed_twin.is_some() && !self.candidates[i].local {
+                // (a dialog read back may hold fewer check marks than candidates)
+                let twin = self.is_copy_twin(i);
+                if let Some(checked) = self.checked.get_mut(i) {
+                    *checked = twin;
+                }
+            }
+        }
     }
     /// Candidate `i` is checked by Check All and the file type toggles: with "Leave them", a file in
     /// Recently Deleted is only checked by hand.
@@ -147,7 +206,7 @@ impl ImportDialog {
     }
     /// Any file of type `ty` is checked.
     pub fn type_checked(&self, ty: &str) -> bool {
-        self.candidates.iter().zip(&self.checked).any(|(c, on)| *on && file_type(c) == ty)
+        self.candidates.iter().zip(&self.checked).enumerate().any(|(i, (c, on))| *on && self.importable(i) && file_type(c) == ty)
     }
     /// Check (the importable ones) or uncheck every file of type `ty`: the raws only, say, and not
     /// the JPEGs kept beside them (issue #344).
@@ -196,6 +255,13 @@ impl ImportDialog {
         }
         self.last_clicked = Some(i);
     }
+    /// How many of the checked files come back as the photo Recently Deleted holds: the import restores
+    /// those without copying or moving their files (only "Import as new" imports them like any other file).
+    pub fn restored_count(&self) -> usize {
+        let restoring = self.on_deleted != "fresh";
+        let checked = self.checked.iter().enumerate().filter(|(i, on)| **on && self.importable(*i));
+        checked.filter(|(i, _)| restoring && self.is_trashed(*i)).count()
+    }
     pub fn selected_paths(&self) -> Vec<String> {
         self.candidates
             .iter()
@@ -220,6 +286,22 @@ impl ImportDialog {
             }
             o => Ok(Some(o.to_string())),
         }
+    }
+    /// Importing checked candidate `i` as it stands joins the library with the browsed record it
+    /// names, as the engine's `Promote` does: a browsed file the library doesn't have, or one whose
+    /// content is in Recently Deleted under "Import as new" (which replaces the trashed photo).
+    /// "Restore them" brings the trashed photo back instead and "Leave them" skips the file.
+    fn promotes_browsed(&self, i: usize) -> bool {
+        !self.copy
+            && self.checked.get(i).copied().unwrap_or(false)
+            && self.candidates.get(i).is_some_and(|c| c.local && c.error.is_none())
+            && (self.is_browsed(i) || (self.is_trashed(i) && self.on_deleted == "fresh"))
+    }
+    /// Keywords or a preset are set while a checked browsed photo would join the library as it is:
+    /// the engine applies them to new files only, so the review says so.
+    fn options_skip_browsed(&self) -> bool {
+        let has_options = !self.keywords().is_empty() || !self.preset.is_empty() || !self.metadata_preset.is_empty();
+        has_options && (0..self.candidates.len()).any(|i| self.promotes_browsed(i))
     }
     fn keywords(&self) -> Vec<String> {
         self.keywords.split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect()
@@ -248,6 +330,153 @@ mod tests {
         let mut candidates: Vec<ImportCandidate> = (0..6).map(|i| ImportCandidate { path: format!("img{i}.jpg"), ..Default::default() }).collect();
         candidates[3].duplicate = Some("content".into());
         ImportDialog::new(candidates)
+    }
+
+    /// An import the engine refuses creates no new album: its params are checked first.
+    #[test]
+    fn a_refused_import_creates_no_new_album() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let mut d = dialog();
+        d.new_album = "Card 1".into();
+        d.keywords = "travel*".into();
+        let albums = app.session.catalog.albums().count();
+        let err = start(&mut app, &d).unwrap_err();
+        assert!(err.contains("can't end in “*”"), "{err}");
+        assert_eq!(app.session.catalog.albums().count(), albums, "no album was created");
+        assert!(app.import.is_none());
+    }
+
+    /// A file whose photo is only browsed (Local) comes from the scan as an ordinary candidate that
+    /// still names its record: offered when adding in place; copying or moving would not copy it
+    /// (the engine adds it where it is), so there it counts as already in the library.
+    #[test]
+    fn a_browsed_photo_is_importable_only_when_adding_in_place() {
+        let mut d = dialog();
+        d.candidates[5].local = true;
+        assert!(d.is_browsed(5) && d.importable(5));
+        assert_eq!(dup_counts(&d), (0, 1, 0), "adding in place: not skipped");
+        d.copy = true;
+        assert!(!d.importable(5), "copying leaves it where it is");
+        assert!(!d.selected_paths().contains(&"img5.jpg".to_string()));
+        assert_eq!(dup_counts(&d), (1, 1, 0));
+        assert!(!d.is_browsed(3), "a duplicate isn't browsed");
+        // its library twin is in Recently Deleted: still offered in place ("Import as new" brings it in), never copied
+        d.copy = false;
+        d.candidates[4].local = true;
+        d.candidates[4].duplicate = Some("content".into());
+        d.set_trashed(vec![false, false, false, false, true, false]);
+        assert!(d.importable(4));
+        d.copy = true;
+        assert!(!d.importable(4), "copying would add it where it is");
+    }
+
+    /// a.png and b.png are browsed copies of one content, c.png and d.png new files with it; the scan
+    /// names a.png on c.png only (as in `twins_of_a_browsed_photo_are_copies_in_the_source_not_library_duplicates`).
+    fn browsed_twins() -> ImportDialog {
+        let a = ImportCandidate { path: "a.png".into(), local: true, existing: Some(1), ..Default::default() };
+        let twin = |path: &str, local: bool, stands_in: bool| ImportCandidate {
+            path: path.into(),
+            local,
+            duplicate: Some("content".into()),
+            browsed_twin: stands_in.then(|| "a.png".into()),
+            ..Default::default()
+        };
+        ImportDialog::new(vec![a, twin("b.png", true, false), twin("c.png", false, true), twin("d.png", false, false)])
+    }
+
+    /// Adding in place the browsed photo is the one brought in and its twins are copies in the
+    /// source, not photos the library has.
+    #[test]
+    fn twins_of_a_browsed_photo_are_copies_in_the_source_not_in_the_library() {
+        let d = browsed_twins();
+        assert_eq!(d.selected_paths(), ["a.png"]);
+        assert_eq!(dup_counts(&d), (0, 3, 0), "three identical copies, none already in the library");
+    }
+
+    /// Copying leaves the browsed photo out (the engine would add it where it is), so the first
+    /// twin that is a file of its own is what copying brings in: the content isn't in the library.
+    #[test]
+    fn copying_brings_in_the_first_twin_of_a_browsed_photo() {
+        let mut d = browsed_twins();
+        d.copy = true;
+        assert!(!d.importable(0) && !d.importable(1), "browsed photos are not copied");
+        assert!(d.importable(2), "the first copy that is a file of its own is");
+        assert!(!d.importable(3), "the next one is a copy of it");
+        d.checked[2] = true;
+        assert_eq!(d.selected_paths(), ["c.png"]);
+        assert_eq!(dup_counts(&d), (1, 2, 0), "a (browsed) counts as there already; b and d are copies; c is offered");
+        // back in place: it is a copy again
+        d.copy = false;
+        assert!(!d.importable(2));
+        assert_eq!(d.selected_paths(), ["a.png"]);
+    }
+
+    /// Switching to Copy checks the twin that copying brings in, and switching back unchecks it.
+    #[test]
+    fn switching_the_transfer_checks_the_twin_that_copying_brings_in() {
+        let mut d = browsed_twins();
+        d.set_transfer(true, false);
+        assert_eq!(d.selected_paths(), ["c.png"]);
+        d.set_transfer(false, false);
+        assert_eq!(d.selected_paths(), ["a.png"]);
+        assert!(!d.checked[2]);
+    }
+
+    /// Choosing the transfer already chosen doesn't undo what was checked by hand.
+    #[test]
+    fn choosing_the_transfer_again_keeps_a_manual_uncheck() {
+        let mut d = browsed_twins();
+        d.set_transfer(true, false);
+        d.checked[2] = false;
+        d.set_transfer(true, true);
+        assert!(d.selected_paths().is_empty(), "Move after Copy keeps the choice");
+    }
+
+    /// A file type's toggle is on only for files that can be imported now.
+    #[test]
+    fn a_file_type_toggle_ignores_browsed_photos_that_copying_cannot_import() {
+        let mut c = ImportCandidate { path: "a.png".into(), local: true, ..Default::default() };
+        c.format = "PNG".into();
+        let mut d = ImportDialog::new(vec![c]);
+        d.copy = true;
+        assert!(!d.type_checked("PNG"));
+        d.copy = false;
+        assert!(d.type_checked("PNG"));
+    }
+
+    /// The review warns that keywords and presets skip a browsed photo only when it matters.
+    #[test]
+    fn keywords_and_presets_are_flagged_only_when_a_browsed_photo_would_skip_them() {
+        let c = ImportCandidate { path: "a.png".into(), local: true, ..Default::default() };
+        let mut d = ImportDialog::new(vec![c]);
+        assert!(!d.options_skip_browsed(), "nothing set, nothing to skip");
+        d.keywords = "beach".into();
+        assert!(d.options_skip_browsed());
+        d.checked[0] = false;
+        assert!(!d.options_skip_browsed(), "unchecked: not imported anyway");
+        d.checked[0] = true;
+        d.copy = true;
+        assert!(!d.options_skip_browsed(), "copying doesn't offer it");
+    }
+
+    /// A browsed photo whose content is in Recently Deleted is promoted only by "Import as new" (the
+    /// engine's `Fresh`, which purges the trashed twin); "Restore them" brings the trashed photo back
+    /// and "Leave them" skips the file, so neither imports the browsed record and the notice stays off.
+    #[test]
+    fn the_notice_follows_the_engines_promotion_of_a_browsed_photo_with_a_trashed_twin() {
+        let c = ImportCandidate { path: "a.png".into(), local: true, duplicate: Some("content".into()), existing: Some(7), ..Default::default() };
+        let mut d = ImportDialog::new(vec![c]);
+        d.set_trashed(vec![true]);
+        d.keywords = "beach".into();
+        d.set_on_deleted("restore");
+        assert!(d.checked[0] && !d.options_skip_browsed(), "Restore brings the trashed photo back, not the browsed one");
+        d.set_on_deleted("fresh");
+        assert!(d.checked[0] && d.options_skip_browsed(), "Import as new promotes the browsed record without the keywords");
+        d.set_on_deleted("");
+        assert!(!d.checked[0] && !d.options_skip_browsed(), "Leave them: unchecked");
+        d.set_on_deleted("fresh");
+        d.copy = true;
+        assert!(!d.options_skip_browsed(), "copying doesn't offer it");
     }
 
     /// Identical copies inside the source folder are not "already in the library" (a fresh library
@@ -363,5 +592,51 @@ mod tests {
         d.last_clicked = Some(99);
         d.click(2, true);
         assert_eq!(d.checked, [true, true, false, false, true, true]);
+    }
+
+    /// The dialog offers only controls a recipe may name: `library.import` refuses the others
+    /// (white balance, geometry and crop, per-photo controls), so one offered here would make every
+    /// import with it fail. Each is moved off its default, as a slider drag does.
+    #[test]
+    fn every_offered_recipe_control_is_accepted_by_the_import() {
+        let session = lightcraft_engine::Session::new();
+        let mut d = dialog();
+        for id in RECIPE_CONTROLS {
+            let spec = lightcraft_develop::controls::find(id).unwrap_or_else(|| panic!("{id} is not a develop control"));
+            let moved = if spec.default < spec.max { spec.max } else { spec.min };
+            note_recipe_value(&mut d.recipe, spec, moved);
+        }
+        assert_eq!(d.recipe.len(), RECIPE_CONTROLS.len(), "all named, none repeated");
+        let params = json!({"paths": ["img0.jpg"], "recipe": recipe_items(&d.recipe)});
+        let request = lightcraft_engine::cmd::library::import_params(&session, &params).unwrap_or_else(|e| panic!("refused: {e}"));
+        assert_eq!(request.opts.recipe.len(), RECIPE_CONTROLS.len());
+    }
+
+    /// A slider moved off its default names its control in the recipe; moved back, it no longer does.
+    #[test]
+    fn a_slider_back_at_its_default_leaves_the_recipe() {
+        let spec = lightcraft_develop::controls::find("light.exposure").unwrap();
+        let mut recipe = std::collections::BTreeMap::new();
+        note_recipe_value(&mut recipe, spec, 0.5);
+        assert_eq!(recipe.get("light.exposure"), Some(&0.5));
+        note_recipe_value(&mut recipe, spec, 1.25);
+        assert_eq!(recipe.get("light.exposure"), Some(&1.25), "a new value replaces the old");
+        note_recipe_value(&mut recipe, spec, spec.default);
+        assert!(recipe.is_empty(), "{recipe:?}");
+    }
+
+    /// `start` hands `library.import` a `recipe` only when the dialog has one.
+    #[test]
+    fn start_passes_the_recipe_only_when_the_dialog_has_one() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services { png: None, ..Default::default() });
+        let mut d = dialog();
+        start(&mut app, &d).unwrap();
+        let params = app.import.take().map(|t| t.params).unwrap();
+        assert!(params.get("recipe").is_none(), "{params}");
+        d.recipe.insert("light.exposure".into(), 0.5);
+        d.recipe.insert("color.vibrance".into(), -20.0);
+        start(&mut app, &d).unwrap();
+        let params = app.import.take().map(|t| t.params).unwrap();
+        assert_eq!(params["recipe"], json!([{"id": "color.vibrance", "value": -20.0}, {"id": "light.exposure", "value": 0.5}]), "{params}");
     }
 }

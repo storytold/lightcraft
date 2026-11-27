@@ -1,15 +1,27 @@
 use super::widgets::{check, choices, heading, hint, row};
 #[cfg(not(target_arch = "wasm32"))]
 use super::widgets::{label_width, path_label};
-use super::*;
+use super::{
+    CACHE_SIZES, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Tokens, Value, json, register,
+};
 
 // --------------------------------------------------------------------------------- Performance
 
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
-    heading(ui, t, crate::i18n::tr("Rendering"));
+    heading(ui, t, "Rendering");
+    #[cfg(target_os = "windows")]
+    check(ui, "settings.composeWindow", &mut app.ui.settings.compose_window, "Prevent G-SYNC/FreeSync flicker (applies at next launch)");
     check(ui, "settings.gpu", &mut app.ui.settings.gpu, "Use the GPU for rendering");
-    let status = if !gpu::available() {
+    // `available` would wait for a device still being created (issue #136)
+    let status = if gpu::enabled() && !gpu::ready() {
+        // the device is created on another thread, which doesn't wake the UI when it's done;
+        // make sure that thread runs (cheap and idempotent: a start lost to an off/on switch
+        // can't leave "starting" for good)
+        gpu::warm_up();
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        "GPU: starting…".to_string()
+    } else if !gpu::available() {
         match gpu::unavailable_reason() {
             Some(why) => crate::i18n::tr_format!("Rendering on the CPU: {why}", why = why),
             None => "No usable GPU found: rendering on the CPU".to_string(),
@@ -39,15 +51,45 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         let opts = [(0u32, auto.as_str()), (512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB")];
         choices(ui, "settingsMemory", &opts, &mut app.ui.settings.memory_mb);
     });
-    heading(ui, t, crate::i18n::tr("Thumbnail cache"));
-    let cur = (app.session.cache_bytes() >> 20) as u32;
+    row(ui, t, crate::i18n::tr("Hot pixel limit"), |ui| {
+        let opts: Vec<(f32, String)> = HOT_PIXEL_LIMITS
+            .iter()
+            .map(|p| (*p, if *p == HOT_PIXEL_LIMIT_DEFAULT { format!("{p} % ({})", crate::i18n::tr("default")) } else { format!("{p} %") }))
+            .collect();
+        let opts: Vec<(f32, &str)> = opts.iter().map(|(p, l)| (*p, l.as_str())).collect();
+        choices(ui, "settingsHotPixels", &opts, &mut app.ui.settings.hot_pixel_limit);
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Remove Hot Pixels (Detail) leaves a raw unchanged when more than this share of its photosites would be replaced: such a photo doesn't look like hot pixels on a sensor.",
+        ),
+    );
+    heading(ui, t, "Preview cache");
+    let cur = app.session.cache_mb;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
-        let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB")];
-        let mut v = if CACHE_SIZES.contains(&cur) { cur } else { 2048 };
+        let gb = lightcraft_engine::media::default_disk_cache_bytes(app.session.catalog.len()).div_ceil(1 << 30);
+        let auto = format!("{} ({gb} GB)", crate::i18n::tr("Automatic"));
+        let custom = custom_cache_option(cur);
+        let mut opts =
+            vec![(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB"), (51_200, "50 GB"), (204_800, "200 GB")];
+        opts.extend(custom.as_ref().map(|(mb, l)| (*mb, l.as_str())));
+        opts.push((0, auto.as_str()));
+        // (a saved size the list doesn't offer shows as its own option, not as Automatic: picking
+        // Automatic then changes it; CodeRabbit on #3583)
+        let mut v = if CACHE_SIZES.contains(&cur) || custom.is_some() { cur } else { 0 };
         if choices(ui, "settingsCache", &opts, &mut v) {
             let _ = app.run("library.preferences", json!({"cacheMb": v}));
         }
     });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Grid thumbnails and the previews the loupe shows, kept on disk so photos open at once next time. Automatic makes room for every photo in this library (about 1.5 MB a photo). 50 GB: normal · 200 GB: better, for several weddings or large shoots.",
+        ),
+    );
     let used = app.session.media.rendered.disk().map(|d| d.size());
     row(ui, t, crate::i18n::tr("In use"), |ui| {
         ui.label(
@@ -60,7 +102,8 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             let _ = app.run("library.clearPreviews", json!({}));
         }
     });
-    heading(ui, t, crate::i18n::tr("Local folders"));
+    background_prep(app, ui, t);
+    heading(ui, t, "Local folders");
     row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
         let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
         let mut v = app.session.forget_local_days;
@@ -77,6 +120,145 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     );
     #[cfg(not(target_arch = "wasm32"))]
     smart_previews(app, ui, t);
+    ai_masks(app, ui, t);
+}
+
+/// Where AI masks (SAM 3) run: the choice (`segment.settings {runOn}`), what they run on, why not on
+/// the GPU, and how long the last photo took (`segment.model.status` → `backend`), as Settings ▸
+/// Faces shows its models' processor. The same lines whatever the state, so nothing moves when the
+/// model loads.
+fn ai_masks(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        return;
+    }
+    heading(ui, t, "AI masks");
+    let current = app.session.segmenter.run_on().name();
+    let mut run_on = current;
+    if row(ui, t, "Run on", |ui| choices(ui, "settingsAiMasksRunOn", &[("auto", "Automatic (GPU when available)"), ("cpu", "CPU")], &mut run_on))
+        && let Err(e) = app.run("segment.settings", json!({"runOn": run_on}))
+    {
+        app.toast(ui.ctx(), e);
+    }
+    let g = &app.session.segmenter;
+    let b = g.backend();
+    let device = if g.remote_endpoint().is_some() {
+        crate::i18n::tr("Remote worker").to_string()
+    } else {
+        b["device"].as_str().map_or_else(|| crate::i18n::tr("Not loaded yet").to_string(), str::to_string)
+    };
+    let text = match b["fallback"].as_str() {
+        Some(why) if g.remote_endpoint().is_none() => format!("{device} ({why})"),
+        _ => device,
+    };
+    row(ui, t, "Device", |ui| {
+        let r = ui.add(egui::Label::new(RichText::new(text.clone()).color(t.text)).truncate()).on_hover_text(text);
+        register(ui, "settings:aiMasksDevice", r.rect);
+    });
+    let took = match (b["analyzeMs"].as_u64().or(b["encodeMs"].as_u64()), b["encodeMs"].as_u64()) {
+        (Some(all), Some(encoder)) => {
+            crate::i18n::tr_format!("{all:.1} s, image encoder {encoder:.1} s", all = all as f64 / 1000.0, encoder = encoder as f64 / 1000.0)
+        }
+        _ => "—".to_string(),
+    };
+    row(ui, t, "Last photo", |ui| {
+        let r = ui.label(RichText::new(took).color(t.text));
+        register(ui, "settings:aiMasksTime", r.rect);
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(if cfg!(target_os = "macos") {
+            "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer."
+        } else {
+            "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer."
+        }),
+    );
+}
+
+/// Settings ▸ Performance ▸ Prepare photos in the background (notes 47 and 48): per mode, what
+/// is made ready before the user gets to it (`prefs.backgroundPrep`), app-wide or for this library.
+fn background_prep(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use lightcraft_engine::prep::{Mode, Scope};
+    heading(ui, t, "Prepare photos in the background");
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "While you go through photos in the loupe, the next ones are made ready before you reach them, and when the computer is otherwise idle the previews of every photo in view are built. The photo on screen always comes first; the work shows in the activity list, where it can be stopped.",
+        ),
+    );
+    let own = app.session.prep.library.is_some();
+    let lib_open = app.session.library.is_some();
+    if lib_open {
+        let mut v = own;
+        if check(ui, "settings.prepOwn", &mut v, "Use different settings for this library") {
+            let r = if v {
+                let cur = app.session.prep_settings();
+                app.run("prefs.setBackgroundPrep", json!({"library": true, "settings": cur}))
+            } else {
+                app.run("prefs.setBackgroundPrep", json!({"reset": true}))
+            };
+            if let Err(e) = r {
+                log::warn!("background preparation: {e}");
+            }
+        }
+        hint(ui, t, crate::i18n::tr("For example, a timelapse library can prepare nothing while a wedding library prepares everything."));
+    }
+    let cur = app.session.prep_settings();
+    let mut patch: Option<Value> = None;
+    let scopes = [(Scope::All, "Every photo"), (Scope::Marked, "Picks, rated and labelled"), (Scope::OnScreen, "Only the photo on screen")];
+    for (mode, key, title) in [(Mode::Culling, "culling", "Culling (a folder before import)"), (Mode::Library, "library", "Library")] {
+        let m = cur.mode(mode);
+        ui.add_space(4.0);
+        ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.0)).color(t.text));
+        let mut previews = m.previews;
+        row(ui, t, crate::i18n::tr("Previews"), |ui| {
+            if check(ui, &format!("settings.prep.{key}.previews"), &mut previews, "Build previews for every photo in view") {
+                patch = Some(json!({key: {"previews": previews}}));
+            }
+        });
+        hint(ui, t, crate::i18n::tr("Starts once you step through a few photos. Uses about 1.5 MB of disk a photo, and the computer's spare time."));
+        let mut ahead = m.ahead;
+        row(ui, t, crate::i18n::tr("Photos ahead"), |ui| {
+            let opts = [(0u8, "Off"), (3, "3"), (5, "5"), (10, "10"), (20, "20")];
+            if choices(ui, &format!("settingsPrepAhead-{key}"), &opts, &mut ahead) {
+                patch = Some(json!({key: {"ahead": ahead}}));
+            }
+        });
+        let mut scope = m.scope;
+        row(ui, t, crate::i18n::tr("Which photos"), |ui| {
+            if choices(ui, &format!("settingsPrepScope-{key}"), &scopes, &mut scope) {
+                patch = Some(json!({key: {"scope": scope}}));
+            }
+        });
+    }
+    ui.add_space(4.0);
+    ui.label(RichText::new(crate::i18n::tr("Editing")).font(t.semibold(12.0)).color(t.text));
+    let mut ahead = cur.develop.ahead;
+    row(ui, t, crate::i18n::tr("Photos ahead"), |ui| {
+        let opts = [(0u8, "Off"), (1, "1"), (2, "2"), (3, "3"), (5, "5")];
+        if choices(ui, "settingsPrepAhead-develop", &opts, &mut ahead) {
+            patch = Some(json!({"develop": {"ahead": ahead}}));
+        }
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "The next photos are opened and kept ready to edit, so the first slider move on them is quick. Uses memory: a few hundred MB a photo.",
+        ),
+    );
+    let mut scope = cur.develop.scope;
+    row(ui, t, crate::i18n::tr("Which photos"), |ui| {
+        if choices(ui, "settingsPrepScope-develop", &scopes, &mut scope) {
+            patch = Some(json!({"develop": {"scope": scope}}));
+        }
+    });
+    if let Some(patch) = patch
+        && let Err(e) = app.run("prefs.setBackgroundPrep", json!({"library": own, "settings": patch}))
+    {
+        log::warn!("background preparation: {e}");
+    }
 }
 
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
@@ -97,7 +279,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if loc.is_null() {
         return;
     }
-    heading(ui, t, crate::i18n::tr("Smart previews"));
+    heading(ui, t, "Smart previews");
     let path = loc["path"].as_str().unwrap_or_default().to_string();
     let available = loc["available"].as_bool().unwrap_or(true);
     let custom = loc["custom"].as_bool().unwrap_or(false);
@@ -182,4 +364,25 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+/// The cache size limit saved in the settings, as an option of its own when the list doesn't offer
+/// it (set through `library.preferences`, or by an older version): its value and label.
+fn custom_cache_option(cur: u32) -> Option<(u32, String)> {
+    if cur == 0 || CACHE_SIZES.contains(&cur) {
+        return None;
+    }
+    let label = if cur.is_multiple_of(1024) { format!("{} GB", cur / 1024) } else { format!("{cur} MB") };
+    Some((cur, label))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_saved_cache_size_the_list_does_not_offer_is_an_option() {
+        assert_eq!(super::custom_cache_option(0), None, "Automatic");
+        assert_eq!(super::custom_cache_option(51_200), None, "offered");
+        assert_eq!(super::custom_cache_option(10_240), Some((10_240, "10 GB".to_string())));
+        assert_eq!(super::custom_cache_option(3000), Some((3000, "3000 MB".to_string())));
+    }
 }

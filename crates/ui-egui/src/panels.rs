@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod bottombar;
+pub mod bursts;
 pub mod chips;
 pub mod compare;
 pub mod crop_overlay;
@@ -27,11 +28,12 @@ pub mod profiles;
 pub mod right;
 pub mod second;
 pub mod slideshow;
+pub mod spot_outline;
 pub mod strip;
 pub mod topbar;
 pub mod unnamed;
 
-use egui::{Align2, Rect, pos2, vec2};
+use egui::{Rect, pos2, vec2};
 
 use crate::LightcraftApp;
 pub use crate::dialogs;
@@ -39,6 +41,7 @@ pub use crate::dialogs::faces;
 pub use crate::dialogs::keymap;
 pub use crate::dialogs::rules_editor;
 pub use crate::dialogs::rules_editor::rules_move;
+pub use crate::dialogs::rules_editor::rules_reorder;
 pub use crate::dialogs::settings;
 pub use crate::dialogs::settings::slide_layout;
 pub use crate::dialogs::settings::slide_overlays;
@@ -46,21 +49,26 @@ pub use crate::dialogs::settings::slide_templates;
 pub use crate::dialogs::settings::slide_titles;
 use crate::theme::Tokens;
 
+/// A side panel the user resizes: which side, how it is drawn and how wide it may be.
+pub struct SidePanel<'a> {
+    /// the left side (else the right)
+    pub left: bool,
+    pub id: &'a str,
+    pub frame: egui::Frame,
+    /// the width the user chose
+    pub width: f32,
+    pub limits: crate::state::PanelWidth,
+    /// room to leave for what is beside the photo
+    pub reserve: f32,
+}
+
 /// Show a side panel the user resizes by dragging its inner edge. `width` (in [`crate::UiState`],
 /// so it survives navigation and restarts) is the source of truth: egui's own remembered size is
 /// dropped every frame, and a drag of the edge returns the new width to store. The panel never
 /// takes more than `available − reserve − MIN_PHOTO_WIDTH` (its minimum permitting), so the photo
 /// stays usable; a narrower window shrinks it without forgetting the chosen width.
-pub fn resizable_side(
-    ui: &mut egui::Ui,
-    left: bool,
-    id: &str,
-    frame: egui::Frame,
-    width: f32,
-    limits: crate::state::PanelWidth,
-    reserve: f32,
-    add: impl FnOnce(&mut egui::Ui),
-) -> Option<f32> {
+pub fn resizable_side(ui: &mut egui::Ui, side: SidePanel, add: impl FnOnce(&mut egui::Ui)) -> Option<f32> {
+    let SidePanel { left, id, frame, width, limits, reserve } = side;
     // `Panel::new` stores `IdSalt::new(id)`; the panel's persisted key is
     // `parent_ui.scope_id().with_salt(that_salt)`, which is exactly `scope_id().with(id)`.
     // (Passing an already-built `Id` through `Panel::left` would salt it a second time.)
@@ -107,12 +115,23 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
 
-/// Paint a centred, dimmed message (empty states).
+/// Paint a centred, dimmed message (empty states). Each line wraps to the area, so a long one (a
+/// translation, an album named in it) is not cut off at its edges.
 pub fn empty_message(ui: &egui::Ui, rect: Rect, title: &str, body: &str) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
-    p.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, crate::i18n::tr(title), t.semibold(18.0), t.text_label);
-    p.text(rect.center() + vec2(0.0, 14.0), Align2::CENTER_CENTER, crate::i18n::tr(body), t.font(13.0), t.text_dim);
+    let wrap = (rect.width() - 32.0).max(120.0);
+    let lay = |text: &str, font: egui::FontId, color: egui::Color32| {
+        let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, wrap);
+        job.halign = egui::Align::Center;
+        p.layout_job(job)
+    };
+    let title = lay(crate::i18n::tr(title), t.semibold(18.0), t.text_label);
+    let body = lay(crate::i18n::tr(body), t.font(13.0), t.text_dim);
+    // as one block, centred: one line each sits where the two lines always sat
+    let top = rect.center().y - (title.size().y + 8.0 + body.size().y) / 2.0;
+    p.galley(pos2(rect.center().x, top), title.clone(), t.text_label);
+    p.galley(pos2(rect.center().x, top + title.size().y + 8.0), body, t.text_dim);
 }
 
 /// A button under an empty state's message: the command it runs, its label, and the id it is

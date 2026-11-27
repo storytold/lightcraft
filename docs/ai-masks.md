@@ -2,12 +2,19 @@
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
-through Metal on macOS, on the CPU elsewhere (for now). If the Mac's GPU can't run it, it runs on
-the CPU (see the worker below).
+through Metal on macOS (if the Mac's GPU can't run it, it runs on the CPU, see the worker below); on Linux and Windows the image encoder (most of the work) runs on the GPU
+through wgpu (Vulkan / DX12), with the two necks and the text detector's DETR encoder and mask
+decoder, and the rest on the CPU, falling back to the CPU when there is no usable GPU
+([Where it runs](#where-it-runs)).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
-Object and Describe offer to download it, every other feature (and every existing mask, see
-below) works, and no render, export or command ever waits for it.
+Object, Describe and Lens Blur's **Find Subject** offer to download it, every other feature (and
+every existing mask, see below) works, and no render, export or command ever waits for it.
+
+Lens Blur reuses this same optional SAM 3 model for **Find Subject**; it does not add or download a
+separate model. The automatic subject estimate used before Find Subject finishes (or when **Auto**
+is selected) uses existing person mattes when available, otherwise a local saliency heuristic, so
+that fallback does not require SAM 3.
 
 ## Using them
 
@@ -27,6 +34,16 @@ In the Masking panel (M):
   the people out of a sky mask; − ▸ Object then clicks remove one object.
 - **Edge** (per selection, −100…100): below 0 a crisper border, above 0 a feathered one (up to 2 %
   of the long edge, so previews and exports match).
+- **Edges follow the photo** (issue #3272): the model's grid (288² over the whole photo) has
+  ~20 px cells on a 24 MP export, so a plain enlargement put the mask's edge up to a cell off the
+  subject's and a raised Exposure drew a bright outline around it. Where the grid is coarser than
+  the output, the mask's logits are guided-filtered by the photo's log luminance (the fast guided
+  filter, a window of 1.5 grid cells, so a preview and an export put the edge in the same place):
+  near the edge the selection follows the photo's tones, ≈ 0 a pixel or two outside a subject that
+  stands out from its background and ≈ 1 inside. Pixels whose surroundings are all in or all out,
+  and edges the photo has no contrast across, keep the plain enlargement. Refine Edges then works
+  on the combined mask and finds these edges in place. Cost on an M2 Pro, per AI selection: +22 ms
+  and +12 MB at 24 MP, +46 ms and +17 MB at 60 MP, +7.5 ms on a 2.7 MP preview.
 - **Detail:** about a second after the last click (or right after a description), the photo
   around the selection is analyzed again, zoomed in, from a sharper source (~5 s on an M4 Pro,
   in the background); the result is kept as a high-resolution patch (at most 4 per selection),
@@ -34,17 +51,89 @@ In the Masking panel (M):
 
 The first Object or Describe on a photo analyzes it (the image encoder runs once per photo and
 look: ~3 s on an Apple M4 Pro, plus a one-time ~6 s for compiling GPU kernels and loading the
-model after launch). That starts in the background as soon as you pick Object; after it, each
-click takes ~35 ms and each description ~0.6 s. Everything the model does runs on its own worker
-thread: the window stays responsive, a click shows its dot at once and the selection follows
-when it's computed ("Selecting…" / "Analyzing the photo…" under the mask tiles). The model is
-unloaded after 10 minutes without use (it takes several GB of memory) and loaded again when
-needed.
+model after launch; ~0.6 s on an RTX 5070 under Linux, of which 0.45 s is the image encoder and
+0.12 s the click features, plus ~1–2 s once for loading the model onto the GPU; ~11 s with all of
+it on the CPU of a 12-core Ryzen 9 3900X). That starts in the background as soon as you pick
+Object; after it, each click takes ~35 ms and each description ~0.6 s (~0.15 s and ~2 s on that
+CPU). Everything the model does runs on its own worker thread: the window stays responsive, a
+click shows its dot at once and the selection follows when it's computed ("Selecting…" /
+"Analyzing the photo…" under the mask tiles). The model is unloaded after 10 minutes without use
+(it takes several GB of memory) and loaded again when needed.
 
 The result is stored with the mask: the model's 288 × 288 mask logits over the uncropped photo
 (quantized, compressed, ~10–30 KB). Renders and exports sample them at any resolution and never
 need the model, so masks survive moving the library to a machine without it, and the web build
 renders them. Editing the photo's look later does not recompute a mask (click again to update).
+
+## Where it runs
+
+| | Image encoder (once per photo) | Click features, clicks, descriptions |
+|---|---|---|
+| macOS | GPU: Metal (candle) | GPU: Metal (candle) |
+| Linux, Windows | GPU: wgpu compute on Vulkan / DX12 (`lightcraft-gpu`, module `sam3`) | the two necks and the text detector's DETR encoder and mask decoder on the GPU (wgpu); the click decoder, the text encoder and the DETR decoder on the CPU (candle) |
+| no usable GPU, `LIGHTCRAFT_GPU=0` / `LIGHTCRAFT_GPU_BACKEND=off`, or the GPU failed; outside macOS also GPU rendering off | CPU (candle) | CPU (candle) |
+| **CPU** chosen in Settings (any platform, macOS included) | CPU (candle) | CPU (candle) |
+
+Measured on Linux (AMD Ryzen 9 3900X, 12 cores / 24 threads; NVIDIA RTX 5070), release build,
+the photo already rendered:
+
+| Step | CPU only | On the GPU |
+|---|---|---|
+| Image encoder (once per photo) | 30.2–31.2 s | 0.49–0.57 s (0.43–0.44 s of it on the GPU, see [gpu-pipeline.md](gpu-pipeline.md#sam-3-backbone-m12)) |
+| Loading the model (once, and again after 10 min idle) | ~1.5 s | ~1.8 s (device and kernels 0.16–1 s, weight upload ~1.1 s) |
+| A photo's whole analysis before its first click | 32.3–33.4 s | 0.56–0.69 s |
+| Click features (once per photo, before the first click) | 2.1–2.3 s | 0.12–0.19 s (the tracker neck on the GPU, 38 ms) |
+| A click | ~0.14 s | ~0.14 s (CPU) |
+| First description on a photo (detector features + text) | 6.3–6.9 s | 0.5–0.8 s (1.3 s the very first time, with the detector loading) (the detector neck, the DETR encoder and the mask decoder on the GPU) |
+| A further description | 4.4–4.5 s | ~0.7 s (the DETR encoder and the mask decoder on the GPU, 24 + 33 ms; the rest on the CPU) |
+| A prompt used before (on this or an earlier photo; the latest 16 are kept) | ~4.35 s | 0.45–0.46 s (no text encoder) |
+
+(CPU: `cargo run -p lightcraft-segment --release --example sam3_bench -- <model dir>`; GPU:
+`LIGHTCRAFT_SAM3_DIR=<model dir> cargo run -p lightcraft-gpu --release --features sam --example
+sam3_backbone_bench -- --app`, and the desktop app's log lines, `SAM 3 loaded in …` and `SAM 3
+analyzed …`. What each GPU part takes: [gpu-pipeline.md](gpu-pipeline.md#sam-3-backbone-m12).)
+
+**Falling back.** When the GPU can't be used (no adapter, a software one, the driver refuses the
+device, not enough memory) the model loads with the image encoder on the CPU. When the GPU fails
+on a photo (device lost, an output of the wrong size or with NaN), that photo is analyzed again on
+the CPU and the model stays there until it loads again (except while LightCraft is closing: then
+the work ends with its error, and nothing starts on the CPU). Neither is an error: the log says why
+(`SAM 3 backbone accelerator unavailable (…)`, `SAM 3 backbone failed on … (…)`), and so do
+Settings and `segment.model.status`.
+
+**Forcing the CPU.** Choose **Settings ▸ Performance ▸ AI masks ▸ Run on: CPU**
+(`segment.settings {"runOn": "cpu"}`; back with `"auto"`, the default). It puts all of SAM 3 on the
+CPU on every platform, macOS included (candle's CPU device instead of Metal), for a GPU that can't
+run the model, and leaves GPU rendering alone. The choice is kept in
+`<config>/models/sam3-settings.json` (`{"runOn": "cpu"}`) and `segment.model.status` reports it as
+`runOn`. Automatic also gives way to the switches every GPU compute in LightCraft follows (AI
+Denoise, faces): `LIGHTCRAFT_GPU=0` / `LIGHTCRAFT_GPU_BACKEND=off` at start (no GPU at all for the
+process) put SAM 3 on the CPU on every platform, macOS included; **Settings ▸ Performance ▸ Use the
+GPU for rendering** off (`app.gpu {"enabled": false}`) does so outside macOS, where it governs the
+wgpu kernels, while on macOS candle keeps Metal. When a switch changes where it runs, a model
+already loaded moves at its next request (it loads again).
+
+**Seeing where it runs.** Settings ▸ Performance ▸ AI masks shows what the image encoder runs on
+(the GPU's name, "Metal GPU" or "CPU", with the reason when it is not on the GPU) and how long the
+last photo took. `segment.model.status` → `backend` says the same for agents and scripts:
+
+```json
+"backend": {
+  "device": "NVIDIA GeForce RTX 5070 (Vulkan)",
+  "runtime": "wgpu",
+  "heads": "CPU; the necks, the DETR encoder and the mask decoder on the GPU",
+  "fallback": null,
+  "encodeMs": 1234,
+  "analyzeMs": 3456
+}
+```
+
+`device` is what runs the image encoder (`null` until the model first loads), `runtime` `wgpu`
+(LightCraft's kernels) or `candle`, `heads` what runs the rest, `fallback` why the encoder is not on
+the GPU where it could be, `encodeMs` the last image encoder run and `analyzeMs` the last photo's
+analysis before its first click (encoder and click features). The log (info level) has each load
+(`SAM 3 loaded in …: the backbone on the …, the rest on the CPU; the necks, the DETR encoder and the
+mask decoder on the GPU`) and each photo (`SAM 3 analyzed W×H in …: backbone … on the …, click features … on the …`).
 
 ## Remote Metal inference
 
@@ -64,13 +153,19 @@ ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:8793:127.0.0.1:8793 user@your
 LIGHTCRAFT_SAM3_REMOTE=127.0.0.1:8793 lightcraft
 ```
 
-Object clicks, Describe prompts, and detail refinement use the remote worker. Only the
+Object clicks, Describe prompts, detail refinement and Lens Blur's Find Subject (people and animals,
+from the camera's focus point when the file records it) use the remote worker; a worker older than the
+app rejects a request it doesn't know with an error, so update both together. **Run on** (Settings
+▸ Performance ▸ AI masks, `segment.settings`) only places local inference: the remote worker
+always runs on the Mac's Metal device, whatever is chosen here. Only the
 rendered model input (long edge at most 1008 pixels) and prompts cross the tunnel. The
 worker caches the current photo; detail crops do not replace that cache. Returned masks
 stay in the local library, so later adjustments and exports work without the connection.
 
 The worker requires Metal and accepts one editing connection at a time. It loads weights
 on demand and releases them when the client disconnects or remains idle for ten minutes.
+If the listener reports an accept error, the worker logs it, waits 100 ms, and retries; startup
+validation and bind errors still stop the worker.
 Both endpoints require loopback addresses: SSH provides authentication and encryption.
 The listener has no independent authentication; do not expose it through a public proxy. Any
 process of any user on the worker Mac can connect to it, and on the editing computer a local
@@ -86,9 +181,9 @@ not RAW development, denoising, or upscaling. The model licence below still appl
 
 ### In the app (recommended)
 
-The first time you pick Object or Describe without the model, LightCraft asks:
+The first time you pick Object, Describe or Lens Blur's Find Subject without the model, LightCraft asks:
 
-> **Download the SAM 3 model?** Object and Describe masks use SAM 3, Meta's segmentation model.
+> **Download the SAM 3 model?** Object, Describe and Lens Blur's Find Subject use SAM 3, Meta's segmentation model.
 > It isn't part of LightCraft, and everything else works without it. Download it once (about
 > 3.4 GB) · *folder*. Licence: SAM License (Meta) — Meta's terms, not LightCraft's. Downloading
 > it means accepting them. [Read the SAM License] — **Not Now** / **Download**
@@ -143,7 +238,9 @@ the Mozilla root certificates; no OpenSSL, `ring` or `aws-lc`, nothing compiled 
 ### By hand
 
 Put `model.safetensors`, `vocab.json` and `merges.txt` from `facebook/sam3` in the model folder:
-`models/sam3/` in the settings folder above, or the folder `LIGHTCRAFT_SAM3_DIR` names. Developers
+`models/sam3/` in the settings folder above, or the folder `LIGHTCRAFT_SAM3_DIR` names. It must be
+the Hugging Face format (3,439,938,512 bytes): `sam3.safetensors` from community mirrors, renamed, is
+Meta's original checkpoint, and LightCraft says so instead of loading it. Developers
 can use the installer scripts, which download from Hugging Face with your token and verify the
 weights:
 
@@ -190,11 +287,14 @@ Therefore:
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |
 | `mask.refineDetail` | `{id?, component?}` | the zoomed-in detail pass → `{started}` |
 | `segment.prepare` | `{}` | load the model and analyze the active photo → `{busy}` |
-| `segment.model.status` | `{}` | `{available, installed, remote, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download}` |
+| `segment.model.status` | `{}` | `{available, installed, remote, dir, loaded, busy, analyzing, runOn, backend, sizeBytes, license, licenseUrl, mirrors, download}` |
+| `segment.settings` | `{runOn?: "auto" \| "cpu"}` | where SAM 3 runs ([Where it runs](#where-it-runs)) → `{runOn}` |
 | `segment.model.download` | `{acknowledged: true}` | start the download in the background → `{started}` |
 | `segment.model.cancel` | `{}` | stop it (it resumes next time) → `{cancelled}` |
 
 `remote` reports the configured endpoint, not its health. `installed` describes local weights only.
+`backend` is where the model runs and how long the last photo took ([Where it runs](#where-it-runs)); `null` in a
+build without AI masks.
 `download` is `{running, done, total, file, error, cancelled, finished}`: `cancelled` is true when the last
 download was cancelled (its `error` says so in words; decide on the flag). An AI mask command refused because
 the model is not installed (or still downloading) fails with an error that starts with "The SAM 3 model is
@@ -220,11 +320,19 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   two-way mask decoder for clicks, and the CLIP text encoder, DETR encoder/decoder (box
   relative-position bias, presence token), pixel decoder and semantic head for text. The CLIP tokenizer is a
   small BPE in `tokenizer.rs`. The downloader (original code) is the `lightcraft-fetch` crate, shared by any model that is downloaded; `fetch/` here says what SAM 3 needs.
-- candle is pinned at 0.9.2: later releases make `candle-core` depend on `tokenizers` with the
-  Oniguruma C library, and the product is pure Rust. Weights are read with positional reads (no
+- candle is pinned at 0.11.1. Releases 0.10.0 to 0.11.0 make `candle-core` depend on `tokenizers`
+  with the Oniguruma C library; 0.11.1 builds it with the pure-Rust `fancy-regex` backend, and the
+  product is pure Rust. Weights are read with positional reads (no
   memory map: `unsafe` stays in `lightcraft-sysmem`), only the tensors a path needs, and every
   tensor's byte range is checked against the file's length when it is opened (a truncated or
   damaged file is an error, never a crash).
+- The image encoder can run outside candle: `lightcraft_segment::BackboneAccel` (pixels in, the
+  backbone's `[1024, 72, 72]` features out), built from the checkpoint through `WeightReader` and
+  given to `Sam3::load_accelerated`. `lightcraft-gpu` (feature `sam`, on with the engine's `sam`)
+  implements it in WGSL. `Sam3` checks every result (size, finite values) and drops the
+  accelerator for the candle backbone on the first failure; `Sam3::backbone_device` /
+  `accelerated` / `backbone_fallback` report it. The engine's worker picks the placement
+  (`Placement` in `worker.rs`).
 - The engine (`crates/engine/src/segment/`) owns one worker thread with the model and the last
   encoded photo; the session sends it jobs and receives results over channels, never holding a
   lock the model holds. Each job runs under `catch_unwind`: a panic inside candle becomes an
@@ -241,6 +349,18 @@ wait and return the result (when built with the `sam` feature; the default CLI h
 - Accuracy: `crates/segment/tests/it/reference.rs` compares every stage against the Python
   reference (`tools/sam3_reference.py`); on Metal the backbone matches to 7e-5 relative error
   and masks to ~5e-5. f16 was tried and rejected (overflow, ~7 % faster).
+- Speed on the CPU: candle runs elementwise operations and layout copies on one thread, batched
+  matrix products one pair after another and transposed convolutions one output channel at a
+  time. `cpu.rs` fuses the bias adds, activations, rotary encoding, window partitioning, head
+  split/merge, the detector's box bias and the pixel decoder's GroupNorm into parallel kernels
+  (the same operations in the same order: bit-identical), runs attention as one task per batch,
+  head and block of query rows (256 KB of scores, so they stay in the core's cache), and the
+  necks' 2 × 2 transposed convolutions as one matrix product each. Those two change how gemm
+  blocks its sums, so results move by float rounding only, as they do between two CPUs (gemm
+  picks its blocking from the cache sizes): against the tensor operations the backbone differs
+  by 1e-5 relative and the masks by at most 7e-4, and fewer than 4e-7 of the mask pixels change
+  side. On a 12-core Ryzen 9 3900X: encode ~37 → ~11 s, a description ~6 → ~2 s, getting ready
+  for clicks ~2.3 → ~0.8 s.
 - The engine feature `sam` (on in the desktop app, off for web and CLI) gates the model; without
   it the commands report that the build has no AI masks.
 

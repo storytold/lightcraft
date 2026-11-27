@@ -246,33 +246,13 @@ impl Backend for HoldAfterFirst {
     }
 }
 
-/// Real stdio framing and real atomic exports: progress, ping during a batch, cancellation
-/// between complete photos, unrelated output preservation, and a usable session afterwards.
-/// Both exports wait after their first photo ([`HoldAfterFirst`]) until the ping is answered or
-/// the cancel is read, so neither can finish first on a fast machine.
-#[test]
-fn export_progress_and_cancel() {
-    let dir = std::env::temp_dir().join(format!("lc-mcp-progress-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let (input, mut send) = std::io::pipe().unwrap();
-    let (output, write) = std::io::pipe().unwrap();
-    let hold = Arc::new(AtomicBool::new(true));
-    let backend = HoldAfterFirst { inner: file_backed_photos(&dir), hold: hold.clone() };
-    let server = std::thread::spawn(move || Server::new(Box::new(backend)).serve(BufReader::new(input), write).unwrap());
-    let (tx, rx) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        for line in BufReader::new(output).lines() {
-            let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
-            if tx.send(value).is_err() {
-                break;
-            }
-        }
-    });
-    let next = || rx.recv_timeout(Duration::from_secs(30)).expect("MCP reply/progress");
-    writeln!(send, "{}", call(1, "query_photos", json!({"limit":8}))).unwrap();
-    let query = next();
-    let photos = query["result"]["structuredContent"]["photos"].as_array().unwrap();
+type Rx = std::sync::mpsc::Receiver<Value>;
+
+fn next_msg(rx: &Rx) -> Value {
+    rx.recv_timeout(Duration::from_secs(30)).expect("MCP reply/progress")
+}
+
+fn assert_query_photos(photos: &[Value]) {
     assert_eq!(photos.len(), 8);
     // Real files, real metadata: eight distinct 1200×800 PNGs probed from disk, not synthesized.
     let names: std::collections::HashSet<&str> = photos.iter().map(|p| p["fileName"].as_str().unwrap()).collect();
@@ -281,13 +261,15 @@ fn export_progress_and_cancel() {
         assert_eq!((p["width"].as_u64(), p["height"].as_u64()), (Some(1200), Some(800)), "{p}");
         assert_eq!(p["format"], "PNG", "{p}");
     }
-    let ids: Vec<_> = photos.iter().map(|p| p["id"].clone()).collect();
+}
+
+fn run_complete_export(send: &mut impl Write, rx: &Rx, hold: &AtomicBool, ids: &[Value], dir: &std::path::Path) {
     let mut request = call(2, "export", json!({"ids":ids,"dir":dir.join("complete"),"longEdge":1200,"format":"png"}));
     request["params"]["_meta"] = json!({"progressToken":"photos","io.modelcontextprotocol/protocolVersion":"2026-07-28"});
     writeln!(send, "{request}").unwrap();
     let (mut last, mut notes, mut asked, mut answered) = (-1.0, 0, false, false);
     loop {
-        let value = next();
+        let value = next_msg(rx);
         if value["method"] == "notifications/progress" {
             assert_eq!(value["params"]["progressToken"], "photos");
             let progress = value["params"]["progress"].as_f64().unwrap();
@@ -312,17 +294,16 @@ fn export_progress_and_cancel() {
     }
     assert!(notes >= 2 && answered, "{notes} progress messages; ping answered {answered}");
     assert_eq!(last, 8.0);
-    let out = dir.join("cancelled");
-    std::fs::create_dir_all(&out).unwrap();
-    let decoy = out.join("photo999.png");
-    std::fs::write(&decoy, b"unrelated existing output").unwrap();
+}
+
+fn run_cancelled_export(send: &mut impl Write, rx: &Rx, hold: &AtomicBool, ids: &[Value], out: &std::path::Path) {
     // this export waits after its first photo until the cancel below is read
     hold.store(true, Ordering::SeqCst);
     let mut request = call(4, "command_run", json!({"id":"app.export","params":{"ids":ids,"dir":out,"longEdge":1200,"format":"png"}}));
     request["params"]["_meta"] = json!({"progressToken":44});
     writeln!(send, "{request}").unwrap();
     loop {
-        let value = next();
+        let value = next_msg(rx);
         assert_ne!(value["id"], 4, "must be cancellable before completion: {value}");
         assert_eq!(value["params"]["progressToken"], 44, "{value}");
         if value["params"]["progress"].as_f64().unwrap() > 0.0 {
@@ -332,7 +313,7 @@ fn export_progress_and_cancel() {
     writeln!(send, "{}", json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4}})).unwrap();
     writeln!(send, "{}", call(5, "doc_inspect", json!({}))).unwrap();
     loop {
-        let value = next();
+        let value = next_msg(rx);
         if value["method"] == "notifications/progress" {
             continue;
         }
@@ -340,13 +321,19 @@ fn export_progress_and_cancel() {
         assert_eq!(value["result"]["isError"], false);
         break;
     }
-    assert_eq!(std::fs::read(&decoy).unwrap(), b"unrelated existing output");
-    let photos: Vec<_> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| *p != decoy).collect();
+}
+
+fn assert_cancelled_output(out: &std::path::Path, decoy: &std::path::Path) {
+    assert_eq!(std::fs::read(decoy).unwrap(), b"unrelated existing output");
+    let photos: Vec<_> = std::fs::read_dir(out).unwrap().map(|e| e.unwrap().path()).filter(|p| p != decoy).collect();
     assert_eq!(photos.len(), 1, "only the photo completed before the cancel remains: {photos:?}");
     for path in &photos {
         let d = lightcraft_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).expect("complete image, no partial/temp file");
         assert_eq!((d.width, d.height), (1200, 800), "{}", path.display());
     }
+}
+
+fn assert_complete_output(dir: &std::path::Path) {
     // The finished export's eight outputs are real 1200×800 PNGs, one per distinct original.
     let complete: Vec<_> = std::fs::read_dir(dir.join("complete")).unwrap().map(|e| e.unwrap().path()).collect();
     assert_eq!(complete.len(), 8, "earlier export retained: {complete:?}");
@@ -359,6 +346,44 @@ fn export_progress_and_cancel() {
         exported.insert(bytes);
     }
     assert_eq!(exported.len(), 8, "eight distinct outputs, not copies of one export");
+}
+
+/// Real stdio framing and real atomic exports: progress, ping during a batch, cancellation
+/// between complete photos, unrelated output preservation, and a usable session afterwards.
+/// Both exports wait after their first photo ([`HoldAfterFirst`]) until the ping is answered or
+/// the cancel is read, so neither can finish first on a fast machine.
+#[test]
+fn export_progress_and_cancel() {
+    let dir = std::env::temp_dir().join(format!("lc-mcp-progress-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (input, mut send) = std::io::pipe().unwrap();
+    let (output, write) = std::io::pipe().unwrap();
+    let hold = Arc::new(AtomicBool::new(true));
+    let backend = HoldAfterFirst { inner: file_backed_photos(&dir), hold: hold.clone() };
+    let server = std::thread::spawn(move || Server::new(Box::new(backend)).serve(BufReader::new(input), write).unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            if tx.send(value).is_err() {
+                break;
+            }
+        }
+    });
+    writeln!(send, "{}", call(1, "query_photos", json!({"limit":8}))).unwrap();
+    let query = next_msg(&rx);
+    let photos = query["result"]["structuredContent"]["photos"].as_array().unwrap();
+    assert_query_photos(photos);
+    let ids: Vec<_> = photos.iter().map(|p| p["id"].clone()).collect();
+    run_complete_export(&mut send, &rx, &hold, &ids, &dir);
+    let out = dir.join("cancelled");
+    std::fs::create_dir_all(&out).unwrap();
+    let decoy = out.join("photo999.png");
+    std::fs::write(&decoy, b"unrelated existing output").unwrap();
+    run_cancelled_export(&mut send, &rx, &hold, &ids, &out);
+    assert_cancelled_output(&out, &decoy);
+    assert_complete_output(&dir);
     drop(send);
     // The fixture's files stay in place until the server (which owns the session) and the reader
     // have finished: the session reads the originals; the output is what the checks above read.
@@ -386,4 +411,49 @@ fn export_without_token_finishes_after_eof() {
     assert_eq!(replies[1]["id"], 2, "queued request survives EOF");
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A batch-edit recipe is reachable over MCP without a tool of its own: `run_command` takes
+/// `library.import` with a `recipe`, the generated `cmd_preset_saveRecipe` tool saves one as a
+/// preset, `list_commands` documents both, and a recipe naming white balance is a tool error that
+/// imports nothing.
+#[test]
+fn a_batch_edit_recipe_is_reachable_over_mcp() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-mcp-recipe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(96, 64, |x, y| [(x * 2) as u8, (y * 3) as u8, 128, 255]);
+    lightcraft_mcp::write_image(&dir.join("gradient.png"), &img, 90).unwrap();
+    let paths = json!([dir.to_string_lossy()]);
+    let mut server = Server::new(Box::new(Headless::default()));
+    let replies = session(
+        &mut server,
+        &[
+            call(1, "list_commands", json!({"filter": "recipe"})),
+            call(2, "run_command", json!({"command": "library.import", "params": {"paths": paths, "recipe": [{"id": "wb.temp", "value": 5000}]}})),
+            call(3, "query_photos", json!({"limit": 5})),
+            call(
+                4,
+                "run_command",
+                json!({"command": "library.import", "params": {"paths": paths, "recipe": [{"id": "light.exposure", "value": 0.5}, {"id": "color.vibrance", "value": 20}]}}),
+            ),
+            call(5, "get_develop", json!({})),
+            call(6, "cmd_preset_saveRecipe", json!({"name": "Warm", "recipe": [{"id": "light.exposure", "value": 0.5}]})),
+            call(7, "list_commands", json!({"filter": "library.import"})),
+        ],
+    );
+    let listed = |r: &Value| -> Vec<Value> { serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap() };
+    let save = listed(&replies[0]).into_iter().find(|c| c["id"] == "preset.saveRecipe").expect("preset.saveRecipe is listed");
+    assert!(save["params"].as_str().unwrap().contains("recipe: [{id:"), "{save}");
+    assert_eq!(replies[1]["result"]["isError"], true, "{}", replies[1]);
+    assert!(replies[1]["result"]["content"][0]["text"].as_str().unwrap().contains("white balance"), "{}", replies[1]);
+    assert!(replies[2]["result"]["structuredContent"]["photos"].as_array().unwrap().is_empty(), "the refused import added nothing");
+    assert_eq!(replies[3]["result"]["isError"], false, "{}", replies[3]);
+    assert_eq!(replies[3]["result"]["structuredContent"]["imported"].as_array().unwrap().len(), 1);
+    assert_eq!(replies[4]["result"]["structuredContent"]["light"]["exposure"], 0.5, "{}", replies[4]);
+    assert_eq!(replies[4]["result"]["structuredContent"]["color"]["vibrance"], 20.0, "{}", replies[4]);
+    assert_eq!(replies[5]["result"]["isError"], false, "{}", replies[5]);
+    assert_eq!(replies[5]["result"]["structuredContent"]["name"], "Warm");
+    let import = listed(&replies[6]).into_iter().find(|c| c["id"] == "library.import").expect("library.import is listed");
+    assert!(import["params"].as_str().unwrap().contains("recipe?: [{id:"), "{import}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
