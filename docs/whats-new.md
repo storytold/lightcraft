@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Exports wait their turn
+- Starting an export while another is still running no longer fails with "an export is already running": the new
+  one waits in the activity list (the bell) as "Waiting to export…" and starts as soon as the one before it ends.
+  ✕ on a waiting export drops it. Each export uses the photos as they were when you asked for it (issue #2965).
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
