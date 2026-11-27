@@ -99,9 +99,13 @@ impl WriteTarget {
 pub struct OriginalGuard {
     /// lower-case file name → (path on disk, what it is: "the original of IMG_1.CR3", …)
     by_name: HashMap<String, Vec<(PathBuf, String)>>,
-    /// Every indexed entry, built on the first check whose target name did not match: a hard
-    /// link or symlink may name an original differently from the catalogued path.
+    /// Every indexed entry, built on the first identity check: a hard link may name an original
+    /// differently from the catalogued path.
     others: std::sync::OnceLock<Vec<(PathBuf, String)>>,
+    /// The indexed entries that are symlinks, by the lower-case name of the file they resolve to.
+    /// Built once per guard from folder listings (no per-file open), so checking an existing
+    /// target is a lookup by its own resolved name, not a `read_link` per original (#3533).
+    symlinks: std::sync::OnceLock<HashMap<String, Vec<(PathBuf, String)>>>,
 }
 
 impl OriginalGuard {
@@ -120,6 +124,7 @@ impl OriginalGuard {
     pub fn add(&mut self, path: &Path, label: &str) {
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else { return };
         self.others = std::sync::OnceLock::new();
+        self.symlinks = std::sync::OnceLock::new();
         let mut put = |file: String, p: PathBuf, what: String| self.by_name.entry(file.to_lowercase()).or_default().push((p, what));
         put(name.clone(), path.to_path_buf(), format!("the original of {label}"));
         // every sidecar name the reader accepts (`.xmp`, `.XMP`, `.Xmp`, a recased photo extension), not only lowercase ones
@@ -180,18 +185,73 @@ impl OriginalGuard {
                 refuse_if_same(p, what)?;
             }
         }
-        // An imported hard link or symlink can have a different name from its original. A write
-        // to that entry would change what the library reads. Only do this fallback for existing
-        // targets that the name index did not protect; the list is built once per guard, not once
-        // per target. Ordinary exports keep the cheaper symlink-only scan.
-        let others = self.others.get_or_init(|| self.by_name.values().flatten().cloned().collect());
-        for (p, what) in others {
-            if !hard_links && std::fs::read_link(p).is_err() {
-                continue;
+        if hard_links {
+            // A hard link shares no name with its original, so the identity check compares the
+            // target with every indexed entry (screenshots only, not every export overwrite). The
+            // list is built once per guard, not once per target.
+            let others = self.others.get_or_init(|| self.by_name.values().flatten().cloned().collect());
+            for (p, what) in others {
+                refuse_if_same(p, what)?;
             }
-            refuse_if_same(p, what)?;
+            return Ok(());
+        }
+        // An imported symlink can have a different name from the file it points to, and a write to
+        // that file would change what the library reads. Its resolved name equals the target's
+        // resolved name, so ordinary exports only look up the target's own names.
+        let symlinks = self.symlinks.get_or_init(|| self.resolve_symlinks());
+        for n in &names {
+            for (p, what) in symlinks.get(n).into_iter().flatten() {
+                refuse_if_same(p, what)?;
+            }
         }
         Ok(())
+    }
+
+    /// The indexed entries that are symlinks, keyed by the lower-case name of the file each one
+    /// resolves to. Each folder is listed once; only the entries the listing reports as symlinks
+    /// are resolved, so a library of plain files costs one listing per folder. A folder that is
+    /// there but can't be listed has each of its entries asked instead.
+    fn resolve_symlinks(&self) -> HashMap<String, Vec<(PathBuf, String)>> {
+        let mut by_folder: HashMap<&Path, Vec<(String, &PathBuf, &String)>> = HashMap::new();
+        for (p, what) in self.by_name.values().flatten() {
+            if let Some(name) = p.file_name() {
+                by_folder.entry(folder_of(p)).or_default().push((name.to_string_lossy().to_lowercase(), p, what));
+            }
+        }
+        let mut out: HashMap<String, Vec<(PathBuf, String)>> = HashMap::new();
+        for (folder, entries) in by_folder {
+            let listed = std::fs::read_dir(folder).and_then(|listing| {
+                let mut links = std::collections::HashSet::new();
+                for e in listing {
+                    let e = e?;
+                    // an entry whose type can't be read is resolved below, like a link
+                    if e.file_type().map_or(true, |t| t.is_symlink()) {
+                        links.insert(e.file_name().to_string_lossy().to_lowercase());
+                    }
+                }
+                Ok(links)
+            });
+            let links = match listed {
+                Ok(links) if links.is_empty() => continue,
+                Ok(links) => Some(links),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue, // gone: nothing to replace there
+                Err(_) => None,
+            };
+            for (name, p, what) in entries {
+                let is_link = match &links {
+                    Some(links) => links.contains(&name),
+                    None => std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()),
+                };
+                if !is_link {
+                    continue;
+                }
+                let Some(resolved) = std::fs::canonicalize(p).ok().and_then(|c| c.file_name().map(|n| n.to_string_lossy().to_lowercase())) else {
+                    continue; // a dangling link: no file for a write to replace through it
+                };
+                out.entry(resolved).or_default().push((p.clone(), what.clone()));
+            }
+        }
+        out
     }
 
     /// A new file with a sidecar's name in that sidecar's folder would be read back as the
@@ -334,6 +394,186 @@ mod tests {
         assert!(g.check(&d.join("IMG_1.xmp")).unwrap_err().contains("sidecar"));
         assert!(g.check(&d.join("other.jpg")).is_ok(), "an ordinary existing file");
         assert!(g.check(&d.join("new.jpg")).is_ok(), "a free name");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #3533: an export overwrite looked every original up with `read_link`, minutes per file in a
+    /// large Windows library. The symlinks are now found from folder listings, once per guard, and
+    /// a symlinked original under another name is still refused.
+    #[test]
+    fn an_original_symlinked_under_another_name_is_found_from_folder_listings() {
+        let d = std::env::temp_dir().join(format!("lc-originals-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::create_dir_all(d.join("out")).unwrap();
+        let real = d.join("out/export.jpg");
+        std::fs::write(&real, b"pixels").unwrap();
+        std::fs::write(d.join("out/other.jpg"), b"other").unwrap();
+        let link = d.join("lib/IMG_1.jpg");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&real, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&real, &link);
+        if let Err(e) = made {
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "can't create a symlink here ({e}); Windows needs Developer Mode or an admin shell");
+            return;
+        }
+        let mut c = Catalog::default();
+        let p = Photo::new(PhotoId(1), Source::File { path: link.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        // Many originals in folders that aren't there: one failed listing each, not a lookup per file.
+        for i in 0..5000 {
+            let p = Photo::new(
+                PhotoId(i + 2),
+                Source::File { path: d.join(format!("gone/{}/IMG_{i}.jpg", i % 50)).to_string_lossy().to_string() },
+                &format!("IMG_{i}.jpg"),
+                "JPEG",
+                10,
+                10,
+                "2026-01-01",
+            );
+            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        let g = OriginalGuard::new(&c);
+        assert!(g.check(&real).unwrap_err().contains("original of IMG_1.jpg"), "the file the library reads through the link");
+        assert!(g.check(&d.join("out/other.jpg")).is_ok(), "an ordinary existing file");
+        let symlinks = g.symlinks.get().expect("built by the first existing target");
+        assert_eq!(symlinks.values().flatten().count(), 1, "only the symlink is resolved: {symlinks:?}");
+        assert!(g.others.get().is_none(), "an export overwrite doesn't scan every original");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The symlink index is built by the first check; an original added after it must still be
+    /// found, so `add` drops the index and the next check builds it again.
+    #[test]
+    fn a_symlinked_original_added_after_a_check_is_found_by_the_next_one() {
+        let d = std::env::temp_dir().join(format!("lc-originals-symlink-late-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::create_dir_all(d.join("out")).unwrap();
+        let real = d.join("out/export.jpg");
+        std::fs::write(&real, b"pixels").unwrap();
+        let plain = d.join("lib/IMG_0.jpg");
+        std::fs::write(&plain, b"plain").unwrap();
+        let link = d.join("lib/IMG_1.jpg");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&real, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&real, &link);
+        if let Err(e) = made {
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "can't create a symlink here ({e}); Windows needs Developer Mode or an admin shell");
+            return;
+        }
+        let mut g = OriginalGuard::default();
+        g.add(&plain, "IMG_0.jpg");
+        assert!(g.check(&real).is_ok(), "nothing in the library reads this file yet");
+        assert!(g.symlinks.get().is_some(), "the first check built the index");
+        g.add(&link, "IMG_1.jpg");
+        assert!(g.symlinks.get().is_none(), "adding an original drops the index");
+        assert!(g.check(&real).unwrap_err().contains("original of IMG_1.jpg"), "the index built again sees the new link");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A symlinked original whose file is gone has nothing a write could replace through it: an
+    /// export over an ordinary file next to where it pointed goes ahead, and nothing panics.
+    #[test]
+    fn a_dangling_symlinked_original_refuses_nothing() {
+        let d = std::env::temp_dir().join(format!("lc-originals-dangling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::create_dir_all(d.join("out")).unwrap();
+        let other = d.join("out/other.jpg");
+        std::fs::write(&other, b"other").unwrap();
+        let link = d.join("lib/IMG_1.jpg");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(d.join("out/missing.jpg"), &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(d.join("out/missing.jpg"), &link);
+        if let Err(e) = made {
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "can't create a symlink here ({e}); Windows needs Developer Mode or an admin shell");
+            return;
+        }
+        let mut g = OriginalGuard::default();
+        g.add(&link, "IMG_1.jpg");
+        assert!(g.check(&other).is_ok(), "an ordinary existing file");
+        assert!(g.check(&d.join("out/missing.jpg")).is_ok(), "the link's missing file is a free name");
+        let symlinks = g.symlinks.get().expect("built by the first existing target");
+        assert!(symlinks.is_empty(), "a dangling link resolves to no file: {symlinks:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The export check and the identity check split in #3533: a hard link with another name shares
+    /// no name with its original, so only the identity check (screenshots) compares it with every
+    /// original. An export overwrite looks up the target's own names and lets it through.
+    #[test]
+    fn a_hard_link_under_another_name_is_refused_by_the_identity_check_only() {
+        let d = std::env::temp_dir().join(format!("lc-originals-hard-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::create_dir_all(d.join("out")).unwrap();
+        let original = d.join("lib/IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let linked = d.join("out/export.jpg");
+        std::fs::hard_link(&original, &linked).unwrap();
+        let other = d.join("out/other.jpg");
+        std::fs::write(&other, b"other").unwrap();
+        let guard = || {
+            let mut g = OriginalGuard::default();
+            g.add(&original, "IMG_1.jpg");
+            g
+        };
+        let g = guard();
+        assert!(g.check_identity(&linked).unwrap_err().contains("original of IMG_1.jpg"), "the identity check compares every original");
+        assert!(g.check_identity(&other).is_ok(), "an ordinary existing file");
+        let g = guard();
+        assert!(g.check(&linked).is_ok(), "an export overwrite looks up only the target's own names");
+        assert!(g.others.get().is_none(), "and doesn't scan every original");
+        assert!(g.check(&original).is_err(), "the original itself is still refused");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder that can be entered but not listed (`-wx`) still has its symlinked originals
+    /// found: each catalogued entry is asked instead of the listing.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_original_in_a_folder_that_cant_be_listed_is_still_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("lc-originals-unlisted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::create_dir_all(d.join("out")).unwrap();
+        let real = d.join("out/export.jpg");
+        std::fs::write(&real, b"pixels").unwrap();
+        let other = d.join("out/other.jpg");
+        std::fs::write(&other, b"other").unwrap();
+        let link = d.join("lib/IMG_1.jpg");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let plain = d.join("lib/IMG_2.jpg");
+        std::fs::write(&plain, b"plain").unwrap();
+        let mut c = Catalog::default();
+        let p = Photo::new(PhotoId(1), Source::File { path: link.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let p = Photo::new(PhotoId(2), Source::File { path: plain.to_string_lossy().to_string() }, "IMG_2.jpg", "JPEG", 10, 10, "2026-01-01");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o300)).unwrap();
+        if std::fs::read_dir(d.join("lib")).is_ok() {
+            std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "a -wx folder can still be listed here (running as root?), so the per-entry fallback can't be tested");
+            return;
+        }
+        let g = OriginalGuard::new(&c);
+        let refused = g.check(&real);
+        // the plain original in the same unlisted folder is asked too, and isn't taken for a link
+        let allowed = g.check(&other);
+        let resolved = g.symlinks.get().map(|s| s.values().flatten().count());
+        std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(refused.unwrap_err().contains("original of IMG_1.jpg"));
+        assert!(allowed.is_ok(), "an ordinary existing file: {allowed:?}");
+        assert_eq!(resolved, Some(1), "only the symlink is resolved");
         let _ = std::fs::remove_dir_all(&d);
     }
 
