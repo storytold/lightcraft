@@ -173,7 +173,7 @@ fn legacy_compressed_orf_and_copies_become_preview_only_without_losing_edits() {
     x.s = Session::new();
     x.s.open_library(&x.lib, false).unwrap();
     assert!(x.s.catalog.photo(x.id).unwrap().preview_only.is_some());
-    assert!(recheck::stale(&x.s.catalog, false).is_empty());
+    assert!(recheck::stale(&mut x.s, false).is_empty());
 }
 
 /// Supported uncompressed ORF is checked once and never reported as newly recovered sensor support.
@@ -185,12 +185,12 @@ fn legacy_uncompressed_orf_is_stamped_once_without_a_false_recovery_notice() {
     let p = x.s.catalog.photo(x.id).unwrap();
     assert!(p.develops_raw());
     assert_eq!(p.preview_checked, APP_VERSION);
-    assert!(recheck::stale(&x.s.catalog, false).is_empty());
-    assert_eq!(recheck::stale(&x.s.catalog, true).len(), 1);
+    assert!(recheck::stale(&mut x.s, false).is_empty());
+    assert_eq!(recheck::stale(&mut x.s, true).len(), 1);
     x.s.persist().unwrap();
     x.s = Session::new();
     x.s.open_library(&x.lib, false).unwrap();
-    assert!(recheck::stale(&x.s.catalog, false).is_empty());
+    assert!(recheck::stale(&mut x.s, false).is_empty());
     assert!(x.s.catalog.photo(x.id).unwrap().develops_raw());
 }
 
@@ -203,5 +203,5 @@ fn unavailable_legacy_orf_is_unchanged_and_retried() {
     let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
     assert_eq!(r, json!({"checked": 1, "updated": [], "cleared": []}));
     assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
-    assert_eq!(recheck::stale(&x.s.catalog, false).len(), 1);
+    assert_eq!(recheck::stale(&mut x.s, false).len(), 1);
 }

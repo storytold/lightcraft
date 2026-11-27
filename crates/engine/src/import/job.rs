@@ -39,11 +39,12 @@ pub struct ImportJob {
     pub(super) library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
     pub(super) by_path: HashMap<String, (PhotoId, bool, Option<String>)>,
-    /// path → the size the record of a browsed (Local) file has: a file of another size has been replaced since
-    /// it was browsed ([`super::files::browsed_files_changed`])
-    local_sizes: HashMap<String, u64>,
+    /// path → the recorded size and format of a browsed (Local) file
+    local_files: HashMap<String, (u64, String)>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
+    /// Paths of deleted duplicates, captured before the worker starts.
+    restore_sources: HashMap<PhotoId, RestoreSource>,
     pub(super) probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
@@ -68,6 +69,152 @@ pub struct ImportJob {
 pub struct Prepared {
     pub scanned: usize,
     pub(super) items: Vec<PreparedItem>,
+    pub(super) restore_checks: HashMap<PhotoId, RestoreCheck>,
+}
+
+#[derive(Debug)]
+struct RestoreSource {
+    path: String,
+    hash: String,
+    format: String,
+}
+
+#[derive(Debug)]
+pub(super) struct RestoreCheck {
+    pub(super) path: String,
+    pub(super) hash: String,
+    pub(super) stamp: Option<RestoreStamp>,
+    pub(super) legacy_dng: Option<Box<ProbeInfo>>,
+    // Windows does not expose the file change time through stable Rust. Hold the original
+    // open without write or delete sharing from verification through catalog reconciliation.
+    #[cfg(windows)]
+    _read_guard: Option<std::fs::File>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RestoreStamp {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+    #[cfg(windows)]
+    created: u64,
+}
+
+impl RestoreStamp {
+    fn from_metadata(meta: std::fs::Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(windows)]
+        use std::os::windows::fs::MetadataExt;
+        if !meta.is_file() {
+            return None;
+        }
+        #[cfg(unix)]
+        if meta.ino() == 0 {
+            return None;
+        }
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok()?,
+            #[cfg(unix)]
+            identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+            #[cfg(windows)]
+            created: meta.creation_time(),
+        })
+    }
+}
+
+pub(super) fn restore_stamp(path: &str) -> Option<RestoreStamp> {
+    RestoreStamp::from_metadata(std::fs::metadata(path).ok()?)
+}
+
+/// Identity from the transfer's own file handle, so another file at its destination is never
+/// considered a redundant copy just because the path or bytes match.
+#[derive(Debug)]
+pub(super) struct CopyOutput {
+    stamp: Option<RestoreStamp>,
+    #[cfg(unix)]
+    verified_hash: Option<String>,
+    #[cfg(windows)]
+    identity: Option<(u64, [u8; 16])>,
+}
+
+impl CopyOutput {
+    pub(super) fn new(file: std::fs::File, expected: Option<&str>) -> Self {
+        let stamp = file.metadata().ok().and_then(RestoreStamp::from_metadata);
+        // Publishing an output can change its ctime. Bind the stamp available after publication
+        // to the verified bytes on the worker, before the catalog thread sees the DNG.
+        #[cfg(unix)]
+        let verified_hash = {
+            use std::io::Seek;
+            let mut file = file;
+            expected.filter(|hash| stamp.is_some_and(|stamp| file.rewind().is_ok() && verified_bytes(&file, stamp, hash))).map(str::to_owned)
+        };
+        #[cfg(unix)]
+        let stamp = stamp.filter(|_| expected.is_none() || verified_hash.is_some());
+        #[cfg(not(unix))]
+        let _ = expected;
+        Self {
+            stamp,
+            #[cfg(unix)]
+            verified_hash,
+            #[cfg(windows)]
+            identity: lightcraft_catalog::safe_file::open_file_id(&file),
+        }
+    }
+
+    pub(super) fn is_current(&self, path: &str, expected: Option<&str>) -> bool {
+        // In particular, a symlink to the file we wrote is not an output that we own.
+        let Some(stamp) = copy_path_stamp(path) else { return false };
+        #[cfg(unix)]
+        {
+            Some(stamp) == self.stamp
+                && expected.is_none_or(|hash| {
+                    self.verified_hash.as_deref() == Some(hash)
+                        || crate::read_file::open_for_read(path)
+                            .is_ok_and(|file| verified_bytes(&file, stamp, hash) && copy_path_stamp(path) == Some(stamp))
+                })
+        }
+        #[cfg(windows)]
+        {
+            let Ok(file) = crate::read_file::open_for_read(path) else { return false };
+            let identity = lightcraft_catalog::safe_file::open_file_id(&file);
+            // On Windows the last write time can update when the writer closes, and a later
+            // writer can restore it. When a content hash is available, check the actual bytes.
+            identity.is_some()
+                && identity == self.identity
+                && self.stamp.is_some_and(|old| old.len == stamp.len)
+                && expected.map_or(self.stamp == Some(stamp), |hash| {
+                    verified_bytes(&file, stamp, hash)
+                        && copy_path_stamp(path) == Some(stamp)
+                        && crate::read_file::open_for_read(path).ok().and_then(|f| lightcraft_catalog::safe_file::open_file_id(&f)) == identity
+                })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (self.stamp, stamp, expected);
+            false
+        }
+    }
+}
+
+fn copy_path_stamp(path: &str) -> Option<RestoreStamp> {
+    std::fs::symlink_metadata(path).ok().and_then(RestoreStamp::from_metadata)
+}
+
+#[cfg(any(unix, windows))]
+fn verified_bytes(file: &std::fs::File, stamp: RestoreStamp, hash: &str) -> bool {
+    use std::io::Read;
+    let file_stamp = || file.metadata().ok().and_then(RestoreStamp::from_metadata);
+    file_stamp() == Some(stamp) && crate::cmd::missing::hash_reader(file.take(stamp.len)).as_deref() == Some(hash) && file_stamp() == Some(stamp)
+}
+
+#[derive(Debug)]
+pub(super) enum RestoreTarget {
+    Decide { format: Option<String> },
+    Keep,
+    Relink(Option<CopyOutput>),
 }
 
 #[derive(Debug)]
@@ -75,11 +222,19 @@ pub(super) enum PreparedItem {
     /// A Local (browsed) record imported for real; with what its file is now when the file was replaced since it was
     /// browsed (the record is brought up to date).
     Promote(PhotoId, Option<Box<ProbeInfo>>),
+    /// A deleted DNG at its old path with a different hash. A matching input raw can prove that
+    /// the record old versions wrote (with the raw's hash) actually belongs to this DNG.
+    UnverifiedDngPath {
+        id: PhotoId,
+        path: String,
+        hash: Option<String>,
+    },
     Duplicate {
         path: String,
         existing: Option<PhotoId>,
         reason: &'static str,
         hash: Option<String>,
+        restore: RestoreTarget,
         /// What the file itself says, when it was read ([`Duplicate::file`]).
         file: Option<Box<FileFacts>>,
     },
@@ -93,6 +248,10 @@ pub(super) struct ReadyFile {
     pub(super) path: String,
     pub(super) stored: String,
     pub(super) info: ProbeInfo,
+    /// Copy as DNG's original input identity, only for this job's duplicate lookup.
+    pub(super) input_hash: Option<String>,
+    pub(super) copy: Option<CopyOutput>,
+    pub(super) generated_dng: bool,
     pub(super) sidecar: Option<crate::sidecar::SidecarData>,
     pub(super) placed: Option<crate::import_move::Placed>,
 }
@@ -138,9 +297,9 @@ impl Prepared {
                 items.push(item);
                 continue;
             };
-            let ReadyFile { path, stored, info, sidecar, placed } = *ready;
+            let ReadyFile { path, stored, info, input_hash, copy, generated_dng, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
-            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
+            let existing_hash = info.content_hash.iter().chain(&input_hash).find_map(|hash| hashes.get(hash).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
                 if let Some(placed) = &placed {
                     crate::import_move::rollback(placed);
@@ -150,19 +309,42 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
+                    restore: RestoreTarget::Decide { format: Some(info.format) },
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
-                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
+                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, copy, generated_dng, sidecar, placed })));
             }
         }
         self.items = items;
     }
 }
 
-fn normalize_import_path(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    if cfg!(windows) { path.to_lowercase() } else { path }
+pub(super) fn normalize_import_path(path: &str) -> String {
+    if cfg!(windows) { path.replace('\\', "/").to_lowercase() } else { path.to_owned() }
+}
+
+/// Older Copy as DNG records kept the input hash. Repair the record only when the input still
+/// has that hash and the DNG still contains the input's sensor samples.
+fn probe_legacy_dng(path: &str, input: &str, hash: &str) -> Option<ProbeInfo> {
+    use crate::read_file::{MAX_MEDIA_BYTES, read_regular};
+    let input_len = std::fs::metadata(input).ok()?.len();
+    let dng_len = std::fs::metadata(path).ok()?.len();
+    let weight = usize::try_from(input_len.saturating_add(dng_len)).unwrap_or(usize::MAX).saturating_mul(6);
+    let _permit = crate::memory::work_gate().acquire(weight);
+    let bytes = read_regular(input, MAX_MEDIA_BYTES).ok()?;
+    if lightcraft_preview::hash_bytes(&bytes).to_string() != hash {
+        return None;
+    }
+    let source = lightcraft_raw::decode(&bytes).ok()?;
+    drop(bytes);
+    let bytes = read_regular(path, MAX_MEDIA_BYTES).ok()?;
+    let dng = lightcraft_raw::decode(&bytes).ok()?;
+    if dng.format != lightcraft_raw::RawFormat::Dng || source.cfa != dng.cfa || !crate::cmd::convert::same_raw_samples(&source, &dng) {
+        return None;
+    }
+    drop((source, dng));
+    crate::files::probe_bytes(path, &bytes).ok()
 }
 
 impl ImportJob {
@@ -199,8 +381,9 @@ impl ImportJob {
             copy_root,
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
-            local_sizes: HashMap::new(),
+            local_files: HashMap::new(),
             by_hash: HashMap::new(),
+            restore_sources: HashMap::new(),
             probe: s.media.file_probe.clone(),
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
@@ -275,7 +458,7 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local, p.content_hash.clone()));
                 if p.local {
-                    self.local_sizes.insert(path.clone(), p.file_size);
+                    self.local_files.insert(path.clone(), (p.file_size, p.format.clone()));
                 }
             }
             // (a copy that was only browsed in Local isn't in the library)
@@ -283,6 +466,12 @@ impl ImportJob {
                 && let Some(h) = &p.content_hash
             {
                 self.by_hash.insert(h.clone(), Some(p.id));
+                if p.deleted
+                    && self.opts.on_deleted == OnDeleted::Restore
+                    && let Source::File { path } = &p.source
+                {
+                    self.restore_sources.insert(p.id, RestoreSource { path: path.clone(), hash: h.clone(), format: p.format.clone() });
+                }
             }
         }
         Some(library)
@@ -293,15 +482,25 @@ impl ImportJob {
     fn sort_by_library(
         &mut self,
         files: Vec<String>,
-        verdicts: Vec<Option<BrowsedFile>>,
-        local: bool,
+        cancel: &std::sync::atomic::AtomicBool,
         out: &mut Prepared,
-        changed: &mut HashMap<String, PhotoId>,
-        todo: &mut Vec<String>,
-    ) {
+    ) -> (Vec<String>, HashMap<String, PhotoId>) {
         use std::sync::atomic::Ordering::Relaxed;
+        let local = self.opts.local;
+        let is_browsed = |f: &String| !local && matches!(self.by_path.get(f.as_str()), Some((_, true, _)));
+        let browsed: Vec<(&str, u64)> =
+            files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_files.get(f.as_str()).map_or(0, |(size, _)| *size))).collect();
+        let mut looked_at = browsed_files_changed(&browsed, cancel).into_iter();
+        let verdicts: Vec<Option<BrowsedFile>> = files.iter().map(|f| is_browsed(f).then(|| looked_at.next()).flatten()).collect();
+        let mut todo = Vec::new();
+        let mut changed = HashMap::new();
         for (f, verdict) in files.into_iter().zip(verdicts) {
             match self.by_path.get(f.as_str()).cloned() {
+                // A known deleted path is only a candidate. Its bytes might belong to another photo now.
+                Some((id, _, _)) if !local && self.restore_sources.contains_key(&id) => {
+                    self.cache.remove(&f);
+                    todo.push(f);
+                }
                 Some((id, true, hash)) if !local => match verdict {
                     // ✕ before its size was looked at: nothing is decided about it, so it isn't promoted
                     Some(BrowsedFile::Unchecked) => {}
@@ -315,12 +514,20 @@ impl ImportJob {
                     }
                 },
                 Some((id, _, _)) => {
-                    out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None, file: None });
+                    out.items.push(PreparedItem::Duplicate {
+                        path: f,
+                        existing: Some(id),
+                        reason: "path",
+                        hash: None,
+                        restore: RestoreTarget::Decide { format: None },
+                        file: None,
+                    });
                     self.done.fetch_add(1, Relaxed);
                 }
                 None => todo.push(f),
             }
         }
+        (todo, changed)
     }
 
     /// A browsed file this import brings into the library (its size unchanged): a duplicate of a library photo with
@@ -330,13 +537,31 @@ impl ImportJob {
         // (here or in a previous batch) counts as the library's from then on
         if let Some(h) = &hash {
             if let Some(existing) = self.by_hash.get(h) {
-                return PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, file: None };
+                let format = self.local_files.get(&f).map(|(_, format)| format.clone());
+                return PreparedItem::Duplicate {
+                    path: f,
+                    existing: *existing,
+                    reason: "content",
+                    hash,
+                    restore: RestoreTarget::Decide { format },
+                    file: None,
+                };
             }
             self.by_hash.insert(h.clone(), Some(id));
         }
         // a file that was only browsed (Local) joins the library when it is imported for real
         self.by_path.insert(f, (id, false, hash));
         PreparedItem::Promote(id, None)
+    }
+
+    fn unverified_dng_path(&self, path: &str, info: &ProbeInfo) -> Option<PhotoId> {
+        let (id, _, _) = self.by_path.get(path)?;
+        let source = self.restore_sources.get(id)?;
+        (!self.opts.local
+            && source.format.eq_ignore_ascii_case("DNG")
+            && info.format.eq_ignore_ascii_case("DNG")
+            && info.content_hash.as_deref() != Some(&source.hash))
+        .then_some(*id)
     }
 
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
@@ -347,18 +572,8 @@ impl ImportJob {
         self.listed.new_batch();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), items: Vec::new() };
-        let mut todo = Vec::new();
-        // browsed files replaced since: probed again with `todo`, their records brought up to date as they join the library
-        let mut changed: HashMap<String, PhotoId> = HashMap::new();
-        // the sizes of the browsed files this import would promote, looked at together before they are decided one by one
-        // (a file promoted in an earlier batch isn't asked about again; one path twice in a batch is, and its second answer is unused)
-        let is_browsed = |f: &String| !opts.local && matches!(self.by_path.get(f.as_str()), Some((_, true, _)));
-        let browsed: Vec<(&str, u64)> =
-            files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_sizes.get(f.as_str()).copied().unwrap_or(0))).collect();
-        let mut looked_at = browsed_files_changed(&browsed, cancel).into_iter();
-        let verdicts: Vec<Option<BrowsedFile>> = files.iter().map(|f| is_browsed(f).then(|| looked_at.next()).flatten()).collect();
-        self.sort_by_library(files, verdicts, opts.local, &mut out, &mut changed, &mut todo);
+        let mut out = Prepared { scanned: files.len(), ..Default::default() };
+        let (todo, mut changed) = self.sort_by_library(files, cancel, &mut out);
 
         // files a preceding scan already probed are not read again (a network share is slow to read),
         // as long as they are still there, as they were: a file gone or changed since is probed again
@@ -415,6 +630,11 @@ impl ImportJob {
             };
             // (this file's place in the lookups above: files that failed to probe have none)
             let found_sidecar = found.next().flatten();
+            if let Some(id) = self.unverified_dng_path(&path, &info) {
+                self.done.fetch_add(1, Relaxed);
+                plan.slots.push(Slot::Item(PreparedItem::UnverifiedDngPath { id, path, hash: info.content_hash }));
+                continue;
+            }
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
             if !opts.local
                 && let Some(h) = &info.content_hash
@@ -499,6 +719,7 @@ impl ImportJob {
                     existing,
                     reason: "content",
                     hash: Some(hash),
+                    restore: RestoreTarget::Decide { format: Some(info.format) },
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 }));
                 continue;
@@ -571,10 +792,91 @@ impl ImportJob {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
-            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
+            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile {
+                path,
+                stored,
+                info,
+                input_hash: None,
+                copy: None,
+                generated_dng: false,
+                sidecar,
+                placed: None,
+            }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
+        // Input hashes are aliases only while this batch can resolve them to a verified
+        // output. A later batch may have to generate that output again to restore it.
+        let outputs: std::collections::HashSet<_> = out
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                PreparedItem::Ready(r) => r.info.content_hash.as_deref(),
+                _ => None,
+            })
+            .collect();
+        for item in &out.items {
+            if let PreparedItem::Ready(r) = item
+                && let Some(alias) = &r.input_hash
+                && !outputs.contains(alias.as_str())
+                && self.by_hash.get(alias) == Some(&None)
+            {
+                self.by_hash.remove(alias);
+            }
+        }
+        self.prepare_restore_checks(&mut out, cancel);
         out
+    }
+
+    /// Verify only the old originals this batch matched, on the preparation worker.
+    fn prepare_restore_checks(&self, out: &mut Prepared, cancel: &std::sync::atomic::AtomicBool) {
+        for item in &out.items {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            let (id, incoming) = match item {
+                PreparedItem::Duplicate {
+                    path, existing, reason: "content", hash: Some(hash), restore: RestoreTarget::Decide { format }, ..
+                } => (existing.or_else(|| self.by_hash.get(hash).copied().flatten()), format.as_deref().map(|format| (path.as_str(), format))),
+                PreparedItem::Ready(r) => (r.info.content_hash.as_ref().and_then(|hash| self.by_hash.get(hash).copied().flatten()), None),
+                _ => (None, None),
+            };
+            let Some(id) = id else { continue };
+            let Some(RestoreSource { path, hash, format }) = self.restore_sources.get(&id) else { continue };
+            out.restore_checks.entry(id).or_insert_with(|| {
+                #[cfg(windows)]
+                let read_guard = {
+                    use std::os::windows::fs::OpenOptionsExt;
+                    const FILE_SHARE_READ: u32 = 1;
+                    std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(path).ok()
+                };
+                let stamp = restore_stamp(path);
+                #[cfg(windows)]
+                let stamp = stamp.filter(|_| read_guard.is_some());
+                let mut legacy_dng = None;
+                let stamp = stamp.filter(|stamp| {
+                    if crate::cmd::missing::file_hash(path).as_deref() == Some(hash) {
+                        return restore_stamp(path) == Some(*stamp);
+                    }
+                    if format.eq_ignore_ascii_case("DNG")
+                        && let Some((input, input_format)) = incoming
+                        && !input_format.is_empty()
+                        && !input_format.eq_ignore_ascii_case("DNG")
+                        && !cfg!(target_arch = "wasm32")
+                    {
+                        legacy_dng = probe_legacy_dng(path, input, hash).filter(|_| restore_stamp(path) == Some(*stamp)).map(Box::new);
+                    }
+                    legacy_dng.is_some()
+                });
+                RestoreCheck {
+                    path: path.clone(),
+                    hash: hash.clone(),
+                    stamp,
+                    legacy_dng,
+                    #[cfg(windows)]
+                    _read_guard: read_guard,
+                }
+            });
+        }
     }
 
     /// Run the transfers `plan` collected (on several threads) and append its items to `out` in
@@ -591,10 +893,10 @@ impl ImportJob {
                     None => continue,
                 },
             };
-            if let PreparedItem::Ready(r) = &item
-                && let Some(h) = &r.info.content_hash
-            {
-                self.by_hash.insert(h.clone(), None);
+            if let PreparedItem::Ready(r) = &item {
+                for h in r.info.content_hash.iter().chain(&r.input_hash) {
+                    self.by_hash.entry(h.clone()).or_insert(None);
+                }
             }
             out.items.push(item);
         }

@@ -607,6 +607,9 @@ impl Session {
         // what its log's thread was handed reach the file before the new journal reads it. When
         // that can't be written, the open fails and the current library stays open with what its
         // thread holds (retried): read now, the files would miss it (review of #3557).
+        if self.library.is_some() && !self.pending_log.is_empty() {
+            self.persist()?;
+        }
         if let Some(old) = self.library.as_mut() {
             if let Err(e) = old.journal.wait() {
                 log::error!("library: {e}");
@@ -634,6 +637,14 @@ impl Session {
         // never edited this session would look unchanged and show the old library's numbers.
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(discard) = &self.preview_build
+            && let Some(retention) = &discard.discard_retention
+        {
+            // Serialize cancellation with the worker's check and unlink before switching catalogs.
+            let _guard = retention.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            discard.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.catalog = catalog;
         // nor do tasks waiting in line carry over: they name the old library's photos and folders
         let dropped = self.activity.library_changed();
@@ -643,6 +654,7 @@ impl Session {
         // (nothing of the list the last library showed is this one's)
         self.refresh_view();
         self.library_generation = crate::LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.reload_tickets = Default::default();
         for entry in self.undo.iter_mut().chain(self.redo.iter_mut()) {
             self.pending_sidecar_repairs.append(&mut entry.retry_sidecars);
         }
@@ -873,7 +885,21 @@ impl Session {
     pub fn persist(&mut self) -> Result<()> {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if !self.pending_log.is_empty() {
-            if let Err(e) = lib.journal.append(&self.pending_log) {
+            let saved = if self.interaction.is_none() && lib.journal.needs_snapshot_for(&self.pending_log) {
+                let unlogged = self.pending_log.len() as u64;
+                let before = lib.journal.seq();
+                let result = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
+                match result {
+                    Err(e) if lib.journal.seq() > before => {
+                        log::warn!("library: the format upgrade saved the changes, but could not reset the log: {e}");
+                        Ok(())
+                    }
+                    result => result,
+                }
+            } else {
+                lib.journal.append(&self.pending_log)
+            };
+            if let Err(e) = saved {
                 // the ops stay queued (and applied in memory): the next persist retries them
                 let reason = e.to_string();
                 log::error!("library: {} change(s) not written to disk: {reason}", self.pending_log.len());

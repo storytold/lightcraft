@@ -115,6 +115,28 @@ fn failed_append_fails_the_command_and_is_retried() {
     assert_eq!((p.rating, p.flag), (4, Flag::Pick));
 }
 
+#[test]
+fn switching_libraries_retries_the_queue_and_preserves_it_if_the_save_fails() {
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    let id = s.selection.active.unwrap();
+    let generation = s.library_generation();
+    store.set_failing(true);
+    assert!(matches!(s.execute("photo.rate", &json!({"rating": 4})), Err(EngineError::NotSaved(_))));
+    let other = MemStore::new();
+    let other_stores = || LibraryStores { dir: "other".into(), catalog: Box::new(other.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    assert!(matches!(s.open_library_in(other_stores(), false), Err(EngineError::NotSaved(_))));
+    assert_eq!(s.library_generation(), generation);
+    assert_eq!(s.catalog.photo(id).unwrap().rating, 4);
+    assert_eq!(s.unsaved().map(|(count, _)| count), Some(1));
+    assert!(other.get("catalog.snap").is_none());
+    store.set_failing(false);
+    s.open_library_in(other_stores(), false).unwrap();
+    assert_ne!(s.library_generation(), generation);
+    assert!(s.catalog.is_empty());
+    assert_eq!(open(&store, false).catalog.photo(id).unwrap().rating, 4);
+}
+
 /// Undo is a command like any other: a failed write of its op is reported, and retried.
 #[test]
 fn failed_append_of_undo_is_reported_and_retried() {

@@ -17,8 +17,8 @@
 //!
 //! The Win32 calls (`MonitorFromWindow`, `GetMonitorInfoW`, `EnumDisplayDevicesW`, the `Wcs…`
 //! profile functions, `QueryDisplayConfig` + `DisplayConfigGetDeviceInfo`) are in the `win32` module,
-//! the only place besides `crates/sysmem` where LightCraft allows `unsafe`. The API is safe, and any
-//! failure answers [`MonitorColor::Unknown`].
+//! along with the Win32 call for identifying an open file. This is the only place besides
+//! `crates/sysmem` where LightCraft allows `unsafe`. The APIs are safe.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::PathBuf;
@@ -51,6 +51,13 @@ pub fn monitor_color(hwnd: isize) -> MonitorColor {
         let _ = hwnd;
         MonitorColor::Unknown
     }
+}
+
+/// The volume serial number and full 128-bit identity of an opened Windows file. Returns
+/// `None` when the file system or driver does not supply a reliable identifier.
+#[cfg(windows)]
+pub fn open_file_id(file: &std::fs::File) -> Option<(u64, [u8; 16])> {
+    win32::open_file_id(file)
 }
 
 /// `true` when Windows colour-manages the desktop on a display with these advanced-colour flags
@@ -86,6 +93,7 @@ mod win32 {
     use super::{MonitorColor, managed, settled_by_windows, until_nul};
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
     use std::path::PathBuf;
     use windows_sys::Win32::Devices::Display::{
         DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_HEADER,
@@ -97,6 +105,7 @@ mod win32 {
         CreateDCW, DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICEW, DeleteDC, EnumDisplayDevicesW, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO,
         MONITORINFOEXW, MonitorFromWindow,
     };
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx};
     use windows_sys::Win32::UI::ColorSystem::{
         CPST_NONE, CPT_ICC, GetColorDirectoryW, GetICMProfileW, WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER, WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE,
         WcsGetDefaultColorProfile, WcsGetDefaultColorProfileSize, WcsGetUsePerUserProfiles,
@@ -110,6 +119,17 @@ mod win32 {
     const CLASS_MONITOR: u32 = u32::from_be_bytes(*b"mntr");
     /// The longest profile name read, in bytes (names are file names in the colour directory).
     const MAX_NAME_BYTES: u32 = 64 << 10;
+
+    pub fn open_file_id(file: &std::fs::File) -> Option<(u64, [u8; 16])> {
+        let mut info = FILE_ID_INFO::default();
+        // SAFETY: the open File owns the handle for the call, and the writable buffer has exactly
+        // the type and size that GetFileInformationByHandleEx expects for FileIdInfo.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(file.as_raw_handle(), FileIdInfo, (&mut info as *mut FILE_ID_INFO).cast(), size_of::<FILE_ID_INFO>() as u32)
+        };
+        let id = info.FileId.Identifier;
+        (ok != 0 && id != [0; 16]).then_some((info.VolumeSerialNumber, id))
+    }
 
     pub fn monitor_color(hwnd: isize) -> MonitorColor {
         let Some(device) = monitor_device(hwnd) else { return MonitorColor::Unknown };

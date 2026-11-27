@@ -17,6 +17,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_ColorSystem",
     "Win32_Devices_Display",
+    "Win32_Storage_FileSystem",
 ] }
 
 [dev-dependencies]

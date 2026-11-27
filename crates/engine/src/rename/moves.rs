@@ -168,7 +168,7 @@ pub(crate) fn rest_after_move_back(rest: Op, moved_back: &std::result::Result<()
     fn rewrite(op: Op, back: &HashSet<PhotoId>) -> Op {
         match op {
             Op::Batch { ops } => Op::Batch { ops: ops.into_iter().map(|op| rewrite(op, back)).collect() },
-            Op::SetFile { id, file_name, source } if back.contains(&id) => Op::Relink { id, file_name, source, format: None },
+            Op::SetFile { id, file_name, source } if back.contains(&id) => Op::Relink { id, file_name, source, format: None, kind: None },
             op => op,
         }
     }
