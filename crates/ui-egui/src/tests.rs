@@ -29,6 +29,7 @@ mod carried_text_field_menu;
 mod color_mixer;
 mod compare;
 mod copy_paste_dialogs;
+mod crop_aspects;
 mod crop_rotate;
 mod crop_tool;
 mod curve;

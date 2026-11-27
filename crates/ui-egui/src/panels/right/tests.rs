@@ -11,18 +11,18 @@ fn history_rows_after_the_cursor_are_greyed() {
 // Feature: the aspect button tells what is locked
 #[test]
 fn aspect_label_names_presets_in_either_orientation() {
-    assert_eq!(super::aspect_label(None, Some(1.5)), "Free");
-    assert_eq!(super::aspect_label(Some((1600, 900)), None), "16 × 9");
-    assert_eq!(super::aspect_label(Some((900, 1600)), None), "16 × 9", "portrait 16:9");
-    assert_eq!(super::aspect_label(Some((400, 500)), None), "4 × 5 / 8 × 10");
+    assert_eq!(super::aspect_label(None, Some(1.5), &[]), "Free");
+    assert_eq!(super::aspect_label(Some((1600, 900)), None, &[]), "16 × 9");
+    assert_eq!(super::aspect_label(Some((900, 1600)), None, &[]), "16 × 9", "portrait 16:9");
+    assert_eq!(super::aspect_label(Some((400, 500)), None, &[]), "4 × 5 / 8 × 10");
 }
 
 #[test]
 fn aspect_label_prefers_original_over_a_coinciding_preset_and_never_shows_pixel_sizes() {
-    assert_eq!(super::aspect_label(Some((300, 200)), Some(1.5)), "Original");
-    assert_eq!(super::aspect_label(Some((600_000, 400_000)), Some(1.5)), "Original");
-    assert_eq!(super::aspect_label(Some((137, 100)), Some(1.5)), "1.37 : 1");
-    assert_eq!(super::aspect_label(Some((0, 5)), None), "Free");
+    assert_eq!(super::aspect_label(Some((300, 200)), Some(1.5), &[]), "Original");
+    assert_eq!(super::aspect_label(Some((600_000, 400_000)), Some(1.5), &[]), "Original");
+    assert_eq!(super::aspect_label(Some((137, 100)), Some(1.5), &[]), "1.37 : 1");
+    assert_eq!(super::aspect_label(Some((0, 5)), None, &[]), "Free");
 }
 
 #[test]

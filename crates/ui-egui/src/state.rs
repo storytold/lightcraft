@@ -143,6 +143,10 @@ pub struct UiState {
     /// Last explicitly chosen aspect, retained across photos and app launches; `None` (nothing
     /// chosen yet) crops locked to the photo's own shape, as Lightroom starts (#991).
     pub crop_default_aspect: Option<serde_json::Value>,
+    /// The saved aspect ratio picked last by its name in the aspect menu: two saved ratios can be the same shape (or the
+    /// photo's own), and the menu shows the one picked while the crop is locked to its shape (review of #3762).
+    #[serde(skip)]
+    pub crop_aspect_picked: Option<String>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
     /// focal length) or `date`.
@@ -587,6 +591,7 @@ impl Default for UiState {
             mask_overlay_all: false,
             crop_overlay: CropOverlay::Thirds,
             crop_default_aspect: None,
+            crop_aspect_picked: None,
             crop_overlay_orient: 0,
             show_filenames: true,
             grid_info: "filename".into(),

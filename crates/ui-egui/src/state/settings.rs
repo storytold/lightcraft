@@ -174,6 +174,9 @@ pub struct AppSettings {
     /// leniently: a value this build doesn't know is the defaults, never the other settings lost.
     #[serde(deserialize_with = "lenient")]
     pub background_prep: lightcraft_engine::prep::PrepSettings,
+    /// The crop tool's saved aspect ratios and the built-in ones hidden (issue #1854), app-wide: handed to the session
+    /// at launch and kept in step with it, as `background_prep` is. Only what the commands would accept is kept.
+    pub crop_aspects: lightcraft_engine::cmd::crop_aspects::CropAspects,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -252,6 +255,7 @@ impl Default for AppSettings {
             grid_badges: GridBadges::Auto,
             loupe_messages: true,
             background_prep: Default::default(),
+            crop_aspects: Default::default(),
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
