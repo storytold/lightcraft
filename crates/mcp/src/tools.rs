@@ -675,10 +675,20 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
             None => ToolResult::error("missing `command`"),
         },
         "import" => {
-            let paths: Vec<String> = match args.get("paths") {
-                Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
-                Some(Value::String(p)) => vec![p.clone()],
+            // Validate the entire request before discovering files or importing a partial batch,
+            // especially in move mode, which may remove successfully imported source files.
+            let paths: Result<Vec<String>, String> = match args.get("paths") {
+                Some(Value::Array(a)) => a
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| v.as_str().map(str::to_string).ok_or_else(|| format!("`paths[{i}]` must be a string")))
+                    .collect(),
+                Some(Value::String(p)) => Ok(vec![p.clone()]),
                 _ => return ToolResult::error("missing `paths`"),
+            };
+            let paths = match paths {
+                Ok(paths) => paths,
+                Err(e) => return ToolResult::error(e),
             };
             let files = expand_paths(&paths);
             if files.is_empty() {
