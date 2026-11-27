@@ -554,10 +554,9 @@ environment.systemPackages = [ pkgs.lightcraft ];           # home-manager: home
 
 ## How it's built
 
-An engine-first Cargo workspace of small, tested crates with enforced layering (`cargo xtask layers`): `geom`,
-`color`, `raster`, `tiff` → `raw`, `codecs`, `meta`, `develop` → `pipeline` → `catalog` → `engine` → `ui-egui`. The
-egui frontend is one swappable crate; nothing below it knows a UI exists. `mcp` and the apps (`lightcraft`,
-`lightcraft-cli`) sit on top of `engine`.
+LightCraft is an engine-first Cargo workspace. The [crate layout](AGENTS.md#layout) shows the
+library layers, the egui frontend, the MCP server, and the desktop, CLI, and web apps. Run
+`cargo xtask layers` to check the workspace dependency layers.
 
 ## Contributing
 
