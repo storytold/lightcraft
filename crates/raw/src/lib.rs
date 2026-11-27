@@ -6,9 +6,11 @@
 //!   [`semantic_masks`] reads a DNG's semantic masks (segmentation mattes, e.g. iPhone ProRAW's sky matte).
 //! - [`RawImage::normalized`] subtracts black, scales white to 1.0 and crops to the active area (applying DNG
 //!   `OpcodeList1`/`OpcodeList2`); [`demosaic`] turns CFA data into camera-RGB [`Rgb32f`];
-//!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_binned`]
-//!   produces the same at 1/k of the size straight from the mosaic (previews, thumbnails;
-//!   [`RawImage::develop_binned_masked`] with the mask of blocks holding clipped samples, for [`highlight`]).
+//!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_balanced`]
+//!   and [`RawImage::develop_balanced_masked`] do the same after white-balancing the mosaic (the 1:1 view and unbinned
+//!   engine loads, including ordinary exports; lossy DNG export and Photo Merge frames still use [`RawImage::develop`]);
+//!   [`RawImage::develop_binned`] produces the development at 1/k of the size straight from the mosaic
+//!   (previews, thumbnails; [`RawImage::develop_binned_masked`] with the mask of blocks holding clipped samples, for [`highlight`]).
 //! - [`color`] implements the DNG colour model (dual-illuminant interpolation, forward matrices, white balance)
 //!   and produces camera → linear Rec.2020 D65 matrices; [`profile`] reads and applies a DNG's own profile
 //!   look tables and tone curve, and [`gaintable`] its gain table map (Apple ProRAW's local tone mapping).
@@ -28,6 +30,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod binned;
+mod bridge;
 pub mod color;
 mod convert;
 pub mod dcp;
@@ -38,24 +41,19 @@ pub mod highlight;
 mod hotpixel;
 pub mod kelvin_builtin;
 pub mod kelvin_presets;
-pub mod lens_metadata;
-#[cfg(test)]
-mod ljpeg_fixtures;
-pub(crate) mod llvc;
+pub use craft_raw::lens_metadata;
 pub mod opcodes;
-mod preview;
 pub mod profile;
 mod saturation;
 pub mod semantic;
-pub mod sparse;
+pub use craft_raw::sparse;
 pub mod spectral;
-mod tiffraw;
-mod unpack;
-mod vendor;
 mod wb_estimate;
 
 pub use craft_raw::{
-    BlackLevel, Cfa, MAX_SAMPLES, RawData, RawError, RawFormat, Rect, Result, SemanticMask, ljpeg, probe, semantic_masks, stretched_height,
+    BlackLevel, Cfa, MAX_SAMPLES, PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, RawData, RawError, RawFormat, Rect, Result, SemanticMask,
+    bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering, embedded_preview_dynamic_range_optimized,
+    embedded_preview_from_range, ljpeg, probe, semantic_masks, stretched_height,
 };
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
@@ -66,10 +64,6 @@ pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::{
-    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
-    embedded_preview_dynamic_range_optimized, embedded_preview_from_range,
-};
 
 use lightcraft_color::Xy;
 use serde::{Deserialize, Serialize};
@@ -86,11 +80,10 @@ pub(crate) fn checked_pixel_count(width: u64, height: u64) -> Option<u64> {
 /// Whether [`decode`] reads this container (possibly not every compression inside it): `craft-raw`'s makers and
 /// the ones still decoded here (Canon CR3, Sony ARW, Fujifilm RAF, Panasonic RW2).
 pub fn is_supported(format: RawFormat) -> bool {
-    format.is_supported() || matches!(format, RawFormat::Cr3 | RawFormat::Arw | RawFormat::Raf | RawFormat::Rw2)
+    format.is_supported()
 }
 
-/// A 2×2 Bayer layout named in code (`"RGGB"`, `"BGGR"`, `"GRBG"`, `"GBRG"`). Only for literal names (tested);
-/// anything else falls back to RGGB instead of failing.
+#[cfg(test)]
 pub(crate) fn bayer(s: &'static str) -> Cfa {
     Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, origin_x: 0, origin_y: 0, pattern: vec![0, 1, 1, 2] })
 }
@@ -139,15 +132,10 @@ pub(crate) enum Mode {
 }
 
 fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
-    match probe(bytes).ok_or(RawError::NotRaw)? {
-        RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
-        RawFormat::Arw => vendor::arw::decode(bytes, mode),
-        RawFormat::Raf => vendor::raf::decode(bytes, mode),
-        RawFormat::Rw2 => vendor::rw2::decode(bytes, mode),
-        RawFormat::Orf => vendor::orf::decode(bytes, mode),
-        // every other maker, and the reasons a file is not decoded, are craft-raw's
-        _ => convert::decode(bytes, mode),
+    if probe(bytes).is_none() {
+        return Err(RawError::NotRaw);
     }
+    convert::decode(bytes, mode)
 }
 
 /// A raw file's description without its samples (see [`probe_info`]).
@@ -263,17 +251,7 @@ pub struct RawImage {
     pub lens_metadata: LensMetadata,
 }
 
-/// Black-subtracted, white-normalised data covering the active area.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Normalized {
-    pub width: usize,
-    pub height: usize,
-    pub cpp: usize,
-    /// Nominal range [0, 1] (values may exceed 1 above white or be negative from noise).
-    pub data: Vec<f32>,
-    /// CFA anchored at (0, 0) of this buffer.
-    pub cfa: Option<Cfa>,
-}
+pub use craft_develop::sensor::Normalized;
 
 impl RawImage {
     /// The description without the samples (what [`probe_info`] returns for the same file).
@@ -316,11 +294,6 @@ impl RawImage {
             lens_metadata: self.lens_metadata,
             pixel_aspect: self.pixel_aspect,
         }
-    }
-
-    /// Validate what a decoder read in `mode` ([`Mode::Header`]: everything but the samples).
-    pub(crate) fn validate_for(&self, mode: Mode) -> Result<()> {
-        self.check(mode == Mode::Full)
     }
 
     /// Validate internal consistency (dimensions vs data length, CFA shape, rectangles).
@@ -414,18 +387,35 @@ impl RawImage {
     /// The result is camera RGB (not white balanced), white level = 1.0, not oriented.
     pub fn develop(&self, method: Method) -> Result<Rgb32f> {
         let n = self.normalized()?;
-        // with no `OpcodeList3` to apply to the whole picture first, AHD demosaics just the default crop (the same
-        // pixels, without demosaicing the margin and then copying the crop out of the full picture)
-        if self.opcodes.list3.is_empty() && method == Method::Ahd {
-            let c = self.develop_crop(n.width, n.height);
-            if let Some(rgb) = demosaic::ahd_window(&n, c) {
-                drop(n);
-                return Ok(self.stretched(rgb));
-            }
-        }
         let rgb = demosaic(&n, method);
         drop(n);
         Ok(self.finish_demosaiced(rgb))
+    }
+
+    /// [`Self::develop`] with white balance `wb` applied to the mosaic before directional demosaicing,
+    /// then divided back to camera RGB.
+    pub fn develop_balanced(&self, method: Method, wb: [f32; 3]) -> Result<Rgb32f> {
+        let mut craft = bridge::to_craft_raw_header(self);
+        craft.data = self.data.clone();
+        craft_develop::sensor::RawDevelopExt::develop_balanced(&craft, method, wb).map(bridge::from_craft_rgb32f)
+    }
+
+    /// [`Self::develop_balanced`] with a per-pixel sensor clip mask for [`highlight::reconstruct_masked`].
+    pub fn develop_balanced_masked(&self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
+        let mut craft = bridge::to_craft_raw_header(self);
+        craft.data = self.data.clone();
+        let (rgb, mask) = craft_develop::sensor::RawDevelopExt::develop_balanced_masked(&craft, method, wb, clip)?;
+        Ok((bridge::from_craft_rgb32f(rgb), mask))
+    }
+
+    /// Like [`Self::develop_balanced_masked`], moving `self.data` temporarily to avoid cloning raw samples.
+    pub fn take_develop_balanced_masked(&mut self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
+        let mut craft = bridge::to_craft_raw_header(self);
+        craft.data = std::mem::replace(&mut self.data, RawData::U16(Vec::new()));
+        let res = craft_develop::sensor::RawDevelopExt::develop_balanced_masked(&craft, method, wb, clip);
+        self.data = craft.data;
+        let (rgb, mask) = res?;
+        Ok((bridge::from_craft_rgb32f(rgb), mask))
     }
 
     /// The last steps of [`Self::develop`] for camera RGB made some other way (a denoiser that demosaics too) from

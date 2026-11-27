@@ -1,6 +1,8 @@
-//! The Edit panel at its narrowest with a long profile applied: the profile row fits (#1759).
+//! The Edit panel at its narrowest with a long profile applied: the profile row fits (#1759). The camera's line
+//! above the Edit header.
 
 use egui::{Rect, vec2};
+use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::{LightcraftApp, Services, headless::HeadlessView};
@@ -26,26 +28,53 @@ fn panel(width: f32) -> (Vec<egui::epaint::TextShape>, Vec<(String, Rect)>) {
     });
     app.run("develop.profile", json!({"id": LONG_ID})).unwrap();
     let photo = app.session.active().unwrap();
+    let drawn = draw(&mut app, photo, width);
+    (drawn.texts, drawn.widgets)
+}
+
+/// What the Edit panel drew in its last pass: its text, its widgets, and its labels' text as a screen reader gets it.
+struct Drawn {
+    texts: Vec<egui::epaint::TextShape>,
+    widgets: Vec<(String, Rect)>,
+    labels: Vec<String>,
+}
+
+impl Drawn {
+    fn rect(&self, id: &str) -> Rect {
+        self.widgets.iter().find(|(w, _)| w == id).unwrap_or_else(|| panic!("{id} not drawn")).1
+    }
+
+    fn text(&self, text: &str) -> &egui::epaint::TextShape {
+        self.texts.iter().find(|t| t.galley.job.text == text).unwrap_or_else(|| panic!("{text:?} not drawn"))
+    }
+}
+
+/// The Edit panel of `photo`, `width` points wide, drawn three times.
+fn draw(app: &mut LightcraftApp, photo: PhotoId, width: f32) -> Drawn {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
     crate::theme::apply(&ctx);
-    let mut texts = Vec::new();
-    let mut widgets = Vec::new();
+    ctx.enable_accesskit();
+    let mut drawn = Drawn { texts: Vec::new(), widgets: Vec::new(), labels: Vec::new() };
     for frame in 0..3 {
         let raw = HeadlessView::raw_input(vec2(width, 4000.0), 1.0, frame as f64 / 60.0, vec![]);
         let mut out = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-                crate::panels::edit::show(&mut app, ui, photo);
+                crate::panels::edit::show(app, ui, photo);
             });
         });
         out.textures_delta.clear();
-        texts.clear();
+        drawn.texts.clear();
         for shape in &out.shapes {
-            text_shapes(&shape.shape, &mut texts);
+            text_shapes(&shape.shape, &mut drawn.texts);
         }
-        widgets = crate::widgets::take_registry(&ctx);
+        drawn.widgets = crate::widgets::take_registry(&ctx);
+        if let Some(update) = out.platform_output.accesskit_update.take() {
+            let labels = update.nodes.iter().filter(|(_, n)| format!("{:?}", n.role()) == "Label");
+            drawn.labels = labels.filter_map(|(_, n)| n.value().map(str::to_string)).collect();
+        }
     }
-    (texts, widgets)
+    drawn
 }
 
 #[test]
@@ -65,4 +94,25 @@ fn a_long_profile_name_leaves_the_edit_panel_its_width() {
     for (id, r) in widgets.iter().filter(|(id, _)| id.starts_with("slider")) {
         assert!(r.right() <= width, "{id} {r:?} is cut off by the {width} pt panel");
     }
+}
+
+#[test]
+fn the_camera_is_named_above_the_edit_header_and_a_photo_without_one_keeps_the_header_in_place() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let photo = app.session.active().unwrap();
+    let camera = app.session.catalog.photo(photo).and_then(|p| p.meta.camera_name()).expect("the demo photo names its camera");
+    let width = crate::state::RIGHT_WIDTH.min;
+    let with = draw(&mut app, photo, width);
+    let line = with.rect("edit:camera");
+    let edit = with.text("Edit");
+    assert!(line.bottom() <= edit.visual_bounding_rect().top(), "the camera {line:?} sits above Edit {:?}", edit.visual_bounding_rect());
+    assert!(line.right() <= width);
+    assert!(with.labels.contains(&camera), "a screen reader reads {camera:?}: {:?}", with.labels);
+    // a photo that names no camera (a scan): no line, and the header where it was
+    let id = PhotoId(app.session.catalog.photos().map(|p| p.id.0).max().unwrap_or(0) + 1);
+    let scan = Photo::new(id, Source::Demo { scene: 1 }, "scan.png", "PNG", 3000, 2000, "2026-11-01T00:00:00");
+    app.session.commit("test", Op::AddPhoto { photo: Box::new(scan) }).unwrap();
+    let without = draw(&mut app, id, width);
+    assert!(without.widgets.iter().all(|(w, _)| w != "edit:camera"));
+    assert_eq!(without.text("Edit").pos, edit.pos, "the header stays in place");
 }
