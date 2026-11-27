@@ -227,9 +227,9 @@ fn sentence(s: &str) -> String {
 fn licence_line(m: &Value) -> String {
     let name = m["licence"]["name"].as_str().filter(|s| !s.is_empty()).unwrap_or("Unknown licence");
     let terms = match m["licence"]["commercial"].as_str() {
-        Some("yes") => "commercial use allowed",
-        Some("no") => "non-commercial use only",
-        _ => "terms unclear",
+        Some("yes") => crate::i18n::tr("commercial use allowed"),
+        Some("no") => crate::i18n::tr("non-commercial use only"),
+        _ => crate::i18n::tr("terms unclear"),
     };
     format!("{name} · {terms}")
 }
@@ -303,7 +303,17 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     if let Some(d) = all.iter().find(|m| m["role"] == "detector") {
         ui.add_space(4.0);
-        hint(ui, t, &format!("Faces are found by {} ({}, included).", d["name"].as_str().unwrap_or("the detector"), mb(d["sizeBytes"].as_u64())));
+        let model = d["name"].as_str().unwrap_or(crate::i18n::tr("the detector"));
+        let model = model.replace("(face detector)", &format!("({})", crate::i18n::tr("face detector")));
+        hint(
+            ui,
+            t,
+            &crate::i18n::tr_format!(
+                "Faces are found by {model} ({size}, included).",
+                model = model,
+                size = mb(d["sizeBytes"].as_u64())
+            ),
+        );
     }
 }
 
@@ -311,10 +321,10 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 fn scan_progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let (left, peak, faces) = (app.caches.faces_pending, app.caches.faces_peak.max(1), app.caches.faces_indexed);
     if left == 0 {
-        hint(ui, t, &format!("{faces} faces learned."));
+        hint(ui, t, &format!("{faces} {}", crate::i18n::tr("faces learned.")));
         return;
     }
-    let text = format!("Scanning photos for faces: {left} left · {faces} faces so far");
+    let text = crate::i18n::tr_format!("Scanning photos for faces: {left} left · {faces} faces so far", left = left, faces = faces);
     crate::progress::Progress::new(Some(1.0 - left as f32 / peak as f32)).label(text).widget("faces:scanProgress").show(ui);
 }
 
@@ -329,7 +339,11 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(m["name"].as_str().unwrap_or("")).color(t.text));
+                    let model_name = m["name"].as_str().unwrap_or("");
+                    let display_name = model_name
+                        .replace("(face detector)", &format!("({})", crate::i18n::tr("face detector")))
+                        .replace("(face recogniser)", &format!("({})", crate::i18n::tr("face recogniser")));
+                    ui.label(RichText::new(display_name).color(t.text));
                     let size = mb(m["sizeBytes"].as_u64());
                     if !size.is_empty() {
                         ui.label(RichText::new(size).color(t.text_dim));
@@ -350,7 +364,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                 let speed = m["speedText"].as_str().filter(|s| !s.is_empty());
                 let (line, ok) = match m["accepted"]["selfTest"].as_object() {
                     Some(test) if test.get("ok").and_then(Value::as_bool) == Some(true) => {
-                        (Some(speed.map_or("Works".to_string(), |s| format!("Works · {s}"))), true)
+                        (Some(speed.map_or(crate::i18n::tr("Works").to_string(), |s| crate::i18n::tr(&format!("Works · {s}")).to_string())), true)
                     }
                     Some(_) => (Some("Failed its last test".to_string()), false),
                     None => (speed.map(str::to_string), true),
@@ -394,7 +408,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         app.caches.faces_epoch += 1;
                     }
                     if !selected && !detector {
-                        let r = ui.button("Use");
+                        let r = ui.button(crate::i18n::tr("Use"));
                         register(ui, format!("faces:use:{id}"), r.rect);
                         if r.clicked() {
                             let _ = app.run("faces.models.select", json!({"id": id}));
