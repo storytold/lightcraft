@@ -1,5 +1,8 @@
 //! `lightcraft-cli`: process wiring only. Everything the CLI does is in the library's `run`.
 
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
 use std::process::ExitCode;
 
 #[cfg(feature = "dhat-heap")]

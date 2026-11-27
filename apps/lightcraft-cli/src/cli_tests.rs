@@ -274,7 +274,10 @@ fn snapshot_renders_the_demo_library_to_a_png_and_reports_a_bad_script() {
     assert!(err.contains("1 scripted request(s) failed"), "{err}");
     let (code, _, err) = go(&["snapshot", "--script", dir.join("none.jsonl").to_str().unwrap_or("")]);
     assert_eq!(code, 1, "{err}");
-    let (code, _, err) = go(&["snapshot", "-o", png.to_str().unwrap_or(""), "--library", "/dev/null/no-library"]);
+    // A library below a file can be neither opened nor created, on any system.
+    let file = dir.join("a-file");
+    std::fs::write(&file, "x").unwrap_or_default();
+    let (code, _, err) = go(&["snapshot", "-o", png.to_str().unwrap_or(""), "--library", file.join("no-library").to_str().unwrap_or("")]);
     assert_eq!(code, 1, "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -319,8 +322,12 @@ fn calibrate_bench_cull_and_denoise_serve_fail_cleanly_without_inputs() {
 
 #[test]
 fn a_library_or_import_that_fails_ends_the_run_with_exit_1() {
-    let (code, _, err) = go(&["mcp", "--library", "/dev/null/no-library"]);
+    let dir = work("no-library");
+    let file = dir.join("a-file");
+    std::fs::write(&file, "x").unwrap_or_default();
+    let (code, _, err) = go(&["mcp", "--library", file.join("no-library").to_str().unwrap_or("")]);
     assert_eq!(code, 1, "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
     let (code, out, err) = go(&["run", "--demo", "--import", "/no/such/photo.jpg", "engine.commands"]);
     assert_eq!(code, 1, "{err}");
     assert!(out.is_empty(), "{out}");
