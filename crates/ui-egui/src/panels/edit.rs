@@ -371,6 +371,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.toggle_flyout("defringe");
         }
         if open {
+            // Auto on the left, Protect Colours on the right, as the Edit header lays out its buttons
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if crate::widgets::text_button(ui, "defringeAuto", crate::i18n::tr("Auto"), false)
+                        .on_hover_text(crate::i18n::tr(
+                            "Turn on Remove Chromatic Aberration, then find the purple fringes and halos along bright edges and set Defringe for them, with Protect Colours",
+                        ))
+                        .clicked()
+                    {
+                        auto_defringe(app, ui.ctx());
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut protect = d.optics.defringe_protect;
+                        let r = ui.checkbox(&mut protect, crate::i18n::tr("Protect Colours"));
+                        crate::widgets::register(ui, "check:optics.defringeProtect", r.rect);
+                        if r
+                            .on_hover_text(crate::i18n::tr(
+                                "Fringes take the colours beside them instead of turning grey, and colours that belong to the subject, like a blue sign or a lit wall, are left alone",
+                            ))
+                            .changed()
+                        {
+                            let _ = app.run("develop.merge", json!({"settings": {"optics": {"defringe_protect": protect}}, "label": "Protect Colours"}));
+                        }
+                    });
+                });
+            });
             control(app, ui, d, "optics.defringePurple", true);
             let on = d.optics.defringe_purple_amount > 0.0;
             control(app, ui, d, "optics.defringePurpleHueLo", on);
@@ -404,5 +430,39 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
         let _ = app.run("develop.reset", json!({}));
+    }
+}
+
+/// Optics ▸ Defringe ▸ Auto: the measuring (a 2048 px render and colour passes over it) runs on a worker with a row in
+/// the activity stack, so the window keeps going; its result goes to the photo it was asked for, as one undo step, when
+/// it arrives. A second press while one measures does nothing.
+fn auto_defringe(app: &mut LightcraftApp, ctx: &egui::Context) {
+    const LABEL: &str = "Finding fringes";
+    if app.tasks.is_running(LABEL) {
+        return;
+    }
+    let Some(id) = app.session.active() else { return };
+    let job = match app.session.auto_defringe_job(id) {
+        Ok(job) => job,
+        Err(e) => return app.toast_error(ctx, e.to_string()),
+    };
+    let started = crate::tasks::spawn(
+        app,
+        LABEL,
+        Some("defringe"),
+        move || job.measure(),
+        move |app, ctx, found| {
+            let r = found
+                .and_then(|found| app.session.execute_fn("develop.autoDefringe", |s| s.auto_defringe_apply(id, found)).map_err(|e| e.to_string()));
+            match r {
+                Ok(r) if r["found"] == true => app.toast(ctx, crate::i18n::tr("Purple fringes found and removed")),
+                Ok(r) if r["removeCa"] == true => app.toast(ctx, crate::i18n::tr("Chromatic aberration removed; no purple fringes found")),
+                Ok(_) => app.toast(ctx, crate::i18n::tr("No purple fringes found")),
+                Err(e) => app.toast_error(ctx, e),
+            }
+        },
+    );
+    if let Err(e) = started {
+        app.toast_error(ctx, e);
     }
 }

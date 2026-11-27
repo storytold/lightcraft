@@ -39,7 +39,8 @@ impl DevelopSettings {
         serde_json::from_value(v.clone())
     }
 
-    /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) stated even when off, for JSON that is copied,
+    /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) and Protect Colours (`optics.defringe_protect`)
+    /// stated even when off, for JSON that is copied,
     /// merged, scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON leaves it out when
     /// off, so settings saved before it keep their hash; a merge needs the `false`, or copying Detail would not turn
     /// the box off and a preset applied at an amount would not find its base value.
@@ -47,6 +48,10 @@ impl DevelopSettings {
         let mut v = self.to_json();
         if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
+        }
+        // (Defringe's Protect Colours likewise)
+        if let Some(optics) = v.get_mut("optics").and_then(Value::as_object_mut) {
+            optics.insert("defringe_protect".into(), Value::Bool(self.optics.defringe_protect));
         }
         v
     }
