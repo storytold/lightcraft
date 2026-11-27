@@ -43,7 +43,7 @@ pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
                     None => return Ok(Value::Null),
                 },
                 crate::pick::Picked::Later => return Ok(Value::Null),
-                crate::pick::Picked::Unavailable => return Err("no folder dialog on this platform".into()),
+                crate::pick::Picked::Unavailable | crate::pick::Picked::Failed(_) => return Err("no folder dialog on this platform".into()),
             }
         }
     };
@@ -168,7 +168,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
                     None => return Ok(Value::Null),
                 },
                 crate::pick::Picked::Later => return Ok(Value::Null),
-                crate::pick::Picked::Unavailable => return Err("no folder dialog on this platform".into()),
+                crate::pick::Picked::Unavailable | crate::pick::Picked::Failed(_) => return Err("no folder dialog on this platform".into()),
             }
         }
     };
