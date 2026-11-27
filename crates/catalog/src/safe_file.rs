@@ -319,13 +319,28 @@ fn compare_files(a: &Path, b: &Path, strict: bool) -> io::Result<bool> {
     }
 }
 
+/// The volume serial number and file index of the file `path` names (following symlinks), or an
+/// error when the file system reports no usable index (0 or `u64::MAX`). On NTFS a different file
+/// created under the same name gets a different index; FAT can reuse one for a new file in the
+/// same directory slot, and ReFS's 64-bit index is not unique, so it is not an identity alone.
+#[cfg(windows)]
+pub fn file_id(path: &Path) -> io::Result<(u64, u64)> {
+    let id = handle_id(&winapi_util::Handle::from_path_any(path)?)?;
+    if id.1 == 0 || id.1 == u64::MAX { Err(io::Error::other("file identity is unavailable")) } else { Ok(id) }
+}
+
+#[cfg(windows)]
+fn handle_id(handle: &winapi_util::Handle) -> io::Result<(u64, u64)> {
+    let info = winapi_util::file::information(handle)?;
+    Ok((info.volume_serial_number(), info.file_index()))
+}
+
 /// The volume serial number and file index of `a` and `b`, read while both files are open.
 #[cfg(windows)]
 fn file_ids(a: &Path, b: &Path) -> io::Result<((u64, u64), (u64, u64))> {
-    use winapi_util::{Handle, file::information};
+    use winapi_util::Handle;
     let (ha, hb) = (Handle::from_path_any(a)?, Handle::from_path_any(b)?);
-    let (ia, ib) = (information(&ha)?, information(&hb)?);
-    Ok(((ia.volume_serial_number(), ia.file_index()), (ib.volume_serial_number(), ib.file_index())))
+    Ok((handle_id(&ha)?, handle_id(&hb)?))
 }
 
 /// The comparison uses each file's volume serial number and file index. Strict mode returns an error for file index 0.
