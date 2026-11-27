@@ -123,7 +123,7 @@ fn home(workspace: &Workspace, panel: Panel) -> Location<Panel> {
         size: None,
         stack: None,
         sibling: Vec::new(),
-        group: Some(GroupLocation { minimized: false, height: None, column: Some(column) }),
+        group: Some(GroupLocation { minimized: false, height: None, flyout_width: None, flyout_offset: None, column: Some(column) }),
     }
 }
 
@@ -280,6 +280,7 @@ pub(crate) fn reveal_command(app: &mut crate::LightcraftApp, id: &str) -> Result
         Some(Panel::Library)
     } else if (id.starts_with("panel.") && id != "panel.close" && id != "panel.presets"
         || id == "view.rightPanel"
+        || id == "view.colorMixer"
         || id.starts_with("section.")
         || id.starts_with("tool.") && id != "tool.none")
         && app.ui.right != crate::state::RightPanel::None
