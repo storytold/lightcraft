@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, str_param};
 use crate::{Result, Session, media::SourceLevel};
 
+/// Strokes one Lens Blur refinement brush keeps (a document can't grow without bound).
+const MAX_LENS_BLUR_STROKES: usize = 2000;
+
 fn active(s: &Session, c: &str) -> Result<PhotoId> {
     s.active().ok_or_else(|| bad(c, "no active photo"))
 }
@@ -85,7 +88,7 @@ fn recipe_partial(recipe: &[(String, f64)]) -> Option<Value> {
 /// The longest name or group a saved recipe preset may have (characters).
 const MAX_PRESET_TEXT: usize = 100;
 
-fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
+pub(super) fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
     let p = s.catalog.photo(id);
     let (w, h) = p.map(|p| (p.width.max(1) as f64, p.height.max(1) as f64)).unwrap_or((3.0, 2.0));
     let o = p.map(|p| p.develop.orientation).unwrap_or_default();
@@ -117,13 +120,11 @@ fn wb_mode_ignores_its_numbers(mode: WbMode, info: &lightcraft_pipeline::SourceI
 /// numbers, neither, or a mode of its own. [`merge_settings_for_photo`] and `preset.apply` both start here, and
 /// both finish with `normalize_wb` so the photo ends on the scale it is edited on.
 pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value, info: &lightcraft_pipeline::SourceInfo) -> Option<DevelopSettings> {
-    let mut d = (*d).clone();
-    let wb = partial.get("wb").and_then(Value::as_object);
-    // the partial names one of the two numbers, and not both or neither
-    let one_field = wb.is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"));
-    if !one_field {
+    if !wb_partial_names_one_field(partial) {
         return None;
     }
+    let mut d = (*d).clone();
+    let wb = partial.get("wb").and_then(Value::as_object);
     // a photo whose source is edited in Kelvin is the one with two scales to trip over
     let kelvin_source = info.raw && !info.relative_wb;
     // the scale the partial's numbers are written on: an unmentioned scale means the relative scale, as `merged` reads it
@@ -149,6 +150,12 @@ pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value,
         }
     }
     Some(d)
+}
+
+/// Whether `partial`'s white balance names one of the two numbers, and not both or neither: the partials
+/// [`prepare_photo_for_wb_partial`] prepares the photo for.
+pub(crate) fn wb_partial_names_one_field(partial: &Value) -> bool {
+    partial.get("wb").and_then(Value::as_object).is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"))
 }
 
 /// Merge a partial settings JSON into a photo's settings (issue #2910). `DevelopSettings::merged` keeps a white
@@ -482,6 +489,150 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         }),
+        cmd!(
+            "lensBlur.brushStroke",
+            "Lens Blur Brush Stroke",
+            [],
+            None,
+            "{mode: \"focus\"|\"blur\", points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?: 0..100, flow?: 1..100, amount?: 1..100 (how far the stroke refines), erase?: bool, autoMask?: bool, pressure?: [p,…] 0..1 per point} — Lens Blur Brush Refinement: Focus strokes stay sharp, Blur strokes are blurred",
+            has_active,
+            |s, p| {
+                const C: &str = "lensBlur.brushStroke";
+                let focus = match str_param(p, "mode") {
+                    Some("focus") => true,
+                    Some("blur") => false,
+                    _ => return Err(bad(C, "`mode` must be \"focus\" or \"blur\"")),
+                };
+                let points: Vec<Point> = p
+                    .get("points")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| bad(C, "missing points"))?
+                    .iter()
+                    .filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
+                    .filter(|q| q.x.is_finite() && q.y.is_finite())
+                    .collect();
+                if points.is_empty() {
+                    return Err(bad(C, "a stroke needs at least one point"));
+                }
+                let d = lightcraft_develop::BrushStroke::default();
+                let num = |key: &str, def: f64, lo: f64, hi: f64| {
+                    let v = f64_or(p, key, def);
+                    if v.is_finite() { v.clamp(lo, hi) } else { def }
+                };
+                let stroke = lightcraft_develop::BrushStroke {
+                    pressure: super::masks::pressure_list(p.get("pressure"), points.len())?,
+                    points,
+                    size: num("size", d.size, 0.001, 0.5),
+                    feather: num("feather", d.feather, 0.0, 100.0),
+                    flow: num("flow", d.flow, 1.0, 100.0),
+                    density: num("amount", d.density, 1.0, 100.0),
+                    erase: bool_or(p, "erase", false),
+                    auto_mask: bool_or(p, "autoMask", false),
+                };
+                edit(s, C, if focus { "Lens Blur Focus Brush" } else { "Lens Blur Blur Brush" }, |d| {
+                    let strokes = if focus { &mut d.lens_blur.focus_strokes } else { &mut d.lens_blur.blur_strokes };
+                    if strokes.len() >= MAX_LENS_BLUR_STROKES {
+                        return Err(bad(C, format!("at most {MAX_LENS_BLUR_STROKES} strokes per brush: Reset the brush first")));
+                    }
+                    strokes.push(stroke);
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
+            "lensBlur.findSubject",
+            "Find Subject",
+            [],
+            None,
+            "{} — selects the photo's subject with an Object mask (SAM 3) clicked where the camera focused, when the file records it, else at the likeliest subject; Lens Blur is switched on and keeps that mask in focus → {mask, point: [x,y], from: \"camera\"|\"photo\", pending?}",
+            has_active,
+            |s, _| {
+                const C: &str = "lensBlur.findSubject";
+                let id = active(s, C)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let camera = s.catalog.photo(id).and_then(|p| p.meta.focus.clone());
+                let (point, from) = match camera {
+                    // stored on the upright photo: the user's Rotate / Flip on top, as masks are
+                    Some(f) => {
+                        let r = d.orientation.map_norm_rect(f.rect);
+                        (Point::new((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0), "camera")
+                    }
+                    None => {
+                        let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(C, e))?;
+                        let info = s.source_info(id);
+                        let p = lightcraft_pipeline::lens_blur::subject_point(&src, &d, info.mattes.as_deref())
+                            .ok_or_else(|| bad(C, "the photo has no picture to look for a subject in"))?;
+                        (p, "photo")
+                    }
+                };
+                if !(point.x.is_finite() && point.y.is_finite()) {
+                    return Err(bad(C, "the camera's focus point is not usable"));
+                }
+                let point = Point::new(point.x.clamp(0.0, 1.0), point.y.clamp(0.0, 1.0));
+                // an Object waiting for the subject (the photo is analyzed meanwhile); the
+                // segmenter fills it with the people / animals the focus falls on, or the object
+                // at the point
+                let mut out = s.execute("mask.add", &json!({"kind": "object", "name": "Lens Blur Subject"}))?;
+                let mask = out
+                    .get("activeMask")
+                    .and_then(Value::as_u64)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .ok_or_else(|| bad(C, "the subject mask was not created"))?;
+                let focus = (from == "camera").then_some(point);
+                if let Err(e) = s.segment_subject_later(id, mask, 0, point, focus) {
+                    // nothing half-made: the empty mask goes again
+                    let _ = s.execute("edit.undo", &json!({}));
+                    return Err(crate::EngineError::Other(e));
+                }
+                out["pending"] = json!(s.segmenter.background);
+                edit(s, C, "Lens Blur Subject", |d| {
+                    // a mask that only says what is in focus: no adjustments of its own
+                    if let Some(m) = d.masks.iter_mut().find(|m| m.id == mask) {
+                        m.adjust = lightcraft_develop::LocalAdjustments::default();
+                    }
+                    let b = &mut d.lens_blur;
+                    b.enabled = true;
+                    if b.amount <= 0.0 || !b.amount.is_finite() {
+                        b.amount = 50.0;
+                    }
+                    b.focus_mask = Some(mask);
+                    d.set_section_enabled("lensBlur", true);
+                    Ok(())
+                })?;
+                if let Some(o) = out.as_object_mut() {
+                    o.insert("mask".into(), json!(mask));
+                    o.insert("point".into(), json!([point.x, point.y]));
+                    o.insert("from".into(), json!(from));
+                }
+                Ok(out)
+            }
+        ),
+        cmd!(
+            "lensBlur.brushReset",
+            "Reset Lens Blur Brush",
+            [],
+            None,
+            "{mode?: \"focus\"|\"blur\"} — removes that brush's strokes (both brushes without `mode`)",
+            has_active,
+            |s, p| {
+                const C: &str = "lensBlur.brushReset";
+                let (focus, blur) = match str_param(p, "mode") {
+                    None => (true, true),
+                    Some("focus") => (true, false),
+                    Some("blur") => (false, true),
+                    Some(_) => return Err(bad(C, "`mode` must be \"focus\" or \"blur\"")),
+                };
+                edit(s, C, "Reset Lens Blur Brush", |d| {
+                    if focus {
+                        d.lens_blur.focus_strokes.clear();
+                    }
+                    if blur {
+                        d.lens_blur.blur_strokes.clear();
+                    }
+                    Ok(())
+                })
+            }
+        ),
         cmd!("develop.sectionEnabled", "Toggle Section", [], None, "{section: string, enabled: bool}", has_active, |s, p| {
             let sec = str_param(p, "section").ok_or_else(|| bad("develop.sectionEnabled", "missing section"))?.to_string();
             let on = bool_or(p, "enabled", true);
@@ -918,38 +1069,53 @@ pub fn specs() -> Vec<CommandSpec> {
         // ---- geometry: Upright
         cmd!(
             "geometry.upright",
-            "Upright",
+            "Perspective Correction",
             [],
             None,
-            "{mode: off|auto|guided|level|vertical|full} — analyses the photo (line segments → vanishing points) and stores the correction; run again to update after lens changes",
+            "{mode: off|auto|guided|level|vertical|full} — analyses the photo (line segments → vanishing points) and stores the correction; run again to update after lens changes → {mode, transform, note (why the mode corrects less than it says, and what it did instead, when it does)}",
             has_active,
             |s, p| {
                 let mode: Upright =
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("auto"))).map_err(|e| bad("geometry.upright", e.to_string()))?;
                 let id = active(s, "geometry.upright")?;
                 let d = s.develop_of(id).unwrap_or_default();
-                let transform = match mode {
-                    Upright::Off | Upright::Guided => None,
+                let (transform, note, family, instead) = match mode {
+                    Upright::Off | Upright::Guided => (None, None, "", None),
                     m => {
                         let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad("geometry.upright", e))?;
                         let info = s.source_info(id);
-                        Some(lightcraft_pipeline::upright::auto_transform(&src, &info, &d, m))
+                        let a = lightcraft_pipeline::upright::analyze_source(&src, &info, &d);
+                        let family = lightcraft_pipeline::upright::guided_hint(m, &a);
+                        let instead = lightcraft_pipeline::upright::fallback(m, &a);
+                        (Some(lightcraft_pipeline::upright::solve(m, &a)), lightcraft_pipeline::upright::shortfall(m, &a), family, instead)
                     }
                 };
-                edit(s, "geometry.upright", "Upright", |d| {
+                edit(s, "geometry.upright", "Perspective Correction", |d| {
                     d.geometry.upright = mode;
                     d.geometry.upright_transform = transform;
                     Ok(())
                 })?;
-                Ok(json!({"mode": mode, "transform": transform}))
+                // say why when the mode can't do what it says, instead of nothing happening
+                let note = note.map(|why| {
+                    let what = match mode {
+                        Upright::Level => "No level correction",
+                        Upright::Vertical => "No vertical correction",
+                        Upright::Full => "No full correction",
+                        _ => "No perspective correction",
+                    };
+                    // (and what it did instead, when it fell back to a lesser correction: "nothing" is only said of none)
+                    let instead = instead.map(|i| format!(" {i}.")).unwrap_or_default();
+                    format!("{what}: {why}.{instead} Try Guided: draw {family}.")
+                });
+                Ok(json!({"mode": mode, "transform": transform, "note": note}))
             }
         ),
         cmd!(
             "geometry.guides",
-            "Guided Upright Guides",
+            "Perspective Guides",
             [],
             None,
-            "{guides: [[x0,y0,x1,y1], …] (≤ 4, normalized coords of the lens-corrected image), add?: bool (append one guide, dropping the oldest beyond 4)} — switches Upright to Guided",
+            "{guides: [[x0,y0,x1,y1], …] (≤ 4, normalized coords of the lens-corrected image), add?: bool (append one guide, dropping the oldest beyond 4)} — switches Perspective Correction to Guided",
             has_active,
             |s, p| {
                 let parse = |v: &Value| -> Option<(Point, Point)> {
@@ -959,7 +1125,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let guides: Vec<(Point, Point)> =
                     p.get("guides").and_then(Value::as_array).map(|a| a.iter().filter_map(parse).collect()).unwrap_or_default();
                 let add = bool_or(p, "add", false);
-                edit(s, "geometry.guides", "Guided Upright", |d| {
+                edit(s, "geometry.guides", "Guided Perspective", |d| {
                     if add {
                         d.geometry.guides.extend(guides);
                     } else {
@@ -1130,10 +1296,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // log2 of the light the photo gathered (shutter s × ISO / f-number²)
                 let gathered = |s: &Session, id: PhotoId| -> Option<f64> {
                     let m = &s.catalog.photo(id)?.meta;
-                    let t = match m.shutter.split_once('/') {
-                        Some((a, b)) => a.trim().parse::<f64>().ok()? / b.trim().parse::<f64>().ok()?,
-                        None => m.shutter.trim().trim_end_matches('s').trim().parse::<f64>().ok()?,
-                    };
+                    let t = m.shutter_seconds()?;
                     let (n, iso) = (m.aperture? as f64, m.iso? as f64);
                     (t > 0.0 && n > 0.0 && iso > 0.0).then(|| (t * iso / (n * n)).log2())
                 };
@@ -1179,24 +1342,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let ops = ids
                 .iter()
                 .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| {
-                    // a hand-written preset may name one white balance number only, and then it means the same as
-                    // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
-                    // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
-                    let info = s.source_info(id);
-                    let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
-                    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
-                    let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
-                    // Amount is measured from the import look only when the photo has one.
-                    // Otherwise the current settings (on the partial's WB scale) are its baseline.
-                    let imported = s.catalog.photo(id).filter(|p| p.import_look.is_some() && amount != 1.0).map(|p| p.import_defaults());
-                    let prepared_import =
-                        imported.as_ref().map(|d| prepare_photo_for_wb_partial(d, &preset.settings, &info).unwrap_or_else(|| d.clone()));
-                    let original = prepared_import.as_ref().unwrap_or(base);
-                    let mut next = preset.apply_on(base, original, amount);
-                    if on_kelvin_scale {
-                        lightcraft_pipeline::local::normalize_wb(&mut next, &info);
-                    }
+                .filter_map(|(id, _)| {
+                    // the same composition, white balance preparation and final scale as previews and import
+                    // (`Session::preset_applied`, issues #2159 and #2910)
+                    let next = s.preset_applied(id, &preset, amount)?;
                     s.develop_op(id, next, &format!("Preset: {}", preset.name))
                 })
                 .collect::<Vec<_>>();
