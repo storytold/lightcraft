@@ -1,8 +1,27 @@
 use super::quick::{QuickJob, content_key, embedded_thumb_key, source_info};
 use super::render::{RenderJob, RenderResult};
 use super::settings_hash::with_process;
-use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
+use super::source::{PreviewLoader, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
+
+/// The format of `p`'s source, or an empty string for non-file sources. The decoder revision and
+/// the format's identity are looked up ignoring ASCII case.
+fn source_format(p: &Photo) -> &str {
+    match &p.source {
+        Source::File { .. } => &p.format,
+        _ => "",
+    }
+}
+
+/// The decoder-specific and per-photo salts a persistent render key carries: the decoder's own salt
+/// (an ORF decode whose sensor pixels were withdrawn), the denoised picture in use, and an imported
+/// camera profile's file. 0 for each when the photo uses none.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct KeySalts {
+    pub decoder: u64,
+    pub denoise: u64,
+    pub profile: u64,
+}
 
 impl crate::Session {
     /// Build a render job for `id` fitting `max_w × max_h`. `before` renders the unedited look.
@@ -58,6 +77,8 @@ impl crate::Session {
         let content = Hasher128::new().str(&content_key).finish().0 as u64;
         let source_key = super::quick::source_identity(&p);
         let decoder = super::quick::decoder_key(&p);
+        let format = source_format(&p);
+        let identity = super::format_identity(format);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
@@ -74,28 +95,11 @@ impl crate::Session {
             ^ salt
             ^ profile_salt.rotate_left(29)
             ^ lens.rotate_left(37)
-            ^ decoder.rotate_left(43);
-        let cache = thumb_bucket.map(|b| {
-            let mut k = Hasher128::new();
-            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
-            with_process(&mut k, &settings).u64(crate::camera_profiles::cache_key());
-            // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
-            if salt != 0 {
-                k.u64(salt);
-            }
-            // (likewise an imported camera profile's file: deleted or replaced, the thumbnail renders afresh)
-            if profile_salt != 0 {
-                k.str("dcp").u64(profile_salt);
-            }
-            // (likewise a database lens profile: thumbnails of every other photo keep their keys)
-            if lens != 0 {
-                k.u64(lens);
-            }
-            if decoder != 0 {
-                k.str("decoder").u64(decoder);
-            }
-            (self.media.rendered.clone(), k.finish())
-        });
+            ^ decoder.rotate_left(43)
+            ^ identity.rotate_left(47);
+        let revision = super::decoder_revision(format);
+        let salts = KeySalts { decoder, denoise: salt, profile: profile_salt };
+        let cache = thumb_bucket.map(|b| (self.media.rendered.clone(), Self::thumb_key(&p, &settings, settings_hash, b, revision, salts)));
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -119,6 +123,41 @@ impl crate::Session {
         })
     }
 
+    /// The cache key of a grid/filmstrip thumbnail of `p` at size `bucket`: its content, the develop
+    /// hash of `settings`, the decoder `format`'s revision and identity, and `salts`. `revision` is
+    /// the format's decoder revision: production passes [`super::decoder_revision`], so a test can
+    /// bump one format by a step and see what its keys do.
+    pub(crate) fn thumb_key(p: &Photo, settings: &DevelopSettings, settings_hash: u64, bucket: usize, revision: u64, salts: KeySalts) -> Hash128 {
+        let format = source_format(p);
+        let identity = super::format_identity(format);
+        let mut k = Hasher128::new();
+        k.str(&content_key(p)).u64(settings_hash).u64(bucket as u64).u64(super::cache_version(revision));
+        // (the format's own identity, next to its decoder revision: a one-step bump of one
+        // format's revision must not land on another format's key)
+        if identity != 0 {
+            k.str("format").u64(identity);
+        }
+        // (likewise an ORF decode whose sensor pixels were withdrawn: the cached thumb must not stand in)
+        if salts.decoder != 0 {
+            k.str("decoder").u64(salts.decoder);
+        }
+        with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
+        // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
+        if salts.denoise != 0 {
+            k.u64(salts.denoise);
+        }
+        // (likewise an imported camera profile's file: deleted or replaced, the thumbnail renders afresh)
+        if salts.profile != 0 {
+            k.str("dcp").u64(salts.profile);
+        }
+        // (likewise a database lens profile: thumbnails of every other photo keep their keys)
+        let lens = super::quick::lens_key(p);
+        if lens != 0 {
+            k.u64(lens);
+        }
+        k.finish()
+    }
+
     /// A render of `id` with `settings` in place of its own, fitting `max_w × max_h` (the loupe's
     /// temporary preview while hovering a preset or profile; nothing is committed or cached).
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
@@ -137,6 +176,7 @@ impl crate::Session {
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
         let decoder = super::quick::decoder_key(&p);
+        let identity = super::format_identity(source_format(&p));
         job.key = settings.hash64()
             ^ crate::files::hot_pixel_key(settings)
             ^ ((max_w as u64) << 40)
@@ -145,19 +185,38 @@ impl crate::Session {
             ^ (job.level as u64) << 60
             ^ profile_salt.rotate_left(29)
             ^ lens.rotate_left(37)
-            ^ decoder.rotate_left(43);
+            ^ decoder.rotate_left(43)
+            ^ identity.rotate_left(47);
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
+        Self::variant_key_at(p, settings, edge, profile_salt, super::decoder_revision(source_format(p)))
+    }
+
+    /// [`Self::variant_key`] with the format's decoder revision given: production passes
+    /// [`super::decoder_revision`], so a test can bump one format by a step.
+    pub(crate) fn variant_key_at(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64, revision: u64) -> Hash128 {
+        let format = source_format(p);
+        let decoder = super::quick::decoder_key(p);
+        let identity = super::format_identity(format);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64() ^ crate::files::hot_pixel_key(settings))
             .u64(edge as u64)
-            .u64(RENDER_CACHE_VERSION);
+            .u64(super::cache_version(revision));
+        // (the format itself, apart from its decoder revision: a one-step bump of one format's
+        // revision must not land on another format's key)
+        if identity != 0 {
+            k.str("format").u64(identity);
+        }
+        // (likewise an ORF decode whose sensor pixels were withdrawn: the cached variant must not stand in)
+        if decoder != 0 {
+            k.str("decoder").u64(decoder);
+        }
         with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
@@ -165,10 +224,6 @@ impl crate::Session {
         let lens = super::quick::lens_key(p);
         if lens != 0 {
             k.u64(lens);
-        }
-        let decoder = super::quick::decoder_key(p);
-        if decoder != 0 {
-            k.str("decoder").u64(decoder);
         }
         k.finish()
     }
@@ -286,14 +341,31 @@ impl crate::Session {
     /// key, [`Self::variant_key`]): a view rendered before the photo's AI Denoise result was there is
     /// not shown as the denoised one.
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
+        self.view_key_at(p, apply_crop, super::decoder_revision(source_format(p)))
+    }
+
+    /// [`Self::view_key`] with the format's decoder revision given: production passes
+    /// [`super::decoder_revision`], so a test can bump one format by a step.
+    pub(crate) fn view_key_at(&self, p: &Photo, apply_crop: bool, revision: u64) -> Hash128 {
         let salt = self.media.denoise_salt(p.id, &p.develop);
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        let format = source_format(p);
+        let decoder = super::quick::decoder_key(p);
+        let identity = super::format_identity(format);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop))
             .u64(apply_crop as u64)
-            .u64(RENDER_CACHE_VERSION);
+            .u64(super::cache_version(revision));
+        // (the format itself, apart from its decoder revision, as in the thumbnail key)
+        if identity != 0 {
+            k.str("format").u64(identity);
+        }
+        // (likewise an ORF decode whose sensor pixels were withdrawn: the cached view must not stand in)
+        if decoder != 0 {
+            k.str("decoder").u64(decoder);
+        }
         with_process(&mut k, &p.develop).u64(crate::camera_profiles::cache_key());
         if salt != 0 {
             k.u64(salt);
@@ -304,10 +376,6 @@ impl crate::Session {
         let lens = super::quick::lens_key(p);
         if lens != 0 {
             k.u64(lens);
-        }
-        let decoder = super::quick::decoder_key(p);
-        if decoder != 0 {
-            k.str("decoder").u64(decoder);
         }
         k.finish()
     }
@@ -437,7 +505,8 @@ impl crate::Session {
             .u64(id.0)
             .u64(profile_salt)
             .finish();
-        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43);
+        let identity = super::format_identity(source_format(&p));
+        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43) ^ identity.rotate_left(47);
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
@@ -659,5 +728,73 @@ impl crate::Session {
                 (id, r)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod decoder_revision_tests {
+    use super::*;
+    use crate::Session;
+
+    /// One photo with a fixed id, content hash and settings, so two keys differ only by the format
+    /// and the decoder revision they are built with.
+    fn session(format: &str) -> Session {
+        let mut s = Session::new();
+        let mut p = Photo::new(PhotoId(1), Source::File { path: "same-original.raw".into() }, "same-original.raw", format, 6000, 4000, "2026-01-01");
+        p.kind = MediaKind::Raw;
+        p.content_hash = Some("unchanged-file-bytes".into());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s
+    }
+
+    /// `format`'s decoder revision, with ARW bumped one step from 1000 to 1001 (CR2's number).
+    fn revision(format: &str, bump_arw: bool) -> u64 {
+        match (format, bump_arw) {
+            ("ARW", true) => super::super::decoder_revision("ARW") + 1,
+            _ => super::super::decoder_revision(format),
+        }
+    }
+
+    /// The persistent render keys of the session's photo — thumbnail, variant, view — built with its
+    /// format's decoder at `revision`.
+    fn keys(s: &mut Session, revision: u64) -> [Hash128; 3] {
+        let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+        [
+            Session::thumb_key(&p, &p.develop, 0x5eed, 256, revision, KeySalts::default()),
+            Session::variant_key_at(&p, &p.develop, 256, 0, revision),
+            s.view_key_at(&p, true, revision),
+        ]
+    }
+
+    /// A one-step bump of one format's decoder revision changes that format's thumbnail, variant and
+    /// view keys, leaves another format's keys alone, and does not land on the other format's key
+    /// even when both revisions read the same: the format's identity, not its revision, keeps them
+    /// apart.
+    #[test]
+    fn a_one_step_decoder_bump_changes_one_formats_persistent_keys() {
+        let mut arw = session("ARW");
+        let mut cr2 = session("CR2");
+        let (arw_before, cr2_before) = (keys(&mut arw, revision("ARW", false)), keys(&mut cr2, revision("CR2", false)));
+        let (arw_after, cr2_after) = (keys(&mut arw, revision("ARW", true)), keys(&mut cr2, revision("CR2", true)));
+        for i in 0..3 {
+            assert_ne!(arw_before[i], arw_after[i], "persistent key {i}: the ARW bump must invalidate ARW's renders");
+            assert_eq!(cr2_before[i], cr2_after[i], "persistent key {i}: the ARW bump must not invalidate CR2's renders");
+            assert_ne!(arw_after[i], cr2_after[i], "persistent key {i}: ARW at CR2's revision must not share CR2's key");
+            assert_ne!(arw_before[i], cr2_before[i], "persistent key {i}: ARW and CR2 must never share a key");
+        }
+        assert_eq!(revision("ARW", true), revision("CR2", false), "the bump lands on CR2's revision number");
+    }
+
+    /// The render jobs build their persistent keys through those builders, at the format's own
+    /// revision.
+    #[test]
+    fn the_render_jobs_use_the_formats_own_decoder_revision() {
+        let mut s = session("ARW");
+        let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+        let rev = super::super::decoder_revision("ARW");
+        let loupe = s.loupe_job(p.id, 640, 480, true).unwrap();
+        assert_eq!(loupe.view_cache.unwrap().1, s.view_key_at(&p, true, rev));
+        let variant = s.variant_job(p.id, &p.develop, 256).unwrap();
+        assert_eq!(variant.cache.unwrap().1, Session::variant_key_at(&p, &p.develop, 256, 0, rev));
     }
 }
