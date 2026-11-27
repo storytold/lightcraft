@@ -1973,6 +1973,24 @@ fn show_in_folders_opens_the_collapsed_stack_a_photo_is_hidden_in() {
     assert!(h.app.session.visible().contains(&b), "the photo is in the grid");
 }
 
+/// A photo under the top of a collapsed stack that the filter bar leaves out: Show in Folders refuses before it
+/// opens the stack, so the stack stays collapsed and no stack step is added to the undo history (review of #3463).
+#[test]
+fn show_in_folders_leaves_the_stack_shut_when_the_filter_hides_its_member() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
+    let (a, b) = (id_at(&h, "/pics/trip/a.jpg"), id_at(&h, "/pics/trip/b.jpg"));
+    h.app.run("library.select", json!({"ids": [a.0, b.0], "active": a.0})).unwrap();
+    h.app.run("stack.group", json!({"ids": [a.0, b.0], "top": a.0, "collapsed": true})).unwrap();
+    h.app.run("photo.rate", json!({"rating": 3, "ids": [a.0]})).unwrap();
+    h.app.run("library.filter", json!({"rating": 3})).unwrap();
+    h.step();
+    let steps = h.app.session.undo.len();
+    let e = h.app.run("app.showInFolders", json!({"id": b.0})).unwrap_err();
+    assert!(e.contains("filter"), "{e}");
+    assert!(h.app.session.catalog.stack_of(b).is_some_and(|st| st.collapsed), "the stack stays collapsed");
+    assert_eq!(h.app.session.undo.len(), steps, "no stack step in the history");
+}
+
 /// With the photo's folder already shown and the grid scrolled away from it, Show in Folders brings
 /// the grid back to the photo (#3456).
 #[test]

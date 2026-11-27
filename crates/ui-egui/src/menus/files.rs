@@ -107,13 +107,17 @@ pub(super) fn show_in_folders(app: &mut LightcraftApp, ctx: &egui::Context, id: 
     app.ui.left_panel = true;
     app.ui.reveal_folder = Some(path.clone());
     if let Some(photo) = photo {
+        // the folder is shown, but the filter bar's other rules leave the photo out: it isn't made
+        // an active photo without a cell, and the filter is the person's to change. Asked before a
+        // collapsed stack it is in is opened, so a refusal changes no stack and adds no undo step.
+        if !app.session.view_matches(photo) {
+            return Err("the filter hides this photo in its folder".into());
+        }
         let hidden = app.session.catalog.stack_of(photo).is_some_and(|st| st.collapsed && st.photos.first() != Some(&photo));
         if hidden {
             app.run("stack.toggle", json!({"ids": [photo.0], "collapsed": false}))?;
         }
         let shown: std::collections::HashSet<_> = app.session.visible_cloned().into_iter().collect();
-        // the folder is shown, but the filter bar's other rules leave the photo out: it isn't made
-        // an active photo without a cell, and the filter is the person's to change
         if !shown.contains(&photo) {
             return Err("the filter hides this photo in its folder".into());
         }
