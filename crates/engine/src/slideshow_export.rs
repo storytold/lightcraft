@@ -511,9 +511,10 @@ impl Prepared {
         if pages == 0 {
             return Err("no slide could be rendered".into());
         }
-        let bytes = pdf.len();
         let catalog = if self.request.settings.full_screen { " /PageMode /FullScreen" } else { "" };
-        pdf.finish(catalog)?.into_inner().map_err(|e| format!("PDF: {}", e.error()))?.sync_all().map_err(|e| format!("PDF: {e}"))?;
+        let file = pdf.finish(catalog)?.into_inner().map_err(|e| format!("PDF: {}", e.error()))?;
+        file.sync_all().map_err(|e| format!("PDF: {e}"))?;
+        let bytes = file.metadata().map_err(|e| format!("PDF: {e}"))?.len();
         part.commit(&self.guard)?;
         progress(total, total, "");
         let mut out = self.summary(Format::Pdf, pages, skipped, warnings);

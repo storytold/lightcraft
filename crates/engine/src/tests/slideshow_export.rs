@@ -134,6 +134,7 @@ fn pdf_has_a_page_per_slide_titles_included() {
     let r = export(&mut s, json!({"format": "pdf", "path": path, "size": 160, "quality": 80, "ids": ids}));
     assert_eq!((r["pages"].as_u64(), r["slides"].as_u64(), r["width"].as_u64(), r["height"].as_u64()), (Some(5), Some(5), Some(160), Some(90)));
     let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(r["bytes"].as_u64(), Some(bytes.len() as u64));
     assert!(bytes.starts_with(b"%PDF-1.4"));
     let pages = pdf_pages(&bytes);
     assert_eq!(pages.len(), 5);
@@ -153,7 +154,9 @@ fn pdf_has_a_page_per_slide_titles_included() {
     s.execute("slideshow.layout", &json!({"aspect": "4:3"})).unwrap();
     let r = export(&mut s, json!({"format": "pdf", "path": path, "size": 120, "fullScreen": false, "ids": ids}));
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(120), Some(90)));
-    assert!(!String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains("/FullScreen"));
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(r["bytes"].as_u64(), Some(bytes.len() as u64));
+    assert!(!String::from_utf8_lossy(&bytes).contains("/FullScreen"));
 }
 
 #[test]
