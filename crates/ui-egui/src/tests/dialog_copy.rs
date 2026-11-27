@@ -234,3 +234,14 @@ fn counts_agree_with_their_nouns() {
     let (slides, p2) = count_before(&text, " slide");
     assert_eq!((p1, p2), (photos != 1, slides != 1), "{text:?}");
 }
+
+#[test]
+fn contact_sheet_paper_box_shows_the_label() {
+    let mut h = demo();
+    h.app.ui.language = crate::i18n::Locale::En;
+    for (paper, label) in [("a4", "A4"), ("letter", "Letter")] {
+        let options = lightcraft_engine::contact_sheet::Options { paper: paper.into(), ..Default::default() };
+        show(&mut h, dialog(json!({"kind": "contactSheet", "options": options})));
+        assert!(h.painted_text().iter().any(|t| t == label), "{paper} not shown as {label}");
+    }
+}
