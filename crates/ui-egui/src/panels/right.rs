@@ -1,5 +1,5 @@
 //! The right-hand panel next to the tool strip: Edit, Crop, Remove, Masking, Red Eye, Info,
-//! Keywords, Versions, Activity.
+//! Keywords, Versions, Activity, Bursts.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -29,10 +29,21 @@ pub(crate) use info::mixed_meta;
 pub(crate) use keywords::forget_stale_enter_keywords;
 use keywords::keywords;
 
+/// The right column's scroll area for `panel`: one per panel, the same with or without a selected photo (the
+/// Keywords panel shows its list either way).
+fn scroll_salt(panel: RightPanel) -> (&'static str, RightPanel) {
+    ("right-scroll", panel)
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
+        // the bursts are the view's, not a photo's: they are there without a selection
+        if app.ui.right == RightPanel::Bursts {
+            super::bursts::show(app, ui);
+            return;
+        }
         // (taken on every pass the panel is drawn; one from earlier than the pass before is forgotten)
         let held = held_offset(ui.ctx());
         let Some(id) = app.session.active() else {
@@ -40,7 +51,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if app.ui.right == RightPanel::Keywords {
                 // (without a selection there is no Add keyword box for Add Keywords to put the cursor in)
                 app.ui.focus_keywords = None;
-                egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt(scroll_salt(RightPanel::Keywords)).auto_shrink([false, false]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     if fold_header(app, ui, "keywording", "Keywords") {
                         padded(ui, |ui| {
@@ -65,7 +76,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 0.0;
             super::edit::histogram(app, ui, id);
         }
-        let mut area = egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]);
+        // each panel keeps its own scroll position: Edit is where it was after Masking or Crop
+        let mut area = egui::ScrollArea::vertical().id_salt(scroll_salt(app.ui.right)).auto_shrink([false, false]);
         if let Some(offset) = held {
             area = area.vertical_scroll_offset(offset);
         }
@@ -91,7 +103,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Keywords => keywords(app, ui, id),
                 RightPanel::Versions => versions(app, ui, id),
                 RightPanel::Activity => activity(app, ui, id),
-                RightPanel::None => {}
+                RightPanel::Bursts | RightPanel::None => {}
             }
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));

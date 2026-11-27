@@ -204,6 +204,10 @@ impl ImportRun {
 /// import runs: replacing `app.import` would stop its worker.
 pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String> {
     busy_synchronizing(app)?;
+    // a Lightroom catalog import owns the catalog until it ends (its photos may share a file's content), as for a drop
+    if app.lightroom.is_some() {
+        return Err(crate::i18n::tr("Finish Lightroom catalog import before adding photos").to_string());
+    }
     if !d.in_library(app) {
         return Err("another library was opened since the photos were scanned: nothing was imported".into());
     }

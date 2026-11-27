@@ -50,7 +50,7 @@ pub enum Dialog {
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
-    /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
+    /// View ▸ Slideshow ▸ Export Slideshow…: format, size, quality, frame rate, container.
     SlideshowExport {
         settings: lightcraft_engine::slideshow_export::ExportSettings,
     },
@@ -184,7 +184,8 @@ pub enum Dialog {
     },
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
     /// of each burst (and stack each burst, best on top, with `stack_groups`); shots at most
-    /// `burst_gap` seconds apart and at least `similarity` alike are a burst.
+    /// `burst_gap` seconds apart and at least `similarity` alike are a burst. Bursts arranged by
+    /// hand (Window ▸ Bursts) are kept unless `reset_bursts`.
     Cull {
         reject_below: f32,
         pick_best: bool,
@@ -192,6 +193,8 @@ pub enum Dialog {
         stack_groups: bool,
         burst_gap: f32,
         similarity: f32,
+        #[serde(default)]
+        reset_bursts: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -341,6 +344,9 @@ pub enum Dialog {
         ids: Vec<u64>,
         folder: String,
         name: String,
+        /// How many files the move touches (the drag label's count, `files_moved`): photos
+        /// already in the folder stay, and virtual copies of one file move it once.
+        files: usize,
         dont_ask: bool,
         /// The library the photos were dropped in (`Session::library_generation`): ids are
         /// numbered per library, so in another one they name other photos.
@@ -374,7 +380,7 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
-    /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
+    /// View ▸ Loupe Overlay ▸ View Options… (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
     /// as they are made.
     ViewOptions,
 }
