@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use lightcraft_raster::Rgb32f;
 use rayon::prelude::*;
 
-use crate::bayer::{Layout, pack_tile};
+use crate::bayer::{Layout, TileRegion, pack_tile};
 use crate::manifest::Gain;
 use crate::tiles::{starts, weight};
 
@@ -139,7 +139,12 @@ pub fn denoise_bayer(
             .par_iter()
             .map(|&(x0, y0, bx, ax, by, ay)| {
                 let mut input = allocate(4 * p.tile * p.tile, 0f32)?;
-                if !pack_tile(mosaic, width, height, layout, x0 as isize, y0 as isize, p.tile, &mut input) {
+                if !pack_tile(
+                    mosaic,
+                    layout,
+                    TileRegion { mosaic_size: (width, height), cell_origin: (x0 as isize, y0 as isize), tile_size: p.tile },
+                    &mut input,
+                ) {
                     return Err(Error::Input("a tile could not be packed".into()));
                 }
                 let mut out = runner.run(&input)?;

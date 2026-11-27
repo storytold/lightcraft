@@ -8,12 +8,15 @@
 //! * `print.get`, `print.set {layout?, image?, page?, guides?, job?}`, `print.reset`
 //! * `print.cell.add|move|resize|delete|stack|photo|page`, `print.layout.autoLayout|newPage|clear`
 //! * `print.exportPdf {path, ids?}`
-//! * `print.template.list|save|apply|delete`
+//! * `print.template.list|save|apply|delete|move`, `print.template.export|import` (`.lcprint` files)
+//! * `print.template.folder.create|rename|delete`: the Template Browser's folders
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, f64_req};
 use crate::print::layout::{Layout, MAX_PAGES, Rect, Snap, Stack, paper_names, paper_size};
-use crate::print::template::{MAX_TEMPLATES, PrintSettings, PrintTemplate, clean_name};
+use crate::print::template::{
+    DEFAULT_FOLDER, FILE_EXT, MAX_FILE, MAX_FOLDERS, MAX_TEMPLATES, PrintSettings, PrintTemplate, clean_folder, clean_name, sort_folders, unique_name,
+};
 use crate::{Result, Session};
 
 fn rect_json(r: &Rect) -> Value {
@@ -270,28 +273,181 @@ fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
 // ---- templates ------------------------------------------------------------------------------
 
 fn template_list(s: &Session) -> Value {
-    json!({"templates": s.print_templates.iter().map(|t| json!({"name": t.name, "style": t.settings.pointer("/layout/style"), "settings": t.settings})).collect::<Vec<_>>()})
+    let count = |f: Option<&str>| s.print_templates.iter().filter(|t| t.folder.as_deref() == f).count();
+    let folders = std::iter::once(json!({"name": DEFAULT_FOLDER, "default": true, "templates": count(None)}))
+        .chain(s.print_template_folders.iter().map(|f| json!({"name": f, "default": false, "templates": count(Some(f))})));
+    json!({
+        "folders": folders.collect::<Vec<_>>(),
+        "templates": s.print_templates.iter().map(|t| json!({
+            "name": t.name,
+            "folder": t.folder.as_deref().unwrap_or(DEFAULT_FOLDER),
+            "style": t.settings.pointer("/layout/style"),
+            "settings": t.settings,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn template_name(p: &Value, id: &str) -> Result<String> {
     clean_name(p.get("name").and_then(Value::as_str).ok_or_else(|| bad(id, "missing `name`"))?).map_err(|e| bad(id, e))
 }
 
+/// The folder `name` names: `None` for [`DEFAULT_FOLDER`], else the listed folder's spelling.
+fn find_folder(s: &Session, name: &str, id: &str) -> Result<Option<String>> {
+    let name = name.trim();
+    if name.eq_ignore_ascii_case(DEFAULT_FOLDER) {
+        return Ok(None);
+    }
+    s.print_template_folders
+        .iter()
+        .find(|f| f.eq_ignore_ascii_case(name))
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| bad(id, format!("no print template folder `{name}` (see print.template.list)")))
+}
+
+/// The `folder` parameter: not given (`None`), or the folder it names (see [`find_folder`]).
+fn folder_param(s: &Session, p: &Value, id: &str) -> Result<Option<Option<String>>> {
+    match p.get("folder") {
+        None => Ok(None),
+        Some(Value::String(f)) => find_folder(s, f, id).map(Some),
+        Some(_) => Err(bad(id, "`folder` must be a folder name")),
+    }
+}
+
+/// A user folder named by `key`: the listed folder's spelling. [`DEFAULT_FOLDER`] is refused.
+fn user_folder(s: &Session, p: &Value, key: &str, id: &str) -> Result<String> {
+    let name = p.get(key).and_then(Value::as_str).ok_or_else(|| bad(id, format!("missing `{key}`")))?;
+    find_folder(s, name, id)?.ok_or_else(|| bad(id, format!("“{DEFAULT_FOLDER}” can't be renamed or deleted")))
+}
+
+/// The templates and folders before a change, put back by [`save_templates`] when it fails.
+type Before = (Vec<PrintTemplate>, Vec<String>);
+
+fn before(s: &Session) -> Before {
+    (s.print_templates.clone(), s.print_template_folders.clone())
+}
+
+/// Save the preferences after a change to the templates or folders; if that fails, both go back
+/// to `before`, so the list matches what is saved and a retry does the same thing.
+fn save_templates(s: &mut Session, before: Before) -> Result<()> {
+    if let Err(e) = s.save_prefs() {
+        (s.print_templates, s.print_template_folders) = before;
+        return Err(e);
+    }
+    Ok(())
+}
+
 fn template_save(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "print.template.save";
     let name = template_name(p, ID)?;
-    let t = PrintTemplate::new(&name, &s.print).map_err(|e| bad(ID, e))?;
+    let folder = folder_param(s, p, ID)?;
+    let mut t = PrintTemplate::new(&name, &s.print).map_err(|e| bad(ID, e))?;
+    let before = before(s);
     match s.print_templates.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
-        Some(x) => *x = t,
+        Some(x) => {
+            // a replaced template stays in its folder unless the call names another
+            t.folder = folder.unwrap_or_else(|| x.folder.clone());
+            *x = t;
+        }
         None => {
             if s.print_templates.len() >= MAX_TEMPLATES {
                 return Err(bad(ID, format!("at most {MAX_TEMPLATES} templates; delete one first")));
             }
+            t.folder = folder.flatten();
             s.print_templates.push(t);
         }
     }
-    s.save_prefs()?;
+    save_templates(s, before)?;
     Ok(template_list(s))
+}
+
+fn template_move(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.move";
+    let name = template_name(p, ID)?;
+    let folder = folder_param(s, p, ID)?.ok_or_else(|| bad(ID, "missing `folder`"))?;
+    let i = s
+        .print_templates
+        .iter()
+        .position(|x| x.name.eq_ignore_ascii_case(&name))
+        .ok_or_else(|| bad(ID, format!("no print template `{name}` (see print.template.list)")))?;
+    let moved = s.print_templates.get(i).is_some_and(|t| t.folder != folder);
+    if moved {
+        let before = before(s);
+        if let Some(t) = s.print_templates.get_mut(i) {
+            t.folder = folder;
+        }
+        save_templates(s, before)?;
+    }
+    let mut out = template_list(s);
+    out["moved"] = json!(moved);
+    Ok(out)
+}
+
+fn folder_create(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.folder.create";
+    let name = clean_folder(p.get("name").and_then(Value::as_str).ok_or_else(|| bad(ID, "missing `name`"))?).map_err(|e| bad(ID, e))?;
+    if s.print_template_folders.iter().any(|f| f.eq_ignore_ascii_case(&name)) {
+        return Err(bad(ID, format!("there is already a folder named “{name}”")));
+    }
+    if s.print_template_folders.len() >= MAX_FOLDERS {
+        return Err(bad(ID, format!("at most {MAX_FOLDERS} folders; delete one first")));
+    }
+    let before = before(s);
+    s.print_template_folders.push(name.clone());
+    sort_folders(&mut s.print_template_folders);
+    save_templates(s, before)?;
+    let mut out = template_list(s);
+    out["name"] = json!(name);
+    Ok(out)
+}
+
+fn folder_rename(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.folder.rename";
+    let from = user_folder(s, p, "name", ID)?;
+    let to = clean_folder(p.get("to").and_then(Value::as_str).ok_or_else(|| bad(ID, "missing `to`"))?).map_err(|e| bad(ID, e))?;
+    if s.print_template_folders.iter().any(|f| f.eq_ignore_ascii_case(&to) && *f != from) {
+        return Err(bad(ID, format!("there is already a folder named “{to}”")));
+    }
+    if to == from {
+        let mut out = template_list(s);
+        out["name"] = json!(to);
+        return Ok(out);
+    }
+    let before = before(s);
+    for f in &mut s.print_template_folders {
+        if *f == from {
+            f.clone_from(&to);
+        }
+    }
+    for t in &mut s.print_templates {
+        if t.folder.as_deref() == Some(from.as_str()) {
+            t.folder = Some(to.clone());
+        }
+    }
+    sort_folders(&mut s.print_template_folders);
+    save_templates(s, before)?;
+    let mut out = template_list(s);
+    out["name"] = json!(to);
+    Ok(out)
+}
+
+fn folder_delete(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.folder.delete";
+    let name = user_folder(s, p, "name", ID)?;
+    let before = before(s);
+    s.print_template_folders.retain(|f| *f != name);
+    let mut moved = 0usize;
+    for t in &mut s.print_templates {
+        if t.folder.as_deref() == Some(name.as_str()) {
+            t.folder = None;
+            moved += 1;
+        }
+    }
+    save_templates(s, before)?;
+    let mut out = template_list(s);
+    out["deleted"] = json!(name);
+    out["moved"] = json!(moved);
+    Ok(out)
 }
 
 fn template_apply(s: &mut Session, p: &Value) -> Result<Value> {
@@ -309,13 +465,66 @@ fn template_apply(s: &mut Session, p: &Value) -> Result<Value> {
 fn template_delete(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "print.template.delete";
     let name = template_name(p, ID)?;
-    let before = s.print_templates.len();
+    let before = before(s);
     s.print_templates.retain(|x| !x.name.eq_ignore_ascii_case(&name));
-    if s.print_templates.len() == before {
+    if s.print_templates.len() == before.0.len() {
         return Err(bad(ID, format!("no print template `{name}`")));
     }
-    s.save_prefs()?;
+    save_templates(s, before)?;
     Ok(template_list(s))
+}
+
+fn template_path<'a>(p: &'a Value, id: &str) -> Result<&'a str> {
+    p.get("path").and_then(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(id, "missing `path`"))
+}
+
+fn template_export(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.export";
+    let name = template_name(p, ID)?;
+    let mut path = std::path::PathBuf::from(template_path(p, ID)?);
+    if path.extension().is_none() {
+        path.set_extension(FILE_EXT);
+    }
+    let t = s
+        .print_templates
+        .iter()
+        .find(|x| x.name.eq_ignore_ascii_case(&name))
+        .ok_or_else(|| bad(ID, format!("no print template `{name}` (see print.template.list)")))?;
+    let bytes = serde_json::to_vec_pretty(&t.to_file()).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+    let name = t.name.clone();
+    let target = path.to_string_lossy();
+    s.check_write_target(&target).map_err(|e| bad(ID, e))?;
+    crate::export::write_file(&target, &bytes).map_err(|e| bad(ID, e))?;
+    Ok(json!({"name": name, "path": target}))
+}
+
+fn template_import(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.import";
+    let path = std::path::Path::new(template_path(p, ID)?);
+    let folder = folder_param(s, p, ID)?.flatten();
+    let meta = std::fs::metadata(path).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
+    if !meta.is_file() {
+        return Err(bad(ID, format!("{}: not a file", path.display())));
+    }
+    if meta.len() > MAX_FILE {
+        return Err(bad(ID, format!("{}: {} bytes is too large for a print template (at most {} KB)", path.display(), meta.len(), MAX_FILE / 1024)));
+    }
+    let bytes = crate::read_file::read_regular(path, MAX_FILE).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
+    let mut t = PrintTemplate::from_file(&bytes).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
+    if s.print_templates.len() >= MAX_TEMPLATES {
+        return Err(bad(ID, format!("at most {MAX_TEMPLATES} templates; delete one first")));
+    }
+    let name = unique_name(&t.name, &s.print_templates);
+    let renamed = name != t.name;
+    t.name = name.clone();
+    t.folder = folder;
+    let before = before(s);
+    s.print_templates.push(t);
+    save_templates(s, before)?;
+    let mut out = template_list(s);
+    out["name"] = json!(name);
+    out["renamed"] = json!(renamed);
+    Ok(out)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -343,11 +552,31 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "print.exportPdf", "Print to PDF", [], None,
             "{path, ids?: photo ids (default selection)} → {path, pages, photos, bytes}; prints the current print.get settings; replaces an existing output, never an original",
             always, export_pdf),
-        cmd!(query "print.template.list", "Print Templates", [], None, "{} → {templates: [{name, style, settings}]}", always, |s, _| Ok(template_list(s))),
+        cmd!(query "print.template.list", "Print Templates", [], None,
+            "{} → {folders: [{name, default, templates: count}] (\"User Templates\" first, then the others by name), templates: [{name, folder, style, settings}]}",
+            always, |s, _| Ok(template_list(s))),
         cmd!(query "print.template.save", "Save Print Template", [], None,
-            "{name} — saves the layout, image settings, page and job (not the cells' photos or the guides); an existing name (any case) is replaced → print.template.list",
+            "{name, folder?}: saves the layout, image settings, page and job (not the cells' photos or the guides) in `folder` (default \"User Templates\"); an existing name (any case) is replaced and stays in its folder unless `folder` is given → print.template.list",
             always, template_save),
         cmd!(query "print.template.apply", "Apply Print Template", [], None, "{name} → print.get", always, template_apply),
         cmd!(query "print.template.delete", "Delete Print Template", [], None, "{name} → print.template.list", always, template_delete),
+        cmd!(query "print.template.move", "Move Print Template to Folder", [], None,
+            "{name, folder}: lists the template in another Template Browser folder (\"User Templates\" or one made with print.template.folder.create); its name and settings stay → print.template.list + {moved: false when it was already there}",
+            always, template_move),
+        cmd!(query "print.template.folder.create", "New Print Template Folder", [], None,
+            "{name}: a Template Browser folder (1 to 80 characters without control characters, not \"User Templates\", unique ignoring ASCII case, at most 100); the name is a label, not a path, so `/` and `\\` are kept as typed; kept while empty → print.template.list + {name}",
+            always, folder_create),
+        cmd!(query "print.template.folder.rename", "Rename Print Template Folder", [], None,
+            "{name, to}: renames a folder and keeps its templates in it; \"User Templates\" can't be renamed → print.template.list + {name}",
+            always, folder_rename),
+        cmd!(query "print.template.folder.delete", "Delete Print Template Folder", [], None,
+            "{name}: deletes a folder; its templates move to \"User Templates\", which can't be deleted → print.template.list + {deleted, moved: templates moved}",
+            always, folder_delete),
+        cmd!(query "print.template.export", "Export Print Template", [], None,
+            "{name, path}: writes the template as a .lcprint JSON file ({format, version, name, settings}, without the template's folder; `.lcprint` is added when the path has no extension); replaces an existing file, never an original → {name, path}",
+            always, template_export),
+        cmd!(query "print.template.import", "Import Print Template", [], None,
+            "{path: a .lcprint file (at most 256 KB), folder? (default \"User Templates\")}: checked like a saved template (format, version, name, every setting; cell photos and guides are dropped) and added under its name; a name taken (any case) gets \" (2)\"… → print.template.list + {name, renamed}",
+            always, template_import),
     ]
 }
