@@ -223,6 +223,106 @@ fn curve_points_from_an_agent_are_stored_in_order() {
     assert!(c[1].0 < c[2].0, "dragged up to its neighbour, not past it: {c:?}");
 }
 
+fn has_widget(h: &Headless, id: &str) -> bool {
+    h.app.widgets.iter().any(|(w, _)| w == id)
+}
+
+/// Right-click a point of the graph at (`x`, `y`) in curve coordinates (0..1, y up).
+fn right_click_curve(h: &mut Headless, x: f64, y: f64) {
+    let r = h.request("ui.clickWidget", json!({"id": "curve", "fx": x, "fy": 1.0 - y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+}
+
+const THREE_POINTS: [[f64; 2]; 4] = [[0.0, 0.0], [0.3, 0.4], [0.7, 0.6], [1.0, 1.0]];
+
+/// Lightroom Classic's help names this as the way to remove a point: right-click (Control-click on
+/// a Mac) it and choose Delete Control Point. The graph's menu only offered the resets, so a point
+/// once added could not be removed by the menu. It works on every channel and is one undo step.
+#[test]
+fn right_click_delete_control_point_removes_the_point_on_every_channel() {
+    for ch in ["master", "red", "green", "blue"] {
+        let mut h = curve_open(ch);
+        exec(&mut h, "develop.curve", json!({"channel": ch, "points": THREE_POINTS}));
+        h.step();
+        let undo_before = h.app.session.undo.len();
+        right_click_curve(&mut h, 0.3, 0.4);
+        assert!(has_widget(&h, "curveMenu:deletePoint"), "{ch}: the menu offers Delete Control Point over a point");
+        click_widget(&mut h, "curveMenu:deletePoint", 1);
+        let d = develop(&h).curve;
+        let c = pts(match ch {
+            "master" => &d.master,
+            "red" => &d.red,
+            "green" => &d.green,
+            _ => &d.blue,
+        });
+        assert_eq!(c, vec![(0.0, 0.0), (0.7, 0.6), (1.0, 1.0)], "{ch}: the right-clicked point is gone, the others stay");
+        assert_eq!(h.app.session.undo.len(), undo_before + 1, "{ch}: one undo step");
+    }
+}
+
+/// The entry is only for a point that can go: not for empty graph, not for the two ends (a curve
+/// always runs from its first to its last point; double-click leaves them too).
+#[test]
+fn delete_control_point_is_offered_only_over_a_removable_point() {
+    let mut h = curve_open("master");
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": THREE_POINTS}));
+    h.step();
+    for (x, y, what) in [(0.5, 0.9, "empty graph"), (0.01, 0.01, "the first point"), (0.99, 0.99, "the last point")] {
+        right_click_curve(&mut h, x, y);
+        assert!(has_widget(&h, "curveMenu:resetChannel"), "{what}: the menu opens");
+        assert!(!has_widget(&h, "curveMenu:deletePoint"), "{what}: nothing to delete");
+        let r = h.request("ui.key", json!({"key": "esc"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
+    assert_eq!(develop(&h).curve.master.len(), 4);
+}
+
+/// The point the menu was opened over is kept while the menu is open, for the photo it was opened
+/// on: with the menu left open, showing another photo whose curve has the very same point must not
+/// offer (and so not apply) the deletion there.
+#[test]
+fn the_point_a_menu_was_opened_over_is_not_carried_to_another_photo() {
+    let mut h = curve_open("master");
+    let a = h.app.session.active().expect("an active photo");
+    let b = h.app.session.visible().iter().copied().find(|p| *p != a).expect("a second photo");
+    for id in [b, a] {
+        h.app.session.selection.active = Some(id);
+        h.step();
+        exec(&mut h, "develop.curve", json!({"channel": "master", "points": THREE_POINTS}));
+        h.step();
+    }
+    right_click_curve(&mut h, 0.3, 0.4);
+    assert!(has_widget(&h, "curveMenu:deletePoint"), "the menu offers Delete Control Point over the point");
+    h.app.session.selection.active = Some(b);
+    h.step();
+    h.step();
+    assert!(has_widget(&h, "curveMenu:resetChannel"), "the menu is still open");
+    assert!(!has_widget(&h, "curveMenu:deletePoint"), "but it was not opened over a point of this photo");
+    assert_eq!(pts(&develop(&h).curve.master).len(), 4);
+}
+
+/// Double-clicking a point removes it, but not an end point. (Each case gets its own app: egui
+/// counts a second pair of clicks as a third and fourth click, not as a new double-click.)
+#[test]
+fn double_clicking_a_point_removes_it_but_not_an_end() {
+    for (x, y, left) in [(0.3, 0.4, vec![(0.0, 0.0), (0.7, 0.6), (1.0, 1.0)]), (0.99, 0.99, pts_of(&THREE_POINTS))] {
+        let mut h = curve_open("master");
+        exec(&mut h, "develop.curve", json!({"channel": "master", "points": THREE_POINTS}));
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "curve", "fx": x, "fy": 1.0 - y, "count": 2}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert_eq!(pts(&develop(&h).curve.master), left, "double-click at ({x}, {y})");
+    }
+}
+
+fn pts_of(v: &[[f64; 2]]) -> Vec<(f64, f64)> {
+    v.iter().map(|p| (p[0], p[1])).collect()
+}
+
 /// The settings the parametric graph is drawn from: two neighbouring regions pushed opposite ways,
 /// where the raw sum of their bumps folds back on itself before the renderer's running maximum
 /// straightens it out.

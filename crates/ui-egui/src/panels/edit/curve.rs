@@ -217,7 +217,9 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     let resp = ui.interact(r, egui::Id::unique(("curve", &ch)), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Tone Curve"));
     register(ui, "curve", r);
-    crate::widgets::context_menu(&resp, |ui| curve_reset_menu(app, ui, &ch));
+    if ch == "parametric" {
+        crate::widgets::context_menu(&resp, |ui| curve_menu(app, ui, &ch, &[], None));
+    }
     let p = ui.painter();
     p.rect_filled(r, 2.0, t.canvas);
     if let Some(hist) = preview_histogram(app, id) {
@@ -278,7 +280,8 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     let line: Vec<Pos2> = (0..=96).map(|i| to_screen(i as f64 / 96.0, curve.eval(i as f64 / 96.0).clamp(0.0, 1.0))).collect();
     p.add(egui::Shape::line(line, Stroke::new(2.0, color)));
     // interaction: drag a point (both axes, between its neighbours; ⌥ = fine), drag empty space to add and
-    // drag a new point, click empty space to add, double-click a point to delete it
+    // drag a new point, click empty space to add, double-click a point or right-click ▸ Delete Control Point
+    // to delete it (the two end points stay)
     let drag_id = egui::Id::unique(("curve-drag", &ch));
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
@@ -380,6 +383,8 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         let arr: Vec<[f64; 2]> = v.iter().map(|p| [p.x, p.y]).collect();
         let _ = app.run("develop.curve", json!({"channel": ch, "points": arr}));
     }
+    let over = menu_point(ui, &resp, &ch, id, &pts, nearest);
+    crate::widgets::context_menu(&resp, |ui| curve_menu(app, ui, &ch, &pts, over));
     // the drag is over when egui says so, or when the pointer comes up without it saying so (a
     // release outside the window would otherwise leave the interaction open, and every later edit a
     // silent preview that Undo cannot take back)
@@ -460,8 +465,49 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     });
 }
 
-/// Right-click menu of the curve graph.
-fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
+/// The point (of `pts`) the graph's right-click menu was opened over, if it can be deleted. It is
+/// read when the menu opens and kept while it is open (the pointer has moved on to the menu by
+/// then), for this photo and channel only: a menu left open while another photo is shown does not
+/// delete a point of that photo; the two ends can't be deleted.
+fn menu_point(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    ch: &str,
+    photo: PhotoId,
+    pts: &[Point],
+    nearest: impl Fn(Pos2) -> Option<(usize, f32)>,
+) -> Option<(f64, f64)> {
+    let menu_id = egui::Id::unique(("curve-menu-point", ch, photo));
+    if resp.secondary_clicked() {
+        let over = resp
+            .interact_pointer_pos()
+            .or(resp.hover_pos())
+            .and_then(nearest)
+            .filter(|(i, dist)| *dist < 10.0 && *i != 0 && *i + 1 != pts.len())
+            .and_then(|(i, _)| pts.get(i))
+            .map(|q| (q.x, q.y));
+        ui.data_mut(|dd| dd.insert_temp(menu_id, over));
+    }
+    ui.data(|dd| dd.get_temp::<Option<(f64, f64)>>(menu_id)).flatten()
+}
+
+/// Right-click menu of the curve graph. `over` is the point (of `pts`) it was opened over, if it
+/// can be deleted: Lightroom Classic's help names right-click ▸ Delete Control Point as the way to
+/// remove one.
+fn curve_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str, pts: &[Point], over: Option<(f64, f64)>) {
+    if let Some((x, y)) = over {
+        let r = ui.button(crate::i18n::tr("Delete Control Point"));
+        register(ui, "curveMenu:deletePoint", r.rect);
+        if r.clicked() {
+            let mut v: Vec<[f64; 2]> = pts.iter().map(|p| [p.x, p.y]).collect();
+            if let Some(i) = v.iter().position(|p| *p == [x, y]) {
+                v.remove(i);
+                let _ = app.run("develop.curve", json!({"channel": ch, "points": v}));
+            }
+            ui.close();
+        }
+        ui.separator();
+    }
     let label = if ch == "parametric" {
         crate::i18n::tr("Reset Parametric Curve").to_string()
     } else {
