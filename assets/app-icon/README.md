@@ -20,9 +20,8 @@ Windows and Linux files use the full-bleed tile so the lynx reads at 16-48 px.
 
 ## Provenance
 
-The owner's original drawing, made in ArtCraft (2880 px, keyed to the three colours), vectorised with
-craftrules `assets/logo-options/_tools/vectorize_tile.py`. The source drawing stays in craftrules at
-`assets/app-icons/lightcraft/source.png`; `lightcraft.svg` here is the canonical artwork. Licence:
+The owner's original drawing, made in ArtCraft (2880 px, keyed to the three colours) and
+vectorised. `lightcraft.svg` here is the canonical artwork. Licence:
 `LICENSE.txt` (MIT OR Apache-2.0, like the repo).
 
 ## Files
@@ -47,3 +46,16 @@ and the `.desktop` file into `applications/`.
 
 Edit `lightcraft.svg` (or `lightcraft-small.svg`), then run `packaging/icons.sh` (needs `resvg`; `iconutil`
 on macOS for the `.icns`; the `.ico` is packed by `cargo xtask ico`). Every output is committed.
+
+## Nightly channel
+
+The Nightly derivatives keep the foreground artwork, alpha and Mac padding unchanged: only the
+amber field moves to the deeper Nightly amber. There is no letter, crescent or badge; the app, the
+window title and the Launcher name the channel in text.
+
+`lightcraft-nightly.png` and its nine-frame ICO use the existing full-bleed 256 px render. The
+separate `lightcraft-nightly-1024.png` and eleven-slot ICNS use the actual padded Mac master, never
+an upscale. The palette recipe, the input/output hashes and the container sizes are recorded in
+[`nightly-provenance.json`](nightly-provenance.json); `packaging/nightly-icons.py` derives them
+(no `resvg` or `iconutil` needed) and `packaging/nightly-icons-tests.py` re-derives the committed
+bytes. Stable source files are not recoloured.

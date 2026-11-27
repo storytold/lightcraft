@@ -107,6 +107,27 @@ fn dehaze_does_not_crush_dark_regions_next_to_bright_ones() {
     }
 }
 
+/// An export's sharp downscale (#2970) keeps more of the fine detail a smaller output can hold
+/// than a preview's smooth one, and changes nothing when the output is the source's own size.
+#[test]
+fn sharp_downscale_keeps_detail() {
+    use crate::Downscale;
+    // fine stripes: a period of 5 source pixels, 3 output pixels at 600 → 360
+    let src = Rgb32f::from_fn(600, 400, |x, _| [0.18 * (1.0 + 0.8 * (x as f32 * std::f32::consts::TAU / 5.0).sin()); 3]);
+    let swing = |down: Downscale, edge: usize| {
+        let r =
+            render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest { downscale: down, ..RenderRequest::fit(edge, edge) });
+        let row: Vec<f32> = (40..r.image.width - 40).map(|x| r.image.data[(r.image.height / 2) * r.image.width + x][1] as f32).collect();
+        let m = row.iter().sum::<f32>() / row.len() as f32;
+        (row.iter().map(|v| (v - m).abs()).sum::<f32>() / row.len() as f32, r.image)
+    };
+    let ((smooth, _), (sharp, _)) = (swing(Downscale::Smooth, 360), swing(Downscale::Sharp, 360));
+    assert!(sharp > smooth * 1.25, "sharp {sharp} vs smooth {smooth}");
+    let ((_, a), (_, b)) = (swing(Downscale::Smooth, 600), swing(Downscale::Sharp, 600));
+    assert_eq!((b.width, b.height), (600, 400));
+    assert_eq!(a.data, b.data, "no resize, no difference");
+}
+
 #[test]
 fn resolution_independence_of_local_contrast() {
     // Clarity at two preview sizes should give similar results after downscaling.
@@ -287,12 +308,16 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
     let full = RenderRequest { quality: Quality::Full, ..draft };
     let mut s = typical_edits();
     s.effects.clarity = 60.0;
+    s.detail.sharpen_amount = 80.0;
     render_cached(&src, &info, &s, &draft, &cache);
     let clarity_plane = |c: &StageCache| c.entries.lock().unwrap().first().and_then(|e| e.planes.clarity.clone()).unwrap().1;
+    let sharpen_plane = |c: &StageCache| c.entries.lock().unwrap().first().and_then(|e| e.planes.sharpen.clone()).unwrap().1;
     let first = clarity_plane(&cache);
+    let first_sharpen = sharpen_plane(&cache);
     s.detail.nr_luminance = 50.0;
     render_cached(&src, &info, &s, &draft, &cache);
     assert!(Arc::ptr_eq(&first, &clarity_plane(&cache)), "a draft redid the clarity plane for a noise-reduction change");
+    assert!(!Arc::ptr_eq(&first_sharpen, &sharpen_plane(&cache)), "a draft reused the old sharpening plane after noise reduction changed");
     for v in [10.0, 45.0, 80.0] {
         s.detail.nr_luminance = v;
         s.detail.nr_color = v / 2.0;
@@ -634,7 +659,7 @@ fn legacy_relative_white_balance_renders_as_before_on_a_kelvin_raw() {
             if temp > 10000.0 && !blue_end {
                 continue;
             }
-            let mut s = DevelopSettings::default();
+            let mut s = DevelopSettings { process: lightcraft_develop::Process::V8.version(), ..DevelopSettings::default() };
             (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
             assert_eq!(s.wb.scale, WbScale::Legacy);
             let old = wb_matrix_for(&old_info, &s);
@@ -771,6 +796,135 @@ fn custom_white_balance_redevelops_in_camera_space() {
     assert!(wb_matrix_for(&info, &s).is_none());
 }
 
+#[test]
+fn cpu_white_balance_stages_redevelop_the_dual_illuminant_card() {
+    use crate::local::{scene_linear_pre, wb_matrix_for, white_balance};
+    use lightcraft_color::cct::temp_tint_to_xy;
+    use lightcraft_develop::{Process, WbMode};
+
+    let cc = camera_color(5500.0, 0.0);
+    let target = temp_tint_to_xy(3200.0, 10.0);
+    let neutral = lightcraft_raw::color::camera_neutral(&cc.tags, target);
+    let developed_at = |xy| {
+        let t = lightcraft_raw::color::camera_transform_of(&cc.tags, xy);
+        t.matrix.apply(std::array::from_fn(|c| neutral[c] * f64::from(t.wb[c]))).map(|v| v as f32)
+    };
+    let card = developed_at(cc.developed_for);
+    // Develop the same camera samples directly for the requested white, without either render route.
+    let expected = developed_at(target);
+    let camera = SourceInfo { raw: true, as_shot_temp: 5500.0, as_shot_tint: 0.0, camera_color: Some(cc), ..Default::default() };
+    let relative = SourceInfo { camera_color: None, relative_wb: true, ..camera.clone() };
+    let close = |actual: &Rgb32f, want: [f32; 3]| {
+        assert_eq!(actual.data.len(), 4);
+        for px in &actual.data {
+            assert!(px.iter().zip(want).all(|(&v, w)| (v - w).abs() < 1e-4), "wanted {want:?}, got {px:?}");
+        }
+    };
+    for process in [Process::V8, Process::V10] {
+        let mut settings = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
+        (settings.wb.mode, settings.wb.temp, settings.wb.tint) = (WbMode::Custom, 3200.0, 10.0);
+        settings.light.exposure = 1.0;
+        let mut wb = Rgb32f::filled(2, 2, card);
+        white_balance(&mut wb, &camera, &settings);
+        close(&wb, expected);
+        let mut scene = Rgb32f::filled(2, 2, card);
+        scene_linear_pre(&mut scene, &camera, &settings);
+        close(&scene, expected.map(|v| v * 2.0));
+
+        // Without camera facts, the CPU stage still uses the relative Bradford result.
+        let m = wb_matrix_for(&relative, &settings).unwrap();
+        let relative_expected = m.map(|r| (r[0] * card[0] + r[1] * card[1] + r[2] * card[2]).max(0.0));
+        assert!(relative_expected.iter().zip(expected).any(|(&v, w)| (v - w).abs() > 1e-4));
+        let mut wb = Rgb32f::filled(2, 2, card);
+        white_balance(&mut wb, &relative, &settings);
+        close(&wb, relative_expected);
+    }
+}
+
+#[test]
+fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback() {
+    use crate::local::wb_matrix_for;
+    use lightcraft_color::REC2020;
+    use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, wb_matrix_checked};
+    use lightcraft_develop::{Process, ProcessVersion, WbMode};
+
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    // Saved V8 (and reserved V9) edits in the reachable warm-green region (Bradford blue cone
+    // response <= 0.0) must reopen without upgrading and must keep the legacy Bradford result.
+    for (proc_num, expected_proc) in [(8, Process::V8), (9, Process::V8)] {
+        let saved_json = serde_json::json!({
+            "process": proc_num,
+            "wb": { "mode": "custom", "temp": 2000.0, "tint": 30.0 }
+        });
+        let saved = DevelopSettings::from_json(&saved_json).unwrap();
+        assert_eq!(saved.process, ProcessVersion(proc_num));
+        assert_eq!(saved.process.process(), expected_proc);
+        assert_eq!(saved.to_json()["process"], serde_json::json!(proc_num));
+        let legacy_m = wb_matrix_for(&info, &saved).unwrap();
+
+        // New V10 edit at the same warm-green WB uses the shared checked Mat3::IDENTITY fallback.
+        let mut v10 = DevelopSettings { process: Process::V10.version(), ..Default::default() };
+        assert_eq!(v10.process.process(), Process::V10);
+        (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+        let v10_reopened = DevelopSettings::from_json(&v10.to_json()).unwrap();
+        assert_eq!(v10_reopened.process, ProcessVersion(10));
+        let v10_m = wb_matrix_for(&info, &v10_reopened).unwrap();
+
+        assert_ne!(legacy_m, v10_m, "saved V{proc_num} edit must not silently adopt V10's checked fallback");
+    }
+
+    let saved = DevelopSettings::from_json(&serde_json::json!({
+        "process": 8,
+        "wb": { "mode": "custom", "temp": 2000.0, "tint": 30.0 }
+    }))
+    .unwrap();
+    let legacy_m = wb_matrix_for(&info, &saved).unwrap();
+    let mut v10 = DevelopSettings::default();
+    (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+    let v10_m = wb_matrix_for(&info, &v10).unwrap();
+
+    // Verify exact correspondence to legacy wb_matrix (V8) vs checked wb_matrix_checked (V10).
+    let expected_shot = wb_matrix(&REC2020, temp_tint_to_xy(5500.0, 0.0)).inverse().unwrap();
+    let legacy_raw = wb_matrix(&REC2020, temp_tint_to_xy(2000.0, 30.0)).mul(&expected_shot);
+    let legacy_g = legacy_raw.apply([1.0, 1.0, 1.0]);
+    let legacy_y = legacy_g[0] * 0.2627 + legacy_g[1] * 0.6780 + legacy_g[2] * 0.0593;
+    let legacy_expected = legacy_raw.mul(&lightcraft_color::Mat3::diag(1.0 / legacy_y, 1.0 / legacy_y, 1.0 / legacy_y)).to_f32();
+    assert_eq!(legacy_m, legacy_expected);
+
+    let v10_raw = wb_matrix_checked(&REC2020, temp_tint_to_xy(2000.0, 30.0)).mul(&expected_shot);
+    let v10_g = v10_raw.apply([1.0, 1.0, 1.0]);
+    let v10_y = v10_g[0] * 0.2627 + v10_g[1] * 0.6780 + v10_g[2] * 0.0593;
+    let v10_expected = v10_raw.mul(&lightcraft_color::Mat3::diag(1.0 / v10_y, 1.0 / v10_y, 1.0 / v10_y)).to_f32();
+    assert_eq!(v10_m, v10_expected);
+}
+
+#[test]
+fn stage_cache_invalidates_wb_on_process_switch_and_undo() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::{Process, WbMode};
+
+    let src = std::sync::Arc::new(scene());
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    let req = RenderRequest::fit(src.width, src.height);
+    let cache = StageCache::default();
+
+    let mut s_v8 = DevelopSettings { process: Process::V8.version(), ..Default::default() };
+    (s_v8.wb.mode, s_v8.wb.temp, s_v8.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+
+    let s_v10 = DevelopSettings { process: Process::V10.version(), ..s_v8.clone() };
+
+    let ref_v8 = render(&src, &info, &s_v8, &req).image.data;
+    let ref_v10 = render(&src, &info, &s_v10, &req).image.data;
+    assert_ne!(ref_v8, ref_v10, "V8 and V10 must differ at warm-green WB");
+
+    // Initial render at V8.
+    assert_eq!(render_cached(&src, &info, &s_v8, &req, &cache).image.data, ref_v8);
+    // Switch to V10 (Update to Current Process): must not reuse V8's cached WB linear image.
+    assert_eq!(render_cached(&src, &info, &s_v10, &req, &cache).image.data, ref_v10);
+    // Undo back to V8: must not reuse V10's cached WB linear image.
+    assert_eq!(render_cached(&src, &info, &s_v8, &req, &cache).image.data, ref_v8);
+}
+
 /// Every stored process number renders with a process this build knows: settings saved before
 /// process versions existed exactly as V1, and a number from a newer LightCraft exactly as the
 /// latest process here (`docs/process-versions.md`). Raw (base tone curve), camera-tone and
@@ -838,5 +992,129 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
         let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(280, 180));
         assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
+    }
+}
+
+/// A raw's linear Rec.2020 as decoding leaves it since it stopped clamping channels at zero: a dark ramp with
+/// sensor noise through a saturating camera matrix (a NIKON D780 profile's), so near black many channels are
+/// negative, and a few strongly out-of-gamut pixels.
+fn negative_noise() -> Rgb32f {
+    let m = [[3.48f32, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]];
+    // ±0.004 of noise per channel, a hash of the position
+    let noise = |x: usize, y: usize, c: usize| {
+        let h = ((x * 7919 + y * 104_729 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    Rgb32f::from_fn(48, 32, |x, y| {
+        if (x + y) % 37 == 0 {
+            return [-0.05, 0.01, -0.02];
+        }
+        let g = 0.0005 * 1.15f32.powi(x as i32);
+        let cam: [f32; 3] = std::array::from_fn(|c| g + noise(x, y, c));
+        std::array::from_fn(|i| m[i][0] * cam[0] + m[i][1] * cam[1] + m[i][2] * cam[2])
+    })
+}
+
+/// Negative channels from decoding reach every stage after it: every slider at its ends, at every output depth
+/// (HDR on and off), and the auto settings give finite values only.
+#[test]
+fn negative_channels_render_finite_everywhere() {
+    use crate::{DeepSamples, OutputDepth, auto};
+    let src = negative_noise();
+    assert!(src.data.iter().flatten().filter(|v| **v < 0.0).count() > src.data.len() / 4, "the source has few negatives");
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let finite = |s: &DevelopSettings, depth: OutputDepth, what: &str| {
+        let r = render(&src, &info, s, &RenderRequest { depth, ..RenderRequest::fit(48, 48) });
+        assert!(r.histogram.total > 0, "{what}");
+        match (depth, r.deep.map(|d| d.samples)) {
+            (OutputDepth::U8, None) | (OutputDepth::U16, Some(DeepSamples::U16(_))) => {}
+            (OutputDepth::F32Linear | OutputDepth::F32Hdr, Some(DeepSamples::F32(v))) => {
+                assert!(v.iter().all(|v| v.is_finite()), "{what} {depth:?}: non-finite output");
+            }
+            _ => panic!("{what} {depth:?}: missing or wrong deep samples"),
+        }
+    };
+    let mut pushed = DevelopSettings::default();
+    pushed.light.exposure = 4.0;
+    pushed.light.shadows = 100.0;
+    pushed.light.blacks = 100.0;
+    for hdr in [false, true] {
+        let mut s = pushed.clone();
+        s.hdr.enabled = hdr;
+        for depth in [OutputDepth::U8, OutputDepth::U16, OutputDepth::F32Linear, OutputDepth::F32Hdr] {
+            finite(&s, depth, &format!("pushed, hdr {hdr}"));
+        }
+    }
+    for c in controls::CONTROLS {
+        for v in [c.min, c.max] {
+            let mut s = pushed.clone();
+            controls::set(&mut s, c.id, v);
+            finite(&s, OutputDepth::F32Linear, &format!("{} = {v}", c.id));
+        }
+    }
+    let tone = auto::auto_tone(&src, &info, &pushed);
+    let t = [tone.exposure, tone.contrast, tone.highlights, tone.shadows, tone.whites, tone.blacks, tone.vibrance, tone.saturation];
+    assert!(t.iter().all(|v| v.is_finite()), "auto tone {t:?}");
+    assert!(auto::auto_bw_mix(&src, &info, &pushed).iter().all(|v| v.is_finite()));
+    let (t, k) = auto::auto_wb(&src, &info);
+    assert!(t.is_finite() && k.is_finite(), "auto WB {t} {k}");
+    assert!(auto::scene_log_mean(&src, &info, &pushed).is_none_or(f64::is_finite));
+}
+
+// Given a cached render with one process, a change to a process with another colour filter (Update
+// to Current Process, undo) renders like a fresh render, not the cached denoised image
+#[test]
+fn a_process_change_does_not_reuse_the_other_colour_filter() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::Process;
+    use std::sync::Arc;
+    let src = Arc::new(colour_noise_scene(128, 96, 128));
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(128, 96);
+    let cache = StageCache::default();
+    let mut old = DevelopSettings::default();
+    old.detail.nr_color = 25.0;
+    old.detail.nr_color_smoothness = 0.0;
+    old.process = Process::V2.version();
+    let current = DevelopSettings { process: Process::LATEST.version(), ..old.clone() };
+    let first = render_cached(&src, &info, &old, &req, &cache).image;
+    let fresh = render(&src, &info, &current, &req).image;
+    assert!(max_diff(&first, &fresh) > 0, "the two colour filters differ on this scene");
+    assert_eq!(render_cached(&src, &info, &current, &req, &cache).image, fresh, "process update");
+    assert_eq!(render_cached(&src, &info, &old, &req, &cache).image, first, "undo");
+}
+
+/// Flat grey with chroma noise: `quiet` columns on the left with little noise, the rest with much.
+pub(crate) fn colour_noise_scene(w: usize, h: usize, quiet: usize) -> Rgb32f {
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut noise = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        ((seed >> 11) as f32 / (1u64 << 53) as f32 - 0.5) * 2.0
+    };
+    let mut img = Rgb32f::new(w, h);
+    for (i, p) in img.data.iter_mut().enumerate() {
+        let sigma = if i % w < quiet { 0.001 } else { 0.015 };
+        let y = 0.04f32;
+        let (r, b) = (y + noise() * sigma, y + noise() * sigma);
+        *p = [r, (y - 0.2627 * r - 0.0593 * b) / 0.6780, b];
+    }
+    img
+}
+
+/// A crop of no width used to give grain NaN coordinates (and NaN pixels); the render stays finite.
+#[test]
+fn zero_width_crop_with_grain_renders_finite_pixels() {
+    let mut s = DevelopSettings::default();
+    s.grain.amount = 60.0;
+    s.crop.geometry.rect = lightcraft_geom::Rect::new(0.5, 0.1, 0.5, 0.9);
+    let mut req = RenderRequest::fit(240, 240);
+    req.depth = crate::OutputDepth::F32Linear;
+    let r = render(&scene(), &SourceInfo::default(), &s, &req);
+    if let Some(d) = r.deep
+        && let crate::DeepSamples::F32(v) = d.samples
+    {
+        assert!(v.iter().all(|x| x.is_finite()), "non-finite sample in a zero-width crop with grain");
     }
 }

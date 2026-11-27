@@ -26,6 +26,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .stroke(egui::Stroke::new(1.0, t.divider)),
         )
         .show(ui, |ui| {
+            crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
             let has_photo = app.session.active().is_some();
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
