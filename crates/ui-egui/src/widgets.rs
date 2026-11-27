@@ -104,6 +104,8 @@ pub fn context_menu_close(response: &Response, default: egui::PopupCloseBehavior
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WidgetHit {
     pub id: egui::Id,
+    /// Whether the owner accepts pointer interaction beyond hovering.
+    pub interactive: bool,
     pub layer_id: egui::LayerId,
     /// The widget's clipped interaction rectangle in its layer's local coordinates, recorded in
     /// the same pass as the registration. Delivery checks this instead of calling
@@ -146,7 +148,7 @@ pub fn register(ui: &egui::Ui, id: impl Into<String>, rect: Rect) {
     let hit = rect.is_finite().then(|| {
         let id = egui::Id::unique(("lc-automation-hit", id.as_str(), duplicate));
         let response = ui.interact(rect, id, egui::Sense::hover());
-        WidgetHit { id, layer_id: response.layer_id, interact_rect: response.interact_rect }
+        WidgetHit { id, interactive: false, layer_id: response.layer_id, interact_rect: response.interact_rect }
     });
     ctx.data_mut(|d| {
         let registry = d.get_temp_mut_or_default::<Registry>(registry);
@@ -167,7 +169,15 @@ pub fn register_response(id: impl Into<String>, rect: Rect, response: &egui::Res
     ctx.data_mut(|d| {
         let registry = d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"));
         registry.rects.push((id.clone(), rect));
-        registry.hits.push((id, WidgetHit { id: response.id, layer_id: response.layer_id, interact_rect: response.interact_rect }));
+        registry.hits.push((
+            id,
+            WidgetHit {
+                id: response.id,
+                interactive: response.enabled() && response.sense.senses_click(),
+                layer_id: response.layer_id,
+                interact_rect: response.interact_rect,
+            },
+        ));
     });
 }
 
@@ -454,7 +464,7 @@ pub fn slider_named(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, 
     let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click_and_drag() } else { Sense::hover() });
     // the name is short ("Exposure value"); how to use it is the description the hover text below gives
     crate::widgets::announce(&value_resp, crate::i18n::tr_format!("{name} value", name = label_text.clone()));
-    register(ui, format!("sliderValue:{}", spec.id), value_rect);
+    register_response(format!("sliderValue:{}", spec.id), value_rect, &value_resp);
     // say that an exact value can be typed here (issue #534: an exact crop angle was hard to find)
     let value_resp = if enabled { value_resp.on_hover_text(crate::i18n::tr("Click to type a value, drag to change it")) } else { value_resp };
     // Keep the short focus-acquisition guard, but let an explicit Return/Escape end the edit.
@@ -482,7 +492,7 @@ pub fn slider_named(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, 
         out.value = Some(spec.default);
     } else {
         pointer_edit(ui, &g, &resp, &mut out);
-        nudge_edit(ui, &g, &resp, pointer_in_row, &mut out);
+        nudge_edit(ui, &g, &resp, &value_resp, pointer_in_row, &mut out);
         side_scroll_edit(ui, &g, pointer_in_row, &mut out);
         wheel_edit(ui, &g, wheel_armed, pointer_in_row, &mut out);
     }
@@ -761,16 +771,29 @@ pub(crate) fn accessibility_nudge(ui: &Ui, resp: &Response) -> (bool, bool) {
     })
 }
 
+fn keyboard_slider_target_key() -> egui::Id {
+    egui::Id::unique("lightcraft-keyboard-slider-target")
+}
+
+/// Prefer the Develop number under the pointer to a previously focused slider for keyboard nudges.
+pub(crate) fn set_keyboard_slider_target(ctx: &egui::Context, target: Option<egui::Id>) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| data.insert_temp(keyboard_slider_target_key(), (pass, target)));
+}
+
 /// The arrow keys (with either a hovered or a focused slider; Shift: five steps) and a screen reader's actions.
-fn nudge_edit(ui: &mut Ui, g: &SliderLayout, resp: &Response, pointer_in_row: bool, out: &mut SliderOut) {
-    let (inc, dec) = accessibility_nudge(ui, resp);
-    if !g.enabled || out.value.is_some() || !(pointer_in_row || resp.has_focus() || inc || dec) {
+fn nudge_edit(ui: &mut Ui, g: &SliderLayout, resp: &Response, value_resp: &Response, pointer_in_row: bool, out: &mut SliderOut) {
+    if !g.enabled || out.value.is_some() {
         return;
     }
+    let pass = ui.ctx().cumulative_pass_nr();
+    let target = ui.data(|d| d.get_temp::<(u64, Option<egui::Id>)>(keyboard_slider_target_key())).filter(|(p, _)| *p == pass).and_then(|(_, id)| id);
+    let keyboard_target = target.map_or_else(|| pointer_in_row || resp.has_focus(), |target| target == value_resp.id);
+    let (inc, dec) = accessibility_nudge(ui, resp);
     let (up, down, shift) = ui.input_mut(|i| {
         let shift = i.modifiers.shift;
         let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
-        (i.consume_key(m, egui::Key::ArrowUp), i.consume_key(m, egui::Key::ArrowDown), shift)
+        (keyboard_target && i.consume_key(m, egui::Key::ArrowUp), keyboard_target && i.consume_key(m, egui::Key::ArrowDown), shift)
     });
     let (up, down) = (up || inc, down || dec);
     if up || down {

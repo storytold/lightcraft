@@ -331,17 +331,28 @@ fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static 
     if keymap.iter().any(|(other, sc)| other != id && find_bindable(other).is_some() && parse(sc) == Some(shortcut)) { None } else { Some(command) }
 }
 
+fn hovered_develop_slider_value(app: &LightcraftApp, ctx: &egui::Context) -> Option<egui::Id> {
+    if app.ui.right != crate::state::RightPanel::Edit {
+        return None;
+    }
+    let at = ctx.pointer_hover_pos()?;
+    app.widget_hits.iter().find_map(|(id, hit)| {
+        (hit.interactive && id.starts_with("sliderValue:") && crate::control::widget_target_visible(ctx, Some(*hit), at)).then_some(hit.id)
+    })
+}
+
 /// Content widgets keep keyboard ownership, including text fields and arrow-driven sliders.
 /// Dock chrome owns activation, traversal, resizing and cancellation; its other keys reach commands.
-fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context, over_slider_value: bool) -> bool {
     if !ctx.egui_wants_keyboard_input() {
         // Escape drops egui focus before shortcuts run; keep the numeric edit's whole input batch.
         return ctx.input(|input| input.key_pressed(Key::Escape))
             && app.widgets.iter().any(|(widget, _)| widget.starts_with("sliderField:") && crate::text_field::was_editing(ctx, widget));
     }
-    // a selected slider keeps its arrow keys; everything else is a shortcut
+    // Over a Develop value, the vertical keys nudge and the horizontal keys navigate photos.
     if crate::widgets::slider_has_focus(ctx) {
-        return ctx.input(|input| [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown].iter().any(|key| input.key_pressed(*key)));
+        return !over_slider_value
+            && ctx.input(|input| [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight].into_iter().any(|key| input.key_pressed(key)));
     }
     // a handle on the photo keeps the arrows (it moves) and Return / Space (it acts)
     if crate::canvas_keys::has_focus(ctx) {
@@ -385,10 +396,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     // don't steal keys from text fields or from the keymap editor recording a shortcut
-    if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
+    let slider = hovered_develop_slider_value(app, ctx);
+    crate::widgets::set_keyboard_slider_target(ctx, slider);
+    if keyboard_owned(app, ctx, slider.is_some()) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
-    let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
+    let (mut fire, aliased, h_press) = pressed_commands(app, ctx, slider.is_some());
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
     }
@@ -405,15 +418,43 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         fire.retain(|f| f != "panel.remove");
     }
     let rotate_fires = fire.iter().any(|f| f == "crop.rotateAspect");
+    let slider_nudge = slider.is_some()
+        && ctx.input(|input| {
+            [Key::ArrowUp, Key::ArrowDown].into_iter().any(|key| matches(input, Modifiers::NONE, key) || matches(input, Modifiers::SHIFT, key))
+        });
     for f in fire {
-        fire_command(app, ctx, &f, rotate_fires);
+        if slider_nudge && matches!(f.as_str(), "library.next" | "library.previous") {
+            // Give the nudge to the photo that owns the slider before the horizontal key switches it.
+            ctx.data_mut(|data| data.get_temp_mut_or_default::<Vec<String>>(photo_navigation_key()).push(f));
+        } else {
+            fire_command(app, ctx, &f, rotate_fires);
+        }
+    }
+}
+
+fn photo_navigation_key() -> egui::Id {
+    egui::Id::unique("lightcraft-photo-navigation-after-slider")
+}
+
+pub(crate) fn finish_slider_navigation(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if let Some(commands) = ctx.data_mut(|data| data.remove_temp::<Vec<String>>(photo_navigation_key())) {
+        for command in commands {
+            fire_command(app, ctx, &command, false);
+        }
+        ctx.request_repaint();
     }
 }
 
 /// The keys pressed this frame: the commands to fire, the aliases (command and params) to run, and
 /// whether an unmodified H that no keymap assignment has claimed was pressed (the Masking panel's
 /// pin toggle, see `handle`).
-fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
+fn pressed_commands(
+    app: &LightcraftApp,
+    ctx: &egui::Context,
+    over_slider_value: bool,
+) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
+    // Reserve just the vertical nudge; a horizontal photo key can arrive in the same input batch.
+    let slider_nudge = |m, k| over_slider_value && matches!(k, Key::ArrowUp | Key::ArrowDown) && (m == Modifiers::NONE || m == Modifiers::SHIFT);
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
@@ -452,6 +493,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
+                && !slider_nudge(m, k)
                 && matches(i, m, k)
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
@@ -469,6 +511,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         for (sc, id, params) in ALIASES {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
                 && !(k == Key::Escape && popup_open)
+                && !slider_nudge(m, k)
                 && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
                 && matches(i, m, k)
