@@ -1,4 +1,6 @@
-use super::files::{BrowsedFile, Seen, browsed_files_changed, expand, expand_report_knowing, is_supported, probe_all, reusable_probes};
+use super::files::{
+    BrowsedFile, Seen, browsed_files_changed, expand, expand_report_knowing, is_supported, probe_all, reusable_probes, stat_all, stat_file,
+};
 use super::types::ImportCandidate;
 use super::{HashMap, ListedFolders, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
@@ -29,14 +31,13 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
         if let Source::File { path } = &p.source
             && found.contains(Path::new(path))
         {
-            let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(p.file_size);
             let c = ImportCandidate {
                 path: path.clone(),
                 format: p.format.clone(),
                 kind: p.kind,
                 width: p.width,
                 height: p.height,
-                file_size,
+                file_size: p.file_size,
                 captured: p.captured.clone(),
                 // a file that was only browsed (Local) is not in the library: importing it promotes it
                 // (a trashed browse record still counts as the path's)
@@ -147,6 +148,47 @@ pub fn browse_queue_until(
     let known = library_files(&input.library, &files);
     let mut files: Vec<String> = files.into_iter().filter(|f| !known.contains_key(Path::new(f))).collect();
     browse_order_until(&mut files, sort, cancel).then_some(files)
+}
+
+/// Known files of a Local folder browse (`browse_files` minus [`browse_queue_until`]), with
+/// `existing` and the on-disk `file_size` filled in for `local` records (via [`stat_all`]) so the
+/// UI can reload browsed files that changed on disk. Returns `None` once `cancel` stops the check.
+pub fn browse_known_until(input: &ScanInput, known: &[String], cancel: &std::sync::atomic::AtomicBool) -> Option<Vec<ImportCandidate>> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let by_path = library_files(&input.library, known);
+    let asked: Vec<&str> =
+        known.iter().filter_map(|f| by_path.get(Path::new(f)).filter(|(_, c, _)| c.local && c.file_size > 0).map(|_| f.as_str())).collect();
+    let seen = if cfg!(target_arch = "wasm32") { Vec::new() } else { stat_all(&asked, cancel, stat_file) };
+    if seen.contains(&Seen::Unchecked) {
+        return None;
+    }
+    let mut seen = seen.into_iter();
+    Some(
+        known
+            .iter()
+            .map(|path| {
+                let mut existing = None;
+                let mut file_size = 0;
+                if let Some((id, c, _)) = by_path.get(Path::new(path))
+                    && c.local
+                    && c.file_size > 0
+                {
+                    existing = Some(id.0);
+                    file_size = if cfg!(target_arch = "wasm32") {
+                        c.file_size
+                    } else {
+                        match seen.next() {
+                            Some(Seen::At { is_file: true, len }) => len,
+                            _ => c.file_size,
+                        }
+                    };
+                }
+                ImportCandidate { path: path.clone(), duplicate: Some("path".into()), existing, file_size, ..Default::default() }
+            })
+            .collect(),
+    )
 }
 
 /// The files browsing `root` (Local) lists: the supported, non-hidden files in it, or below it

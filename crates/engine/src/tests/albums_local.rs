@@ -104,7 +104,8 @@ fn local_folder_file_changed_twice_quickly_reloads_latest_state() {
     let file = dir.join("rapid.png");
     let write_png = |w: usize, h: usize| {
         let img = lightcraft_raster::Rgba8::from_fn(w, h, |x, y| [(x * 9) as u8, (y * 11) as u8, 1, 255]);
-        let b = crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() }).unwrap();
+        let b = crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() })
+            .unwrap();
         std::fs::write(&file, b).unwrap();
     };
 

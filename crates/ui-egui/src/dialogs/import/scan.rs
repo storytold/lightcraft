@@ -233,9 +233,11 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         // the files the library knows come too, marked as such: the folder bookkeeping (browse
         // times, records of files gone) needs the whole listing; only the queue is imported
         let queued: std::collections::HashSet<&String> = queue.iter().collect();
-        let known: Vec<String> = files.iter().filter(|f| !queued.contains(f)).cloned().collect();
-        let known =
-            known.into_iter().map(|path| lightcraft_engine::import::ImportCandidate { path, duplicate: Some("path".into()), ..Default::default() });
+        let known_paths: Vec<String> = files.iter().filter(|f| !queued.contains(f)).cloned().collect();
+        let Some(known) = lightcraft_engine::import::browse_known_until(&input, &known_paths, &p.cancel) else {
+            let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: false });
+            return;
+        };
         let candidates =
             queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
         // the probes of earlier scans go back to the session with the result, for the import that follows
