@@ -9,6 +9,7 @@ description = "LightCraft MCP server (L5): JSON-RPC 2.0 over stdio, driving a ru
 workspace = true
 
 [dependencies]
+craft-mime = { workspace = true }
 lightcraft-engine = { workspace = true }
 lightcraft-codecs = { workspace = true }
 lightcraft-raster = { workspace = true }

@@ -108,6 +108,11 @@ fn luma(img: &Rgba8, i: usize) -> f64 {
     (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0
 }
 
+/// A difference between two renders, without the one level of 8-bit dither any pixel can differ by.
+fn above_dither(d: f64) -> f64 {
+    (d - 1.5).max(0.0)
+}
+
 fn centroid(w: usize, weights: impl Iterator<Item = f64>) -> (f64, f64) {
     let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
     for (i, v) in weights.enumerate() {
@@ -140,9 +145,9 @@ fn masks_stay_on_the_content_under_every_geometry_change_on_the_gpu() {
             let plain = on_gpu(&src, &unmasked, None);
             // (where the marked photo differs from an unmarked one: a warp leaves light blank canvas)
             let bare = on_gpu(&Arc::new(marked(false)), &unmasked, None);
-            let mark = centroid(plain.width, (0..plain.data.len()).map(|i| (luma(&plain, i) - luma(&bare, i)).max(0.0)));
+            let mark = centroid(plain.width, (0..plain.data.len()).map(|i| above_dither(luma(&plain, i) - luma(&bare, i))));
             for (how, m) in [("fresh", on_gpu(&src, &s, None)), ("cached", on_gpu(&src, &s, Some(&cache)))] {
-                let at = centroid(m.width, (0..m.data.len()).map(|i| (luma(&m, i) - luma(&plain, i)).max(0.0)));
+                let at = centroid(m.width, (0..m.data.len()).map(|i| above_dither(luma(&m, i) - luma(&plain, i))));
                 let d = ((at.0 - mark.0).powi(2) + (at.1 - mark.1).powi(2)).sqrt();
                 assert!(d < 2.0, "{name} after {what} ({how}): the mask's effect is at {at:?}, the mark at {mark:?}");
             }

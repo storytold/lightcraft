@@ -13,6 +13,7 @@ use lightcraft_ui_egui::{
 
 fn sidebar() -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.headless_host = true;
     app.ui.left_panel = true;
     app.ui.view = ViewMode::PhotoGrid;
     app.ui.right = RightPanel::None;
@@ -50,7 +51,9 @@ fn a_month_triangle_names_its_year() {
     for (id, captured) in ids.into_iter().zip(["2025-03-05T10:00:00", "2026-03-05T10:00:00"]) {
         session.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(captured.into()) }).expect("the capture time is set");
     }
-    let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    // Keep host-folder discovery from moving rows between a queued click and its frame (#3858).
+    let mut app = LightcraftApp::new(session, Services { png: None, local_places: Some(Vec::new()), ..Default::default() });
+    app.headless_host = true;
     app.ui.left_panel = true;
     app.ui.view = ViewMode::PhotoGrid;
     app.ui.right = RightPanel::None;
@@ -85,6 +88,7 @@ fn a_keyword_list_triangle_names_its_keyword() {
         session.execute("keyword.create", &params).expect("a keyword is created");
     }
     let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    app.headless_host = true;
     app.ui.left_panel = false;
     app.ui.view = ViewMode::PhotoGrid;
     app.ui.right = RightPanel::Keywords;

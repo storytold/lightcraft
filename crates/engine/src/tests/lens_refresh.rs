@@ -19,7 +19,7 @@ fn lens(k: f64) -> EmbeddedLens {
 }
 
 fn lens_of(s: &Session, id: PhotoId) -> Option<EmbeddedLens> {
-    s.catalog.photo(id).and_then(|p| p.embedded_lens)
+    s.catalog.photo(id).and_then(|p| p.embedded_lens.as_deref().copied())
 }
 
 /// Two demo photos "taken with different lenses".
@@ -157,7 +157,7 @@ fn photos_get_their_profile_when_the_database_arrives() {
 }
 
 fn with_lens(mut p: Photo, l: Option<EmbeddedLens>, on: bool) -> Photo {
-    p.embedded_lens = l;
+    p.embedded_lens = l.map(Box::new);
     let mut d = (*p.develop).clone();
     d.optics.lens_profile = on;
     p.develop = Arc::new(d);
@@ -237,7 +237,7 @@ fn a_new_database_profile_changes_the_render_and_cache_keys() {
         let render = s.render_job(id, 800, 600, false, true).unwrap().key;
         let thumb = s.thumb_job(id, 256).unwrap().cache.unwrap().1;
         let p = s.catalog.photo(id).unwrap().clone();
-        (render, thumb, Session::variant_key(&p, &p.develop, 128), Session::view_key(&p, true))
+        (render, thumb, Session::variant_key(&p, &p.develop, 128, 0), s.view_key(&p, true))
     };
     let before = keys(&mut s);
     s.catalog.apply(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens(-0.03))) }).unwrap();

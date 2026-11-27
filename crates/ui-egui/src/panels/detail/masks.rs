@@ -1,7 +1,7 @@
 use super::geometry::CanvasMap;
 use super::{
-    Color32, DevelopSettings, Gesture, LightcraftApp, MaskShape, Point, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, ToolOverlay, json, pos2,
-    register, vec2,
+    Color32, DevelopSettings, Gesture, LightcraftApp, MaskShape, Point, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, ToolOverlay, adjusting, json,
+    overlay_shown, pos2, register, vec2,
 };
 
 /// What the user did to a face box this frame.
@@ -29,7 +29,8 @@ const REGION_HANDLES: [(f32, f32, egui::CursorIcon); 8] = [
 ];
 
 /// Face/pet/focus regions read from XMP (MWG-RS), drawn as boxes over the photo. Hovering a box shows
-/// a × in its corner and eight resize handles. A drag previews the new box live and is reported once,
+/// a × in its corner and eight resize handles, and dragging its body moves it (not under a tool that
+/// draws on the photo). A drag previews the new box live and is reported once,
 /// on release (one undo step); the × reports the region to remove. Both are catalog-only edits:
 /// LightCraft doesn't write regions to XMP. Regions are stored on the upright (EXIF-oriented) photo;
 /// `orient` is the user's Rotate / Flip on top of it, which the loupe's normalized frame includes.
@@ -42,6 +43,52 @@ pub(super) struct RegionContext<'a> {
     /// the names to offer when a region is named
     pub people: &'a [String],
     pub setup: crate::panels::faces::Setup,
+    /// Dragging a box's body moves it: not while a tool that works on the photo owns the drag.
+    pub movable: bool,
+}
+
+/// Dragging the body of a box moves it. It is laid out before the handles and the × so they win an
+/// overlapping press. The press point and the box at press time are remembered, so the box follows the
+/// pointer from where it was grabbed. The move is reported on release, unless the box ends where it began.
+fn region_body_drag(
+    ui: &egui::Ui,
+    map: &CanvasMap,
+    rect: Rect,
+    (index, norm): (usize, lightcraft_geom::Rect),
+    orient: lightcraft_geom::Orientation,
+    drag_key: egui::Id,
+) -> Option<RegionEdit> {
+    let body_key = egui::Id::unique(("region-body", index));
+    let body_resp = ui.interact(rect, body_key, Sense::drag());
+    if body_resp.drag_started() {
+        let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(body_resp.interact_pointer_pos().unwrap_or(rect.center()));
+        let start = map.norm(press);
+        ui.data_mut(|d| d.insert_temp(body_key, (start, norm)));
+    }
+    // (the release frame reports `dragged()` too, so the last position is taken before the stop)
+    if body_resp.dragged() || body_resp.drag_stopped() {
+        let pp = body_resp.interact_pointer_pos();
+        let shown = ui.data(|d| d.get_temp::<(Point, lightcraft_geom::Rect)>(body_key));
+        if let (Some(pp), Some((start, shown))) = (pp, shown) {
+            let now = map.norm(pp);
+            let (w, h) = (shown.x1 - shown.x0, shown.y1 - shown.y0);
+            let (x0, y0) = ((shown.x0 + now.x - start.x).clamp(0.0, (1.0 - w).max(0.0)), (shown.y0 + now.y - start.y).clamp(0.0, (1.0 - h).max(0.0)));
+            let moved = lightcraft_geom::Rect { x0, y0, x1: x0 + w, y1: y0 + h };
+            if moved == shown {
+                ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
+            } else {
+                ui.data_mut(|d| d.insert_temp(drag_key, (index, orient.inverse().map_norm_rect(moved))));
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+    if !body_resp.drag_stopped() {
+        return None;
+    }
+    let edit = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)).map(|(i, new)| RegionEdit::Resize(i, new));
+    ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
+    ui.data_mut(|d| d.remove_temp::<(Point, lightcraft_geom::Rect)>(body_key));
+    edit
 }
 
 pub(super) fn region_overlay(
@@ -51,7 +98,7 @@ pub(super) fn region_overlay(
     regions: &RegionContext,
     editing: &mut Option<crate::state::NameEdit>,
 ) -> Option<RegionEdit> {
-    let RegionContext { photo, orient, hints, people, setup } = *regions;
+    let RegionContext { photo, orient, hints, people, setup, movable } = *regions;
     let t = Tokens::get(p.ctx());
     let clip = p.clip_rect();
     let pointer = ui.input(|i| i.pointer.hover_pos());
@@ -66,6 +113,9 @@ pub(super) fn region_overlay(
         // white with a black keyline just outside it, so the box shows on any background
         p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(190)), StrokeKind::Outside);
         p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Outside);
+        if movable && let Some(moved) = region_body_drag(ui, map, rect, (index, norm), orient, drag_key) {
+            edit = Some(moved);
+        }
         if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
                 let c = pos2(rect.left() + fx * rect.width(), rect.top() + fy * rect.height());
@@ -124,7 +174,7 @@ pub(super) fn region_overlay(
             let cross = Stroke::new(1.4, if resp.hovered() { Color32::WHITE } else { Color32::from_gray(210) });
             p.line_segment([c - vec2(m, m), c + vec2(m, m)], cross);
             p.line_segment([c - vec2(m, -m), c + vec2(m, -m)], cross);
-            if resp.on_hover_text(crate::i18n::tr("Remove this face box (undo with Edit ▸ Undo)")).clicked() {
+            if resp.on_hover_text(crate::i18n::tr("Remove this face box (undo with Edit → Undo)")).clicked() {
                 edit = Some(RegionEdit::Remove(index));
             }
         }
@@ -313,7 +363,12 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
 pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let active = app.session.active_mask;
     let clip = app.canvas_rect.unwrap_or(map.rect);
-    let p = &ui.painter_at(clip);
+    let mut painter = ui.painter_at(clip);
+    // a slider at work: no lines, handles or pins over the effect
+    if adjusting(app) {
+        painter.set_invisible();
+    }
+    let p = &painter;
     // (mask, component, handle, screen position) of everything that can be grabbed
     let mut grips: Vec<(u32, usize, u8, Pos2)> = Vec::new();
     // pins follow Show Pins and the Tool Overlay mode (Shift+H); Auto hides them while brushing
@@ -345,6 +400,15 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
                 grips.push((m.id, ci, 0, q));
             }
         }
+    }
+    // the pointer on a pin shows that mask's overlay (as Lightroom Classic); of pins on top of each other, the
+    // selected mask's, then the nearest: the one a drag there would move ([`grip_gestures`])
+    if let Some(h) = resp.hover_pos()
+        && let Some((mid, ..)) = grips.iter().filter(|(_, _, handle, q)| *handle == 0 && q.distance(h) < 9.0).min_by(|a, b| {
+            (Some(a.0) != active, a.3.distance(h)).partial_cmp(&(Some(b.0) != active, b.3.distance(h))).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        app.ui.mask_hover = app.session.active().map(|photo| (photo, *mid));
     }
     mask_keys(app, ui, map, d, &grips);
     object_marks(app, p, map, d, active);
@@ -614,6 +678,15 @@ fn brush_tool(
     clip: Rect,
     d: &DevelopSettings,
 ) {
+    // a live stroke cut short (no release seen): what went to the photo stays, in one step
+    if matches!(app.gesture, Some(Gesture::Brush { live: Some(_), .. }))
+        && !resp.drag_stopped()
+        && !resp.clicked()
+        && !ui.input(|i| i.pointer.any_down())
+    {
+        app.gesture = None;
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
     let active = app.session.active_mask;
     // the stroke goes into the selected mask (or a new one): in its coordinates
     let map = &map.for_mask_id(d, active);
@@ -632,30 +705,39 @@ fn brush_tool(
         match &mut app.gesture {
             // a held, unmoving pointer records nothing: coverage builds by passes, not time (#518)
             Some(Gesture::Brush { points, .. }) if points.last() == Some(&n) => {}
-            Some(Gesture::Brush { points, pressure }) => {
+            Some(Gesture::Brush { points, pressure, .. }) => {
                 record_pressure(pressure, points.len(), force);
                 points.push(n);
             }
+            // a stroke starts with a press, not part-way through a drag: one ended for picking another mask
+            // or photo ([`LightcraftApp::cancel_brush_gesture`]) paints nothing more until the button is let go
+            _ if !(resp.drag_started() || resp.clicked()) => {}
             _ => {
                 let mut pressure = Vec::new();
                 record_pressure(&mut pressure, 0, force);
-                app.gesture = Some(Gesture::Brush { points: vec![n], pressure });
+                app.gesture = Some(Gesture::Brush { points: vec![n], pressure, live: None });
             }
         }
     }
-    // the stroke being painted (the render shows it once it's committed), with the committed
-    // stroke's dab spacing, feather and flow (issue #517), tinted only when the overlay will
-    // show it: with the overlay hidden (O, or a mask slider hid it) or a colour overlay at
-    // opacity 0, the photo stays untinted while painting, so dodging and burning is judged on
-    // the photo (issue #2549)
+    // the overlay rule: a mask with settings shows its effect while painted (the stroke goes to the photo live),
+    // never tinted; the stroke is tinted only when the overlay will show it (O, or a mask without settings yet).
+    // With the all-masks overlay it follows the mask's visibility, and a colour overlay at opacity 0 tints nothing,
+    // so dodging and burning is judged on the photo (issue #2549). The tinted stroke has the committed stroke's dab
+    // spacing, feather and flow (issue #517); the render shows it once it's committed.
     use lightcraft_pipeline::MaskView;
     let colored = matches!(MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(), MaskView::Color | MaskView::ColorOnBw);
     // the all-masks overlay ([`view_overlay`]) shows only visible masks, and gives way to the
     // selected mask's when none has anything in it (a stroke goes into the selected mask, or a new one)
-    let visible = active.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.visible);
+    let mask = active.and_then(|id| d.masks.iter().find(|m| m.id == id));
+    let visible = mask.is_none_or(|m| m.visible);
     let all = app.ui.mask_overlay_all && (visible || d.masks.iter().any(|m| m.visible && !m.components.is_empty()));
-    let shown = if all { visible } else { app.ui.mask_overlay } && !(colored && app.ui.mask_overlay_opacity <= 0.0);
-    if shown && let Some(Gesture::Brush { points, pressure }) = &app.gesture {
+    let red = if all { visible } else { mask.is_none_or(|m| overlay_shown(app, m)) } && !(colored && app.ui.mask_overlay_opacity <= 0.0);
+    if !red {
+        live_stroke(app, ui);
+    }
+    if let Some(Gesture::Brush { points, pressure, live: None }) = &app.gesture
+        && red
+    {
         let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
         // opacity 0 only gets here in the image views, which ignore it: a fixed tint there
         let opacity = if app.ui.mask_overlay_opacity > 0.0 { app.ui.mask_overlay_opacity / 100.0 } else { 110.0 / 255.0 };
@@ -674,7 +756,7 @@ fn brush_tool(
         app.brush_live = None;
     }
     if (resp.drag_stopped() || resp.clicked())
-        && let Some(Gesture::Brush { points, pressure }) = app.gesture.take()
+        && let Some(Gesture::Brush { points, pressure, live }) = app.gesture.take()
     {
         app.brush_live = None;
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
@@ -686,8 +768,54 @@ fn brush_tool(
         let _ = app.run(
             "mask.brushStroke",
             json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
-                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
+                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect && live.is_none(),
+                   "continue": live.is_some()}),
         );
+        if live.is_some() {
+            let _ = app.run("develop.endInteraction", json!({}));
+        }
+    }
+}
+
+/// A stroke on a mask with settings goes to the photo every moment while painting, so its effect
+/// shows live (one undo step for the whole stroke).
+fn live_stroke(app: &mut LightcraftApp, ui: &egui::Ui) {
+    let now = ui.input(|i| i.time);
+    let Some(Gesture::Brush { points, pressure, live }) = &app.gesture else { return };
+    if !live_due(*live, points.len(), now) {
+        return;
+    }
+    let (pts, pressure, first) = (points.iter().map(|q| [q.x, q.y]).collect::<Vec<_>>(), pressure.clone(), live.is_none());
+    if first {
+        let _ = app.run("develop.beginInteraction", json!({"label": "Brush"}));
+    }
+    let erase = app.ui.brush_erase != ui.input(|i| i.modifiers.alt);
+    let sent = app.run(
+        "mask.brushStroke",
+        json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
+               "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "continue": !first}),
+    );
+    // only a stroke that reached the photo is live: else the release would replace the mask's
+    // previous stroke instead of adding this one
+    if sent.is_ok() {
+        if let Some(Gesture::Brush { live, .. }) = &mut app.gesture {
+            *live = Some((now, pts.len()));
+        }
+    } else if first {
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(LIVE_STROKE_EVERY));
+}
+
+/// How often (seconds) a stroke whose effect shows while painting goes to the photo.
+const LIVE_STROKE_EVERY: f64 = 0.12;
+
+/// Whether the stroke of `len` points should go to the photo now: the first time once it has two
+/// points, then every [`LIVE_STROKE_EVERY`] when it grew.
+fn live_due(live: Option<(f64, usize)>, len: usize, now: f64) -> bool {
+    match live {
+        None => len >= 2,
+        Some((at, sent)) => len > sent && (now - at >= LIVE_STROKE_EVERY || now < at || now.is_nan()),
     }
 }
 
@@ -829,7 +957,7 @@ fn current_on_photo(app: &LightcraftApp, mask: u32) -> Option<bool> {
 }
 
 /// Long-edge units → normalized units for x and y.
-fn frame_long_norm(map: &CanvasMap) -> (f64, f64) {
+pub(super) fn frame_long_norm(map: &CanvasMap) -> (f64, f64) {
     // derive from the mapping: 1 normalized unit in x and y in screen points (of the frame's
     // proportions, which a lens or perspective warp doesn't change)
     let map = map.for_mask(false);
@@ -903,5 +1031,72 @@ mod pen_tests {
         assert_eq!(pen_force(&i), Some(0.3), "the latest usable force");
         i.events = vec![touch(Some(4.0))];
         assert_eq!(pen_force(&i), Some(1.0));
+    }
+}
+
+#[cfg(test)]
+mod region_drag_tests {
+    use super::*;
+
+    /// Dragging the body of a face box (not a handle) moves the whole box by the drag, keeps its
+    /// size, and stays inside the photo; the move is reported once, on release.
+    #[test]
+    fn a_moved_face_box_keeps_its_size_and_stays_inside_the_photo() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0));
+        let frame = lightcraft_pipeline::geometry::Frame::new(100, 100, &DevelopSettings::default(), true);
+        let map = CanvasMap::new(&frame, canvas);
+        let mut photo = lightcraft_catalog::Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            lightcraft_catalog::Source::Demo { scene: 0 },
+            "a.jpg",
+            "JPEG",
+            100,
+            100,
+            "2026-10-01T00:00:00",
+        );
+        photo.meta.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: 0.2, y0: 0.2, x1: 0.4, y1: 0.4 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: Some("Jane".to_string()),
+            description: None,
+        }];
+        let mut editing = None;
+        let mut run_frame = |events: &[egui::Event]| -> Option<RegionEdit> {
+            let mut edit = None;
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(canvas), events: events.to_vec(), ..Default::default() }, |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                    let p = ui.painter_at(canvas);
+                    let regions = RegionContext {
+                        photo: &photo,
+                        orient: lightcraft_geom::Orientation::Normal,
+                        hints: None,
+                        people: &[],
+                        setup: crate::panels::faces::Setup::Running,
+                        movable: true,
+                    };
+                    edit = region_overlay(ui, &p, &map, &regions, &mut editing);
+                });
+            });
+            output.textures_delta.clear();
+            edit
+        };
+        // the box is at 80..160 px on screen; drag its centre (120, 120) by 40 x 20 px
+        let press =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        run_frame(&[egui::Event::PointerMoved(pos2(120.0, 120.0))]);
+        run_frame(&[press(pos2(120.0, 120.0), true)]);
+        run_frame(&[egui::Event::PointerMoved(pos2(140.0, 130.0))]);
+        run_frame(&[egui::Event::PointerMoved(pos2(160.0, 140.0))]);
+        let edit = run_frame(&[press(pos2(160.0, 140.0), false)]);
+        assert!(matches!(edit, Some(RegionEdit::Resize(0, _))), "dragging the face box body reports the moved box");
+        let Some(RegionEdit::Resize(index, moved)) = edit else { return };
+        assert_eq!(index, 0);
+        assert!(((moved.x1 - moved.x0) - 0.2).abs() < 0.02, "width kept: {moved:?}");
+        assert!(((moved.y1 - moved.y0) - 0.2).abs() < 0.02, "height kept: {moved:?}");
+        assert!((moved.x0 - 0.3).abs() < 0.02 && (moved.y0 - 0.25).abs() < 0.02, "moved by the drag: {moved:?}");
+        assert!(moved.x0 >= 0.0 && moved.y0 >= 0.0 && moved.x1 <= 1.0 && moved.y1 <= 1.0, "inside the photo: {moved:?}");
     }
 }

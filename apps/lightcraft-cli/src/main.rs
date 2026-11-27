@@ -11,11 +11,13 @@
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
 //! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
+mod bench_cull;
 
 use std::io::Write;
 use std::path::Path;
@@ -110,6 +112,12 @@ USAGE:
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
+  lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
+      Time what culling a shoot costs on its own files: reading the folder (browse), the first
+      screen of grid thumbnails, camera previews at loupe sizes and full size, a loupe render,
+      rating, and importing N files in place (default 2000) and copying M (default 200). Libraries
+      are made in a new folder under DIR (default: the temp folder); nothing is written next to the
+      photos. --files K reads only the first K files by name (a sample of a slow network folder).
   lightcraft-cli --version | --help
 ";
 
@@ -139,7 +147,27 @@ fn library_error(dir: &str, e: lightcraft_engine::EngineError) -> String {
     }
 }
 
+/// The desktop GUI's Launcher protocol is not a headless option: a CLI invoked with it (a shell
+/// completing `lightcraft` to `lightcraft-cli`, say) must say so rather than import the profile path
+/// as a folder. Checked before the arguments are otherwise read.
+fn launch_profile_refusal(args: impl Iterator<Item = String>) -> Option<String> {
+    for arg in args {
+        // (`--` ends the options: a file after it may be named like one of these.)
+        if arg == "--" {
+            break;
+        }
+        if arg == "--launch-profile" || arg == "--profile-root" || arg.starts_with("--launch-profile=") || arg.starts_with("--profile-root=") {
+            return Some(format!("lightcraft-cli: `{arg}` belongs to the LightCraft desktop app, not the headless CLI"));
+        }
+    }
+    None
+}
+
 fn main() -> ExitCode {
+    if let Some(refusal) = launch_profile_refusal(std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned())) {
+        eprintln!("{refusal}");
+        return ExitCode::from(2);
+    }
     // `--features dhat-heap`: count allocations; the profile is written when `_heap` drops
     // (LIGHTCRAFT_DHAT_FILE, default dhat-heap.json).
     #[cfg(feature = "dhat-heap")]
@@ -176,6 +204,7 @@ fn main() -> ExitCode {
         Some("controls") => controls(&args[1..]),
         Some("denoise-serve") => denoise_serve(&args[1..]),
         Some("calibrate") => calibrate(&args[1..]),
+        Some("bench-cull") => bench_cull::run(&args[1..]),
         Some("--version" | "-V" | "version") => {
             println!("lightcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -269,8 +298,11 @@ fn calibrate(args: &[String]) -> Result<(), String> {
                         let result = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| pool.add(&bytes));
                         let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         match result {
-                            Ok(Some(model)) => eprintln!("[{n}/{}] {} ({model})", files.len(), path.display()),
-                            Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable camera JPEG or colour)", files.len(), path.display()),
+                            Ok(Some(added)) if added.colour => eprintln!("[{n}/{}] {} ({})", files.len(), path.display(), added.model),
+                            Ok(Some(added)) => {
+                                eprintln!("[{n}/{}] {} ({}, tone only: too dark or colourless)", files.len(), path.display(), added.model)
+                            }
+                            Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable or a black-and-white camera JPEG)", files.len(), path.display()),
                             Err(e) => eprintln!("[{n}/{}] {}: {e}", files.len(), path.display()),
                         }
                     }
@@ -290,11 +322,12 @@ fn calibrate(args: &[String]) -> Result<(), String> {
             Ok(profile) => {
                 let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
                 println!(
-                    "{}: {} photos, {} colour pairs, hue/saturation table {} → {}",
+                    "{}: {} photos, {} colour pairs, hue/saturation table {}, tone curve {} → {}",
                     profile.model,
                     profile.files,
                     profile.samples,
                     profile.hue_sat.is_some(),
+                    profile.tone.is_some(),
                     path.display()
                 );
                 written += 1;
@@ -1125,6 +1158,28 @@ mod raw_files_tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
         assert_eq!(files, vec![a.join("one.NEF")]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod launch_profile_tests {
+    use super::launch_profile_refusal;
+
+    fn refusal(args: &[&str]) -> Option<String> {
+        launch_profile_refusal(args.iter().map(|a| (*a).to_string()))
+    }
+
+    #[test]
+    fn the_desktop_launch_protocol_is_refused_before_it_can_be_read_as_a_folder() {
+        for args in [
+            vec!["--launch-profile", "nightly-v1", "--profile-root", "/p", "--"],
+            vec!["run", "--profile-root=/p"],
+            vec!["--launch-profile=nightly-v1"],
+        ] {
+            assert!(refusal(&args).is_some(), "{args:?}");
+        }
+        assert!(refusal(&["run", "--library", "a", "--", "/p"]).is_none(), "a file named like an option after -- is a file");
+        assert!(refusal(&["run", "--demo"]).is_none());
     }
 }
 

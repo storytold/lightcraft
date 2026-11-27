@@ -151,6 +151,66 @@ fn a_click_outside_an_open_dropdown_keeps_the_dialog() {
 }
 
 #[test]
+fn export_subfolder_variable_dropdown() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.run("dialog.export", json!({})).unwrap();
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "combo:exportSubfolderTags"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(egui::Popup::is_any_open(&h.view.ctx), "the subfolder tags dropdown is open");
+
+    // Inspect AccessKit nodes to verify ComboBox role and localized accessible name
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    ctx.enable_accesskit();
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+    let mut out = ctx.run_ui(raw, |ui| {
+        let c = crate::widgets::combo_box("exportSubfolderTags").width(90.0).selected_text(crate::i18n::tr("Insert…")).show_ui(ui, |_| {});
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("Insert variable"));
+    });
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.expect("AccessKit update produced");
+    let has_combo = update.nodes.iter().any(|(_, n)| format!("{:?}", n.role()) == "ComboBox" && n.label().unwrap_or_default() == "Insert variable");
+    assert!(has_combo, "ComboBox has localized accessible name 'Insert variable'");
+
+    // Test text insertion and cursor behavior for subfolder field
+    let subfolder_id = crate::text_field::id("field:exportSubfolder");
+    let mut text = String::from("prefix_suffix");
+    // Place cursor at index 7 (after "prefix_")
+    let mut state = egui::text_edit::TextEditState::default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(7))));
+    state.store(&h.view.ctx, subfolder_id);
+
+    // Insert {date} at non-terminal cursor
+    crate::import::insert_at_cursor(&h.view.ctx, subfolder_id, &mut text, "{date}");
+    assert_eq!(text, "prefix_{date}suffix");
+    let loaded = egui::text_edit::TextEditState::load(&h.view.ctx, subfolder_id).unwrap();
+    assert_eq!(loaded.cursor.char_range().unwrap().primary.index.0, 7 + "{date}".chars().count());
+
+    // Replace selected range with {album}
+    let mut state = egui::text_edit::TextEditState::default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(7), egui::text::CCursor::new(7 + "{date}".chars().count()))));
+    state.store(&h.view.ctx, subfolder_id);
+    crate::import::insert_at_cursor(&h.view.ctx, subfolder_id, &mut text, "{album}");
+    assert_eq!(text, "prefix_{album}suffix");
+    let loaded = egui::text_edit::TextEditState::load(&h.view.ctx, subfolder_id).unwrap();
+    assert_eq!(loaded.cursor.char_range().unwrap().primary.index.0, 7 + "{album}".chars().count());
+
+    // Replace selection with {hour}
+    let mut state = egui::text_edit::TextEditState::default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(7), egui::text::CCursor::new(7 + "{album}".chars().count()))));
+    state.store(&h.view.ctx, subfolder_id);
+    crate::import::insert_at_cursor(&h.view.ctx, subfolder_id, &mut text, "{hour}");
+    assert_eq!(text, "prefix_{hour}suffix");
+}
+
+#[test]
 fn modal_dialogs_close_background_menus() {
     let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
     let r = h.request("ui.clickWidget", json!({"id": "menu:Photo"}), T);
@@ -160,4 +220,40 @@ fn modal_dialogs_close_background_menus() {
     h.app.run("dialog.copySettings", json!({})).unwrap();
     h.step();
     assert!(!egui::Popup::is_any_open(&h.view.ctx), "background menus cannot remain above the modal window");
+}
+
+/// The Create Preset name box is a `dialog_field` registered under `field:presetName`: Esc
+/// restores the name from before the edit and cancels the dialog, and Return keeps it and
+/// creates the preset. Drawn as a plain `egui::TextEdit` in `widgets::named` (the bug), the box
+/// is never focused under that id, so typing never lands, Esc does not restore, and Return does
+/// not confirm.
+#[test]
+fn create_preset_name_box_restores_on_escape_and_keeps_its_text_on_return() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.run("dialog.createPreset", json!({})).unwrap();
+    h.step(); // the dialog opens and its name field takes the focus
+    let r = h.request("ui.text", json!({"text": "My Preset"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let preset_name = |h: &Headless| match &h.app.ui.dialog {
+        Some(crate::state::Dialog::CreatePreset { name, .. }) => Some(name.clone()),
+        _ => None,
+    };
+    assert_eq!(preset_name(&h), Some("My Preset".to_string()), "the typed text is in the name box");
+    // Esc gives back the name from before the edit and cancels the dialog
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "escape cancels the dialog");
+    h.app.run("dialog.createPreset", json!({})).unwrap();
+    h.step();
+    assert_eq!(preset_name(&h), Some(String::new()), "the name is back to what it was before the edit");
+    let r = h.request("ui.text", json!({"text": "My Preset"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // Return keeps the text and creates the preset with it
+    let r = h.request("ui.key", json!({"key": "return"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "return confirms the dialog and closes it");
+    let preset = h.app.session.presets.iter().find(|p| p.name == "My Preset").expect("the preset was created with the typed name");
+    assert_eq!(preset.group, "User Presets", "the preset stays in the dialog's group");
 }
