@@ -479,5 +479,49 @@ class InventoryFailures(unittest.TestCase):
                 self.assertEqual(list(root.glob('.sources.json.*.tmp')), [])
 
 
+
+class GitSourceIsolationTests(unittest.TestCase):
+    """Exercise the identity block inserted into the hash-pinned generator."""
+
+    def identity(self, source, name='same-crate'):
+        import logging
+        import textwrap
+        from urllib.parse import urlparse
+        repo = 'https://github.com/example/formats'
+        commit = urlparse(source).fragment
+        key = source.removeprefix('git+').split('#', 1)[0]
+        scope = {
+            'hashlib': hashlib, 'source': source, 'CARGO_HOME': 'cargo',
+            'cargo_vendored_entry': {key: {'git': repo, 'replace-with': 'vendored-sources'}},
+            'logging': logging, 'name': name, 'repo_url': repo, 'commit': commit,
+            'git_repo': {'commits': {commit: {name: object()}}},
+        }
+        block = next(new for label, _, new in wrapper.PATCHES if label == 'isolate Git directory sources')
+        exec(textwrap.dedent(block), scope)
+        mapping = scope['cargo_vendored_entry']
+        replacement = mapping[key]['replace-with']
+        self.assertEqual(mapping[replacement]['directory'], scope['vendor_root'])
+        self.assertNotEqual(replacement, 'vendored-sources')
+        return scope['vendor_root'], replacement
+
+    def test_same_package_and_version_at_two_revisions_are_isolated(self):
+        prefix = 'git+https://github.com/example/formats?rev='
+        first = self.identity(prefix + 'a' * 40 + '#' + 'a' * 40)
+        second = self.identity(prefix + 'b' * 40 + '#' + 'b' * 40)
+        self.assertNotEqual(first[0], second[0])
+        self.assertNotEqual(first[1], second[1])
+        self.assertTrue(first[0].startswith('cargo/vendor-git/'))
+
+    def test_packages_from_one_locked_source_share_one_root(self):
+        source = 'git+https://github.com/example/formats?rev=' + 'a' * 40 + '#' + 'a' * 40
+        self.assertEqual(self.identity(source, 'metadata'), self.identity(source, 'tiff'))
+
+    def test_distinct_source_aliases_do_not_repeat_copy_into_same_directory(self):
+        commit = 'a' * 40
+        first = self.identity('git+https://github.com/example/formats?rev=' + commit + '#' + commit)
+        second = self.identity('git+https://github.com/example/formats?tag=release#' + commit)
+        self.assertNotEqual(first, second)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

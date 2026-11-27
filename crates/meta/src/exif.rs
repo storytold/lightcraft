@@ -1,6 +1,6 @@
 use crate::convert::{from_craft, to_craft};
 use crate::{Metadata, Orientation};
-use craft_tiff::{ParseOptions, Tiff, TiffError, tags as t};
+use craft_tiff::{ParseOptions, Tiff, TiffError};
 
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
     craft_metadata::strip_exif_header(b)
@@ -27,8 +27,7 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
 }
 
 pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
-    let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
-    tiff.ifds.first()?.u16(t::ORIENTATION).map(Orientation::from_exif)
+    craft_metadata::ifd0_orientation_compat(bytes).map(crate::convert::orientation_from_craft)
 }
 
 #[cfg(test)]
@@ -69,6 +68,7 @@ mod write_tests {
             focal_length: Some(35.0),
             lens_model: Some("35mm F2".into()),
             gps: Some(Gps { latitude: 43.7904, longitude: -110.6818, altitude: Some(2000.0) }),
+            rating: Some(4),
             ..Default::default()
         };
         let back = read_exif(&write_exif(&m));
@@ -81,8 +81,12 @@ mod write_tests {
         assert!((back.f_number.unwrap() - 2.8).abs() < 1e-6);
         assert!((back.exposure_time.unwrap() - 0.004).abs() < 1e-9);
         assert_eq!(back.lens_model, m.lens_model);
+        assert_eq!(back.rating, Some(4));
         let g = back.gps.unwrap();
         assert!((g.latitude - 43.7904).abs() < 1e-5 && (g.longitude + 110.6818).abs() < 1e-5, "{g:?}");
+
+        let rejected = read_exif(&write_exif(&Metadata { rating: Some(-1), ..Default::default() }));
+        assert_eq!(rejected.rating, Some(-1));
     }
 
     #[test]

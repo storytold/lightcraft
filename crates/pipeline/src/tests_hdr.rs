@@ -150,10 +150,14 @@ fn hdr_histogram_shows_the_range_above_sdr_white_on_a_fixed_scale() {
         RenderRequest { depth: OutputDepth::U16, ..req },
         RenderRequest { window: Some(crate::PixelWindow { x: 0, y: 0, w: 8, h: 8 }), ..req },
         RenderRequest { proof: Some(crate::Proof::default()), ..req },
+        RenderRequest { quality: crate::Quality::Draft, ..req },
     ] {
         assert!(crate::hdr_histogram(&src, &raw(), &s, &other).is_none());
     }
     let h = crate::hdr_histogram(&src, &raw(), &s, &req).expect("an HDR edit's histogram");
+    let samples = deep(&src, &s, OutputDepth::F32Hdr);
+    let legacy = lightcraft_raster::Histogram::of_hdr(samples.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32);
+    assert_eq!(h, legacy);
     let bins = h.hdr.expect("HDR bins");
     assert_eq!(bins.stops, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32, "the whole HDR range");
     assert!(h.above_sdr() > 0.0, "highlights above SDR white: {}", h.above_sdr());

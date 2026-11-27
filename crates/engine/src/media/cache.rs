@@ -342,11 +342,10 @@ impl MediaCache {
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
         let outliers = p.develop.removes_hot_pixels();
         // (a source developed with another camera profile, or none, doesn't stand in; a smart preview
-        // has no camera profile, and decoding it again gives the same picture, so it stands in while the
-        // original is offline)
+        // has no camera profile, so a cached proxy source only stands in while the original is offline —
+        // both profiles being none is not a match)
         if cached
-            && let Some(a) = self.get_source(p.id, level).filter(|a| a.fits_outliers(outliers))
-            && (a.camera_profile == wanted.as_ref().map(|(id, _)| id.clone()) || (a.from_proxy && self.original_offline(p)))
+            && let Some(a) = self.get_source(p.id, level).filter(|a| a.fits_outliers(outliers) && self.cached_source_stands_in(a, p, wanted.as_ref()))
         {
             return SourceRef::Loaded(Box::new(a));
         }
@@ -356,10 +355,7 @@ impl MediaCache {
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
             && let Some(big) = [SourceLevel::Preview, SourceLevel::Full].into_iter().find_map(|level| {
-                self.get_source(p.id, level).filter(|b| {
-                    b.fits_outliers(outliers)
-                        && (b.camera_profile.as_deref() == wanted.as_ref().map(|(tag, _)| tag.as_str()) || (b.from_proxy && self.original_offline(p)))
-                })
+                self.get_source(p.id, level).filter(|b| b.fits_outliers(outliers) && self.cached_source_stands_in(b, p, wanted.as_ref()))
             })
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
@@ -415,6 +411,23 @@ impl MediaCache {
             return 0;
         }
         self.camera_profiles.get(profile_id).map_or(0, |d| d.fingerprint)
+    }
+
+    /// A cached decoded source may stand in for photo `p` developed with camera profile `wanted`.
+    /// A source decoded from a smart preview only stands in while the original is offline: its
+    /// camera profile is also none, so a profile match would keep the proxy after the drive returns.
+    fn cached_source_stands_in(&self, a: &DecodedSource, p: &Photo, wanted: Option<&(String, Arc<DcpProfile>)>) -> bool {
+        if a.from_proxy { self.original_offline(p) } else { a.camera_profile.as_deref() == wanted.map(|(id, _)| id.as_str()) }
+    }
+
+    /// How to load photo `p`'s original at most `max_edge` pixels long, with the photo's Remove Hot
+    /// Pixels setting (the opening smart-preview refresh must not drop that correction).
+    pub fn origin_ref_of(&mut self, p: &Photo, max_edge: usize) -> SourceRef {
+        let mut r = self.origin_ref(&p.source, max_edge);
+        if let SourceRef::File { outliers: o, .. } = &mut r {
+            *o = p.develop.removes_hot_pixels();
+        }
+        r
     }
 
     /// How to load `origin` at most `max_edge` pixels long, ignoring decoded sources in memory (a

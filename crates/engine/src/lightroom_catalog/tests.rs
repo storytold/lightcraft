@@ -214,6 +214,8 @@ fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() 
                 file: Some(Box::new(crate::import::FileFacts {
                     meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
                     captured: None,
+                    orientation: None,
+                    sidecar: None,
                 })),
             }],
             ..Default::default()
@@ -263,7 +265,7 @@ fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
         p.format = "DNG".into();
         p.kind = lightcraft_catalog::MediaKind::Raw;
         p.as_shot_wb = Some((5200.0, 4.0));
-        p.embedded_lens = Some(lightcraft_develop::EmbeddedLens::default());
+        p.embedded_lens = Some(Box::default());
     });
     let mut data = sample();
     data.photos.retain(|p| number(&p.image, "masterImage") == 0);
@@ -354,6 +356,181 @@ fn a_content_duplicate_keeps_the_rights_metadata_and_capture_time_in_its_file() 
     assert_eq!(m.gps, None, "nothing from the other photo's record");
     // the catalog row has no capture time: the file's, not the other photo's edited one
     assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A content duplicate's XMP sidecar goes into its new record as it does for a file import of it
+/// (caption, copyright…) when the catalog doesn't restate them, also when its file has a capture
+/// time of its own (#2589).
+#[test]
+fn a_content_duplicate_keeps_what_its_sidecar_says() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-sidecar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">© Sidecar Author</rdf:li></rdf:Alt></dc:rights>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!((new.meta.caption.as_str(), new.meta.copyright.as_str()), ("Harbour at dawn", "© Sidecar Author"), "{r}");
+    assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "the file's own capture time: {r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A file that becomes a content duplicate only after it was prepared (another import added a photo
+/// with its bytes while the catalog was read) is turned into one just before the commit
+/// (`revalidate_add`); its new record keeps what its sidecar says all the same (#2589).
+#[test]
+fn a_file_that_turns_out_to_be_a_content_duplicate_at_commit_keeps_what_its_sidecar_says() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-late-duplicate-sidecar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">© Sidecar Author</rdf:li></rdf:Alt></dc:rights>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    // prepared while the library has no photo with the file's bytes: the file is ready to add
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    // then a photo with the same bytes arrives before the commit (the library is still the one
+    // the job was prepared for: the commit checks its identity, not its photos)
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    assert_eq!(s.catalog.photos().count(), 2, "{r}");
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!((new.meta.caption.as_str(), new.meta.copyright.as_str()), ("Harbour at dawn", "© Sidecar Author"), "{r}");
+    assert_eq!(s.catalog.photo(other).unwrap().meta.caption, "Other photo's caption", "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A content duplicate's sidecar regions drawn on its photo as stored (its stored size as
+/// `AppliedToDimensions`, no `mwg-rs:Rotation`) land on the upright photo, turned by its file's own
+/// orientation as a file import of it turns them (#2674): the record's size is its file's upright one,
+/// and the catalog's orientation is a develop rotation on top of it (#2589).
+#[test]
+fn a_content_duplicates_sidecar_regions_are_turned_by_its_files_orientation() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-regions-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+  xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+<mwg-rs:Regions rdf:parseType="Resource">
+<mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="32" stDim:h="24" stDim:unit="pixel"/>
+<mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType="Resource" mwg-rs:Name="Hannah" mwg-rs:Type="Face">
+<mwg-rs:Area rdf:parseType="Resource" stArea:x="0.25" stArea:y="0.4" stArea:w="0.1" stArea:h="0.15" stArea:unit="normalized"/>
+</rdf:li></rdf:Bag></mwg-rs:RegionList>
+</mwg-rs:Regions>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    // stored 32 × 24, a quarter turn clockwise upright: 24 × 32 (the size the new record takes)
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| (p.width, p.height) = (24, 32));
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 24,
+            height: 32,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            orientation: Some(lightcraft_geom::Orientation::Rotate90),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!(new.meta.regions.len(), 1, "{r}");
+    let b = new.meta.regions[0].rect;
+    let got = [b.x0, b.y0, b.x1, b.y1];
+    assert!(
+        got.iter().zip([0.525, 0.2, 0.675, 0.3]).all(|(g, w)| (g - w).abs() < 1e-9),
+        "the box is where the photo as stored had the face: {got:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// Only the Lightroom import reads a content duplicate's XMP sidecar: any other import skips the
+/// duplicate without looking its sidecar up (#2954), so the same file beside the same sidecar
+/// reaches the report with no sidecar unless the import makes a record of it (#2589).
+#[test]
+fn only_an_import_that_makes_a_record_of_a_content_duplicate_reads_its_sidecar() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-skip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("test.ARW");
+    std::fs::write(&file, b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let paths = [file.to_string_lossy().into_owned()];
+    for read_duplicates in [false, true] {
+        let mut s = crate::Session::new();
+        let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+        s.media.file_probe =
+            Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), content_hash: Some("same-bytes".into()), ..Default::default() })));
+        let opts = crate::import::ImportOptions { read_duplicates, ..Default::default() };
+        let r = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+        assert!(r.imported.is_empty() && s.catalog.photos().count() == 1, "{read_duplicates}: {r:?}");
+        let [d] = r.duplicates.as_slice() else { panic!("{read_duplicates}: {r:?}") };
+        assert_eq!((d.reason, d.existing), ("content", Some(other.0)), "{read_duplicates}");
+        let caption = d.file.as_ref().and_then(|f| f.sidecar.as_ref()).and_then(|sc| sc.caption.clone());
+        if read_duplicates {
+            assert_eq!(caption.as_deref(), Some("Harbour at dawn"), "the Lightroom import reads it: {r:?}");
+        } else {
+            assert_eq!(caption, None, "a skipped duplicate's sidecar isn't looked up: {r:?}");
+        }
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 /// A catalog photo matched (by path) to a library photo in Recently Deleted leaves it there, as
@@ -1053,6 +1230,19 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     assert_eq!(partial["light"]["contrast"], -100.0);
 }
 
+/// SQLite WAL checksum (file format §4.2) for building fixtures; the reader is craft-sqlite's.
+fn wal_checksum(bytes: &[u8], big: bool, mut sum: (u32, u32)) -> (u32, u32) {
+    for pair in bytes.as_chunks::<8>().0 {
+        let first = [pair[0], pair[1], pair[2], pair[3]];
+        let second = [pair[4], pair[5], pair[6], pair[7]];
+        let (first, second) =
+            if big { (u32::from_be_bytes(first), u32::from_be_bytes(second)) } else { (u32::from_le_bytes(first), u32::from_le_bytes(second)) };
+        sum.0 = sum.0.wrapping_add(first).wrapping_add(sum.1);
+        sum.1 = sum.1.wrapping_add(second).wrapping_add(sum.0);
+    }
+    sum
+}
+
 #[test]
 fn wal_checksums_cover_commits_without_materializing_historical_databases() {
     let mut main = vec![0; 512];
@@ -1090,9 +1280,8 @@ fn wal_checksums_cover_commits_without_materializing_historical_databases() {
     }
 }
 
-/// Issue #2592: a catalog in Lightroom's backup layout (`Backups/<date>/<name>.zip`), with one
-/// collection and the catalog's own id.
-fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
+/// A synthetic catalog with one photo, one collection and the catalog's own id.
+fn backup_catalog(catalog_id: &str) -> Vec<u8> {
     use SqlValue::{Integer as I, Null as N, Text as T};
     let mut tables: Vec<(&str, &str, Vec<Vec<SqlValue>>)> = one_row(photo_tables(("/catalog/", "")));
     tables.push((
@@ -1106,7 +1295,12 @@ fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
         "id_local INTEGER PRIMARY KEY, id_global, name, type, value",
         vec![vec![N, T("v1".into()), T("Adobe_storeProviderID".into()), N, T(catalog_id.into())]],
     ));
-    let bytes = native_catalog_rows(&tables, None);
+    native_catalog_rows(&tables, None)
+}
+
+/// Issue #2592: a catalog in Lightroom's backup layout (`Backups/<date>/<name>.zip`).
+fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
+    let bytes = backup_catalog(catalog_id);
     let folder = root.join("Lightroom");
     let dated = folder.join("Backups").join("2023-11-07 0900");
     std::fs::create_dir_all(&dated).unwrap();
@@ -1149,6 +1343,42 @@ fn a_backup_zip_imports_like_its_catalog_and_leaves_no_temporary_files() {
     assert!(!interop.iter().any(|n| n.starts_with("lc-lrbackup-")), "the unpacked catalog is removed: {interop:?}");
     assert_eq!(std::fs::read(&zip).unwrap(), zip_before, "the backup is only read");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_dated_backup_folder_recovers_its_unambiguous_zip64_catalog() {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-zip64-{}-{stamp}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let dated = root.join("Lightroom").join("Backups").join("2023-11-07 0900");
+    std::fs::create_dir_all(&dated).unwrap();
+
+    let catalog = backup_catalog("968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let valid = crate::lightroom_backup::tests::zip(&[("Cat.lrcat", &catalog), ("Cat.lrcat-data/CURRENT", b"MANIFEST-000005\n")], true, true);
+    let ambiguous = crate::lightroom_backup::tests::zip(&[("Cat.lrcat", &catalog), ("Cat.lrcat", &catalog)], true, true);
+    let zip = dated.join("Cat.zip");
+    // If discovery accepts duplicate catalogs, the earlier file name wins.
+    std::fs::write(dated.join("00-ambiguous.zip"), ambiguous).unwrap();
+    std::fs::write(&zip, &valid).unwrap();
+
+    let mut s = crate::Session::new();
+    let Err(crate::EngineError::LightroomCatalog { path, catalog: Some(discovered) }) = s.open_library(&dated, false) else {
+        panic!("opening a backup folder should offer its catalog");
+    };
+    assert_eq!(path, dated);
+    assert_eq!(discovered, zip);
+    assert!(s.library.is_none());
+
+    let lib = root.join("Library");
+    s.open_library(&lib, false).unwrap();
+    let report = import(&mut s, &discovered, false).unwrap();
+    assert_eq!((report["photos"].as_u64(), report["collections"].as_u64()), (Some(1), Some(1)));
+    assert_eq!(report["source"], json!(zip.to_string_lossy()));
+    let clean = std::fs::read_dir(lib.join("Interop")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with("lc-lrbackup-"));
+    assert!(clean, "the extracted catalog should be removed");
+    assert_eq!(std::fs::read(&zip).unwrap(), valid);
+    drop(s);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Issue #2606: the backup of an imported catalog matches its collections by the catalog id.
@@ -1473,6 +1703,56 @@ fn native_video_reimport_repairs_kind_without_losing_edits_or_memberships() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", windows))]
+fn catalog_import_finds_the_wal_for_a_non_unicode_filename() {
+    #[cfg(target_os = "linux")]
+    let mut name = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    };
+    #[cfg(windows)]
+    let mut name = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0xd800])
+    };
+    name.push(format!("-lightcraft-catalog-wal-{}.lrcat", std::process::id()));
+    let path = std::env::temp_dir().join(&name);
+    name.push("-wal");
+    let wal_path = std::env::temp_dir().join(&name);
+
+    let mut tables = photo_tables(("/catalog/", ""));
+    let main = native_catalog(&tables);
+    tables[3].2[6] = SqlValue::Integer(3);
+    let updated = native_catalog(&tables);
+
+    // The fixture's fifth page holds Adobe_images. Commit its new rating in the WAL.
+    const PAGE_SIZE: usize = 2048;
+    let mut wal = vec![0; 32 + 24];
+    wal[..4].copy_from_slice(&0x377f0682u32.to_be_bytes());
+    wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+    wal[8..12].copy_from_slice(&(PAGE_SIZE as u32).to_be_bytes());
+    let header_sum = wal_checksum(&wal[..24], false, (0, 0));
+    wal[24..28].copy_from_slice(&header_sum.0.to_be_bytes());
+    wal[28..32].copy_from_slice(&header_sum.1.to_be_bytes());
+    wal.extend_from_slice(&updated[4 * PAGE_SIZE..5 * PAGE_SIZE]);
+    let frame = &mut wal[32..];
+    frame[..4].copy_from_slice(&5u32.to_be_bytes());
+    frame[4..8].copy_from_slice(&5u32.to_be_bytes());
+    let frame_sum = wal_checksum(&frame[24..], false, wal_checksum(&frame[..8], false, header_sum));
+    frame[16..20].copy_from_slice(&frame_sum.0.to_be_bytes());
+    frame[20..24].copy_from_slice(&frame_sum.1.to_be_bytes());
+
+    std::fs::write(&path, main).unwrap();
+    let before = read(&path).unwrap();
+    std::fs::write(&wal_path, wal).unwrap();
+    let after = read(&path);
+    std::fs::remove_file(wal_path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(number(&before.photos[0].image, "rating"), 5);
+    assert_eq!(number(&after.unwrap().photos[0].image, "rating"), 3);
+}
+
+#[test]
 fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
     let bytes = native_catalog(&photo_tables(("/catalog/", "")));
     let path = std::env::temp_dir().join(format!("lightcraft-native-catalog-{}.lrcat", std::process::id()));
@@ -1731,4 +2011,63 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// A catalog whose settings decode to more than the budget keeps every row, archives the settings that fit, and
+/// says once how many it left out, instead of allocating whatever its BLOBs inflate to.
+#[test]
+fn settings_past_the_decode_budget_are_left_out_with_one_warning() {
+    use crate::lightroom_fixture::{self as fixture, Field, Table};
+    let dir = fixture::dir("history-budget");
+    let catalog = dir.join("test.lrcat");
+    let big = "x".repeat(512 << 10);
+    let rows = (1..=4).map(|id| fixture::history_step(id, 1, id as f64, "Step", Field::Blob(fixture::compressed(&big)))).collect();
+    fixture::write(&catalog, &[Table { name: "Adobe_libraryImageDevelopHistoryStep", columns: fixture::HISTORY_COLUMNS, rows }]);
+    let db = Database::open_file_with_wal(FileSource::open(&catalog).unwrap(), &[]).unwrap();
+    let reader = Reader { tables: db.live_tables().unwrap(), db };
+    let mut warnings = Vec::new();
+    let rows = reader.table_within("Adobe_libraryImageDevelopHistoryStep", true, 1 << 20, &mut warnings).unwrap();
+    assert_eq!(rows.len(), 4, "every step is still read");
+    assert_eq!(rows.iter().filter(|r| r.contains_key("text")).count(), 2, "the two steps within 1 MiB keep their settings");
+    assert_eq!(warnings, ["2 history steps archived without their settings: more than 1 MiB of settings in Adobe_libraryImageDevelopHistoryStep"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A stream that inflates past the length its header declares is stopped there, not inflated up to 16 MiB first.
+#[test]
+fn a_stream_longer_than_its_declared_length_is_stopped_at_that_length() {
+    let mut bytes = 10u32.to_be_bytes().to_vec();
+    bytes.extend(miniz_oxide::deflate::compress_to_vec_zlib(&[b'x'; 1024], 6));
+    assert_eq!(decode_compressed(&bytes, "settings"), Err("invalid compressed settings".to_string()));
+    let mut exact = 1024u32.to_be_bytes().to_vec();
+    exact.extend(miniz_oxide::deflate::compress_to_vec_zlib(&[b'x'; 1024], 6));
+    assert_eq!(decode_compressed(&exact, "settings").map(|text| text.len()), Ok(1024), "exactly its length decodes");
+}
+
+/// Settings that fail to decode still cost their declared length, so a catalog of damaged rows can't make the
+/// reader inflate without bound: past the budget, the rest are left out without being inflated.
+#[test]
+fn settings_that_fail_to_decode_still_count_against_the_budget() {
+    use crate::lightroom_fixture::{self as fixture, Field, Table};
+    let dir = fixture::dir("history-budget-bad");
+    let catalog = dir.join("test.lrcat");
+    let mut damaged = (512u32 << 10).to_be_bytes().to_vec();
+    damaged.extend([1, 2, 3]);
+    let rows = (1..=4).map(|id| fixture::history_step(id, 1, id as f64, "Step", Field::Blob(damaged.clone()))).collect();
+    fixture::write(&catalog, &[Table { name: "Adobe_libraryImageDevelopHistoryStep", columns: fixture::HISTORY_COLUMNS, rows }]);
+    let db = Database::open_file_with_wal(FileSource::open(&catalog).unwrap(), &[]).unwrap();
+    let reader = Reader { tables: db.live_tables().unwrap(), db };
+    let mut warnings = Vec::new();
+    let rows = reader.table_within("Adobe_libraryImageDevelopHistoryStep", true, 1 << 20, &mut warnings).unwrap();
+    assert_eq!(rows.len(), 4, "every step is still read");
+    assert_eq!(
+        warnings,
+        [
+            "image 1: history step 1: invalid compressed settings; archived without its settings",
+            "image 1: history step 2: invalid compressed settings; archived without its settings",
+            "2 history steps archived without their settings: more than 1 MiB of settings in Adobe_libraryImageDevelopHistoryStep",
+        ],
+        "the two damaged steps within 1 MiB are tried; the other two aren't"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
