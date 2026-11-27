@@ -1,9 +1,9 @@
-use super::histogram::preview_histogram;
 use super::sliders::control;
 use super::{
     Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PARAM_AMOUNTS, ParametricCurve, PhotoId, Point, Pos2, Rect, RichText, Sense, Stroke,
     Tokens, Vertex, controls, hex, json, paint, pos2, register, text_button, vec2,
 };
+use super::{Histogram, Slot};
 
 // ------------------------------------------------------------------------------ tone curve
 
@@ -28,8 +28,7 @@ fn curve_histogram_profile(h: &lightcraft_raster::Histogram, channel: &str) -> [
     samples.map(|v| (v / peak).sqrt())
 }
 
-/// Show the currently rendered photo's tonal distribution behind the editable
-/// curve, without requesting another render or blocking pointer interactions.
+/// Draw the selected curve's input behind its handles. Sampling is asynchronous.
 fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lightcraft_raster::Histogram, channel: &str) {
     let profile = curve_histogram_profile(h, channel);
     let color = match channel {
@@ -162,6 +161,27 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
     }
 }
 
+/// Request a small diagnostic of the whole crop. Never fall back to output pixels or to another
+/// photo/edit/channel while this request is pending, even when a late completion has just landed.
+fn curve_input_histogram(app: &mut LightcraftApp, id: PhotoId, channel: &str) -> Option<Histogram> {
+    use lightcraft_engine::pipeline::curve_input::{CurveInput, EDGE};
+    let input = match channel {
+        "master" => CurveInput::Master,
+        "red" => CurveInput::Red,
+        "green" => CurveInput::Green,
+        "blue" => CurveInput::Blue,
+        "parametric" => CurveInput::Parametric,
+        _ => CurveInput::Master,
+    };
+    let job =
+        app.session.thumb_job(id, EDGE)?.with_hidden_grading(app.ui.grading_hidden_for(id)).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
+    let job = app.renderer.curve_input_job(job, input);
+    let job = app.renderer.job_for(Slot::CurveHistogram, job);
+    let key = job.key;
+    app.renderer.request(Slot::CurveHistogram, job, 90);
+    app.renderer.curve_histogram.as_ref().filter(|h| h.0 == id && h.1 == key).map(|h| h.2.clone())
+}
+
 pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     // channel selector
@@ -210,6 +230,22 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         });
     });
     let ch = app.ui.curve_channel.clone();
+    let input_histogram = curve_input_histogram(app, id, &ch);
+    let status = if input_histogram.is_some() {
+        "Sampled input"
+    } else if app.renderer.failure_of(Slot::CurveHistogram, id).is_some() && !app.renderer.is_pending(Slot::CurveHistogram) {
+        "Input histogram unavailable"
+    } else {
+        "Loading input histogram..."
+    };
+    let label = ui
+        .horizontal(|ui| {
+            ui.add_space(24.0);
+            ui.label(RichText::new(crate::i18n::tr(status)).small().color(t.text_label))
+        })
+        .inner;
+    register(ui, "curve:inputHistogram", label.rect);
+    label.on_hover_text(crate::i18n::tr("Sampled tones entering the selected curve, across the whole crop. Parametric comes first, then Point, then Red, Green and Blue. Point and Parametric show a luminance summary. HDR edits use the SDR preview rendition."));
     let w = ui.available_width();
     let side = (w - 48.0).max(80.0);
     let (outer, _) = ui.allocate_exact_size(vec2(w, side + 12.0), Sense::hover());
@@ -220,7 +256,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     crate::widgets::context_menu(&resp, |ui| curve_reset_menu(app, ui, &ch));
     let p = ui.painter();
     p.rect_filled(r, 2.0, t.canvas);
-    if let Some(hist) = preview_histogram(app, id) {
+    if let Some(hist) = input_histogram {
         draw_curve_histogram(p, r, &hist, &ch);
     }
     for i in 1..4 {
