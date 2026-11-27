@@ -1079,31 +1079,49 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
 /// as `{id}:{key}`. Returns the value chosen this frame.
 pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str, hint: &str, items: &[(T, &str, &str)], current: T) -> Option<T> {
     let t = Tokens::get(ui.ctx());
-    let active = items.iter().position(|(v, _, _)| *v == current).unwrap_or(0);
-    let mut chosen = None;
     ui.horizontal(|ui| {
-        let name = crate::i18n::tr(label);
-        ui.label(egui::RichText::new(name).color(t.text_dim));
-        let shown = items.get(active).map_or("", |(_, l, _)| crate::i18n::tr(l));
-        let mut r = dropdown(ui, id, shown, t.font(12.5), t.text_label);
-        if !hint.is_empty() {
-            r = r.on_hover_text(crate::i18n::tr(hint));
-        }
-        ui.ctx().accesskit_node_builder(r.id, |node| {
-            node.set_label(name.to_string());
-            node.set_value(shown.to_string());
-        });
-        egui::Popup::menu(&r).show(|ui| {
-            for (i, (v, l, key)) in items.iter().enumerate() {
-                let item = ui.selectable_label(i == active, crate::i18n::tr(l));
-                register(ui, format!("{id}:{key}"), item.rect);
-                if item.clicked() {
-                    chosen = Some(*v);
-                }
+        ui.label(egui::RichText::new(crate::i18n::tr(label)).color(t.text_dim));
+        menu_dropdown(ui, id, label, hint, items, current)
+    })
+    .inner
+}
+
+/// The dropdown of [`labeled_dropdown`] without its label, for a row that draws the label itself
+/// (a dialog's label column): screen readers still hear `label` as its name.
+pub fn menu_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str, hint: &str, items: &[(T, &str, &str)], current: T) -> Option<T> {
+    let t = Tokens::get(ui.ctx());
+    let active = items.iter().position(|(v, _, _)| *v == current).unwrap_or(0);
+    let shown = items.get(active).map_or("", |(_, l, _)| crate::i18n::tr(l));
+    let mut r = dropdown(ui, id, shown, t.font(12.5), t.text_label);
+    if !hint.is_empty() {
+        r = r.on_hover_text(crate::i18n::tr(hint));
+    }
+    let mut chosen = None;
+    egui::Popup::menu(&r).show(|ui| {
+        for (i, (v, l, key)) in items.iter().enumerate() {
+            let item = ui.selectable_label(i == active, crate::i18n::tr(l));
+            register(ui, format!("{id}:{key}"), item.rect);
+            if item.clicked() {
+                chosen = Some(*v);
+                picked(ui, r.id);
             }
-        });
+        }
+    });
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&r));
+    ui.ctx().accesskit_node_builder(r.id, |node| {
+        node.set_label(crate::i18n::tr(label).to_string());
+        node.set_value(shown.to_string());
+        node.set_expanded(open);
     });
     chosen
+}
+
+/// After an item of a dropdown's menu is chosen: close the menu and give the focus back to the
+/// dropdown `trigger`. egui closes a menu by itself only on a pointer click, so a choice made with
+/// Enter or Space would otherwise leave it open, with the focus on an item that is going away.
+pub fn picked(ui: &Ui, trigger: egui::Id) {
+    ui.close();
+    ui.memory_mut(|m| m.request_focus(trigger));
 }
 
 #[cfg(test)]
