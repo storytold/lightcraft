@@ -21,6 +21,7 @@ mod hue_sat;
 mod look_fit;
 mod mono;
 mod pairs;
+pub(crate) use pairs::plausible_matrix;
 mod proxy;
 mod tone;
 
@@ -94,7 +95,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 26: a lens database's vignetting correction reaches the sensor proxy only in the share the camera JPEG shows
 /// (`camera_vignetting_amount`, ranked within chromaticity classes), not whole: JPEGs that show less of it fitted looks too
 /// dark, with skewed colour. The same for a DNG's tone fit; a CR3 proxy gets the gain where its framed pixels come from.
-pub const LOOK_VERSION: u32 = 26;
+/// 27: a fitted matrix whose rows aren't led by their own channel is refused (#3973).
+pub const LOOK_VERSION: u32 = 27;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

@@ -72,9 +72,12 @@ impl CameraProfile {
         Mat3(self.matrix)
     }
 
-    /// Whether the data is usable (bounded matrix, table shape matching its data).
+    /// Whether the data is usable (bounded matrix that a fit would keep, table shape matching its
+    /// data). A profile saved before the fit refused implausible matrices (#3973) may hold one.
     fn valid(&self) -> bool {
-        let matrix = self.matrix.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0) && Mat3(self.matrix).inverse().is_some();
+        let matrix = self.matrix.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0)
+            && Mat3(self.matrix).inverse().is_some()
+            && crate::camera_preview::plausible_matrix(&Mat3(self.matrix));
         let table = self.hue_sat.as_ref().is_none_or(|t| {
             let dims = (1..=4096).contains(&t.hue_divisions) && (2..=4096).contains(&t.sat_divisions) && (1..=4096).contains(&t.val_divisions);
             let len = t.hue_divisions.checked_mul(t.sat_divisions).and_then(|n| n.checked_mul(t.val_divisions));
@@ -400,6 +403,10 @@ mod tests {
         let mut p = profile();
         p.version = 99;
         assert!(bad(p), "unknown version");
+        let mut p = profile();
+        // #3973's refused fit: blue led by red and blue together, an orange turns magenta
+        p.matrix[2] = [2.97, -4.50, 2.57];
+        assert!(bad(p), "a matrix the fit would refuse");
         // a pooled tone curve round-trips; a broken one (knots going backwards) is a damaged file
         let toned = profile().with_tone(lightcraft_pipeline::tone::default_raw_camera_tone());
         let path = save(&toned, &dir).unwrap();
