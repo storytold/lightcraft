@@ -4740,3 +4740,1064 @@ fn a_broken_link_before_dotdot_is_an_error() {
     assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn reload_relinked_virtual_copy_reads_its_own_file() {
+    reload_relinked_virtual_copy(true);
+}
+
+#[test]
+fn reload_original_leaves_relinked_virtual_copy_unchanged() {
+    reload_relinked_virtual_copy(false);
+}
+
+#[test]
+fn reload_copy_refreshes_family_and_keeps_the_metadata_target() {
+    reload_copy_family_metadata(false);
+}
+
+#[test]
+fn reload_selected_copies_fill_metadata_after_deduplication() {
+    reload_copy_family_metadata(true);
+}
+
+fn reload_copy_family_metadata(select_sibling: bool) {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new(&format!("reload-copy-family-{select_sibling}"));
+    let path = dir.join("original.png");
+    write_png(&path, 10);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let original = s.active().unwrap();
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let sibling = PhotoId(r["ids"][0].as_u64().unwrap());
+    s.execute("develop.set", &json!({"ids": [copy.0], "control": "light.exposure", "value": 0.7})).unwrap();
+    let before: Vec<_> = [original, copy, sibling].map(|id| s.catalog.photo(id).unwrap().clone()).into();
+    let old_items = reload::plan(&mut s, &json!({"ids": [original.0]})).unwrap();
+    let old_info = reload::file_probe(&s).unwrap()(&path.to_string_lossy()).unwrap();
+    write_png(&path, 200);
+    let targets = if select_sibling { vec![copy.0, sibling.0, copy.0, sibling.0] } else { vec![copy.0, copy.0] };
+    let items = reload::plan(&mut s, &json!({"ids": targets})).unwrap();
+    assert_eq!(items.len(), 1, "one probe per shared file");
+    assert_eq!(items[0].id, copy, "keep the explicit metadata target");
+    assert_eq!(items[0].metadata_targets.len(), if select_sibling { 2 } else { 1 }, "each selected photo counts once");
+    let mut info = reload::file_probe(&s).unwrap()(&path.to_string_lossy()).unwrap();
+    info.meta.camera = "new camera metadata".into();
+    let changed = reload::apply(&mut s, items, vec![Ok(info)]).unwrap().reloaded;
+    assert_eq!(changed.len(), 3);
+    for old in &before {
+        let new = s.catalog.photo(old.id).unwrap();
+        assert_ne!(new.content_hash, old.content_hash);
+        assert_eq!(new.develop, old.develop);
+        assert_eq!(new.meta.camera, if old.id == copy || (select_sibling && old.id == sibling) { "new camera metadata" } else { "" });
+    }
+    assert!(
+        reload::apply(&mut s, old_items, vec![Ok(old_info)]).unwrap().reloaded.is_empty(),
+        "the newer copy reload supersedes its original's old result"
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+    for old in &before {
+        assert_eq!(s.catalog.photo(old.id).unwrap(), old);
+    }
+    s.execute("edit.redo", &json!({})).unwrap();
+    for old in &before {
+        assert_ne!(s.catalog.photo(old.id).unwrap().content_hash, old.content_hash);
+    }
+}
+
+fn reload_relinked_virtual_copy(from_copy: bool) {
+    let dir = super::TestDir::new(&format!("reload-relinked-copy-{from_copy}"));
+    let original_path = dir.join("original.png");
+    let copy_path = dir.join("other.png");
+    write_png(&original_path, 10);
+    write_png(&copy_path, 20);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original_path.to_string_lossy()]})).unwrap();
+    let original = PhotoId(r["imported"][0].as_u64().unwrap());
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+        copies.push(PhotoId(r["ids"][0].as_u64().unwrap()));
+    }
+    let (copy, sibling) = (copies[0], copies[1]);
+    s.execute("photo.relink", &json!({"id": copy.0, "path": copy_path.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(copy).unwrap().copy_of, Some(original));
+    let before: Vec<_> = [original, sibling, copy].into_iter().map(|id| s.catalog.photo(id).unwrap().clone()).collect();
+    write_png(&original_path, 100);
+    write_png(&copy_path, 200);
+
+    if from_copy {
+        // A relinked copy keeps its own probe; same-file siblings still share one original probe.
+        let items = crate::cmd::reload::plan(&mut s, &json!({"ids": [copy.0, original.0, sibling.0]})).unwrap();
+        assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), vec![copy, original]);
+        assert_eq!(items[0].path, copy_path.to_string_lossy());
+        assert_eq!(items[1].path, original_path.to_string_lossy());
+    }
+    let target = if from_copy { copy } else { original };
+    let changed = if from_copy { vec![copy] } else { vec![original, sibling] };
+    let r = s.execute("photo.reload", &json!({"ids": [target.0]})).unwrap();
+    assert_eq!(r["reloaded"], json!(changed.iter().map(|id| id.0).collect::<Vec<_>>()));
+    for old in &before {
+        let new = s.catalog.photo(old.id).unwrap();
+        if changed.contains(&old.id) {
+            assert_ne!(new.content_hash, old.content_hash);
+            assert_eq!(new.develop, old.develop);
+        } else {
+            assert_eq!(new, old, "a photo using another file stays unchanged");
+        }
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    for old in &before {
+        assert_eq!(s.catalog.photo(old.id).unwrap(), old, "reload remains one undo step");
+    }
+}
+
+#[test]
+fn reload_ticket_stays_with_its_file_after_a_copy_is_relinked() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-relinked-ticket");
+    let original_path = dir.join("original.png");
+    let other_path = dir.join("other.png");
+    write_png(&original_path, 10);
+    write_png(&other_path, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original_path.to_string_lossy()]})).unwrap();
+    let original = s.active().unwrap();
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    s.execute("photo.relink", &json!({"id": copy.0, "path": other_path.to_string_lossy()})).unwrap();
+    write_png(&original_path, 100);
+    let original_items = reload::plan(&mut s, &json!({"ids": [original.0]})).unwrap();
+    let original_info = reload::file_probe(&s).unwrap()(&original_path.to_string_lossy()).unwrap();
+    let expected = original_info.content_hash.clone();
+    let copy_items = reload::plan(&mut s, &json!({"ids": [copy.0]})).unwrap();
+    let copy_info = reload::file_probe(&s).unwrap()(&other_path.to_string_lossy()).unwrap();
+    reload::apply(&mut s, copy_items, vec![Ok(copy_info)]).unwrap();
+    s.execute("photo.relink", &json!({"id": copy.0, "path": original_path.to_string_lossy()})).unwrap();
+
+    let changed = reload::apply(&mut s, original_items, vec![Ok(original_info)]).unwrap().reloaded;
+    assert!(changed.contains(&original), "a newer read of another file must not supersede this result");
+    assert_eq!(s.catalog.photo(original).unwrap().content_hash, expected);
+    assert_eq!(s.catalog.photo(copy).unwrap().content_hash, expected);
+}
+
+#[test]
+fn reload_keeps_selected_targets_when_the_probe_representative_relinks() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-relinked-representative");
+    let original_path = dir.join("original.png");
+    let other_path = dir.join("other.png");
+    write_png(&original_path, 10);
+    write_png(&other_path, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original_path.to_string_lossy()]})).unwrap();
+    let original = s.active().unwrap();
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let items = reload::plan(&mut s, &json!({"ids": [copy.0, original.0]})).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, copy);
+    write_png(&original_path, 100);
+    let mut info = reload::file_probe(&s).unwrap()(&original_path.to_string_lossy()).unwrap();
+    let expected = info.content_hash.clone();
+    info.meta.camera = "fresh metadata".into();
+    s.execute("photo.relink", &json!({"id": copy.0, "path": other_path.to_string_lossy()})).unwrap();
+    let relinked = s.catalog.photo(copy).unwrap().clone();
+
+    assert_eq!(reload::apply(&mut s, items, vec![Ok(info)]).unwrap().reloaded, vec![original]);
+    let parent = s.catalog.photo(original).unwrap();
+    assert_eq!(parent.content_hash, expected);
+    assert_eq!(parent.meta.camera, "fresh metadata");
+    assert_eq!(s.catalog.photo(copy).unwrap(), &relinked);
+}
+
+#[test]
+fn review_relink_rejects_old_reload_facts_only_for_the_changed_photo() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-relink-aba");
+    let a = dir.join("a.png");
+    let b = dir.join("b.png");
+    write_png(&a, 10);
+    write_png(&b, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    s.execute("photo.relink", &json!({"id": copy.0, "path": a.to_string_lossy()})).unwrap();
+    let items = reload::plan(&mut s, &json!({"ids": [id.0, copy.0]})).unwrap();
+    let mut old = reload::file_probe(&s).unwrap()(&a.to_string_lossy()).unwrap();
+    old.meta.camera = "old probe metadata".into();
+    s.execute("photo.relink", &json!({"id": id.0, "path": b.to_string_lossy()})).unwrap();
+    write_png(&a, 200);
+    s.execute("photo.relink", &json!({"id": id.0, "path": a.to_string_lossy()})).unwrap();
+    let current = s.catalog.photo(id).unwrap().clone();
+    let changed = reload::apply(&mut s, items, vec![Ok(old)]).unwrap().reloaded;
+    assert!(!changed.contains(&id));
+    assert_eq!(s.catalog.photo(id).unwrap(), &current, "the replaced A keeps its current facts");
+    assert_eq!(s.catalog.photo(copy).unwrap().meta.camera, "old probe metadata", "the untouched sibling keeps its pending reload");
+    write_png(&a, 201);
+    let fresh = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+    assert!(fresh["reloaded"].as_array().unwrap().contains(&json!(id.0)), "a newly planned reload is accepted");
+}
+
+#[test]
+fn source_history_rejects_pending_reload_without_cancelling_untouched_siblings() {
+    use crate::cmd::reload;
+    for redo in [false, true] {
+        let dir = super::TestDir::new(&format!("reload-history-{redo}"));
+        let path = dir.join("original.png");
+        write_png(&path, 10);
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"id": id.0})).unwrap()["ids"][0].as_u64().unwrap());
+        write_png(&path, 20);
+        s.execute("photo.relink", &json!({"id": id.0, "path": path.to_string_lossy()})).unwrap();
+        if redo {
+            s.execute("edit.undo", &json!({})).unwrap();
+        }
+        let items = reload::plan(&mut s, &json!({"ids": [id.0, copy.0]})).unwrap();
+        write_png(&path, 30);
+        let old = reload::file_probe(&s).unwrap()(&path.to_string_lossy()).unwrap();
+        s.execute(if redo { "edit.redo" } else { "edit.undo" }, &json!({})).unwrap();
+        let current = s.catalog.photo(id).unwrap().clone();
+        let changed = reload::apply(&mut s, items, vec![Ok(old)]).unwrap().reloaded;
+        assert_eq!(s.catalog.photo(id).unwrap(), &current, "history protects the restored source facts");
+        assert_eq!(changed, [copy], "history leaves an untouched sibling's pending read usable");
+        assert_eq!(s.execute("photo.reload", &json!({"id": id.0})).unwrap()["reloaded"], json!([id.0]));
+    }
+}
+
+#[test]
+fn review_relinked_reload_keeps_an_implicit_same_file_copy() {
+    use crate::cmd::reload;
+    use lightcraft_catalog::Op;
+    let dir = super::TestDir::new("reload-relink-implicit-copy");
+    let a = dir.join("a.png");
+    let b = dir.join("b.png");
+    write_png(&a, 10);
+    write_png(&b, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    let p = s.catalog.photo(copy).unwrap().clone();
+    let mut metadata = p.meta.clone();
+    metadata.shutter = "1/2".into();
+    s.catalog.apply(Op::SetMeta { id: copy, meta: Box::new(metadata) }).unwrap();
+    s.catalog
+        .apply(Op::SetContent {
+            id: copy,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: Some("old unsupported source".into()),
+            preview_checked: "old".into(),
+        })
+        .unwrap();
+    let items = reload::plan(&mut s, &json!({"ids": [id.0]})).unwrap();
+    let mut old = reload::file_probe(&s).unwrap()(&a.to_string_lossy()).unwrap();
+    old.meta.camera = "must not fill the unselected copy".into();
+    old.meta.lens = "must not fill the unselected copy".into();
+    old.meta.shutter = "0.4".into();
+    old.meta.exposure_time = Some(0.4);
+    s.execute("photo.relink", &json!({"id": id.0, "path": b.to_string_lossy()})).unwrap();
+    write_png(&a, 200);
+    s.execute("photo.relink", &json!({"id": id.0, "path": a.to_string_lossy()})).unwrap();
+    let current = s.catalog.photo(id).unwrap().clone();
+    let changed = reload::apply(&mut s, items, vec![Ok(old)]).unwrap().reloaded;
+    assert!(!changed.contains(&id) && changed.contains(&copy));
+    assert_eq!(s.catalog.photo(id).unwrap(), &current);
+    let sibling = s.catalog.photo(copy).unwrap();
+    assert!(sibling.preview_only.is_none());
+    assert!(sibling.meta.camera.is_empty() && sibling.meta.lens.is_empty());
+    assert_eq!((sibling.meta.shutter.as_str(), sibling.meta.exposure_time), ("0.4", Some(0.4)));
+}
+
+#[test]
+fn review_reload_keeps_an_implicit_copy_when_its_selected_parent_moves() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-parent-moves");
+    let a = dir.join("a.png");
+    let b = dir.join("b.png");
+    write_png(&a, 10);
+    write_png(&b, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    let items = reload::plan(&mut s, &json!({"ids": [id.0]})).unwrap();
+    write_png(&a, 200);
+    let mut info = reload::file_probe(&s).unwrap()(&a.to_string_lossy()).unwrap();
+    let hash = info.content_hash.clone();
+    info.meta.camera = "must not fill implicit metadata".into();
+    s.execute("photo.relink", &json!({"id": id.0, "path": b.to_string_lossy()})).unwrap();
+    let parent = s.catalog.photo(id).unwrap().clone();
+    let before = s.catalog.photo(copy).unwrap().clone();
+    assert_eq!(reload::apply(&mut s, items, vec![Ok(info)]).unwrap().reloaded, vec![copy]);
+    let photo = s.catalog.photo(copy).unwrap();
+    assert_eq!(photo.content_hash, hash);
+    assert_ne!(photo.content_hash, before.content_hash);
+    assert_eq!(photo.meta.camera, before.meta.camera);
+    assert_eq!(s.catalog.photo(id).unwrap(), &parent);
+}
+
+#[test]
+fn review_relink_recognizes_an_extensionless_dng() {
+    use lightcraft_catalog::MediaKind;
+    let dir = super::TestDir::new("relink-extensionless-raw");
+    let image = dir.join("old.png");
+    let raw = dir.join("new-source");
+    write_png(&image, 10);
+    std::fs::write(&raw, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    s.execute("develop.set", &json!({"id": id.0, "control": "light.exposure", "value": 0.4})).unwrap();
+    let develop = s.catalog.photo(id).unwrap().develop.clone();
+    let wb = crate::cmd::reload::file_probe(&s).unwrap()(&raw.to_string_lossy()).unwrap().as_shot_wb;
+    assert!(wb.is_some());
+    s.execute("photo.relink", &json!({"id": id.0, "path": raw.to_string_lossy()})).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!((p.kind, p.format.as_str()), (MediaKind::Raw, "DNG"));
+    assert_eq!(p.as_shot_wb, wb, "the replacement raw supplies its verified As Shot value");
+    assert_eq!(p.develop, develop, "the relink preserves the user's Develop settings");
+}
+
+#[test]
+fn followup_relink_replaces_database_lens_without_changing_develop_settings() {
+    use lightcraft_catalog::Op;
+    let dir = super::TestDir::new("relink-database-lens");
+    let raw = dir.join("sensor.dng");
+    let rendered = dir.join("rendered.png");
+    std::fs::write(&raw, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    write_png(&rendered, 30);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) }).unwrap();
+    let before = s.catalog.photo(id).unwrap().clone();
+    assert!(!before.develop.optics.lens_profile);
+    s.execute("photo.relink", &json!({"id": id.0, "path": rendered.to_string_lossy()})).unwrap();
+    let after = s.catalog.photo(id).unwrap().clone();
+    assert!(after.embedded_lens.is_none(), "the old database profile does not belong to the replacement image");
+    assert_eq!(after.develop, before.develop, "reading lens facts does not enable a correction");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap(), &before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap(), &after);
+}
+
+#[test]
+fn relink_uses_the_replacement_cameras_white_balance_scale() {
+    use lightcraft_catalog::MediaKind;
+    let dir = super::TestDir::new("relink-camera-wb");
+    let original = dir.join("original.png");
+    let replacement = dir.join("replacement.arw");
+    write_png(&original, 10);
+    std::fs::write(&replacement, []).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(|path| {
+        let mut info = crate::media::ProbeInfo { kind: MediaKind::Raw, format: "ARW".into(), as_shot_wb: Some((4300.0, 7.0)), ..Default::default() };
+        info.meta.camera = "SONY ILCA-99M2".into();
+        if path.ends_with("replacement.arw") {
+            info.meta.lens = "Replacement lens".into();
+            info.meta.lens_make = "Replacement maker".into();
+        }
+        Ok(info)
+    }));
+    s.execute("photo.relink", &json!({"id": id.0, "path": replacement.to_string_lossy()})).unwrap();
+    let photo = s.catalog.photo(id).unwrap();
+    assert!(photo.develops_raw() && !photo.relative_wb());
+    assert_eq!(photo.as_shot_wb, Some((4300.0, 7.0)));
+    assert_eq!(photo.meta.lens, "Replacement lens");
+    assert_eq!(photo.meta.lens_make, "Replacement maker");
+    s.execute("photo.relink", &json!({"id": id.0, "path": original.to_string_lossy()})).unwrap();
+    let meta = &s.catalog.photo(id).unwrap().meta;
+    assert_eq!((meta.lens.as_str(), meta.lens_make.as_str()), ("Replacement lens", "Replacement maker"));
+}
+
+#[test]
+fn relink_keeps_a_missing_white_balance_measurement_only_for_the_same_content() {
+    use lightcraft_catalog::{MediaKind, Op};
+    let dir = super::TestDir::new("relink-missing-wb");
+    let original = dir.join("original.dng");
+    let moved = dir.join("moved.dng");
+    let other = dir.join("other.dng");
+    let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    for path in [&original, &moved, &other] {
+        std::fs::write(path, &raw).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let measured = Some((4300.0, 7.0));
+    s.commit("Set as shot", Op::SetAsShotWb { id, wb: measured }).unwrap();
+    let old = s.catalog.photo(id).unwrap().clone();
+    s.media.file_probe = Some(std::sync::Arc::new(move |path| {
+        let changed = path.ends_with("other.dng");
+        Ok(crate::media::ProbeInfo {
+            kind: MediaKind::Raw,
+            format: "DNG".into(),
+            width: old.width,
+            height: old.height,
+            file_size: old.file_size,
+            content_hash: if changed { Some("replacement-content".into()) } else { old.content_hash.clone() },
+            ..Default::default()
+        })
+    }));
+    s.execute("photo.relink", &json!({"path": moved.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().as_shot_wb, measured, "identical contents retain their measured fallback");
+    s.execute("photo.relink", &json!({"path": other.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().as_shot_wb, None);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().as_shot_wb, measured);
+}
+
+#[test]
+fn reload_refreshes_a_copy_created_during_the_probe() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-late-copy");
+    let file = dir.join("a.png");
+    write_png(&file, 10);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let items = reload::plan(&mut s, &json!({"id": id.0})).unwrap();
+    write_png(&file, 200);
+    let info = reload::file_probe(&s).unwrap()(&file.to_string_lossy()).unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"id": id.0})).unwrap()["ids"][0].as_u64().unwrap());
+    assert_ne!(s.catalog.photo(copy).unwrap().content_hash, info.content_hash);
+    let hash = info.content_hash.clone();
+    let out = reload::apply(&mut s, items, vec![Ok(info)]).unwrap();
+    assert!(out.reloaded.contains(&copy));
+    assert_eq!(s.catalog.photo(copy).unwrap().content_hash, hash);
+}
+
+#[test]
+fn reload_repairs_old_source_classification_without_replacing_edits() {
+    use lightcraft_catalog::{MediaKind, Op};
+    for raw in [false, true] {
+        let dir = super::TestDir::new(&format!("reload-kind-{raw}"));
+        let file = dir.join(if raw { "sensor.dng" } else { "rendered.png" });
+        if raw {
+            std::fs::write(&file, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        } else {
+            write_png(&file, 50);
+        }
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.75})).unwrap();
+        let correct = s.catalog.photo(id).unwrap().clone();
+        assert!(correct.is_edited());
+        let mut old = (*correct).clone();
+        old.kind = if raw { MediaKind::Image } else { MediaKind::Raw };
+        old.format = if raw { "JPEG" } else { "ORF" }.into();
+        old.preview_checked = old.preview_stamp(&old.preview_only);
+        old.as_shot_wb = Some((4300.0, 7.0));
+        s.catalog.apply(Op::RemovePhoto { id }).unwrap();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(old) }).unwrap();
+        let before = s.catalog.photo(id).unwrap().clone();
+        assert_eq!(s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap()["reloaded"], json!([id.0]));
+        let repaired = s.catalog.photo(id).unwrap().clone();
+        assert_eq!((repaired.kind, &repaired.format, &repaired.preview_checked), (correct.kind, &correct.format, &correct.preview_checked));
+        assert_eq!((repaired.develop.clone(), repaired.meta.clone()), (before.develop.clone(), before.meta.clone()));
+        assert_eq!(repaired.as_shot_wb, correct.as_shot_wb);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &before);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap(), &repaired);
+    }
+}
+
+#[test]
+fn followup_copy_as_dng_does_not_discard_an_output_matching_only_local() {
+    copy_as_dng_with_local_match(false);
+}
+
+#[test]
+fn followup_copy_as_dng_deduplicates_against_a_pending_local_promotion() {
+    copy_as_dng_with_local_match(true);
+}
+
+#[test]
+fn copy_as_dng_compares_a_replaced_browsed_file_using_its_fresh_hash() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    for updated_matches in [false, true] {
+        let dir = super::TestDir::new(&format!("copy-dng-fresh-browse-{updated_matches}"));
+        let raw = dir.join("source.orf");
+        std::fs::write(&raw, crate::files::tests::sensor_orf()).unwrap();
+        let (encoded, _, _) = crate::cmd::convert::write_dng_with(None, &raw.to_string_lossy(), String::new()).unwrap();
+        let dng = std::fs::read(encoded).unwrap();
+        let mut changed = lightcraft_raw::decode(&dng).unwrap();
+        let lightcraft_raw::RawData::U16(samples) = &mut changed.data else { panic!("integer fixture") };
+        samples[0] ^= 1;
+        let mut different = lightcraft_raw::write_dng(&changed, &Default::default()).unwrap();
+        different.resize(different.len().max(dng.len()) + 16, 0);
+        let (before, after) = if updated_matches { (&different, &dng) } else { (&dng, &different) };
+        let local_path = dir.join("browsed.dng").to_string_lossy().into_owned();
+        std::fs::write(&local_path, before).unwrap();
+        let mut s = Session::new().with_fs();
+        let browsed =
+            crate::import::import_with(&mut s, std::slice::from_ref(&local_path), &ImportOptions { local: true, ..Default::default() }).unwrap();
+        let local = PhotoId(browsed.imported[0]);
+        std::fs::write(&local_path, after).unwrap();
+        let destination = dir.join("copies");
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(destination.to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let report = crate::import::import_with(&mut s, &[raw.to_string_lossy().into_owned(), local_path], &opts).unwrap();
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!((report.imported.len(), report.duplicates.len()), (if updated_matches { 1 } else { 2 }, usize::from(updated_matches)));
+        let promoted = s.catalog.photo(local).unwrap();
+        assert!(promoted.in_library());
+        assert_eq!(promoted.content_hash, Some(lightcraft_preview::hash_bytes(after).to_string()));
+        assert_eq!(copy_dng_output_names(&destination).len(), usize::from(!updated_matches));
+    }
+}
+
+fn copy_as_dng_with_local_match(promote: bool) {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::Source;
+    let dir = super::TestDir::new(&format!("copy-dng-local-output-{promote}"));
+    let input = dir.join("sensor.nef");
+    std::fs::write(&input, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    let (generated, _, _) = crate::cmd::convert::write_dng_with(None, &input.to_string_lossy(), String::new()).unwrap();
+    let browsed = dir.join("browsed.dng");
+    std::fs::rename(generated, &browsed).unwrap();
+    let expected = std::fs::read(&browsed).unwrap();
+    let mut s = Session::new().with_fs();
+    let local =
+        crate::import::import_with(&mut s, &[browsed.to_string_lossy().into()], &ImportOptions { local: true, ..Default::default() }).unwrap();
+    let local_id = PhotoId(local.imported[0]);
+    let destination = dir.join("copies");
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let input_path = input.to_string_lossy().to_string();
+    let paths = if promote { vec![browsed.to_string_lossy().into(), input_path.clone()] } else { vec![input_path.clone()] };
+    let added = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+    assert_eq!(added.imported.len(), 1, "a Local match is not yet a library duplicate: {added:?}");
+    assert!(added.failed.is_empty(), "{added:?}");
+    assert_eq!(added.duplicates.len(), usize::from(promote), "{added:?}");
+    let id = PhotoId(added.imported[0]);
+    assert_eq!(s.catalog.photo(local_id).unwrap().local, !promote);
+    assert_eq!(id == local_id, promote);
+    let photo = s.catalog.photo(id).unwrap();
+    assert!(!photo.local);
+    let Source::File { path } = &photo.source else { panic!("file photo") };
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+    let again = crate::import::import_with(&mut s, &[input_path], &opts).unwrap();
+    assert!(again.imported.is_empty() && again.failed.is_empty(), "{again:?}");
+    assert_eq!(again.duplicates.len(), 1);
+    assert_eq!(again.duplicates[0].existing, Some(id.0), "real library duplicates keep their policy");
+    assert_eq!(copy_dng_output_names(&destination).len(), usize::from(!promote));
+    assert_eq!(std::fs::read(&browsed).unwrap(), expected);
+}
+
+#[test]
+fn convert_to_dng_refreshes_copy_classification_and_undo_redo() {
+    use lightcraft_catalog::{MediaKind, Op, Source};
+    let dir = super::TestDir::new("convert-copy-kind");
+    let raw = dir.join("sensor.dng");
+    let png = dir.join("rendered.png");
+    std::fs::write(&raw, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    write_png(&png, 30);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
+    let parent = s.active().unwrap();
+    // The existing conversion fixture uses a tiny DNG catalogued as NEF to exercise the command.
+    let photo = s.catalog.photo(parent).unwrap();
+    s.catalog
+        .apply(Op::Relink { id: parent, file_name: photo.file_name.clone(), source: photo.source.clone(), format: Some("NEF".into()), kind: None })
+        .unwrap();
+    let copy = s.execute("photo.virtualCopy", &json!({"ids": [parent.0]})).unwrap();
+    let copy = PhotoId(copy["ids"][0].as_u64().unwrap());
+    let independent = s.execute("photo.virtualCopy", &json!({"ids": [parent.0]})).unwrap();
+    let independent = PhotoId(independent["ids"][0].as_u64().unwrap());
+    s.execute("photo.relink", &json!({"id": independent.0, "path": png.to_string_lossy()})).unwrap();
+    let independent_before = s.catalog.photo(independent).unwrap().clone();
+    let shared = s.catalog.photo(copy).unwrap();
+    s.catalog
+        .apply(Op::Relink {
+            id: copy,
+            file_name: shared.file_name.clone(),
+            source: shared.source.clone(),
+            format: Some("PNG".into()),
+            kind: Some(MediaKind::Image),
+        })
+        .unwrap();
+    s.catalog.apply(Op::SetAsShotWb { id: copy, wb: None }).unwrap();
+    s.catalog.apply(Op::SetEmbeddedLens { id: copy, lens: Some(Box::default()) }).unwrap();
+    let database_lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: parent, lens: Some(Box::new(database_lens)) }).unwrap();
+    s.execute("develop.set", &json!({"ids": [copy.0], "control": "light.exposure", "value": 0.4})).unwrap();
+    let before = s.catalog.photo(copy).unwrap().clone();
+    let parent_before = s.catalog.photo(parent).unwrap().clone();
+    assert_eq!((before.kind, before.format.as_str()), (MediaKind::Image, "PNG"));
+    let converted = s.execute("photo.convertToDng", &json!({"ids": [parent.0]})).unwrap();
+    assert_eq!(converted["converted"].as_array().unwrap().len(), 1, "{converted}");
+    let output = Source::File { path: converted["converted"][0]["path"].as_str().unwrap().into() };
+    let output_info =
+        crate::files::probe_bytes("converted.dng", &std::fs::read(converted["converted"][0]["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(output_info.as_shot_wb.is_some());
+    for id in [parent, copy] {
+        let photo = s.catalog.photo(id).unwrap();
+        assert_eq!((photo.kind, photo.format.as_str()), (MediaKind::Raw, "DNG"), "known DNG output is always raw");
+        assert_eq!(photo.source, output);
+        assert_eq!(photo.as_shot_wb, output_info.as_shot_wb, "every relinked record uses the generated DNG's As Shot facts");
+        let lens = output_info.embedded_lens.as_ref().or((id == parent).then_some(&database_lens));
+        assert_eq!(photo.embedded_lens.as_deref(), lens);
+    }
+    assert_eq!(s.catalog.photo(independent).unwrap(), &independent_before);
+    let after = s.catalog.photo(copy).unwrap().clone();
+    assert_eq!(after.develop, before.develop);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(copy).unwrap(), &before);
+    assert_eq!(s.catalog.photo(parent).unwrap(), &parent_before);
+    assert_eq!(s.catalog.photo(independent).unwrap(), &independent_before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(copy).unwrap(), &after);
+    assert_eq!(s.catalog.photo(independent).unwrap(), &independent_before);
+}
+
+#[test]
+fn copy_as_dng_keeps_input_metadata_and_deduplicates_across_jobs_and_reopen() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::{MediaKind, Source};
+    let dir = super::TestDir::new("copy-dng-output-facts");
+    let library = dir.join("library");
+    let destination = dir.join("destination");
+    let paths: Vec<_> = ["first.orf", "second.orf"].map(|name| dir.join(name).to_string_lossy().to_string()).into();
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="2" crs:Exposure2012="+0.7"/></rdf:RDF></x:xmpmeta>"#;
+    let input = crate::tests_xmp::synthetic_dng_with(Some(xmp), Default::default());
+    for path in &paths {
+        std::fs::write(path, &input).unwrap();
+    }
+    // Describe a formerly preview-only vendor raw with distinct input metadata; the tiny DNG supplies its pixels.
+    let mut info = crate::files::probe_bytes("sensor.orf", &input).unwrap();
+    info.format = "ORF".into();
+    info.preview_only = Some("old unsupported compression".into());
+    info.meta.camera = "input camera".into();
+    info.captured = Some("2020-02-03T04:05:06".into());
+    info.file_modified = Some("2021-03-04T05:06:07".into());
+    info.as_shot_wb = Some((4300.0, 7.0));
+    let probe: crate::media::FileProbe = std::sync::Arc::new(move |path| {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        Ok(crate::media::ProbeInfo {
+            content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+            file_size: bytes.len() as u64,
+            ..info.clone()
+        })
+    });
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let mut s = Session::new().with_fs();
+    s.open_library(&library, false).unwrap();
+    s.media.file_probe = Some(probe.clone());
+    let report = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert_eq!(report.imported.len(), 1, "{report:?}");
+    let id = PhotoId(report.imported[0]);
+    assert_eq!(report.duplicates.len(), 1, "{report:?}");
+    assert_eq!(report.duplicates[0].existing, Some(id.0));
+    let photo = s.catalog.photo(id).unwrap().clone();
+    let Source::File { path: output } = &photo.source else { panic!("file photo") };
+    let bytes = std::fs::read(output).unwrap();
+    assert_eq!((photo.kind, photo.format.as_str(), &photo.preview_only), (MediaKind::Raw, "DNG", &None));
+    assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+    assert_ne!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&input).to_string()));
+    assert_eq!(photo.file_size, bytes.len() as u64);
+    assert_eq!(photo.meta.camera, "input camera");
+    assert_eq!(photo.captured.as_deref(), Some("2020-02-03T04:05:06"));
+    assert_eq!(photo.as_shot_wb, Some((4300.0, 7.0)));
+    assert_eq!(photo.rating, 2);
+    assert_eq!(photo.develop.light.exposure, 0.7);
+    let inventory = || copy_dng_output_names(&destination);
+    let kept = inventory();
+    assert_eq!(kept.len(), 1, "only the generated DNG remains");
+    for reopen in [false, true] {
+        if reopen {
+            assert!(!s.media.smart_dir.as_ref().unwrap().exists(), "this fixture builds no proxies or opening-refresh writers");
+            s.persist().unwrap();
+            drop(s);
+            s = Session::new().with_fs();
+            s.open_library(&library, false).unwrap();
+            s.media.file_probe = Some(probe.clone());
+        }
+        let again = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+        assert!(again.imported.is_empty() && again.failed.is_empty(), "{again:?}");
+        assert_eq!(again.duplicates.len(), 2, "{again:?}");
+        assert!(again.duplicates.iter().all(|duplicate| duplicate.existing == Some(id.0)), "{again:?}");
+        assert_eq!(inventory(), kept, "a repeated conversion leaves no orphan DNG");
+        assert_eq!(s.catalog.photo(id).unwrap(), &photo);
+    }
+    assert_copy_as_dng_restores(&mut s, id, &paths, &opts, &bytes);
+    assert!(paths.iter().all(|path| std::fs::read(path).unwrap() == input));
+}
+
+fn assert_copy_as_dng_restores(s: &mut Session, id: PhotoId, paths: &[String], opts: &crate::import::ImportOptions, bytes: &[u8]) {
+    use lightcraft_catalog::{MediaKind, Source};
+    let dir = Path::new(&paths[0]).parent().unwrap();
+    let destination = Path::new(opts.destination.as_deref().unwrap());
+    let input = std::fs::read(&paths[0]).unwrap();
+    let inventory = || copy_dng_output_names(destination);
+    // Recreate the same destination (also through a directory alias), then a differently named
+    // DNG. None may be deleted as disposable or relinked to the input raw with stale DNG facts.
+    for (i, path) in [&paths[0], &paths[0], &paths[1]].into_iter().enumerate() {
+        #[cfg(unix)]
+        if i == 1 {
+            let alias = dir.join("destination-alias");
+            std::os::unix::fs::symlink(destination, &alias).unwrap();
+            let photo = s.catalog.photo(id).unwrap();
+            let source = Source::File { path: alias.join(&photo.file_name).to_string_lossy().into() };
+            s.catalog.apply(lightcraft_catalog::Op::Relink { id, file_name: photo.file_name.clone(), source, format: None, kind: None }).unwrap();
+        }
+        #[cfg(not(unix))]
+        if i == 1 {
+            continue;
+        }
+        let Source::File { path: old } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+        std::fs::remove_file(old).unwrap();
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+        let restored = crate::import::import_with(s, std::slice::from_ref(path), opts).unwrap();
+        assert_eq!(restored.restored, [id.0], "{restored:?}");
+        assert!(restored.failed.is_empty() && restored.imported.is_empty(), "{restored:?}");
+        let restored = s.catalog.photo(id).unwrap();
+        let Source::File { path: restored_path } = &restored.source else { panic!("file photo") };
+        assert_eq!(Path::new(restored_path).extension().unwrap(), "dng", "Restore keeps the newly written DNG, not the input raw");
+        assert_eq!(std::fs::read(restored_path).unwrap(), bytes);
+        assert_eq!(restored.content_hash, Some(lightcraft_preview::hash_bytes(bytes).to_string()));
+        assert_eq!((restored.kind, restored.format.as_str(), &restored.preview_only), (MediaKind::Raw, "DNG", &None));
+        assert_eq!(inventory(), [Path::new(restored_path).file_name().unwrap()], "only the restored DNG remains");
+    }
+    // Different input identities can encode to identical DNGs. Both transfers reach commit;
+    // only the first replacement may survive a Restore planned against the still-missing path.
+    let padded_path = dir.join("padded.orf").to_string_lossy().to_string();
+    let mut padded = input.clone();
+    padded.extend_from_slice(&[0; 16]);
+    assert_ne!(lightcraft_preview::hash_bytes(&padded), lightcraft_preview::hash_bytes(&input));
+    std::fs::write(&padded_path, &padded).unwrap();
+    for incoming in [[paths[0].clone(), padded_path.clone()], [padded_path.clone(), paths[0].clone()]] {
+        let Source::File { path: old } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+        std::fs::remove_file(old).unwrap();
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+        let restored = crate::import::import_with(s, &incoming, opts).unwrap();
+        assert_eq!(restored.restored, [id.0], "{restored:?}");
+        assert!(restored.failed.is_empty() && restored.imported.is_empty(), "{restored:?}");
+        let Source::File { path: restored_path } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+        assert_eq!(std::fs::read(restored_path).unwrap(), bytes);
+        assert_eq!(inventory(), [Path::new(restored_path).file_name().unwrap()], "a pending Restore keeps only its live replacement");
+        assert_eq!(std::fs::read(&padded_path).unwrap(), padded);
+    }
+    // Another transfer may fill the missing name with different pixels before commit.
+    let Source::File { path: old } = s.catalog.photo(id).unwrap().source.clone() else { panic!("file photo") };
+    std::fs::remove_file(&old).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+    let different = dir.join("different").join(Path::new(&old).file_name().unwrap()).with_extension("orf");
+    let mut raw = lightcraft_raw::decode(&input).unwrap();
+    let lightcraft_raw::RawData::U16(samples) = &mut raw.data else { panic!("integer fixture") };
+    samples[0] ^= 1;
+    std::fs::create_dir_all(different.parent().unwrap()).unwrap();
+    std::fs::write(&different, lightcraft_raw::write_dng(&raw, &Default::default()).unwrap()).unwrap();
+    let restored = crate::import::import_with(s, &[different.to_string_lossy().into(), paths[1].clone()], opts).unwrap();
+    assert_eq!(restored.restored, [id.0], "{restored:?}");
+    assert_eq!(restored.imported.len(), 1, "the different image remains an independent import: {restored:?}");
+    let Source::File { path } = &s.catalog.photo(id).unwrap().source else { panic!("file photo") };
+    assert_ne!(path, &old, "Restore follows the matching content, not a reused name");
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    assert_ne!(std::fs::read(old).unwrap(), bytes);
+}
+
+#[test]
+fn copy_as_dng_restore_uses_the_verified_output_across_batches() {
+    use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
+    use lightcraft_catalog::{Op, Source};
+    for case in if cfg!(unix) { &[0, 1, 2, 3, 4][..] } else { &[0][..] } {
+        let dir = super::TestDir::new(&format!("copy-dng-restore-batch-{case}"));
+        let destination = dir.join("copies");
+        let source = ["first.nef", "second.nef"].map(|name| dir.join(name).to_string_lossy().into_owned());
+        let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        for path in &source {
+            std::fs::write(path, &raw).unwrap();
+        }
+        let mut session = Session::new().with_fs();
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(destination.to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut job = ImportJob::new(&mut session, opts.clone()).unwrap();
+        let first = job.prepare(&source[..1], &cancel);
+        let r = commit_prepared(&mut session, &opts, job.now(), first).unwrap();
+        let id = PhotoId(r.imported[0]);
+        let Source::File { path: old } = session.catalog.photo(id).unwrap().source.clone() else { panic!("file photo") };
+        let output = std::fs::read(&old).unwrap();
+        assert_ne!(output, raw);
+        session.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+
+        if *case != 0 {
+            // A new job sees the deleted record and verifies that its old DNG is still intact.
+            job = ImportJob::new(&mut session, opts.clone()).unwrap();
+        } else {
+            // The original job must not mistake a previous batch's input alias for a catalog hash.
+            std::fs::remove_file(&old).unwrap();
+        }
+        let second = job.prepare(&source[1..], &cancel);
+        if *case == 1 {
+            std::fs::remove_file(&old).unwrap();
+        } else if *case == 2 {
+            use std::io::Write;
+            let mtime = std::fs::metadata(&old).unwrap().modified().unwrap();
+            let mut different = output.clone();
+            different[0] ^= 1;
+            let mut f = std::fs::File::create(&old).unwrap();
+            f.write_all(&different).unwrap();
+            f.set_modified(mtime).unwrap();
+            assert_eq!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
+        } else if *case == 3 {
+            let mtime = std::fs::metadata(&old).unwrap().modified().unwrap();
+            std::fs::File::options().write(true).open(&old).unwrap().set_modified(mtime - std::time::Duration::from_secs(60)).unwrap();
+            assert_ne!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
+        } else if *case == 4 {
+            let mtime = std::fs::metadata(&old).unwrap().modified().unwrap();
+            let incoming = dir.join("incoming.dng");
+            let mut changed = output.clone();
+            changed[0] ^= 1;
+            std::fs::write(&incoming, changed).unwrap();
+            std::fs::File::options().write(true).open(&incoming).unwrap().set_modified(mtime).unwrap();
+            std::fs::rename(&incoming, &old).unwrap();
+            assert_eq!(std::fs::metadata(&old).unwrap().modified().unwrap(), mtime);
+        }
+        let r = commit_prepared(&mut session, &opts, job.now(), second).unwrap();
+        assert_eq!(r.restored, [id.0], "{r:?}");
+        assert!(r.failed.is_empty() && r.imported.is_empty(), "{r:?}");
+        let photo = session.catalog.photo(id).unwrap();
+        let Source::File { path } = &photo.source else { panic!("file photo") };
+        assert_eq!(Path::new(path).extension().unwrap(), "dng");
+        assert_eq!(std::fs::read(path).unwrap(), output);
+        assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&output).to_string()));
+        if *case == 3 {
+            assert_eq!(path, &old, "a new modification time alone does not move the restored photo");
+            assert_eq!(copy_dng_output_names(&destination).len(), 1);
+        } else if *case == 4 {
+            assert_ne!(path, &old, "a different file with the same mtime is not the original");
+        }
+    }
+}
+
+#[test]
+fn legacy_copy_as_dng_restores_only_the_matching_converted_sensor() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::Op;
+    for (replaced, raw_first) in [(false, false), (false, true), (true, false)] {
+        let dir = super::TestDir::new(&format!("legacy-copy-as-dng-restore-{replaced}-{raw_first}"));
+        let raw_path = dir.join("source.orf").to_string_lossy().into_owned();
+        let raw_bytes = crate::files::tests::sensor_orf();
+        std::fs::write(&raw_path, &raw_bytes).unwrap();
+        let mut s = Session::new().with_fs();
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(dir.join("copies").to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let report = crate::import::import_with(&mut s, std::slice::from_ref(&raw_path), &opts).unwrap();
+        let id = PhotoId(report.imported[0]);
+        let photo = s.catalog.photo(id).unwrap();
+        let original = file_source_path(photo);
+        let expected = photo.content_hash.clone();
+        assert_eq!(photo.format, "DNG");
+        let raw_hash = Some(lightcraft_preview::hash_bytes(&raw_bytes).to_string());
+        assert_ne!(expected, raw_hash);
+        s.catalog
+            .apply(Op::SetContent {
+                id,
+                width: photo.width,
+                height: photo.height,
+                file_size: raw_bytes.len() as u64,
+                content_hash: raw_hash,
+                preview_only: None,
+                preview_checked: String::new(),
+            })
+            .unwrap();
+        s.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+        let before = s.catalog.photo(id).unwrap().clone();
+        if replaced {
+            let mut other = lightcraft_raw::decode(&std::fs::read(&original).unwrap()).unwrap();
+            let lightcraft_raw::RawData::U16(samples) = &mut other.data else { panic!("integer fixture") };
+            samples[0] ^= 1;
+            std::fs::write(&original, lightcraft_raw::write_dng(&other, &Default::default()).unwrap()).unwrap();
+        }
+        let solo = crate::import::import_with(&mut s, std::slice::from_ref(&original), &ImportOptions::default()).unwrap();
+        assert!(solo.imported.is_empty() && solo.restored.is_empty() && solo.failed.len() == 1, "{solo:?}");
+        assert_eq!(s.catalog.photo(id).unwrap(), &before);
+        let paths = if raw_first { [raw_path, original.clone()] } else { [original.clone(), raw_path] };
+        let report = crate::import::import_with(&mut s, &paths, &ImportOptions::default()).unwrap();
+        assert!(report.imported.is_empty());
+        assert_eq!(s.catalog.photos().count(), 1);
+        let photo = s.catalog.photo(id).unwrap();
+        assert_eq!(file_source_path(photo), original);
+        if replaced {
+            assert_eq!(photo, &before);
+            assert!(report.restored.is_empty() && report.failed.len() == 2, "{report:?}");
+        } else {
+            assert_eq!(report.restored, [id.0], "{report:?}");
+            assert!(report.failed.is_empty(), "{report:?}");
+            assert_eq!(photo.content_hash, expected);
+            assert_eq!(photo.file_size, std::fs::metadata(original).unwrap().len());
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.catalog.photo(id).unwrap(), &before);
+        }
+    }
+}
+
+#[test]
+fn copy_as_dng_preserves_a_replaced_duplicate_output_and_refuses_it_for_restore() {
+    use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
+    use lightcraft_catalog::Op;
+    for deleted in [false, true] {
+        let dir = super::TestDir::new(&format!("copy-dng-replaced-output-{deleted}"));
+        let destination = dir.join("copies");
+        let first = dir.join("first.nef").to_string_lossy().into_owned();
+        let second = dir.join("second.nef").to_string_lossy().into_owned();
+        let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        for path in [&first, &second] {
+            std::fs::write(path, &raw).unwrap();
+        }
+        let mut session = Session::new().with_fs();
+        let opts = ImportOptions {
+            mode: ImportMode::Copy,
+            destination: Some(destination.to_string_lossy().into()),
+            organize: Organize::Flat,
+            convert_dng: true,
+            ..Default::default()
+        };
+        let report = crate::import::import_with(&mut session, &[first], &opts).unwrap();
+        let id = PhotoId(report.imported[0]);
+        let original = file_source_path(session.catalog.photo(id).unwrap());
+        if deleted {
+            session.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+            std::fs::remove_file(&original).unwrap();
+        }
+        let mut job = ImportJob::new(&mut session, opts.clone()).unwrap();
+        let batch = job.prepare(&[second], &std::sync::atomic::AtomicBool::new(false));
+        let generated = destination.join("second.dng");
+        let displaced = dir.join("displaced.dng");
+        std::fs::rename(&generated, &displaced).unwrap();
+        // A byte-identical replacement is still somebody else's file.
+        let bytes = std::fs::read(&displaced).unwrap();
+        std::fs::write(&generated, &bytes).unwrap();
+        let report = commit_prepared(&mut session, &opts, job.now(), batch).unwrap();
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert!(report.restored.is_empty() && report.imported.is_empty(), "{report:?}");
+        assert_eq!(std::fs::read(&generated).unwrap(), bytes);
+        let photo = session.catalog.photo(id).unwrap();
+        assert_eq!((photo.deleted, file_source_path(photo)), (deleted, original));
+    }
+}
+
+#[test]
+fn a_reused_deleted_path_does_not_claim_a_dng_restore() {
+    use crate::import::{ImportMode, ImportOptions, Organize};
+    use lightcraft_catalog::Op;
+    let dir = super::TestDir::new("dng-restore-reused");
+    let input = dir.join("incoming.nef");
+    let raw = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    std::fs::write(&input, raw).unwrap();
+    let destination = dir.join("copies");
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let input = input.to_string_lossy().into_owned();
+    let mut s = Session::new().with_fs();
+    let report = crate::import::import_with(&mut s, std::slice::from_ref(&input), &opts).unwrap();
+    let id = PhotoId(report.imported[0]);
+    let old = file_source_path(s.catalog.photo(id).unwrap());
+    let wanted = std::fs::read(&old).unwrap();
+    s.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+    let mut changed = lightcraft_raw::decode(&wanted).unwrap();
+    let lightcraft_raw::RawData::U16(samples) = &mut changed.data else { panic!("integer fixture") };
+    samples[0] ^= 1;
+    let other = lightcraft_raw::write_dng(&changed, &Default::default()).unwrap();
+    std::fs::write(&old, &other).unwrap();
+    let report = crate::import::import_with(&mut s, &[old.clone(), input], &opts).unwrap();
+    assert_eq!(report.restored, [id.0], "{report:?}");
+    assert!(report.imported.is_empty() && report.failed.len() == 1, "{report:?}");
+    let path = file_source_path(s.catalog.photo(id).unwrap());
+    assert_ne!(path, old);
+    assert_eq!(std::fs::read(path).unwrap(), wanted);
+    assert_eq!(std::fs::read(old).unwrap(), other);
+}
+
+#[test]
+fn a_changed_generated_dng_never_gets_a_new_catalog_record() {
+    use crate::import::{ImportJob, ImportMode, ImportOptions, Organize, commit_prepared};
+    let dir = super::TestDir::new("dng-changed-before-add");
+    let source = dir.join("source.orf");
+    let destination = dir.join("copies");
+    std::fs::write(&source, crate::files::tests::sensor_orf()).unwrap();
+    let opts = ImportOptions {
+        mode: ImportMode::Copy,
+        destination: Some(destination.to_string_lossy().into()),
+        organize: Organize::Flat,
+        convert_dng: true,
+        ..Default::default()
+    };
+    let mut s = Session::new().with_fs();
+    let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
+    let batch = job.prepare(&[source.to_string_lossy().into_owned()], &std::sync::atomic::AtomicBool::new(false));
+    let output = destination.join("source.dng");
+    let mut bytes = std::fs::read(&output).unwrap();
+    bytes[0] ^= 1;
+    std::fs::write(&output, &bytes).unwrap();
+    let report = commit_prepared(&mut s, &opts, job.now(), batch).unwrap();
+    assert!(report.imported.is_empty() && report.failed.len() == 1, "{report:?}");
+    assert!(s.catalog.is_empty());
+    assert_eq!(std::fs::read(&output).unwrap(), bytes);
+    assert!(source.is_file());
+}
+
+fn file_source_path(p: &lightcraft_catalog::Photo) -> String {
+    match &p.source {
+        lightcraft_catalog::Source::File { path } => path.clone(),
+        _ => panic!("file photo"),
+    }
+}
+
+fn copy_dng_output_names(destination: &Path) -> Vec<std::ffi::OsString> {
+    let mut files: Vec<_> = std::fs::read_dir(destination).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    files.sort();
+    files
+}

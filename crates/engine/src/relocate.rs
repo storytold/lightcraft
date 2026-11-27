@@ -542,7 +542,7 @@ impl Located {
             }
             moving.insert(r.id);
             places.insert(r.to.clone());
-            ops.push(Op::Relink { id: r.id, file_name: p.file_name.clone(), source: Source::File { path: r.to }, format: None });
+            ops.push(Op::Relink { id: r.id, file_name: p.file_name.clone(), source: Source::File { path: r.to }, format: None, kind: None });
         }
         let relinked = ops.len();
         if relinked == 0 {

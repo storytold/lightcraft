@@ -28,7 +28,7 @@
 
 use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -117,7 +117,7 @@ fn create_temp(path: &Path) -> io::Result<(PathBuf, File)> {
     let dir = parent_of(path);
     for _ in 0..1000 {
         let tmp = dir.join(format!(".lightcraft-{}-{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        match OpenOptions::new().read(true).write(true).create_new(true).open(&tmp) {
             Ok(f) => return Ok((tmp, f)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -127,8 +127,8 @@ fn create_temp(path: &Path) -> io::Result<(PathBuf, File)> {
 }
 
 /// Write a temp file next to `path` with what `fill` writes, synced to disk when `sync`. On
-/// failure the temp file is removed. Returns its path and length.
-fn write_temp(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<(PathBuf, u64)> {
+/// failure the temp file is removed. Returns its path, length and open handle.
+fn write_temp(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<(PathBuf, u64, File)> {
     let (tmp, file) = create_temp(path)?;
     let r = (|| {
         let limit = FAIL_AFTER.with(Cell::get);
@@ -140,10 +140,10 @@ fn write_temp(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> i
         if sync {
             sync_file(&f)?;
         }
-        Ok(n)
+        Ok((n, f))
     })();
     match r {
-        Ok(n) => Ok((tmp, n)),
+        Ok((n, file)) => Ok((tmp, n, file)),
         Err(e) => {
             let _ = fs::remove_file(&tmp);
             Err(e)
@@ -172,7 +172,8 @@ pub fn write_atomic_nosync(path: &Path, data: &[u8]) -> io::Result<()> {
 
 /// Temp file (synced when `sync`) renamed over `path`, then the folder synced when `sync`.
 fn replace_with(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
-    let (tmp, n) = write_temp(path, sync, fill)?;
+    let (tmp, n, file) = write_temp(path, sync, fill)?;
+    drop(file);
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(e);
@@ -193,16 +194,22 @@ pub fn write_new(path: &Path, data: &[u8]) -> io::Result<()> {
 /// `IMG_1.dng`, `IMG_1-2.dng`, …): the file is written once and then given the first name that
 /// is not taken. Returns that name; `AlreadyExists` when every candidate is taken.
 pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u8]) -> io::Result<PathBuf> {
+    write_new_unique_open(candidates, data).map(|(path, _)| path)
+}
+
+/// Like [`write_new_unique`], also returns the verified file handle so a caller can track the
+/// file it created even if the name is reused later.
+pub fn write_new_unique_open(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u8]) -> io::Result<(PathBuf, File)> {
     let mut candidates = candidates.peekable();
     let Some(first) = candidates.peek().cloned() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no file name to write"));
     };
-    let (tmp, _) = write_temp(&first, true, &mut |w| w.write_all(data))?;
+    let (tmp, _, mut file) = write_temp(&first, true, &mut |w| w.write_all(data))?;
     let r = (|| {
         // Kept (issue #134 point 4): these files replace raws (Convert / Copy as DNG) or become
         // library photos (merges). On a local disk the read usually comes from the cache, but on a
         // network volume it can go back to the server, and next to encoding a DNG it costs little.
-        if !same_content(&tmp, data)? {
+        if !same_content(&mut file, data)? {
             return Err(io::Error::other("the written file reads back different (failing drive or connection?)"));
         }
         for path in candidates.by_ref().take(100_000) {
@@ -219,7 +226,7 @@ pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u
     })();
     // after a hard link the temp name is a second name of the new file; after a rename it's gone
     let _ = fs::remove_file(&tmp);
-    r
+    r.map(|path| (path, file))
 }
 
 /// Give the complete temp file `tmp` the name `path`, unless that is taken.
@@ -245,10 +252,10 @@ fn publish_new_by_rename(tmp: &Path, path: &Path, before_claim: &dyn Fn()) -> io
     Ok(())
 }
 
-/// Does the file at `path` hold exactly `data`?
-fn same_content(path: &Path, data: &[u8]) -> io::Result<bool> {
+/// Does the open file hold exactly `data`?
+fn same_content(f: &mut File, data: &[u8]) -> io::Result<bool> {
     use std::io::Read;
-    let mut f = File::open(path)?;
+    f.rewind()?;
     if f.metadata()?.len() != data.len() as u64 {
         return Ok(false);
     }
@@ -267,6 +274,9 @@ fn same_content(path: &Path, data: &[u8]) -> io::Result<bool> {
         at += k;
     }
 }
+
+#[cfg(windows)]
+pub use lightcraft_wincolor::open_file_id;
 
 /// Do `a` and `b` name the same existing file (through hard links, symlinks, `..`,
 /// case-insensitive names)?
@@ -322,10 +332,15 @@ fn compare_files(a: &Path, b: &Path, strict: bool) -> io::Result<bool> {
 /// The volume serial number and file index of `a` and `b`, read while both files are open.
 #[cfg(windows)]
 fn file_ids(a: &Path, b: &Path) -> io::Result<((u64, u64), (u64, u64))> {
-    use winapi_util::{Handle, file::information};
+    use winapi_util::Handle;
     let (ha, hb) = (Handle::from_path_any(a)?, Handle::from_path_any(b)?);
-    let (ia, ib) = (information(&ha)?, information(&hb)?);
-    Ok(((ia.volume_serial_number(), ia.file_index()), (ib.volume_serial_number(), ib.file_index())))
+    Ok((windows_file_id(&ha)?, windows_file_id(&hb)?))
+}
+
+#[cfg(windows)]
+fn windows_file_id(file: impl winapi_util::AsHandleRef) -> io::Result<(u64, u64)> {
+    let info = winapi_util::file::information(file)?;
+    Ok((info.volume_serial_number(), info.file_index()))
 }
 
 /// The comparison uses each file's volume serial number and file index. Strict mode returns an error for file index 0.
@@ -340,6 +355,21 @@ fn same_file_id(a: (u64, u64), b: (u64, u64), strict: bool) -> io::Result<bool> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn full_windows_file_id_distinguishes_files_with_identical_bytes() {
+        let dir = temp("full-file-id");
+        let original = dir.join("original");
+        let replacement = dir.join("replacement");
+        for path in [&original, &replacement] {
+            fs::write(path, b"same data").unwrap();
+        }
+        let id = |path| open_file_id(&File::open(path).unwrap()).expect("test volume supports file IDs");
+        assert_eq!(id(&original), id(&original));
+        assert_ne!(id(&original), id(&replacement));
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     fn temp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-safe-file-{tag}-{}", std::process::id()));

@@ -280,7 +280,7 @@ fn the_cache_follows_a_file_name_and_a_format() {
     assert_eq!((found(&c, "renamed_0042"), found(&c, "plain")), (0, 1));
     assert_current(&c);
 
-    let undo = c.apply(Op::Relink { id, file_name: "Moved.TIF".into(), source: source.clone(), format: Some("TIFF".into()) }).unwrap();
+    let undo = c.apply(Op::Relink { id, file_name: "Moved.TIF".into(), source: source.clone(), format: Some("TIFF".into()), kind: None }).unwrap();
     assert_eq!((found(&c, "moved"), found(&c, "tiff"), found(&c, "png")), (1, 1, 0));
     assert_eq!((found_by_rule(&c, "moved"), found_by_rule(&c, "tiff"), found_by_rule(&c, "png")), (1, 1, 0));
     assert_current(&c);

@@ -63,7 +63,7 @@ impl crate::Session {
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
-        let lens = super::quick::lens_key(&p);
+        let metadata = super::quick::source_metadata_key(&p);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -73,7 +73,7 @@ impl crate::Session {
             ^ content.rotate_left(17)
             ^ salt
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37)
+            ^ metadata.rotate_left(37)
             ^ decoder.rotate_left(43);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
@@ -87,9 +87,8 @@ impl crate::Session {
             if profile_salt != 0 {
                 k.str("dcp").u64(profile_salt);
             }
-            // (likewise a database lens profile: thumbnails of every other photo keep their keys)
-            if lens != 0 {
-                k.u64(lens);
+            if metadata != 0 {
+                k.u64(metadata);
             }
             if decoder != 0 {
                 k.str("decoder").u64(decoder);
@@ -134,8 +133,7 @@ impl crate::Session {
         // (the imported camera profile's file is in the key, as in `render_job`'s: a profile file replaced under the
         // same id is a new picture)
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
-        // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
-        let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
+        let metadata = super::quick::source_metadata_key(&p);
         let decoder = super::quick::decoder_key(&p);
         job.key = settings.hash64()
             ^ crate::files::hot_pixel_key(settings)
@@ -144,7 +142,7 @@ impl crate::Session {
             ^ (apply_crop as u64)
             ^ (job.level as u64) << 60
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37)
+            ^ metadata.rotate_left(37)
             ^ decoder.rotate_left(43);
         Some(job)
     }
@@ -162,9 +160,9 @@ impl crate::Session {
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
         }
-        let lens = super::quick::lens_key(p);
-        if lens != 0 {
-            k.u64(lens);
+        let metadata = super::quick::source_metadata_key(p);
+        if metadata != 0 {
+            k.u64(metadata);
         }
         let decoder = super::quick::decoder_key(p);
         if decoder != 0 {
@@ -301,9 +299,9 @@ impl crate::Session {
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
         }
-        let lens = super::quick::lens_key(p);
-        if lens != 0 {
-            k.u64(lens);
+        let metadata = super::quick::source_metadata_key(p);
+        if metadata != 0 {
+            k.u64(metadata);
         }
         let decoder = super::quick::decoder_key(p);
         if decoder != 0 {
@@ -437,7 +435,7 @@ impl crate::Session {
             .u64(id.0)
             .u64(profile_salt)
             .finish();
-        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43);
+        let key = h.0 as u64 ^ super::quick::source_metadata_key(&p).rotate_left(37) ^ super::quick::decoder_key(&p).rotate_left(43);
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
