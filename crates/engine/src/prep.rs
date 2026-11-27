@@ -150,27 +150,26 @@ impl PrepSettings {
     /// Apply the fields of `patch` (a partial object, as `prefs.setBackgroundPrep` takes it).
     pub fn patched(&self, patch: &Value) -> Result<PrepSettings, String> {
         let mut v = serde_json::to_value(self).map_err(|e| e.to_string())?;
-        merge(&mut v, patch, 0);
+        merge(&mut v, patch, 0)?;
         let p: PrepSettings = serde_json::from_value(v).map_err(|e| format!("background preparation settings: {e}"))?;
         Ok(p.sanitized())
     }
 }
 
 /// `patch` merged into `into`, objects field by field (two levels deep: mode → field).
-fn merge(into: &mut Value, patch: &Value, depth: usize) {
+fn merge(into: &mut Value, patch: &Value, depth: usize) -> Result<(), String> {
     match (into, patch) {
         (Value::Object(a), Value::Object(b)) if depth < 3 => {
             for (k, v) in b {
                 match a.get_mut(k) {
-                    Some(old) => merge(old, v, depth + 1),
-                    None => {
-                        a.insert(k.clone(), v.clone());
-                    }
+                    Some(old) => merge(old, v, depth + 1)?,
+                    None => return Err(format!("unknown background preparation setting `{k}`")),
                 }
             }
         }
         (a, b) => *a = b.clone(),
     }
+    Ok(())
 }
 
 /// What the user is doing, as far as preparation goes.
@@ -505,6 +504,22 @@ mod tests {
         assert_eq!(p.develop.scope, Scope::OnScreen);
         assert_eq!(p.ahead(Mode::Develop), 0);
         assert!(PrepSettings::default().patched(&json!({"culling": {"scope": "sometimes"}})).is_err());
+        assert!(PrepSettings::default().patched(&json!({"library": {"previews": false, "unknown": true}})).is_err());
+    }
+
+    #[test]
+    fn a_patch_with_an_unknown_field_is_rejected_at_every_level() {
+        let original = PrepSettings::default().patched(&json!({"culling": {"ahead": 3}, "develop": {"ahead": 1}})).unwrap();
+        let before = original;
+        for patch in [
+            json!({"unknown": true}),
+            json!({"culling": {"ahead": 4}, "unknown": true}),
+            json!({"culling": {"previews": false, "unknown": true}}),
+            json!({"develop": {"ahead": 0, "unknown": true}}),
+        ] {
+            assert!(original.patched(&patch).is_err(), "{patch}");
+            assert_eq!(original, before, "{patch} leaves the settings as they were");
+        }
     }
 
     /// Tests side by side: one test's release doesn't free the build another test holds (CodeRabbit on #3077).
