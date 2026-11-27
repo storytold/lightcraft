@@ -18,6 +18,22 @@ pub struct Exported {
     pub gpu_fallback: Option<String>,
 }
 
+impl Exported {
+    /// Check that the primary file and its sidecars can be written separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the primary destination would also name a sidecar.
+    pub fn check_sidecar_destination(&self, path: &std::path::Path) -> Result<(), String> {
+        let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else { return Ok(()) };
+        let extension = if cfg!(windows) { extension.trim_end_matches(' ') } else { extension };
+        if self.sidecars.iter().any(|(ext, _)| extension.eq_ignore_ascii_case(ext)) {
+            return Err(format!("{}: the output file and its sidecar would have the same name (choose another file name)", path.display()));
+        }
+        Ok(())
+    }
+}
+
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
     let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
