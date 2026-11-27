@@ -361,6 +361,12 @@
 
 ## 2026-10-27
 
+### The desktop app starts in the system's language
+- On macOS, Windows and Linux, a library with no saved settings now opens in the first of the system's preferred
+  languages that LightCraft has a catalog for (Russian for `ru-SK`, German for `de-AT`), as the web build follows the
+  browser's languages. Before, it opened in English unless `LIGHTCRAFT_LANGUAGE` was set. A language chosen in
+  Settings ▸ General ▸ Language is kept as before.
+
 ### One feedback row in the macOS Help menu
 - On macOS the Help menu showed macOS's own "Send LightCraft Feedback" row above LightCraft's Send Feedback…. Only
   LightCraft's row is left; it opens a new issue on the project's GitHub. (A `--memory` session doesn't change that

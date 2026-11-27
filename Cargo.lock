@@ -4033,6 +4033,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "serde_json",
+ "sys-locale",
  "thiserror 2.0.21",
  "winit",
  "winresource",
