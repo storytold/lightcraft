@@ -280,6 +280,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "album.removePhotos",
             "photo.delete",
+            "library.deleteRejected",
             "photo.restore",
             "photo.deletePermanently",
             "library.emptyRecentlyDeleted",
