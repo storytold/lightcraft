@@ -102,7 +102,14 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             let _ = app.run("library.clearPreviews", json!({}));
         }
     });
+    // The preview cache size is saved with the library (`library.preferences`).
+    super::general::in_memory_note(app, ui, t);
     background_prep(app, ui, t);
+    ai_masks(app, ui, t);
+}
+
+/// Local folders: when photos only seen in Local, never added or changed, leave the catalog.
+pub(super) fn local_folders(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "Local folders");
     row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
         let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
@@ -118,9 +125,6 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.",
         ),
     );
-    #[cfg(not(target_arch = "wasm32"))]
-    smart_previews(app, ui, t);
-    ai_masks(app, ui, t);
 }
 
 /// Where AI masks (SAM 3) run: the choice (`segment.settings {runOn}`), what they run on, why not on
@@ -264,7 +268,7 @@ fn background_prep(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
 /// the effective folder, what is in it, and choosing another one.
 #[cfg(not(target_arch = "wasm32"))]
-fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub(super) fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // listing a big folder every frame would be slow: refresh every 2 s and after a change
     let cache = egui::Id::unique("smart-location");
     let now = ui.input(|i| i.time);

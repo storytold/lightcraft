@@ -144,12 +144,17 @@ fn a_row_of_many_choices_wraps_under_itself() {
 
 #[test]
 fn a_label_longer_than_its_column_leaves_the_controls_in_line() {
-    // Given Performance, whose "Forget unchanged photos" label is wider than the label column
+    // Given Library, whose "Forget unchanged photos" label is wider than the label column
     let mut h = demo([1600.0, 1000.0]);
-    show(&mut h, "performance");
-    // Then its choices start where the choices of a short label do
-    let (short, long) = (rect(&h, "button:settingsPreview-0"), rect(&h, "button:settingsForgetLocal-0"));
-    assert!((short.left() - long.left()).abs() < 0.5, "Preview size starts at {} and Forget unchanged photos at {}", short.left(), long.left());
+    show(&mut h, "library");
+    // Then its choices start where the choices of a row with no label do
+    let (short, long) = (rect(&h, "button:settingsLightroomImport-0"), rect(&h, "button:settingsForgetLocal-0"));
+    assert!(
+        (short.left() - long.left()).abs() < 0.5,
+        "When importing a Lightroom catalog starts at {} and Forget unchanged photos at {}",
+        short.left(),
+        long.left()
+    );
 }
 
 #[test]
@@ -165,13 +170,13 @@ fn a_long_library_folder_is_cut_short_and_its_tooltip_has_all_of_it() {
 
     let mut h = headless(session, [1600.0, 1000.0]);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
-    // When Settings opens on General, which shows where the library is
-    show(&mut h, "general");
+    // When Settings opens on Library, which shows where the library is
+    show(&mut h, "library");
     let general = rect(&h, "dialog:window");
     show(&mut h, "display");
     // Then the window is as wide as on a tab without a path
-    assert!(same(general, rect(&h, "dialog:window")), "General is {general:?} with a long path, Display is {:?}", rect(&h, "dialog:window"));
-    show(&mut h, "general");
+    assert!(same(general, rect(&h, "dialog:window")), "Library is {general:?} with a long path, Display is {:?}", rect(&h, "dialog:window"));
+    show(&mut h, "library");
     assert!(screen.contains_rect(general), "Settings {general:?} runs off the {screen:?} window");
     // And the path is cut short, inside the window
     let location = rect(&h, "text:settingsLocation");
@@ -239,8 +244,8 @@ fn library_default_stays_on_the_line_of_the_smart_previews_folder_whatever_its_l
         let mut session = lightcraft_engine::Session::new().with_fs();
         session.open_library(&dir, true).unwrap();
         let mut h = headless(session, [1600.0, 1000.0]);
-        // When Performance is scrolled to the foot of its page
-        show(&mut h, "performance");
+        // When Library is scrolled to the foot of its page
+        show(&mut h, "library");
         let window = rect(&h, "dialog:window");
         h.request("ui.move", json!({"x": window.center().x, "y": window.center().y}), T);
         for _ in 0..6 {
@@ -263,7 +268,7 @@ fn library_default_stays_on_the_line_of_the_smart_previews_folder_whatever_its_l
 fn a_short_path_is_shown_whole_and_has_no_tooltip() {
     // Given the in-memory library, whose Location is a short sentence
     let mut h = demo([1600.0, 1000.0]);
-    show(&mut h, "general");
+    show(&mut h, "library");
     let location = "In memory — nothing is saved";
     assert!(h.painted_text().iter().any(|text| text == location), "it is all there");
     assert!(!tooltip_shown(&h), "no tooltip before hovering the location");

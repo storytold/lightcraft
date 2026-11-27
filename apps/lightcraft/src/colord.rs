@@ -3,7 +3,7 @@
 //! GNOME, KDE and most other desktops keep each monitor's profile in colord
 //! (`org.freedesktop.ColorManager` on the system bus): Settings ▸ Color writes it there, and a
 //! calibrator (DisplayCAL, gnome-color-manager) installs its profile there. While no monitor profile
-//! is chosen in Settings ▸ Display, previews are shown through that profile
+//! is chosen in Settings ▸ Monitor, previews are shown through that profile
 //! (`Services::screen_profile`). A background thread asks colord every few seconds, so the UI never
 //! waits on D-Bus; without colord, or a display with no profile, the previews stay sRGB.
 //!

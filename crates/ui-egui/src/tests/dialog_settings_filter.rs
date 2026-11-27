@@ -80,13 +80,13 @@ fn says(h: &Headless, part: &str) -> bool {
 #[test]
 fn typing_lists_the_sections_that_match_on_whatever_tab() {
     let mut h = demo([1200.0, 1000.0]);
-    // Given Settings open on General, which has nothing about sidecars (they are on Import)
+    // Given Settings open on General, which has nothing about sidecars (they are on Files)
     show(&mut h, "general");
     // When "sidecar names" is typed into the filter
     filter(&mut h, "sidecar names");
     // Then the section about them is listed with the tab it is on, and the page of General is not shown
-    assert_eq!(found(&h), ["import:XMP sidecars"]);
-    assert!(says(&h, "Import") && says(&h, "XMP sidecars"));
+    assert_eq!(found(&h), ["files:XMP sidecars"]);
+    assert!(says(&h, "Files") && says(&h, "XMP sidecars"));
     assert!(headings(&h).is_empty(), "the tab's own page gives way to what was found: {:?}", headings(&h));
     // And the tab that was open is still the one open
     assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "general".into() }));
@@ -98,7 +98,7 @@ fn a_word_from_a_row_a_hint_or_a_button_finds_its_section() {
     show(&mut h, "general");
     // (a row's label)
     filter(&mut h, "Forget unchanged");
-    assert_eq!(found(&h), ["performance:Local folders"]);
+    assert_eq!(found(&h), ["library:Local folders"]);
     // (a button)
     filter(&mut h, "Clear Cache");
     assert_eq!(found(&h), ["performance:Preview cache"]);
@@ -146,7 +146,7 @@ fn typing_in_the_filter_starts_no_slide_preview_render() {
     assert!(h.app.session.active().is_some(), "a photo is active, so the preview would have one to render");
     assert_eq!(h.app.renderer.wanted(crate::render::Slot::SlidePreview), None, "none before");
     filter(&mut h, "sidecar names");
-    assert_eq!(found(&h), ["import:XMP sidecars"]);
+    assert_eq!(found(&h), ["files:XMP sidecars"]);
     h.settle(T);
     assert_eq!(h.app.renderer.wanted(crate::render::Slot::SlidePreview), None, "the filter asked for no render of the slide preview");
 }
@@ -184,7 +184,7 @@ fn choosing_what_starts_a_tab_shows_the_top_of_its_page() {
     for _ in 0..60 {
         h.step();
     }
-    assert!(rect(&h, "heading:Library").unwrap().top() < room.top(), "General is scrolled down");
+    assert!(rect(&h, "heading:Startup").unwrap().top() < room.top(), "General is scrolled down");
     // When what is above its first heading (the language) is found and chosen
     filter(&mut h, "language");
     assert!(found(&h).contains(&"general:".to_string()), "{:?}", found(&h));
@@ -194,7 +194,7 @@ fn choosing_what_starts_a_tab_shows_the_top_of_its_page() {
         h.step();
     }
     // Then the page is at its top again
-    assert!(rect(&h, "heading:Library").unwrap().top() >= room.top() - 0.5, "the top of General is in view");
+    assert!(rect(&h, "heading:Startup").unwrap().top() >= room.top() - 0.5, "the top of General is in view");
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn return_opens_the_first_result() {
     key(&mut h, "Enter");
     h.settle(T);
     steps(&mut h);
-    assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "import".into() }));
+    assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "files".into() }));
     assert!(headings(&h).contains(&"XMP sidecars".to_string()));
     assert!(found(&h).is_empty());
 }

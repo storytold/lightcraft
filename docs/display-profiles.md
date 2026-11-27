@@ -31,7 +31,7 @@ that doesn't report it). The log says which applies (`screen profile: …`) when
 
 ## Using it
 
-Settings ▸ Display ▸ **Choose Profile…** picks an `.icc` / `.icm` file (the dialog opens where the system keeps
+Settings ▸ Monitor ▸ **Choose Profile…** picks an `.icc` / `.icm` file (the dialog opens where the system keeps
 them: `~/.local/share/icc` on Linux, ColorSync's folders on macOS, `…\spool\drivers\color` on Windows). **Use Screen
 Profile** (in hosts without one, **Use sRGB**) goes back to no profile. The choice is an app setting (`ui.json`, `displayProfile`)
 and applies at once; a file that can't be used is reported there and previews stay sRGB.

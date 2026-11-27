@@ -3,7 +3,7 @@
 //! macOS colour-manages windows that say what colour space they draw in. wgpu leaves the window's
 //! Metal layer without one for sRGB content, which Core Animation shows without colour matching, so
 //! on a wide-gamut (P3) screen the previews looked more saturated than the exported files do in
-//! Preview or Photos (issue #787). While no monitor profile is chosen in Settings ▸ Display, the
+//! Preview or Photos (issue #787). While no monitor profile is chosen in Settings ▸ Monitor, the
 //! previews are shown through this profile instead (`Services::screen_profile`).
 
 use objc2::MainThreadMarker;

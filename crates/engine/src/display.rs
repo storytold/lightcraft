@@ -1,7 +1,7 @@
 //! The monitor profile (`app.displayProfile`): previews shown on a wide-gamut or calibrated
 //! display through its ICC profile.
 //!
-//! The frontend holds the profile in use (Settings ▸ Display, the UI command `app.displayProfile`).
+//! The frontend holds the profile in use (Settings ▸ Monitor, the UI command `app.displayProfile`).
 //! With a profile, the loupe renders into the display's own primaries
 //! ([`RenderJob::with_display`](crate::media::RenderJob::with_display)) and everything else made
 //! for sRGB (thumbnails, cached previews, embedded camera JPEGs) is converted to it

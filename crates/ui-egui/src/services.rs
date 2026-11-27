@@ -70,10 +70,10 @@ pub struct Services {
     pub pick_preset_files: Option<PickFiles>,
     /// Open dialog for a GPS track log (`.gpx`; Photo ▸ Metadata ▸ Auto-Tag from Tracklog…).
     pub pick_tracklog: Option<PickFiles>,
-    /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Display; desktop only).
+    /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Monitor; desktop only).
     pub pick_display_profile: Option<PickFiles>,
     /// The profile of the screen showing the window, used while none is chosen in Settings ▸
-    /// Display: macOS's screen profile (its windows aren't colour-managed: issue #787), colord's on
+    /// Monitor: macOS's screen profile (its windows aren't colour-managed: issue #787), colord's on
     /// Linux, and on Windows the monitor's (none while Windows colour-manages the desktop itself).
     pub screen_profile: Option<ScreenProfileFn>,
     /// The system's Reduce Motion setting (macOS), followed while Settings ▸ Interface ▸ Reduce motion
@@ -112,7 +112,7 @@ pub struct Services {
     /// The host's current log file (`<settings>/logs/lightcraft.log`), which Help ▸ Open Log
     /// Folder reveals (#260). None where no log is kept: the web, `--memory`, `LIGHTCRAFT_NO_PREFS`.
     pub log_file: Option<String>,
-    /// Choose a folder (Settings → General → Open Library…; desktop only).
+    /// Choose a folder (Settings → Library → Open Library…; desktop only).
     pub pick_folder: Option<PickFolder>,
     /// Open a Lightroom Classic `.lrcat` catalog for read-only import.
     pub pick_lightroom_catalog: Option<PickFolder>,

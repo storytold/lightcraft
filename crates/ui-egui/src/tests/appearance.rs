@@ -174,7 +174,7 @@ fn the_top_bar_button_and_settings_cards_drive_the_mode() {
     h.step();
     assert_eq!(h.app.ui.settings.appearance_mode, AppearanceMode::Light);
     assert_eq!(crate::theme::current(&h.view.ctx), Some(ThemeKind::Silver));
-    // Settings ▸ Interface: the mode buttons and the theme radios
+    // Settings ▸ Appearance: the mode buttons and the theme radios
     h.app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "interface".into() });
     h.step();
     h.step();

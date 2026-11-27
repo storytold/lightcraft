@@ -117,6 +117,12 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+    auto_import(app, ui, t);
+}
+
+/// XMP sidecars: whether changes are written beside the photos by themselves, and how the files
+/// are named.
+pub(super) fn xmp_sidecars(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "XMP sidecars");
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
@@ -130,6 +136,11 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             let _ = app.run("library.xmpPreferences", json!({"naming": naming}));
         }
     });
+}
+
+/// Auto Import: the folder watched for new photos, and what is done with what arrives there.
+fn auto_import(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let d = app.session.import_defaults.clone();
     if !cfg!(target_arch = "wasm32") {
         heading(ui, t, "Dropped Files");
         check(ui, "settings.importDropped", &mut app.ui.settings.import_dropped_directly, "Import dropped files without review");
@@ -197,6 +208,6 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         }
     }
     if app.session.library.is_none() {
-        hint(ui, t, crate::i18n::tr("In-memory session: these settings last until LightCraft quits."));
+        hint(ui, t, crate::i18n::tr("In-memory session: the library's settings last until LightCraft quits."));
     }
 }

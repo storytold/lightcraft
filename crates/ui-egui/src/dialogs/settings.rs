@@ -32,7 +32,7 @@ mod widgets;
 pub use display::display_profile;
 pub(super) use display::view_options;
 use display::{display_tab, interface_tab};
-use general::general_tab;
+use general::{files_tab, general_tab, library_tab};
 use import::import_tab;
 pub(crate) use libraries::{can_switch_library, free_name};
 pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
@@ -48,7 +48,9 @@ pub mod slide_titles;
 /// (id, label) of the tabs, in order.
 pub const TABS: &[(&str, &str)] = &[
     ("general", "General"),
+    ("library", "Library"),
     ("import", "Import"),
+    ("files", "Files"),
     ("performance", "Performance"),
     ("display", "Display"),
     ("interface", "Interface"),
@@ -56,6 +58,18 @@ pub const TABS: &[(&str, &str)] = &[
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
 ];
+
+/// What a tab is called on the tab bar. Two tabs go by another name than [`TABS`] gives them,
+/// so that the monitor's colour profile and how LightCraft looks are not taken for each other:
+/// `display` is Monitor and `interface` is Appearance. (Said here and not in `TABS`, whose lines
+/// after these two are where other work adds its tabs; ids stay as they are.)
+pub fn tab_label(id: &str, label: &'static str) -> &'static str {
+    match id {
+        "display" => "Monitor",
+        "interface" => "Appearance",
+        _ => label,
+    }
+}
 
 /// Preview cache sizes offered (MB; 0 = automatic: room for every photo of the library).
 const CACHE_SIZES: [u32; 8] = [512, 1024, 2048, 4096, 8192, 51_200, 204_800, 0];
@@ -66,6 +80,8 @@ const LABEL_W: f32 = 150.0;
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
     let t = Tokens::get(ui.ctx());
     match tab {
+        "library" => library_tab(app, ui, &t),
+        "files" => files_tab(app, ui, &t),
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
         "display" => display_tab(app, ui, &t),
@@ -158,7 +174,7 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
         for (id, label) in TABS {
-            if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, shown == *id && !filtering).clicked() {
+            if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), tab_label(id, label), shown == *id && !filtering).clicked() {
                 *tab = id.to_string();
                 ui.ctx().request_repaint();
                 // (a tab opened is its page asked for: the filter gives way)
@@ -293,12 +309,15 @@ impl Filter {
 impl Section {
     /// The name of the section's tab, in the language shown.
     fn tab_name(&self) -> &'static str {
-        TABS.iter().find(|(id, _)| *id == self.tab).map_or("", |(_, label)| crate::i18n::tr(label))
+        TABS.iter().find(|(id, _)| *id == self.tab).map_or("", |(id, label)| crate::i18n::tr(tab_label(id, label)))
     }
 
     /// Whether the section, with the name of its tab, has every word of `words` (lower case).
     fn has(&self, words: &str) -> bool {
-        let all = format!("{} {}", self.tab_name(), self.texts.join(" ")).to_lowercase();
+        // Search the name on the tab bar (`tab_label`) and the id's label in `TABS` (so "Monitor"
+        // and "Display", or "Appearance" and "Interface", both find the tab).
+        let listed = TABS.iter().find(|(id, _)| *id == self.tab).map_or("", |(_, label)| crate::i18n::tr(label));
+        let all = format!("{} {} {}", self.tab_name(), listed, self.texts.join(" ")).to_lowercase();
         words.split_whitespace().all(|word| all.contains(word))
     }
 

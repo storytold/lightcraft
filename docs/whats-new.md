@@ -741,6 +741,17 @@
 - A library that already holds such a loop opens as before; only what the albums on it show changes.
 ## 2026-10-23
 
+### Settings tabs are grouped by what you come to do
+- The tabs of Settings are grouped by what you come to do. **Library** is the library itself: where it is, opening
+  or making another, where its smart previews are kept and when photos only seen in Local leave the catalog (the
+  last two were under Performance). **Files** is what is written beside the photo files and what they are opened
+  in: XMP sidecars (which was under Import, though it governs every later edit) and External Editing (which was
+  under General). General keeps the language, startup, culling and dialogs; Performance keeps rendering and the thumbnail
+  cache. Display is now **Monitor** and Interface is **Appearance**, so the monitor's colour profile and how
+  LightCraft looks are not mistaken for each other. Agents: `app.settings` takes `library` and `files` as tabs;
+  every tab id from before still opens its tab (`display` and `interface` are Monitor and Appearance).
+- Each section of Settings can be found by scripts as `heading:<its English name>` in `ui.widgets`, whatever the
+  interface language.
 ### AI Denoise works out of the box
 - Turning on AI Denoise no longer asks for an ONNX model and a `denoise-model.json`: LightCraft's own built-in
   denoiser runs automatically. Installing a model of your own is optional (Settings ▸ AI Denoise ▸ Your own model);
@@ -897,12 +908,12 @@
   library open now, or create a new library for them, named after the catalog and placed next to the open library
   (both can be changed). LightCraft opens the new library, then imports the catalog into it. Cancel does nothing.
   Open Library… on a Lightroom catalog goes through the same choice.
-- To import as before without the question, choose Settings ▸ General ▸ When importing a Lightroom catalog ▸
+- To import as before without the question, choose Settings ▸ Library ▸ When importing a Lightroom catalog ▸
   Always merge into the open library, or tick Don't ask again in the window. Ask where to import it brings the
   question back.
 
 ### Choose which library opens at launch
-- Settings ▸ General ▸ **At launch**: *Open the last library* (as before) or *Ask me*. With *Ask me*, LightCraft
+- Settings ▸ Library ▸ **At launch**: *Open the last library* (as before) or *Ask me*. With *Ask me*, LightCraft
   starts with a window listing your recent libraries: each one's name, the folder it is in and when you last opened
   it. One that is gone (moved, renamed, on a disconnected drive), can't be read or no longer holds a library is
   greyed out with the reason. Each one is checked in the background, showing *Checking…* until it answers (and that

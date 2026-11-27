@@ -272,12 +272,12 @@ fn old_and_odd_settings_files_ask() {
     assert_eq!(odd.settings.startup_view, crate::state::StartupView::Detail, "the rest of the file still loads");
 }
 
-/// Settings ▸ General ▸ When importing a Lightroom catalog switches between the two.
+/// Settings ▸ Library ▸ When importing a Lightroom catalog switches between the two.
 #[test]
 fn settings_general_switches_the_question_off_and_on() {
     let f = Fixture::new("settings");
     let mut h = f.app(false);
-    h.app.run("app.settings", json!({})).unwrap();
+    h.app.run("app.settings", json!({"tab": "library"})).unwrap();
     h.step();
     h.step();
     click(&mut h, "button:settingsLightroomImport-1");
