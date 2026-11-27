@@ -47,7 +47,7 @@ pub(super) fn crop_overlay(
     };
     let quad = frame_crop_quad(d, frame);
     let pts: Vec<Pos2> = quad.iter().map(|q| map.screen(*q)).collect();
-    let p = ui.painter();
+    let p = loupe_painter(app, ui);
     // darken outside the crop (the box's corners in screen order: a flipped photo shows its
     // top-left corner elsewhere)
     let quad = flipped_corners(&pts, frame.flip_h, frame.flip_v);
@@ -272,6 +272,13 @@ pub(crate) fn readout_rect(at: Pos2, size: egui::Vec2, bounds: Rect) -> Rect {
 }
 
 /// On top of everything (the tooltip layer), so neither the photo nor a panel covers it.
+/// A painter clipped to the loupe: zoomed in, the crop box reaches past it, and the filmstrip
+/// below shares this `ui` (#3966: the box and its handles were painted over the filmstrip).
+fn loupe_painter(app: &LightcraftApp, ui: &egui::Ui) -> egui::Painter {
+    let clip = app.canvas_rect.map_or(ui.clip_rect(), |c| c.intersect(ui.clip_rect()));
+    ui.painter().with_clip_rect(clip)
+}
+
 fn top_painter(ui: &egui::Ui, name: &'static str) -> egui::Painter {
     ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(name)))
 }
@@ -569,7 +576,7 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     }
     let Some(Gesture::StraightenLine { a }) = app.gesture.clone() else { return };
     let Some(b) = resp.interact_pointer_pos().or(resp.hover_pos()) else { return };
-    let p = ui.painter();
+    let p = loupe_painter(app, ui);
     p.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
     p.line_segment([a, b], Stroke::new(1.5, Color32::WHITE));
     if resp.drag_stopped() {
