@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Choose a lens profile by hand
+- When LightCraft finds no lens profile for a raw (the file names no lens, or names it in a way the lens database
+  doesn't know), pick it yourself: Optics ▸ Lens Profile lists the lenses for your camera's mount, and typing narrows
+  the list. The photo's Lens field takes the profile's name, and the choice stays when the file is read again
+  (issue #1049).
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
