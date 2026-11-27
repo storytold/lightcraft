@@ -75,7 +75,10 @@ Virtual copies count as added records too; reimport reports zero additions when 
 records already exist. Existing LightCraft
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Persistent import
 identity prevents reimport from duplicating virtual copies and collections. One undo step reverses
-catalog changes; any saved recovery archives remain available.
+catalog changes; any saved recovery archives remain available. When the catalog's data can't be
+applied (for example a capture time Lightroom keeps as a year or a month alone), the import stops
+with that error and adds no photos: the records it had already made for the catalog's originals are
+removed, and photos browsed in Local are Local again. The redo history is cleared, as by any change.
 
 Records marked `VIDEO` in the source catalog appear in the **Videos** type filter, including
 offline originals. Reimport also repairs the classification of videos imported as images by
