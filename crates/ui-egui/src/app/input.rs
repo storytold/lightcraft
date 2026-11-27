@@ -130,20 +130,32 @@ impl LightcraftApp {
     /// injected ones alike ([`Self::take_nav_buttons`]).
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.inject_raw_input(ctx, raw);
-        self.take_nav_buttons(raw);
+        let primary_down = ctx.input(|i| i.pointer.primary_down());
+        self.take_nav_buttons(raw, primary_down);
     }
 
     /// Take the mouse's Back / Forward button events (`Extra1` / `Extra2`) out of `raw` and keep
     /// their presses for the next UI pass's shortcuts (issue #3303). egui treats any pressed
     /// button as the start of a click or drag: left in, Back pressed over a slider would set it
-    /// to the pointer, on the photo navigation is about to switch to.
-    fn take_nav_buttons(&mut self, raw: &mut egui::RawInput) {
+    /// to the pointer, on the photo navigation is about to switch to. Each press keeps whether the
+    /// primary button was down at that point of the batch (`primary_down` is its state before the
+    /// batch): a press made mid-drag stays mid-drag even when the drag's release follows it in the
+    /// same batch.
+    fn take_nav_buttons(&mut self, raw: &mut egui::RawInput, mut primary_down: bool) {
         raw.events.retain(|event| match event {
             egui::Event::PointerButton { button: button @ (egui::PointerButton::Extra1 | egui::PointerButton::Extra2), pressed, .. } => {
                 if *pressed {
-                    self.nav_buttons.push(*button);
+                    self.nav_buttons.push((*button, primary_down));
                 }
                 false
+            }
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed, .. } => {
+                primary_down = *pressed;
+                true
+            }
+            egui::Event::PointerGone => {
+                primary_down = false;
+                true
             }
             _ => true,
         });

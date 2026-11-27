@@ -231,3 +231,33 @@ fn the_buttons_wait_for_a_slider_drag_to_end() {
     press(&mut h, egui::PointerButton::Extra2);
     assert_eq!(h.app.session.active(), Some(second), "after the drag Forward steps again");
 }
+
+/// A Back / Forward press that comes in the same host frame as the end of a slider drag, before the release, still
+/// counts as mid-drag: the photo stays (review of #3324). A later press steps again.
+#[test]
+fn a_press_before_the_drag_ends_in_the_same_frame_waits() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let ids = h.app.session.visible_cloned();
+    let (first, second) = (ids[2], ids[3]);
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first.0], "active": first.0}}), T);
+    h.request("ui.set", json!({"view": "detail"}), T);
+    h.settle(SETTLE);
+    let at = h.app.widgets.iter().find(|(id, _)| id == "slider:light.exposure").map(|(_, r)| r.center()).expect("the Exposure slider");
+    let button = |button, pos, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: Default::default() };
+    h.app.synthetic.extend([egui::Event::PointerMoved(at), button(egui::PointerButton::Primary, at, true)]);
+    h.settle(SETTLE);
+    let to = at + egui::vec2(30.0, 0.0);
+    // one host frame: the drag moves, Forward is pressed and let go, then the drag's button is let go
+    h.events.extend([
+        egui::Event::PointerMoved(to),
+        button(egui::PointerButton::Extra2, to, true),
+        button(egui::PointerButton::Extra2, to, false),
+        button(egui::PointerButton::Primary, to, false),
+    ]);
+    h.step();
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active(), Some(first), "Forward pressed before the release keeps the photo");
+    press(&mut h, egui::PointerButton::Extra2);
+    assert_eq!(h.app.session.active(), Some(second), "a later Forward steps again");
+}
