@@ -224,7 +224,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
 }
 
 /// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time) from a fresh probe.
-fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
+pub(crate) fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
     let (mut m, src) = (ph.meta.clone(), &info.meta);
     let before = m.clone();
     if m.camera.is_empty() {
@@ -315,7 +315,7 @@ pub(crate) fn as_shot_wb_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_cat
     (ph.develops_raw() && !ph.relative_wb() && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
 }
 
-/// The ops that bring photo `id` and its virtual copies up to date with what their file is now
+/// The ops that bring photo `id` and its same-file family up to date with what their file is now
 /// (`info`, a fresh probe), appended to `ops`; the photos they change are appended to `changed`.
 /// Reload and the preview-only recheck (`library.recheckPreviewOnly`) share it.
 pub(crate) fn reload_ops(
@@ -324,46 +324,47 @@ pub(crate) fn reload_ops(
     info: &crate::media::ProbeInfo,
     ops: &mut Vec<Op>,
     changed: &mut Vec<lightcraft_catalog::PhotoId>,
+    targets: impl IntoIterator<Item = lightcraft_catalog::PhotoId>,
+    metadata_target: impl Fn(lightcraft_catalog::PhotoId) -> bool,
 ) {
     let Some(ph) = cat.photo(id) else { return };
-    // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
-    // nothing already set is overwritten
-    let meta_ops = fill_missing_meta(id, ph, info);
-    let mut mine: Vec<Op> =
-        content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
-    if !mine.is_empty() {
-        ops.append(&mut mine);
-        changed.push(id);
-    }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let mut meta = c.meta.clone();
-        // Copies share the source file but may have independently edited metadata. Repair only
-        // recognizable legacy shutter values, not every missing field on the copy.
-        let shutter_op = repair_legacy_shutter(&mut meta, &info.meta).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
-        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
-            .into_iter()
-            .chain(shutter_op)
-            .chain(lens_ops(c.id, c, info))
-            .chain(as_shot_wb_op(c.id, c, info))
-            .collect();
-        if !theirs.is_empty() {
-            ops.extend(theirs);
+    // Only same-file family members share a probe; independently relinked copies keep their facts.
+    for c in targets.into_iter().filter_map(|id| cat.photo(id)).filter(|c| !c.deleted && shares_reload_source(c, ph)) {
+        let metadata = if metadata_target(c.id) {
+            fill_missing_meta(c.id, c, info)
+        } else {
+            // A fallback representative is still implicit: only repair recognizable legacy
+            // shutter values, without filling independent metadata from the shared file.
+            let mut meta = c.meta.clone();
+            repair_legacy_shutter(&mut meta, &info.meta).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) }).into_iter().collect()
+        };
+        let wb = as_shot_wb_op(c.id, c, info);
+        let before = ops.len();
+        ops.extend(content_op(c.id, c, info.clone()).into_iter().chain(metadata).chain(lens_ops(c.id, c, info)).chain(wb));
+        if ops.len() != before {
             changed.push(c.id);
         }
     }
 }
 
+/// Copies share probe results only while both the family and the actual file agree.
+pub(crate) fn shares_reload_source(a: &lightcraft_catalog::Photo, b: &lightcraft_catalog::Photo) -> bool {
+    a.copy_of.unwrap_or(a.id) == b.copy_of.unwrap_or(b.id)
+        && matches!((&a.source, &b.source), (Source::File { path: a }, Source::File { path: b }) if a == b)
+}
+
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
 /// dimensions and content hash, cached sources dropped. The app runs the same steps
-/// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids]}
+/// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids], failed?: [{id, path, error}]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::cmd::reload as r;
     let items = r::plan(s, p)?;
-    let probe = r::file_probe(s);
-    let results = r::probe(probe.as_ref(), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
-    let reloaded = r::apply(s, items, results)?;
-    Ok(r::to_json(&reloaded))
+    if items.is_empty() {
+        return Ok(r::Reloaded::default().to_json());
+    }
+    let probe = r::file_probe(s).ok_or_else(|| bad("photo.reload", "this session has no file access"))?;
+    let results = r::probe(Some(&probe), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
+    Ok(r::apply(s, items, results)?.to_json())
 }
 
 /// Duplicate: copy the file next to itself (`<name>-copy`, never overwriting) and add it with the
@@ -428,7 +429,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded, failed?: [{id, path, error}]}",
             has_selection,
             reload
         ),
@@ -526,7 +527,7 @@ mod tests {
         info.meta.title = "File title".into();
         let mut ops = Vec::new();
         let mut changed = Vec::new();
-        reload_ops(&cat, source.id, &info, &mut ops, &mut changed);
+        reload_ops(&cat, source.id, &info, &mut ops, &mut changed, (1..=5).map(PhotoId), |id| id == source.id);
         for op in ops {
             cat.apply(op).unwrap();
         }
@@ -628,6 +629,43 @@ mod tests {
         ph.develop = std::sync::Arc::new(d);
         let info = crate::media::ProbeInfo { embedded_lens: Some(lens()), ..Default::default() };
         assert!(lens_ops(ph.id, &ph, &info).is_empty());
+    }
+
+    #[test]
+    fn reload_with_new_source_metadata_leaves_the_old_render_and_source_behind() {
+        use crate::SourceLevel;
+        use std::sync::Arc;
+
+        let mut s = Session::new();
+        let id = PhotoId(1);
+        let mut ph = Photo::new(id, Source::File { path: "/x.arw".into() }, "x.arw", "ARW", 64, 64, "2026-10-06T00:00:00");
+        ph.kind = lightcraft_catalog::MediaKind::Raw;
+        ph.meta.camera = "SONY ILCE-7M3".into();
+        ph.as_shot_wb = Some((6500.0, 0.0));
+        assert!(!ph.relative_wb());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        s.selection.ids = vec![id];
+        s.selection.active = Some(id);
+        let before = s.catalog.photo(id).unwrap().clone();
+        let render_key = s.loupe_job(id, 64, 64, true).unwrap().key;
+        let quick_key = s.quick_view_job(id, 64, true).unwrap().key;
+        let view_key = s.view_key(&before, true);
+        s.media.rendered.put(view_key, Arc::new(lightcraft_raster::Rgba8::new(64, 64)));
+        s.media.insert(id, SourceLevel::Thumb, Arc::new(lightcraft_raster::Rgb32f::new(64, 64)));
+
+        let info = crate::media::ProbeInfo { width: before.width, height: before.height, as_shot_wb: Some((4986.0, -2.0)), ..Default::default() };
+        s.media.file_probe = Some(Arc::new(move |_| Ok(info.clone())));
+        assert_eq!(s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap()["reloaded"], json!([id.0]));
+        let after = s.catalog.photo(id).unwrap();
+        assert_eq!(after.content_hash, before.content_hash);
+        assert_eq!(after.as_shot_wb, Some((4986.0, -2.0)));
+        assert!(s.media.rendered.get(s.view_key(after, true)).is_none(), "the old view render no longer matches");
+        assert_ne!(s.loupe_job(id, 64, 64, true).unwrap().key, render_key);
+        assert_ne!(s.quick_view_job(id, 64, true).unwrap().key, quick_key);
+        assert!(!s.media.has_source(id, SourceLevel::Thumb), "Reload discards the old decoded source");
+
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.view_key(s.catalog.photo(id).unwrap(), true), view_key);
     }
 
     /// End to end on a public Panasonic raw (skipped without the corpus): a catalog from before the lens data was read

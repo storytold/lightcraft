@@ -134,6 +134,7 @@ fn virtual_copy(s: &mut Session, src: PhotoId, name: &str) -> Result<Option<Phot
         }
     }
     s.commit("Create Virtual Copy", Op::Batch { ops })?;
+    s.reload_tickets.inherit_copy(id, src);
     Ok(Some(id))
 }
 

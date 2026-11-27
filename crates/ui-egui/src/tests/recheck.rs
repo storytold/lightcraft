@@ -17,14 +17,28 @@ impl Drop for Dir {
 }
 
 /// An app on a library at `dir/lib` with one photo whose preview-only flag an older version set.
-/// Its file (a PNG) reads fine, as a raw a newer decoder handles would.
 fn app_with_stale_photo(dir: &Path) -> (LightcraftApp, PhotoId) {
+    app_with_stale_file(dir, false)
+}
+
+fn app_with_stale_raw(dir: &Path) -> (LightcraftApp, PhotoId) {
+    app_with_stale_file(dir, true)
+}
+
+fn app_with_stale_file(dir: &Path, raw: bool) -> (LightcraftApp, PhotoId) {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir.join("files")).unwrap();
     let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
     let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
-    let file = dir.join("files/one.png");
-    std::fs::write(&file, lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    let file = dir.join(if raw { "files/one.dng" } else { "files/one.png" });
+    let bytes = if raw {
+        // Our procedural pixels, written as a real, developable linear DNG.
+        let rgb: Vec<_> = img.data.iter().flat_map(|pixel| pixel[..3].iter().map(|v| f32::from(*v) / 255.0)).collect();
+        lightcraft_raw::write_rendered_dng(16, 12, &rgb, &lightcraft_color::SRGB, &Default::default(), None).unwrap()
+    } else {
+        lightcraft_engine::export::encode_image(&img, &o).unwrap()
+    };
+    std::fs::write(&file, bytes).unwrap();
     let mut session = lightcraft_engine::Session::new().with_fs();
     session.open_library(dir.join("lib"), false).unwrap();
     let r = session.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
@@ -48,7 +62,7 @@ fn app_with_stale_photo(dir: &Path) -> (LightcraftApp, PhotoId) {
 #[test]
 fn opening_a_library_rechecks_stale_preview_only_raws_in_the_background() {
     let dir = Dir(std::env::temp_dir().join(format!("lc-ui-recheck-{}", std::process::id())));
-    let (mut app, id) = app_with_stale_photo(&dir.0);
+    let (mut app, id) = app_with_stale_raw(&dir.0);
     let ctx = egui::Context::default();
     crate::recheck::tick(&mut app);
     // it shows in the activity stack while it runs
@@ -58,6 +72,7 @@ fn opening_a_library_rechecks_stale_preview_only_raws_in_the_background() {
     assert!(app.session.activity.list().iter().all(|r| r.kind != "recheck"), "the row goes with the task");
     let p = app.session.catalog.photo(id).unwrap();
     assert_eq!(p.preview_only, None);
+    assert!(p.develops_raw());
     assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "1 raw can now be developed from its raw data"), "{:?}", app.ui.toast);
     // once per opened library
     app.ui.toast = None;
@@ -83,7 +98,7 @@ fn recheck_result_is_dropped_after_switching_libraries() {
 #[test]
 fn notice_reload_button_rereads_the_file() {
     let dir = Dir(std::env::temp_dir().join(format!("lc-ui-recheck-reload-{}", std::process::id())));
-    let (mut app, id) = app_with_stale_photo(&dir.0);
+    let (mut app, id) = app_with_stale_raw(&dir.0);
     let ctx = egui::Context::default();
     crate::panels::edit::reload_preview_only(&mut app, &ctx, id);
     let rows = app.session.activity.list();
@@ -93,9 +108,90 @@ fn notice_reload_button_rereads_the_file() {
     assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
     assert!(app.session.activity.list().iter().all(|r| r.kind != "reload"), "the row goes with the task");
     assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
+    assert!(app.session.catalog.photo(id).unwrap().develops_raw());
     assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
     // one undo step
     assert_eq!(app.session.undo.last().map(|u| u.label.as_str()), Some("Reload Changed Files"));
+}
+
+#[test]
+fn review_grouped_reload_reports_a_cleared_preview_only_copy() {
+    for relink in [false, true] {
+        let dir = Dir(std::env::temp_dir().join(format!("lc-ui-reload-grouped-{relink}-{}", std::process::id())));
+        let (mut app, id) = app_with_stale_raw(&dir.0);
+        let r = app.session.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap();
+        let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+        let p = app.session.catalog.photo(id).unwrap().clone();
+        app.session
+            .catalog
+            .apply(Op::SetContent {
+                id,
+                width: p.width,
+                height: p.height,
+                file_size: p.file_size,
+                content_hash: p.content_hash.clone(),
+                preview_only: None,
+                preview_checked: String::new(),
+            })
+            .unwrap();
+        let ctx = egui::Context::default();
+        assert_eq!(app.run("photo.reload", json!({"ids": [id.0, copy.0]})).unwrap()["count"], 1);
+        if relink {
+            let lightcraft_catalog::Source::File { path } = app.session.catalog.photo(copy).unwrap().source.clone() else { panic!("file photo") };
+            app.session.execute("photo.relink", &json!({"id": copy.0, "path": path})).unwrap();
+        }
+        assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+        assert!(app.session.catalog.photo(copy).unwrap().preview_only.is_none());
+        assert!(app.session.catalog.photo(copy).unwrap().develops_raw());
+        if relink {
+            assert!(app.ui.toast.is_none(), "Reload must not claim a recovery performed by Relink: {:?}", app.ui.toast);
+        } else {
+            assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
+        }
+    }
+}
+
+#[test]
+fn a_negative_reload_notice_requires_an_accepted_probe_even_when_unchanged() {
+    for case in ["unchanged", "relinked", "unreadable"] {
+        let dir = Dir(std::env::temp_dir().join(format!("lc-ui-reload-negative-{case}-{}", std::process::id())));
+        let (mut app, id) = app_with_stale_raw(&dir.0);
+        let file = dir.0.join("files/preview.dng");
+        std::fs::copy(dir.0.join("files/one.dng"), &file).unwrap();
+        let native = app.session.media.file_probe.clone().unwrap();
+        app.session.media.file_probe = Some(std::sync::Arc::new(move |path| {
+            let mut info = native(path)?;
+            // Simulate a decoder that can only use this raw's embedded preview.
+            if path.ends_with("preview.dng") {
+                info.preview_only = Some("unsupported raw variant".into());
+            }
+            Ok(info)
+        }));
+        let relink = json!({"id": id.0, "path": file.to_string_lossy()});
+        if case != "relinked" {
+            app.session.execute("photo.relink", &relink).unwrap();
+        }
+        if case == "unreadable" {
+            std::fs::remove_file(&file).unwrap();
+        }
+        app.run("photo.reload", json!({"ids": [id.0]})).unwrap();
+        if case == "relinked" {
+            app.session.execute("photo.relink", &relink).unwrap();
+        }
+        let before = app.session.catalog.photo(id).unwrap().clone();
+        let undo = app.session.undo.len();
+        assert!(crate::tasks::wait(&mut app, &egui::Context::default(), Duration::from_secs(10)));
+        assert_eq!(app.session.catalog.photo(id).unwrap(), &before);
+        assert_eq!(app.session.undo.len(), undo, "none of these Reloads changes the catalog");
+        let notice = app.ui.toast.as_ref().map(|(text, _, _)| text.as_str());
+        match case {
+            "unreadable" => {
+                assert!(notice.is_some_and(|text| text.starts_with("Could not read this photo.") && text.contains("preview.dng")), "{notice:?}")
+            }
+            "unchanged" => assert_eq!(notice, Some("This raw variant still can't be decoded")),
+            _ => assert_eq!(notice, None, "{case}"),
+        }
+    }
 }
 
 /// Reload from Disk on a selection returns at once and reads the files on a worker thread; `wait`
@@ -136,7 +232,7 @@ fn reload_of_a_selection_runs_in_the_background() {
     let probe = lightcraft_engine::cmd::reload::file_probe(&app.session);
     let cancelled = std::sync::atomic::AtomicBool::new(true);
     let results = lightcraft_engine::cmd::reload::probe(probe.as_ref(), &items, &cancelled, &|_| {});
-    assert!(lightcraft_engine::cmd::reload::apply(&mut app.session, items, results).unwrap().is_empty());
+    assert!(lightcraft_engine::cmd::reload::apply(&mut app.session, items, results).unwrap().reloaded.is_empty());
     assert!(app.session.catalog.photo(id).unwrap().preview_only.is_some());
 }
 
@@ -247,7 +343,7 @@ fn reload_with_bad_ids_names_the_command() {
 fn a_cancelled_reload_reports_only_what_it_did() {
     use std::sync::{Arc, Condvar, Mutex};
     let dir = Dir(std::env::temp_dir().join(format!("lc-ui-reload-cancel-{}", std::process::id())));
-    let (mut app, id) = app_with_stale_photo(&dir.0);
+    let (mut app, id) = app_with_stale_raw(&dir.0);
     let ctx = egui::Context::default();
     let native = app.session.media.file_probe.clone().unwrap();
     for read in [false, true] {
@@ -275,6 +371,7 @@ fn a_cancelled_reload_reports_only_what_it_did() {
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         if read {
             assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
+            assert!(app.session.catalog.photo(id).unwrap().develops_raw());
             assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
         } else {
             assert!(app.session.catalog.photo(id).unwrap().preview_only.is_some());

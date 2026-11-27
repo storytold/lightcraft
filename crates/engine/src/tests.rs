@@ -67,6 +67,37 @@ mod task_queue;
 mod view_follow;
 pub(super) mod xmp;
 
+pub(crate) struct TestDir(std::path::PathBuf);
+
+impl TestDir {
+    pub(crate) fn new(tag: &str) -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        loop {
+            let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("lc-{tag}-{}-{serial}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Self(dir),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("could not create test directory {}: {e}", dir.display()),
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for TestDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn demo() -> Session {
     Session::with_demo()
 }
