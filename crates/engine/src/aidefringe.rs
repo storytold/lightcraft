@@ -502,10 +502,13 @@ pub struct Publish {
     at: u64,
 }
 
-/// The name of photo `p`'s correction by the model with SHA-256 `model`.
+/// The name of photo `p`'s correction by the model with SHA-256 `model`, for its content and its lens profile.
 pub fn key(p: &Photo, model: &str) -> u64 {
     let mut h = Hasher128::new();
-    h.str(VERSION).str(model).str(&crate::media::content_key(p));
+    // the lens database's profile pinned to the photo too: the correction is made on the picture that profile
+    // corrects, and its gains are mapped back through that frame; a refreshed profile changes neither the file nor
+    // the model (review of #4545)
+    h.str(VERSION).str(model).str(&crate::media::content_key(p)).u64(crate::media::lens_key(p));
     h.finish().0 as u64 | 1
 }
 

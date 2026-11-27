@@ -30,8 +30,8 @@ was read from (spread over the four source pixels around it). So:
   model is installed. It never comes out without the correction it was asked for.
 
 The correction of the photo being edited is made in the background (Activity shows it and can cancel it) and kept in
-`<library>/ai-defringe/<key>.lcadf`, named by a hash of the photo's content, the model file's SHA-256 and the algorithm
-version (`crates/engine/src/aidefringe.rs`, `VERSION`). It is cached data: Clear (`aiDefringe.clear`) deletes it and it
+`<library>/ai-defringe/<key>.lcadf`, named by a hash of the photo's content, the lens database profile pinned to it, the model file's
+SHA-256 and the algorithm version (`crates/engine/src/aidefringe.rs`, `VERSION`). It is cached data: Clear (`aiDefringe.clear`) deletes it and it
 is made again when wanted. A file is compressed, checksummed and read as hostile input. Up to 24 corrections stay in
 memory; each holds only the pixels it changes.
 

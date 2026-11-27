@@ -141,6 +141,47 @@ fn the_switch_needs_a_model_and_the_correction_is_made_in_the_background() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Review of #4545: a correction is made for the lens database's profile pinned to the photo. When that profile is
+/// refreshed (same file, same model), the correction made before is not used again; switching back to the old
+/// profile finds it again.
+#[test]
+fn a_refreshed_lens_profile_does_not_reuse_the_old_correction() {
+    use lightcraft_develop::{EmbeddedLens, EmbeddedWarp, LensSource};
+    let mut x = setup("adf-lens");
+    let id = photo(&x.s);
+    install(&mut x);
+    let lens = |k: f64| EmbeddedLens {
+        warp: Some(EmbeddedWarp { planes: [[1.0, k, 0.0, 0.0, 0.0, 0.0]; 3], radius: 0.6, ..Default::default() }),
+        source: LensSource::Database,
+        ..Default::default()
+    };
+    x.s.catalog.apply(lightcraft_catalog::Op::SetEmbeddedLens { id, lens: Some(Box::new(lens(-0.02))) }).unwrap();
+    x.s.execute("aiDefringe.toggle", &json!({"enabled": true})).unwrap();
+    let ready = |s: &mut Session| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            s.execute("aiDefringe.pump", &json!({})).unwrap();
+            match s.aidefringe_state(id) {
+                PhotoState::Ready { .. } => break,
+                PhotoState::Failed { error } => panic!("{error}"),
+                _ => {}
+            }
+            assert!(std::time::Instant::now() < deadline, "the correction never came");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    ready(&mut x.s);
+    // the database refreshes the profile: same bytes, same model, but the old correction no longer fits
+    x.s.catalog.apply(lightcraft_catalog::Op::SetEmbeddedLens { id, lens: Some(Box::new(lens(0.03))) }).unwrap();
+    assert!(!matches!(x.s.aidefringe_state(id), PhotoState::Ready { .. }), "the correction for the old profile isn't reused");
+    ready(&mut x.s);
+    assert_eq!(std::fs::read_dir(x.dir.join("library").join("ai-defringe")).unwrap().flatten().count(), 2, "one per profile");
+    // the old profile back: its correction is found again
+    x.s.catalog.apply(lightcraft_catalog::Op::SetEmbeddedLens { id, lens: Some(Box::new(lens(-0.02))) }).unwrap();
+    assert!(matches!(x.s.aidefringe_state(id), PhotoState::Ready { .. }));
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
 #[test]
 fn switching_off_and_quickly_on_again_does_not_count_as_cancelling() {
     let mut x = setup("adf-offon");
