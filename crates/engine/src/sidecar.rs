@@ -808,11 +808,25 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     Ok((fresh, false, Some(b)))
 }
 
-/// Key of the stem sidecar a file maps to: case-insensitive, and `\` and `/` are one separator, as a
-/// library can hold one folder spelled both ways (a Windows import and a folder synchronization;
-/// issue #4466), and files that share a stem must share a key whatever their spelling.
+/// Key of the stem sidecar a file maps to: case-insensitive, and in a Windows path ([`windows_style`]) `\` and `/`
+/// are one separator, as a library can hold one folder spelled both ways (a Windows import and a folder
+/// synchronization; issue #4466), and files that share a stem must share a key whatever their spelling. A POSIX
+/// path keeps a `\` as the character it is there: part of a name, not a separator (review of #4467).
 fn stem_key(original: &str) -> String {
-    sidecar_path(&original.replace('\\', "/"), SidecarNaming::Stem).to_string_lossy().to_lowercase()
+    sidecar_path(&separators_folded(original), SidecarNaming::Stem).to_string_lossy().to_lowercase()
+}
+
+/// A path written the Windows way: a drive (`C:\`, `C:/`) or a UNC share (`\\server`, `//server`). Only there is
+/// `\` a separator.
+fn windows_style(path: &str) -> bool {
+    let b = path.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && sep(b[2])) || (b.len() >= 2 && sep(b[0]) && sep(b[1]) && b[0] == b'\\')
+}
+
+/// `path` with its separators written `/` when it is a Windows path ([`windows_style`]); as it is otherwise.
+fn separators_folded(path: &str) -> std::borrow::Cow<'_, str> {
+    if windows_style(path) && path.contains('\\') { path.replace('\\', "/").into() } else { path.into() }
 }
 
 /// Where a plain path is cut to make its [`stem_key`]: at the dot of its extension, which is
@@ -832,7 +846,7 @@ fn plain_cut(original: &str) -> Option<usize> {
 /// ([`plain_cut`], of the path with its separators made `/`). Any other shape goes the long way.
 fn stem_key_into(key: &mut String, original: &str) {
     key.clear();
-    key.extend(original.chars().map(|c| if c == '\\' { '/' } else { c }));
+    key.push_str(&separators_folded(original));
     match plain_cut(key) {
         Some(cut) => {
             key.truncate(cut);
@@ -1052,7 +1066,7 @@ impl ImportStems {
         // (the arriving paths with `/` for every separator: a file's own record may spell them otherwise)
         let mut arriving_paths: HashSet<String> = HashSet::new();
         for (arriving, (path, kind)) in incoming.enumerate() {
-            arriving_paths.insert(path.replace('\\', "/"));
+            arriving_paths.insert(separators_folded(path).into_owned());
             let e = best.entry(stem_key(path)).or_default();
             let rank = rank_of(path, kind, arriving as u64);
             if e.1.as_ref().is_none_or(|(b, _)| rank < *b) {
@@ -1060,16 +1074,14 @@ impl ImportStems {
             }
         }
         if let Some(cat) = cat {
-            let (mut key, mut spelled) = (String::new(), String::new());
+            let mut key = String::new();
             for p in cat.photos().filter(|p| p.copy_of.is_none()) {
                 let Some(path) = file_path(p) else { continue };
                 stem_key_into(&mut key, path);
                 let Some(e) = best.get_mut(key.as_str()) else { continue };
                 // the arriving file's own record (a trashed photo imported again) is not a rival,
                 // whichever separators the record and the arriving path are spelled with
-                spelled.clear();
-                spelled.extend(path.chars().map(|c| if c == '\\' { '/' } else { c }));
-                if arriving_paths.contains(spelled.as_str()) {
+                if arriving_paths.contains(separators_folded(path).as_ref()) {
                     continue;
                 }
                 let rank = rank_of(path, p.kind, p.id.0);

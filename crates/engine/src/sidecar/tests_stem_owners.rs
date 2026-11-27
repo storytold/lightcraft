@@ -278,3 +278,22 @@ fn an_arriving_file_is_no_rival_of_its_own_record_spelled_with_other_separators(
     let jpeg = "S:\\Photos\\2025\\P6650.JPG";
     assert!(!ImportStems::for_import(Some(&c), [(jpeg, MediaKind::Image)].into_iter()).owns(jpeg));
 }
+
+/// Review of #4467: on a POSIX path a `\\` is part of a name, not a separator. A raw named `a\\b.CR2` and a JPEG
+/// `b.JPG` in a folder `a` are separate files with separate stem sidecars, so both keep their own stem sidecar.
+#[test]
+fn a_backslash_in_a_posix_name_is_no_separator() {
+    let mut c = Catalog::new();
+    let mut ids = Vec::new();
+    for (path, kind) in [("/photos/a\\b.CR2", MediaKind::Raw), ("/photos/a/b.JPG", MediaKind::Image)] {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: path.to_string() }, "P", "X", 6, 4, "2026-01-01");
+        p.kind = kind;
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    assert_eq!(namings(&StemOwners::of(&c), &c, &ids), [SidecarNaming::Stem, SidecarNaming::Stem], "two stems, one each");
+    // and arriving, the JPEG is no rival of the raw's record, nor the raw of the JPEG's
+    let jpeg = "/photos/a/b.JPG";
+    assert!(ImportStems::for_import(Some(&c), [(jpeg, MediaKind::Image)].into_iter()).owns(jpeg));
+}
