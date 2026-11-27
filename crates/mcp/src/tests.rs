@@ -313,6 +313,83 @@ fn import_tool_moves_with_a_folder_template() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Clients send the untyped arguments of a `cmd_*` tool as strings (`{"id": "11"}`); the command
+/// still gets numbers, lists and objects, and text keys keep their text (an album named `2008`).
+#[test]
+fn command_tools_accept_stringified_arguments() {
+    let mut b = Headless::demo();
+    let r = call_tool(&mut b, "cmd_album_create", &json!({"name": "2008"}));
+    assert!(!r.is_error, "{r:?}");
+    let album = r.structured.as_ref().and_then(|v| v["id"].as_u64()).expect("album id");
+    assert!(b.session.catalog.albums().any(|a| a.name == "2008"), "the name stays text");
+    let photos: Vec<u64> = b.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    let r = call_tool(&mut b, "cmd_album_addPhotos", &json!({"id": album.to_string(), "ids": json!(photos).to_string()}));
+    assert!(!r.is_error, "{r:?}");
+    assert_eq!(r.structured.as_ref().map(|v| v["added"].clone()), Some(json!(2)));
+    let r = call_tool(&mut b, "cmd_catalog_query", &json!({"filter": json!({"album": album}).to_string(), "limit": "1"}));
+    assert!(!r.is_error, "{r:?}");
+    let v = r.structured.expect("query result");
+    assert_eq!(v["total"], 2, "the filter object reached the command: {v}");
+    assert_eq!(v["photos"].as_array().map(Vec::len), Some(1), "the limit number reached the command: {v}");
+}
+
+/// Each generated tool lists the keys its params doc names, typed where the doc is certain.
+#[test]
+fn command_tool_schemas_list_documented_keys() {
+    let mut b = Headless::demo();
+    let tools = crate::tool_definitions(&mut b, true);
+    let schema = |name: &str| tools.iter().find(|t| t["name"] == name).map(|t| t["inputSchema"].clone()).unwrap();
+    let s = schema("cmd_album_create");
+    assert_eq!(s["properties"]["name"]["type"], "string");
+    assert_eq!(s["properties"]["folder"]["type"], "boolean");
+    assert!(s["properties"]["parent"].is_object());
+    assert_eq!(s["additionalProperties"], true);
+    assert!(schema("cmd_album_addPhotos")["properties"]["id"].is_object());
+    let export = schema("cmd_app_export");
+    for k in ["longEdge", "shortEdge", "width", "height", "megapixels", "percent", "hdr"] {
+        assert!(export["properties"][k].is_object(), "app.export lists `{k}`: {export}");
+    }
+    assert_eq!(export["properties"]["photosAlbum"]["type"], "string");
+}
+
+/// A running app with one command, `test.lazyDoc` (named for this test only, so no other test has
+/// put its doc in the server's cache): it records each call and lists that command.
+struct OneCommand(Vec<(String, Value)>);
+
+impl Backend for OneCommand {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.0.push((method.to_string(), params));
+        Ok(match method {
+            "engine.commands" => json!([{"id": "test.lazyDoc", "label": "Lazy Doc", "params": "{album?: name | null, limit?}"}]),
+            _ => json!({}),
+        })
+    }
+    fn has_ui(&self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        "one command".into()
+    }
+}
+
+/// The repair reads each command's doc even when the client never asked for `tools/list`: the
+/// server asks for the commands first, then `album: "2008"` (a name, says the doc) stays text while
+/// the undocumented `limit: "5"` becomes a number. Without the lookup the album would be 2008.
+#[test]
+fn command_tools_repair_without_a_tool_list() {
+    let mut b = OneCommand(vec![]);
+    let r = call_tool(&mut b, "cmd_test_lazyDoc", &json!({"album": "2008", "limit": "5"}));
+    assert!(!r.is_error, "{r:?}");
+    let methods: Vec<&str> = b.0.iter().map(|(m, _)| m.as_str()).collect();
+    assert_eq!(methods, ["engine.commands", "engine.execute"]);
+    assert_eq!(b.0[1].1, json!({"command": "test.lazyDoc", "params": {"album": "2008", "limit": 5}}));
+    // the doc is kept: the next call doesn't ask again
+    let r = call_tool(&mut b, "cmd_test_lazyDoc", &json!({"album": "null"}));
+    assert!(!r.is_error, "{r:?}");
+    assert_eq!(b.0.len(), 3);
+    assert_eq!(b.0[2].1, json!({"command": "test.lazyDoc", "params": {"album": null}}), "the doc offers null");
+}
+
 #[test]
 fn command_tools_run_commands() {
     let mut b = Headless::demo();

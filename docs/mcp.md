@@ -154,8 +154,16 @@ when a path is optional. The image-only `render_preview` and `ui_screenshot` rem
 and non-destructive. These annotations are client hints, not a file-access sandbox.
 `export` is not idempotent because the default conflict policy chooses a new filename on repeated calls.
 Unknown helper argument keys return JSON-RPC `-32602` naming the key and accepted arguments.
-Generated `cmd_*` tools and nested command params remain free-form: the registry has prose
-parameter docs, not machine-readable schemas. Existing command validation (including strict
+Generated `cmd_*` tools accept any keys: the registry has prose parameter docs, not
+machine-readable schemas. Each tool's input schema lists the top-level keys its doc names (with the
+doc's words as their description), typed only where that is certain: `boolean` for `bool` params and
+`string` for text keys such as `name`, `title` and `path`. Clients send untyped arguments as strings
+(`{"id": "11"}`), so the server turns a string that is a JSON number, boolean, null, list or object
+back into that value before the command runs, reading that command's doc to tell text from
+numbers: a key holds text when it is a known text key or its doc says text or name (`photosAlbum?:
+top-level album name`, `watermark?: text | {…}`). Text keeps its text, so an album can be named
+`2008`; it is only decoded when the string is a JSON list or object, or `null` where the doc offers
+it. Nested params stay free-form. Existing command validation (including strict
 export options) is preserved. Escaped tool panics return `isError: true`, and the session keeps
 serving; backend panics during resource reads or tool listing return an internal error.
 The headless backend owns its session directly, without a session mutex.

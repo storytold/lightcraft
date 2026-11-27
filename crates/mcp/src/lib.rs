@@ -18,6 +18,7 @@
 
 mod backend;
 mod base64;
+mod command_params;
 mod headless;
 mod server;
 mod tools;
