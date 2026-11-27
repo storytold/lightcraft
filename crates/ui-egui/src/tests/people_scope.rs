@@ -151,3 +151,33 @@ fn a_browsed_folder_lists_the_people_of_its_library_photos() {
     assert!(shows(&mut h, &format!("person-face:{}:0", imported.0)), "the card opens on their face");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Review of #2640: an unnamed face selected in one scope can't be named once the view's scope no longer holds it, also
+/// when the Name button is pressed in the very frame the scope changed (the naming bar used to read the selection
+/// before it was brought up to date).
+#[test]
+fn a_selection_out_of_the_new_scope_is_not_named() {
+    let mut h = demo();
+    let ids: Vec<PhotoId> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+    let (stranger, other) = (ids[0], ids[1]);
+    set_faces(&mut h, stranger, vec![face(0.3, None)]);
+    for id in [stranger, other] {
+        h.app.session.commit("setup", Op::SetFlag { id, flag: Flag::None }).unwrap();
+    }
+    exec(&mut h, "view.people", json!({}));
+    click(&mut h, &format!("unnamed-face:{}:0", stranger.0));
+    assert!(h.app.ui.unnamed_selected.contains(&(stranger.0, 0)), "the face is selected");
+    h.app.ui.unnamed_name = "Ann Lee".into();
+    h.step();
+    let name = h.app.widgets.iter().rev().find(|(w, _)| w == "unnamed:name").map(|(_, r)| r.center()).expect("the Name button");
+    // the scope changes (Picks: the face's photo isn't picked) and the button is pressed in the next frame
+    h.app.session.commit("pick", Op::SetFlag { id: other, flag: Flag::Pick }).unwrap();
+    h.app.run("library.source", json!({"kind": "picks"})).unwrap();
+    let button = |pressed| egui::Event::PointerButton { pos: name, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.events.extend([egui::Event::PointerMoved(name), button(true), button(false)]);
+    h.step();
+    h.settle(SETTLE);
+    let regions = &h.app.session.catalog.photo(stranger).unwrap().meta.regions;
+    assert!(regions.iter().all(|r| r.name.is_none()), "the face out of scope was not named: {regions:?}");
+    assert!(h.app.ui.unnamed_selected.is_empty(), "and it is no longer selected");
+}

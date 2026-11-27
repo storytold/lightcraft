@@ -97,9 +97,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the filters narrowing the list (a date, a keyword…), removable here
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     super::chips::show(app, ui, &chips);
+    // the unnamed faces of what the view shows now, asked for first: a selection that left the view's scope (its
+    // source or filter changed while the view stayed open) is dropped before the box below can name it
+    let unnamed = super::unnamed::faces(app, now);
     // what is selected below, and the box to name it with
     super::unnamed::naming_bar(app, ui);
-    let unnamed = super::unnamed::faces(app, now);
     if people.is_empty() && unnamed.faces.is_empty() {
         let (title, body) = if !chips.is_empty() && narrowed {
             ("No named people in these photos", "Remove a filter above, or choose All Photos in the sidebar")
