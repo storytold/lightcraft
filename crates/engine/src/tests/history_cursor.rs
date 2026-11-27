@@ -207,3 +207,52 @@ fn fractional_history_restore_preserves_the_cursor() {
     assert_eq!(after, before);
     assert_eq!(exposure(&s), 3.0);
 }
+
+/// Issue #4203: a photo's first edit also lists where it started, as an "Import" step at the bottom of History;
+/// going to it brings back the photo as it was before any edit. Later edits add no second one.
+#[test]
+fn the_first_edit_lists_an_import_step_to_go_back_to() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let start = s.develop_of(id).unwrap();
+    assert!(s.catalog.photo(id).unwrap().history.is_empty(), "a demo photo starts with no History");
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
+    let labels: Vec<String> = s.catalog.photo(id).unwrap().history.iter().map(|h| h.label.clone()).collect();
+    assert_eq!(labels.len(), 3, "Import and the two edits: {labels:?}");
+    assert_eq!(labels[0], "Import");
+    s.execute("history.restore", &json!({"index": 0})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap(), start, "the Import step is the photo before its first edit");
+}
+
+/// Undoing a photo's first edit takes its Import step away with it.
+#[test]
+fn undoing_the_first_edit_removes_its_import_step() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().history.len(), 2);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().history.is_empty(), "back to no History");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().history.len(), 2, "redo brings both back");
+}
+
+/// Review of #4216: past the History limit the oldest edits go, not the Import step, so the photo as it was before
+/// any edit is still there to go back to. Clear History still clears everything.
+#[test]
+fn the_import_step_outlives_the_history_limit() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let start = s.develop_of(id).unwrap();
+    for i in 0..lightcraft_catalog::HISTORY_LIMIT + 20 {
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": (i % 40) as f64 / 10.0 - 2.0 + 0.05})).unwrap();
+    }
+    let history = &s.catalog.photo(id).unwrap().history;
+    assert_eq!(history.len(), lightcraft_catalog::HISTORY_LIMIT, "the limit holds");
+    assert_eq!(history[0].label, lightcraft_catalog::IMPORT_STEP, "the Import step is still at the bottom");
+    s.execute("history.restore", &json!({"index": 0})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap(), start, "and still brings back the photo before its first edit");
+    s.execute("history.clear", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().history.len() <= 1, "Clear History clears it, the Import step included");
+}

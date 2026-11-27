@@ -486,10 +486,13 @@ impl Photo {
     /// Keep the newest [`HISTORY_LIMIT`](crate::HISTORY_LIMIT) History steps; the cursor moves with
     /// its step, or to the oldest step kept when its own is dropped. Returns how many were dropped.
     pub fn trim_history(&mut self) -> usize {
-        let n = self.history.len().saturating_sub(crate::HISTORY_LIMIT);
+        let drop = crate::history_overflow(&self.history);
+        let (from, n) = (drop.start, drop.len());
         if n > 0 {
-            self.history.drain(..n);
-            self.history_cursor = self.history_cursor.map(|c| c.saturating_sub(n));
+            self.history.drain(drop);
+            // a cursor after the dropped steps moves with its step; one on a dropped step goes to the oldest kept
+            // after the Import step (or the Import step itself, if that was where it was)
+            self.history_cursor = self.history_cursor.map(|c| if c < from { c } else { c.saturating_sub(n).max(from) });
         }
         n
     }
