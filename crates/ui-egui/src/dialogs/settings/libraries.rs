@@ -100,6 +100,10 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     app.ui.reference = None;
     app.ui.compare = None;
     app.ui.brief_info = crate::state::BriefInfo::default();
+    // (masks hidden with O, and the hovered mask, are keyed by photo ID too)
+    app.ui.mask_overlay_hidden.clear();
+    app.ui.mask_hover = None;
+    app.ui.mask_hover_prev = None;
     // a keyword picked in the Keyword List belongs to the library being left
     app.ui.keyword_list_selected = None;
     if app.ui.view == crate::state::ViewMode::Reference {
@@ -175,7 +179,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
         None => location,
     };
     if lightcraft_engine::library::is_library(&dir) {
-        return Err(format!("{}: there is a library here already; open it with File ▸ Open Library…", dir.display()));
+        return Err(format!("{}: there is a library here already; open it with File → Open Library…", dir.display()));
     }
     if dir.is_file() {
         return Err(format!("{}: is a file; a library is a folder", dir.display()));
