@@ -46,9 +46,9 @@ pub struct LogInfo {
     #[serde(default)]
     pub current: bool,
     /// What the report file takes from it (its last [`MAX_LOG_BYTES`]), read when the dialog opened, so the
-    /// file holds what the preview described.
+    /// file holds what the preview described. Shared, never copied: the dialog's state is cloned as it is drawn.
     #[serde(skip)]
-    pub text: String,
+    pub text: std::sync::Arc<str>,
 }
 
 /// This run's log (`log_file`) and the two before it (`lightcraft.1.log`, `lightcraft.2.log`), those
@@ -64,7 +64,7 @@ pub fn logs(log_file: Option<&str>) -> Vec<LogInfo> {
             let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(text.len() as u64);
             let name = path.file_name()?.to_string_lossy().to_string();
             let tail = last_lines(&text, EXCERPT_LINES).to_string();
-            Some(LogInfo { name, path: path.to_string_lossy().to_string(), bytes, tail, current: path.as_path() == current, text })
+            Some(LogInfo { name, path: path.to_string_lossy().to_string(), bytes, tail, current: path.as_path() == current, text: text.into() })
         })
         .collect()
 }
@@ -297,8 +297,8 @@ pub fn file_text(rows: &[(String, String)], opts: &ReportOptions, logs: &[(Strin
 }
 
 /// The logs a report takes: this run's, and the two before it when asked for.
-pub fn chosen(logs: &[LogInfo], opts: &ReportOptions) -> Vec<LogInfo> {
-    logs.iter().filter(|l| l.current || opts.previous_logs).cloned().collect()
+pub fn chosen<'a>(logs: &'a [LogInfo], opts: &ReportOptions) -> Vec<&'a LogInfo> {
+    logs.iter().filter(|l| l.current || opts.previous_logs).collect()
 }
 
 /// The System Info rows (Help ▸ System Info…), also the system part of a bug report.
@@ -374,7 +374,7 @@ pub fn create(app: &mut LightcraftApp, opts: &ReportOptions, rows: &[(String, St
             .iter()
             .map(|l| {
                 let text =
-                    if l.text.is_empty() { read_end(std::path::Path::new(&l.path), MAX_LOG_BYTES).unwrap_or_default() } else { l.text.clone() };
+                    if l.text.is_empty() { read_end(std::path::Path::new(&l.path), MAX_LOG_BYTES).unwrap_or_default() } else { l.text.to_string() };
                 let name = if l.bytes > MAX_LOG_BYTES {
                     format!("{} (its last {} MB of {:.0} MB)", l.name, MAX_LOG_BYTES >> 20, l.bytes as f64 / f64::from(1u32 << 20))
                 } else {
@@ -390,7 +390,7 @@ pub fn create(app: &mut LightcraftApp, opts: &ReportOptions, rows: &[(String, St
         }
         path = Some(p);
     }
-    let issue = issue(rows, opts, logs.first(), path.is_some());
+    let issue = issue(rows, opts, logs.first().copied(), path.is_some());
     if let Some(open) = app.services.open_url.as_mut() {
         open(&issue.url)?;
     }
@@ -439,7 +439,7 @@ pub fn dialog_body(ui: &mut egui::Ui, t: &crate::theme::Tokens, opts: &mut Repor
         egui::RichText::new(tr("A raw file? Name the camera model, and share the file through a link (Google Drive, Dropbox…).")).color(t.text_dim),
     );
     let chosen = chosen(logs, opts);
-    let issue = issue(rows, opts, chosen.first(), !chosen.is_empty());
+    let issue = issue(rows, opts, chosen.first().copied(), !chosen.is_empty());
     ui.label(egui::RichText::new(tr("The new issue")).color(t.text_label));
     egui::ScrollArea::vertical().id_salt("reportBugPreview").max_height(200.0).show(ui, |ui| {
         ui.add(egui::Label::new(egui::RichText::new(issue.body.as_str()).monospace().size(11.0).color(t.text_label)).wrap());
@@ -473,7 +473,7 @@ mod tests {
             bytes: tail.len() as u64,
             tail: tail.into(),
             current: true,
-            text: String::new(),
+            text: Default::default(),
         }
     }
 
@@ -525,14 +525,27 @@ mod tests {
     #[test]
     fn this_runs_log_is_chosen_by_name_not_position() {
         let older =
-            LogInfo { name: "lightcraft.1.log".into(), path: String::new(), bytes: 1, tail: String::new(), current: false, text: String::new() };
+            LogInfo { name: "lightcraft.1.log".into(), path: String::new(), bytes: 1, tail: String::new(), current: false, text: Default::default() };
         let current = LogInfo { current: true, name: "lightcraft.log".into(), ..older.clone() };
         let both_logs = [older.clone(), current.clone()];
         let opts = ReportOptions::default();
         assert!(chosen(std::slice::from_ref(&older), &opts).is_empty(), "only an older log: none is this run's");
-        assert_eq!(chosen(&both_logs, &opts), std::slice::from_ref(&current));
+        assert_eq!(chosen(&both_logs, &opts), [&current]);
         let both = ReportOptions { previous_logs: true, ..Default::default() };
         assert_eq!(chosen(&both_logs, &both).len(), 2);
+    }
+
+    /// Review of #3763: the log text read when the dialog opened is shared, not copied, when the dialog's state is
+    /// cloned (as it is at every draw), and the logs a report takes are picked by reference.
+    #[test]
+    fn a_dialog_clone_shares_its_log_text() {
+        let big: std::sync::Arc<str> = "a log line\n".repeat(400_000).into();
+        let log = LogInfo { name: "lightcraft.log".into(), path: String::new(), bytes: 1, tail: String::new(), current: true, text: big.clone() };
+        let copy = log.clone();
+        assert!(std::sync::Arc::ptr_eq(&copy.text, &big), "the clone shares the text");
+        let logs = [log];
+        let picked = chosen(&logs, &ReportOptions::default());
+        assert!(std::ptr::eq(picked[0], &logs[0]), "picked by reference");
     }
 
     #[test]
