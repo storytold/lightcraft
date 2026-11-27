@@ -339,6 +339,36 @@ fn deleting_explicit_targets_keeps_the_surviving_selection() {
 }
 
 #[test]
+fn photo_commands_accept_named_ids_without_a_selection() {
+    use lightcraft_catalog::Flag;
+
+    let mut s = demo();
+    let ids = s.visible_cloned();
+    let rated = ids[0];
+    let edited = ids[1];
+    let restored = ids[2];
+    let picked = ids[3];
+    let rotated = ids[4];
+    s.selection = Selection::default();
+
+    assert!(matches!(s.execute("photo.rate", &json!({"rating": 3})), Err(crate::EngineError::Disabled(..))));
+    s.execute("photo.rate", &json!({"ids": [rated.0], "rating": 3})).unwrap();
+    assert_eq!(s.catalog.photo(rated).unwrap().rating, 3);
+    s.execute("photo.setMeta", &json!({"ids": [edited.0], "title": "Named target"})).unwrap();
+    assert_eq!(s.catalog.photo(edited).unwrap().meta.title, "Named target");
+    s.execute("photo.pick", &json!({"ids": [picked.0]})).unwrap();
+    assert_eq!(s.catalog.photo(picked).unwrap().flag, Flag::Pick);
+    let orientation = s.develop_of(rotated).unwrap().orientation;
+    s.execute("photo.rotateLeft", &json!({"ids": [rotated.0]})).unwrap();
+    assert_ne!(s.develop_of(rotated).unwrap().orientation, orientation);
+
+    s.execute("photo.delete", &json!({"ids": [restored.0]})).unwrap();
+    s.selection = Selection::default();
+    s.execute("photo.restore", &json!({"ids": [restored.0]})).unwrap();
+    assert!(!s.catalog.photo(restored).unwrap().deleted);
+}
+
+#[test]
 fn permanently_deleting_photos_selects_a_neighbour_in_recently_deleted() {
     for params in [json!({}), json!({"key": "fileName", "ascending": false}), json!({"key": "random", "seed": 123})] {
         for at_end in [false, true] {
