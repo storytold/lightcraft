@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Captions from a Lightroom catalog
+- A Lightroom catalog import brings across every photo's caption. It read captions only from the XMP Lightroom
+  caches inside the catalog, which often doesn't have them, so most photos arrived without the caption Lightroom
+  showed. It now reads Lightroom's own IPTC table too (issue #4043).
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)

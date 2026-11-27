@@ -210,6 +210,10 @@ pub struct CatalogPhoto {
     pub keywords: Vec<String>,
     pub history: Vec<Row>,
     pub snapshots: Vec<Row>,
+    /// The caption Lightroom shows, from its `AgLibraryIPTC` table: it can be missing from the cached XMP packet
+    /// ([`CatalogPhoto::xmp`]) Lightroom keeps for the image (issue #4043). Empty when the table has none.
+    #[serde(default)]
+    pub caption: String,
     /// Whether `path` may be looked at (derived when the catalog is read; not archived).
     #[serde(skip)]
     pub original: Original,
@@ -504,8 +508,9 @@ pub fn read_source(
     total: &AtomicUsize,
     done: &AtomicUsize,
 ) -> Result<CatalogImport, String> {
-    // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
-    total.store(14, Ordering::Relaxed);
+    // 13 catalog tables, the optional IPTC table (captions, #4043) and one validation stage; ImportJob adds one unit
+    // per original path.
+    total.store(15, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
     if crate::lightroom_backup::is_backup(path) {
@@ -562,6 +567,12 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     let roots: HashMap<_, _> = table("AgLibraryRootFolder", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let folders: HashMap<_, _> = table("AgLibraryFolder", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let files: HashMap<_, _> = table("AgLibraryFile", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    // the caption each image has in Lightroom's own IPTC table (the cached XMP below may not restate it)
+    let mut captions: HashMap<_, _> = optional_table("AgLibraryIPTC", &mut warnings)?
+        .into_iter()
+        .filter(|r| !text(r, "caption").trim().is_empty())
+        .map(|r| (number(&r, "image"), text(&r, "caption").to_string()))
+        .collect();
     let develops: HashMap<_, _> = optional_table("Adobe_imageDevelopSettings", &mut warnings)?
         .into_iter()
         .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
@@ -693,6 +704,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
             keywords: keywords.remove(&id).unwrap_or_default(),
             history: history.remove(&id).unwrap_or_default(),
             snapshots: snapshots.remove(&id).unwrap_or_default(),
+            caption: captions.remove(&id).unwrap_or_default(),
             original,
         });
     }
@@ -1403,6 +1415,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 }
                 Err(e) => warnings.push(format!("image {} XMP: {e}", src.source_id)),
             }
+        }
+        // Lightroom's own caption, over the cached packet's (which can lack it or be older)
+        if !src.caption.is_empty() {
+            p.meta.caption = src.caption.clone();
         }
         p.rating = number(&src.image, "rating").clamp(0, 5) as u8;
         p.flag = match number(&src.image, "pick") {
