@@ -500,12 +500,25 @@ pub(super) fn resample_correspondence(image: &Rgb32f, source: impl Fn(f64, f64) 
     for (i, pixel) in out.data.iter_mut().enumerate() {
         let p = source((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
         *pixel = if p.x.is_finite() && p.y.is_finite() && p.x >= 0.5 && p.y >= 0.5 && p.x <= w as f64 - 0.5 && p.y <= h as f64 - 0.5 {
-            image.sample_bilinear(p.x as f32, p.y as f32)
+            sample_correspondence(image, p.x - 0.5, p.y - 0.5)
         } else {
             [f32::NAN; 3]
         };
     }
     out
+}
+
+/// Bilinear sampling inside the image, with integer coordinates at pixel centres.
+fn sample_correspondence(image: &Rgb32f, x: f64, y: f64) -> [f32; 3] {
+    let blend = |a: [f32; 3], b: [f32; 3], t: f64| std::array::from_fn(|i| (f64::from(a[i]) * (1.0 - t) + f64::from(b[i]) * t) as f32);
+    // The first warp can leave a NaN border. Read a neighbour only when it contributes.
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let row = |y| {
+        let left = image.get(x0, y);
+        if x.fract() == 0.0 { left } else { blend(left, image.get(x0 + 1, y), x.fract()) }
+    };
+    let top = row(y0);
+    if y.fract() == 0.0 { top } else { blend(top, row(y0 + 1), y.fract()) }
 }
 
 /// Propose correspondence geometry only. A resolved lens describes the oriented

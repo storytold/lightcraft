@@ -3234,6 +3234,34 @@ fn cr3_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop() {
     assert!(reopened.opcodes.list3.is_empty(), "no external shading opcode is silently introduced");
 }
 
+/// A second warp must ignore invalid taps with zero weight and propagate invalid taps with positive weight.
+#[test]
+fn correspondence_samples_use_only_neighbours_with_nonzero_weight() {
+    let valid = [0.25, 0.5, 1.0];
+    let mut image = Rgb32f::new(2, 2);
+    image.data.fill([f32::NAN; 3]);
+    image.set(0, 0, valid);
+    let sample = |image: &Rgb32f, x, y| resample_correspondence(image, |_, _| lightcraft_geom::Point::new(x, y)).get(0, 0);
+    assert_eq!(sample(&image, 0.5, 0.5), valid);
+    assert!(sample(&image, 1.0, 1.0).iter().all(|v| v.is_nan()));
+    // These coordinates still have a positive neighbour weight even though casting them to f32 rounds to the centre.
+    let next = 0.5f64.next_up();
+    for (x, y) in [(next, 0.5), (0.5, next)] {
+        assert!(sample(&image, x, y).iter().all(|v| v.is_nan()));
+    }
+    let mut mask = Rgb32f::new(2, 2);
+    mask.set(0, 0, [1.0; 3]);
+    let almost_next_centre = 1.5f64.next_down();
+    for (x, y) in [(almost_next_centre, 0.5), (0.5, almost_next_centre)] {
+        assert!(sample(&mask, x, y)[0] > 0.0, "a clipped neighbour with positive weight must count");
+    }
+    for (x, y) in [(1, 0), (0, 1)] {
+        let mut axis = image.clone();
+        axis.set(x, y, valid.map(|v| 3.0 * v));
+        assert_eq!(sample(&axis, 0.5 + x as f64 * 0.5, 0.5 + y as f64 * 0.5), valid.map(|v| 2.0 * v));
+    }
+}
+
 /// Keep clipped contributors in the resampled mask and mark out-of-frame samples invalid.
 #[test]
 fn correspondence_mask_keeps_every_contributing_clipped_sample_and_invalid_border() {
