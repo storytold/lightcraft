@@ -1463,6 +1463,13 @@ impl Session {
         f
     }
 
+    /// Whether photo `id` matches what the view asks (its source, folder and filter bar), stacks aside: a member
+    /// of a collapsed stack that matches is shown once the stack opens. Nothing is changed.
+    pub fn view_matches(&self, id: PhotoId) -> bool {
+        let f = self.view_filter(self.source, &self.filter);
+        self.catalog.photo(id).is_some_and(|p| f.matches(p, &self.catalog))
+    }
+
     /// Let go of what a held view kept: the view shows what matches now ([`Session::hold_view`]).
     pub fn refresh_view(&mut self) {
         self.base = None;
