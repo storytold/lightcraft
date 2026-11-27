@@ -253,7 +253,7 @@ pub(crate) fn output_px(frame: &Frame) -> [usize; 2] {
 pub(crate) fn focus_box(photo: &lightcraft_catalog::Photo) -> Option<lightcraft_geom::Rect> {
     let f = photo.meta.focus.as_ref()?;
     let d = &photo.develop;
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, d, true, photo.embedded_lens.as_ref());
+    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, d, true, photo.embedded_lens.as_deref());
     let [w, h] = output_px(&frame);
     let to_out = frame.out_to_norm(w, h).inverse()?;
     // stored on the upright photo: the user's Rotate / Flip on top, then the crop
@@ -286,7 +286,7 @@ pub(crate) fn focus_pan(app: &LightcraftApp, id: PhotoId) -> Option<(f32, f32)> 
 
 /// Ease the loupe rect toward `target` while a click-zoom animation runs; otherwise follow it exactly.
 pub(super) fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
-    let t = if *anim { 0.22 } else { 0.0 };
+    let t = if *anim { crate::motion::zoom_tween_seconds(ctx) } else { 0.0 };
     let id = egui::Id::unique("loupe_anim");
     let v = |k: &str, x: f32| ctx.animate_value_with_time(id.with(k), x, t);
     let (c, s) = (target.center(), target.size());

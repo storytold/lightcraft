@@ -190,8 +190,8 @@ Neither names ORF or specifies its file layout. These references do not establis
 
 | Stage | Target | LightCraft | Status |
 |---|---|---|---|
-| Bayer demosaic | Adobe's own, plus AI "Raw Details" | AHD (default; blends its horizontal and vertical candidates where neither is clearly more homogeneous, so flat noise doesn't become a maze), PPG, bilinear (`crates/raw/src/demosaic`) | 🟡 quality unmeasured against Lightroom; demosaics before white balance (#1328, PR #1463); no Raw Details |
-| X-Trans demosaic | ✅ | in-house edge-weighted directional | 🟡 unmeasured |
+| Bayer demosaic | Adobe's own, plus AI "Raw Details" | AHD (default; blends its horizontal and vertical candidates where neither is clearly more homogeneous, so flat noise doesn't become a maze), PPG, bilinear (`crates/raw/src/demosaic`); at full size (exports, 1:1, and previews `files::bin_factor` can't bin, Bayer sensors under about 4600 px on the long side and X-Trans under about 5760 px; other previews and thumbnails bin the mosaic), run on the mosaic white balanced as shot and divided back after, so neutral edges stay neutral (#1328) | 🟡 quality unmeasured against Lightroom; no Raw Details |
+| X-Trans demosaic | ✅ | in-house edge-weighted directional, on the white-balanced mosaic as Bayer (#1328) | 🟡 unmeasured |
 | Foveon | ✅ (older bodies) | — | ⬜ |
 | Monochrome / LinearRaw | ✅ | handled, no demosaic | ✅ |
 | Pixel shift (Sony ARQ, Pentax, OM high-res, Nikon) | ✅ (Sony, Pentax, Nikon) | — | ⬜ |
@@ -200,7 +200,7 @@ Neither names ORF or specifies its file layout. These references do not establis
 | Black and white levels | per model, calibrated | read from each file (masked columns, maker notes, SR2SubIFD, CMP1) | 🟡 per-body bugs keep surfacing: A450–A700 SR2 black level and M/S ARW pedestal (#535, fixed); 5D Mark IV CR2 renders dark (#455, open); white-level pile-up in phone DNGs (#548, fixed) |
 | Crop masks and aspect | ✅ | DefaultCrop, Sony recorded size, Canon AspectInfo, Panasonic in-camera crops, Nikon CropArea, measured Nikon bodies without it (D4, D90, D5000, D600, D610) | 🟡 7RM3 / 7RM4 crop origin 8–32 px off (cosmetic) |
 | Lens metadata | ✅ read for profile selection | EXIF lens fields read; used only for the in-file corrections below | 🟡 |
-| Highlight reconstruction | ✅ | neutral clip, chromaticity diffusion (`highlight.rs`) | 🟡 tuned by eye |
+| Highlight reconstruction | ✅ | neutral clip, chromaticity diffusion (`highlight.rs`); told which channels hold clipped samples (binned previews, #548) or were interpolated from them (full-size demosaic, #1328) | 🟡 tuned by eye |
 | AI denoise | ✅ Bayer and X-Trans, model bundled | Bayer only, user-installed weights, pure-Rust CPU / GPU | 🟡 no X-Trans, no shippable weights |
 | Super Resolution | ✅ | — | ⬜ |
 | HDR / panorama merge to raw DNG | ✅ | linear DNG (float16 HDR) with the source's colour tags | ✅ |
@@ -222,7 +222,10 @@ Neither names ORF or specifies its file layout. These references do not establis
   bodies, median ΔE 5.1, ΔL\* +0.2; rejected fits fall back to a neutral matrix at median ΔE 18.5,
   ΔL\* −11, chroma ×0.39. RW2 140 of 174 files accepted, median 5.0. NEF 13 of 13, 2.9–7.8. RAF 23 of
   24, pooled X-H2S 1.62 / X-T4 2.34 (measured before `LOOK_VERSION` 13 stopped applying the embedded vignetting
-  correction twice); X-S10, 60 photos not used to find that bug, mean ΔE00 2.71 → 2.55 with it fixed. SRW 2.2–7.6.
+  correction twice); X-S10, 60 photos not used to find that bug, mean ΔE00 2.71 → 2.55 with it fixed. Since
+  `LOOK_VERSION` 26 a lens database's vignetting reaches the fit only in the share the camera JPEG shows (an
+  ILCE-7M3 with an FE 28mm F2 at f/2, whose JPEG shows none of it, had rendered darker and orange with the whole
+  profile). SRW 2.2–7.6.
 - Against Lightroom itself (few): Sony DRO median ΔE76 7.5 → 3.3; Olympus E-1 vs Lightroom Classic
   ΔE00 11.25 → 8.30; ProRAW with its gain map ΔE00 19 (why the map is off). No measurement against
   Adobe Standard across models exists.
@@ -294,6 +297,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | patch | Camera look: a lens database's vignetting reaches the per-file fit only in the share the camera JPEG shows (`LOOK_VERSION` 26), so raws whose JPEG shows little or none of it (mostly Sony) no longer render too dark, with skewed colour, with lensfun profiles. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |
@@ -337,5 +341,6 @@ Beyond decoding:
 | 2026-10-25 | minor | Canon EOS D60: dual-illuminant matrices fitted to our own ColorChecker Classic shots (tungsten, sun; `crates/raw/src/chart_table.rs`), the first chart-calibrated model: its CRWs edit white balance in Kelvin; counts unchanged |
 | 2026-10-18 | minor | Minolta MRW decoded (`vendor/mrw.rs`): DiMAGE 7, 7Hi, A1, A2, A200 and Dynax / Maxxum 7D verified; 551 verified, 656 unverified, 201 preview (re-measured with `coverage.py`) |
 | 2026-10-23 | minor | AHD blends its horizontal and vertical candidates where their homogeneity is close, so flat noise no longer becomes a maze pattern; Bayer demosaic row notes the pre-white-balance demosaic (#1328); scores unchanged |
+| 2026-11-23 | minor | Demosaic: Bayer and X-Trans mosaics are demosaiced white balanced as shot and divided back after, and highlight reconstruction is told which channels were interpolated from clipped samples (#1328: green, cyan, yellow and magenta outlines on neutral edges and around clipped highlights at full size); scores unchanged |
 | 2026-10-30 | patch | RAF camera look fitted on the vignetting-corrected sensor (`LOOK_VERSION` 13): renders were up to 0.3 EV too bright in midtones and 0.6 EV in shadows; X-S10 mean ΔE00 vs the camera JPEG 2.71 → 2.55 on 60 photos |
 | 2026-10-26 | minor | Canon CRW decoding moved to the shared craft-libs crate `craft-crw` (local path dependency until that branch merges); `vendor/crw.rs` is now the adapter onto `RawImage`, and the clean-room derivation record lives in craft-libs `crates/crw/clean-room/`; counts unchanged |

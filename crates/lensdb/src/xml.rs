@@ -1,147 +1,36 @@
-//! A small, bounded XML tree reader for lensfun-format database files.
+//! Reading lensfun-format database files with `craft-xml`, within this crate's limits.
 
-use quick_xml::events::Event;
+pub(crate) use craft_xml::El as Node;
 
 use crate::Error;
 
-const MAX_NODES: usize = 500_000;
+/// Most nodes (elements and their text) one document may hold.
+const MAX_NODES: usize = 1_000_000;
+/// Deepest element nesting (lensfun files nest four deep).
 const MAX_DEPTH: usize = 32;
 
-#[derive(Debug, Default)]
-pub(crate) struct Node {
-    pub name: String,
-    pub attrs: Vec<(String, String)>,
-    pub text: String,
-    pub children: Vec<Node>,
-}
-
-impl Node {
-    pub fn attr(&self, k: &str) -> Option<&str> {
-        self.attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
-    }
-    pub fn num(&self, k: &str) -> Option<f64> {
-        self.attr(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite())
-    }
-    pub fn kids<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Node> + 'a {
-        self.children.iter().filter(move |c| c.name == name)
-    }
-    pub fn kid(&self, name: &str) -> Option<&Node> {
-        self.children.iter().find(|c| c.name == name)
-    }
-    pub fn kid_text(&self, name: &str) -> Option<&str> {
-        self.kid(name).map(|n| n.text.trim()).filter(|t| !t.is_empty())
-    }
-}
-
-fn entity(name: &str) -> Option<char> {
-    Some(match name {
-        "amp" => '&',
-        "lt" => '<',
-        "gt" => '>',
-        "quot" => '"',
-        "apos" => '\'',
-        _ => {
-            let n = name.strip_prefix('#')?;
-            let v = match n.strip_prefix('x') {
-                Some(h) if h.bytes().all(|b| b.is_ascii_hexdigit()) => u32::from_str_radix(h, 16).ok()?,
-                Some(_) => return None,
-                None if n.bytes().all(|b| b.is_ascii_digit()) => n.parse().ok()?,
-                None => return None,
-            };
-            char::from_u32(v)?
-        }
-    })
-}
-
-/// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
-/// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
-/// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
-fn entity_end(rest: &str) -> Option<usize> {
-    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
-    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
-}
-
-fn unescape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find('&') {
-        out.push_str(rest.get(..i).unwrap_or_default());
-        let tail = rest.get(i..).unwrap_or_default();
-        match entity_end(tail).and_then(|j| entity(tail.get(1..j)?).map(|c| (c, j))) {
-            Some((c, j)) => {
-                out.push(c);
-                rest = tail.get(j + 1..).unwrap_or_default();
-            }
-            None => {
-                out.push('&');
-                rest = tail.get(1..).unwrap_or_default();
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
+/// The document's root element. Malformed markup is an error (strict); an undefined entity is kept as the text
+/// `&name;`.
 pub(crate) fn parse(s: &str) -> Result<Node, Error> {
-    let mut reader = quick_xml::Reader::from_str(s);
-    let mut stack = vec![Node { name: "#root".into(), ..Default::default() }];
-    let mut count = 0usize;
-    loop {
-        let ev = reader.read_event().map_err(|e| Error::Xml(e.to_string()))?;
-        match ev {
-            Event::Start(ref e) | Event::Empty(ref e) => {
-                count += 1;
-                if count > MAX_NODES || stack.len() > MAX_DEPTH {
-                    return Err(Error::TooLarge);
-                }
-                let attrs = e
-                    .attributes()
-                    .with_checks(false)
-                    .flatten()
-                    .map(|a| (String::from_utf8_lossy(a.key.as_ref()).into_owned(), unescape(&String::from_utf8_lossy(&a.value))))
-                    .collect();
-                let node = Node { name: String::from_utf8_lossy(e.name().as_ref()).into_owned(), attrs, ..Default::default() };
-                if matches!(ev, Event::Empty(_)) {
-                    if let Some(p) = stack.last_mut() {
-                        p.children.push(node);
-                    }
-                } else {
-                    stack.push(node);
-                }
-            }
-            Event::End(_) => close(&mut stack),
-            Event::Text(t) => {
-                if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&t.decode().map_err(|e| Error::Xml(e.to_string()))?);
-                }
-            }
-            Event::CData(t) => {
-                if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&t));
-                }
-            }
-            Event::GeneralRef(r) => {
-                if let (Some(top), Some(c)) = (stack.last_mut(), entity(&String::from_utf8_lossy(&r))) {
-                    top.text.push(c);
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
+    let limits = craft_xml::Limits { max_depth: MAX_DEPTH, max_nodes: MAX_NODES, ..craft_xml::Limits::DEFAULT };
+    let options = craft_xml::Options {
+        strict: true,
+        unknown_entity: craft_xml::UnknownEntity::Literal,
+        drop_blank_text: true,
+        ..craft_xml::Options::default()
     }
-    while stack.len() > 1 {
-        close(&mut stack);
-    }
-    stack.pop().ok_or(Error::Xml("empty document".into()))
+    .with_limits(limits);
+    options.parse(s.as_bytes()).map_err(|e| if e.is_limit() { Error::TooLarge } else { Error::Xml(e.to_string()) })
 }
 
-fn close(stack: &mut Vec<Node>) {
-    if stack.len() > 1
-        && let Some(n) = stack.pop()
-        && let Some(p) = stack.last_mut()
-    {
-        p.children.push(n);
-    }
+/// A finite number in attribute `k`.
+pub(crate) fn num(n: &Node, k: &str) -> Option<f64> {
+    n.attr(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite())
+}
+
+/// The trimmed text of the first child `name`, when not empty.
+pub(crate) fn kid_text(n: &Node, name: &str) -> Option<String> {
+    n.child(name).map(|c| c.text().trim().to_string()).filter(|t| !t.is_empty())
 }
 
 #[cfg(test)]
@@ -149,24 +38,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn many_ampersands_before_one_semicolon_are_read_once() {
-        // 200 000 `&` then a `;`: each `&` once searched the whole rest for the `;`
-        let hostile = format!("{};&amp;", "&".repeat(200_000));
-        assert_eq!(unescape(&hostile), format!("{};&", "&".repeat(200_000)));
-        assert_eq!(unescape("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+    fn references_and_padding_decode_and_unknown_entities_stay() {
+        let root = parse("<lens maker='C&#0000000097;non &amp;'>&#x0000041; &unknownreference;</lens>").unwrap();
+        assert_eq!(root.attr("maker"), Some("Canon &"));
+        assert_eq!(root.text(), "A &unknownreference;");
     }
 
     #[test]
-    fn zero_padded_numeric_references_decode() {
-        assert_eq!(unescape("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");
-        assert_eq!(unescape("&abc&#xyz;&;"), "&abc&#xyz;&;");
-    }
-
-    #[test]
-    fn entity_rejects_signed_numeric_references() {
-        assert_eq!(entity("#+65"), None);
-        assert_eq!(entity("#x+41"), None);
-        assert_eq!(entity("#65"), Some('A'));
-        assert_eq!(entity("#x41"), Some('A'));
+    fn limits_are_too_large() {
+        assert!(matches!(parse(&"<a>".repeat(MAX_DEPTH + 1)), Err(Error::TooLarge)));
+        assert!(matches!(parse(&format!("<a>{}</a>", "<b/>".repeat(MAX_NODES))), Err(Error::TooLarge)));
     }
 }
