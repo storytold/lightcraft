@@ -188,3 +188,140 @@ fn the_error_type_maps_to_the_exit_codes() {
     assert_eq!(CliError::from("boom").exit_code(), 1);
     assert_eq!(CliError::from(String::from("boom")).to_string(), "boom");
 }
+
+// What follows runs the commands themselves in-process, on files made for the test in a folder of its own.
+
+fn work(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("lightcraft-cli-unit-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap_or_default();
+    dir
+}
+
+fn gradient(path: &std::path::Path) {
+    let img = lightcraft_raster::Rgba8::from_fn(120, 80, |x, y| [(x * 2) as u8, (y * 3) as u8, 100, 255]);
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap_or_default();
+    std::fs::write(path, png).unwrap_or_default();
+}
+
+#[test]
+fn render_develops_a_file_and_refuses_what_it_cannot_do() {
+    let dir = work("render");
+    let (input, out) = (dir.join("in.png"), dir.join("out.jpg"));
+    gradient(&input);
+    let (i, o) = (input.to_str().unwrap_or(""), out.to_str().unwrap_or(""));
+    let (code, _, err) = go(&["render", i, "-o", o, "--set", "light.exposure=1", "--size", "60", "--quality", "80", "--opt", "colorSpace=srgb"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("wrote"), "{err}");
+    assert!(out.exists());
+    // A control that does not exist, a preset that does not exist, an extension that is no format, the input as the output.
+    for args in [
+        &["render", i, "-o", o, "--set", "nope=1"][..],
+        &["render", i, "-o", o, "--preset", "no-such-preset"],
+        &["render", i, "-o", &format!("{o}.nope")],
+        &["render", i, "-o", i],
+        &["render", "/no/such/file.png", "-o", o],
+    ] {
+        let (code, out, err) = go(args);
+        assert_eq!(code, 1, "{args:?}: {err}");
+        assert!(out.is_empty() && err.starts_with("lightcraft-cli: "), "{args:?}: {out}{err}");
+    }
+    // A settings file that is neither settings nor a preset.
+    let settings = dir.join("settings.json");
+    std::fs::write(&settings, "[1, 2]").unwrap_or_default();
+    let (code, _, err) = go(&["render", i, "-o", o, "--settings", settings.to_str().unwrap_or("")]);
+    assert_eq!(code, 1, "{err}");
+    std::fs::write(&settings, r#"{"light": {"exposure": 0.5}}"#).unwrap_or_default();
+    let (code, _, err) = go(&["render", i, "-o", o, "--settings", settings.to_str().unwrap_or("")]);
+    assert_eq!(code, 0, "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn synth_merge_writes_inputs_and_merge_reads_them() {
+    let dir = work("synth");
+    let (code, out, err) = go(&["synth-merge", "pano", "-o", dir.to_str().unwrap_or("")]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.lines().count(), 5, "{out}");
+    let (code, out, err) = go(&["synth-merge", "hdr", "-o", dir.to_str().unwrap_or("")]);
+    assert_eq!(code, 0, "{err}");
+    let files: Vec<&str> = out.lines().collect();
+    assert_eq!(files.len(), 3, "{out}");
+    let preview = dir.join("preview.png");
+    let mut args =
+        vec!["merge", "hdr", "--deghost", "low", "--no-align", "--auto-crop", "--no-auto-settings", "--preview", preview.to_str().unwrap_or("")];
+    args.extend(files.iter().copied());
+    let (code, out, err) = go(&args);
+    assert_eq!(code, 0, "{err}");
+    assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok_and(|v| v["seconds"].is_number()), "{out}");
+    let (code, _, err) = go(&["merge", "hdr", "/no/such/photo.dng"]);
+    assert_eq!(code, 1, "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn snapshot_renders_the_demo_library_to_a_png_and_reports_a_bad_script() {
+    let dir = work("snapshot");
+    let png = dir.join("shot.png");
+    let (code, _, err) = go(&["snapshot", "--size", "400x300", "-o", png.to_str().unwrap_or("")]);
+    assert_eq!(code, 0, "{err}");
+    assert!(png.exists(), "{err}");
+    let script = dir.join("script.jsonl");
+    std::fs::write(&script, "{\"method\": \"ui.set\", \"params\": {\"view\": \"detail\"}}\n{\"method\": \"no.such.method\"}\n").unwrap_or_default();
+    let (code, out, err) = go(&["snapshot", "--size", "400x300", "--script", script.to_str().unwrap_or(""), "-o", png.to_str().unwrap_or("")]);
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(out.lines().count(), 2, "{out}");
+    assert!(err.contains("1 scripted request(s) failed"), "{err}");
+    let (code, _, err) = go(&["snapshot", "--script", dir.join("none.jsonl").to_str().unwrap_or("")]);
+    assert_eq!(code, 1, "{err}");
+    let (code, _, err) = go(&["snapshot", "-o", png.to_str().unwrap_or(""), "--library", "/dev/null/no-library"]);
+    assert_eq!(code, 1, "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn run_reads_a_script_file_and_refuses_a_bad_one() {
+    let dir = work("script");
+    let script = dir.join("steps.jsonl");
+    std::fs::write(&script, "# comment\n{\"command\": \"engine.commands\"}\n\n").unwrap_or_default();
+    let (code, out, err) = go(&["run", "--demo", "--script", script.to_str().unwrap_or("")]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.lines().count(), 1, "{out}");
+    for (text, needle) in [
+        ("not json\n", "steps.jsonl:1"),
+        ("{\"x\": 1}\n", "needs `command` or `method`"),
+        ("{\"command\": \"a\", \"params\": 3}\n", "must be a JSON object"),
+    ] {
+        std::fs::write(&script, text).unwrap_or_default();
+        let (code, out, err) = go(&["run", "--demo", "--script", script.to_str().unwrap_or("")]);
+        assert_eq!(code, 1, "{err}");
+        assert!(out.is_empty() && err.contains(needle), "{needle}: {out}{err}");
+    }
+    let (code, _, err) = go(&["run", "--demo", "--script", dir.join("none").to_str().unwrap_or("")]);
+    assert_eq!(code, 1, "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn calibrate_bench_cull_and_denoise_serve_fail_cleanly_without_inputs() {
+    let dir = work("calibrate");
+    let (code, _, err) = go(&["calibrate", "--max", "0", "--out", dir.to_str().unwrap_or(""), dir.to_str().unwrap_or("")]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("0 of 0 raw files") && err.contains("no profile written"), "{err}");
+    let (code, _, err) = go(&["bench-cull", dir.join("none").to_str().unwrap_or("")]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("not a folder"), "{err}");
+    let (code, _, err) = go(&["denoise-serve", "--token-env", "LC_UNIT_TEST_NO_SUCH_VARIABLE"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("LC_UNIT_TEST_NO_SUCH_VARIABLE"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_library_or_import_that_fails_ends_the_run_with_exit_1() {
+    let (code, _, err) = go(&["mcp", "--library", "/dev/null/no-library"]);
+    assert_eq!(code, 1, "{err}");
+    let (code, out, err) = go(&["run", "--demo", "--import", "/no/such/photo.jpg", "engine.commands"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(out.is_empty(), "{out}");
+}
