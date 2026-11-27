@@ -114,8 +114,8 @@ Run `cargo test --release -p lightcraft-codecs --test it bench:: -- --ignored --
 
 ## Gaps / limitations
 
-- **AVIF decode**: no permissively licensed, pure-Rust AV1 decoder exists today (dav1d is C;
-  rav1d-safe is AGPL). Files are sniffed and rejected with `Error::Unsupported`.
+- **AVIF decode** uses the shared pure-Rust AV1 decoder on native builds with the `avif` feature.
+  Animated AVIF, depth and gain-map auxiliary images, and progressive/layered images are unsupported.
 - **HEIC** needs the `heif` feature (off by default: HEVC patents are the distributor's call);
   without it, `Error::Unsupported` says the build has no HEIC support. 4:2:2 and 4:4:4 HEIF
   (Canon/Sony HIF) is refused: heic-rs 0.1.1 loses sync on those bitstreams.
