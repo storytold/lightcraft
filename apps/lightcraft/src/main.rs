@@ -71,7 +71,7 @@ use gpu_crash::{gpu_crash_check_at, gpu_crash_notice, window_wgpu_options};
 #[cfg(test)]
 use launch::launch_imports_in;
 use launch::{
-    HELP, LaunchArgs, control_port_from, launch_imports, launch_library_choice, log_dir, panic_log_path_with, startup_failed, stopped_text,
+    HELP, LaunchArgs, control_port_from, install_panic_hooks, launch_imports, launch_library_choice, log_dir, startup_failed, stopped_text,
     stopped_while_running,
 };
 #[cfg(test)]
@@ -432,16 +432,6 @@ fn main() -> eframe::Result {
     }
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
-    // The crash log follows the profile: Nightly keeps it in <profile>/Settings, never in the shared
-    // system-temp file Stable writes.
-    lightcraft_engine::guard::install_hook(panic_log_path_with(
-        |name| std::env::var_os(name),
-        std::env::temp_dir(),
-        lightcraft_engine::config::profile_root().map(std::path::Path::to_path_buf),
-    ));
-    if let Some(logger) = logger {
-        logging::record_panics(logger);
-    }
     alloc_release::install();
     let nightly = launch_profile::current().is_nightly();
     // Nightly has no control server: an inherited port variable or flag must not open a socket the
@@ -472,6 +462,10 @@ fn main() -> eframe::Result {
     if !nightly && let Some(value) = control {
         control_port = control_port_from("--control", Some(value));
     }
+    // Like the log file, after the arguments: `--version`, `--help` and a usage error create no
+    // portable `LightCraftData` folder for the crash log (a panic until here still reaches
+    // standard error).
+    install_panic_hooks(logger, in_memory);
     // The log file: opened after the arguments, so `--version`, `--help` and a usage error leave
     // no file behind. Records logged until now are written to it first.
     let mut log_file = None;

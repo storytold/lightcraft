@@ -105,19 +105,47 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
     port
 }
 
-/// An isolated profile keeps the emergency crash log with its other app data: the Nightly profile's
-/// settings folder, else `LIGHTCRAFT_CONFIG_DIR`, else (no override, or an empty one) the historical
-/// system-temp location. The profile wins because Nightly refuses `LIGHTCRAFT_CONFIG_DIR`, and a
-/// shared temp file would put a Nightly crash in Stable's log.
-pub(crate) fn panic_log_path_with(
-    env: impl Fn(&str) -> Option<std::ffi::OsString>,
-    temp: std::path::PathBuf,
-    profile: Option<std::path::PathBuf>,
-) -> std::path::PathBuf {
-    if let Some(root) = profile.filter(|root| !root.as_os_str().is_empty()) {
-        return root.join("Settings").join("lightcraft-panics.log");
+/// The emergency crash log: `lightcraft-panics.log` in the settings folder, next to `ui.json` (an
+/// isolated profile's with `LIGHTCRAFT_CONFIG_DIR`). Never the system temp folder: on Linux and
+/// FreeBSD every user shares it, so another could create the file first or put a link there (issue
+/// #2572). None (panics then go to standard error, and to the log file when there is one) for a
+/// `--memory` session, which writes nothing (issue #164), with `LIGHTCRAFT_NO_PREFS` or with no
+/// settings folder.
+fn panic_log_path(in_memory: bool) -> Option<std::path::PathBuf> {
+    panic_log_path_with(in_memory, std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some(), config_dir)
+}
+
+/// `config` (the settings folder) is looked up only when the crash log is kept.
+fn panic_log_path_with(in_memory: bool, no_prefs: bool, config: impl FnOnce() -> Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    if in_memory || no_prefs {
+        return None;
     }
-    env("LIGHTCRAFT_CONFIG_DIR").filter(|value| !value.is_empty()).map(std::path::PathBuf::from).unwrap_or(temp).join("lightcraft-panics.log")
+    config().map(|d| d.join("lightcraft-panics.log"))
+}
+
+/// Prepare only the selected settings directory before installing the emergency hook. A new profile
+/// may not have reached the normal logger yet; if preparation fails, keep the stderr fallback.
+fn prepare_panic_log(path: std::path::PathBuf) -> Option<std::path::PathBuf> {
+    let mut dirs = std::fs::DirBuilder::new();
+    dirs.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        dirs.mode(0o700);
+    }
+    dirs.create(path.parent()?).ok()?;
+    Some(path)
+}
+
+/// The panic hooks: the engine guard's (standard error, and the crash log when there is one), then
+/// the log file's.
+pub(crate) fn install_panic_hooks(logger: Option<&'static super::logging::AppLogger>, in_memory: bool) {
+    if let Some(path) = panic_log_path(in_memory).and_then(prepare_panic_log) {
+        lightcraft_engine::guard::install_hook(path);
+    }
+    if let Some(logger) = logger {
+        super::logging::record_panics(logger);
+    }
 }
 
 /// What to tell the user when LightCraft stopped while running (`error`), and why when the GPU
@@ -169,25 +197,105 @@ pub(crate) fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
 mod config_path_tests {
     use super::*;
 
+    /// #2572: the crash log is in the settings folder (an isolated profile's too: `config_dir` honours
+    /// `LIGHTCRAFT_CONFIG_DIR`); without one (an empty override, no home folder), with
+    /// `LIGHTCRAFT_NO_PREFS` or in a `--memory` session there is none, and the last two never look the
+    /// folder up.
     #[test]
-    fn config_override_keeps_panic_log_in_isolated_profile() {
-        let temp = std::path::PathBuf::from("temp");
-        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone(), None), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| None, temp.clone(), None), temp.join("lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone(), None), temp.join("lightcraft-panics.log"));
+    fn panic_log_lives_in_the_settings_folder() {
+        let settings = || Some(std::path::PathBuf::from("settings"));
+        assert_eq!(panic_log_path_with(false, false, settings), Some(std::path::Path::new("settings").join("lightcraft-panics.log")));
+        assert_eq!(panic_log_path_with(false, false, || None), None);
+        let unasked = || -> Option<std::path::PathBuf> { panic!("the settings folder was looked up") };
+        assert_eq!(panic_log_path_with(false, true, unasked), None);
+        assert_eq!(panic_log_path_with(true, false, unasked), None);
     }
 
-    /// Nightly's crash log lives in its own profile's settings folder, never in Stable's temp file,
-    /// and an inherited LIGHTCRAFT_CONFIG_DIR cannot move it out again.
+    /// The emergency hook works before the logger creates a new profile's directory, but leaves
+    /// no files or settings directory in no-persistence modes. A child isolates the panic hook
+    /// and active profile; both possible settings paths and the temp directory are synthetic.
     #[test]
-    fn nightly_profile_owns_the_panic_log() {
-        let temp = std::path::PathBuf::from("temp");
-        let profile = std::path::PathBuf::from("/launcher/profiles/lightcraft");
-        assert_eq!(
-            panic_log_path_with(|_| Some("stable settings".into()), temp.clone(), Some(profile.clone())),
-            profile.join("Settings/lightcraft-panics.log")
-        );
-        assert_eq!(panic_log_path_with(|_| None, temp.clone(), Some(profile.clone())), profile.join("Settings/lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| None, temp.clone(), Some("".into())), temp.join("lightcraft-panics.log"));
+    fn a_panic_is_kept_in_the_settings_folder_not_the_temp_folder() {
+        if let Ok(mode) = std::env::var("LIGHTCRAFT_TEST_PANIC_LOG") {
+            let root = std::path::PathBuf::from(std::env::var_os("LIGHTCRAFT_TEST_PANIC_ROOT").unwrap());
+            let settings = if mode == "nightly" {
+                let profile = root.join("nightly");
+                let settings = profile.join("Settings");
+                lightcraft_engine::config::set_profile_root(profile).unwrap();
+                settings
+            } else {
+                root.join("settings")
+            };
+            assert_eq!(config_dir(), Some(settings.clone()));
+            assert!(!settings.exists(), "the logger has not initialized these settings");
+            if mode == "existing" {
+                std::fs::create_dir(&settings).unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o750)).unwrap();
+                }
+            }
+            #[cfg(unix)]
+            let before = if mode == "existing" {
+                use std::os::unix::fs::PermissionsExt;
+                Some(std::fs::metadata(&settings).unwrap().permissions().mode())
+            } else {
+                None
+            };
+
+            install_panic_hooks(None, mode == "memory");
+            let persists = mode != "memory" && mode != "no-prefs";
+            if persists {
+                assert!(settings.is_dir(), "{mode}: settings directory was not prepared");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let after = std::fs::metadata(&settings).unwrap().permissions().mode();
+                    if let Some(before) = before {
+                        assert_eq!(after, before, "existing settings permissions were changed");
+                    } else {
+                        assert_eq!(after & 0o077, 0, "{mode}: fresh settings directory is not private");
+                    }
+                }
+            } else {
+                assert!(!settings.exists(), "{mode}: settings directory was created by startup");
+            }
+            assert!(std::thread::spawn(|| panic!("lc-2572 probe")).join().is_err());
+            let kept = std::fs::read_to_string(settings.join("lightcraft-panics.log")).unwrap_or_default();
+            assert_eq!(kept.contains("lc-2572 probe"), persists, "{mode}: {kept:?}");
+            if !persists {
+                assert!(!settings.exists(), "{mode}: the hook created a settings directory");
+            }
+            assert!(!root.join("temp/lightcraft-panics.log").exists(), "{mode}: crash log fell back to temp");
+            if mode == "nightly" {
+                assert!(!root.join("settings").exists(), "Nightly did not initialize the other profile");
+            }
+            return;
+        }
+
+        let scratch = std::env::temp_dir().join(format!("lightcraft-panic-log-{}", std::process::id()));
+        std::fs::create_dir(&scratch).unwrap();
+        for mode in ["first-run", "nightly", "existing", "memory", "no-prefs"] {
+            let root = scratch.join(mode);
+            let temp = root.join("temp");
+            std::fs::create_dir_all(&temp).unwrap();
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args(["--exact", "launch::config_path_tests::a_panic_is_kept_in_the_settings_folder_not_the_temp_folder", "--nocapture"])
+                .env("LIGHTCRAFT_TEST_PANIC_LOG", mode)
+                .env("LIGHTCRAFT_TEST_PANIC_ROOT", &root)
+                .env("LIGHTCRAFT_CONFIG_DIR", root.join("settings"))
+                .env_remove("LIGHTCRAFT_NO_PREFS")
+                .env("TMPDIR", &temp)
+                .env("TMP", &temp)
+                .env("TEMP", &temp);
+            if mode == "no-prefs" {
+                child.env("LIGHTCRAFT_NO_PREFS", "1");
+            }
+            let out = child.output().unwrap();
+            assert!(out.status.success(), "{mode}: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        }
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 }
