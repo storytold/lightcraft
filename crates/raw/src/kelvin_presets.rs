@@ -126,6 +126,11 @@ fn locus_uv(t: f64) -> (f64, f64) {
 }
 
 impl KelvinPresets {
+    /// Heap storage retained by the calibrated temperature/multiplier points.
+    pub fn bytes(&self) -> usize {
+        self.points.capacity().saturating_mul(std::mem::size_of::<(f32, [f32; 3])>())
+    }
+
     /// `points` as (Kelvin, multipliers), ascending in Kelvin; `None` unless they make a curve: three to
     /// [`MAX_POINTS`] of them, positive multipliers, red rising and blue falling from one preset to the next.
     pub fn new(points: impl IntoIterator<Item = (f32, [f32; 3])>) -> Option<KelvinPresets> {
@@ -265,6 +270,14 @@ pub fn as_shot_white(color: &ColorData, wb_multipliers: Option<[f32; 3]>) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_points_include_spare_capacity() {
+        let mut presets = a99m2();
+        let used = presets.points.len();
+        presets.points.reserve_exact(128);
+        assert!(presets.bytes() >= (used + 128) * std::mem::size_of::<(f32, [f32; 3])>());
+    }
 
     /// The ILCA-99M2's presets (every file of the body carries the same).
     fn a99m2() -> KelvinPresets {
