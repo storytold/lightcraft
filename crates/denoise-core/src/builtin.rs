@@ -9,7 +9,7 @@
 
 use crate::bayer::reflect;
 use crate::licence::{Commercial, Licence};
-use crate::manifest::{DenoiserManifest, Domain, Gain};
+use crate::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
 use crate::nlm::{self, Stabiliser, Tuning};
 use crate::run::{Error, TileRunner};
 
@@ -46,6 +46,7 @@ pub fn manifest() -> DenoiserManifest {
         size_bytes: None,
         provenance: "Block-matching collaborative filtering with a noise level measured from each photo, written for LightCraft.".into(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: TILE,
         overlap: OVERLAP,
         gain: Gain::None,

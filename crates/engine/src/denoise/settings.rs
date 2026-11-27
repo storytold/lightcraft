@@ -97,7 +97,9 @@ impl Installed {
     pub fn fingerprint(&self) -> String {
         let sha = self.accepted.get("sha256").and_then(Value::as_str).or(self.manifest.sha256.as_deref()).unwrap_or("");
         let len = std::fs::metadata(&self.onnx).map(|m| m.len()).unwrap_or(0);
-        format!("{}@{}:{len}", self.manifest.id, sha)
+        // what the model is asked to do is part of which picture it makes: the same file read as camera RGB and as
+        // Rec. 2020 gives different products, and a product keyed without it would pass for the other space's
+        format!("{}@{}:{}:{}:{len}", self.manifest.id, self.manifest.domain.name(), self.manifest.space.name(), sha)
     }
 }
 
@@ -129,11 +131,34 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
 }
 
 /// Forget that setting the graphics card up for a model closed LightCraft before (the markers [`set_up_card`] leaves):
-/// the user chose where denoise runs, so the card may be tried again.
-pub(crate) fn forget_gpu_set_ups(dir: &Path) {
-    for i in installed_models(dir) {
-        let _ = std::fs::remove_file(i.onnx.with_file_name(GPU_SETUP_MARKER));
+/// the user chose where denoise runs, so the card may be tried again. Every marker is attempted, so one that cannot be
+/// cleared does not keep the others; the first failure is returned, since a marker that stays leaves its card off and the
+/// caller must not report success.
+pub(crate) fn forget_gpu_set_ups(dir: &Path) -> Result<(), String> {
+    let mut failed: Option<String> = None;
+    let mut remember = |r: Result<(), String>| {
+        if let Err(why) = r {
+            failed.get_or_insert(why);
+        }
+    };
+    // Every folder in the models folder may hold a marker — one whose model file or manifest is half-written or
+    // unreadable included, which `installed_models` skips. The folders are read here, and their manifests not at all.
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for folder in entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+                remember(super::gpu::forget_marker(&folder.join(GPU_SETUP_MARKER)));
+            }
+        }
+        // no models folder at all: there is nothing beside a model to forget
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        // one that cannot be read may hold markers this reset did not see: the caller is told rather than left thinking
+        // the card is free to be tried
+        Err(e) => remember(Err(format!("the AI Denoise models folder {} cannot be read: {e}", dir.display()))),
     }
     #[cfg(feature = "denoise")]
-    forget_builtin_card(&builtin_marker(&dir.join(lightcraft_denoise::builtin::ID)));
+    remember(forget_builtin_card(&builtin_marker(&dir.join(lightcraft_denoise::builtin::ID))));
+    match failed {
+        Some(why) => Err(why),
+        None => Ok(()),
+    }
 }

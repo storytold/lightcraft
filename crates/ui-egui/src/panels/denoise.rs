@@ -304,7 +304,16 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if all.iter().all(|m| m["selected"] != true) && all.iter().any(|m| m["installed"] == true) {
         hint(ui, t, "The built-in denoiser is in use: press Use on a model to use that instead.");
     }
-    hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
+    let is_linear_rgb = all.iter().any(|m| m["selected"] == true && m["domain"] == "linearRgb");
+    if is_linear_rgb {
+        hint(
+            ui,
+            t,
+            "Works on raw files from cameras with standard (Bayer) or Fujifilm X-Trans sensors, and on monochrome and linear raw files. Other files keep their normal noise reduction.",
+        );
+    } else {
+        hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
+    }
     work_section(app, ui, t, &list);
 }
 
@@ -324,10 +333,23 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
     heading(ui, t, "Speed");
     let current = list["runOn"].as_str().unwrap_or("auto").to_string();
     let mut run_on = current.as_str();
+    // a choice that could not clear the card's set-up marker (a set-up is running, or the models folder takes no change) is
+    // applied all the same, and its warning is shown: the card stays off until the marker goes
+    let ctx = ui.ctx().clone();
+    let choose = |app: &mut LightcraftApp, run_on: &str| {
+        match app.run("denoise.settings", json!({"runOn": run_on})) {
+            Err(e) => app.toast(&ctx, e),
+            Ok(r) => {
+                if let Some(why) = r["warning"].as_str() {
+                    app.toast(&ctx, why.to_string());
+                }
+            }
+        }
+        app.caches.denoise.epoch += 1;
+    };
     let options = [("auto", "Automatic"), ("gpu", "Graphics card"), ("cpu", "Processor")];
     if ui.horizontal(|ui| choices(ui, "denoiseRunOn", &options, &mut run_on)).inner {
-        let _ = app.run("denoise.settings", json!({"runOn": run_on}));
-        app.caches.denoise.epoch += 1;
+        choose(app, run_on);
     }
     hint(
         ui,
@@ -340,8 +362,7 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
         register(ui, "denoise:retryGpu", r.rect);
         if r.clicked() {
             // choosing where it runs, even the same again, forgets the failed set-up
-            let _ = app.run("denoise.settings", json!({"runOn": run_on}));
-            app.caches.denoise.epoch += 1;
+            choose(app, run_on);
         }
     }
 }

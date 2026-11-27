@@ -52,7 +52,7 @@ fn the_built_in_denoiser_on_the_card_gives_the_cpus_tile() {
         other => panic!("the first photo decides where the work runs, not {other:?}"),
     }
     assert!(!dir.join(GPU_SETUP_MARKER).exists(), "a set-up that ended leaves no marker");
-    forget_builtin_card(&dir.join(GPU_SETUP_MARKER));
+    forget_builtin_card(&dir.join(GPU_SETUP_MARKER)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -68,7 +68,7 @@ fn with_the_processor_chosen_the_built_in_denoiser_runs_on_the_cpu_and_never_sta
     assert_eq!(at_once, 16, "the threads asked for are the threads used");
     assert_eq!(m.device(RunOn::Cpu)["kind"], "cpu");
     assert_eq!(m.device(RunOn::Auto)["kind"], "pending", "the card was not even set up");
-    forget_builtin_card(&dir.join(GPU_SETUP_MARKER));
+    forget_builtin_card(&dir.join(GPU_SETUP_MARKER)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -85,11 +85,41 @@ fn a_set_up_marker_left_behind_keeps_the_card_off_the_built_in_denoiser_until_a_
     assert_eq!(device["kind"], "cpu", "{device}");
     assert_eq!(device["retry"], true, "{device}");
     assert!(device["reason"].as_str().unwrap().contains("closed"), "{device}");
-    // choosing where denoise runs forgets it (and the marker): the card is set up afresh for the next photo
-    forget_gpu_set_ups(&dir);
+    // choosing where denoise runs forgets it (and the marker): the card is set up afresh for the next photo, even in
+    // this process, whose cached built-in card held the failure
+    forget_gpu_set_ups(&dir).unwrap();
     assert!(!marker.exists());
-    let (again, _) = builtin("builtin-marker-again");
+    let again = BuiltinModel::new(&marker);
     assert_eq!(again.device(RunOn::Auto)["kind"], "pending");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A marker that cannot be cleared leaves the cached card as it was: the marker goes first, so a failure and the card's
+/// state agree, and the next photo still hears why the card is off instead of starting a set-up that cannot succeed.
+#[cfg(unix)]
+#[test]
+fn a_marker_that_cannot_be_cleared_leaves_the_cached_card_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("builtin-unclearable");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 1)\n").unwrap();
+    // the models folder takes no change, so the marker cannot be removed
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::write(dir.join("made-anyway"), b"").is_ok() {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        return lightcraft_testkit::skip!(System, "this process writes to a mode-500 folder, so an unremovable marker cannot be made");
+    }
+    let m = BuiltinModel::new(&marker);
+    let _ = m.runner.set(lightcraft_denoise::builtin::Builtin::with_noise(CHECK_NOISE));
+    let (_, at_once) = m.runner(RunOn::Gpu, 6);
+    assert_eq!(at_once, 6, "no card: the threads asked for");
+    assert_eq!(m.device(RunOn::Gpu)["kind"], "cpu", "the marker keeps the card off");
+    assert!(forget_gpu_set_ups(&dir).is_err(), "the marker cannot be cleared, and the caller is told");
+    let again = BuiltinModel::new(&marker);
+    assert_eq!(again.device(RunOn::Auto)["kind"], "cpu", "the failed clear did not evict the card that holds the reason");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    forget_gpu_set_ups(&dir).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -124,7 +154,7 @@ fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card_fo
     let (_, _) = m.runner(RunOn::Gpu, 8);
     if m.device(RunOn::Gpu)["kind"] != "gpu" {
         lightcraft_testkit::skip!(Gpu, "no card for the built-in denoiser here: {}", m.device(RunOn::Gpu)["reason"]);
-        forget_builtin_card(&dir.join(GPU_SETUP_MARKER));
+        forget_builtin_card(&dir.join(GPU_SETUP_MARKER)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
@@ -142,7 +172,7 @@ fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card_fo
     assert_eq!(device["fellBack"], GPU_MAX_FALLBACKS);
     let (_, at_once) = m.runner(RunOn::Gpu, 8);
     assert_eq!(at_once, 8, "the next photo runs on the CPU, even with the card chosen");
-    forget_builtin_card(&dir.join(GPU_SETUP_MARKER));
+    forget_builtin_card(&dir.join(GPU_SETUP_MARKER)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 

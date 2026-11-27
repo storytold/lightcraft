@@ -1,9 +1,11 @@
+use rayon::prelude::*;
+
 use super::builtin::{BuiltinModel, builtin_marker};
 use super::model::{Loader, Model, ModelSlot, RunOn, STACK};
 use super::settings::EXT;
 use super::{
-    Arc, AtomicBool, AtomicUsize, ByteReader, Condvar, Control, DenoiserManifest, HashSet, Hasher128, Layout, Mutex, OnceLock, Ordering, Params,
-    Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, product,
+    Arc, AtomicBool, AtomicUsize, ByteReader, Condvar, Control, DenoiserManifest, Domain, HashSet, Hasher128, Layout, LinearSpace, Mutex, OnceLock,
+    Ordering, Params, Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, denoise_linear_rgb, product,
 };
 
 /// Samples at or above this (white = 1) are clipped: the model leaves them as the camera recorded them.
@@ -150,6 +152,46 @@ fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
     Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)])
 }
 
+struct LinearRec2020Transform {
+    inv_matrix: lightcraft_color::Mat3,
+    wb: [f32; 3],
+}
+
+enum DenoiseInput {
+    Bayer {
+        mosaic: lightcraft_raw::Normalized,
+        layout: Layout,
+    },
+    LinearRgb {
+        camera_rgb: lightcraft_raster::Rgb32f,
+        color_transform: Option<LinearRec2020Transform>,
+        /// `max(R, G, B)` per pixel in the camera's own domain, taken before the colour transform: which pixels the
+        /// sensor clipped is not readable from the converted values the model sees.
+        clip_from: Option<Vec<f32>>,
+    },
+}
+
+/// Bytes the memory gate holds while a raw picture becomes a product, from the file's header, before anything is
+/// allocated: the model's scratch, and the picture's own allocations at their peak.
+///
+/// For a Bayer model that is the mosaic and the tiles. For a linear-RGB model the demosaic's own needs (the samples the
+/// decode stored, the normalised mosaic and the 12 B/px RGB it makes) and the tiles' (the model's input and the result
+/// accumulator at 12 B/px each, its weights at 4 B/px and, for a converted input, the camera-domain clip map at 4 B/px) do
+/// not overlap in time, but the RGB lives through both, so the larger of the two is reserved.
+fn reservation(domain: Domain, space: LinearSpace, pixels: usize, cpp: usize, scratch: usize, parallel: usize) -> usize {
+    let (tile_bytes, demosaic_bytes) = match domain {
+        Domain::BayerToRgb => (20, 0),
+        // while the demosaic runs, the samples the decode stored (up to 4 B each) sit beside the normalised mosaic (another
+        // 4 B each) and the 12 B/px RGB it makes, plus the model's own scratch
+        Domain::LinearRgb => (if space.is_default() { 28 } else { 32 }, 12 + cpp.saturating_mul(8)),
+    };
+    let tiles = pixels.saturating_mul(tile_bytes).saturating_add(scratch.saturating_mul(parallel));
+    if demosaic_bytes == 0 {
+        return tiles;
+    }
+    tiles.max(pixels.saturating_mul(demosaic_bytes).saturating_add(16 * 1024 * 1024))
+}
+
 /// Make the product of `spec` unless it is there: decode the photo, run the model over its mosaic, write the result.
 /// `Ok(true)` when it was made now, `Ok(false)` when it already existed.
 pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Result<bool, MakeError> {
@@ -166,41 +208,111 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         Some(r) => r(&spec.path).map_err(MakeError::Failed)?,
         None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
     };
-    // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
-    let (mosaic, layout) = {
-        let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));
-        if lightcraft_raw::probe(&bytes).is_none() {
-            return Err(MakeError::Unsupported("not a raw file".into()));
-        }
-        let raw = match lightcraft_raw::decode(&bytes) {
-            Ok(r) => r,
-            Err(lightcraft_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
-            Err(e) => return Err(MakeError::Failed(e.to_string())),
-        };
-        drop(bytes);
-        if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
-            return Err(MakeError::Unsupported(
-                "only Bayer raw files can be denoised (this one has another sensor layout or is already demosaiced)".into(),
-            ));
-        }
-        let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
-        drop(raw);
-        let layout =
-            n.cfa.as_ref().and_then(layout_of).ok_or_else(|| MakeError::Unsupported("the colour filter layout is not a Bayer pattern".into()))?;
-        (n, layout)
-    };
-    if cancelled() {
-        return Err(MakeError::Cancelled);
+    if lightcraft_raw::probe(&bytes).is_none() {
+        return Err(MakeError::Unsupported("not a raw file".into()));
     }
-    let decoded = began.elapsed();
+    // headers only: how big the picture is decides what making it reserves, before it is allocated
+    let info = match lightcraft_raw::probe_info(&bytes) {
+        Ok(info) => info,
+        Err(lightcraft_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
+        Err(e) => return Err(MakeError::Failed(e.to_string())),
+    };
+    // what the file is decides whether a model takes it at all: the headers say so, and a model need not be loaded for a
+    // file it cannot run on
+    match spec.manifest.domain {
+        Domain::BayerToRgb => {
+            if info.cpp != 1 || !info.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
+                return Err(MakeError::Unsupported(
+                    "only Bayer raw files can be denoised with a Bayer model (this one has another sensor layout or is already demosaiced)".into(),
+                ));
+            }
+        }
+        Domain::LinearRgb => {
+            if info.cpp != 1 && info.cpp != 3 {
+                return Err(MakeError::Unsupported("only raw files with 1 or 3 samples per pixel can be denoised".into()));
+            }
+        }
+    }
     let model = loaded(spec)?;
     // Packed input, returned RGB and the preceding group's RGB overlap while tiles run.
     let scratch =
         model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));
     let (_, budget) = crate::memory::work_gate().usage();
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
-    let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(20).saturating_add(scratch.saturating_mul(parallel)));
-    model.prepare(&mosaic.data, mosaic.width, mosaic.height);
+    // one reservation for the whole making, taken before the first allocation: the samples the decode leaves and the RGB
+    // the demosaic makes are charged from the moment they exist, never held uncharged while the model loads or the tiles
+    // wait for their turn
+    let pixels = info.active_area.width.saturating_mul(info.active_area.height);
+    let reserved = reservation(spec.manifest.domain, spec.manifest.space, pixels, info.cpp, scratch, parallel);
+    let _held = crate::memory::work_gate().acquire(reserved.max(bytes.len().saturating_mul(4)));
+    // the wait for room can be long, and a job the user has given up on does not decode a picture for nothing
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
+    let read = began.elapsed();
+    let demosaic_started = web_time::Instant::now();
+    let input = {
+        let raw = match lightcraft_raw::decode(&bytes) {
+            Ok(r) => r,
+            Err(lightcraft_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
+            Err(e) => return Err(MakeError::Failed(e.to_string())),
+        };
+        drop(bytes);
+        match spec.manifest.domain {
+            Domain::BayerToRgb => {
+                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
+                drop(raw);
+                let layout = n
+                    .cfa
+                    .as_ref()
+                    .and_then(layout_of)
+                    .ok_or_else(|| MakeError::Unsupported("the colour filter layout is not a Bayer pattern".into()))?;
+                DenoiseInput::Bayer { mosaic: n, layout }
+            }
+            Domain::LinearRgb => {
+                let color_transform_info = match spec.manifest.space {
+                    LinearSpace::CameraRgb => None,
+                    LinearSpace::LinRec2020 => {
+                        let as_shot_xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+                        let (matrix, wb) = lightcraft_raw::color::camera_to_rec2020(&raw, as_shot_xy);
+                        if wb.iter().any(|&w| !w.is_finite() || w <= 0.0) {
+                            return Err(MakeError::Failed("invalid camera white balance multipliers".into()));
+                        }
+                        let inv_matrix = matrix.inverse().ok_or_else(|| MakeError::Failed("camera color matrix is not invertible".into()))?;
+                        Some((matrix, inv_matrix, wb))
+                    }
+                };
+                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
+                drop(raw);
+                let mut camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
+                drop(n);
+                let (color_transform, clip_from) = match color_transform_info {
+                    None => (None, None),
+                    Some((matrix, inv_matrix, wb)) => {
+                        // Clipping is a property of the sensor, so measure it before the white balance and the colour
+                        // matrix move the values into Rec.2020, where "at white" no longer means the camera clipped.
+                        let clip_from: Vec<f32> = camera_rgb.data.iter().map(|px| px[0].max(px[1]).max(px[2])).collect();
+                        let m = matrix.to_f32();
+                        camera_rgb.data.par_iter_mut().for_each(|px| {
+                            let balanced = [px[0] * wb[0], px[1] * wb[1], px[2] * wb[2]];
+                            let r = m[0][0] * balanced[0] + m[0][1] * balanced[1] + m[0][2] * balanced[2];
+                            let g = m[1][0] * balanced[0] + m[1][1] * balanced[1] + m[1][2] * balanced[2];
+                            let b = m[2][0] * balanced[0] + m[2][1] * balanced[1] + m[2][2] * balanced[2];
+                            *px = [r, g, b];
+                        });
+                        (Some(LinearRec2020Transform { inv_matrix, wb }), Some(clip_from))
+                    }
+                };
+                DenoiseInput::LinearRgb { camera_rgb, color_transform, clip_from }
+            }
+        }
+    };
+    let decoded = demosaic_started.elapsed();
+    let tiled = web_time::Instant::now();
+    // the built-in denoiser measures the whole photo's noise once, from its mosaic; a linear-RGB model has no mosaic to measure
+    if let DenoiseInput::Bayer { mosaic, .. } = &input {
+        model.prepare(&mosaic.data, mosaic.width, mosaic.height);
+    }
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
@@ -226,20 +338,47 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         .thread_name(|i| format!("denoise-{i}"))
         .build()
         .map_err(|e| MakeError::Failed(format!("could not start the worker threads: {e}")))?;
-    let rgb = pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?;
-    drop(mosaic);
+    let (mut rgb, color_transform) = match input {
+        DenoiseInput::Bayer { mosaic, layout } => {
+            (pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?, None)
+        }
+        DenoiseInput::LinearRgb { camera_rgb, color_transform, clip_from } => {
+            (pool.install(|| denoise_linear_rgb(&camera_rgb, clip_from.as_deref(), runner, &params, &ctl))?, color_transform)
+        }
+    };
+    if let Some(transform) = color_transform {
+        let inv_m = transform.inv_matrix.to_f32();
+        let wb = transform.wb;
+        rgb.data.par_iter_mut().for_each(|px| {
+            let r = inv_m[0][0] * px[0] + inv_m[0][1] * px[1] + inv_m[0][2] * px[2];
+            let g = inv_m[1][0] * px[0] + inv_m[1][1] * px[1] + inv_m[1][2] * px[2];
+            let b = inv_m[2][0] * px[0] + inv_m[2][1] * px[1] + inv_m[2][2] * px[2];
+            // Negatives are kept, as the CameraRgb and Bayer paths keep them: the inverse matrix puts colours outside the
+            // camera's gamut below zero and noise does the same in the dark, and clipping them here would move hue; only a
+            // sample that is not a number is replaced. The display transform clips, not this step.
+            let cr = r / wb[0];
+            let cg = g / wb[1];
+            let cb = b / wb[2];
+            *px = [if cr.is_finite() { cr } else { 0.0 }, if cg.is_finite() { cg } else { 0.0 }, if cb.is_finite() { cb } else { 0.0 }];
+        });
+    }
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
+    let modelled = tiled.elapsed();
     let ran = began.elapsed();
     product::write(&spec.product, &rgb, &spec.key).map_err(|e| MakeError::Failed(format!("could not save the denoised picture: {e}")))?;
     if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
         eprintln!(
-            "[denoise] read + decode {:.0} ms, model (set-up, tiles, blend) {:.0} ms, write {:.0} ms",
+            "[denoise] load + read (with the memory wait) {:.0} ms, decode + demosaic {:.0} ms, model (set-up, tiles, blend) {:.0} ms, write {:.0} ms",
+            read.as_secs_f64() * 1e3,
             decoded.as_secs_f64() * 1e3,
-            (ran - decoded).as_secs_f64() * 1e3,
+            modelled.as_secs_f64() * 1e3,
             (began.elapsed() - ran).as_secs_f64() * 1e3
         );
     }
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests;

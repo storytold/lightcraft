@@ -207,11 +207,13 @@ pub(super) fn builtin_card(marker: &Path) -> Arc<BuiltinCard> {
     c
 }
 
-/// Forget the card's state for the marker (and the marker): the card is tried afresh for the next photo.
+/// Forget the card's state for the marker (and the marker): the card is tried afresh for the next photo. The marker goes
+/// first: a clear that fails leaves the cached card as it was, so the failure and the state agree.
 #[cfg(feature = "denoise")]
-pub(super) fn forget_builtin_card(marker: &Path) {
+pub(super) fn forget_builtin_card(marker: &Path) -> Result<(), String> {
+    super::gpu::forget_marker(marker)?;
     BUILTIN_CARDS.lock().unwrap_or_else(PoisonError::into_inner).retain(|(m, _)| m != marker);
-    let _ = std::fs::remove_file(marker);
+    Ok(())
 }
 
 /// Where the card's set-up is recorded for the built-in denoiser whose `onnx` is its model's (made-up) path in the models

@@ -23,8 +23,8 @@ use std::time::{Duration, SystemTime};
 
 use lightcraft_catalog::{Photo, PhotoId, Source};
 use lightcraft_denoise::bayer::Layout;
-use lightcraft_denoise::manifest::DenoiserManifest;
-use lightcraft_denoise::run::{Control, Params, TileRunner, denoise_bayer};
+use lightcraft_denoise::manifest::{DenoiserManifest, Domain, LinearSpace};
+use lightcraft_denoise::run::{Control, Params, TileRunner, denoise_bayer, denoise_linear_rgb};
 use lightcraft_denoise::{Error as RunError, product};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_preview::Hasher128;
@@ -59,6 +59,8 @@ pub use model::{Serving, serving};
 pub(crate) use products::eligible;
 #[cfg(test)]
 pub(crate) use products::{JobSpec, MakeError, Progress, make_product};
+#[cfg(test)]
+pub(crate) use settings::Installed;
 pub use settings::{DEFAULT_CACHE_GB, DIR, EXT};
 pub(crate) use settings::{Settings, forget_gpu_set_ups, installed_models, read_capped, read_settings, write_atomic, write_settings};
 pub(crate) use state::State;
