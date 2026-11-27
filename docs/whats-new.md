@@ -9,6 +9,12 @@
 
 ## Unreleased
 
+### Pressing at the search box's edge no longer moves the window
+- On macOS the top bar is the window's title bar, and the search box's padding around its text still belonged to
+  it: a press there, where a text selection often starts, dragged the whole window instead. The whole box is now
+  the search field's. A click anywhere in it puts the cursor in the field, and only the bar's empty space moves the
+  window (#2807).
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
