@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Gradients go where you drag
+- Picking Linear or Radial under Create New Mask with the pointer no longer drops a gradient at the top or the
+  centre of the photo (issue #2311). The pointer becomes a crosshair and you drag on the photo, as in Lightroom: a
+  linear gradient runs from where you press (full effect) to where you let go, which also sets its angle; a radial
+  one is centred where you press and reaches the pointer. Hold ⇧ to keep a linear gradient horizontal or vertical,
+  or to make a radial one a circle, and ⌥ (Alt) to draw a linear gradient out from where you press in both
+  directions, or a radial one from a corner. Linear and Radial Gradient in a mask's + and − menus work the same
+  way. Esc puts the tool down without making anything, and Edit ▸ Undo removes a drawn gradient in one step. While
+  the tool is picked, a click that doesn't drag only shows how to draw the gradient, and the handles of the masks
+  already on the photo wait until you have drawn it or pressed Esc. By keyboard, the Linear and Radial tiles still
+  place a gradient at once, and so do L and R; once a gradient is picked, a "New gradient" point on the photo places
+  one with Return.
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)

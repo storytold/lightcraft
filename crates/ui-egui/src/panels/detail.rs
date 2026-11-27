@@ -22,6 +22,7 @@ mod info;
 mod lens_blur;
 mod look_ahead;
 mod masks;
+pub(crate) use masks::{gradient_tool, gradient_wait_release};
 mod retouch;
 mod window;
 
@@ -105,8 +106,9 @@ pub enum Gesture {
         start: (f32, f32),
         at: Pos2,
     },
-    /// Dragging component `comp` of `mask`: its pin (`handle` 0) or a linear gradient's start (1)
-    /// or end (2).
+    /// Dragging component `comp` of `mask`: its pin (`handle` 0), a linear gradient's start (1)
+    /// or end (2), a radial one's edges (1..4) or rotation (5), or a radial (6) or linear (7) one
+    /// being drawn.
     MaskHandle {
         mask: u32,
         comp: usize,
