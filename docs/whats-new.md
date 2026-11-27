@@ -16,6 +16,12 @@
   back it shows the usual panels. A keymap that gives Shift+Tab to another command
   keeps it, and in a text field Shift+Tab still moves the keyboard focus (carries #1195).
 
+### Face suggestions match the same person more often
+- Each face is now read both as it is and mirrored, and the two are averaged before it is compared with the faces you
+  have named. On the LFW benchmark with AuraFace, about 1 in 6 of a person's photos that used to miss the match bar now
+  reach it, and more for small faces in group photos, with no more strangers matched (issue #1920). Recognising a face takes about
+  twice as long, and the faces already scanned are scanned once more, in the background.
+
 ### Pressing at the search box's edge no longer moves the window
 - On macOS the top bar is the window's title bar, and the search box's padding around its text still belonged to
   it: a press there, where a text selection often starts, dragged the whole window instead. The whole box is now
