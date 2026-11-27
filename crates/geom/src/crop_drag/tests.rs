@@ -90,7 +90,7 @@ fn given_straightened_image_when_dragged_outside_then_crop_stays_inside_the_rota
         for aspect in [None, Some(1.5)] {
             let g = drag(start, hd, c, p(3.0, -3.0), aspect);
             assert!(g.is_within_image(W, H), "{hd:?} {aspect:?}: {:?}", g.rect);
-            assert_eq!(g.angle, 12.0);
+            assert_eq!(g.angle.to_bits(), 12.0_f64.to_bits());
         }
     }
 }
@@ -248,6 +248,7 @@ fn given_straightened_photo_when_a_small_frame_is_moved_inside_then_it_follows_t
 
 //   Scenario: a frame a handle drag left within the tolerance past a tilted edge (review of #2299)
 #[test]
+#[expect(clippy::many_single_char_names, reason = "The regression uses the crop equation's conventional aspect/scale/centre notation.")]
 fn given_a_frame_just_past_a_tilted_edge_when_moved_then_it_still_slides_and_a_click_changes_nothing() {
     let a = 2.0 / 3.0;
     let fit = crate::crop_fit_angle(W, H, 3.0, Some(a));
