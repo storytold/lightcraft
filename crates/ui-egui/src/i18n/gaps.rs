@@ -4,8 +4,8 @@
 //! catalog and the report could not name it. This reads the source for them: every `tr("…")` /
 //! `.tr("…")` call in `crates/ui-egui/src` and `apps/lightcraft/src` whose argument is one string
 //! literal (a trailing comma, as rustfmt leaves in a wrapped call, is fine), or an `if`/`match`
-//! whose branches are literals (`tr(if on { "On" } else { "Off" })`). Test code (`tests.rs` and
-//! `tests_*.rs` files, `tests/` folders and items under exactly `#[cfg(test)]`) is skipped. The scanner lexes
+//! whose branches are literals (`tr(if on { "On" } else { "Off" })`). Test code (`tests.rs`, `tests_*.rs` and `*_tests.rs`
+//! files, `tests/` folders and items under exactly `#[cfg(test)]`) is skipped. The scanner lexes
 //! the source (comments, strings, raw strings and chars) rather than grepping it, so a `tr(` in a
 //! comment or a string is not a use.
 //!
@@ -23,7 +23,7 @@ use std::{
 const SOURCES: [&str; 2] = ["src", "../../apps/lightcraft/src"];
 
 #[derive(Debug, Clone, PartialEq)]
-enum Kind {
+pub(super) enum Kind {
     Ident(String),
     Str(String),
     Punct(char),
@@ -31,9 +31,9 @@ enum Kind {
 }
 
 #[derive(Debug, Clone)]
-struct Tok {
-    kind: Kind,
-    line: usize,
+pub(super) struct Tok {
+    pub(super) kind: Kind,
+    pub(super) line: usize,
 }
 
 /// One `tr` call with a literal key.
@@ -45,7 +45,7 @@ struct Use {
 
 /// Split Rust source into the tokens the scan needs. Comments vanish; strings, raw strings and
 /// chars are single tokens, so braces and parentheses inside them never count.
-fn lex(source: &str) -> Vec<Tok> {
+pub(super) fn lex(source: &str) -> Vec<Tok> {
     let chars: Vec<char> = source.replace("\r\n", "\n").chars().collect();
     let mut tokens = Vec::new();
     let (mut i, mut line) = (0, 1);
@@ -182,7 +182,7 @@ fn read_string(chars: &[char], mut i: usize) -> (String, usize, usize) {
 }
 
 /// The index of the token that closes the group opened at `open`.
-fn matching(tokens: &[Tok], open: usize) -> usize {
+pub(super) fn matching(tokens: &[Tok], open: usize) -> usize {
     let Kind::Punct(opener) = tokens[open].kind else { return open };
     let closer = match opener {
         '(' => ')',
@@ -205,11 +205,11 @@ fn matching(tokens: &[Tok], open: usize) -> usize {
     tokens.len() - 1
 }
 
-fn is_punct(token: Option<&Tok>, c: char) -> bool {
+pub(super) fn is_punct(token: Option<&Tok>, c: char) -> bool {
     token.is_some_and(|token| token.kind == Kind::Punct(c))
 }
 
-fn is_ident(token: Option<&Tok>, name: &str) -> bool {
+pub(super) fn is_ident(token: Option<&Tok>, name: &str) -> bool {
     token.is_some_and(|token| matches!(&token.kind, Kind::Ident(word) if word == name))
 }
 
@@ -246,7 +246,7 @@ fn starts_entry(tokens: &[Tok], mut at: usize) -> bool {
 /// The index just past the item that starts at `at` (after its attributes): a struct field, a
 /// field in a struct literal or an enum variant ends at its comma, anything else at its closing
 /// brace or its `;`. Groups are jumped over, so a `;` in `[u8; 4]` or a `,` in `f(a, b)` ends nothing.
-fn skip_item(tokens: &[Tok], mut at: usize) -> usize {
+pub(super) fn skip_item(tokens: &[Tok], mut at: usize) -> usize {
     while is_punct(tokens.get(at), '#') && is_punct(tokens.get(at + 1), '[') {
         at = matching(tokens, at + 1) + 1;
     }
@@ -310,7 +310,7 @@ fn scan_source(source: &str) -> Vec<Use> {
 }
 
 /// Every `.rs` file under `dir` that is not a test file, in a stable order.
-fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
+pub(super) fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     let mut paths: Vec<PathBuf> = entries.filter_map(|entry| entry.ok().map(|entry| entry.path())).collect();
     paths.sort();
@@ -320,7 +320,7 @@ fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
             if name != "tests" {
                 source_files(&path, out);
             }
-        } else if name.ends_with(".rs") && name != "tests.rs" && !name.starts_with("tests_") {
+        } else if name.ends_with(".rs") && name != "tests.rs" && !name.starts_with("tests_") && !name.ends_with("_tests.rs") {
             out.push(path);
         }
     }
@@ -331,20 +331,29 @@ pub(super) fn messages_in(source: &str) -> BTreeSet<String> {
     scan_source(source).into_iter().map(|used| used.key).collect()
 }
 
-/// The literal key of every `tr("…")` call in the app's non-test source.
-pub(super) fn source_messages() -> BTreeSet<String> {
+/// Every scanned source file as `(path relative to the repository, text)`, in a stable order.
+pub(super) fn read_sources() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo = root.join("../..").canonicalize().unwrap_or_default();
     let mut files = Vec::new();
     for source in SOURCES {
         assert!(root.join(source).is_dir(), "{source} (relative to the crate) is not a folder: the report has nothing to scan");
         source_files(&root.join(source), &mut files);
     }
-    let mut keys = BTreeSet::new();
-    for path in files {
-        let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        keys.extend(messages_in(&text));
-    }
-    keys
+    files
+        .into_iter()
+        .map(|path| {
+            let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let shown = root.join(&path).canonicalize().unwrap_or(path.clone());
+            // `/` on every platform.
+            (shown.strip_prefix(&repo).unwrap_or(&shown).display().to_string().replace('\\', "/"), text)
+        })
+        .collect()
+}
+
+/// The literal key of every `tr("…")` call in the app's non-test source.
+pub(super) fn source_messages() -> BTreeSet<String> {
+    read_sources().iter().flat_map(|(_, text)| messages_in(text)).collect()
 }
 
 #[cfg(test)]
