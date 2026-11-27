@@ -250,6 +250,9 @@ pub struct LightcraftApp {
     /// `PointerMoved` (which can start a drag) or a `PointerButton` release (which can become a
     /// click).
     pointer_cleanup: bool,
+    /// This frame's input includes synthetic events: what they change is a client's doing, not
+    /// the user's.
+    pub(crate) synthetic_frame: bool,
     /// Files the control channel (`ui.dropFiles`) holds over the window: every frame reports them
     /// as hovered, as the OS does while a drag is over the window.
     drop_hover: Vec<String>,

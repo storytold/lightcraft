@@ -23,6 +23,7 @@ use crate::widgets::register;
 mod appearance;
 mod display;
 mod general;
+pub(crate) use general::is_program_field;
 mod import;
 mod libraries;
 mod performance;

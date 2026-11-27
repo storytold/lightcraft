@@ -126,6 +126,7 @@ impl LightcraftApp {
     /// keeps that batch in flight until a completed UI pass consumed it. It never injects while
     /// the fonts are not installed (the pass would draw nothing and the events would be lost).
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.synthetic_frame = false;
         let file = |p: &String| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
         if !self.drop_pending.is_empty() {
             raw.dropped_files = std::mem::take(&mut self.drop_pending)
@@ -186,6 +187,7 @@ impl LightcraftApp {
         if self.synthetic.is_empty() {
             return;
         }
+        self.synthetic_frame = true;
         let pointer =
             |e: &egui::Event| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. });
         let n = if pointer(&self.synthetic[0]) {

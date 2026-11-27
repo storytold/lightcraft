@@ -928,6 +928,12 @@
 
 ## 2026-10-22
 
+### Only you choose the program Edit In starts
+- A control-channel or MCP client can no longer make LightCraft start a program of its choosing (issue #2551). Edit In
+  and Open Original in Other Editor accept an editor named by automation only when it is the one set in
+  Settings ▸ External Editing, or PhotoCraft. Automation can't change those two settings either: `ui.set` refuses
+  them, and nothing it types or pastes into their fields stays. Type your editor there yourself, as before.
+
 ### Exports don't create a photo's sidecar
 - Saving an export, a preset or any other file as `IMG_1.xmp` or `IMG_1.jpg.xmp` in the folder of the library photo
   `IMG_1.jpg` is now refused when no sidecar is there yet, as writing over an existing one already was. The library
