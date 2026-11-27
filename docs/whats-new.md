@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Shift+Tab hides all the panels
-- View ▸ Hide All Panels (Shift+Tab, Lightroom Classic's Toggle All Panels) hides the left sidebar, the right panel,
+- Window ▸ Hide All Panels (Shift+Tab, Lightroom Classic's Toggle All Panels) hides the left sidebar, the right panel,
   the Presets column and the filmstrip; the next press brings back exactly what was shown, so a panel that was already
   hidden stays hidden. Showing a panel by hand in between starts over, and with no panel shown and nothing to bring
   back it shows the usual panels. A keymap that gives Shift+Tab to another command

@@ -1,4 +1,4 @@
-//! Headless tests of Shift+Tab (View ▸ Hide All Panels), which hides the side panels, the Presets
+//! Headless tests of Shift+Tab (Window ▸ Hide All Panels), which hides the side panels, the Presets
 //! column and the filmstrip and brings back exactly what it hid, and of how it gets on with F8.
 
 use std::time::Duration;
@@ -194,7 +194,7 @@ fn hiding_the_panels_ends_the_tool_in_use() {
 }
 
 #[test]
-fn the_view_menu_lists_the_panel_commands_with_their_state() {
+fn the_window_menu_lists_the_panel_commands_with_their_state() {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
     let item = |app: &LightcraftApp, id: &str| -> Option<(String, Option<String>, Option<bool>)> {
         fn find(nodes: &[MenuNode], id: &str) -> Option<(String, Option<String>, Option<bool>)> {
@@ -205,14 +205,14 @@ fn the_view_menu_lists_the_panel_commands_with_their_state() {
             })
         }
         let bar = menu_bar(app);
-        find(&bar.iter().find(|(t, _)| t == "View")?.1, id)
+        find(&bar.iter().find(|(t, _)| t == "Window")?.1, id)
     };
     app.ui.left_panel = true;
     app.ui.right = RightPanel::Edit;
     app.ui.filmstrip = true;
-    let (label, _, on) = item(&app, "view.rightPanel").expect("View ▸ Right Panel");
+    let (label, _, on) = item(&app, "view.rightPanel").expect("Window ▸ Right Panel");
     assert_eq!((label.as_str(), on), ("Right Panel", Some(true)));
-    let (label, _, on) = item(&app, "view.allPanels").expect("View ▸ Hide All Panels");
+    let (label, _, on) = item(&app, "view.allPanels").expect("Window ▸ Hide All Panels");
     assert_eq!((label.as_str(), on), ("Hide All Panels", Some(false)));
     app.run("view.allPanels", json!({})).unwrap();
     assert_eq!(checked(&app, "view.rightPanel"), Some(false));

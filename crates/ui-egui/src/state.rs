@@ -47,7 +47,7 @@ pub struct UiState {
     /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
     #[serde(skip)]
     pub right_hidden: RightPanel,
-    /// Set while View ▸ Hide All Panels (Shift+Tab, `view.allPanels`) is in effect: what to bring
+    /// Set while Window ▸ Hide All Panels (Shift+Tab, `view.allPanels`) is in effect: what to bring
     /// back. Showing any panel by hand makes it stale (see [`UiState::all_panels_hidden`]).
     #[serde(skip)]
     pub hidden_panels: Option<HiddenPanels>,
