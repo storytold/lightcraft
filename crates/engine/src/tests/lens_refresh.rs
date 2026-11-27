@@ -19,7 +19,7 @@ fn lens(k: f64) -> EmbeddedLens {
 }
 
 fn lens_of(s: &Session, id: PhotoId) -> Option<EmbeddedLens> {
-    s.catalog.photo(id).and_then(|p| p.embedded_lens)
+    s.catalog.photo(id).and_then(|p| p.embedded_lens.as_deref().copied())
 }
 
 /// Two demo photos "taken with different lenses".
@@ -157,7 +157,7 @@ fn photos_get_their_profile_when_the_database_arrives() {
 }
 
 fn with_lens(mut p: Photo, l: Option<EmbeddedLens>, on: bool) -> Photo {
-    p.embedded_lens = l;
+    p.embedded_lens = l.map(Box::new);
     let mut d = (*p.develop).clone();
     d.optics.lens_profile = on;
     p.develop = Arc::new(d);
