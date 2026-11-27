@@ -71,8 +71,14 @@ if [[ "$SKIP_BUILD" = 0 ]]; then
   prepare_fonts
   (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif \
     ${CROSS_TARGET:+--target "$CROSS_TARGET"})
+  # The man-and-completions example writes lightcraft-cli's man pages and shell completions below. It is
+  # built in its own cargo run (built with the binaries, its dev-dependencies' features would be unified
+  # into them) and for the host, since a cross build cannot run it.
+  (cd "$ROOT" && cargo build --release --locked -p lightcraft-cli --example man-and-completions)
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
+# Host-built: the example is run here, so a cross build finds it in the host's release directory.
+HOST_BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"
@@ -81,6 +87,23 @@ rm -rf "$WORK"
 install -Dm755 "$BIN/lightcraft" "$STAGE/usr/bin/lightcraft"
 install -Dm755 "$BIN/lightcraft-cli" "$STAGE/usr/bin/lightcraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/lightcraft" "$STAGE/usr/bin/lightcraft-cli" 2>/dev/null || true
+# lightcraft-cli's man pages and shell completions (RFC-0018 rule 1.9), from its clap definition, written by
+# the example built above (a --skip-build run needs it built too) under the command's installed name. zsh
+# reads site-functions on Fedora and openSUSE; the deb also links the completion into Debian's
+# vendor-completions (nfpm.yaml).
+stage_cli_docs() {
+  local root="$1" name="$2" generator="$HOST_BIN/examples/man-and-completions" docs="$WORK/cli-docs-$2"
+  if [[ ! -x "$generator" ]]; then
+    echo "error: $generator is not built (cargo build --release -p lightcraft-cli --example man-and-completions)" >&2
+    exit 1
+  fi
+  "$generator" "$docs" "$name"
+  install -Dm644 -t "$root/usr/share/man/man1" "$docs"/*.1
+  install -Dm644 "$docs/$name.bash" "$root/usr/share/bash-completion/completions/$name"
+  install -Dm644 "$docs/_$name" "$root/usr/share/zsh/site-functions/_$name"
+  install -Dm644 "$docs/$name.fish" "$root/usr/share/fish/vendor_completions.d/$name.fish"
+}
+stage_cli_docs "$STAGE" lightcraft-cli
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 if [[ "$IS_NIGHTLY" = 1 ]]; then
   sed -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.lightcraft.nightly-v1|' \
@@ -127,6 +150,10 @@ stage_nightly() {
   install -Dm755 "$HERE/nightly-fhs-launch.sh" "$stage/usr/bin/$NFPM_BIN"
   install -Dm755 "$HERE/nightly-fhs-cli-launch.sh" "$stage/usr/bin/$NFPM_CLI"
   rm -f "$stage/usr/bin/lightcraft" "$stage/usr/bin/lightcraft-cli"
+  # The CLI is installed as $NFPM_CLI here: its man pages and completions are renamed with it.
+  rm -f "$stage"/usr/share/man/man1/lightcraft-cli*.1 "$stage/usr/share/bash-completion/completions/lightcraft-cli" \
+    "$stage/usr/share/zsh/site-functions/_lightcraft-cli" "$stage/usr/share/fish/vendor_completions.d/lightcraft-cli.fish"
+  stage_cli_docs "$stage" "$NFPM_CLI"
   mv "$stage/usr/share/doc/lightcraft" "$stage/usr/share/doc/$NFPM_NAME"
   sed -e "s#^Exec=lightcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
       -e "s|^TryExec=lightcraft$|TryExec=$NFPM_BIN|" \
