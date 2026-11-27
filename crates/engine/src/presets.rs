@@ -178,21 +178,18 @@ impl Session {
     /// from an XMP sidecar or a catalog import, which record none) composes them on its current
     /// settings instead, since the camera defaults are not its import state. Either way, the
     /// settings the preset does not name keep the photo's values (issue #2159). The `preset.apply`
-    /// command and the UI's hover previews share this, so hovering shows exactly what a click commits.
+    /// command and the UI's hover previews and thumbnails share this, so hovering shows exactly what
+    /// a click commits, white balance preparation included ([`apply_preset_to_photo`]).
     pub fn preset_applied(&self, id: PhotoId, preset: &Preset, amount: f64) -> Option<DevelopSettings> {
         let current = self.develop_of(id)?;
         let photo = self.catalog.photo(id)?;
         // The original is read only below 100 %: the panel asks for every visible row at 100 % on
         // every frame, and then neither the import state nor a copy of the photo's settings is built.
-        let look;
-        let original: &DevelopSettings = match &photo.import_look {
-            Some(_) if (amount - 1.0).abs() >= 1e-9 => {
-                look = photo.import_defaults();
-                &look
-            }
-            _ => &current,
-        };
-        Some(preset.apply_on(&current, original, amount))
+        let original = photo.import_look.as_ref().filter(|_| (amount - 1.0).abs() >= 1e-9).map(|_| photo.import_defaults());
+        // the photo's source is read only for a preset that needs it (one white balance number):
+        // the panel asks for every visible row on every frame
+        let info = if crate::cmd::wb_partial_names_one_field(&preset.settings) { self.source_info(id) } else { Default::default() };
+        Some(apply_preset_to_photo(preset, &current, original.as_ref(), amount, &info))
     }
 
     /// Add imported presets. Identical presets (same name, group and settings) already present are
@@ -632,6 +629,41 @@ impl Session {
             "groups": groups,
         })
     }
+}
+
+/// Apply `preset` to a photo's settings `current` at `amount` (1.0 = 100 %), composing on
+/// `original` (the photo's import state; `None`: `current` itself, see [`Preset::apply_on`]): the
+/// one path every caller that puts a preset on a photo takes (the `preset.apply` command,
+/// thumbnails and hover previews through [`Session::preset_applied`], importing with a preset,
+/// import defaults), so all of them show and store the same result.
+///
+/// `info` is the photo's source: a hand-written preset may name one white balance number only, and
+/// then it means what a one-field partial means (`prepare_photo_for_wb_partial`, shared with
+/// `develop.merge`, issue #2910): the photo (and its original) are brought onto the preset's scale
+/// with the photo's own as-shot white first, and the result is put back on the scale the photo is
+/// edited on. Without an import state a zero (or negative) `amount` returns `current` exactly as it
+/// was, before any preparation, so a preview at nothing never turns As Shot into Custom; with one,
+/// 0 % is the import state's value for each setting the preset names ([`Preset::apply_on`]). A NaN
+/// `amount` changes nothing.
+pub fn apply_preset_to_photo(
+    preset: &Preset,
+    current: &DevelopSettings,
+    original: Option<&DevelopSettings>,
+    amount: f64,
+    info: &lightcraft_pipeline::SourceInfo,
+) -> DevelopSettings {
+    if amount.is_nan() || (amount <= 0.0 && original.is_none()) {
+        return current.clone();
+    }
+    let prepared = crate::cmd::prepare_photo_for_wb_partial(current, &preset.settings, info);
+    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+    let base = prepared.as_ref().unwrap_or(current);
+    let prepared_original = original.map(|o| crate::cmd::prepare_photo_for_wb_partial(o, &preset.settings, info).unwrap_or_else(|| o.clone()));
+    let mut next = preset.apply_on(base, prepared_original.as_ref().unwrap_or(base), amount);
+    if on_kelvin_scale {
+        lightcraft_pipeline::local::normalize_wb(&mut next, info);
+    }
+    next
 }
 
 #[cfg(test)]

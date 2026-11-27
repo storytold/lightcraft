@@ -399,7 +399,10 @@ fn track_box(entry: &[u8], offset: u64, size: u32) -> Vec<u8> {
     let mut co64 = vec![0u8; 4];
     co64.extend(1u32.to_be_bytes());
     co64.extend(offset.to_be_bytes());
-    let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
+    // One sample in chunk 1, using sample description 1. The shared parser
+    // deliberately refuses sample access without this mapping.
+    let stsc: Vec<u8> = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect();
+    let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsc", &stsc), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
     box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))))
 }
 
@@ -410,11 +413,10 @@ fn cr3_file(entry: &[u8], sample: &[u8]) -> Vec<u8> {
     // The track length does not depend on the offset value (always a 64-bit field), so it can be
     // measured with a placeholder before the real offset is known.
     let track_len = track_box(entry, 0, sample.len() as u32).len();
-    let offset = (ftyp.len() + 8 + track_len + 7) & !7;
+    let offset = ftyp.len() + 8 + track_len + 8; // moov and mdat headers
     let mut file = ftyp;
     file.extend(box_bytes(b"moov", &track_box(entry, offset as u64, sample.len() as u32)));
-    file.resize(offset, 0);
-    file.extend_from_slice(sample);
+    file.extend(box_bytes(b"mdat", sample));
     file
 }
 

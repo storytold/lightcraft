@@ -480,6 +480,7 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     ctx.set_visuals_of(egui::Theme::Dark, v.clone());
     ctx.set_visuals_of(egui::Theme::Light, v);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+    let animation_time = crate::motion::animation_time(crate::motion::reduced(ctx));
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
@@ -488,7 +489,10 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.0));
         s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
         s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
-        s.animation_time = 0.08;
+        s.animation_time = animation_time;
+        // Captions and headings are not text to select (#1885); text meant for copying opts in
+        // with `Label::selectable(true)`.
+        s.interaction.selectable_labels = false;
     });
 }
 
@@ -583,24 +587,79 @@ mod tests {
         }
     }
 
+    /// Drag the pointer across `label` from end to end, press Copy, and return what egui copied.
+    fn drag_and_copy(label: impl Fn() -> egui::Label) -> Option<String> {
+        let ctx = egui::Context::default();
+        apply_kind(&ctx, ThemeKind::default());
+        let frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut rect = egui::Rect::NOTHING;
+            let mut out = ctx.run_ui(input, |ui| rect = ui.add(label()).rect);
+            out.textures_delta.clear();
+            (out.platform_output.commands, rect)
+        };
+        let (_, rect) = frame(vec![]);
+        let (from, to) = (rect.left_center() + egui::vec2(1.0, 0.0), rect.right_center() - egui::vec2(1.0, 0.0));
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let mut commands = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![button(to, false)],
+            vec![egui::Event::Copy],
+        ] {
+            commands.extend(frame(events).0);
+        }
+        commands.into_iter().find_map(|c| if let egui::OutputCommand::CopyText(text) = c { Some(text) } else { None })
+    }
+
+    /// #1885: a panel caption is not text to select, as in Lightroom; text a dialog offers for
+    /// copying (a path) opts in and still copies.
+    #[test]
+    fn static_labels_cannot_be_drag_selected_but_opted_in_text_can() {
+        assert_eq!(drag_and_copy(|| egui::Label::new("Exposure")), None, "a plain label was selected and copied");
+        assert_eq!(drag_and_copy(|| egui::Label::new("/Users/me/Pictures").selectable(true)).as_deref(), Some("/Users/me/Pictures"));
+    }
+
     /// #736: the release input must carry Thai, not silently skip the check with an older pin.
     /// Exercise the Thai characters of the reported folder name through every egui family.
     #[test]
     fn thai_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Thai", "Studio34 ถ่ายภาพงานแต่งงาน");
+    }
+
+    /// #1915: Hebrew folder names drew as boxes. The release input carries Noto Sans Hebrew, and
+    /// every egui family reaches it (letters, final forms, maqaf, geresh and gershayim, niqqud).
+    /// No ₪ here: Inter and Hack draw it before the Hebrew face, and Hack also holds monospace's
+    /// replacement glyph, where `has_glyph` answers false (the engine test checks ₪ in the face).
+    #[test]
+    fn hebrew_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Hebr", "תמונות טנזניה 2024 ךםןףץ ־ ׳ ״ שָׁלוֹם");
+    }
+
+    /// The craft-fonts face for `script` is in every UI family and draws the non-ASCII
+    /// characters of `name` in each of them.
+    fn folder_name_has_glyphs_in_every_ui_family(script: &str, name: &str) {
         if lightcraft_engine::CRAFT_FONTS.is_empty() {
             lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        let thai = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers("Thai")).expect("font input includes Thai");
+        let face = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers(script)).unwrap_or_else(|| panic!("font input includes {script}"));
         set_language(Locale::En);
         let definitions = font_definitions(lightcraft_engine::CRAFT_FONTS);
-        let name = craft_font_name(thai);
-        assert!(definitions.font_data.contains_key(&name));
+        let face_name = craft_font_name(face);
+        assert!(definitions.font_data.contains_key(&face_name));
         // (The strong family has the face's heavier twin instead when it is a variable font.)
-        let strong = format!("{name} strong");
+        let strong = format!("{face_name} strong");
         for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
             let names = definitions.families.get(&family).expect("UI font family");
-            assert!(names.contains(&name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {name}");
+            assert!(names.contains(&face_name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {face_name}");
         }
         let ctx = egui::Context::default();
         ctx.set_fonts(definitions);
@@ -609,10 +668,10 @@ mod tests {
         ctx.fonts_mut(|fonts| {
             for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
                 let id = FontId::new(13.0, family);
-                // Check the Thai portion; egui 0.36's has_glyph reports false for characters
+                // Check the non-ASCII portion; egui 0.36's has_glyph reports false for characters
                 // in the replacement glyph's own face (including normal monospace Latin).
-                for ch in "Studio34 ถ่ายภาพงานแต่งงาน".chars().filter(|ch| !ch.is_ascii()) {
-                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch}");
+                for ch in name.chars().filter(|ch| !ch.is_ascii()) {
+                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch} (U+{:04X})", ch as u32);
                 }
             }
         });
