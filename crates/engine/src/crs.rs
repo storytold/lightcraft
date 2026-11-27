@@ -59,52 +59,9 @@ impl Target {
 /// Band names as they appear in `crs:` field names, in our mixer order.
 const CRS_BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
-/// `crs:` fields that describe the packet rather than an adjustment.
-const NON_ADJUSTMENT: &[&str] = &[
-    "crs:Version",
-    "crs:ProcessVersion",
-    "crs:Name",
-    "crs:ShortName",
-    "crs:Group",
-    "crs:UUID",
-    "crs:PresetType",
-    "crs:SupportsAmount",
-    "crs:SupportsColor",
-    "crs:SupportsMonochrome",
-    "crs:SupportsHighDynamicRange",
-    "crs:SupportsNormalDynamicRange",
-    "crs:SupportsSceneReferred",
-    "crs:SupportsOutputReferred",
-    "crs:CameraModelRestriction",
-    "crs:Copyright",
-    "crs:ContactInfo",
-    "crs:HasSettings",
-    "crs:AlreadyApplied",
-    "crs:RawFileName",
-    "crs:HasCrop",
-    // preset/library bookkeeping and tool options that don't change the rendering
-    "crs:Cluster",
-    "crs:SupportsAmount2",
-    "crs:RequiresRGBTables",
-    "crs:SortName",
-    "crs:Description",
-    "crs:CropConstrainToWarp",
-    "crs:OverrideLookVignette",
-    // the file's as-shot white, recorded next to the edit (ours comes from the file itself)
-    "crs:AsShotTemperature",
-    "crs:AsShotTint",
-    // which Lightroom version may read the edit, and checksums of the profiles it names
-    "crs:CompatibleVersion",
-    "crs:CameraProfileDigest",
-    "crs:LensProfileDigest",
-    // the lens profile Lightroom picked: ours is the file's own, only `LensProfileEnable` carries over
-    "crs:LensProfileName",
-    "crs:LensProfileFilename",
-    "crs:LensProfileIsEmbedded",
-    "crs:LensProfileSetup",
-    // a crop tool option (keep the crop inside the photo), not the crop itself
-    "crs:CropConstrainToUnitSquare",
-];
+/// `crs:` fields that describe the packet rather than an adjustment: the bookkeeping rows of
+/// `registry.json`, generated with the rest of the classification (#4435).
+use registry::NON_ADJUSTMENT;
 
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
 pub fn has_adjustments(props: &Props) -> bool {
@@ -405,6 +362,8 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     if let Some(b) = boolean(props, "crs:AutoLateralCA") {
         put(o, "optics.remove_ca", json!(b));
     }
+    n(o, "ChromaticAberrationR", "optics.ca_red");
+    n(o, "ChromaticAberrationB", "optics.ca_blue");
     n(o, "LensManualDistortionAmount", "optics.distortion");
     n(o, "VignetteAmount", "optics.vignetting");
     n(o, "VignetteMidpoint", "optics.vignetting_midpoint");
@@ -449,6 +408,10 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         Some(true) => {
             let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
             let (l, t, r, b) = (e("Left", 0.0), e("Top", 0.0), e("Right", 1.0), e("Bottom", 1.0));
+            // other tools write the cropped result's output dimensions beside the crop; the
+            // edges carry the rect, so these are consumed with it and their values ignored
+            note("crs:CropHeight");
+            note("crs:CropWidth");
             if r > l && b > t {
                 put(
                     o,
@@ -500,11 +463,13 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     let quiet = |k: &str| {
         k.starts_with("Enable")
             || k.starts_with("ToneCurveName")
-            || k == "AutoTone"
-            || k == "AutoGrayscaleMix"
+            || registry::QUIET_NAMES.contains(&k)
             || (k == "PointColors" && value_is(k, &empty_points))
-            // the lens profile's strength, written at its default (100 %) next to every profile
-            || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale") && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
+            // the lens profile's strengths, written at their default (100 %) next to every
+            // profile; Lightroom writes no CA scale at all in a real sidecar set, so its
+            // default comes from the same strength family
+            || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale" | "LensProfileChromaticAberrationScale")
+                && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
     };
     let mut unmapped: Vec<String> = props
         .keys()
@@ -513,6 +478,8 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
         .filter(|k| !NON_ADJUSTMENT.contains(k) && !read.contains(*k))
         .map(|k| k.trim_start_matches("crs:").to_string())
         .filter(|k| !quiet(k))
+        // the metadata bucket is silently skipped by classification: the report must agree
+        .filter(|k| !registry::METADATA_SKIPPED_CRS_FIELDS.contains(&k.as_str()))
         .collect();
     unmapped.dedup();
     unmapped.extend(mask_skips);
@@ -550,6 +517,9 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
     Some(Preset { id, name, group, settings, favorite: false, builtin: false })
 }
+
+/// Adobe's `crs:` namespace and our import decision for every field of it.
+pub mod registry;
 
 #[cfg(test)]
 mod tests;

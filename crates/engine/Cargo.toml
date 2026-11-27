@@ -63,6 +63,10 @@ sam = ["dep:lightcraft-segment", "lightcraft-gpu/sam"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
 
+[build-dependencies]
+# the crs field registry (src/crs/registry.json) is parsed at build time into crs_registry.rs
+serde_json = { workspace = true }
+
 [dev-dependencies]
 # Construct RAW errors using the same TIFF package as craft-raw.
 # tests record why they skip (`cargo xtask ci` lists the skips)
