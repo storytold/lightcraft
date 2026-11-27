@@ -31,7 +31,7 @@ Each audience with its own hours (Opus 5.5 agent wall-clock hours to ~95%):
 The gap between breadth and readiness is quality and coverage, not missing buttons: camera colour is
 estimated rather than measured, CR3 decodes on 26 verified Canon bodies (rarer CRX variants still open as previews), HE NEF opens
 as preview, as does compressed ORF when an embedded preview is available; rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
-tests run in CI on Linux x64 (every pull request and push to `main`) and FreeBSD (nightly), not on macOS or Windows. **Why alpha:** core workflows run end to end, but readiness is below
+tests run in CI on Linux x64 (every pull request and push to `main`) and FreeBSD (nightly). A subset runs on Windows for relevant path changes or pull requests labelled `full-ci`. macOS still needs a test job. **Why alpha:** core workflows run end to end, but readiness is below
 the ~75% beta bar (it is above the ~40% alpha bar) and Lightroom's main inputs, raw files, still have gaps (Nikon HE NEF opens as preview; Canon,
 ~30% of raw users, decodes CR3 on 26 verified bodies). It passes the alpha gate: all six core workflows
 (import, cull, develop, save and reopen, batch looks, export) work end to end on macOS
@@ -109,7 +109,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 5. AI masks: Subject / Sky / People (40–70 h + model decision)
 6. Compressed ORF (support withdrawn; estimate pending provenance review) and HE NEF (20–40 h)
 7. Lens profile database of our own (40–80 h, #329)
-8. Tests in CI on macOS and Windows, and the GPU tests in CI (6–12 h)
+8. Full CI test coverage on macOS and Windows, and GPU tests in CI (6–12 h)
 9. Per-model raw verification (20–35 h)
 
 ## Progress log
@@ -199,6 +199,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | patch | Document conditional Windows tests and the remaining CI coverage gaps (#4463) |
 | 2026-11-15 | minor | Lens Blur with AI subject focus and per-mask bokeh; survey tiles fit the photos' shapes and glide to their new places; direct import of Lightroom backup zips (#2592); legacy shutter repair in virtual copies; the opened-library folder-safety fix; v0.21.0 and v0.21.1 released; craft-libs cutover for TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata and gain maps, plus a security-hardening batch; headline numbers not re-measured |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |

@@ -18,7 +18,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | JPEG | ✅ | ✅ | ✅ (parallel decoder, ICC, EXIF orientation) | ✅ quality, size limit, ICC, metadata; Huffman tables optimized per image (issue #1373) | `crates/codecs/src/jpeg.rs`, `crates/codecs/src/encode.rs` (shared `craft-jpeg` encoder), export tests |
 | TIFF | ✅ 8/16/32-bit | ✅ 8/16-bit, LZW/ZIP | ✅ 1–64-bit integer, 16–64-bit float, bilevel, CCITT fax, WhiteIsZero | ✅ 8/16-bit, 32-bit float linear, none / LZW / ZIP | `crates/tiff`, `crates/codecs/src/tiff_codec.rs` |
 | PNG | ✅ | ✅ | ✅ | ✅ | |
-| PSD / PSB | ✅ (maximized-compatibility composite) | ✅ (Classic: PSD export, edit-in round trip) | ✅ merged composite | ⬜ (external-editor round trip writes 16-bit TIFF) | `crates/codecs/src/psd.rs` |
+| PSD / PSB | ✅ (maximized-compatibility composite) | ✅ (Classic: PSD export, edit-in round trip) | ✅ merged composite | 🟡 flat PSD (8/16-bit, including Edit in PhotoCraft); no PSB or layered export | `crates/codecs/src/psd.rs` |
 | HEIC / HEIF | ✅ | ⬜ (Classic) / HDR only | ✅ in every release build (`craft-heif` from craft-libs, heic-rs) | ⬜ | `heif` feature on by packaging scripts; EXIF and XMP read from the container in every build (`crates/meta/src/heif.rs`, #693) |
 | AVIF | ✅ | ✅ (HDR) | ⬜ recognised, not decoded (no permissive pure-Rust AV1 decoder) | ✅ 8/10-bit, PQ HDR | EXIF and XMP read from the container (`crates/meta/src/heif.rs`); exported EXIF reads back |
 | JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR (`jixel`, native only; ⬜ web) | `crates/engine/src/tests/export.rs` |
@@ -69,12 +69,13 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | HDR, print, video output | 15% | ~35% | estimated |
 | **Non-raw file formats** | 100% | **~70%** | estimated; raw is in [raw-parity.md](raw-parity.md) (~50%) |
 
-Remaining: **26–47 h** (AVIF decode 8–15 h if a permissive decoder is written or found; PSD write 4–8 h; lossy DNG and Render to DNG 4–8 h; HLG 3–5 h; catalog import depth 8–12 h).
+Remaining: **23–40 h** (AVIF decode 8–15 h if a permissive decoder is written or found, lossy DNG and Render to DNG 4–8 h, HLG 3–5 h, and catalog import depth 8–12 h).
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | patch | Document flat PSD export and drop PSD writing from the remaining estimate (#4462) |
 | 2026-10-12 | minor | LR-PROF-IMPORT: the user's own DNG camera profiles (`.dcp`) import as camera profiles; none ship |
 | 2026-10-10 | major | Created from the code and the installed Lightroom's document types |
 | 2026-10-10 | minor | JPEG XL export (#247): JXL write ✅ (native only), PQ JPEG XL HDR |
