@@ -6,6 +6,10 @@ license.workspace = true
 publish = false
 description = "LightCraft command-line tool: headless render, command listing and the MCP server"
 
+[lib]
+name = "lightcraft_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "lightcraft-cli"
 path = "src/main.rs"
@@ -23,9 +27,13 @@ lightcraft-codecs = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-merge = { workspace = true }
 serde_json = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
 dhat = { workspace = true, optional = true }
 
 [dev-dependencies]
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
 lightcraft-testkit = { workspace = true }
 
 [features]
