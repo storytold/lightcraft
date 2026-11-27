@@ -772,6 +772,21 @@ impl LightcraftApp {
     }
 }
 
+/// The app's first frame starts the GPU device warm-up (`app.gpu`), on a thread that loads the
+/// driver. A process that ends while it does crashes inside the driver (issue #620; in CI, tests
+/// killed by SIGSEGV after they had passed). The window ends through [`LightcraftApp::shutdown`],
+/// which decides that itself; any other end (a test returning, a headless run) passes through here
+/// first, so it waits for the warm-up, bounded. (Native only: there is no warm-up thread on the web,
+/// and the web host moves fields out of the app.)
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for LightcraftApp {
+    fn drop(&mut self) {
+        if !lightcraft_engine::gpu::shutting_down() {
+            let _ = lightcraft_engine::gpu::wait_warm_up(std::time::Duration::from_secs(30));
+        }
+    }
+}
+
 /// "Found 3 faces in 2 photos" for a `faces.detect` result.
 pub(crate) fn detect_summary(v: &Value) -> String {
     let photos = v["photos"].as_array().map(Vec::as_slice).unwrap_or_default();
