@@ -465,11 +465,31 @@ fn windows_links_open_in_the_browser() {
 #[cfg(unix)]
 fn a_link_opener_is_not_waited_for() {
     use crate::platform::launch;
-    let started = std::time::Instant::now();
-    let mut c = std::process::Command::new("sleep");
-    c.arg("3");
-    assert_eq!(launch(c), Ok(()));
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "returned at once ({:?})", started.elapsed());
+    let dir = std::env::temp_dir().join(format!("lc-link-opener-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (gate, passed) = (dir.join("gate"), dir.join("passed"));
+    // the opener waits at a gate this test opens only after `launch` has returned
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c").arg(format!("while [ ! -e '{}' ]; do sleep 0.05; done; : > '{}'", gate.display(), passed.display()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(launch(c));
+    });
+    // (a watchdog, not a timing check: an opener that was waited for never returns at all)
+    let returned = rx.recv_timeout(std::time::Duration::from_secs(120));
+    let still_gated = !passed.exists();
+    std::fs::write(&gate, b"").unwrap();
+    assert_eq!(returned, Ok(Ok(())), "launch returned while its opener still waited at the gate");
+    assert!(still_gated, "the opener had not got past its gate when launch returned");
+    // and the opener was left running: it gets through the gate afterwards
+    for _ in 0..2400 {
+        if passed.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(passed.exists(), "the opener kept running after launch returned");
+    let _ = std::fs::remove_dir_all(&dir);
     let missing = launch(std::process::Command::new("lc-no-such-opener"));
     assert!(missing.as_ref().is_err_and(|e| e.starts_with("lc-no-such-opener: ")), "{missing:?}");
 }
