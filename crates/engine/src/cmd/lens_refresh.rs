@@ -25,10 +25,11 @@ pub struct Missing {
     pub path: String,
 }
 
-/// Library raws with a file, no lens profile and a lens the database `db` knows by name (`ids`: only these; virtual
-/// copies follow the photo they were copied from). With `again` (the database's files were replaced, or an agent
-/// asked for every photo), also the raws whose profile came from the database (the new data may give another one, or
-/// none) and the raws whose file named no lens when they were imported (a newer LightCraft may read their lens).
+/// Library raws with a file, no lens profile and a lens the database `db` knows by name, or no lens name and a camera
+/// whose built-in lens it knows (`ids`: only these; virtual copies follow the photo they were copied from). With
+/// `again` (the database's files were replaced, or an agent asked for every photo), also the raws whose profile came
+/// from the database (the new data may give another one, or none) and the other raws whose file named no lens when
+/// they were imported (a newer LightCraft may read their lens).
 /// No file-system calls.
 pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[PhotoId]>, again: bool) -> Vec<Missing> {
     // a photo and its virtual copies list the photo once, in library order
@@ -41,7 +42,7 @@ pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[Phot
         .filter(|p| {
             let lens = p.meta.lens.trim();
             match &p.embedded_lens {
-                None if lens.is_empty() => again,
+                None if lens.is_empty() => again || crate::lens_profiles::has_built_in_lens(db, &p.meta.camera),
                 None => crate::lens_profiles::profile_name(db, &p.meta.camera, lens).is_some(),
                 Some(_) => again && from_database(p),
             }
