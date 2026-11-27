@@ -33,6 +33,18 @@ use crate::align::{self, Alignment};
 use crate::frame::{Frame, FrameColor, consensus_multipliers};
 use crate::{MergeError, Progress, Result, check};
 
+mod blend;
+mod input;
+mod rows;
+
+#[cfg(test)]
+#[path = "hdr/tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "hdr/tests_output.rs"]
+mod tests_output;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Deghost {
@@ -110,7 +122,15 @@ fn maxc(p: [f32; 3]) -> f32 {
 }
 
 /// Merge exposure brackets. Frames must share their pixel size (and orientation).
-pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress) -> Result<HdrResult> {
+pub fn merge_hdr(frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress) -> Result<HdrResult> {
+    merge_hdr_iter(frames.into_iter().map(Ok), opts, progress)
+}
+
+/// Decode and retain one frame at a time. Every frame is validated and moved into exact-capacity
+/// f32 storage before requesting the next; no sample is quantised. The Vec adapter uses this path too.
+/// Input requests check cancellation at fraction zero; merge analysis starts at fraction 0.02.
+pub fn merge_hdr_iter(frames: impl IntoIterator<Item = Result<Frame>>, opts: &HdrOptions, progress: &Progress) -> Result<HdrResult> {
+    let mut frames = input::collect(frames, progress)?;
     let n = frames.len();
     if n < 2 {
         return Err(MergeError::TooFew(n, 2));
@@ -138,6 +158,9 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
     // 1. brightness order and reference
     let exif: Option<Vec<f64>> = frames.iter().map(|f| f.exposure).collect();
     let medians: Vec<f32> = frames.par_iter().map(|f| align::median_luma(&f.image, f.clip)).collect();
+    if medians.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return Err(input::bad("brightness arithmetic is outside the finite f32 range"));
+    }
     let brightness: Vec<f64> = match &exif {
         Some(e) if e.iter().any(|v| (v - e[0]).abs() > 0.1) => e.clone(),
         _ => medians.iter().map(|m| (*m as f64).log2()).collect(),
@@ -174,6 +197,15 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         } else {
             (0..n).map(|i| medians[reference] / medians[i].max(1e-6)).collect()
         };
+        if rel.iter().any(|v| !v.is_finite() || *v <= 0.0 || !(g0 * *v).is_finite() || g0 * *v <= 0.0) {
+            return Err(input::bad("exposure arithmetic is outside the finite f32 range"));
+        }
+        if frames.iter().zip(&rel).any(|(frame, relative)| {
+            let gain = g0 * *relative;
+            gain > 1.0 && frame.image.data.par_chunks(16_384).any(|pixels| pixels.iter().flatten().any(|v| !(*v * gain).is_finite()))
+        }) {
+            return Err(input::bad("alignment exposure arithmetic overflows f32"));
+        }
         let feats: Vec<(crate::features::Features, f64)> = frames
             .par_iter()
             .enumerate()
@@ -194,9 +226,7 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         check(progress, 0.35, "Resampling")?;
         // one frame at a time (the warp is parallel inside): each warped copy replaces its frame before the next is made
         for i in (0..n).filter(|&i| i != reference && alignments[i].model != "identity") {
-            let (img, v) = align::warp(&frames[i].image, &alignments[i].h);
-            frames[i].image = img;
-            valid[i] = Some(v);
+            valid[i] = Some(input::warp(&mut frames[i], &alignments[i].h)?);
         }
     }
     check(progress, 0.45, "Normalising exposures")?;
@@ -221,84 +251,23 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         ln_k[order[p]] = ln_k[order[p - 1]] + step_ln[p - 1];
     }
     let k: Vec<f32> = ln_k.iter().map(|v| v.exp() as f32).collect();
+    if k.iter().any(|v| !v.is_finite() || *v <= 0.0 || !(1.0 / *v).is_finite()) {
+        return Err(input::bad("exposure arithmetic is outside the finite f32 range"));
+    }
     let ev: Vec<f64> = ln_k.iter().map(|v| v / std::f64::consts::LN_2).collect();
-    let ev_exif = exif.as_ref().map(|e| e.iter().map(|v| v - e[reference]).collect());
+    let ev_exif: Option<Vec<f64>> = exif.as_ref().map(|e| e.iter().map(|v| v - e[reference]).collect());
+    if ev_exif.as_ref().is_some_and(|values| values.iter().any(|v| !v.is_finite())) {
+        return Err(input::bad("EXIF exposure difference is not finite"));
+    }
 
     // 4./5. deghost maps (small scale)
     check(progress, 0.55, "Deghosting")?;
     let ghost_small: Option<(Vec<Plane>, usize)> = opts.deghost.params().map(|(thr, r)| deghost_maps(&frames, &valid, &k, &order, reference, thr, r));
     check(progress, 0.7, "Merging")?;
 
-    let darkest = order[0];
-    let clips: Vec<f32> = frames.iter().map(|f| f.clip).collect();
-    // how close each pixel of each frame is to saturation: its brightest channel within 1 px (see `saturation`)
-    let sat: Vec<Vec<f32>> = frames.par_iter().map(|f| saturation(&f.image)).collect();
-    let mut out = Rgb32f::new(w, h);
-    let fr = &frames;
-    let vd = &valid;
-    let gs = ghost_small.as_ref();
-    out.data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        for x in 0..w {
-            let i_px = y * w + x;
-            let mut acc = [0f64; 3];
-            let mut ws = 0f64;
-            // the reference at or near its clip: the radiance is at least this
-            let mr = maxc(fr[reference].image.data[i_px]);
-            let bound = if mr >= 0.80 * clips[reference] { mr / k[reference] } else { 0.0 };
-            for i in 0..n {
-                if vd[i].as_ref().is_some_and(|v| !v[i_px]) {
-                    continue;
-                }
-                let v = fr[i].image.data[i_px];
-                let m = sat[i][i_px];
-                let mut wt = k[i] * (1.0 - smoothstep(0.80 * clips[i], 0.96 * clips[i], m));
-                if i == darkest {
-                    wt += 1e-6;
-                }
-                if i == reference {
-                    wt += 1e-9;
-                } else if bound > 0.0 {
-                    // a frame far darker than that saw something that moved there
-                    wt *= smoothstep(0.35, 0.6, m / k[i] / bound);
-                }
-                if i != reference
-                    && let Some((maps, fac)) = gs
-                {
-                    let g = sample_plane(&maps[i], (x as f32 + 0.5) / *fac as f32, (y as f32 + 0.5) / *fac as f32);
-                    wt *= 1.0 - g;
-                }
-                if wt <= 0.0 {
-                    continue;
-                }
-                let inv = 1.0 / k[i];
-                for c in 0..3 {
-                    acc[c] += (wt * v[c] * inv) as f64;
-                }
-                ws += wt as f64;
-            }
-            if ws > 0.0 {
-                row[x] = acc.map(|a| (a / ws) as f32);
-            } else {
-                row[x] = fr[reference].image.data[i_px];
-            }
-        }
-    });
+    let out = blend::Blend { frames: &frames, valid: &valid, k: &k, ghost: ghost_small.as_ref(), reference, darkest: order[0] }.render()?;
     check(progress, 0.92, "Merging")?;
 
-    let ghost = match &ghost_small {
-        Some((maps, fac)) => {
-            let fac = *fac as f32;
-            let mut g = Plane::new(w, h);
-            g.data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-                for (x, o) in row.iter_mut().enumerate() {
-                    let (sx, sy) = ((x as f32 + 0.5) / fac, (y as f32 + 0.5) / fac);
-                    *o = (0..n).filter(|&i| i != reference).map(|i| sample_plane(&maps[i], sx, sy)).fold(0.0, f32::max);
-                }
-            });
-            g
-        }
-        None => Plane::new(0, 0),
-    };
     // per-frame results in the caller's order
     let mut ev_in = vec![0.0; n];
     let mut alignments_in = vec![Alignment::identity(); n];
@@ -320,9 +289,9 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
     if let Some(multipliers) = wb_multipliers {
         color.set_as_shot_multipliers(multipliers);
     }
-    Ok(HdrResult {
+    let mut result = HdrResult {
         radiance: out,
-        ghost,
+        ghost: Plane::new(0, 0),
         reference: input[reference],
         ev: ev_in,
         ev_exif,
@@ -334,7 +303,26 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         baseline_exposure: rf.baseline_exposure,
         lens: rf.lens.clone(),
         wb_multipliers,
-    })
+    };
+    // The full-size overlay needs only the small maps. Do not retain any full-size input,
+    // validity map or saturation scratch while allocating it.
+    drop(frames);
+    drop(valid);
+    if let Some((maps, fac)) = &ghost_small {
+        let fac = *fac as f32;
+        let mut ghost = Plane { width: w, height: h, data: input::pixels(result.radiance.data.len())? };
+        ghost.data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let (sx, sy) = ((x as f32 + 0.5) / fac, (y as f32 + 0.5) / fac);
+                *o = (0..n).filter(|&i| i != reference).map(|i| sample_plane(&maps[i], sx, sy)).fold(0.0, f32::max);
+            }
+        });
+        if ghost.data.par_chunks(16_384).any(|pixels| pixels.iter().any(|v| !v.is_finite())) {
+            return Err(input::bad("deghost arithmetic produced a non-finite value"));
+        }
+        result.ghost = ghost;
+    }
+    Ok(result)
 }
 
 /// Bilinear sample of a plane at continuous coordinates (pixel centres at +0.5).
@@ -507,31 +495,5 @@ fn dilate(p: &Plane, r: usize) -> Plane {
             out.data[y * w + x] = (a..=b).map(|yy| tmp.data[yy * w + x]).fold(0.0, f32::max);
         }
     }
-    out
-}
-
-/// A frame's saturation per pixel: the brightest channel within 1 px (3 × 3). A demosaiced pixel next to clipped
-/// photosites is interpolated from them and reads low in the channel that clipped (green, in camera RGB), so it loses
-/// its weight with them. On real ARW brackets the brightest frame's green was 3–5 % low within 2 px of clipped pixels
-/// (and linear to 1 % elsewhere), and as that frame carries the most weight, bright windows got magenta fringes.
-fn saturation(img: &Rgb32f) -> Vec<f32> {
-    let (w, h) = (img.width, img.height);
-    let m: Vec<f32> = img.data.iter().map(|p| maxc(*p)).collect();
-    if w == 0 || h == 0 {
-        return m;
-    }
-    let mut rows = vec![0f32; w * h];
-    rows.par_chunks_mut(w).zip(m.par_chunks(w)).for_each(|(out, src)| {
-        for (x, o) in out.iter_mut().enumerate() {
-            *o = src[x.saturating_sub(1)..=(x + 1).min(w - 1)].iter().copied().fold(0.0, f32::max);
-        }
-    });
-    let mut out = vec![0f32; w * h];
-    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        let (a, b) = (y.saturating_sub(1), (y + 1).min(h - 1));
-        for (x, v) in row.iter_mut().enumerate() {
-            *v = (a..=b).map(|yy| rows[yy * w + x]).fold(0.0, f32::max);
-        }
-    });
     out
 }
