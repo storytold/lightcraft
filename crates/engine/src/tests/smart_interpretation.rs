@@ -111,13 +111,20 @@ fn wait_build(s: &Session) {
 }
 
 #[test]
-fn raw_smart_build_requires_source_facts() {
+fn raw_smart_build_requires_facts_from_the_fresh_original() {
     let mut x = Lib::new("missing-facts", true);
+    let original = x.s.media.file_loader.clone().unwrap();
     x.s.media.insert(x.id, SourceLevel::Preview, Arc::new(Rgb32f::filled(48, 32, [0.7; 3])));
+    x.s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::filled(48, 32, [0.7; 3]), SourceInfo::default()))));
     let r = x.build();
-    assert_eq!(r["built"], 0, "unknown pixels must not be labelled sensor-derived: {r}");
+    assert_eq!(r["built"], 0, "unverified original pixels must not be labelled sensor-derived: {r}");
     assert!(r["failed"][0][1].as_str().unwrap().contains("Reload"), "{r}");
     assert!(!x.status());
+
+    x.s.media.file_loader = Some(original);
+    let r = x.build();
+    assert_eq!(r["built"], 1, "a verified fresh decode can build despite the unfactored cache: {r}");
+    assert!(x.status());
 }
 
 #[test]
