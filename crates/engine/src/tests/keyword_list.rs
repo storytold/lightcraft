@@ -54,6 +54,59 @@ fn creating_a_keyword_with_attributes_and_the_selection() {
     assert!(s.execute("keyword.info", &json!({"keyword": "lisbon"})).is_err(), "no such keyword");
 }
 
+/// Every command that names a keyword refuses a new name ending in `*` at any level, and changes
+/// nothing; a name with `*` inside is allowed. A keyword the library has from a file keeps its name
+/// and can still be given to photos.
+#[test]
+fn commands_refuse_a_new_keyword_name_ending_in_an_asterisk() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    s.execute("keyword.create", &json!({"name": "Lagoon", "parent": null})).unwrap();
+    s.execute("keyword.saveSet", &json!({"name": "Mine", "keywords": ["Lagoon"]})).unwrap();
+    for name in ["travel*", "places|rome*"] {
+        // a metadata preset in prefs that holds the name
+        s.metadata_presets = vec![crate::cmd::metadata::MetadataPreset { name: "Old".into(), fields: json!({"keywords": [name]}) }];
+        let before = s.catalog.to_snapshot();
+        let sets = s.keyword_sets.clone();
+        let presets = s.metadata_presets.clone();
+        for (command, params) in [
+            ("keyword.create", json!({"name": name, "parent": null})),
+            ("keyword.edit", json!({"keyword": "Lagoon", "name": name.rsplit('|').next()})),
+            ("keyword.rename", json!({"from": "Lagoon", "to": name})),
+            ("keyword.merge", json!({"from": ["Lagoon"], "into": name})),
+            ("keyword.move", json!({"keyword": "Lagoon", "parent": name})),
+            ("photo.setMeta", json!({"addKeywords": [name]})),
+            ("photo.setMeta", json!({"keywords": ["Lagoon", name]})),
+            ("keyword.setShortcut", json!({"keywords": [name]})),
+            ("keyword.saveSet", json!({"name": "Mine", "keywords": [name]})),
+            ("library.import", json!({"paths": ["missing.jpg"], "keywords": [name]})),
+            ("metadata.savePreset", json!({"name": "Trip", "fields": {"keywords": ["Lagoon", name]}})),
+            ("library.import", json!({"paths": ["missing.jpg"], "metadataPreset": "Old"})),
+        ] {
+            let err = s.execute(command, &params).unwrap_err().to_string();
+            assert!(err.contains("can't end in “*”"), "{command} {params}: {err}");
+        }
+        // the import defaults' metadata preset
+        s.import_defaults.metadata_preset = Some("Old".into());
+        let err = s.execute("library.import", &json!({"paths": ["missing.jpg"]})).unwrap_err().to_string();
+        assert!(err.contains("can't end in “*”"), "import defaults: {err}");
+        s.import_defaults.metadata_preset = None;
+        assert!(s.catalog.to_snapshot() == before && s.keyword_sets == sets && s.metadata_presets == presets, "{name}: nothing changed");
+    }
+    s.execute("photo.setMeta", &json!({"addKeywords": ["a*b"]})).unwrap();
+    assert!(ids.iter().all(|id| keywords_of(&s, *id).contains(&"a*b".to_string())));
+    // a keyword read from a file (here put on the photo as a sidecar read puts it)
+    let id = lightcraft_catalog::PhotoId(ids[0]);
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords.push("travel*".into());
+    s.commit("Read Metadata", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1]], "addKeywords": ["TRAVEL*"]})).unwrap();
+    assert!(keywords_of(&s, ids[1]).contains(&"TRAVEL*".to_string()), "{:?}", keywords_of(&s, ids[1]));
+    s.execute("keyword.edit", &json!({"keyword": "travel*", "synonyms": ["trip"]})).unwrap();
+    assert!(keywords_of(&s, ids[0]).contains(&"travel*".to_string()), "its name is kept");
+}
+
 /// "Put new keywords inside this keyword": new keywords go inside the default parent unless the
 /// command says otherwise (`parent: null` = the top level). It belongs to its keyword in the
 /// library: it follows a rename, goes with a delete, and undo and redo bring it back with them.
@@ -483,4 +536,74 @@ fn importing_keywords_reads_a_list() {
     assert!(s.execute("keyword.import", &json!({"path": dir.join("bad.txt").to_string_lossy()})).is_err(), "not UTF-8: refused");
     assert!(s.execute("keyword.import", &json!({})).is_err(), "a path or text");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A library whose photos got a whole keyword list as one keyword (line breaks inside) is
+/// repaired when it opens: one keyword a line, journaled.
+#[test]
+fn line_separated_keywords_are_split_when_the_library_opens() {
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0];
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords = vec!["Bride\r\n Groom\r\n Happy Couple".into()];
+    s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    assert_eq!(s.split_multiline_keywords(), 1);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, vec!["Bride", "Groom", "Happy Couple"]);
+    assert_eq!(s.split_multiline_keywords(), 0, "nothing left to split");
+}
+
+/// A listed keyword with line breaks hands its options to the names it splits into, so a keyword left
+/// out of export stays out (CodeRabbit on #2922); a name listed already keeps its own options but is
+/// left out of export when either was.
+#[test]
+fn a_split_keyword_keeps_its_export_options() {
+    use lightcraft_catalog::Op;
+    use lightcraft_catalog::keywords::KeywordInfo;
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0];
+    let hidden = KeywordInfo { include_on_export: false, ..KeywordInfo::default() };
+    let groom = KeywordInfo { person: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Bride\nGroom".into(), info: Some(hidden) }).unwrap();
+    s.catalog.apply(Op::SetKeyword { path: "Groom".into(), info: Some(groom) }).unwrap();
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords = vec!["Bride\nGroom".into()];
+    s.catalog.apply(Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    assert_eq!(s.split_multiline_keywords(), 1);
+    let bride = s.catalog.keyword_info("Bride").expect("Bride is listed with the options it came with");
+    assert!(!bride.include_on_export, "{bride:?}");
+    let groom = s.catalog.keyword_info("Groom").unwrap();
+    assert!(!groom.include_on_export && groom.person, "kept its own options, left out of export: {groom:?}");
+    assert!(s.catalog.keyword_info("Bride\nGroom").is_none(), "the multi-line record is gone");
+}
+
+/// A split keyword that is where new keywords go hands that to one of its names only, so there is still one
+/// default parent (CodeRabbit on #2922).
+#[test]
+fn a_split_default_parent_stays_one_keyword() {
+    use lightcraft_catalog::Op;
+    use lightcraft_catalog::keywords::KeywordInfo;
+    let mut s = Session::with_demo();
+    let inside = KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Ceremony\nReception".into(), info: Some(inside) }).unwrap();
+    s.split_multiline_keywords();
+    let parents: Vec<&str> = s.catalog.listed_keywords().filter(|k| k.info.new_keywords_inside).map(|k| k.path.as_str()).collect();
+    assert_eq!(parents, ["Ceremony"]);
+    assert_eq!(s.catalog.default_keyword_parent().as_deref(), Some("Ceremony"));
+}
+
+/// The first name a default parent splits into stays the default parent when it is listed already (its other
+/// options are its own).
+#[test]
+fn a_split_default_parent_stays_one_when_its_first_name_is_listed() {
+    use lightcraft_catalog::Op;
+    use lightcraft_catalog::keywords::KeywordInfo;
+    let mut s = Session::with_demo();
+    let own = KeywordInfo { include_on_export: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Ceremony".into(), info: Some(own) }).unwrap();
+    let inside = KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Ceremony\nReception".into(), info: Some(inside) }).unwrap();
+    s.split_multiline_keywords();
+    let parents: Vec<&str> = s.catalog.listed_keywords().filter(|k| k.info.new_keywords_inside).map(|k| k.path.as_str()).collect();
+    assert_eq!(parents, ["Ceremony"]);
+    assert_eq!(s.catalog.default_keyword_parent().as_deref(), Some("Ceremony"));
 }

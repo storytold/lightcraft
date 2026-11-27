@@ -117,11 +117,12 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
 }
 
 /// The modification time in `meta` as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
-/// filesystem doesn't say or the time is before 1970.
+/// filesystem doesn't say or the time is before 1970. In the host's time zone, like every date the
+/// catalog stores: this is the capture date of a file that carries none of its own.
 fn modified_iso(meta: &std::fs::Metadata) -> Option<String> {
     let t = meta.modified().ok()?;
     let secs = i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
-    Some(crate::import::civil(secs))
+    Some(crate::import::local_civil(secs))
 }
 
 impl crate::Session {
