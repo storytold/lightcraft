@@ -77,6 +77,17 @@ impl SyntheticLibrary {
         }
         LightcraftApp::new(session, Services { png: None, ..Default::default() })
     }
+
+    /// The app of a library on disk (`lib` in the fixture's folder) with the fixture photos
+    /// imported: for what only a library on disk does (previews built into its cache, preferences
+    /// saved with it). Stop what it started in the background before the fixture is dropped.
+    pub(crate) fn on_disk_app(&self) -> LightcraftApp {
+        let mut session = lightcraft_engine::Session::new().with_fs();
+        session.open_library(self.dir.join("lib"), false).unwrap();
+        let paths: Vec<String> = self.photos.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        session.execute("library.import", &serde_json::json!({"paths": paths})).unwrap();
+        LightcraftApp::new(session, Services { png: None, ..Default::default() })
+    }
 }
 
 impl Drop for SyntheticLibrary {
