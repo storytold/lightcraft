@@ -108,6 +108,7 @@ dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and h
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 
 # formats
+quick-xml = "0.41"
 miniz_oxide = "0.9"
 
 # codecs

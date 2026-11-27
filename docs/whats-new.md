@@ -14,6 +14,11 @@
   you already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [process versions](process-versions.md).
 
+### Remove Location checks all of an Original's embedded XMP
+- An Original copy with “Remove Location Info” on is now also refused when its embedded XMP names a place the
+  catalog doesn't show: an IPTC Extension Location Shown or Location Created (a city, coordinates…), or GPS in any
+  packet. Photoshop files (PSD/PSB) get the same check as other formats. An XMP packet too large to read in full is
+  refused too, because it can't be shown to be free of location. Empty place fields still export.
 ### Cleaner edges in raw exports
 - Exports of raw photos and the 1:1 view no longer draw thin yellow, green or cyan outlines along sharp white edges
   (a white boat against the sky, window frames), green and cyan rims around small bright reflections such as

@@ -56,8 +56,8 @@ fn exif_has_location(tiff: &[u8]) -> bool {
 /// properties), not only the fields projected into [`crate::Metadata`]. A packet whose property
 /// list was cut short can't prove it has none.
 fn xmp_has_location(packet: &str) -> bool {
-    let Ok(xmp) = crate::xmp::parse_xmp_with(packet, &[]) else { return true };
-    xmp.properties_truncated || xmp.has_location_metadata() || crate::parse_xmp(packet).map_or(true, |x| crate::has_location(&x.metadata))
+    let Ok(xmp) = crate::parse_xmp(packet) else { return true };
+    xmp.properties_truncated || xmp.has_location_metadata() || crate::has_location(&xmp.metadata)
 }
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
