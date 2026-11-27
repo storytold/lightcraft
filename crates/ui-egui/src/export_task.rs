@@ -64,7 +64,7 @@ pub fn start(
     to: Destination,
     after: Option<AfterExport>,
 ) -> Result<Value, String> {
-    if app.export.is_some() {
+    if exports_waiting_or_running(app) {
         app.services.write_shared.as_ref().ok_or("no background writer")?;
         let total = items.len();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -77,10 +77,13 @@ pub fn start(
     start_now(app, items, opts, to, after)
 }
 
-/// The next queued export that hasn't been dropped, started now. One that adds to Apple Photos waits while
-/// another import holds Photos (its row says so; [`poll`] tries again). The library may have grown while it
-/// waited, so what it writes is checked against the originals as they are now. One that can't start says why,
-/// on screen for longer, and the one after it is tried.
+/// An export runs, or one waits its turn (also while nothing runs: the front one may be waiting for Apple Photos).
+/// A new background export then queues behind them, in the order asked for (issue #2965), and leaves its Apple
+/// Photos reservation until it starts.
+pub(crate) fn exports_waiting_or_running(app: &LightcraftApp) -> bool {
+    app.export.is_some() || app.export_queue.iter().any(|q| !q.cancel.load(Ordering::Relaxed))
+}
+
 /// Another Apple Photos import holds Photos (the web build has none).
 fn photos_busy(app: &LightcraftApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
@@ -92,6 +95,10 @@ fn photos_busy(app: &LightcraftApp) -> bool {
     }
 }
 
+/// The next queued export that hasn't been dropped, started now. One that adds to Apple Photos waits while
+/// another import holds Photos (its row says so; [`poll`] tries again). The library may have grown while it
+/// waited, so what it writes is checked against the originals as they are now. One that can't start says why,
+/// on screen for longer, and the one after it is tried.
 fn start_next(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.export_queue.retain(|q| !q.cancel.load(Ordering::Relaxed));
     while let Some(q) = app.export_queue.front() {

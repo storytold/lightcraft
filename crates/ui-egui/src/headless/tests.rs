@@ -2136,7 +2136,19 @@ fn a_waiting_export_waits_for_apple_photos() {
     assert_eq!(h.app.export_queue.len(), 1, "the Photos export still waits, it was not dropped");
     let rows = h.request("ui.inspect", json!({}), t)["result"]["activity"].clone();
     assert!(rows.to_string().contains("waiting for Apple Photos"), "{rows}");
-    // Photos free again: it starts and runs
+    // a later export, asked for while nothing runs and the Photos export waits, queues behind it (review of #4191):
+    // an ordinary one, and another to Photos, which takes no reservation of its own meanwhile
+    let later = h.app.run("app.export", json!({"ids": [ids[0]], "dir": "/lc-photos-c", "background": true, "longEdge": 64})).unwrap();
+    assert_eq!(later["queued"], 2, "{later}");
+    let photos_later =
+        h.app.run("app.export", json!({"ids": [ids[0]], "dir": "/lc-photos-d", "background": true, "longEdge": 64, "addToPhotos": true}));
+    assert_eq!(photos_later.as_ref().map(|r| r["queued"].clone()).ok(), Some(json!(3)), "{photos_later:?}");
+    for _ in 0..10 {
+        h.step();
+    }
+    assert!(h.app.export.is_none(), "nothing jumps the waiting Photos export");
+    assert!(!written.lock().unwrap().iter().any(|p| p.starts_with("/lc-photos-c/") || p.starts_with("/lc-photos-d/")), "nothing written yet");
+    // Photos free again: they start and run, in the order asked for
     drop(held);
     let t0 = Instant::now();
     while (h.app.export.is_some() || !h.app.export_queue.is_empty()) && t0.elapsed() < Duration::from_secs(60) {
@@ -2145,6 +2157,8 @@ fn a_waiting_export_waits_for_apple_photos() {
     assert!(h.app.export.is_none() && h.app.export_queue.is_empty());
     let w = written.lock().unwrap().clone();
     assert_eq!(w.iter().filter(|p| p.starts_with("/lc-photos-b/")).count(), 1, "{w:?}");
+    let at = |dir: &str| w.iter().position(|p| p.starts_with(dir)).unwrap_or_else(|| panic!("{dir} written: {w:?}"));
+    assert!(at("/lc-photos-b/") < at("/lc-photos-c/") && at("/lc-photos-c/") < at("/lc-photos-d/"), "in the order asked for: {w:?}");
 }
 
 /// Issue #236: the Export dialog's Add to Apple Photos is there on macOS only; there the

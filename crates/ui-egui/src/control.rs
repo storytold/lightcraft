@@ -618,7 +618,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false) && app.services.write_shared.is_some();
     // Add to Apple Photos: refused here, before anything is written, when it can't be done. An export that
     // waits behind a running one reserves Photos when it starts (the running one may hold it; issue #2965).
-    let after = if background && app.export.is_some() { None } else { Some(app.session.after_export(&opts)?) };
+    let after = if background && crate::export_task::exports_waiting_or_running(app) { None } else { Some(app.session.after_export(&opts)?) };
     let out = if background {
         let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
         crate::export_task::start(app, items, opts, to, after)?
