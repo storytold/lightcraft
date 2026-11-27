@@ -937,6 +937,13 @@ pub enum WhatsNewBlock {
 /// with a space, so a sentence isn't split, issue #4383), and inline Markdown is shown as text ([`plain_markdown`]).
 /// The `# ` title is left out (the dialog has its own).
 pub fn whats_new_blocks(src: &str) -> Vec<WhatsNewBlock> {
+    whats_new_blocks_in(src, &|line| line.to_string())
+}
+
+/// [`whats_new_blocks`] with each source line put through `translate` before the lines of a note are joined: the
+/// translation catalog holds the notes line by line, as the file wraps them, so each line is looked up whole
+/// before the note becomes one paragraph (review of #4385).
+pub fn whats_new_blocks_in(src: &str, translate: &dyn Fn(&str) -> String) -> Vec<WhatsNewBlock> {
     let mut out = Vec::new();
     // the bullet or paragraph being gathered (true: a bullet)
     let mut open: Option<(bool, String)> = None;
@@ -952,18 +959,18 @@ pub fn whats_new_blocks(src: &str) -> Vec<WhatsNewBlock> {
             close(&mut open, &mut out);
         } else if let Some(h) = l.strip_prefix("### ") {
             close(&mut open, &mut out);
-            out.push(WhatsNewBlock::Heading(plain_markdown(h)));
+            out.push(WhatsNewBlock::Heading(plain_markdown(&translate(h))));
         } else if let Some(h) = l.strip_prefix("## ") {
             close(&mut open, &mut out);
-            out.push(WhatsNewBlock::Section(plain_markdown(h)));
+            out.push(WhatsNewBlock::Section(plain_markdown(&translate(h))));
         } else if let Some(b) = l.strip_prefix("- ") {
             close(&mut open, &mut out);
-            open = Some((true, b.to_string()));
+            open = Some((true, translate(b)));
         } else if let Some((_, text)) = &mut open {
             text.push(' ');
-            text.push_str(l);
+            text.push_str(&translate(l));
         } else {
-            open = Some((false, l.to_string()));
+            open = Some((false, translate(l)));
         }
     }
     close(&mut open, &mut out);
@@ -1017,9 +1024,21 @@ fn plain_markdown(s: &str) -> String {
 fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::WhatsNew = dlg else { return };
     egui::ScrollArea::vertical().max_height(list_height(ui, 460.0)).auto_shrink([false, true]).show(ui, |ui| {
-        // parsed once: the notes are built in
-        static BLOCKS: std::sync::LazyLock<Vec<WhatsNewBlock>> = std::sync::LazyLock::new(|| whats_new_blocks(WHATS_NEW));
-        for block in BLOCKS.iter() {
+        // parsed once per UI language: the notes are built in, and translated line by line as the catalog holds them
+        static BLOCKS: std::sync::Mutex<Option<(crate::i18n::Locale, std::sync::Arc<Vec<WhatsNewBlock>>)>> = std::sync::Mutex::new(None);
+        let language = crate::i18n::language();
+        let blocks = {
+            let mut cached = BLOCKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match cached.as_ref() {
+                Some((l, b)) if *l == language => b.clone(),
+                _ => {
+                    let b = std::sync::Arc::new(whats_new_blocks_in(WHATS_NEW, &|l| crate::i18n::tr(l).to_string()));
+                    *cached = Some((language, b.clone()));
+                    b
+                }
+            }
+        };
+        for block in blocks.iter() {
             match block {
                 WhatsNewBlock::Heading(h) => {
                     ui.add_space(6.0);
