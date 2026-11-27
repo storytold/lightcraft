@@ -329,6 +329,41 @@ fn channel_curves_need_the_master_and_all_channel_curves() {
     assert!(["/curve/master", "/curve/red", "/curve/green", "/curve/blue"].iter().all(|p| all.pointer(p).is_some()), "{all}");
 }
 
+/// An older-process packet (written for this test, as old DNGs, sidecars and catalogs carry it) of
+/// a photo nobody edited: its sliders and raw sharpening at their old defaults and its curve named
+/// as the old default one. `extra`: more attributes.
+fn old_process_packet(curve_name: &str, sharpness: &str, extra: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+             crs:Exposure="0.00" crs:HighlightRecovery="0" crs:FillLight="0" crs:Shadows="5" crs:Brightness="+50"
+             crs:Contrast="+25" crs:Sharpness="{sharpness}" crs:ToneCurveName="{curve_name}" {extra}>
+            <crs:ToneCurve><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>70, 58</rdf:li><rdf:li>180, 190</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurve>
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// An untouched raw from an older process version keeps the look it is imported with (so it isn't
+/// taken for an edited one, whose thumbnails need the whole raw decoded); what was changed there
+/// still comes in, and so does a sharpening of 25 where it isn't that version's raw default.
+#[test]
+fn the_older_process_defaults_are_no_edit() {
+    let raw = DevelopSettings::for_raw(5000.0, 0.0);
+    let read = |base: &DevelopSettings, packet: String, target| apply_partial(base, &to_partial(&props(&packet), target), 1.0);
+    let untouched = old_process_packet("Medium Contrast", "25", "");
+    assert_eq!(read(&raw, untouched.clone(), Target::RawAbsolute), raw, "an untouched older-process raw is unchanged");
+    assert_eq!(read(&raw, untouched, Target::RawRelative), raw);
+    for changed in ["Custom", "Strong Contrast"] {
+        assert!(!read(&raw, old_process_packet(changed, "25", ""), Target::RawAbsolute).curve.master.is_empty(), "{changed}: the curve is read");
+    }
+    let sharpening = |packet: String, base: &DevelopSettings, target| read(base, packet, target).detail.sharpen_amount;
+    assert_eq!(sharpening(old_process_packet("Medium Contrast", "50", ""), &raw, Target::RawAbsolute), 50.0, "a changed amount is read");
+    let current = old_process_packet("Medium Contrast", "25", r#"crs:ProcessVersion="11.0" crs:Contrast2012="0""#);
+    assert_eq!(sharpening(current, &raw, Target::RawAbsolute), 25.0, "25 under the 2012 process is a choice");
+    let rendered = DevelopSettings::default();
+    assert_eq!(sharpening(old_process_packet("Medium Contrast", "25", ""), &rendered, Target::Rendered), 25.0, "a rendered file's old default was 0");
+}
+
 fn unmapped(x: &str) -> Vec<String> {
     to_partial_report(&props(x), None, Target::Any, 1.5).1
 }

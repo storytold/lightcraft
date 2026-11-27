@@ -326,9 +326,14 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "ParametricMidtoneSplit", "curve.split_mid");
     n(o, "ParametricHighlightSplit", "curve.split_highlights");
     n(o, "CurveRefineSaturation", "curve.refine_saturation");
+    // Under the older process versions an untouched photo's curve is the one named "Medium
+    // Contrast", as Contrast 25, Blacks 5 and Brightness 50 are its sliders' defaults (read
+    // relative to them above): it is no edit, and our rendering has its own base contrast, so it
+    // is not applied. A changed curve is named otherwise ("Custom", "Strong Contrast").
+    let old_default_curve = first(props, "crs:ToneCurveName").is_some_and(|n| n.eq_ignore_ascii_case("Medium Contrast"));
     if let Some(c) = curve(props, "crs:ToneCurve").filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
         // the older single curve, used when no 2012 curve is present
-        if !props.contains_key("crs:ToneCurvePV2012") {
+        if !props.contains_key("crs:ToneCurvePV2012") && !old_default_curve {
             put(o, "curve.master", c);
         }
     }
@@ -366,7 +371,13 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "SplitToningBalance", "grading.balance");
 
     // ---- Detail
-    n(o, "Sharpness", "detail.sharpen_amount");
+    // An older process version's raw sharpening default (25) is an untouched photo's, like its
+    // tone sliders' defaults above: the photo keeps our own raw default. (Rendered files defaulted
+    // to 0 there, and 25 under the 2012 process is a choice: both are read as written.)
+    let raw = matches!(target, Target::RawAbsolute | Target::RawRelative);
+    if !(raw && !pv2012 && num(props, "crs:Sharpness") == Some(25.0)) {
+        n(o, "Sharpness", "detail.sharpen_amount");
+    }
     n(o, "SharpenRadius", "detail.sharpen_radius");
     n(o, "SharpenDetail", "detail.sharpen_detail");
     n(o, "SharpenEdgeMasking", "detail.sharpen_masking");
