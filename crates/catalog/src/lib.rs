@@ -217,9 +217,12 @@ pub enum Op {
         id: PhotoId,
         file_name: String,
         source: Source,
-        /// The file's format when it changes too (Convert to DNG).
+        /// The file's format when it changes too (Convert to DNG or a fresh probe).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         format: Option<String>,
+        /// A fresh probe's media kind; omitted by older journals and path-only moves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<MediaKind>,
     },
     /// What a photo's file is now (after it changed on disk: Reload).
     SetContent {
@@ -249,6 +252,12 @@ pub enum Op {
     SetAsShotWb {
         id: PhotoId,
         wb: Option<(f64, f64)>,
+    },
+    /// Source white balance verified from the file when its camera and catalog metadata disagree.
+    SetSourceWb {
+        id: PhotoId,
+        wb: Option<(f64, f64)>,
+        relative: Option<bool>,
     },
     /// The name shown for a colour label (`None` = its colour's name).
     SetLabelName {
@@ -943,14 +952,18 @@ impl Catalog {
                 self.changes.now = Aspects::ALL;
                 self.touch(*id);
             }
-            Op::SetDeleted { .. } | Op::SetLocal { .. } | Op::SetContent { .. } | Op::SetEmbeddedLens { .. } | Op::SetAsShotWb { .. } => {
-                self.changes.now = Aspects::ALL
-            }
+            Op::SetDeleted { .. }
+            | Op::SetLocal { .. }
+            | Op::SetContent { .. }
+            | Op::SetEmbeddedLens { .. }
+            | Op::SetAsShotWb { .. }
+            | Op::SetSourceWb { .. } => self.changes.now = Aspects::ALL,
             Op::SetRating { .. } => self.changes.now = Aspects::RATING,
             Op::SetFlag { .. } => self.changes.now = Aspects::FLAG,
             Op::SetLabel { .. } => self.changes.now = Aspects::LABEL,
             Op::SetMeta { .. } => self.changes.now = Aspects::META,
             Op::SetCaptured { .. } => self.changes.now = Aspects::CAPTURED,
+            Op::Relink { kind: Some(_), .. } => self.changes.now = Aspects::ALL,
             Op::SetFile { .. } | Op::Relink { .. } => self.changes.now = Aspects::FILE,
             Op::SetAnalysis { .. } => self.changes.now = Aspects::ANALYSIS,
             Op::SetDevelop { .. } | Op::SetVersions { .. } | Op::SetHistory { .. } | Op::PushHistory { .. } | Op::SetHistoryCursor { .. } => {
@@ -1210,14 +1223,16 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
             }
-            Op::Relink { id, file_name, source, format } => {
+            Op::Relink { id, file_name, source, format, kind } => {
                 if let Some(p) = self.photos.get(&id) {
                     self.index.file_changed(id, file_path(&p.source), file_path(&source));
                 }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
-                let old = Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format };
+                let old_kind = kind.map(|k| std::mem::replace(&mut p.kind, k));
+                let old =
+                    Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format, kind: old_kind };
                 self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
                 old
             }
@@ -1243,6 +1258,13 @@ impl Catalog {
                 }
                 let p = self.photo_mut(id)?;
                 Op::SetAsShotWb { id, wb: std::mem::replace(&mut p.as_shot_wb, wb) }
+            }
+            Op::SetSourceWb { id, wb, relative } => {
+                if wb.is_some_and(|(t, tint)| !(t.is_finite() && tint.is_finite())) {
+                    return Err(CatalogError::Invalid("as-shot white balance is not a number".into()));
+                }
+                let p = self.photo_mut(id)?;
+                Op::SetSourceWb { id, wb: std::mem::replace(&mut p.as_shot_wb, wb), relative: std::mem::replace(&mut p.source_relative_wb, relative) }
             }
             Op::SetFile { id, file_name, source } => {
                 if file_name.trim().is_empty() {
@@ -1554,6 +1576,7 @@ fn changes_what_albums_test(op: &Op) -> bool {
         | Op::SetContent { .. }
         | Op::SetEmbeddedLens { .. }
         | Op::SetAsShotWb { .. }
+        | Op::SetSourceWb { .. }
         | Op::SetRating { .. }
         | Op::SetFlag { .. }
         | Op::SetLabel { .. }

@@ -241,7 +241,7 @@ impl DecodedSource {
 /// catalog still holds but the decode no longer finds (the original was replaced) is not restored. A database profile
 /// is never taken from the decode, so a cached render, a fresh decode and the Optics panel all use the one profile the photo holds, and a
 /// change to it (a database update looked up again, `cmd::lens_refresh`) changes the render keys
-/// ([`super::quick::lens_key`]).
+/// ([`super::quick::source_metadata_key`]).
 pub(crate) fn pinned_lens(
     decoded: Option<lightcraft_develop::EmbeddedLens>,
     catalog: Option<lightcraft_develop::EmbeddedLens>,

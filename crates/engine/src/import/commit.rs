@@ -227,7 +227,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Promote(id, fresh) => {
                 // the file was replaced since it was browsed: the record takes what it is now before it joins the library
                 if let Some(info) = &fresh {
-                    crate::cmd::convert::reload_ops(&s.catalog, id, info, &mut ops, &mut Vec::new());
+                    let targets = s.catalog.photos().filter(|p| p.id == id || p.copy_of == Some(id)).map(|p| p.id);
+                    crate::cmd::convert::reload_ops(&s.catalog, id, info, &mut ops, &mut Vec::new(), targets, |target| target == id);
                 }
                 if s.catalog.photo(id).is_some_and(|p| p.local) {
                     ops.push(Op::SetLocal { id, local: false });

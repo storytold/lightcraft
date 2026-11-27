@@ -1554,6 +1554,7 @@ fn convert_to_dng_is_verified_and_atomic() {
             file_name: "shot.dng".into(),
             source: lightcraft_catalog::Source::File { path: path.clone() },
             format: Some("NEF".into()),
+            kind: None,
         })
         .unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
