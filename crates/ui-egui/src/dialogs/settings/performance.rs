@@ -9,7 +9,7 @@ use super::{
 
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
-    heading(ui, t, crate::i18n::tr("Rendering"));
+    heading(ui, t, "Rendering");
     #[cfg(target_os = "windows")]
     check(ui, "settings.composeWindow", &mut app.ui.settings.compose_window, "Prevent G-SYNC/FreeSync flicker (applies at next launch)");
     check(ui, "settings.gpu", &mut app.ui.settings.gpu, "Use the GPU for rendering");
@@ -66,7 +66,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             "Remove Hot Pixels (Detail) leaves a raw unchanged when more than this share of its photosites would be replaced: such a photo doesn't look like hot pixels on a sensor.",
         ),
     );
-    heading(ui, t, crate::i18n::tr("Preview cache"));
+    heading(ui, t, "Preview cache");
     let cur = app.session.cache_mb;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
         let gb = lightcraft_engine::media::default_disk_cache_bytes(app.session.catalog.len()).div_ceil(1 << 30);
@@ -103,7 +103,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         }
     });
     background_prep(app, ui, t);
-    heading(ui, t, crate::i18n::tr("Local folders"));
+    heading(ui, t, "Local folders");
     row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
         let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
         let mut v = app.session.forget_local_days;
@@ -120,13 +120,66 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     );
     #[cfg(not(target_arch = "wasm32"))]
     smart_previews(app, ui, t);
+    ai_masks(app, ui, t);
+}
+
+/// Where AI masks (SAM 3) run: the choice (`segment.settings {runOn}`), what they run on, why not on
+/// the GPU, and how long the last photo took (`segment.model.status` → `backend`), as Settings ▸
+/// Faces shows its models' processor. The same lines whatever the state, so nothing moves when the
+/// model loads.
+fn ai_masks(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        return;
+    }
+    heading(ui, t, "AI masks");
+    let current = app.session.segmenter.run_on().name();
+    let mut run_on = current;
+    if row(ui, t, "Run on", |ui| choices(ui, "settingsAiMasksRunOn", &[("auto", "Automatic (GPU when available)"), ("cpu", "CPU")], &mut run_on))
+        && let Err(e) = app.run("segment.settings", json!({"runOn": run_on}))
+    {
+        app.toast(ui.ctx(), e);
+    }
+    let g = &app.session.segmenter;
+    let b = g.backend();
+    let device = if g.remote_endpoint().is_some() {
+        crate::i18n::tr("Remote worker").to_string()
+    } else {
+        b["device"].as_str().map_or_else(|| crate::i18n::tr("Not loaded yet").to_string(), str::to_string)
+    };
+    let text = match b["fallback"].as_str() {
+        Some(why) if g.remote_endpoint().is_none() => format!("{device} ({why})"),
+        _ => device,
+    };
+    row(ui, t, "Device", |ui| {
+        let r = ui.add(egui::Label::new(RichText::new(text.clone()).color(t.text)).truncate()).on_hover_text(text);
+        register(ui, "settings:aiMasksDevice", r.rect);
+    });
+    let took = match (b["analyzeMs"].as_u64().or(b["encodeMs"].as_u64()), b["encodeMs"].as_u64()) {
+        (Some(all), Some(encoder)) => {
+            crate::i18n::tr_format!("{all:.1} s, image encoder {encoder:.1} s", all = all as f64 / 1000.0, encoder = encoder as f64 / 1000.0)
+        }
+        _ => "—".to_string(),
+    };
+    row(ui, t, "Last photo", |ui| {
+        let r = ui.label(RichText::new(took).color(t.text));
+        register(ui, "settings:aiMasksTime", r.rect);
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(if cfg!(target_os = "macos") {
+            "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer."
+        } else {
+            "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer."
+        }),
+    );
 }
 
 /// Settings ▸ Performance ▸ Prepare photos in the background (notes 47 and 48): per mode, what
 /// is made ready before the user gets to it (`prefs.backgroundPrep`), app-wide or for this library.
 fn background_prep(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::prep::{Mode, Scope};
-    heading(ui, t, crate::i18n::tr("Prepare photos in the background"));
+    heading(ui, t, "Prepare photos in the background");
     hint(
         ui,
         t,
@@ -226,7 +279,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if loc.is_null() {
         return;
     }
-    heading(ui, t, crate::i18n::tr("Smart previews"));
+    heading(ui, t, "Smart previews");
     let path = loc["path"].as_str().unwrap_or_default().to_string();
     let available = loc["available"].as_bool().unwrap_or(true);
     let custom = loc["custom"].as_bool().unwrap_or(false);

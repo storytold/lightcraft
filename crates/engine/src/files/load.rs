@@ -53,9 +53,10 @@ pub fn load_vec_pair(
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
-/// crop, and `factor` × `factor` blocks averaged into one pixel when the plain one was binned (plain means: the
-/// plain development's clip mask tells highlight reconstruction which of them held clipped samples). `None` when
-/// the product is missing, damaged, made from something else or not the size of this raw's active area.
+/// crop, and `factor` × `factor` blocks averaged into one pixel when the plain one was binned. Unbinned twins are
+/// already RGB (cell-protected by the product), so highlight reconstruction on them is value-based; binned twins
+/// still share the block clip mask with the plain development. `None` when the product is missing, damaged, made
+/// from something else or not the size of this raw's active area.
 fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, factor: usize) -> Option<Rgb32f> {
     use lightcraft_denoise::product::{self, Window};
     let a = raw.active_area;
@@ -176,11 +177,15 @@ fn load_bytes_now(
             None => None,
         };
         let factor = if binned.is_some() { bin.unwrap_or(1) } else { 1 };
+        let use_twin_mask = binned.is_some();
         let (img, clip_mask) = match binned {
             Some((img, mask)) => (img, Some(mask)),
             None => {
                 let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                (raw.develop(method).map_err(|e| e.to_string())?, None)
+                // demosaiced white balanced (the as-shot white the colour model below applies), camera RGB after it
+                // (demosaiced on the sensor's own scale, neutral edges get coloured outlines), and which channels
+                // were interpolated from clipped samples (issue #1328)
+                raw.take_develop_balanced_masked(method, t.wb, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?
             }
         };
         // the same development from the denoised mosaic, when the photo has been denoised
@@ -199,12 +204,15 @@ fn load_bytes_now(
         };
         // camera RGB → what the pipeline takes: clipped highlights rebuilt, white balance and the colour model applied,
         // fitted to `max_edge` and upright (the same for the plain and the denoised picture)
-        let finish = |mut img: Rgb32f| {
+        // Unbinned denoised twins are already RGB (the product's cell-protected representation). The
+        // ordinary demosaic's sensor mask does not describe them; applying it would put Bayer-pattern
+        // colour into a uniform protected cell. Binned twins keep the existing block mask.
+        let finish = |mut img: Rgb32f, use_mask: bool| {
             let mut stages = vec![("develop", t0.elapsed())];
             stages.push(("transform", t0.elapsed()));
-            match &clip_mask {
-                Some(mask) => colour.rebuild_highlights_masked(&mut img, mask),
-                None => colour.rebuild_highlights(&mut img),
+            match (use_mask, &clip_mask) {
+                (true, Some(mask)) => colour.rebuild_highlights_masked(&mut img, mask),
+                _ => colour.rebuild_highlights(&mut img),
             }
             stages.push(("highlights", t0.elapsed()));
             colour.apply(&mut img);
@@ -216,7 +224,7 @@ fn load_bytes_now(
             stages.push(("orient", t0.elapsed()));
             (img, stages)
         };
-        let (img, stages) = finish(img);
+        let (img, stages) = finish(img, true);
         if lightcraft_pipeline::profiling() {
             let mut prev = std::time::Duration::ZERO;
             let parts: Vec<String> = stages
@@ -229,7 +237,7 @@ fn load_bytes_now(
                 .collect();
             eprintln!("[profile] raw source {}×{} (max {max_edge}, ms after decode): {}", img.width, img.height, parts.join(", "));
         }
-        let twin = twin.map(|picture| finish(picture).0);
+        let twin = twin.map(|picture| finish(picture, use_twin_mask).0);
         // White balance re-evaluates the file's own colour model (when it has one and no file-local look matrix sits
         // on top of it). A model's measured matrices never do: they only give the Kelvin scale its numbers, and the
         // picture is adapted from the as-shot white as every fitted look is (so settings from before that scale

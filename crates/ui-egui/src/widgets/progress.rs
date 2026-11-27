@@ -9,8 +9,9 @@
 //! ```
 //!
 //! A bar announces itself to screen readers as a progress indicator with its percentage. Motion
-//! asks for repaints only while it is on screen. There is no reduced-motion setting in the app,
-//! so the motion is kept slow and small: one gentle sweep, one slow turning arc.
+//! asks for repaints only while it is on screen. The motion is kept slow and small (one gentle
+//! sweep, one slow turning arc), and with Settings ▸ Interface ▸ Reduce motion on ([`crate::motion`])
+//! it stands still: the sweeping segment stays at the bar's left end and the arc becomes a dot.
 
 use std::f32::consts::TAU;
 
@@ -129,13 +130,14 @@ impl Progress {
         let fill = match self.fraction {
             Some(f) => Rect::from_min_size(inner.min, vec2(inner.width() * f, inner.height())),
             None => {
-                // a short bar sweeping across and back, eased so it slows at the ends
-                let phase = (ui.input(|i| i.time) / SWEEP_SECONDS).fract() as f32;
-                let eased = 0.5 - 0.5 * (phase * TAU).cos();
-                let len = inner.width() * 0.3;
-                let x = inner.left() + (inner.width() - len) * eased;
-                ui.ctx().request_repaint_after(FRAME);
-                Rect::from_min_size(pos2(x, inner.top()), vec2(len, inner.height()))
+                // a short bar sweeping across and back, eased so it slows at the ends (still when
+                // motion is reduced)
+                let reduced = crate::motion::reduced(ui.ctx());
+                let (x, len) = sweep_span(inner.width(), ui.input(|i| i.time), reduced);
+                if !reduced {
+                    ui.ctx().request_repaint_after(FRAME);
+                }
+                Rect::from_min_size(pos2(inner.left() + x, inner.top()), vec2(len, inner.height()))
             }
         };
         if fill.width() > 0.0 {
@@ -155,6 +157,18 @@ impl Progress {
     }
 }
 
+/// The sweeping segment of an indeterminate bar `width` wide at `time` seconds: its offset from the
+/// bar's left edge and its length. With reduced motion it stands at the left end.
+pub(crate) fn sweep_span(width: f32, time: f64, reduced: bool) -> (f32, f32) {
+    let len = width * 0.3;
+    if reduced {
+        return (0.0, len);
+    }
+    let phase = (time / SWEEP_SECONDS).fract() as f32;
+    let eased = 0.5 - 0.5 * (phase * TAU).cos();
+    ((width - len) * eased, len)
+}
+
 /// The arc a spinner draws at `time` seconds: points on a circle of `radius` around `center`,
 /// covering three quarters of the turn and rotating once per [`TURN_SECONDS`].
 fn arc_points(center: Pos2, radius: f32, time: f64) -> Vec<Pos2> {
@@ -168,10 +182,15 @@ fn arc_points(center: Pos2, radius: f32, time: f64) -> Vec<Pos2> {
         .collect()
 }
 
-/// Draw a spinner of `size` points centred in `rect`, in `color`, at `time` seconds. Callers that
-/// draw by hand (a busy button) use this; it asks for no repaint itself.
-pub fn paint_spinner(p: &egui::Painter, rect: Rect, color: Color32, time: f64) {
+/// Draw a spinner of `size` points centred in `rect`, in `color`, at `time` seconds; with `reduced`
+/// motion a still dot of the same room. Callers that draw by hand (a busy button) use this; it asks
+/// for no repaint itself.
+pub fn paint_spinner(p: &egui::Painter, rect: Rect, color: Color32, time: f64, reduced: bool) {
     let size = rect.width().min(rect.height());
+    if reduced {
+        p.circle_filled(rect.center(), size * 0.18, color);
+        return;
+    }
     let width = (size / 8.0).max(1.5);
     let radius = ((size - width) / 2.0).max(0.5);
     p.add(Shape::line(arc_points(rect.center(), radius, time), Stroke::new(width, color)));
@@ -184,8 +203,11 @@ pub fn spinner(ui: &mut Ui, size: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     resp.widget_info(|| egui::WidgetInfo::new(egui::Role::ProgressIndicator));
     if ui.is_rect_visible(rect) {
-        paint_spinner(ui.painter(), rect, t.text_dim, ui.input(|i| i.time));
-        ui.ctx().request_repaint_after(FRAME);
+        let reduced = crate::motion::reduced(ui.ctx());
+        paint_spinner(ui.painter(), rect, t.text_dim, ui.input(|i| i.time), reduced);
+        if !reduced {
+            ui.ctx().request_repaint_after(FRAME);
+        }
     }
     resp
 }

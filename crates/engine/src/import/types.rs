@@ -67,6 +67,10 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// A duplicate by content is read as a new file is, its XMP sidecar included: the Lightroom
+    /// import makes a record of its own from it ([`Duplicate::file`], #2589). Any other import
+    /// skips it without looking up its sidecar (a round trip per name on a network share, #2954).
+    pub read_duplicates: bool,
     /// A batch-edit recipe: develop control id / value pairs (e.g. `light.exposure` → 0.5),
     /// applied to every imported photo *after* its XMP sidecar, camera default and import preset,
     /// as one more History step (`Import adjustments`). Only the named controls change; the recipe
@@ -137,8 +141,19 @@ pub struct ImportCandidate {
     /// `"path"` (already in the library), `"content"` (same bytes in the library or earlier in this
     /// list): skipped by the import.
     pub duplicate: Option<String>,
-    /// The photo that already has it.
+    /// The photo that already has it. On a browsed candidate (`local`): its record.
     pub existing: Option<u64>,
+    /// The file was only browsed in Local: the library has a record of it (`existing`) that is not in
+    /// the library, so it is not a duplicate and importing it promotes that record.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
+    /// On the first `"content"` duplicate that is a file of its own, when no library photo has its
+    /// bytes but a browsed candidate (`local`) earlier in this list does: the path of that browsed
+    /// candidate. Adding in place the browsed photo is the one brought in, and this is a copy in the
+    /// source; copying and moving leave the browsed photo out (the engine would add it where it is),
+    /// and this file is what they bring in instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browsed_twin: Option<String>,
     /// Not readable.
     pub error: Option<String>,
     /// A raw variant that can't be decoded yet (why): it imports as preview only.
@@ -171,6 +186,11 @@ pub struct FileFacts {
     /// The capture time a file import gives it: the file's, else its XMP sidecar's, else the
     /// file's modification time.
     pub captured: Option<String>,
+    /// The file's own orientation, when it states one ([`crate::media::ProbeInfo::orientation`]): it turns what its
+    /// sidecar's regions were drawn on, the photo as stored, upright (#2674).
+    pub orientation: Option<lightcraft_geom::Orientation>,
+    /// Its XMP sidecar (or a raw's embedded XMP), which a file import merges into the record.
+    pub sidecar: Option<crate::sidecar::SidecarData>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
