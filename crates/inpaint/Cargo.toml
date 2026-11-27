@@ -9,6 +9,7 @@ description = "Content-aware hole filling: PatchMatch-based patch completion and
 workspace = true
 
 [dependencies]
+craft-develop = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }

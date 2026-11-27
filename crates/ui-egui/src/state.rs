@@ -33,9 +33,6 @@ pub struct UiState {
     pub docking_version: u32,
     #[serde(default = "crate::i18n::default_language")]
     pub language: crate::i18n::Locale,
-    /// The Build Previews run last announced (its identity, finished?).
-    #[serde(skip)]
-    pub preview_build_seen: Option<(usize, bool)>,
     /// Saving the library is failing (announced with a toast; the top bar shows a warning until
     /// a later save succeeds).
     #[serde(skip)]
@@ -50,6 +47,26 @@ pub struct UiState {
     /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
     #[serde(skip)]
     pub right_hidden: RightPanel,
+    /// The panel F8 just showed again, until [`UiState::note_right`] sees it: a tool coming back this way still closes
+    /// to the panel before it, while a tool opened any other way on a hidden column closes to the hidden column.
+    #[serde(skip)]
+    pub right_shown_by_f8: Option<RightPanel>,
+    /// The panel on show before a tool panel ([`RightPanel::is_tool`]) took its place, put back
+    /// when the tool closes ([`RightPanel::None`]: the panel was hidden, and stays hidden).
+    #[serde(skip)]
+    pub tool_return: Option<RightPanel>,
+    /// The panels toggles (a panel key or button: I, M, R, Q…) opened, each with what the right column showed before
+    /// it and that one's [`UiState::tool_return`], the latest last: toggling the panel on show off puts back exactly
+    /// that, closed included (test notes 2026-10-24 note 21), and the one below it is then on show with its own
+    /// record (Edit → I → K → K → I = Edit). Forgotten once another panel is shown (not when F8 hides the panel and
+    /// shows it again). At most [`TOGGLE_HISTORY`] deep.
+    #[serde(skip)]
+    /// Each record also holds the on-canvas tool of the panel it replaced (Masking's Brush, Remove's Heal or Clone),
+    /// put back with that panel (`None`: a tool opened by a command, which leaves the tool as it is).
+    pub toggle_return: Vec<(RightPanel, RightPanel, Option<RightPanel>, Option<String>)>,
+    /// The panel [`UiState::note_right`] last saw.
+    #[serde(skip)]
+    pub right_seen: RightPanel,
     /// Widths of the left sidebar and of the right panel in points (dragging their inner edge
     /// resizes them; within [`LEFT_WIDTH`] / [`RIGHT_WIDTH`]).
     pub left_width: f32,
@@ -90,9 +107,23 @@ pub struct UiState {
     #[serde(skip)]
     pub proof_intent: lightcraft_engine::proof::ProofIntent,
     pub proof_paper_ink: bool,
-    /// Masking: show the selected mask as a rendered overlay (O), how (`MaskView` name, ⇧O cycles),
-    /// in which colour and opacity (0..100, colour views), and whether pins are drawn.
+    /// Masking: the selected mask's overlay switched on to stay (O, the panel's eye: "Always"),
+    /// how it is drawn (`MaskView` name, ⇧O cycles), in which colour and opacity (0..100, colour
+    /// views), and whether pins are drawn. Without it the overlay shows only by the one rule of
+    /// [`crate::panels::detail::overlay_mask`]: a mask without settings yet, or the mask whose pin
+    /// or component row the pointer is on. Not kept between sessions: the photo opens without it.
+    #[serde(skip)]
     pub mask_overlay: bool,
+    /// The mask whose pin or component row the pointer is on, this frame and the last (the overlay
+    /// shows it), with the photo it is on: a mask of the same id on another photo is another mask.
+    /// Not the mask's own row: there its effect is judged.
+    #[serde(skip)]
+    pub mask_hover: Option<(lightcraft_engine::catalog::PhotoId, u32)>,
+    #[serde(skip)]
+    pub mask_hover_prev: Option<(lightcraft_engine::catalog::PhotoId, u32)>,
+    /// The masks (of their photos) whose automatic overlay O hid, each until O shows it again.
+    #[serde(skip)]
+    pub mask_overlay_hidden: Vec<(lightcraft_engine::catalog::PhotoId, u32)>,
     pub mask_overlay_mode: String,
     pub mask_overlay_color: [u8; 3],
     pub mask_overlay_opacity: f32,
@@ -143,6 +174,9 @@ pub struct UiState {
     /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
     #[serde(skip)]
     pub cull_burst: Option<(f32, f32)>,
+    /// Whether Assisted Culling stacked its bursts the last time it was confirmed (this session).
+    #[serde(skip)]
+    pub cull_stack: bool,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -238,8 +272,15 @@ pub struct UiState {
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
     /// Selected curve channel in the Curve flyout.
     pub curve_channel: String,
-    /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
+    /// The colour band shown in the Color Mixer's Color mode (one of `MIXER_BANDS`).
     pub mixer_mode: String,
+    /// The Color Mixer's tab: "mixer" | "point" (Point Color). Remembered.
+    pub mixer_tab: String,
+    /// What the Mixer adjusts by: "hsl" (eight sliders per Hue / Saturation / Luminance) |
+    /// "color" (one colour at a time). Remembered; HSL by default.
+    pub mixer_adjust: String,
+    /// The HSL group shown: "hue" | "sat" | "lum" | "all". Remembered.
+    pub mixer_group: String,
     /// Selected colour grading tab: "3way" | "shadows" | "midtones" | "highlights".
     pub grading_mode: String,
     /// Colour grading wheels (shadows, midtones, highlights) hidden for viewing by their eye, and
@@ -387,6 +428,112 @@ pub struct UiState {
     pub print: crate::print_view::PrintUi,
 }
 
+/// How many panel toggles [`UiState::toggle_return`] remembers (pressing I and K in turn would grow it without end).
+pub const TOGGLE_HISTORY: usize = 16;
+
+impl UiState {
+    /// Notes the panel on show: a tool panel opened from another panel (or from none) remembers
+    /// that one, to put it back when the tool closes; any other panel forgets it.
+    pub fn note_right(&mut self) {
+        self.note_right_from(None);
+    }
+
+    /// [`UiState::note_right`], told which panel a toggle ([`UiState::toggle_panel`]) just opened (its record is
+    /// on the history already).
+    fn note_right_from(&mut self, toggled: Option<RightPanel>) {
+        let shown_by_f8 = self.right_shown_by_f8.take();
+        if self.right == self.right_seen {
+            return;
+        }
+        // F8 showing a tool it hid: the panel before that tool still holds (`None` is F8's hidden column, not
+        // what the tool came from). A tool opened another way on the hidden column came from the hidden column.
+        let back_from_f8 = self.right_seen == RightPanel::None && shown_by_f8 == Some(self.right);
+        // A tool opened by a command, not a toggle (B, a mask tool from Crop…), is recorded like a toggle: closing
+        // it shows exactly what the column showed before (Info → Crop → B → Done = Crop), and the records below it
+        // stay (Crop closed = Info, I = Edit). That holds when the history already ends with this tool: F8 hiding it
+        // kept its record, and opening it again by a command on the hidden column (Info → Remove → F8 → Visualize
+        // Spots) closes it back to the hidden column, not to Info.
+        let opened_directly = self.right.is_tool() && !back_from_f8 && toggled != Some(self.right);
+        if opened_directly {
+            if self.toggle_return.len() >= TOGGLE_HISTORY {
+                self.toggle_return.remove(0);
+            }
+            self.toggle_return.push((self.right, self.right_seen, self.tool_return, None));
+        }
+        // F8 hiding the panel a toggle opened keeps its record, for F8 showing it again
+        let f8_hid = |opened: RightPanel| self.right == RightPanel::None && self.right_hidden == opened;
+        if !opened_directly && self.toggle_return.last().is_some_and(|&(opened, ..)| opened != self.right && !f8_hid(opened)) {
+            self.toggle_return.clear();
+        }
+        if self.right.is_tool() {
+            if !self.right_seen.is_tool() && !back_from_f8 {
+                self.tool_return = Some(self.right_seen);
+            }
+        } else if !(self.right == RightPanel::None && self.right_seen.is_tool() && self.right_hidden == self.right_seen) {
+            // any panel but F8 hiding the tool on show forgets it
+            self.tool_return = None;
+        }
+        self.right_seen = self.right;
+    }
+
+    /// The panel to show when the tool panel on show closes: the one shown before it, or none
+    /// when the panel was hidden (Edit when nothing is known).
+    pub fn leave_tool(&mut self) -> RightPanel {
+        self.note_right();
+        if let Some(back) = self.untoggle() {
+            return back;
+        }
+        let back = self.tool_return.take().unwrap_or(RightPanel::Edit);
+        if back.is_tool() { RightPanel::Edit } else { back }
+    }
+
+    /// A panel toggle (`panel.info`, `panel.masking`…) for `p`: when `p` is on show (`exposed`: not hidden behind
+    /// another dock tab) it goes and the right column shows exactly what it showed before the toggle opened it, or
+    /// stays closed when it was (note 21); otherwise `p` comes up and what was there is remembered. Returns whether
+    /// `p` is now on.
+    pub fn toggle_panel(&mut self, p: RightPanel, exposed: bool) -> bool {
+        self.note_right();
+        if self.right == p && exposed {
+            self.right = match self.untoggle() {
+                Some(back) => back,
+                None if p.is_tool() => self.leave_tool(),
+                None => RightPanel::None,
+            };
+            self.note_right();
+            false
+        } else {
+            // (a column hidden behind another dock tab comes back hidden, with no on-canvas tool: what it held
+            // wasn't on show)
+            let saved =
+                if exposed { (p, self.right, self.tool_return, Some(self.tool.clone())) } else { (p, RightPanel::None, self.tool_return, None) };
+            if self.toggle_return.len() >= TOGGLE_HISTORY {
+                self.toggle_return.remove(0);
+            }
+            // (on the history before `note_right` sees `p`: the panel it replaced keeps its own record below it)
+            self.toggle_return.push(saved);
+            self.right = p;
+            self.note_right_from(Some(p));
+            true
+        }
+    }
+
+    /// What the toggle that opened the panel on show replaced (see [`UiState::toggle_panel`]), with its own tool
+    /// memory and on-canvas tool put back, or `None` when that panel wasn't opened by a toggle.
+    fn untoggle(&mut self) -> Option<RightPanel> {
+        let &(opened, before, tool_return, _) = self.toggle_return.last()?;
+        if opened != self.right {
+            return None;
+        }
+        if let Some((.., Some(tool))) = self.toggle_return.pop() {
+            self.tool = tool;
+        }
+        self.tool_return = tool_return;
+        // seen already: `note_right` must not take the panel being left for the one this came back from
+        self.right_seen = before;
+        Some(before)
+    }
+}
+
 impl Default for UiState {
     /// Initialize the library and import review sizes as independent app preferences.
     fn default() -> Self {
@@ -395,7 +542,6 @@ impl Default for UiState {
             docking: None,
             docking_version: crate::docking::DOCKING_VERSION,
             language: crate::i18n::default_language(),
-            preview_build_seen: None,
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             luminance_map_restore: None,
@@ -405,6 +551,10 @@ impl Default for UiState {
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
             right_hidden: RightPanel::None,
+            tool_return: None,
+            toggle_return: Vec::new(),
+            right_shown_by_f8: None,
+            right_seen: RightPanel::Edit,
             presets: false,
             preset_thumbs: false,
             filmstrip: true,
@@ -425,7 +575,10 @@ impl Default for UiState {
             proof_profile: None,
             proof_intent: lightcraft_engine::proof::ProofIntent::Perceptual,
             proof_paper_ink: false,
-            mask_overlay: true,
+            mask_overlay: false,
+            mask_hover: None,
+            mask_hover_prev: None,
+            mask_overlay_hidden: Vec::new(),
             mask_overlay_mode: "color".into(),
             mask_overlay_color: [230, 30, 40],
             mask_overlay_opacity: 50.0,
@@ -446,6 +599,7 @@ impl Default for UiState {
             person_from: None,
             last_person: None,
             cull_burst: None,
+            cull_stack: false,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
@@ -477,7 +631,10 @@ impl Default for UiState {
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
-            mixer_mode: "hue".into(),
+            mixer_mode: "red".into(),
+            mixer_tab: "mixer".into(),
+            mixer_adjust: "hsl".into(),
+            mixer_group: "hue".into(),
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
@@ -541,6 +698,11 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Whether photos, an album, a sidebar section or a keyword are being dragged.
+    pub fn drag_active(&self) -> bool {
+        self.dragging_photos.is_some() || self.dragging_album.is_some() || self.dragging_section.is_some() || self.dragging_keyword.is_some()
+    }
+
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
     pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
         match self.grading_hidden {

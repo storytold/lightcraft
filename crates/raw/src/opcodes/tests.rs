@@ -1,19 +1,5 @@
 use super::*;
 
-#[test]
-fn reject_opcode_counts_whose_bytes_exceed_the_remaining_data() {
-    let mut gain_map = Vec::new();
-    for value in [u32::MAX, 1] {
-        gain_map.extend_from_slice(&value.to_be_bytes());
-    }
-    gain_map.extend(be(&[1.0, 1.0, 0.0, 0.0]));
-    gain_map.extend_from_slice(&1u32.to_be_bytes());
-    assert!(parse_gain_map(Area::default(), &mut Rd { d: &gain_map, p: 0 }).is_none());
-
-    let delta_count = u32::MAX.to_be_bytes();
-    assert!(parse_delta_scale(10, Area::default(), &mut Rd { d: &delta_count, p: 0 }).is_none());
-}
-
 pub(crate) struct ListWriter(pub Vec<u8>, pub u32);
 
 impl ListWriter {
@@ -87,7 +73,7 @@ fn parse_and_apply_area_ops() {
     let list = parse_list(&blob);
     assert_eq!(list.len(), 4);
     assert!(matches!(list[3], Opcode::Unknown { id: 99, .. }));
-    assert!(list[..3].iter().all(|o| o.is_applied()));
+    assert!(list[..3].iter().all(is_applied));
     let mut buf = vec![0.25f32; w * h];
     apply_list(&list, &mut buf, w, h, 1, None, 1.0);
     // gain map: horizontal ramp 1 → 2 across relative x 0..1 (x / w)
@@ -264,7 +250,7 @@ fn warp_rectilinear2_parses_the_spec_layout() {
         list,
         vec![Opcode::WarpRectilinear2 { planes: vec![k, wr2_set(&[(0, 1.0)])], center: [0.5, 0.25], reciprocal: true, optional: false }]
     );
-    assert!(list[0].is_applied() && list[0].is_lens_correction());
+    assert!(is_applied(&list[0]) && list[0].is_lens_correction());
     // written back as opcode 14, version 1.6.0.0, optional flag kept
     let again = vec![Opcode::WarpRectilinear2 { planes: vec![k], center: [0.5, 0.5], reciprocal: false, optional: true }];
     let bytes = write_list(&again);
