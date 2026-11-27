@@ -94,6 +94,9 @@ pub struct RenderResult {
     /// The result as a texture on the window's GPU device ([`RenderJob::on_screen`]); `rendered`
     /// then holds its histogram and an empty image.
     pub frame: Option<ScreenFrame>,
+    /// A slide job's result: the size in pixels of the photo's render the slide was composed
+    /// from, which sets where the slide's layout put the photo ([`RenderJob::with_slide`]).
+    pub slide_photo: Option<[usize; 2]>,
 }
 
 impl RenderJob {
@@ -219,6 +222,7 @@ impl RenderJob {
             quick: None,
             display: None,
             frame: None,
+            slide_photo: None,
         }
     }
 
@@ -238,6 +242,7 @@ impl RenderJob {
         let slide = self.slide.clone();
         let mut r = self.run_photo();
         if let (Some(slide), Ok(rendered)) = (slide, r.rendered.as_mut()) {
+            r.slide_photo = Some([rendered.image.width, rendered.image.height]);
             rendered.image = slide.compose(&rendered.image);
             rendered.deep = None;
         }
@@ -294,6 +299,7 @@ impl RenderJob {
                 quick: Some(QuickSource::Cached),
                 display: None,
                 frame: None,
+                slide_photo: None,
             };
         }
         if let Some((cache, key)) = &self.cache
@@ -313,6 +319,7 @@ impl RenderJob {
                 quick: None,
                 display: None,
                 frame: None,
+                slide_photo: None,
             };
         }
         // a face tile of an unedited raw: cut from the camera's embedded preview when it is big enough
@@ -334,6 +341,7 @@ impl RenderJob {
                 quick: None,
                 display: None,
                 frame: None,
+                slide_photo: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
@@ -381,6 +389,7 @@ impl RenderJob {
                         quick: None,
                         display: None,
                         frame: None,
+                        slide_photo: None,
                     };
                 }
                 let pixels_needed =
@@ -405,6 +414,7 @@ impl RenderJob {
                             quick: None,
                             display: None,
                             frame: Some(frame),
+                            slide_photo: None,
                         };
                     }
                     Some(OnScreen::Pixels(r)) => (r, None),
@@ -465,6 +475,7 @@ impl RenderJob {
                     quick: None,
                     display,
                     frame: None,
+                    slide_photo: None,
                 }
             }
             Err(e) => self.failed(e),

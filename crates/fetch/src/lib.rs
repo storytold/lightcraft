@@ -51,12 +51,18 @@ const MAX_REDIRECTS: usize = 8;
 
 /// The mirrors to try, in order: `env`'s (base URLs separated by commas, spaces or newlines), then
 /// the mirrors file's (one base URL per line, `#` comments), then `defaults`; duplicates and
-/// unusable URLs dropped, at most 16.
+/// unusable URLs dropped, at most 16. A mirror can be `http(s)://`, `file://<absolute path>` or an
+/// absolute folder path: files from a local folder are copied (then checked like a download).
 pub fn mirrors(env: Option<&str>, file: Option<&Path>, defaults: &[&str]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut add = |s: &str| {
-        let s = s.trim().trim_end_matches('/');
-        if !s.is_empty() && Url::parse(s).is_ok() && !out.iter().any(|m| m == s) && out.len() < MAX_MIRRORS {
+        let s = s.trim();
+        // a local folder (an absolute path) is the same as its `file://` URL
+        let s = if Path::new(s).is_absolute() { format!("file://{}", s.replace('%', "%25")) } else { s.to_string() };
+        let s = keep_root(s.trim_end_matches('/'));
+        let s = s.as_str();
+        let usable = local_path(s).is_some() || Url::parse(s).is_ok();
+        if !s.is_empty() && usable && !out.iter().any(|m| m == s) && out.len() < MAX_MIRRORS {
             out.push(s.to_string());
         }
     };
@@ -197,13 +203,13 @@ fn download_source(
         let mut errors = Vec::new();
         let mut ok = false;
         'mirrors: for m in mirrors {
-            let url = if exact_urls { m.clone() } else { format!("{m}/{}", f.name) };
+            let url = if exact_urls { m.clone() } else { file_url_in(m, f.name) };
             for _ in 0..opts.attempts.clamp(1, 16) {
                 if cancel.load(Ordering::Relaxed) {
                     return Err(DownloadError::Cancelled);
                 }
                 let mut report = |n: u64, announced: u64| {
-                    let mirror = Url::parse(m).map(|u| u.display()).unwrap_or_default();
+                    let mirror = short(m);
                     progress(&Progress {
                         file: f.name.to_string(),
                         done: before.saturating_add(n),
@@ -284,6 +290,9 @@ fn bearer<'a>(token: Option<&'a str>, url: &Url, origin: &str) -> Option<&'a str
 
 /// A mirror for messages (no query string: it may hold a token).
 fn short(m: &str) -> String {
+    if local_path(m).is_some() {
+        return m.to_string();
+    }
     Url::parse(m).map(|u| u.display()).unwrap_or_else(|_| "mirror".into())
 }
 
@@ -345,8 +354,11 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
         }
         Err(_) => 0,
     };
-    let fetched = f.size != Some(have) || have == 0;
-    if fetched {
+    let local = local_path(url);
+    let fetched = local.is_some() || f.size != Some(have) || have == 0;
+    if let Some(src) = local {
+        copy_local(&src, &part, limit, f.size, cancel, report)?;
+    } else if fetched {
         let limits = Limits { connect: opts.connect_timeout, stall: opts.stall_timeout, cancel };
         let mut url = Url::parse(url).map_err(|e| Fail::NextMirror(e.to_string()))?;
         let origin = url.host.clone();
@@ -453,6 +465,103 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
     }
     std::fs::rename(&part, dir.join(f.name)).map_err(disk)?;
     Ok(())
+}
+
+/// The local path of a `file://` URL (absolute only; `file:///C:/x` → `C:/x` on Windows).
+/// A mirror with its trailing separators taken off, except a filesystem root's: `file:///` and `file:///D:/` stay
+/// as they are (without it neither is an absolute path).
+fn keep_root(s: &str) -> String {
+    match s {
+        "file:" => "file:///".to_string(),
+        s if s.starts_with("file://") && s.ends_with(':') => format!("{s}/"),
+        s => s.to_string(),
+    }
+}
+
+/// The URL of file `name` on mirror `m`: one separator between them (a root mirror already ends with one), and on a
+/// local mirror the name's own `%` escaped, so the decoded path is that very name.
+fn file_url_in(m: &str, name: &str) -> String {
+    let name = if local_path(m).is_some() { name.replace('%', "%25") } else { name.to_string() };
+    if m.ends_with('/') { format!("{m}{name}") } else { format!("{m}/{name}") }
+}
+
+fn local_path(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let rest = if rest.get(2..3) == Some(":") { rest.strip_prefix('/').unwrap_or(rest) } else { rest };
+    let rest = percent_decode(rest)?;
+    let p = PathBuf::from(&rest);
+    if p.is_absolute() && !rest.chars().any(char::is_control) { Some(p) } else { None }
+}
+
+/// Decode `%XX` escapes (a `file://` URL's path); `None` for a broken escape or non-UTF-8 result.
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        if c == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Copy a file from a local mirror into `part` (from the start; it is checked afterwards like a download).
+fn copy_local(src: &Path, part: &Path, limit: u64, size: Option<u64>, cancel: &AtomicBool, report: &mut dyn FnMut(u64, u64)) -> Result<(), Fail> {
+    let disk = |e: std::io::Error| Fail::Disk(format!("{}: {e}", part.display()));
+    let meta = std::fs::metadata(src).map_err(|e| Fail::NextMirror(format!("{}: {e}", src.display())))?;
+    if !meta.is_file() {
+        return Err(Fail::NextMirror(format!("{} is not a file", src.display())));
+    }
+    if meta.len() > limit || size.is_some_and(|s| s != meta.len()) {
+        return Err(Fail::NextMirror(format!("{} has the wrong size ({} bytes)", src.display(), meta.len())));
+    }
+    let mut input = File::open(src).map_err(|e| Fail::NextMirror(format!("{}: {e}", src.display())))?;
+    // (a fresh file: an old one at that name may be a hard link to the source, which truncating would empty)
+    let mut out = new_part(part).map_err(disk)?;
+    let announced = size.unwrap_or(meta.len());
+    let mut have = 0u64;
+    report(0, announced);
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            drop(out);
+            let _ = std::fs::remove_file(part);
+            return Err(Fail::Cancelled);
+        }
+        let n = match input.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                drop(out);
+                let _ = std::fs::remove_file(part);
+                return Err(Fail::NextMirror(format!("{}: {e}", src.display())));
+            }
+        };
+        if n == 0 {
+            break;
+        }
+        if have.saturating_add(n as u64) > limit {
+            drop(out);
+            let _ = std::fs::remove_file(part);
+            return Err(Fail::NextMirror(format!("{} grew past the expected {limit} bytes", src.display())));
+        }
+        out.write_all(buf.get(..n).unwrap_or_default()).map_err(disk)?;
+        have = have.saturating_add(n as u64);
+        report(have, announced);
+    }
+    // a source rewritten (or cut short) after its size was read: what was copied is not that file, and a partial
+    // left behind would be resumed by the next mirror, failing its hash; so it goes, and the next mirror starts over
+    if have != announced {
+        drop(out);
+        let _ = std::fs::remove_file(part);
+        return Err(Fail::NextMirror(format!("{} changed while it was copied ({have} of {announced} bytes)", src.display())));
+    }
+    out.sync_all().map_err(disk)
 }
 
 fn http_fail(e: HttpError) -> Fail {

@@ -324,7 +324,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush Stroke",
             [],
             None,
-            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these} → {activeMask, connected}",
+            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these, continue?: bool — the stroke being painted, sent again as it grows: it replaces the mask's last stroke, so its effect shows while painting} → {activeMask, connected}",
             has_active,
             |s, p| {
                 let pts: Vec<Point> = p
@@ -347,6 +347,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     pressure: pressure_list(p.get("pressure"), pts_len)?,
                 };
                 let connect = bool_or(p, "connect", false);
+                let again = bool_or(p, "continue", false);
                 let mut connected = false;
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 let want = optional_mask_id(p, "mask.brushStroke")?.or(s.active_mask);
@@ -384,7 +385,11 @@ pub fn specs() -> Vec<CommandSpec> {
                                 strokes.extend(connected_strokes(from, &last, stroke));
                                 connected = true;
                             }
-                            None => strokes.push(stroke),
+                            // the stroke being painted, sent again as it grew: it replaces itself
+                            None => match strokes.last_mut() {
+                                Some(last) if again => *last = stroke,
+                                _ => strokes.push(stroke),
+                            },
                         }
                     } else {
                         m.components.push(MaskComponent {
@@ -581,7 +586,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AI Mask Model Status",
             [],
             None,
-            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, and the download's progress → {available, installed, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
+            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, where it runs and how long the last photo took, and the download's progress → {available, installed, dir, loaded, busy, analyzing, runOn (auto | cpu: segment.settings), backend: {device (what runs the backbone: a GPU's name, Metal GPU or CPU; null until loaded), runtime (wgpu|candle), heads (CPU|Metal GPU, and which of the parts after the backbone the GPU accelerator runs, e.g. `CPU; the necks on the GPU`), fallback (why the backbone is not on the GPU), encodeMs (last backbone run), analyzeMs (last photo's analysis before the first click)}, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
             super::always,
             |s, _| {
                 let g = &s.segmenter;
@@ -593,12 +598,30 @@ pub fn specs() -> Vec<CommandSpec> {
                     "loaded": g.loaded(),
                     "busy": g.busy(),
                     "analyzing": g.analyzing(),
+                    "runOn": g.run_on().name(),
+                    "backend": g.backend(),
                     "sizeBytes": crate::segment::MODEL_BYTES,
                     "license": crate::segment::LICENSE_NAME,
                     "licenseUrl": crate::segment::LICENSE_URL,
                     "mirrors": g.mirrors().len(),
                     "download": g.download_status(),
                 }))
+            }
+        ),
+        cmd!(
+            query "segment.settings",
+            "AI Mask Settings",
+            [],
+            None,
+            "{runOn?: auto | cpu} → {runOn} — where SAM 3 runs (Settings ▸ Performance ▸ AI masks): `auto` (the default) the GPU when there is one (Metal on macOS; elsewhere the parts LightCraft's wgpu kernels run, while GPU rendering is allowed, and the rest on the CPU: `segment.model.status` → `backend` says which), `cpu` all of it on the CPU on every platform (for a GPU that can't run it). Local inference only: a remote worker (`LIGHTCRAFT_SAM3_REMOTE`) runs on its Mac's Metal device either way. Kept with the app's settings; a loaded model moves at its next request",
+            super::always,
+            |s, p| {
+                let c = "segment.settings";
+                if let Some(v) = p.get("runOn") {
+                    let run_on = v.as_str().and_then(crate::segment::RunOn::parse).ok_or_else(|| bad(c, "`runOn` must be auto or cpu"))?;
+                    s.segmenter.set_run_on(run_on).map_err(ai_err)?;
+                }
+                Ok(json!({"runOn": s.segmenter.run_on().name()}))
             }
         ),
         cmd!(
@@ -924,15 +947,16 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("spot.add", "missing points"));
                 }
                 let d = Spot::default();
+                let size = f64_or(p, "size", d.size).clamp(SPOT_SIZE.0, SPOT_SIZE.1);
+                let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut spot = Spot {
                     mode,
-                    points: pts,
-                    size: f64_or(p, "size", d.size).clamp(SPOT_SIZE.0, SPOT_SIZE.1),
+                    points: thin_spot_points(&pts, size, super::develop::crop_dims(s, id)),
+                    size,
                     feather: f64_or(p, "feather", d.feather).clamp(0.0, 100.0),
                     opacity: f64_or(p, "opacity", d.opacity).clamp(0.0, 100.0),
                     source_offset: point(p, "source"),
                 };
-                let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 if spot.source_offset.is_none() && spot.mode != SpotMode::Fill {
                     // resolve the automatic source now: it gets a pin and stays put at every size
@@ -1125,6 +1149,38 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
     s.set_develop(id, d, label)
 }
 
+/// A brushed spot's points as stored: consecutive near-duplicates dropped and the stroke thinned to one point
+/// every `size / 4` (long-edge units, like the mask brush's dabs), the first and the last point kept. `dims` is
+/// the oriented photo's width and height: points are normalized per axis, so a distance counts in long-edge
+/// units (issue #2359). A caller that records a point per frame (the app's brush, an agent replaying a pointer)
+/// then stores a handful of points instead of dozens that all draw and render the same disc.
+fn thin_spot_points(pts: &[Point], size: f64, (w, h): (f64, f64)) -> Vec<Point> {
+    let long = w.max(h).max(1e-9);
+    let (kx, ky) = (w / long, h / long);
+    let dist = |a: Point, b: Point| ((b.x - a.x) * kx).hypot((b.y - a.y) * ky);
+    let spacing = size / 4.0;
+    let mut out: Vec<Point> = Vec::with_capacity(pts.len().min(64));
+    for &q in pts {
+        // `> 0.0` as well: with a zero size an exact repeat would otherwise count as a step
+        if out.last().is_none_or(|&last| dist(last, q) > 0.0 && dist(last, q) >= spacing) {
+            out.push(q);
+        }
+    }
+    // the stroke reaches where it ended: a last point closer than the spacing takes the place of the one
+    // before it (so a hold at the end doesn't leave a bump), unless it is at that one already
+    if let Some(&end) = pts.last()
+        && let Some(&last) = out.last()
+        && dist(last, end) > 0.0
+    {
+        match out.len() {
+            1 if dist(last, end) < spacing / 2.0 => {}
+            1 => out.push(end),
+            n => out[n - 1] = end,
+        }
+    }
+    out
+}
+
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
 fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
@@ -1202,5 +1258,70 @@ mod tests_color_range {
         cap_color_range_samples(&mut shape);
         let MaskShape::ColorRange { samples, .. } = shape else { panic!() };
         assert_eq!(samples.len(), MAX_COLOR_RANGE_SAMPLES);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The thinning measures in long-edge units: on a portrait photo the y axis is the long one (issue #2359).
+    #[test]
+    fn spot_thinning_respects_the_aspect_ratio() {
+        let pts: Vec<Point> = (0..100).map(|i| Point::new(0.1, 0.1 + 0.002 * f64::from(i))).collect();
+        // size 0.04: one point per 0.01 long-edge units, which is 0.01 of y on a portrait photo but 0.015 on a landscape one
+        let tall = thin_spot_points(&pts, 0.04, (2.0, 3.0));
+        let wide = thin_spot_points(&pts, 0.04, (3.0, 2.0));
+        assert!(tall.len() > wide.len(), "{} vs {}", tall.len(), wide.len());
+        // 0.198 of y: 19.8 spacings of 0.01 (portrait), 13.2 of 0.015 (landscape), plus the first point
+        assert!((tall.len() as f64 - 21.0).abs() <= 2.0, "{}", tall.len());
+        assert!((wide.len() as f64 - 14.0).abs() <= 2.0, "{}", wide.len());
+        assert_eq!(tall.first(), pts.first());
+        assert_eq!(tall.last(), pts.last());
+        assert_eq!(wide.last(), pts.last());
+    }
+
+    #[test]
+    fn thinning_keeps_clicks_and_degenerate_input() {
+        let one = vec![Point::new(0.5, 0.5)];
+        assert_eq!(thin_spot_points(&one, 0.05, (3.0, 2.0)), one);
+        assert_eq!(thin_spot_points(&[one[0], one[0], one[0]], 0.05, (3.0, 2.0)), one);
+        assert!(thin_spot_points(&[], 0.05, (3.0, 2.0)).is_empty());
+        // a zero-sized photo doesn't divide by zero
+        assert_eq!(thin_spot_points(&[one[0], Point::new(0.6, 0.6)], 0.05, (0.0, 0.0)).len(), 1);
+    }
+
+    /// A long straight stroke keeps about one point per spacing, leaves no gap wider than a spacing plus one
+    /// recorded step (two spacings at the end), and still ends where the stroke ended, also after a hold there.
+    #[test]
+    fn a_long_stroke_is_thinned_without_gaps() {
+        let step = 0.0008;
+        let mut pts: Vec<Point> = (0..=1000).map(|i| Point::new(0.1 + step * f64::from(i), 0.5)).collect();
+        // the pointer rests at the end for a few frames
+        pts.extend([*pts.last().unwrap(); 5]);
+        let (size, dims) = (0.04, (3.0, 2.0));
+        let thin = thin_spot_points(&pts, size, dims);
+        // 0.8 long-edge units at one point per 0.01, plus the first
+        assert!((70..=82).contains(&thin.len()), "{}", thin.len());
+        assert_eq!(thin.first(), pts.first());
+        assert_eq!(thin.last(), pts.last());
+        let gaps: Vec<f64> = thin.windows(2).map(|w| w[1].x - w[0].x).collect();
+        let spacing = size / 4.0;
+        for &gap in &gaps[..gaps.len() - 1] {
+            assert!(gap > 0.0 && gap <= spacing + step + 1e-12, "gap {gap}");
+        }
+        // the end takes the place of the last point kept, so the last gap may reach two spacings
+        let end_gap = gaps[gaps.len() - 1];
+        assert!(end_gap > 0.0 && end_gap < 2.0 * spacing + step, "end gap {end_gap}");
+    }
+
+    /// A zero or tiny brush thins nothing but exact repeats: every distinct point is kept, in order.
+    #[test]
+    fn a_zero_or_tiny_size_keeps_every_distinct_point() {
+        let pts: Vec<Point> = (0..50).map(|i| Point::new(0.2 + 0.001 * f64::from(i), 0.3)).collect();
+        let doubled: Vec<Point> = pts.iter().flat_map(|&q| [q, q]).collect();
+        for size in [0.0, 1e-9] {
+            assert_eq!(thin_spot_points(&doubled, size, (3.0, 2.0)), pts, "size {size}");
+        }
     }
 }

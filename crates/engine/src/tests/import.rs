@@ -20,16 +20,25 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
+/// The clock these tests run on; an undated file is pinned to it too (see `write_png`).
+const CLOCK: &str = "2026-01-14T05:58:48";
+
 /// A small procedural PNG (distinct per seed).
 fn write_png(path: &Path, seed: u8) {
-    let (w, h) = (48usize, 32usize);
+    write_png_sized(path, seed, 48, 32);
+}
+
+/// [`write_png`] of another size: a replaced file is noticed by its size, as probes kept from a scan are.
+fn write_png_sized(path: &Path, seed: u8, w: usize, h: usize) {
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
     let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
     let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
-    // undated files take the file's date: the tests' clock time (2026-01-14T05:58:48)
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    // Undated files take the file's date, read in the host's zone (issue #2284), so the file is
+    // pinned to the instant this machine reads as the tests' clock time rather than to a fixed one.
+    let secs = crate::import::local_instant(CLOCK).and_then(|s| u64::try_from(s).ok()).unwrap_or(0);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
@@ -57,7 +66,8 @@ fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Opti
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
     // Keep the same known file-date fallback as write_png, distinct from the regression timestamp.
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    let secs = crate::import::local_instant(CLOCK).and_then(|s| u64::try_from(s).ok()).unwrap_or(0);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
@@ -84,6 +94,383 @@ fn recursive_discovery_includes_sony_sr2_and_srf_case_insensitively() {
     assert_eq!(found, expected);
     assert_eq!(crate::import::expand(&expected, None), expected, "folder and direct discovery agree");
     std::fs::remove_dir_all(src).unwrap();
+}
+
+/// A file that was only browsed (Local) is not "already in the library": the scan offers it, and
+/// importing it brings the browsed record (with its edits) into the library.
+#[test]
+fn a_browsed_photos_own_file_is_offered_and_joins_the_library_when_imported() {
+    let src = temp_dir("browsed-own");
+    let f = src.join("a.png");
+    write_png(&f, 75);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [f], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.rate", &json!({"ids": [id], "rating": 3})).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [f]})).unwrap();
+    assert_eq!(scan["duplicates"], 0, "{scan}");
+    assert_eq!(scan["candidates"][0]["duplicate"], Value::Null, "{scan}");
+    assert_eq!(scan["candidates"][0]["existing"], id, "the candidate still names the browsed record: {scan}");
+    assert_eq!(scan["candidates"][0]["local"], true, "and says it was only browsed: {scan}");
+    let r = s.execute("library.import", &json!({"paths": [f]})).unwrap();
+    assert_eq!(r["imported"], json!([id]), "{r}");
+    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    assert!(!p.local && p.rating == 3, "the same record, now in the library, edits kept");
+    let scan = s.execute("library.importPreview", &json!({"paths": [f]})).unwrap();
+    assert_eq!(scan["duplicates"], 1, "now it is in the library: {scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A browse record in Recently Deleted still counts as the path's: the scan lists the file as it did,
+/// not as a new browsed file.
+#[test]
+fn a_deleted_browse_record_still_counts_as_the_files_own() {
+    let src = temp_dir("browsed-deleted");
+    let f = src.join("a.png");
+    write_png(&f, 76);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [f], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.delete", &json!({"ids": [id]})).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [f]})).unwrap();
+    assert_eq!(scan["candidates"][0]["duplicate"], "path", "{scan}");
+    assert_eq!(scan["candidates"][0].get("local"), None, "{scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A browsed file that another application replaced since (it has another size) is not what its record says: the scan
+/// reads it again, so the content stored at the browse (the old file's, which the library also has) doesn't make it a
+/// duplicate, and importing it brings the record up to date as it joins the library.
+#[test]
+fn a_browsed_file_replaced_since_is_read_again_before_it_joins_the_library() {
+    let src = temp_dir("browsed-replaced");
+    let (a, b) = (src.join("a.png"), src.join("b.png"));
+    write_png(&a, 75);
+    std::fs::copy(&a, &b).unwrap();
+    let mut s = Session::new().with_fs();
+    // b is in the library; a was only browsed, with the same bytes
+    s.execute("library.import", &json!({"paths": [b]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    let old = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().content_hash.clone();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a]})).unwrap();
+    assert_eq!(scan["candidates"][0]["duplicate"], "content", "the file is what was browsed, and the library has its bytes: {scan}");
+    write_png_sized(&a, 9, 64, 40);
+    let scan = s.execute("library.importPreview", &json!({"paths": [a]})).unwrap();
+    assert!(scan["candidates"][0]["duplicate"].is_null(), "the file that is there now is new to the library: {scan}");
+    assert_eq!(scan["candidates"][0]["width"], 64, "{scan}");
+    assert_eq!(scan["candidates"][0]["local"], true, "it still says it was only browsed (Copy and Move leave it out): {scan}");
+    assert_eq!(scan["candidates"][0]["existing"], id, "and names the record: {scan}");
+    let r = s.execute("library.import", &json!({"paths": [a]})).unwrap();
+    assert_eq!(r["imported"], json!([id]), "the same record joins the library: {r}");
+    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    assert!(!p.local, "it is in the library now");
+    assert_eq!((p.width, p.height, p.file_size), (64, 40, std::fs::metadata(&a).unwrap().len()), "the record describes the file it has now");
+    assert_ne!(p.content_hash, old, "and holds its content, not the old file's");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A browsed file replaced by a copy of a photo the library has is a duplicate of that photo, and its record stays
+/// browsed.
+#[test]
+fn a_browsed_file_replaced_by_a_copy_of_a_library_photo_is_a_duplicate() {
+    let src = temp_dir("browsed-replaced-dup");
+    let (a, c) = (src.join("a.png"), src.join("c.png"));
+    write_png(&a, 75);
+    write_png_sized(&c, 9, 64, 40);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [c]})).unwrap();
+    let library_id = r["imported"][0].as_u64().unwrap();
+    let r = s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    std::fs::copy(&c, &a).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a]})).unwrap();
+    assert_eq!(scan["candidates"][0]["duplicate"], "content", "{scan}");
+    assert_eq!(scan["candidates"][0]["existing"], library_id, "of the library's photo: {scan}");
+    assert_eq!(scan["candidates"][0]["local"], true, "it is still the browsed record's file (Copy and Move leave it out): {scan}");
+    let r = s.execute("library.import", &json!({"paths": [a]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 0, "{r}");
+    assert_eq!(r["duplicates"][0]["existing"], library_id, "{r}");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().local, "the record was not brought in");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// ✕ while the sizes of browsed files are checked: a file that wasn't checked is not promoted (it stays a browsed record),
+/// where the check used to run for every file whatever the ✕ said.
+#[test]
+fn a_cancelled_import_does_not_promote_a_browsed_file_it_did_not_check() {
+    use crate::import::{ImportJob, ImportOptions, commit_prepared};
+    let src = temp_dir("browsed-cancel-import");
+    let a = src.join("a.png");
+    write_png(&a, 75);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    let mut job = ImportJob::new(&mut s, ImportOptions::default()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let prepared = job.prepare(&[a.to_string_lossy().to_string()], &cancel);
+    let report = commit_prepared(&mut s, &job.opts, job.now(), prepared).unwrap();
+    assert!(report.imported.is_empty() && report.duplicates.is_empty(), "nothing was decided about the file: {report:?}");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().local, "the record is still only browsed");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// ✕ while a scan checks the sizes of browsed files: a file that wasn't checked is not offered as the record's own (it is
+/// one of the files the scan didn't reach, like the ones after it).
+#[test]
+fn a_cancelled_scan_does_not_vouch_for_a_browsed_file_it_did_not_check() {
+    use crate::import::{ScanInput, ScanProgress, scan_with};
+    let src = temp_dir("browsed-cancel-scan");
+    let a = src.join("a.png");
+    write_png(&a, 75);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let (input, paths) = ScanInput::new(&mut s, &[a.to_string_lossy().to_string()]);
+    let progress = ScanProgress::default();
+    progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    let out = scan_with(input, &paths, &progress);
+    assert_eq!(out.candidates.len(), 1);
+    assert!(!out.candidates[0].local && out.candidates[0].error.is_some(), "not vouched for as the browsed record's file: {:?}", out.candidates[0]);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A file of its own with the new content of a replaced browsed file stands in for it when copying leaves it out.
+#[test]
+fn a_twin_of_a_replaced_browsed_file_stands_in_for_it_when_copying() {
+    let src = temp_dir("browsed-replaced-twin");
+    let (a, d) = (src.join("a.png"), src.join("d.png"));
+    write_png(&a, 75);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    write_png_sized(&a, 9, 64, 40);
+    std::fs::copy(&a, &d).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, d]})).unwrap();
+    let found = scan["candidates"].as_array().unwrap();
+    assert_eq!(found[0]["local"], true, "{scan}");
+    assert_eq!(found[1]["duplicate"], "content", "{scan}");
+    assert_eq!(found[1]["browsedTwin"], found[0]["path"], "{scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A browsed file replaced by a copy of another browsed file isn't a stand-in: the first file of its own is.
+#[test]
+fn a_replaced_browsed_file_does_not_take_the_stand_in_of_another_browsed_file() {
+    let src = temp_dir("browsed-replaced-standin");
+    let (a, b, d) = (src.join("a.png"), src.join("b.png"), src.join("d.png"));
+    write_png(&a, 75);
+    write_png_sized(&b, 9, 64, 40);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &d).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, d]})).unwrap();
+    let found = scan["candidates"].as_array().unwrap();
+    assert!(found[1]["browsedTwin"].is_null(), "a browsed file doesn't stand in: {scan}");
+    assert_eq!(found[2]["browsedTwin"], found[0]["path"], "the file of its own does: {scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// "Import as new" replaces the trashed library photo with the same content when the browsed twin
+/// is promoted, as it does for a new file.
+#[test]
+fn promoting_a_browsed_twin_as_new_replaces_the_trashed_library_photo() {
+    let src = temp_dir("browsed-fresh");
+    let original = src.join("original.png");
+    let twin = src.join("browsed.png");
+    write_png(&original, 77);
+    std::fs::copy(&original, &twin).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    let old = r["imported"][0].as_u64().unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "local": true})).unwrap();
+    let local = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.delete", &json!({"ids": [old]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "onDeleted": "fresh"})).unwrap();
+    assert_eq!(r["imported"], json!([local]), "{r}");
+    let trashed = s.catalog.photos().filter(|p| p.deleted).count();
+    assert_eq!(trashed, 0, "the trashed twin is gone");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(local)).is_some_and(|p| p.in_library()));
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// Restoring a trashed library photo by the content of a browsed file doesn't relink it onto the
+/// path the browse record holds: that would leave two records on one file.
+#[test]
+fn restoring_by_a_browsed_twin_does_not_relink_onto_its_path() {
+    let src = temp_dir("browsed-restore");
+    let original = src.join("original.png");
+    let renamed = src.join("renamed.png");
+    write_png(&original, 78);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    let old = r["imported"][0].as_u64().unwrap();
+    std::fs::rename(&original, &renamed).unwrap();
+    s.execute("photo.delete", &json!({"ids": [old]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [renamed], "local": true})).unwrap();
+    let local = r["imported"][0].as_u64().unwrap();
+    let r = s.execute("library.import", &json!({"paths": [renamed]})).unwrap();
+    assert_eq!(r["restored"], json!([old]), "{r}");
+    let on_path = s.catalog.photos().filter(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if Path::new(path) == renamed)).count();
+    assert_eq!(on_path, 1, "one record holds the renamed file");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(local)).is_some_and(|p| p.local), "the browse record is left alone");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn local_twin_does_not_block_reimport_after_permanent_delete_and_restart() {
+    use lightcraft_catalog::PhotoId;
+    for mode in ["add", "copy"] {
+        let src = temp_dir(&format!("local-twin-src-{mode}"));
+        let lib = temp_dir(&format!("local-twin-lib-{mode}"));
+        let original = src.join("original.png");
+        let twin = src.join("browsed.png");
+        write_png(&original, 71);
+        std::fs::copy(&original, &twin).unwrap();
+        let bytes = std::fs::read(&original).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        let r = s.execute("library.import", &json!({"paths": [original], "mode": mode})).unwrap();
+        let old = r["imported"][0].as_u64().unwrap();
+        let r = s.execute("library.import", &json!({"paths": [twin], "local": true})).unwrap();
+        let local = PhotoId(r["imported"][0].as_u64().unwrap());
+        let before = s.catalog.photo(local).unwrap().clone();
+        s.execute("photo.delete", &json!({"ids": [old]})).unwrap();
+        s.execute("library.source", &json!({"kind": "recentlyDeleted"})).unwrap();
+        s.execute("library.select", &json!({"ids": [old]})).unwrap();
+        s.execute("photo.deletePermanently", &json!({"ids": [old]})).unwrap();
+        s.close_library().unwrap();
+        s.open_library(&lib, false).unwrap();
+        let scan = s.execute("library.importPreview", &json!({"paths": [original]})).unwrap();
+        assert_eq!(scan["duplicates"], 0, "a browsed copy is not a library duplicate: {scan}");
+        let r = s.execute("library.import", &json!({"paths": [original], "mode": mode})).unwrap();
+        assert_eq!(ids(&r, "imported"), 1, "{r}");
+        assert_eq!(ids(&r, "restored"), 0);
+        assert_eq!(ids(&r, "duplicates"), 0);
+        assert_ne!(r["imported"][0], old);
+        assert_eq!(s.catalog.photo(local).unwrap(), &before, "leave the other path's browse record alone");
+        assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 1);
+        let scan = s.execute("library.importPreview", &json!({"paths": [original]})).unwrap();
+        assert_eq!(scan["duplicates"], 1, "the actual library photo still counts");
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert_eq!(std::fs::read(&twin).unwrap(), bytes);
+        s.close_library().unwrap();
+        let _ = std::fs::remove_dir_all(src);
+        let _ = std::fs::remove_dir_all(lib);
+    }
+}
+
+#[test]
+fn local_twin_import_matches_the_library_photo_before_promoting() {
+    use lightcraft_catalog::PhotoId;
+    let src = temp_dir("local-twin-priority");
+    let original = src.join("original.png");
+    let twin = src.join("browsed.png");
+    write_png(&original, 72);
+    std::fs::copy(&original, &twin).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.rate", &json!({"ids": [id], "rating": 5})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "local": true})).unwrap();
+    let local = PhotoId(r["imported"][0].as_u64().unwrap());
+    let scan = s.execute("library.importPreview", &json!({"paths": [twin]})).unwrap();
+    assert_eq!(scan["duplicates"], 1, "{scan}");
+    assert_eq!(scan["candidates"][0]["existing"], id);
+    let r = s.execute("library.import", &json!({"paths": [twin]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 0);
+    assert_eq!(r["duplicates"][0]["existing"], id);
+    s.execute("photo.delete", &json!({"ids": [id]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "onDeleted": "skip"})).unwrap();
+    assert_eq!(ids(&r, "imported"), 0, "skip must not promote the local twin: {r}");
+    assert_eq!(r["duplicates"][0]["existingDeleted"], true);
+    let r = s.execute("library.import", &json!({"paths": [twin]})).unwrap();
+    assert_eq!(r["restored"], json!([id]));
+    assert!(s.catalog.photo(local).unwrap().local);
+    assert_eq!(s.catalog.photo(PhotoId(id)).unwrap().rating, 5);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn local_twins_are_deduplicated_when_promoted_in_one_import() {
+    let src = temp_dir("local-twin-batch");
+    let a = src.join("a.png");
+    let b = src.join("b.png");
+    let c = src.join("c.png");
+    write_png(&a, 73);
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &c).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2, "browsing shows both paths: {r}");
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, c]})).unwrap();
+    assert_eq!(scan["duplicates"], 2, "only one candidate per content: {scan}");
+    let r = s.execute("library.import", &json!({"paths": [a, b, c]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert_eq!(ids(&r, "duplicates"), 2);
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 1);
+    assert_eq!(s.catalog.photos().filter(|p| p.local).count(), 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 0);
+    assert_eq!(s.catalog.photos().filter(|p| p.local).count(), 2);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn twins_of_a_browsed_photo_are_copies_in_the_source_not_library_duplicates() {
+    let src = temp_dir("local-twin-scan");
+    let a = src.join("a.png");
+    let b = src.join("b.png");
+    let c = src.join("c.png");
+    let d = src.join("d.png");
+    write_png(&a, 75);
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &c).unwrap();
+    std::fs::copy(&a, &d).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, c, d]})).unwrap();
+    let found = scan["candidates"].as_array().unwrap();
+    assert_eq!(found.len(), 4, "{scan}");
+    assert_eq!(found[0]["local"], true, "{scan}");
+    assert!(found[0]["duplicate"].is_null(), "the first browsed copy is offered: {scan}");
+    for twin in &found[1..] {
+        assert_eq!(twin["duplicate"], "content", "{scan}");
+        assert!(twin["existing"].is_null(), "no library photo has these bytes, a browsed record isn't one: {scan}");
+    }
+    // (copying leaves the browsed photo out: the first file of its own stands in for it, once)
+    assert!(found[1]["browsedTwin"].is_null(), "a browsed twin doesn't: {scan}");
+    assert_eq!(found[2]["browsedTwin"], found[0]["path"], "{scan}");
+    assert!(found[3]["browsedTwin"].is_null(), "{scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn local_twin_promotion_counts_across_background_import_batches() {
+    use crate::import::{ImportJob, ImportOptions, commit_prepared};
+    let src = temp_dir("local-twin-worker");
+    let a = src.join("a.png");
+    let b = src.join("b.png");
+    let c = src.join("c.png");
+    write_png(&a, 74);
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &c).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.rate", &json!({"ids": [id], "rating": 4})).unwrap();
+    let mut job = ImportJob::new(&mut s, ImportOptions::default()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let first = job.prepare(&[a.to_string_lossy().to_string()], &cancel);
+    let report = commit_prepared(&mut s, &job.opts, job.now(), first).unwrap();
+    assert_eq!(report.imported, [id], "promote the existing record with its edits");
+    assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().rating, 4);
+    let next = job.prepare(&[b.to_string_lossy().to_string(), c.to_string_lossy().to_string()], &cancel);
+    let report = commit_prepared(&mut s, &job.opts, job.now(), next).unwrap();
+    assert!(report.imported.is_empty());
+    assert_eq!(report.duplicates.len(), 2);
+    assert!(report.duplicates.iter().all(|d| d.existing == Some(id)));
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 1);
+    let _ = std::fs::remove_dir_all(src);
 }
 
 #[test]
@@ -1631,6 +2018,168 @@ fn assisted_culling_burst_limits_are_adjustable() {
         assert!(s.execute("photo.analyze", &p).is_err(), "{bad} must be refused");
     }
     assert_eq!(s.commits(), undo_before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A box blur of radius `r`: the larger `r`, the lower the focus score.
+fn soften(img: &lightcraft_raster::Rgb32f, r: usize) -> lightcraft_raster::Rgb32f {
+    let (w, h) = (img.width, img.height);
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let (mut acc, mut n) = ([0f32; 3], 0.0);
+            for yy in y.saturating_sub(r)..(y + r + 1).min(h) {
+                for xx in x.saturating_sub(r)..(x + r + 1).min(w) {
+                    let c = img.data[yy * w + xx];
+                    acc = [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]];
+                    n += 1.0;
+                }
+            }
+            out.data[y * w + x] = acc.map(|v| v / n);
+        }
+    }
+    out
+}
+
+/// Write a linear image as an sRGB PNG.
+fn save_png(img: &lightcraft_raster::Rgb32f, path: &std::path::Path) {
+    let data: Vec<[u8; 4]> = img
+        .data
+        .iter()
+        .map(|c| {
+            let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+            [e(c[0]), e(c[1]), e(c[2]), 255]
+        })
+        .collect();
+    let png = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: img.width, height: img.height, data }),
+        &Default::default(),
+    )
+    .unwrap();
+    std::fs::write(path, png).unwrap();
+}
+
+/// Assisted culling with `stackGroups` (#2277): each burst becomes one collapsed stack with its
+/// sharpest photo on top, an unrelated photo stays loose, analysis and stack are one undo step,
+/// and a second run neither makes another stack nor splits the existing one.
+#[test]
+fn assisted_culling_stacks_each_burst_best_on_top() {
+    let dir = temp_dir("cull-stack");
+    let scene = lightcraft_scenes::demo_library()[0].render(480, 320);
+    let save = |img: &lightcraft_raster::Rgb32f, name: &str| save_png(img, &dir.join(name));
+    save(&soften(&scene, 3), "a_soft.png");
+    save(&scene, "b_sharp.png");
+    save(&soften(&scene, 6), "c_softer.png");
+    save(&lightcraft_scenes::demo_library()[7].render(480, 320), "d_other.png");
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png", "d_other.png"].iter().enumerate() {
+        let id = by_name(&s, n);
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+    }
+    let (soft, sharp, softer, other) =
+        (by_name(&s, "a_soft.png"), by_name(&s, "b_sharp.png"), by_name(&s, "c_softer.png"), by_name(&s, "d_other.png"));
+    // a photo named twice is measured and stacked once
+    let mut twice = ids.clone();
+    twice.push(sharp.0);
+    s.selection = crate::Selection { ids: vec![soft, sharp, softer, other], active: Some(soft) };
+    let r = s.execute("photo.analyze", &json!({"ids": twice, "stackGroups": true})).unwrap();
+    assert_eq!((r["stacks"].clone(), r["groups"].clone()), (json!(1), json!(1)), "{r}");
+    // the active photo went into the collapsed stack: its top takes over, the loose photo stays selected
+    assert_eq!(s.selection.active, Some(sharp));
+    assert!(s.selection.ids.contains(&other) && s.selection.ids.contains(&sharp) && !s.selection.ids.contains(&soft), "{:?}", s.selection.ids);
+    let st = s.catalog.stack_of(sharp).unwrap().clone();
+    assert!(st.collapsed && st.top() == sharp, "the sharpest photo tops the stack");
+    let mut members = st.photos.clone();
+    members.sort();
+    let mut want = vec![soft, sharp, softer];
+    want.sort();
+    assert_eq!(members, want);
+    assert!(s.catalog.stack_of(other).is_none(), "the unrelated photo stays loose");
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_some_and(|a| a.best));
+    // one undo step removes the stack and the analysis together
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stacks().next().is_none());
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_none());
+    // without `stackGroups` nothing is stacked
+    let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["stacks"], 0, "{r}");
+    assert!(s.catalog.stacks().next().is_none());
+    s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(s.catalog.stacks().count(), 1);
+    // a second run leaves the stack as it is
+    let before = s.catalog.stack_of(sharp).unwrap().clone();
+    let commits = s.commits();
+    let r = s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(r["stacks"], 0, "{r}");
+    assert_eq!(s.catalog.stacks().count(), 1);
+    assert_eq!(s.catalog.stack_of(sharp).unwrap(), &before);
+    assert!(s.commits() > commits);
+    // a burst partly stacked already: the loose photos are stacked among themselves when two remain
+    let mut s2 = Session::new().with_fs();
+    s2.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png", "d_other.png"].iter().enumerate() {
+        let id = by_name(&s2, n);
+        s2.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+    }
+    let (soft, sharp, softer, other) =
+        (by_name(&s2, "a_soft.png"), by_name(&s2, "b_sharp.png"), by_name(&s2, "c_softer.png"), by_name(&s2, "d_other.png"));
+    let ids: Vec<u64> = [soft, sharp, softer, other].iter().map(|p| p.0).collect();
+    s2.execute("stack.group", &json!({"ids": [soft.0, other.0]})).unwrap();
+    let r = s2.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(r["stacks"], 1, "{r}");
+    assert!(s2.catalog.stack_of(soft).unwrap().photos.contains(&other), "the existing stack is untouched");
+    let st = s2.catalog.stack_of(sharp).unwrap();
+    assert!(st.top() == sharp && st.photos.len() == 2 && st.photos.contains(&softer));
+    // a non-boolean value is refused before anything changes
+    let n = s2.commits();
+    assert!(s2.execute("photo.analyze", &json!({"ids": ids, "stackGroups": "yes"})).is_err());
+    assert_eq!(s2.commits(), n);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Assisted culling with `stackGroups` (#2277): two bursts make two stacks in one undo step, and a
+/// deleted photo is measured but left out of its burst's stack, even when it is the sharpest.
+#[test]
+fn assisted_culling_stacks_two_bursts_and_leaves_deleted_photos_out() {
+    let dir = temp_dir("cull-stack-two");
+    let (one, two) = (lightcraft_scenes::demo_library()[0].render(480, 320), lightcraft_scenes::demo_library()[7].render(480, 320));
+    let files = [
+        ("a_soft.png", soften(&one, 3), "10:00:00"),
+        ("b_sharp.png", one.clone(), "10:00:01"),
+        ("c_softer.png", soften(&one, 6), "10:00:02"),
+        ("d_sharp.png", two.clone(), "10:05:00"),
+        ("e_soft.png", soften(&two, 4), "10:05:01"),
+    ];
+    for (name, img, _) in &files {
+        save_png(img, &dir.join(name));
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    for (name, _, at) in &files {
+        let id = by_name(&s, name);
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T{at}")) }).unwrap();
+    }
+    let [soft, sharp, softer, d, e] = files.map(|f| by_name(&s, f.0));
+    let ids: Vec<u64> = [soft, sharp, softer, d, e].iter().map(|p| p.0).collect();
+    s.commit("t", lightcraft_catalog::Op::SetDeleted { id: sharp, deleted: true }).unwrap();
+    let n = s.commits();
+    let r = s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!((r["groups"].clone(), r["stacks"].clone()), (json!(2), json!(2)), "{r}");
+    assert_eq!(s.commits(), n + 1, "analysis and both stacks are one undo step");
+    // the deleted photo is measured, but its burst is stacked from the other two
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_some());
+    assert!(s.catalog.stack_of(sharp).is_none(), "a deleted photo is never stacked");
+    let st = s.catalog.stack_of(soft).unwrap();
+    assert!(st.collapsed && st.top() == soft && st.photos.len() == 2 && st.photos.contains(&softer), "{st:?}");
+    let st = s.catalog.stack_of(d).unwrap();
+    assert!(st.collapsed && st.top() == d && st.photos.len() == 2 && st.photos.contains(&e), "{st:?}");
+    // one undo removes both stacks
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stacks().next().is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3355,6 +3904,295 @@ fn presets_apply_the_imported_profile_they_name() {
     s.execute("develop.profile", &json!({"id": "lc.vivid", "amount": 100})).unwrap();
     assert_eq!(apply(&mut s, "Portra Soft").profile.id, "lc.vivid");
     let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_xmp_rating_and_label() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-xmp-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="5" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("photo.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("photo.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 5);
+    assert_eq!(p.flag, lightcraft_catalog::Flag::None);
+    assert_eq!(p.label, Some(lightcraft_catalog::ColorLabel::Blue));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_exif_rating() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-exif-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() });
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("exif_rating.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("exif_rating.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 3);
+    assert_eq!(p.flag, lightcraft_catalog::Flag::None);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_rejected_rating() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-rejected-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // Case 1: EXIF rating -1
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(-1), ..Default::default() });
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("exif_rejected.jpg"), &bytes).unwrap();
+
+    // Case 2: XMP rating -1
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="-1"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("xmp_rejected.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+    let exif_p = s.catalog.photos().find(|p| p.file_name == "exif_rejected.jpg").unwrap();
+    assert_eq!(exif_p.rating, 0);
+    assert_eq!(exif_p.flag, lightcraft_catalog::Flag::Reject);
+
+    let xmp_p = s.catalog.photos().find(|p| p.file_name == "xmp_rejected.jpg").unwrap();
+    assert_eq!(xmp_p.rating, 0);
+    assert_eq!(xmp_p.flag, lightcraft_catalog::Flag::Reject);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_xmp_png_and_webp() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, encode_png, encode_webp_lossless};
+    let src = temp_dir("embedded-xmp-png-webp-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // PNG with embedded XMP rating and label
+    let png_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    let png_meta = EncodeMeta { xmp: Some(png_xmp), ..Default::default() };
+    let png_bytes = encode_png(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), &png_meta).unwrap();
+    std::fs::write(src.join("embedded.png"), &png_bytes).unwrap();
+
+    // WebP with embedded XMP rating and label
+    let webp_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let webp_meta = EncodeMeta { xmp: Some(webp_xmp), ..Default::default() };
+    let webp_bytes = encode_webp_lossless(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), &webp_meta).unwrap();
+    std::fs::write(src.join("embedded.webp"), &webp_bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+
+    let png_photo = s.catalog.photos().find(|p| p.file_name == "embedded.png").unwrap();
+    assert_eq!(png_photo.rating, 4);
+    assert_eq!(png_photo.label, Some(ColorLabel::Red));
+
+    let webp_photo = s.catalog.photos().find(|p| p.file_name == "embedded.webp").unwrap();
+    assert_eq!(webp_photo.rating, 2);
+    assert_eq!(webp_photo.label, Some(ColorLabel::Blue));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_exif_rating_when_xmp_has_unrelated_rating_text() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("exif-rating-unrelated-xmp-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(5), ..Default::default() });
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><exif:ISOSpeedRatings><rdf:Seq><rdf:li>100</rdf:li></rdf:Seq></exif:ISOSpeedRatings><dc:description><rdf:Alt><rdf:li xml:lang="x-default">Rating guide mentioning xmp:Rating</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { exif: Some(&exif), xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("iso_and_desc_rating.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("iso_and_desc_rating.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 5);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_rendered_file_ignores_embedded_develop_settings() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-rendered-develop-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // A JPEG with embedded XMP containing rating and crs:Exposure2012="+1.00"
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="3" crs:Exposure2012="+1.00"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("rendered_with_crs.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("rendered_with_crs.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    // Rating is imported from embedded XMP
+    assert_eq!(p.rating, 3);
+    // Develop settings from embedded XMP are ignored for rendered files (already baked into pixels)
+    assert_eq!(p.develop.light.exposure, 0.0);
+    assert_eq!(p.develop, std::sync::Arc::new(p.camera_defaults()));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_embedded_metadata_and_field_specific_sidecar_precedence() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-sidecar-precedence-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // Case 1: JPEG with embedded Rating 4 and Label Blue, external sidecar with only Label Red
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes1 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("partial.jpg"), &bytes1).unwrap();
+    let partial_sidecar = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("partial.xmp"), partial_sidecar).unwrap();
+
+    // Case 2: JPEG with embedded Rating 4 and Label Blue, without sidecar
+    let px2 = [129u8; 40 * 30 * 3];
+    let bytes2 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px2)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("no_sidecar.jpg"), &bytes2).unwrap();
+
+    // Case 3: JPEG with embedded Rating 4 and Label Blue, complete sidecar override with Rating 1 and Label Red
+    let px3 = [130u8; 40 * 30 * 3];
+    let bytes3 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px3)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("complete.jpg"), &bytes3).unwrap();
+    let complete_sidecar = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="1" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("complete.xmp"), complete_sidecar).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 3);
+
+    let partial_p = s.catalog.photos().find(|p| p.file_name == "partial.jpg").unwrap();
+    assert_eq!(partial_p.rating, 4);
+    assert_eq!(partial_p.label, Some(ColorLabel::Red));
+
+    let no_sidecar_p = s.catalog.photos().find(|p| p.file_name == "no_sidecar.jpg").unwrap();
+    assert_eq!(no_sidecar_p.rating, 4);
+    assert_eq!(no_sidecar_p.label, Some(ColorLabel::Blue));
+
+    let complete_p = s.catalog.photos().find(|p| p.file_name == "complete.jpg").unwrap();
+    assert_eq!(complete_p.rating, 1);
+    assert_eq!(complete_p.label, Some(ColorLabel::Red));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_partial_sidecar_override_with_rendered_develop() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-sidecar-rendered-develop-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // JPEG with embedded Rating 4, Label Blue, and crs:Exposure2012="+2.00"
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="4" xmp:Label="Blue" crs:Exposure2012="+2.00"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("photo.jpg"), &bytes).unwrap();
+
+    // Sidecar overriding Label to Red and explicitly setting Exposure to +1.00 (no rating tag)
+    let sidecar_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Label="Red" crs:Exposure2012="+1.00"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("photo.xmp"), sidecar_xmp).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("photo.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    // Rating 4 from embedded is kept
+    assert_eq!(p.rating, 4);
+    // Label Red from sidecar overrides Blue
+    assert_eq!(p.label, Some(ColorLabel::Red));
+    // External sidecar's develop settings apply; embedded exposure +2 stays suppressed
+    assert_eq!(p.develop.light.exposure, 1.0);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_raw_with_embedded_develop_and_partial_sidecar() {
+    use lightcraft_catalog::ColorLabel;
+    let src = temp_dir("raw-embedded-develop-sidecar-test");
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="2" xmp:Label="Blue" crs:Exposure2012="+1.50"/></rdf:RDF></x:xmpmeta>"#;
+
+    // Case 1: Raw with embedded develop + rating + label, external sidecar has only Label Red
+    write_raw_with_xmp(&src.join("raw1.NEF"), xmp, 1);
+    let sidecar1 = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("raw1.xmp"), sidecar1).unwrap();
+
+    // Case 2: Raw with embedded develop, external sidecar overrides develop settings to Exposure +0.50 and Rating 5
+    write_raw_with_xmp(&src.join("raw2.NEF"), xmp, 2);
+    let sidecar2 = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="5" crs:Exposure2012="+0.50"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("raw2.xmp"), sidecar2).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+
+    let p1 = s.catalog.photos().find(|p| p.file_name == "raw1.NEF").unwrap();
+    assert_eq!(p1.rating, 2, "rating from embedded XMP is preserved");
+    assert_eq!(p1.label, Some(ColorLabel::Red), "label is overridden by external sidecar");
+    assert_eq!(p1.develop.light.exposure, 1.5, "raw keeps embedded develop when sidecar provides none");
+
+    let p2 = s.catalog.photos().find(|p| p.file_name == "raw2.NEF").unwrap();
+    assert_eq!(p2.rating, 5, "rating is overridden by external sidecar");
+    assert_eq!(p2.label, Some(ColorLabel::Blue), "label from embedded XMP is preserved");
+    assert_eq!(p2.develop.light.exposure, 0.5, "external sidecar develop overrides embedded develop");
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one,
+/// optionally with an embedded XMP packet in tag 700.
+fn write_raw_with_xmp(path: &Path, xmp: &str, seed: u8) {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let px: Vec<u8> = (0..48 * 32).flat_map(|i| [(i % 251) as u8, 91, seed]).collect();
+    let j = encode_jpeg(&EncodeImage::new(48, 32, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    let xmp_bytes = xmp.as_bytes();
+    let xmp_off = 8 + 2 + 36 + 4;
+    let jpeg_off = xmp_off + xmp_bytes.len();
+    let mut f = b"II*\0\x08\0\0\0\x03\0".to_vec();
+    for (tag, v) in [(513u16, jpeg_off as u32), (514, j.len() as u32)] {
+        f.extend_from_slice(&tag.to_le_bytes());
+        f.extend_from_slice(&[4, 0, 1, 0, 0, 0]);
+        f.extend_from_slice(&v.to_le_bytes());
+    }
+    f.extend_from_slice(&700u16.to_le_bytes());
+    f.extend_from_slice(&[1, 0]);
+    f.extend_from_slice(&(xmp_bytes.len() as u32).to_le_bytes());
+    f.extend_from_slice(&(xmp_off as u32).to_le_bytes());
+    f.extend_from_slice(&[0, 0, 0, 0]);
+    f.extend_from_slice(xmp_bytes);
+    f.extend_from_slice(&j);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, f).unwrap();
 }
 
 /// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one.
