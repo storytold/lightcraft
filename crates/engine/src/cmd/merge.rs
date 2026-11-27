@@ -24,18 +24,54 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     if !bool_or(p, "preview", false) {
         return s.merge_now(kind, finish, &ids);
     }
-    let job = s.plan_merge(kind, finish, &ids, true)?;
-    let out = job.run(&|_, _| true).map_err(|e| bad(id, e))?;
-    let mut info = out.info;
-    if let (Some(path), Some(img)) = (str_param(p, "previewPath"), &out.preview) {
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default())
-            .map_err(|e| bad(id, e.to_string()))?;
-        s.check_write_target(path).map_err(|e| bad(id, e))?;
-        crate::export::write_file(path, &png).map_err(|e| bad(id, e))?;
-        info["previewPath"] = json!(path);
+    let (jobs, skipped) = s.plan_merges_inner(kind, finish, &ids, true)?;
+    if jobs.len() > 1 && str_param(p, "previewPath").is_some() {
+        return Err(bad(id, "previewPath is only supported for a single merge group; remove it to preview all groups"));
     }
-    if let Some(img) = &out.preview {
-        info["previewSize"] = json!([img.width, img.height]);
+    let single = jobs.len() == 1;
+    let mut previews = Vec::new();
+    let mut failed = Vec::new();
+    let mut first_preview = None;
+    for job in &jobs {
+        let out = match job.run(&|_, _| true) {
+            Ok(out) => out,
+            Err(e) => {
+                failed.push(json!({"photos": job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), "error": e}));
+                continue;
+            }
+        };
+        let mut info = out.info;
+        if let Some(img) = &out.preview {
+            info["previewSize"] = json!([img.width, img.height]);
+        }
+        if single {
+            first_preview = out.preview;
+        }
+        previews.push(info);
+    }
+    if previews.is_empty() {
+        let msg = failed.iter().map(|f| format!("{}: {}", f["photos"], f["error"])).collect::<Vec<_>>().join("; ");
+        return Err(bad(id, format!("all previews failed: {msg}")));
+    }
+    let mut info = previews.first().cloned().unwrap_or(Value::Null);
+    if single {
+        if let (Some(path), Some(img)) = (str_param(p, "previewPath"), &first_preview) {
+            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default())
+                .map_err(|e| bad(id, e.to_string()))?;
+            s.check_write_target(path).map_err(|e| bad(id, e))?;
+            crate::export::write_file(path, &png).map_err(|e| bad(id, e))?;
+            info["previewPath"] = json!(path);
+        }
+    } else if let Some(obj) = info.as_object_mut() {
+        obj.insert("previews".into(), Value::Array(previews));
+        if !failed.is_empty() {
+            obj.insert("failed".into(), Value::Array(failed));
+        }
+    }
+    if !skipped.is_empty()
+        && let Some(obj) = info.as_object_mut()
+    {
+        obj.insert("skipped".into(), json!(skipped.iter().map(|g| g.iter().map(|p| p.0).collect::<Vec<_>>()).collect::<Vec<_>>()));
     }
     Ok(info)
 }
@@ -52,7 +88,7 @@ fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (mut merged, mut failed) = (Vec::new(), Vec::new());
     for set in sets {
-        match s.merge_now(kind.clone(), finish.clone(), &set) {
+        match s.merge_now_groups(kind.clone(), finish.clone(), vec![set.clone()]) {
             Ok(v) => merged.push(v),
             Err(e) => failed.push(json!({"photos": set.iter().map(|p| p.0).collect::<Vec<_>>(), "error": e.to_string()})),
         }
