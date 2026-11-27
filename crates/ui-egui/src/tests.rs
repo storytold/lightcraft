@@ -121,6 +121,7 @@ mod text_prompt;
 mod thumb;
 mod titlebar;
 mod tool_overlay;
+mod ui_language;
 mod unsaved;
 mod view_cost;
 mod wb_selector;
