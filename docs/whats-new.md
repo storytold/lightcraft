@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### What's New reads as written
+- Help ▸ What's New shows each note as one paragraph instead of breaking it at every line of the source, and
+  shows links, bold and italics as text instead of raw Markdown (issue #4383).
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
@@ -2336,8 +2340,6 @@
 ### Library
 - Choosing a date under By Date or a keyword under Keywords shows those photos from All Photos, as their counts
   promise, instead of filtering whatever album or folder was open, which often showed nothing (issue #341).
-)
-)
 
 ## 2026-10-07
 
