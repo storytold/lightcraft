@@ -331,8 +331,8 @@ mod config_tests {
             assert_eq!(actual, Some(root.join("Settings")));
         }
         assert_eq!(
-            config_dir_from(None, Platform::Windows, |name| (name == "APPDATA").then(|| OsString::from("/roaming")), || None),
-            Some(PathBuf::from("/roaming/LightCraft"))
+            config_dir_from(None, Platform::Windows, |name| (name == "APPDATA").then(|| OsString::from(r"C:\Roaming")), || None),
+            Some(PathBuf::from(r"C:\Roaming").join("LightCraft"))
         );
     }
 
