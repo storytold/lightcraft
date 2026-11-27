@@ -179,6 +179,22 @@ fn non_positive_iso_is_ignored() {
 }
 
 #[test]
+fn negative_xmp_pixel_width_is_ignored() {
+    let read = |attrs: &str| {
+        let x = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" {attrs}/>
+            </rdf:RDF>"#
+        );
+        parse_xmp(&x).unwrap().metadata.width
+    };
+
+    assert_eq!(read(r#"tiff:ImageWidth="-1""#), None);
+    assert_eq!(read(r#"tiff:ImageWidth="-1" exif:PixelXDimension="640""#), Some(640));
+    assert_eq!(read(r#"exif:PixelXDimension="-1""#), None);
+}
+
+#[test]
 fn malformed_inputs() {
     assert!(parse_xmp("<a><b></a>").is_ok() || parse_xmp("<a><b></a>").is_err());
     assert_eq!(parse_xmp("").unwrap().metadata, Metadata::default());
@@ -327,6 +343,36 @@ fn mwg_regions_quarter_turn_rotation_is_mapped_to_the_upright_frame() {
     assert!(near(regions[2].rect, [0.2, 0.25, 0.4, 0.55]), "0 is untouched: {:?}", regions[2].rect);
     assert!(near(regions[3].rect, [0.6, 0.45, 0.8, 0.75]), "π (orientation 3): {:?}", regions[3].rect);
     assert!(near(regions[4].rect, [0.6, 0.45, 0.8, 0.75]), "−π (orientation 3): {:?}", regions[4].rect);
+}
+
+/// The size a packet's boxes were drawn on is its `AppliedToDimensions`, unless a box says how the photo was turned
+/// (Lightroom's `mwg-rs:Rotation`: those are upright already) or there is no size to go by.
+#[test]
+fn regions_drawn_on_is_the_applied_to_size_unless_a_box_says_how_it_was_turned() {
+    let packet = |dims: &str, rotation: &str| {
+        format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+              <mwg-rs:Regions rdf:parseType="Resource">{dims}
+                <mwg-rs:RegionList><rdf:Bag>
+                  <rdf:li rdf:parseType="Resource" mwg-rs:Type="Face">
+                    <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.3" stArea:y="0.4" stArea:w="0.2" stArea:h="0.3"/>
+                  </rdf:li>
+                  <rdf:li rdf:parseType="Resource" mwg-rs:Type="Face"{rotation}>
+                    <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.6" stArea:y="0.4" stArea:w="0.2" stArea:h="0.3"/>
+                  </rdf:li>
+                </rdf:Bag></mwg-rs:RegionList>
+              </mwg-rs:Regions>
+            </rdf:Description></rdf:RDF>"#
+        )
+    };
+    let dims = r#"<mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="6000" stDim:h="4000" stDim:unit="pixel"/>"#;
+    let drawn_on = |x: &str| parse_xmp(x).unwrap().regions_drawn_on();
+    assert_eq!(drawn_on(&packet(dims, "")), Some((6000.0, 4000.0)));
+    assert_eq!(drawn_on(&packet(dims, r#" mwg-rs:Rotation="-1.57080""#)), None, "one box turned by Lightroom");
+    assert_eq!(drawn_on(&packet("", "")), None, "no AppliedToDimensions");
+    assert_eq!(drawn_on(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF>"#), None);
 }
 
 /// A second, differently-shaped encoding: each region is its own `rdf:Description` (rather than an
@@ -482,4 +528,77 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
     assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
     assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
     assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
+}
+
+#[test]
+fn zero_padded_numeric_references_decode() {
+    assert_eq!(unescape_attr("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");
+    assert_eq!(unescape_attr("&abc&#xyz;&;"), "&abc&#xyz;&;");
+}
+
+#[test]
+fn entity_rejects_signed_numeric_references() {
+    assert_eq!(entity("#+65"), None);
+    assert_eq!(entity("#x+41"), None);
+    assert_eq!(entity("#65"), Some('A'));
+    assert_eq!(entity("#x41"), Some('A'));
+}
+
+#[test]
+fn malformed_capture_time_falls_back_and_keeps_raw_property() {
+    let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" exif:DateTimeOriginal="2026-01-01T" xmp:CreateDate="2026-01-02T10:00:00Z"/></rdf:RDF></x:xmpmeta>"#;
+    let parsed = parse_xmp(packet).unwrap();
+    assert_eq!(
+        parsed.metadata.capture_time.map(|d| (d.year, d.month, d.day, d.hour, d.minute, d.second, d.offset_minutes)),
+        Some((2026, 1, 2, 10, 0, 0, Some(0)))
+    );
+    assert_eq!(parsed.properties["exif:DateTimeOriginal"], vec!["2026-01-01T".to_string()]);
+}
+
+#[test]
+fn malformed_capture_time_without_fallback_is_not_projected() {
+    let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:DateTimeOriginal="2026-01-01T"/></rdf:RDF></x:xmpmeta>"#;
+    let parsed = parse_xmp(packet).unwrap();
+    assert_eq!(parsed.metadata.capture_time, None);
+    assert_eq!(parsed.properties["exif:DateTimeOriginal"], vec!["2026-01-01T".to_string()]);
+}
+
+#[test]
+fn a_start_tag_with_thousands_of_namespace_declarations_is_refused() {
+    let decls: String = (0..2000).map(|i| format!(" xmlns:p{i}=\"urn:x{i}\"")).collect();
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description{decls} p1:a=\"1\"/></rdf:RDF></x:xmpmeta>"
+    );
+    assert!(matches!(parse_xmp(&xmp), Err(XmpError::TooComplex)));
+}
+
+#[test]
+fn many_ampersands_before_one_semicolon_are_read_once() {
+    // 200 000 `&` then a `;`: each `&` once searched the whole rest of the attribute for the `;`
+    let hostile = format!("{};&amp;", "&".repeat(200_000));
+    assert_eq!(unescape_attr(&hostile), format!("{};&", "&".repeat(200_000)));
+    assert_eq!(unescape_attr("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+}
+
+/// Children that add no key (empty structs) still had their whole ancestor path copied, each,
+/// after the budget was spent: a 250 KB path under 100 000 such children was 25 GB of copying.
+#[test]
+fn paths_are_not_built_past_the_key_budget() {
+    let level = "n".repeat(60_000);
+    let mut doc = String::from(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:lc=\"https://lightcraft.example/lc/\"><rdf:RDF><rdf:Description>",
+    );
+    for _ in 0..4 {
+        doc.push_str(&format!("<lc:{level} rdf:parseType=\"Resource\">"));
+    }
+    for _ in 0..100_000 {
+        doc.push_str("<lc:e rdf:parseType=\"Resource\"/>");
+    }
+    for _ in 0..4 {
+        doc.push_str(&format!("</lc:{level}>"));
+    }
+    doc.push_str("</rdf:Description></rdf:RDF></x:xmpmeta>");
+    let t = std::time::Instant::now();
+    let _ = parse_xmp(&doc);
+    assert!(t.elapsed().as_secs() < 10, "took {:?}", t.elapsed());
 }

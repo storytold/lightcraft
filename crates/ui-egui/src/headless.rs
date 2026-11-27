@@ -388,11 +388,12 @@ impl Headless {
         }
     }
 
-    /// Is anything still in progress (renders, file-system checks the sidebar waits for, queued
-    /// input)?
+    /// Is anything still in progress (renders, file-system checks the sidebar waits for, the albums' counts,
+    /// queued input)?
     pub fn busy(&self) -> bool {
         self.app.renderer.in_flight() > 0
             || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
+            || self.app.caches.album_recount_running()
             || self.app.merge.busy()
             || self.app.scan.is_some()
             || self.app.sync.is_some()
@@ -400,6 +401,7 @@ impl Headless {
             || self.app.import.is_some()
             || self.app.export.is_some()
             || self.app.session.denoise_busy()
+            || self.app.survey_motion.moving(self.time)
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.app.pending_gestures.is_empty()
@@ -466,13 +468,21 @@ impl Headless {
         }
     }
 
+    /// Queue a control-protocol request without running a frame: the answer comes on the returned
+    /// channel once a frame ([`Self::step`]) has taken the request up, and the work it starts is done.
+    pub(crate) fn send(&mut self, method: &str, params: Value) -> Result<std::sync::mpsc::Receiver<Value>, Value> {
+        let (req, rx) = ControlRequest::new(method, params);
+        self.control.send(req).map_err(|_| json!({"ok": false, "error": "control channel closed"}))?;
+        Ok(rx)
+    }
+
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
     /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
-        let (req, rx) = ControlRequest::new(method, params);
-        if self.control.send(req).is_err() {
-            return json!({"ok": false, "error": "control channel closed"});
-        }
+        let rx = match self.send(method, params) {
+            Ok(rx) => rx,
+            Err(e) => return e,
+        };
         let t0 = Instant::now();
         let reply = loop {
             self.step();

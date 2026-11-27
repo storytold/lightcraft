@@ -43,7 +43,7 @@ fn grid_menu_shortcut_hints_keep_native_toggle_dispatch() {
         assert_eq!(label, "Photo Grid");
         assert_eq!(accelerator, Some("G"));
         assert!(!native_menu_delivers(accelerator.unwrap()));
-        for (key, text) in [("Cmd+Shift+G", "⌘⇧G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
+        for (key, text) in [("Cmd+Shift+G", "⇧⌘G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
             crate::shortcuts::assign(&mut keymap, "view.gridToggle", Some(key)).unwrap();
             let (label, accelerator) = native_item_presentation(&keymap, id, &Value::Null, "Photo Grid", Some(key));
             assert_eq!(label, format!("Photo Grid ({text})"));
@@ -278,25 +278,11 @@ fn bar_follows_the_registry_and_state() {
 }
 
 #[test]
-fn quit_ends_the_file_menu_after_unlisted_entries() {
-    let app = app();
-    // the File menu has registry entries the layout doesn't list (appended as fallbacks)
-    let listed = LAYOUT.iter().find(|(t, _)| *t == "File").unwrap().1;
-    let unlisted: Vec<String> = crate::menus::menu_entries(&app)
-        .into_iter()
-        .filter(|e| e.menu.first().map(String::as_str) == Some("File") && !listed.contains(&e.id.as_str()) && !HIDDEN.contains(&e.id.as_str()))
-        .map(|e| e.id)
-        .collect();
-    assert!(!unlisted.is_empty(), "no fallback File entries to order");
-    let bar = menu_bar(&app);
+fn quit_ends_the_file_menu_alone_in_its_group() {
+    let bar = menu_bar(&app());
     let file = &bar.iter().find(|(t, _)| t == "File").unwrap().1;
-    // Quit is the last item, alone in its separator group
     assert!(matches!(file.last(), Some(MenuNode::Item { id, .. }) if id == "app.quit"), "{file:?}");
     assert_eq!(file.get(file.len() - 2), Some(&MenuNode::Separator));
-    // every fallback entry is still reachable, before Quit
-    for id in &unlisted {
-        assert!(find(&file[..file.len() - 1], id).is_some(), "{id} missing before Quit");
-    }
 }
 
 #[test]
@@ -767,12 +753,24 @@ fn native_menu_commands_respect_the_blocking_window_policy() {
 
 #[test]
 fn shortcut_text_per_platform() {
-    assert_eq!(shortcut_text("Cmd+Shift+Z", true), "⌘⇧Z");
+    assert_eq!(shortcut_text("Cmd+Shift+Z", true), "⇧⌘Z");
     assert_eq!(shortcut_text("Cmd+Shift+Z", false), "Ctrl+Shift+Z");
     assert_eq!(shortcut_text("Delete", true), "⌫");
 }
 
-/// Every item of a menu, submenus included.
+/// AppKit and Apple's Human Interface Guidelines write modifiers ⌃⌥⇧⌘ whatever order the binding
+/// was spelled in, so the hint on a button matches the menu bar's own column.
+#[test]
+fn shortcut_text_orders_mac_modifiers_control_option_shift_command() {
+    assert_eq!(shortcut_text("Cmd+Alt+Shift+C", true), "⌥⇧⌘C");
+    assert_eq!(shortcut_text("Shift+Alt+Ctrl+Cmd+K", true), "⌃⌥⇧⌘K");
+    assert_eq!(shortcut_text("Cmd+Ctrl+F", true), "⌃⌘F");
+    assert_eq!(shortcut_text("Shift+Cmd+Up", true), "⇧⌘↑");
+    assert_eq!(shortcut_text("Shift+Alt+Y", true), "⌥⇧Y");
+    assert_eq!(shortcut_text("Cmd+Alt+Shift+C", false), "Ctrl+Alt+Shift+C", "other platforms keep the binding as written");
+}
+
+/// Every item of a menu, submenus included, in order.
 fn flat(nodes: &[MenuNode]) -> Vec<&MenuNode> {
     nodes
         .iter()
@@ -782,6 +780,126 @@ fn flat(nodes: &[MenuNode]) -> Vec<&MenuNode> {
             MenuNode::Separator => vec![],
         })
         .collect()
+}
+
+/// The app in each view whose menus differ (grid, loupe with a mask, compare).
+fn apps_in_every_view() -> Vec<LightcraftApp> {
+    [ViewMode::PhotoGrid, ViewMode::Detail, ViewMode::Compare]
+        .into_iter()
+        .map(|v| {
+            let mut a = app();
+            a.ui.view = v;
+            a.ui.right = RightPanel::Masking;
+            a
+        })
+        .collect()
+}
+
+/// Given every command that names a menu, Then the layout gives it a place: a slot in its
+/// menu's [`LAYOUT`] row (one-level path), or a submenu that [`LAYOUT`] or [`SUBMENUS`] places
+/// (two-level path). Nothing lands in an unsorted group at the end.
+#[test]
+fn every_menu_command_has_a_place_in_the_layout() {
+    let placed = |e: &crate::menus::MenuEntry| -> bool {
+        let Some(title) = e.menu.first() else { return true };
+        let top = LAYOUT.iter().filter(|(t, _)| t == title).flat_map(|(_, l)| l.iter().copied());
+        match e.menu.get(1) {
+            None => top.clone().any(|s| s == e.id),
+            Some(sub) => {
+                let nested = SUBMENUS.iter().filter(|(t, _, _)| t == title).flat_map(|(_, _, l)| l.iter().copied());
+                top.chain(nested).any(|s| s.strip_prefix('@') == Some(sub.as_str()))
+            }
+        }
+    };
+    let unplaced: Vec<String> = crate::menus::menu_entries(&app())
+        .into_iter()
+        .filter(|e| !HIDDEN.contains(&e.id.as_str()) && !placed(e))
+        .map(|e| format!("{} ({})", e.id, e.menu.join(" ▸ ")))
+        .collect();
+    assert!(unplaced.is_empty(), "commands without a place in LAYOUT: {unplaced:#?}");
+}
+
+/// Given the grid, the loupe or Compare with library photos selected, When a menu is opened,
+/// Then no command shows up twice in it (with the same parameters), under the same label or
+/// another one. The one repeat on purpose: Custom… ends File ▸ Export with Preset with the
+/// Export dialog.
+#[test]
+fn no_menu_offers_the_same_command_twice() {
+    const ON_PURPOSE: &[(&str, &str)] = &[("dialog.export", "Custom…")];
+    for a in apps_in_every_view() {
+        for (title, items) in menu_bar(&a) {
+            let mut seen: Vec<(&str, &Value, &str)> = Vec::new();
+            for n in flat(&items) {
+                let MenuNode::Item { id, params, label, .. } = n else { continue };
+                if ON_PURPOSE.contains(&(id.as_str(), label.as_str())) {
+                    continue;
+                }
+                if let Some((_, _, first)) = seen.iter().find(|(i, p, _)| i == id && *p == params) {
+                    panic!("{title} ({:?}): `{id}` {params} twice, as {first:?} and {label:?}", a.ui.view);
+                }
+                seen.push((id, params, label));
+            }
+        }
+    }
+}
+
+/// Given any view, Then every menu fits a laptop screen without scrolling: at most 40 rows,
+/// a separator counting as half a row (about 45 fit on a 14-inch MacBook's screen).
+#[test]
+fn every_menu_fits_a_laptop_screen() {
+    for a in apps_in_every_view() {
+        for (title, items) in menu_bar(&a) {
+            let seps = items.iter().filter(|n| **n == MenuNode::Separator).count();
+            let rows = items.len() - seps;
+            let height = rows as f32 + seps as f32 / 2.0;
+            assert!(height <= 40.0, "{title} ({:?}): {rows} rows and {seps} separators", a.ui.view);
+        }
+    }
+}
+
+/// Given the loupe, When a mask overlay mode or colour is chosen in View ▸ Mask Overlay, Then
+/// it is the one in use and the only one checked; the cycle items stay for their keys.
+#[test]
+fn mask_overlay_menu_lists_modes_and_colors_with_the_current_one_checked() {
+    use lightcraft_engine::pipeline::MaskView;
+    let mut a = app();
+    a.ui.view = ViewMode::Detail;
+    let mask_menu = |a: &LightcraftApp| -> Vec<MenuNode> {
+        let bar = menu_bar(a);
+        let view = &bar.iter().find(|(t, _)| t == "View").expect("View menu").1;
+        view.iter()
+            .find_map(|n| match n {
+                MenuNode::Submenu { label, children } if label == "Mask Overlay" => Some(children.clone()),
+                _ => None,
+            })
+            .expect("View ▸ Mask Overlay")
+    };
+    let checked_of = |kids: &[MenuNode], id: &str| -> Vec<Value> {
+        kids.iter()
+            .filter_map(|n| match n {
+                MenuNode::Item { id: i, params, checked: Some(true), .. } if i == id => Some(params.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let kids = mask_menu(&a);
+    for id in ["view.maskOverlay", "view.maskOverlayAll", "view.maskPins"] {
+        assert!(find(&kids, id).is_some(), "{id} in Mask Overlay");
+    }
+    let modes = kids.iter().filter(|n| matches!(n, MenuNode::Item { id, params, .. } if id == "view.maskOverlayMode" && !params.is_null())).count();
+    assert_eq!(modes, MaskView::ALL.len());
+    let colors = kids.iter().filter(|n| matches!(n, MenuNode::Item { id, params, .. } if id == "view.maskOverlayColor" && !params.is_null())).count();
+    assert_eq!(colors, crate::panels::masking::OVERLAY_COLORS.len());
+    for id in ["view.maskOverlayMode", "view.maskOverlayColor"] {
+        assert!(kids.iter().any(|n| matches!(n, MenuNode::Item { id: i, params, .. } if i == id && params.is_null())), "the cycle item {id} stays");
+        let catalog_path = super::super::ui_commands::UI_COMMANDS.iter().find(|c| c.0 == id).map(|c| c.3);
+        assert_eq!(catalog_path, Some("View>Mask Overlay"), "the command catalog (ui.menu.list) places {id} where the menu does");
+    }
+    run_item(&mut a, "view.maskOverlayMode", json!({"mode": MaskView::WhiteOnBlack.name()})).unwrap();
+    run_item(&mut a, "view.maskOverlayColor", json!({"color": "#28c846"})).unwrap();
+    let kids = mask_menu(&a);
+    assert_eq!(checked_of(&kids, "view.maskOverlayMode"), vec![json!({"mode": MaskView::WhiteOnBlack.name()})]);
+    assert_eq!(checked_of(&kids, "view.maskOverlayColor"), vec![json!({"color": "#28c846"})]);
 }
 
 /// Given the menu bar, Then an item that turns something on or off is named for the thing,
@@ -822,4 +940,38 @@ fn no_two_menu_commands_share_a_label() {
         }
     }
     assert!(clashes.is_empty(), "{clashes:#?}");
+}
+
+/// Edit lists Select Only Active Photo with the other Select rows and Paste Settings from Previous
+/// with the other Paste rows, not after Settings…, near the end of the menu.
+#[test]
+fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
+    let a = app();
+    let bar = menu_bar(&a);
+    let nodes = &bar.iter().find(|(title, _)| title == "Edit").unwrap().1;
+    let pos = |id: &str| {
+        nodes.iter().position(|n| matches!(n, MenuNode::Item { id: i, .. } if i == id)).unwrap_or_else(|| panic!("{id} is a top-level Edit row"))
+    };
+    assert_eq!(pos("library.selectOnlyActive"), pos("library.selectNone") + 1, "Select Only Active Photo follows Deselect All");
+    assert_eq!(pos("develop.pastePrevious"), pos("dialog.pasteSettings") + 1, "Paste Settings from Previous follows Paste Selected Settings…");
+    assert!(pos("app.settings") > pos("library.selectOnlyActive"), "Settings… stays after them");
+    let after = &nodes[pos("app.settings") + 1..];
+    assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
+}
+
+/// The interface language is chosen in Settings ▸ General (one choice per language), so Edit has no
+/// Language submenu of 18 rows. The commands stay: agents and tests still switch language by id.
+#[test]
+fn edit_menu_has_no_language_submenu_because_settings_has_the_choice() {
+    let mut a = app();
+    let bar = menu_bar(&a);
+    let edit = bar.iter().find(|(t, _)| t == "Edit").expect("Edit menu").1.as_slice();
+    assert!(!edit.iter().any(|n| matches!(n, MenuNode::Submenu { label, .. } if label == "Language")), "Edit still has a Language submenu");
+    for (title, nodes) in &bar {
+        for command in crate::menus::LANGUAGE_COMMANDS {
+            assert!(find(nodes, command.0).is_none(), "{} is in {title}", command.0);
+        }
+    }
+    run_item(&mut a, "app.language.german", Value::Null).expect("the command still switches language");
+    assert_eq!(a.ui.language, crate::i18n::Locale::De);
 }

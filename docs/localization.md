@@ -39,18 +39,20 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
    ```
 
    The fields are the BCP-47 code (also the settings-file value), the **endonym** shown in the
-   Language menu, the ISO 15924 script (`Latn`, `Jpan`, `Hans`, `Hant`, `Kore`…), and the embedded
+   Settings language row, the ISO 15924 script (`Latn`, `Jpan`, `Hans`, `Hant`, `Kore`…), and the embedded
    catalog. `build.rs` picks up `<code>-formats.json` by name, so the macro and the format lookup
    follow automatically. Add the corresponding `app.language.<name>` entry to
    `LANGUAGE_COMMANDS` and `language_from_command` in `src/menus.rs`, and to the
-   `language_commands_cover_every_language` test. Settings read the locale table; menus and
-   the control channel share the language-command mapping.
+   `language_commands_cover_every_language` test. Settings read the locale table; the control
+   channel uses the language commands (they are in no menu).
 3. **Make sure the glyphs exist.** The script drives which craft-fonts faces the UI installs: a
    language whose script has no face in the build shows boxes (the test says so instead of failing).
    Fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never here; a
    missing face is added there, not worked around in this repository. Sentence-cased messages go
    through `i18n::upper_first`, which leaves Georgian lowercase (upper-casing Mkhedruli would make
-   Mtavruli).
+   Mtavruli). Menu paths in messages use → ("View → Clear Filters"), in English and in
+   translations: Inter has no ▸ or ▾, so those paint as boxes (issue #1950).
+   `source_strings_use_paintable_symbols` checks every symbol in the code's string literals.
 4. Run `cargo xtask ci` (it includes `fmt`, `clippy`, the tests, `parity` and the wasm check).
 
 ## How a message is found
@@ -95,8 +97,12 @@ cargo test -p lightcraft-ui-egui --lib -- --exact i18n::tests::translation_gaps_
 The tests fail on a broken catalog (malformed JSON, a repeated key, placeholders that differ from
 the source), never on a missing translation. The last command is the translation gaps report: per
 language, the count and list of plain and format messages it lacks and the number of untranslated
-What's New lines. It always passes, and `cargo xtask ci` prints it after its test step. The glyph
-tests are skipped without `CRAFT_FONTS_DIR` (there are no CJK faces to check then).
+What's New lines. The plain messages include every `tr("…")` string in the app's source, whether
+or not some catalog has it yet: the report reads calls rustfmt wrapped over several lines and the
+literal branches of `tr(if …)` and `tr(match …)`, and skips tests and comments. A string that
+reaches `tr` through a variable is listed only when it is a catalog key or in one of the label
+tables the report reads. It always passes, and `cargo xtask ci` prints it after its test step. The
+glyph tests are skipped without `CRAFT_FONTS_DIR` (there are no CJK faces to check then).
 To look at a language, render it headless:
 
 ```sh
@@ -119,4 +125,5 @@ Help ▸ What's New shows `docs/whats-new.md`, and each of its lines (a heading,
 bullet, without the `- ` or `### `) is looked up like any message, so a catalog can translate the notes
 line by line (German does). A line that is re-wrapped or edited no longer matches its translation and
 shows in English until the catalog is updated; the translation gaps report counts the untranslated
-lines.
+lines. The notes may write menu paths with ▸ like the other docs: the dialog shows it as → (and the
+activity stack's ✕ as ×, the sidebar's ＋ as +), since Inter has none of them.

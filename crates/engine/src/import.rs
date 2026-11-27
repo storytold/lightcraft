@@ -15,9 +15,12 @@
 //! 6. Apply each photo's XMP sidecar (or a raw/DNG file's embedded XMP): the sidecar wins for
 //!    metadata and develop settings are restored (see [`crate::sidecar`]). Its capture time fills
 //!    in when the file has none (read before step 5, so it also files and names the copy).
-//! 7. Optionally apply a preset and add keywords (the import dialog's options).
+//! 7. Optionally apply a preset, then a batch-edit recipe (one more History step), and add
+//!    keywords (the import dialog's options).
 //! 8. Commit all new photos as one undoable op. (Undoing a move removes the catalog records;
 //!    the files stay at the destination — undo never moves files back over a card.)
+//! 9. Copy and Move rename sequences use checked platform-sized numbers: the last number is usable once, and any
+//!    further renamed files are reported as failed without losing earlier completed transfers.
 //!
 //! The import dialog first calls [`scan`] (`library.importPreview`): the same expansion, probing
 //! and duplicate detection without adding anything, so the user can review the candidates. The
@@ -36,27 +39,49 @@ mod commit;
 mod defaults;
 mod files;
 mod job;
+mod reads;
 mod scan;
 mod types;
 
+pub(crate) use commit::start_from_file;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use commit::workers;
-pub use commit::{batch_size, civil, commit_prepared, system_clock};
+pub use commit::{batch_size, civil, commit_prepared, local_civil, local_instant, system_clock};
 pub use defaults::{CameraDefault, ImportDefaults, apply_import_defaults, has_import_look, import_defaults};
-pub use files::{EXTENSIONS, LaunchPath, accept_list, expand, expand_within, is_supported, launch_path};
+#[cfg(test)]
+use files::expand_knowing;
+pub use files::{
+    EXTENSIONS, Expansion, LAUNCH_PROBE_LIMIT, LaunchPath, accept_list, expand, expand_report, expand_within, is_supported, launch_deadline,
+    launch_path, launch_path_until,
+};
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
 use job::PreparedItem;
-pub use job::{ImportJob, Prepared, import, import_with};
+pub use job::{ImportJob, Prepared, candidate_thumb_key, import, import_with};
+pub use reads::{MAX_SKIPPED, MAX_STUCK_READERS, ReadWatch, STALL_AFTER, StalledRead, StuckReaders};
 pub(crate) use scan::scan_files;
-pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
+pub use scan::{
+    ScanInput, ScanOutput, ScanProgress, browse_files, browse_order, browse_path, browse_queue, browse_queue_until, browse_spelling, scan,
+    scan_report, scan_with,
+};
 #[cfg(test)]
 use scan::{library_files, library_hashes};
 pub use types::{
-    Duplicate, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved, OnDeleted,
-    Organize,
+    Duplicate, FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved,
+    OnDeleted, Organize,
 };
+
+mod listed_folders;
+pub use listed_folders::ListedFolders;
+
+#[cfg(test)]
+#[path = "import/tests_listed_folders.rs"]
+mod tests_listed_folders;
 
 #[cfg(test)]
 #[path = "import/tests_known.rs"]
 mod tests_known;
+
+#[cfg(test)]
+#[path = "import/tests_pool.rs"]
+mod tests_pool;

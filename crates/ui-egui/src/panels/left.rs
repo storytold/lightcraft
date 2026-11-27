@@ -19,15 +19,18 @@ mod local;
 mod rows;
 mod sections;
 
+use albums::albums_rows;
+pub(crate) use albums::drag_auto_scroll;
+pub(crate) use albums::forget_hover;
 pub use albums::{album_drag_feedback, auto_scroll_speed};
-use albums::{albums_rows, drag_auto_scroll};
 pub(crate) use dates::browse_all_photos;
 use dates::date_rows;
-pub(crate) use folders::{folder_row_of, move_photos, moved_text};
+pub(crate) use folders::{created_text, folder_row_of, move_photos, moved_text};
 use folders::{folder_rows, reveal_chosen};
 use keywords::keyword_rows;
 pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
 use local::{local_now, local_rows};
+pub(crate) use rows::disclosure_name;
 #[cfg(test)]
 pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
 use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
@@ -164,12 +167,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let tree = app.caches.folder_tree(&app.session.catalog);
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
-                            folder_rows(app, ui, &tree, 0.0);
+                            folder_rows(app, ui, &tree, 0.0, None);
                         })
                     }
                     SidebarSection::Keywords => {
                         let tree = app.caches.keyword_tree(&app.session.catalog);
-                        section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
+                        section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0, None))
                     }
                 };
                 placed.push(at);

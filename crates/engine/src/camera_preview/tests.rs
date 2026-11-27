@@ -1,4 +1,6 @@
+use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
+use lightcraft_raw::profile::{HsvTableApply, ProfileLookHueSat};
 
 fn steep_toe_scene() -> (Rgb32f, Rgb32f) {
     let mut sensor = Rgb32f::new(96, 64);
@@ -24,6 +26,74 @@ fn camera_tone_follows_the_jpegs_deep_shadows() {
     let error = dark.iter().map(|(x, y)| (look.tone.apply(luminance_2020(**x)) - luminance_2020(**y)).abs()).sum::<f32>() / dark.len() as f32;
     assert!(error < 0.001, "deep-shadow luminance error {error}");
     assert_eq!(look.matrix, Mat3::IDENTITY);
+}
+
+/// Issue #1904: two populations the camera renders at different brightness for the same scene luminance (saturated
+/// blue at 1.7x, red at 2.64x) made quantile matching join them with a near-vertical step.
+#[test]
+fn tone_fit_does_not_step_between_two_pixel_populations() {
+    let mut pairs = Vec::new();
+    for i in 0..620 {
+        let x = 0.040 + 0.012 * f64::from(i) / 620.0;
+        pairs.push((x, 1.7 * x));
+    }
+    for i in 0..380 {
+        let x = 0.02 * (10.0f64).powf(f64::from(i) / 380.0);
+        pairs.push((x, 2.64 * x));
+    }
+    let elasticity = |k: &[[f32; 2]; 32]| {
+        k.windows(2)
+            .map(|w| {
+                ((f64::from(w[1][1]) + ELASTICITY_BLACK) / (f64::from(w[0][1]) + ELASTICITY_BLACK)).ln()
+                    / (f64::from(w[1][0]) / f64::from(w[0][0])).ln()
+            })
+            .fold(0.0, f64::max)
+    };
+    let mut xs: Vec<f64> = pairs.iter().map(|p| p.0).collect();
+    let mut ys: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+    xs.sort_by(f64::total_cmp);
+    ys.sort_by(f64::total_cmp);
+    let raw: [[f32; 2]; 32] = std::array::from_fn(|i| {
+        let mid = (i * xs.len() / 32 + (i + 1) * xs.len() / 32) / 2;
+        [xs[mid] as f32, ys[mid] as f32]
+    });
+    assert!(elasticity(&raw) > 10.0, "the synthetic scene must reproduce the step: {}", elasticity(&raw));
+    let tone = fit_tone(pairs).unwrap();
+    let knots = tone.knots();
+    assert!(elasticity(knots) <= MAX_TONE_ELASTICITY + 1e-3, "{}", elasticity(knots));
+    assert!(knots.iter().zip(&raw).all(|(a, b)| a[0] == b[0]), "only the outputs move");
+    for w in knots.windows(2) {
+        assert!(w[1][1] >= w[0][1]);
+    }
+    // A curve within the bound is left alone.
+    let smooth: [[f32; 2]; 32] = std::array::from_fn(|i| {
+        let x = 0.01 * 1.15f32.powi(i as i32);
+        [x, 0.9 * (x / (x + 0.18))]
+    });
+    assert_eq!(limit_elasticity(smooth, &[]), Some(smooth));
+}
+
+/// A step at the top of the curve reaches its end: the pinned window and the free end are both under the bound, and
+/// the pixel pairs choose between them.
+#[test]
+fn a_step_at_the_curves_end_is_repaired_from_the_side_the_pixels_support() {
+    let x = |i: usize| 0.01 * 1.15f64.powi(i as i32);
+    let stepped: [[f32; 2]; 32] = std::array::from_fn(|i| [x(i) as f32, (0.3 * x(i) * if i >= 30 { 3.0 } else { 1.0 }) as f32]);
+    let pairs = |gain: f64| -> Vec<(f64, f64)> {
+        (0..4000).map(|j| x(0) * (x(31) / x(0)).powf(f64::from(j) / 3999.0)).map(|x| (x, 0.3 * x * if x >= 0.62 { gain } else { 1.0 })).collect()
+    };
+    // The pixels follow the curve below the step: the end is left free and the top knots drop to the repair slope.
+    let free = limit_elasticity(stepped, &pairs(1.0)).unwrap();
+    assert_eq!(free[..30], stepped[..30], "the curve up to the step is kept");
+    let (u29, v29) = (x(29).ln(), (f64::from(stepped[29][1]) + ELASTICITY_BLACK).ln());
+    for k in 30..32 {
+        let limit = (v29 + TONE_REPAIR_ELASTICITY * (x(k).ln() - u29)).exp() - ELASTICITY_BLACK;
+        assert!(f64::from(free[k][1]) <= limit + 1e-6, "knot {k}: {} over {limit}", free[k][1]);
+    }
+    // The pixels do sit above the step: the window stays pinned to the top knot.
+    let pinned = limit_elasticity(stepped, &pairs(3.0)).unwrap();
+    assert_eq!(pinned[31], stepped[31], "the end the pixels support is kept");
+    assert!(pinned[29][1] > stepped[29][1] && pinned[30][1] < stepped[30][1], "the step is spread over the window");
 }
 
 #[test]
@@ -661,7 +731,7 @@ fn corpus_lens_corrected_jpegs_pair_with_the_warped_sensor() {
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
         let (Some((plain, reference, _)), Some((chosen, chosen_reference, _))) =
-            (proxies(&raw, &bytes, &t, PROXY, 0.0, None), proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&lens)))
+            (proxies(&raw, &bytes, &t, PROXY, 0.0, None, None), proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&lens), None))
         else {
             continue;
         };
@@ -928,7 +998,7 @@ fn corpus_cr3_gets_a_framing_aligned_camera_look() {
     assert_eq!(raw.format, RawFormat::Cr3);
     assert_eq!(raw.info().developed_size(), (6000, 4000));
     let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-    let look = fit_preview(&raw, &bytes, &transform, None).0;
+    let look = fit_preview(&raw, &bytes, &transform, None, None).0;
     eprintln!("R100 guarded colour fit accepted: {}", look.is_some());
     assert!(look.is_some(), "this R100 corpus photo has enough matching colour after camera-framing alignment");
     let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
@@ -965,7 +1035,7 @@ fn corpus_uses_the_bundled_profile(file: &str, model: &str) {
     let lens = lens_geometry(&raw.opcodes.list3);
     raw.opcodes.list3.retain(|op| !op.is_lens_correction());
     let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-    let look = fit_preview(&raw, &bytes, &transform, lens.as_ref()).0.expect("fit accepted");
+    let look = fit_preview(&raw, &bytes, &transform, lens.as_ref(), None).0.expect("fit accepted");
     let expected = bundled.matrix().mul(&transform.matrix.inverse().unwrap());
     for (row, want) in look.matrix.0.iter().zip(expected.0) {
         for (got, want) in row.iter().zip(want) {
@@ -1216,6 +1286,30 @@ fn assert_lowered(fitted: &CameraLook, fixed: &CameraLook, what: &str) {
         let x = 0.001 * 1.005f32.powi(i);
         assert!(fixed.tone.apply(x) <= fitted.tone.apply(x) + 1e-5, "{what} at {x}: {} > {}", fixed.tone.apply(x), fitted.tone.apply(x));
     }
+    // V5's shoulder stays below too whenever the lowered last segment's slope over its squared gap to
+    // white is at most the fitted one's (`dro_off` doesn't enforce it, so V1 to V4 keep their curve;
+    // issue #1632)
+    if v5_bounded(&fixed.tone, &fitted.tone) {
+        assert!(v5_below(&fixed.tone, &fitted.tone), "{what}: brighter than the fitted curve under V5");
+    }
+}
+
+/// Whether the last segment of `a`, over its squared gap to white, is at most `b`'s: then `a`'s V5
+/// shoulder ([`CameraTone::apply_rolloff`]) is nowhere above `b`'s (issue #1632).
+fn v5_bounded(a: &CameraTone, b: &CameraTone) -> bool {
+    let rate = |t: &CameraTone| {
+        let k = t.knots();
+        ((k[31][1] - k[30][1]) / (k[31][0] - k[30][0])).max(0.0) / (1.0 - k[31][1]).powi(2)
+    };
+    rate(a) <= rate(b)
+}
+
+/// Whether `a`'s V5 curve is nowhere brighter than `b`'s, from deep shadows to far past the last knot.
+fn v5_below(a: &CameraTone, b: &CameraTone) -> bool {
+    (0..=2400).all(|i| {
+        let x = 0.001 * 1.005f32.powi(i);
+        a.apply_rolloff(x) <= b.apply_rolloff(x) + 1e-5
+    })
 }
 
 /// Issue #244: Sony's Dynamic Range Optimizer lifts the camera JPEG's shadows, not the raw's. A
@@ -1346,14 +1440,16 @@ fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
         let mut raw = lightcraft_raw::decode(&bytes).unwrap();
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-        let look = fit_preview(&raw, &bytes, &transform, None).0.expect("a camera look");
+        let look = fit_preview(&raw, &bytes, &transform, None, None).0.expect("a camera look");
         // the look fitted to the JPEG, as before this change
-        let (sensor, reference, clipped) = proxies(&raw, &bytes, &transform, PROXY, 0.0, None).unwrap();
+        let (sensor, reference, clipped) = proxies(&raw, &bytes, &transform, PROXY, 0.0, None, None).unwrap();
         let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
         let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
         let fitted = fit_look(&sensor, &reference, &clipped, colour).unwrap();
         if dro {
             assert_lowered(&fitted, &look, name);
+            // the Sony DRO samples' lowered curves stay below their fitted ones under V5 as well
+            assert!(v5_below(&look.tone, &fitted.tone), "{name}: brighter than the fitted curve under V5");
             for x in lowered {
                 assert!(look.tone.apply(x) < 0.95 * fitted.tone.apply(x), "{name} at {x}: {} vs {}", look.tone.apply(x), fitted.tone.apply(x));
             }
@@ -1978,20 +2074,22 @@ fn a_rejected_profile_leaves_the_tone_curve_on_the_photos_own_colour() {
     assert!(look.is_some() && !t.matrix_is_fallback);
 }
 
-/// [`monochrome_look`] on a synthetic raw file: an ILCE-7M4 (it has a bundled camera profile) whose camera JPEG,
-/// in a minimal TIFF, is black and white gets the tone curve, on the colour of the transform it is given; the
-/// same file with a tinted JPEG gets nothing from this step.
-#[test]
-fn monochrome_look_reads_the_files_black_and_white_jpeg() {
+/// A synthetic ILCE-7M4 raw (it has a bundled camera profile; demosaiced grey `sensor` levels) and its file bytes:
+/// a minimal TIFF holding the camera JPEG, a bright camera curve on the `scene` luminance as an 8-bit sRGB JPEG in
+/// `tint` (grey for `[1.0; 3]`).
+fn grey_raw_with_jpeg(
+    (w, h): (usize, usize),
+    sensor: impl Fn(usize, usize) -> f32,
+    scene: impl Fn(usize, usize) -> f32,
+    tint: [f32; 3],
+) -> (RawImage, Vec<u8>) {
     use lightcraft_raw::{BlackLevel, ColorData, OpcodeLists, Orientation, RawData, Rect};
-    let (w, h) = (192usize, 128usize);
-    let level = |x: usize, y: usize| 0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32);
     let raw = RawImage {
         format: RawFormat::Arw,
         width: w,
         height: h,
         cpp: 3,
-        data: RawData::F32((0..w * h).flat_map(|i| [level(i % w, i / w); 3]).collect()),
+        data: RawData::F32((0..w * h).flat_map(|i| [sensor(i % w, i / w); 3]).collect()),
         cfa: None,
         bits: 16,
         black: BlackLevel::uniform(0.0),
@@ -2007,38 +2105,198 @@ fn monochrome_look_reads_the_files_black_and_white_jpeg() {
         metadata: lightcraft_meta::Metadata { make: Some("SONY".into()), model: Some("ILCE-7M4".into()), ..Default::default() },
         lens_metadata: Default::default(),
     };
+    let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let pixels: Vec<u8> = (0..w * h)
+        .flat_map(|i| {
+            let v = 1.0 - (-3.0 * scene(i % w, i / w)).exp();
+            tint.map(|t| (srgb(v * t).clamp(0.0, 1.0) * 255.0).round() as u8)
+        })
+        .collect();
+    let image = lightcraft_codecs::EncodeImage::new(w as u32, h as u32, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let jpeg = lightcraft_codecs::encode_jpeg(&image, 95, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
+    // II*, IFD0 at 8 with JPEGInterchangeFormat (0x201) and its length (0x202), the JPEG after it
+    let mut tiff = b"II*\0\x08\0\0\0\x02\0".to_vec();
+    for (tag, value) in [(0x0201u16, 38u32), (0x0202, jpeg.len() as u32)] {
+        tiff.extend(tag.to_le_bytes());
+        tiff.extend(4u16.to_le_bytes());
+        tiff.extend(1u32.to_le_bytes());
+        tiff.extend(value.to_le_bytes());
+    }
+    tiff.extend(0u32.to_le_bytes());
+    assert_eq!(tiff.len(), 38);
+    tiff.extend(jpeg);
+    (raw, tiff)
+}
+
+/// [`monochrome_look`] on a synthetic raw file: an ILCE-7M4 whose camera JPEG is black and white gets the tone curve,
+/// on the colour of the transform it is given; the same file with a tinted JPEG gets nothing from this step.
+#[test]
+fn monochrome_look_reads_the_files_black_and_white_jpeg() {
+    let (w, h) = (192usize, 128usize);
+    let level = |x: usize, y: usize| 0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32);
+    let (raw, grey) = grey_raw_with_jpeg((w, h), level, level, [1.0; 3]);
     assert!(crate::camera_profiles::get("ILCE-7M4").is_some());
-    // the camera's rendering: a bright curve on the scene's luminance, as a grey (or tinted) 8-bit sRGB JPEG
-    let file = |tint: [f32; 3]| {
-        let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
-        let pixels: Vec<u8> = (0..w * h)
-            .flat_map(|i| {
-                let v = 1.0 - (-3.0 * level(i % w, i / w)).exp();
-                tint.map(|t| (srgb(v * t).clamp(0.0, 1.0) * 255.0).round() as u8)
-            })
-            .collect();
-        let image = lightcraft_codecs::EncodeImage::new(w as u32, h as u32, 3, lightcraft_codecs::Samples::U8(&pixels));
-        let jpeg = lightcraft_codecs::encode_jpeg(&image, 95, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
-        // II*, IFD0 at 8 with JPEGInterchangeFormat (0x201) and its length (0x202), the JPEG after it
-        let mut tiff = b"II*\0\x08\0\0\0\x02\0".to_vec();
-        for (tag, value) in [(0x0201u16, 38u32), (0x0202, jpeg.len() as u32)] {
-            tiff.extend(tag.to_le_bytes());
-            tiff.extend(4u16.to_le_bytes());
-            tiff.extend(1u32.to_le_bytes());
-            tiff.extend(value.to_le_bytes());
-        }
-        tiff.extend(0u32.to_le_bytes());
-        assert_eq!(tiff.len(), 38);
-        tiff.extend(jpeg);
-        tiff
-    };
     let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-    let look = monochrome_look(&raw, &file([1.0; 3]), &t, None).expect("a tone curve from the black-and-white JPEG");
+    let look = monochrome_look(&raw, &grey, &t, None, None).expect("a tone curve from the black-and-white JPEG");
     assert!(look.matrix == Mat3::IDENTITY && look.hue_sat.is_none(), "on the transform's colour");
     let curve = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let mid = curve.apply(0.25);
     assert!((mid - (1.0 - (-0.75f32).exp())).abs() < 0.05, "the camera's curve at 0.25: {mid}");
-    assert!(monochrome_look(&raw, &file([1.0, 0.9, 0.8]), &t, None).is_none(), "a tinted JPEG is not black and white");
+    let (_, tinted) = grey_raw_with_jpeg((w, h), level, level, [1.0, 0.9, 0.8]);
+    assert!(monochrome_look(&raw, &tinted, &t, None, None).is_none(), "a tinted JPEG is not black and white");
+}
+
+/// The look is fitted on the sensor as the render shows it, with the file's embedded vignetting correction: the
+/// camera corrected its JPEG, so a curve fitted to the uncorrected sensor learns that brightening, and the render
+/// then applies it twice (X-S10 RAFs up to 0.3 EV brighter than their camera JPEGs).
+#[test]
+fn the_look_is_fitted_on_the_vignetting_corrected_sensor() {
+    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette};
+    let (w, h) = (192usize, 128usize);
+    let vignette = EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let gain = |x: usize, y: usize| {
+        let point = lightcraft_geom::Point::new(x as f64 + 0.5, y as f64 + 0.5);
+        lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32
+    };
+    let scene = |x: usize, y: usize| 0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32);
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), |x, y| scene(x, y) / gain(x, y), scene, [1.0; 3]);
+    let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+    let lens = EmbeddedLens { vignette: Some(vignette), ..Default::default() };
+    let camera = 1.0 - (-0.75f32).exp();
+    let at_quarter = |embedded: Option<&EmbeddedLens>| {
+        let look = monochrome_look(&raw, &bytes, &t, None, embedded).expect("a tone curve");
+        ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
+    };
+    let (corrected, uncorrected) = (at_quarter(Some(&lens)), at_quarter(None));
+    assert!((corrected - camera).abs() < 0.03, "the camera's curve at 0.25: {corrected} vs {camera}");
+    assert!(uncorrected > camera + 0.03, "without the correction the curve brightens: {uncorrected} vs {camera}");
+}
+
+/// The colour fit gets the embedded vignetting correction too ([`starting_colour`] forwards it to every fit): the
+/// tinted camera JPEG of the vignetted sensor takes the colour path, not the black-and-white one.
+#[test]
+fn the_colour_look_is_fitted_on_the_vignetting_corrected_sensor() {
+    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette};
+    let (w, h) = (192usize, 128usize);
+    let vignette = EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let gain = |x: usize, y: usize| {
+        let point = lightcraft_geom::Point::new(x as f64 + 0.5, y as f64 + 0.5);
+        lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32
+    };
+    let scene = |x: usize, y: usize| 0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32);
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), |x, y| scene(x, y) / gain(x, y), scene, [1.0, 0.9, 0.8]);
+    let lens = EmbeddedLens { vignette: Some(vignette), ..Default::default() };
+    let at_quarter = |embedded: Option<&EmbeddedLens>| {
+        let (_, _, look) = starting_colour(&mut raw.clone(), &bytes, None, embedded);
+        let look = look.expect("a colour look");
+        assert!(look.matrix != Mat3::IDENTITY || look.hue_sat.is_some(), "the colour fit, not the black-and-white one");
+        ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
+    };
+    let (corrected, uncorrected) = (at_quarter(Some(&lens)), at_quarter(None));
+    assert!(uncorrected > corrected + 0.03, "without the correction the curve brightens: {uncorrected} vs {corrected}");
+}
+
+/// A lens database profile reaches the fit only as far as the camera JPEG shows it. A camera that left its JPEG
+/// uncorrected relative to its raw keeps the curve fitted without any correction: with the whole
+/// profile on the sensor the curve darkened and the colour fit bent (an ILCE-7M3 with an FE 28mm F2 at f/2 rendered
+/// darker and orange). A camera that corrected its JPEG fully gets the whole correction, as with the file's own data.
+#[test]
+fn a_lens_database_vignetting_reaches_the_fit_as_far_as_the_camera_jpeg_shows_it() {
+    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, LensSource};
+    let (w, h) = (192usize, 128usize);
+    let vignette = EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let gain = |x: usize, y: usize| {
+        let point = lightcraft_geom::Point::new(x as f64 + 0.5, y as f64 + 0.5);
+        lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32
+    };
+    let scene = |x: usize, y: usize| 0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32);
+    let database = EmbeddedLens { vignette: Some(vignette), source: LensSource::Database, ..Default::default() };
+    let camera = 1.0 - (-0.75f32).exp();
+    let at_quarter = |raw: &RawImage, bytes: &[u8], embedded: Option<&EmbeddedLens>| {
+        let t = lightcraft_raw::color::camera_transform(raw, lightcraft_raw::color::as_shot_white_xy(raw));
+        let look = monochrome_look(raw, bytes, &t, None, embedded).expect("a tone curve");
+        ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
+    };
+
+    // the camera JPEG of the vignetted sensor, uncorrected
+    let vignetted = |x: usize, y: usize| scene(x, y) / gain(x, y);
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, vignetted, [1.0; 3]);
+    let (with_profile, without) = (at_quarter(&raw, &bytes, Some(&database)), at_quarter(&raw, &bytes, None));
+    assert!((with_profile - camera).abs() < 0.03, "the camera's curve at 0.25: {with_profile} vs {camera}");
+    assert!((with_profile - without).abs() < 0.01, "as without the profile: {with_profile} vs {without}");
+
+    // the same in colour: the tinted JPEG takes the colour fit, whose curve the whole profile darkened
+    let tint = [1.0, 0.9, 0.8];
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, vignetted, tint);
+    let colour_at_quarter = |raw: &RawImage, bytes: &[u8], embedded: Option<&EmbeddedLens>| {
+        let (_, _, look) = starting_colour(&mut raw.clone(), bytes, None, embedded);
+        let look = look.expect("a colour look");
+        assert!(look.matrix != Mat3::IDENTITY || look.hue_sat.is_some(), "the colour fit, not the black-and-white one");
+        ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
+    };
+    let (with_profile, without) = (colour_at_quarter(&raw, &bytes, Some(&database)), colour_at_quarter(&raw, &bytes, None));
+    assert!((with_profile - without).abs() < 0.01, "the colour fit's curve as without the profile: {with_profile} vs {without}");
+
+    // a camera JPEG with the whole correction applied: the whole correction reaches the fit
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, scene, [1.0; 3]);
+    let corrected = at_quarter(&raw, &bytes, Some(&database));
+    assert!((corrected - camera).abs() < 0.03, "the camera's curve at 0.25: {corrected} vs {camera}");
+
+    // and in colour: the colour fit keeps the database profile, whose correction it would otherwise learn into the curve
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, scene, tint);
+    let (with_profile, without) = (colour_at_quarter(&raw, &bytes, Some(&database)), colour_at_quarter(&raw, &bytes, None));
+    assert!(without > with_profile + 0.03, "without the profile the colour fit's curve brightens: {without} vs {with_profile}");
+}
+
+/// A lens-warped sensor proxy gets the vignetting gain of the position it samples, as the render applies it: the
+/// vignetted sensor, corrected, gives the proxy of the same sensor without vignetting.
+#[test]
+fn the_vignetting_correction_is_applied_before_the_lens_warp() {
+    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette};
+    // twice the 384 px proxy edge: the demosaiced proxy of this linear raw is then the size a warp needs (bins of 2)
+    let (w, h) = (768usize, 512usize);
+    let vignette = EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let gain = |x: usize, y: usize| {
+        let point = lightcraft_geom::Point::new(x as f64 + 0.5, y as f64 + 0.5);
+        lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32
+    };
+    // a texture for the warped candidate to line up with: the JPEG shows the sensor's centre zoomed by 1 / 0.8
+    let texture = |x: f64, y: f64| 0.2 * (1.0 + 0.3 * ((x / 48.0).floor() + (y / 48.0).floor()).rem_euclid(2.0)) as f32;
+    let warp = LensGeometry { k: [0.8, 0.0, 0.0, 0.0], center: [0.5, 0.5] };
+    let (cx, cy) = ((w - 1) as f64 / 2.0, (h - 1) as f64 / 2.0);
+    let jpeg = |x: usize, y: usize| texture(cx + (x as f64 - cx) * 0.8, cy + (y as f64 - cy) * 0.8);
+    let sensor_proxy = |vignetted: bool, embedded: Option<&EmbeddedLens>| {
+        let sensor = |x: usize, y: usize| texture(x as f64, y as f64) / if vignetted { gain(x, y) } else { 1.0 };
+        let (raw, bytes) = grey_raw_with_jpeg((w, h), sensor, jpeg, [1.0; 3]);
+        let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        let (plain, _, _) = proxies(&raw, &bytes, &t, PROXY, 0.0, None, embedded).unwrap();
+        let (sensor, _, _) = proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&warp), embedded).unwrap();
+        assert!(sensor.data.iter().zip(&plain.data).any(|(a, b)| a != b), "the warped candidate is chosen");
+        sensor
+    };
+    let lens = EmbeddedLens { vignette: Some(vignette), ..Default::default() };
+    let (corrected, expected) = (sensor_proxy(true, Some(&lens)), sensor_proxy(false, None));
+    let worst = corrected.data.iter().zip(&expected.data).map(|(a, b)| (a[1] / b[1] - 1.0).abs()).filter(|d| d.is_finite()).fold(0.0, f32::max);
+    assert!(worst < 0.02, "largest deviation {worst}");
+}
+
+/// [`alignment`] leaves out the pixels a proxy lacks (NaN outside a lens-warped one): read as black, they made a
+/// false edge around the border, and the warped candidate lost against a worse unwarped one.
+#[test]
+fn alignment_leaves_out_missing_pixels() {
+    let (w, h) = (48usize, 32usize);
+    let mut a = Rgb32f::new(w, h);
+    for (i, p) in a.data.iter_mut().enumerate() {
+        *p = [0.1 + 0.05 * ((i * 7919) % 13) as f32; 3];
+    }
+    let mut b = a.clone();
+    for (i, p) in b.data.iter_mut().enumerate() {
+        let (x, y) = (i % w, i / w);
+        if x < 4 || y < 4 || x >= w - 4 || y >= h - 4 {
+            *p = [f32::NAN; 3];
+        }
+    }
+    assert!(alignment(&a, &b) > 0.999, "{}", alignment(&a, &b));
 }
 
 /// The black-and-white fit has the partial look's checks: a JPEG of another picture, or one the default curve
@@ -2242,6 +2500,48 @@ fn dng_tone_gates_follow_the_files_own_tags() {
     assert!(looked.profile.look_table.is_some() && eligible(RawFormat::Dng, looked), "a look table defines colour, not tone");
 }
 
+/// A DNG's tone fit takes a lens database's vignetting correction in the share its camera JPEG shows, as the other
+/// raws' fits do: none for a JPEG left uncorrected (the curve as without the profile), all of it for a corrected one.
+/// The file's own vignetting data still reaches it whole.
+#[test]
+fn dng_tone_fit_takes_a_lens_database_vignetting_as_far_as_the_camera_jpeg_shows_it() {
+    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, LensSource};
+    let (w, h) = (384usize, 256usize);
+    let vignette = EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let gain = |x: usize, y: usize| {
+        let point = lightcraft_geom::Point::new(x as f64 + 0.5, y as f64 + 0.5);
+        lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32
+    };
+    // a gradient with blocks of texture, so the preview shows the same picture (`structure_agrees`)
+    let texture = |x: usize, y: usize| ((x / 6).wrapping_mul(2_654_435_761) ^ (y / 6).wrapping_mul(40_503)) % 7;
+    let scene = |x: usize, y: usize| (0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32)) * (0.55 + 0.075 * texture(x, y) as f32);
+    let vignetted = |x: usize, y: usize| scene(x, y) / gain(x, y);
+    let database = EmbeddedLens { vignette: Some(vignette), source: LensSource::Database, ..Default::default() };
+    let at_quarter = |jpeg_scene: &dyn Fn(usize, usize) -> f32, embedded: Option<&EmbeddedLens>| {
+        // tinted: a fit's pairs need some colour (`collect_pairs`)
+        let (mut raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, jpeg_scene, [1.0, 0.95, 0.9]);
+        raw.format = RawFormat::Dng;
+        // a camera whose RGB is linear sRGB (XYZ to sRGB under D65): the grey sensor stays grey
+        let xyz_to_camera = Mat3([[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]]);
+        raw.color = lightcraft_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(xyz_to_camera), None], ..Default::default() };
+        let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        assert!(dng_tone_eligible(&raw, &t), "a DNG whose tone the fit defines");
+        let look = fit_dng_tone(&raw, &bytes, &t, embedded).expect("a DNG tone fit");
+        ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
+    };
+    let (with_profile, without) = (at_quarter(&vignetted, Some(&database)), at_quarter(&vignetted, None));
+    assert!((with_profile - without).abs() < 0.01, "an uncorrected JPEG, as without the profile: {with_profile} vs {without}");
+    let (with_profile, without) = (at_quarter(&scene, Some(&database)), at_quarter(&scene, None));
+    assert!(without > with_profile + 0.03, "a corrected JPEG: without the profile the curve brightens: {without} vs {with_profile}");
+
+    // the file's own vignetting data is what its camera applied: it reaches the fit whole, whatever the JPEG shows
+    let file = EmbeddedLens { source: LensSource::File, ..database };
+    let with_file = at_quarter(&scene, Some(&file));
+    assert!((with_file - with_profile).abs() < 0.01, "a corrected JPEG, as with the measured share: {with_file} vs {with_profile}");
+    let (with_file, without) = (at_quarter(&vignetted, Some(&file)), at_quarter(&vignetted, None));
+    assert!(without > with_file + 0.03, "an uncorrected JPEG still gets the file's whole correction: {without} vs {with_file}");
+}
+
 /// The 1024 px preview Lightroom Classic writes into a 7008 px DNG is fitted; a 256 px thumbnail is not.
 #[test]
 fn dng_tone_fit_takes_lightroom_sized_previews() {
@@ -2249,6 +2549,171 @@ fn dng_tone_fit_takes_lightroom_sized_previews() {
     assert!(1024.0 >= floor(7008.0));
     assert!(256.0 < floor(7008.0));
     assert!(1024.0 >= floor(9504.0), "a 61 MP raw too");
+}
+
+#[test]
+fn a_photo_no_look_fits_keeps_its_camera_profiles_colour() {
+    let colour = (
+        Mat3([[1.8, -0.6, -0.2], [-0.3, 1.5, -0.2], [0.0, -0.4, 1.4]]),
+        dro_test_look(&std::array::from_fn(|i| 0.01 + i as f32 * 0.01), &|x| x).hue_sat,
+    );
+    // too dark for any look, no tone either: the profile's colour, the default raw tone curve
+    let look = with_profile_colour(None, Some(colour.clone()), None, |_| None).expect("the profile's colour");
+    assert_eq!((look.matrix, look.hue_sat.is_some()), (colour.0, true));
+    assert_eq!(look.tone, lightcraft_pipeline::tone::default_raw_camera_tone().unwrap());
+    // the JPEG's tone curve when it has one
+    let toned = dro_test_look(&std::array::from_fn(|i| 0.01 + i as f32 * 0.01), &|x| 0.9 * x);
+    let look = with_profile_colour(None, Some(colour.clone()), None, |c| Some(CameraLook { matrix: c.0, ..toned.clone() })).unwrap();
+    assert_eq!((look.matrix, look.tone), (colour.0, toned.tone));
+    // a photo's own look wins; without a profile there is nothing to keep (the neutral fallback follows)
+    let own = with_profile_colour(Some(toned.clone()), Some(colour), None, |_| panic!("the photo's own look is used")).unwrap();
+    assert_eq!(own.matrix, toned.matrix);
+    assert!(with_profile_colour(None, None, None, |_| panic!("no colour to fit")).is_none());
+}
+
+/// A camera curve: a toe, then a shoulder toward 0.95, the shape camera JPEG curves have.
+fn camera_curve(x: f32) -> f32 {
+    0.95 * (x / (x + 0.12)).powf(1.3) * 1.1
+}
+
+fn sampled(curve: impl Fn(f32) -> f32, from: f32, to: f32) -> CameraTone {
+    CameraTone::new(std::array::from_fn(|i| {
+        let x = from * (to / from).powf(i as f32 / 31.0);
+        [x, curve(x)]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_dark_photos_curve_goes_on_along_the_cameras_pooled_one() {
+    let pooled = sampled(camera_curve, 0.0005, 0.9);
+    // a dark photo's JPEG showed the curve up to 0.02, 10% darker than the camera's (a picture style)
+    let photo = sampled(|x| 0.9 * camera_curve(x), 0.0005, 0.02).with_chroma([1.4, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).unwrap();
+    let tone = extend_tone(&photo, &pooled);
+    assert_eq!(tone.chroma(), photo.chroma());
+    // its own curve where its JPEG taught it, the pooled one from 1 EV past that, a monotone fade in between
+    for x in [0.001f32, 0.005, 0.01, 0.019] {
+        assert!((tone.apply(x) - photo.apply(x)).abs() < 0.02 * photo.apply(x), "{x}: {} vs {}", tone.apply(x), photo.apply(x));
+    }
+    for x in [0.05f32, 0.1, 0.3, 0.8] {
+        assert!((tone.apply(x) - pooled.apply(x)).abs() < 0.01, "{x}: {} vs {}", tone.apply(x), pooled.apply(x));
+    }
+    assert!(tone.knots().windows(2).all(|k| k[1][0] > k[0][0] && k[1][1] >= k[0][1]));
+    // a photo that already reaches as far keeps its curve
+    let bright = sampled(|x| 0.9 * camera_curve(x), 0.0005, 0.85);
+    assert_eq!(extend_tone(&bright, &pooled), bright);
+}
+
+#[test]
+fn extending_a_photos_curve_keeps_it_where_its_jpeg_taught_it() {
+    let pooled = sampled(camera_curve, 0.0005, 0.9);
+    let encoded = |v: f32| v.max(0.0).powf(1.0 / 2.2);
+    // a smooth dark curve, and one with a sharp toe (flat, then a steep rise over two knots)
+    let smooth = sampled(|x| 0.9 * camera_curve(x), 0.0005, 0.02);
+    let toe = CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.0005 * 40f32.powf(i as f32 / 31.0);
+        [
+            x,
+            if i < 9 {
+                0.001 + 0.0001 * i as f32
+            } else if i < 11 {
+                0.004 + 0.012 * (i - 8) as f32
+            } else {
+                0.03 + 0.004 * (i - 10) as f32
+            },
+        ]
+    }))
+    .unwrap();
+    for photo in [smooth, toe] {
+        let tone = extend_tone(&photo, &pooled);
+        for [x, _] in photo.knots() {
+            let change = (encoded(tone.apply(*x)) - encoded(photo.apply(*x))).abs();
+            assert!(change <= THIN_TOLERANCE + 1e-5, "{x}: {} vs {} ({change})", tone.apply(*x), photo.apply(*x));
+        }
+    }
+    // the smooth one still goes on along the pooled curve
+    assert!((extend_tone(&smooth, &pooled).apply(0.3) - pooled.apply(0.3)).abs() < 0.01);
+}
+
+#[test]
+fn a_pooled_tone_curve_spans_dark_and_bright_photos() {
+    // camera RGB grey (white balanced): a dark photo's pixels and a bright one's, through one camera curve
+    let matrix = Mat3::IDENTITY;
+    let samples: Vec<([f64; 3], f64)> = (0..4000)
+        .map(|i| {
+            let x = if i % 2 == 0 { 0.0005 * 40f64.powf((i / 2) as f64 / 2000.0) } else { 0.02 * 40f64.powf((i / 2) as f64 / 2000.0) };
+            ([x; 3], f64::from(camera_curve(x as f32)))
+        })
+        .collect();
+    let tone = fit_profile_tone(&samples, &matrix).unwrap();
+    for x in [0.001f32, 0.01, 0.05, 0.2, 0.6] {
+        assert!((tone.apply(x) - camera_curve(x)).abs() < 0.01 + 0.03 * camera_curve(x), "{x}: {} vs {}", tone.apply(x), camera_curve(x));
+    }
+    assert!(fit_profile_tone(&samples[..64], &matrix).is_none(), "too few samples");
+}
+
+#[test]
+fn a_photo_too_dark_for_colour_pairs_still_gives_the_pooled_curve_its_shadows() {
+    // a scene of saturated colours, its camera JPEG a linear map of the sensor; `level` sets the exposure
+    let colours = [[0.9, 0.2, 0.1], [0.1, 0.8, 0.2], [0.2, 0.3, 0.9], [0.8, 0.7, 0.1], [0.6, 0.2, 0.7], [0.5, 0.5, 0.5]];
+    let scene = |level: f32| {
+        let sensor = Rgb32f::from_fn(64, 64, |x, y| colours[(x / 8 + y / 8) % colours.len()].map(|v| v * level * (1.0 + (x % 8) as f32 / 16.0)));
+        let reference = Rgb32f::from_fn(64, 64, |x, y| sensor.data[y * 64 + x].map(|v| v * 0.8));
+        (sensor, reference)
+    };
+    let (sensor, reference) = scene(0.3);
+    let bright = samples_from_proxies(&sensor, &reference, &Mat3::IDENTITY).unwrap();
+    assert!(!bright.colour.is_empty() && !bright.tone.is_empty());
+    // every JPEG channel under the colour-pair floor, its luminance still above the tone floor
+    let (sensor, reference) = scene(0.003);
+    assert!(reference.data.iter().all(|p| p.iter().all(|v| *v < 0.004)));
+    let dark = samples_from_proxies(&sensor, &reference, &Mat3::IDENTITY).expect("tone samples from a dark photo");
+    assert!(dark.colour.is_empty() && dark.tone.len() > 1000, "{} colour pairs, {} tone samples", dark.colour.len(), dark.tone.len());
+    // a black-and-white camera JPEG gives nothing
+    let grey = Rgb32f::from_fn(64, 64, |x, y| [luminance_2020(reference.data[y * 64 + x]) * 100.0; 3]);
+    assert!(samples_from_proxies(&scene(0.3).0, &grey, &Mat3::IDENTITY).is_none());
+}
+
+#[test]
+fn a_pooled_tone_curve_takes_luminance_with_negative_channels_as_the_render_does() {
+    // a saturating matrix sends this magenta's green channel negative; the render keeps it, so the curve's input
+    // is the unclamped luminance (clamped, the magenta samples read 30% brighter and pull the pooled quantiles)
+    let matrix = Mat3([[1.3, -0.2, -0.1], [-0.1, 1.2, -0.1], [-0.1, -0.5, 1.6]]);
+    let magenta = [0.9, 0.05, 0.9];
+    assert!(matrix.apply(magenta)[1] < 0.0);
+    let samples: Vec<([f64; 3], f64)> = (0..4000)
+        .map(|i| {
+            let colour = if i % 2 == 0 { magenta } else { [1.0; 3] };
+            let x = colour.map(|v| v * 0.001 * 500f64.powf(f64::from(i / 2) / 2000.0));
+            (x, f64::from(camera_curve(luma(matrix.apply(x)) as f32)))
+        })
+        .collect();
+    let tone = fit_profile_tone(&samples, &matrix).unwrap();
+    for x in [0.002f32, 0.02, 0.1, 0.3] {
+        assert!((tone.apply(x) - camera_curve(x)).abs() < 0.01 + 0.03 * camera_curve(x), "{x}: {} vs {}", tone.apply(x), camera_curve(x));
+    }
+}
+
+#[test]
+fn only_a_look_with_the_profiles_colour_continues_along_its_pooled_curve() {
+    let profile = Mat3([[1.2, -0.1, -0.1], [-0.1, 1.1, 0.0], [0.0, -0.2, 1.2]]);
+    let pooled = sampled(camera_curve, 0.0005, 0.9);
+    let dark = sampled(|x| 0.9 * camera_curve(x), 0.0005, 0.02);
+    let with = |matrix| CameraLook { matrix, tone: dark, hue_sat: None };
+    // the profile's colour: the curve goes on along the pooled one
+    assert_eq!(with_pooled_tone(with(profile), Some(profile), Some(pooled)).tone, extend_tone(&dark, &pooled));
+    // the photo's own matrix (the profile's colour rejected): its curve as fitted
+    assert_eq!(with_pooled_tone(with(Mat3::IDENTITY), Some(profile), Some(pooled)).tone, dark);
+    assert_eq!(with_pooled_tone(with(profile), None, Some(pooled)).tone, dark);
+    assert_eq!(with_pooled_tone(with(profile), Some(profile), None).tone, dark);
+}
+
+#[test]
+fn a_photo_no_look_fits_takes_the_profiles_pooled_tone_curve() {
+    let colour = (Mat3::IDENTITY, None);
+    let pooled = sampled(camera_curve, 0.0005, 0.9);
+    let look = with_profile_colour(None, Some(colour), Some(pooled), |_| None).unwrap();
+    assert_eq!(look.tone, pooled);
 }
 
 /// Pairs whose scene luminance spans `ratio` from the darkest to the brightest pixel, mapped
@@ -2425,5 +2890,253 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
     if let Some(look) = fit_tone_only(&sensor, &reference, None) {
         let sky = luma(displayed(look.matrix.apply([0.9; 3]), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)));
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
+    }
+}
+
+/// A lens database's vignetting correction reaches the fit in the share the camera JPEG shows: a JPEG with none, part
+/// or all of it is measured as such, and a JPEG without enough usable pixels keeps the whole correction.
+#[test]
+fn camera_vignetting_amount_measures_the_share_the_jpeg_shows() {
+    use lightcraft_develop::EmbeddedVignette;
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let (w, h) = (96, 64);
+    let gain = |i: usize| {
+        lightcraft_pipeline::optics::embedded_vignette_gain(
+            &vignette,
+            lightcraft_geom::Point::new((i % w) as f64 + 0.5, (i / w) as f64 + 0.5),
+            w as f64,
+            h as f64,
+        ) as f32
+    };
+    // a scene of unrelated brightnesses (no gradient for the vignetting to hide in), darkened by the lens
+    let mut seed = 12345u32;
+    let mut sensor = Rgb32f::new(w, h);
+    for (i, p) in sensor.data.iter_mut().enumerate() {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let v = 0.02 + 0.4 * (seed >> 8) as f32 / (1u32 << 24) as f32;
+        *p = [v, v * 0.9, v * 0.7].map(|c| c / gain(i));
+    }
+    let clipped = vec![false; w * h];
+    for shown in [0.0, 0.4, 1.0] {
+        let mut reference = sensor.clone();
+        for (i, p) in reference.data.iter_mut().enumerate() {
+            let g = 1.0 + (gain(i) - 1.0) * shown;
+            *p = p.map(|c| (c * g).powf(1.0 / 2.2).min(1.0));
+        }
+        let amount = camera_vignetting_amount(&sensor, &reference, &clipped, &vignette, ProxyFrame::new(lightcraft_geom::Orientation::Normal));
+        assert!((amount - f64::from(shown)).abs() < 0.051, "the JPEG shows {shown}, measured {amount}");
+    }
+    // too few pixels to measure on: the whole correction, although this JPEG shows none of it
+    let (tw, th) = (8, 8);
+    let mut tiny = Rgb32f::new(tw, th);
+    for (i, p) in tiny.data.iter_mut().enumerate() {
+        let g = lightcraft_pipeline::optics::embedded_vignette_gain(
+            &vignette,
+            lightcraft_geom::Point::new((i % tw) as f64 + 0.5, (i / tw) as f64 + 0.5),
+            tw as f64,
+            th as f64,
+        ) as f32;
+        let v = 0.05 + 0.05 * ((i * 7) % 8) as f32;
+        *p = [v, v * 0.9, v * 0.7].map(|c| c / g);
+    }
+    let mut tiny_reference = tiny.clone();
+    tiny_reference.map_in_place(|p| p.map(|c| c.powf(1.0 / 2.2)));
+    let frame = ProxyFrame::new(lightcraft_geom::Orientation::Normal);
+    assert_eq!(camera_vignetting_amount(&tiny, &tiny_reference, &[false; 64], &vignette, frame), 1.0);
+}
+
+/// A camera that renders some hues brighter than others doesn't read as vignetting where those hues gather toward
+/// the corners: the JPEG without any correction, whose blue pixels (more of them toward the corners) the camera
+/// renders brighter, is measured as showing none of it.
+#[test]
+fn camera_vignetting_amount_is_not_misled_by_hues_gathered_in_the_corners() {
+    use lightcraft_develop::EmbeddedVignette;
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let (w, h) = (96, 64);
+    let mut seed = 54321u32;
+    let mut random = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let mut sensor = Rgb32f::new(w, h);
+    let mut reference = Rgb32f::new(w, h);
+    for (i, (s, r)) in sensor.data.iter_mut().zip(reference.data.iter_mut()).enumerate() {
+        let point = lightcraft_geom::Point::new((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+        let gain = lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32;
+        let radius = ((point.x / w as f64 - 0.5).hypot(point.y / h as f64 - 0.5) / 0.5f64.hypot(0.5)) as f32;
+        let v = (0.02 + 0.4 * random()) / gain;
+        let blue = random() < radius;
+        *s = if blue { [0.4 * v, 0.6 * v, v] } else { [v, 0.6 * v, 0.4 * v] };
+        let brightness = if blue { 1.6 } else { 1.0 };
+        *r = s.map(|c| (c * brightness).powf(1.0 / 2.2).min(1.0));
+    }
+    let clipped = vec![false; w * h];
+    let amount = camera_vignetting_amount(&sensor, &reference, &clipped, &vignette, ProxyFrame::new(lightcraft_geom::Orientation::Normal));
+    assert!(amount < 0.051, "the JPEG shows no correction, measured {amount}");
+}
+
+/// A CR3 sensor proxy moved to its camera JPEG's framing gets the vignetting gain of the position each pixel shows,
+/// not of where it lands.
+#[test]
+fn the_vignetting_gain_of_a_framed_proxy_is_taken_where_its_pixels_come_from() {
+    use lightcraft_develop::EmbeddedVignette;
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let (w, h) = (96, 64);
+    let framing = Cr3Framing { scale: 0.92, offset: [0.02, -0.015] };
+    let frame = ProxyFrame { orientation: lightcraft_geom::Orientation::Normal, framing: Some(framing) };
+    let gains = vignetting_gains(&Rgb32f::new(w, h), &vignette, frame);
+    for i in [0, w - 1, w * h / 2 + w / 3, w * h - 1] {
+        let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+        let expected = lightcraft_pipeline::optics::embedded_vignette_gain(
+            &vignette,
+            lightcraft_geom::Point::new(f64::from(x), f64::from(y)),
+            w as f64,
+            h as f64,
+        );
+        assert!((gains[i] - expected).abs() < 1e-9, "pixel {i}: {} vs {expected}", gains[i]);
+    }
+}
+
+/// What `camera_vignetting_amount` can't measure on keeps the whole correction: proxies of different sizes, and a flat
+/// scene, where every share ranks alike (a tie keeps the larger share, the correction a camera JPEG usually has).
+/// Clipped and black pixels are left out: here they sit where the correction would brighten or darken them most and
+/// would pull the share of a JPEG without any correction up. A JPEG clips highlights the sensor doesn't, so pixels
+/// clipped in the JPEG are left out without the sensor's clip mask too. Non-finite pixels don't spoil the measurement.
+#[test]
+fn camera_vignetting_amount_falls_back_and_leaves_out_what_it_cannot_measure() {
+    use lightcraft_develop::EmbeddedVignette;
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let (w, h) = (96, 64);
+    let gains: Vec<f32> = (0..w * h)
+        .map(|i| {
+            let point = lightcraft_geom::Point::new((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+            lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32
+        })
+        .collect();
+    let measure = |sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool]| {
+        camera_vignetting_amount(sensor, reference, clipped, &vignette, ProxyFrame::new(lightcraft_geom::Orientation::Normal))
+    };
+    let unclipped = vec![false; w * h];
+
+    let mut flat = Rgb32f::new(w, h);
+    flat.data.fill([0.2, 0.18, 0.14]);
+    assert_eq!(measure(&flat, &flat, &unclipped), 1.0, "a tie keeps the whole correction");
+    assert_eq!(measure(&flat, &Rgb32f::new(w, h / 2), &unclipped), 1.0, "proxies of different sizes");
+
+    // a scene of unrelated brightnesses, darkened by the lens, and its JPEG without any correction
+    let mut seed = 777u32;
+    let mut sensor = Rgb32f::new(w, h);
+    for (p, g) in sensor.data.iter_mut().zip(&gains) {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let v = 0.02 + 0.4 * (seed >> 8) as f32 / (1u32 << 24) as f32;
+        *p = [v, v * 0.9, v * 0.7].map(|c| c / g);
+    }
+    let mut reference = sensor.clone();
+    reference.data.iter_mut().for_each(|p| *p = p.map(|c| c.powf(1.0 / 2.2)));
+    assert!(measure(&sensor, &reference, &unclipped) < 0.051);
+    let mut sorted = gains.clone();
+    sorted.sort_by(f32::total_cmp);
+    let (low, high) = (sorted[w * h / 4], sorted[w * h * 3 / 4]);
+
+    // the quarter the correction brightens most, clipped white in the JPEG
+    let corners: Vec<bool> = gains.iter().map(|g| *g >= high).collect();
+    let mut clipped_reference = reference.clone();
+    clipped_reference.data.iter_mut().zip(&corners).filter(|(_, c)| **c).for_each(|(p, _)| *p = [1.0; 3]);
+    let amount = measure(&sensor, &clipped_reference, &corners);
+    assert!(amount < 0.051, "clipped pixels are left out: measured {amount}");
+    let amount = measure(&sensor, &clipped_reference, &unclipped);
+    assert!(amount < 0.051, "pixels clipped in the JPEG alone are left out: measured {amount}");
+    let mut bright_reference = reference.clone();
+    bright_reference.data.iter_mut().zip(&corners).filter(|(_, c)| **c).for_each(|(p, _)| *p = [0.97; 3]);
+    let amount = measure(&sensor, &bright_reference, &unclipped);
+    assert!(amount > 0.1, "the same pixels, just below the clip, would have pulled the share up: {amount}");
+
+    // the quarter it brightens least, black in the JPEG
+    let mut dark_reference = reference.clone();
+    let darkened = |level: f32| {
+        let mut r = dark_reference.clone();
+        r.data.iter_mut().zip(&gains).filter(|(_, g)| **g <= low).for_each(|(p, _)| *p = [level; 3]);
+        r
+    };
+    let amount = measure(&sensor, &darkened(0.0), &unclipped);
+    assert!(amount < 0.051, "black pixels are left out: measured {amount}");
+    let amount = measure(&sensor, &darkened(1e-3), &unclipped);
+    assert!(amount > 0.1, "the same pixels, measurable, would have pulled the share up: {amount}");
+
+    // non-finite pixels in either proxy
+    for i in (0..w * h).step_by(37) {
+        sensor.data[i] = [f32::NAN, 0.1, 0.1];
+        dark_reference.data[i + 1] = [f32::INFINITY; 3];
+    }
+    let amount = measure(&sensor, &dark_reference, &unclipped);
+    assert!(amount < 0.051, "non-finite pixels are left out: measured {amount}");
+}
+
+/// A sensor proxy of a photo turned upright gets the gain of where each pixel lands in the upright frame the lens
+/// profile describes: with the optical centre off the middle, pixel (x, y) of a 96 × 64 sensor turned a quarter
+/// clockwise takes the gain at (64 - y, x) of the 64 × 96 upright frame, and turned anticlockwise at (y, 96 - x).
+#[test]
+fn the_vignetting_gain_of_a_turned_proxy_is_taken_in_the_upright_frame() {
+    use lightcraft_develop::EmbeddedVignette;
+    use lightcraft_geom::{Orientation, Point};
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: Point::new(0.3, 0.6), radius: 0.6 };
+    let (w, h) = (96usize, 64usize);
+    let (wf, hf) = (w as f64, h as f64);
+    let normal = vignetting_gains(&Rgb32f::new(w, h), &vignette, ProxyFrame::new(Orientation::Normal));
+    for (orientation, upright) in [
+        (Orientation::Rotate90, (|x: f64, y: f64, _: f64, h: f64| (h - y, x)) as fn(f64, f64, f64, f64) -> (f64, f64)),
+        (Orientation::Rotate270, |x, y, w, _| (y, w - x)),
+    ] {
+        let gains = vignetting_gains(&Rgb32f::new(w, h), &vignette, ProxyFrame::new(orientation));
+        let mut differ = 0;
+        for i in 0..w * h {
+            let (x, y) = upright((i % w) as f64 + 0.5, (i / w) as f64 + 0.5, wf, hf);
+            let expected = lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, Point::new(x, y), hf, wf);
+            assert!((gains[i] - expected).abs() < 1e-9, "{orientation:?}, pixel {i}: {} vs {expected}", gains[i]);
+            differ += usize::from((gains[i] - normal[i]).abs() > 1e-3);
+        }
+        assert!(differ > w * h / 2, "{orientation:?}: the turn matters for this lens ({differ} pixels differ)");
+    }
+}
+
+/// A CR3 sensor proxy moved to its camera JPEG's framing is measured with the gain of where its pixels come from: the
+/// share a JPEG with the whole correction shows is found with the framing, and missed without it.
+#[test]
+fn camera_vignetting_amount_follows_a_cr3_proxys_framing() {
+    use lightcraft_develop::EmbeddedVignette;
+    use lightcraft_geom::{Orientation, Point};
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: 0.6 };
+    let (w, h) = (96usize, 64usize);
+    let framing = Cr3Framing { scale: 0.8, offset: [0.08, -0.06] };
+    // a scene of unrelated brightnesses, one per sensor pixel
+    let scene = |x: f32, y: f32| {
+        let seed = (x.floor() as u32).wrapping_mul(73_856_093) ^ (y.floor() as u32).wrapping_mul(19_349_663);
+        0.02 + 0.4 * (seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223) >> 8) as f32 / (1u32 << 24) as f32
+    };
+    // the framed proxy: pixel q shows the vignetted sensor at `framing.source(q)`
+    let mut sensor = Rgb32f::new(w, h);
+    let mut source_gains = Vec::with_capacity(w * h);
+    for (i, p) in sensor.data.iter_mut().enumerate() {
+        let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+        let g = lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, Point::new(f64::from(x), f64::from(y)), w as f64, h as f64) as f32;
+        let v = scene(x, y) / g;
+        *p = [v, v * 0.9, v * 0.7];
+        source_gains.push(g);
+    }
+    let clipped = vec![false; w * h];
+    let measure = |reference: &Rgb32f, framing: Option<Cr3Framing>| {
+        camera_vignetting_amount(&sensor, reference, &clipped, &vignette, ProxyFrame { orientation: Orientation::Normal, framing })
+    };
+    for shown in [0.0f32, 0.75, 1.0] {
+        let mut reference = sensor.clone();
+        for (p, g) in reference.data.iter_mut().zip(&source_gains) {
+            *p = p.map(|c| (c * (1.0 + (g - 1.0) * shown)).powf(1.0 / 2.2));
+        }
+        let framed = measure(&reference, Some(framing));
+        assert!((framed - f64::from(shown)).abs() < 0.051, "the JPEG shows {shown}, measured {framed} with the framing");
+        if shown == 1.0 {
+            let unframed = measure(&reference, None);
+            assert!(unframed < 0.9, "without the framing the gains are taken at the wrong places: {unframed}");
+        }
     }
 }

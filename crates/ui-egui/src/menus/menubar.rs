@@ -120,9 +120,9 @@ pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::sh
 /// Top-level menus in order (the macOS app menu is added by the host).
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Photo", "Window", "Help"];
 
-/// Order and grouping per menu: command ids, `---` separators and `@Submenu` placeholders.
-/// Entries with a menu path that aren't listed are appended at the end of their menu, before any
-/// [`LAST`] item.
+/// Order and grouping per menu: command ids, `---` separators and `@Submenu` placeholders. Every
+/// command with a menu path has a slot here, or its submenu does (a test checks it); an entry left
+/// out would still be appended at the end of its menu, before any [`LAST`] item.
 const LAYOUT: &[(&str, &[&str])] = &[
     (
         "File",
@@ -130,12 +130,15 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "file.addPhotos",
             "file.addFolder",
             "@Import from Device",
+            "file.importLightroom",
             "---",
             "app.newLibrary",
             "app.openLibrary",
             "@Open Recent Library",
             "file.backupLibrary",
             "file.restoreLibrary",
+            "file.findMissing",
+            "library.compact",
             "---",
             "dialog.newAlbum",
             "dialog.newFolder",
@@ -150,6 +153,9 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.export",
             "app.exportPrevious",
             "@Export with Preset",
+            "---",
+            "dialog.print",
+            "dialog.contactSheet",
             "---",
             "library.toggleAutoWriteXmp",
             "@Previews",
@@ -167,16 +173,19 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.copySettings",
             "develop.paste",
             "dialog.pasteSettings",
+            "develop.pastePrevious",
             "develop.sync",
             "develop.autoSync",
             "---",
             "library.selectAll",
             "library.selectNone",
+            "library.selectOnlyActive",
             "@Select by",
             "---",
             "view.focusSearch",
             "---",
             "app.settings",
+            "@Language",
         ],
     ),
     (
@@ -184,35 +193,20 @@ const LAYOUT: &[(&str, &[&str])] = &[
         &[
             "view.photoGrid",
             "view.squareGrid",
-            "@Grid Info",
-            "view.thumbSizeUp",
-            "view.thumbSizeDown",
             "view.detail",
             "view.compare",
             "view.survey",
+            "view.reference",
             "view.people",
             "---",
-            "view.leftPanel",
-            "@Sidebar Sections",
-            "view.photoCounts",
-            "view.faceBoxes",
-            "view.focusPoint",
-            "view.zoomToFocus",
-            "view.filmstrip",
-            "view.histogram",
-            "view.navigator",
-            "view.infoOverlay",
-            "@Loupe Overlay",
-            "@Appearance",
-            "---",
-            "view.fullScreenPreview",
-            "view.lightsOut",
-            "view.enterFullScreen",
-            "---",
-            "view.showOriginal",
-            "view.beforeAfter",
-            "view.beforeAfterSplit",
-            "@Before/After Settings",
+            "@Grid Info",
+            "view.thumbSizeUp",
+            "view.thumbSizeDown",
+            "@Sort",
+            "@Stacks",
+            "view.filterBar",
+            "library.toggleFilters",
+            "library.clearFilter",
             "---",
             "view.zoomIn",
             "view.zoomOut",
@@ -223,38 +217,39 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.clipping",
             "view.visualizeHdr",
             "view.softProof",
-            "view.maskOverlay",
-            "view.maskOverlayAll",
-            "view.maskOverlayMode",
-            "view.maskOverlayColor",
-            "view.maskPins",
-            "@Tool Overlay",
-            "view.cropOverlay",
+            "view.visualizeSpots",
             "---",
-            "@Sort",
-            "@Stacks",
-            "view.filterBar",
-            "library.toggleFilters",
-            "library.clearFilter",
-            "library.refresh",
-            "library.holdView",
+            "@Loupe Overlay",
+            "@Before/After",
+            "@Mask Overlay",
+            "@Tool Overlay",
+            "@Crop Overlay",
             "---",
             "compare.swap",
             "compare.makeSelect",
             "---",
-            "view.viewOptions",
+            "view.fullScreenPreview",
+            "view.lightsOut",
+            "view.enterFullScreen",
+            "@Slideshow",
+            "---",
+            "@Appearance",
         ],
     ),
     (
         "Photo",
         &[
+            "@Edit In",
+            "---",
             "@Add to Album",
+            "photo.addToLibrary",
             "---",
             "@Set Rating",
             "@Set Flag",
             "@Set Color Label",
-            "@Metadata Preset",
             "view.autoAdvance",
+            "dialog.cull",
+            "library.findSimilar",
             "---",
             "photo.rotateLeft",
             "photo.rotateRight",
@@ -263,35 +258,38 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "version.create",
             "photo.virtualCopy",
+            "photo.duplicate",
             "@Stack",
             "@Photo Merge",
+            "photo.convertToDng",
             "---",
             "develop.auto",
             "develop.treatment",
             "develop.reset",
+            "develop.matchExposure",
             "develop.updateProcess",
             "dialog.createPreset",
             "---",
-            "photo.saveMetadataToFile",
-            "photo.readMetadataFromFile",
-            "photo.reload",
-            "photo.readFocusPoints",
+            "@Metadata",
+            "---",
             "app.showInFinder",
             "app.showInFolders",
             "dialog.rename",
-            "dialog.captureTime",
-            "photo.tagFromTracklog",
+            "photo.reload",
+            "tool.enablePainting",
             "---",
             "album.removePhotos",
             "photo.delete",
             "photo.restore",
             "photo.deletePermanently",
+            "library.emptyRecentlyDeleted",
         ],
     ),
     (
         "Window",
         &[
             "panel.edit",
+            "panel.profiles",
             "panel.crop",
             "panel.remove",
             "panel.masking",
@@ -302,9 +300,21 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "panel.activity",
             "panel.info",
             "panel.keywords",
+            "panel.bursts",
             "---",
             "@Edit Sections",
             "@Tools",
+            "---",
+            "view.leftPanel",
+            "view.rightPanel",
+            "@Sidebar Sections",
+            "view.photoCounts",
+            "view.filmstrip",
+            "view.histogram",
+            "view.navigator",
+            "---",
+            "view.secondWindow",
+            "ui.dock.reset",
         ],
     ),
     (
@@ -317,10 +327,12 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "app.github",
             "app.artcraft",
             "---",
+            "app.help",
             "app.whatsNew",
             "app.shortcuts",
             "app.systemInfo",
             "app.openLogFolder",
+            "@Debug",
             "---",
             "app.checkForUpdates",
             "app.about",
@@ -328,12 +340,58 @@ const LAYOUT: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Items that always end their menu in their own separator group, after the entries appended
-/// because the layout doesn't list them (Quit is the last item of the in-window File menu).
+/// Order and grouping inside submenus: (menu, submenu, slots). Slots are as in [`LAYOUT`] (ids of
+/// entries with that submenu path, `---`, `@Nested` submenus), plus `*` for the parameterized
+/// items [`expanded`] builds. A submenu without a row here lists those first, then its entries.
+const SUBMENUS: &[(&str, &str, &[&str])] = &[
+    ("View", "Sort", &["*", "---", "library.refresh", "library.holdView"]),
+    ("View", "Loupe Overlay", &["view.infoOverlay", "view.viewOptions", "view.focusPoint", "view.zoomToFocus", "view.faceBoxes", "---", "*"]),
+    (
+        "View",
+        "Before/After",
+        &[
+            "view.showOriginal",
+            "view.beforeAfter",
+            "view.beforeAfterSplit",
+            "view.beforeAfterTopBottom",
+            "view.beforeAfterSplitTopBottom",
+            "---",
+            "beforeAfter.copyAfterToBefore",
+            "beforeAfter.copyBeforeToAfter",
+            "beforeAfter.swap",
+            "beforeAfter.resetBefore",
+        ],
+    ),
+    ("View", "Mask Overlay", &["view.maskOverlay", "view.maskOverlayAll", "view.maskPins", "---", "*"]),
+    (
+        "Photo",
+        "Metadata",
+        &[
+            "dialog.allMetadata",
+            "photo.copyMetadata",
+            "photo.pasteMetadata",
+            "@Metadata Preset",
+            "---",
+            "photo.saveMetadataToFile",
+            "photo.readMetadataFromFile",
+            "photo.readFocusPoints",
+            "---",
+            "dialog.captureTime",
+            "photo.tagFromTracklog",
+            "metadata.reverseGeocode",
+            "metadata.downloadPlaceNames",
+            "---",
+            "faces.detect",
+        ],
+    ),
+];
+
+/// Items that always end their menu in their own separator group (Quit is the last item of the
+/// in-window File menu).
 const LAST: &[&str] = &["app.quit"];
 
-/// Registry entries that are reached another way (parameterized commands are expanded into
-/// submenus below; others duplicate a dialog command).
+/// Registry entries that are reached another way: parameterized commands and the items of
+/// hand-built submenus are made by [`expanded`]; the others duplicate a dialog command.
 const HIDDEN: &[&str] = &[
     "photo.rate",
     "photo.flag",
@@ -341,12 +399,21 @@ const HIDDEN: &[&str] = &[
     "photo.reject",
     "photo.unflag",
     "photo.label",
+    "photo.clearLabel",
     "library.sort",
     "library.shuffle",
     "album.addPhotos",
     "album.create",
     "library.import",
     "preset.create",
+    // File ▸ Previews ▸ Discard Preview Cache
+    "library.clearPreviews",
+    // View ▸ Loupe Overlay
+    "view.chooseLayoutImage",
+    "view.layoutImage",
+    // View ▸ Mask Overlay (each mode and colour, then the cycle item)
+    "view.maskOverlayMode",
+    "view.maskOverlayColor",
 ];
 
 /// The selection includes a photo in Recently Deleted.
@@ -359,6 +426,8 @@ pub(crate) fn selection_deleted(app: &LightcraftApp) -> bool {
 /// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
+        // Nightly is updated by the ArtCraft Launcher: the Help item would query the stable feed.
+        "app.checkForUpdates" => !crate::channel::is_nightly(),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
@@ -388,8 +457,6 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
     let u = &app.ui;
     let panel = |p: RightPanel| Some(u.right == p);
     match id {
-        // Every language's command is checked when it is the active one.
-        _ if crate::menus::language_from_command(id).is_some() => Some(crate::menus::language_from_command(id) == Some(u.language)),
         "develop.autoSync" => Some(app.session.auto_sync),
         "view.photoCounts" => Some(u.show_counts),
         "view.secondWindow" => Some(u.second_window),
@@ -436,6 +503,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "panel.activity" => panel(RightPanel::Activity),
         "panel.info" => panel(RightPanel::Info),
         "panel.keywords" => panel(RightPanel::Keywords),
+        "panel.bursts" => panel(RightPanel::Bursts),
         "panel.presets" => Some(u.presets),
         "library.toggleAutoWriteXmp" => Some(app.session.xmp.auto_write),
         _ => None,
@@ -461,17 +529,31 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
 }
 
 /// The parameterized submenus.
+/// The params of Build Standard-Sized Previews: automatic builds as big as the loupe on this screen shows photos
+/// (the engine's standard size, once a loupe has been drawn); before that, in a fresh session, the standard
+/// 2560 px, not the engine's 2048 px minimum, so a typical fit view needn't render again; a chosen limit is used as is.
+pub(crate) fn standard_build_params(settings: &crate::state::AppSettings, loupe_edge: usize) -> Value {
+    match settings.preview_limit {
+        0 if loupe_edge == 0 => json!({"size": "standard", "edge": settings.standard_preview_edge()}),
+        0 => json!({"size": "standard"}),
+        edge => json!({"size": "standard", "edge": edge}),
+    }
+}
+
 pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
         "Previews" => {
-            let running = app.session.preview_build.as_ref().is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed));
+            // (the background preparation's build gives way to one asked for here)
+            let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);
+            let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running());
+            let standard = standard_build_params(&app.ui.settings, app.session.loupe_edge);
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
             vec![
                 item(
                     "library.buildPreviews",
-                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
+                    standard,
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
                     !running,
@@ -485,7 +567,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     !running,
                     None,
                 ),
-                item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, running, None),
+                item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, stoppable, None),
                 MenuNode::Separator,
                 // (read and written on a worker thread: the originals may be on a slow drive)
                 item(
@@ -505,7 +587,14 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     None,
                 ),
                 MenuNode::Separator,
-                item("library.clearPreviews", Value::Null, "Discard Preview Cache", None, true, None),
+                item(
+                    "library.clearPreviews",
+                    Value::Null,
+                    "Discard Preview Cache",
+                    crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "library.clearPreviews"),
+                    true,
+                    None,
+                ),
             ]
         }
         "Set Rating" => (0..=5u8)
@@ -546,7 +635,8 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 })
                 .collect();
             v.push(MenuNode::Separator);
-            v.push(item("photo.label", json!({"label": "none"}), "None", None, has, Some(active.as_ref().is_some_and(|p| p.label.is_none()))));
+            let clear_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.clearLabel");
+            v.push(item("photo.clearLabel", Value::Null, "None", clear_key, has, Some(active.as_ref().is_some_and(|p| p.label.is_none()))));
             v.push(MenuNode::Separator);
             // label sets: each a checkable item; Edit… names them
             let sets = lightcraft_engine::cmd::manage::label_sets_json(&app.session);
@@ -629,6 +719,39 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     if step == 0.0 { crate::i18n::tr("No Matte").to_string() } else { format!("{} {:.0}%", crate::i18n::tr("Matte"), step * 100.0) };
                 v.push(item("view.layoutImageMatte", json!({"matte": step}), label, None, chosen, Some(near(li.matte, step))));
             }
+            v
+        }
+        "Mask Overlay" => {
+            // each mode and colour of the Masking panel's overlay, then the item that steps on
+            use lightcraft_engine::pipeline::MaskView;
+            let mode = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
+            let mut v: Vec<MenuNode> = MaskView::ALL
+                .into_iter()
+                .map(|m| item("view.maskOverlayMode", json!({"mode": m.name()}), m.label(), None, true, Some(m == mode)))
+                .collect();
+            let keymap = &app.ui.settings.keymap;
+            v.push(item(
+                "view.maskOverlayMode",
+                Value::Null,
+                "Cycle Mask Overlay Mode",
+                crate::shortcuts::shortcut_of(keymap, "view.maskOverlayMode"),
+                true,
+                None,
+            ));
+            v.push(MenuNode::Separator);
+            let colors = crate::panels::masking::OVERLAY_COLORS.into_iter().zip(crate::panels::masking::OVERLAY_COLOR_NAMES);
+            v.extend(colors.map(|(c, name)| {
+                let hex = format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+                item("view.maskOverlayColor", json!({"color": hex}), name, None, true, Some(app.ui.mask_overlay_color == c))
+            }));
+            v.push(item(
+                "view.maskOverlayColor",
+                Value::Null,
+                "Cycle Mask Overlay Color",
+                crate::shortcuts::shortcut_of(keymap, "view.maskOverlayColor"),
+                true,
+                None,
+            ));
             v
         }
         "Tool Overlay" => {
@@ -787,13 +910,11 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
         "Add to Album" => {
             let targets = app.session.selected();
             let sel = !targets.is_empty();
-            // albums hold library photos (issue #684): a Local-only selection is told what to do first
+            // albums hold library photos (issue #684): a Local-only selection finds them off, and Add to My
+            // Photos is the Photo menu's own item right below this submenu (not repeated in it: one command,
+            // one row)
             let local_only = crate::panels::grid::local_only(app, &targets);
             let mut v: Vec<MenuNode> = vec![];
-            if local_only {
-                v.push(item("photo.addToLibrary", Value::Null, crate::i18n::tr("Add to My Photos First"), None, false, None));
-                v.push(MenuNode::Separator);
-            }
             let mut albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.name.clone(), a.id.0)).collect();
             albums.sort_by_key(|(n, _)| n.to_lowercase());
             let any = !albums.is_empty();
@@ -848,6 +969,48 @@ fn tidy(v: Vec<MenuNode>) -> Vec<MenuNode> {
     out
 }
 
+/// How deep `@Nested` submenus in [`SUBMENUS`] may go (a slot naming its own submenu stops here).
+const MAX_SUBMENU_DEPTH: usize = 3;
+
+/// The items of submenu `name` in menu `title`: its [`SUBMENUS`] slots when it has a row there
+/// (else the parameterized items of [`expanded`]), then the entries with this submenu path that
+/// no slot names, the ones opening a dialog last after a separator.
+fn submenu_items(app: &LightcraftApp, entries: &[MenuEntry], used: &mut [bool], title: &str, name: &str, depth: usize) -> Vec<MenuNode> {
+    let here = |e: &MenuEntry| e.menu.len() == 2 && e.menu[0] == title && e.menu[1] == name;
+    let slots = SUBMENUS.iter().find(|(t, s, _)| *t == title && *s == name).map_or(&["*"][..], |(_, _, l)| *l);
+    let mut children = Vec::new();
+    for slot in slots {
+        if *slot == "---" {
+            children.push(MenuNode::Separator);
+        } else if *slot == "*" {
+            children.extend(expanded(app, name).unwrap_or_default());
+        } else if let Some(nested) = slot.strip_prefix('@') {
+            if depth < MAX_SUBMENU_DEPTH {
+                let items = submenu_items(app, entries, used, title, nested, depth + 1);
+                children.push(MenuNode::Submenu { label: nested.to_string(), children: items });
+            }
+        } else if let Some(i) = entries.iter().position(|e| e.id == *slot && here(e)) {
+            if let Some(u) = used.get_mut(i) {
+                *u = true;
+            }
+            children.push(node(app, &entries[i]));
+        }
+    }
+    let mut dialogs = Vec::new();
+    for (e, u) in entries.iter().zip(used.iter_mut()) {
+        if !*u && here(e) {
+            *u = true;
+            // commands that open a dialog go last, after a separator
+            if e.label.ends_with('…') { dialogs.push(node(app, e)) } else { children.push(node(app, e)) }
+        }
+    }
+    if !dialogs.is_empty() {
+        children.push(MenuNode::Separator);
+        children.extend(dialogs);
+    }
+    children
+}
+
 /// The whole menu bar: (title, items) per menu in [`MENUS`] order.
 pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
     let entries: Vec<MenuEntry> =
@@ -858,34 +1021,18 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
         let layout = LAYOUT.iter().find(|(t, _)| t == title).map(|(_, l)| *l).unwrap_or(&[]);
         let mut items = Vec::new();
         let mut last = Vec::new();
-        let sub = |name: &str, used: &mut [bool]| -> Vec<MenuNode> {
-            let mut children = expanded(app, name).unwrap_or_default();
-            let mut dialogs = Vec::new();
-            for (i, e) in entries.iter().enumerate() {
-                if !used[i] && e.menu.len() == 2 && e.menu[0] == *title && e.menu[1] == name {
-                    used[i] = true;
-                    // commands that open a dialog go last, after a separator
-                    if e.label.ends_with('…') { dialogs.push(node(app, e)) } else { children.push(node(app, e)) }
-                }
-            }
-            if !dialogs.is_empty() {
-                children.push(MenuNode::Separator);
-                children.extend(dialogs);
-            }
-            children
-        };
         for slot in layout {
             if *slot == "---" {
                 items.push(MenuNode::Separator);
             } else if let Some(name) = slot.strip_prefix('@') {
-                let children = sub(name, &mut used);
+                let children = submenu_items(app, &entries, &mut used, title, name, 1);
                 items.push(MenuNode::Submenu { label: name.to_string(), children });
             } else if let Some(i) = entries.iter().position(|e| e.id == *slot && e.menu.first().map(String::as_str) == Some(title)) {
                 used[i] = true;
                 if LAST.contains(slot) { last.push(node(app, &entries[i])) } else { items.push(node(app, &entries[i])) }
             }
         }
-        // everything else that names this menu
+        // anything the layout doesn't place yet (a test keeps this empty)
         items.push(MenuNode::Separator);
         let mut extra_subs: Vec<String> = Vec::new();
         for (i, e) in entries.iter().enumerate() {
@@ -900,7 +1047,7 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
             }
         }
         for name in extra_subs {
-            let children = sub(&name, &mut used);
+            let children = submenu_items(app, &entries, &mut used, title, &name, 1);
             items.push(MenuNode::Submenu { label: name, children });
         }
         if !last.is_empty() {
@@ -921,6 +1068,7 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
         "photo.rate"
             | "photo.flag"
             | "photo.label"
+            | "photo.clearLabel"
             | "photo.pick"
             | "photo.reject"
             | "photo.unflag"
@@ -990,20 +1138,22 @@ pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> N
     policy
 }
 
-/// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
+/// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⇧⌘Z` on macOS, `Ctrl+Shift+Z` elsewhere.
+/// On macOS the modifiers come in AppKit's and Apple's HIG order, ⌃⌥⇧⌘, however the binding spells them.
 pub fn shortcut_text(sc: &str, mac: bool) -> String {
     if mac {
-        let mut mods = String::new();
+        let (mut ctrl, mut alt, mut shift, mut cmd) = (false, false, false, false);
         let mut key = "";
         for part in sc.split('+') {
             match part {
-                "Ctrl" => mods.push('⌃'),
-                "Alt" => mods.push('⌥'),
-                "Shift" => mods.push('⇧'),
-                "Cmd" => mods.push('⌘'),
+                "Ctrl" => ctrl = true,
+                "Alt" => alt = true,
+                "Shift" => shift = true,
+                "Cmd" => cmd = true,
                 k => key = k,
             }
         }
+        let mods: String = [(ctrl, '⌃'), (alt, '⌥'), (shift, '⇧'), (cmd, '⌘')].into_iter().filter_map(|(on, glyph)| on.then_some(glyph)).collect();
         let key = match key {
             "Delete" => "⌫",
             "Escape" => "⎋",

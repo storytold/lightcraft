@@ -24,6 +24,7 @@ web-time = { workspace = true }
 winapi-util = { workspace = true }
 
 [dev-dependencies]
+dhat = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
