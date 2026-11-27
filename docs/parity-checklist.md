@@ -809,7 +809,6 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-19 | minor | LR-EDIT-OPTICS-DEFRINGE: AI Defringe (beyond Lightroom), a user-installed defringe network with a cached per-photo correction; no model ships; status unchanged |
-
 | 2026-10-29 | minor | MENU-EDIT-SELECTBY: Edit → Select by lists each rating on its own (★ only … ★★★★★ only, `library.selectBy` with `ratingOp: eq`) after the "and higher" rows, beside Unrated (#3311); status unchanged (✅) |
 | 2026-11-15 | patch | LR-PRE-AMOUNT: Amount blends tone curves, fades in the strength of a profile/LUT or switched-on group a preset changes, and takes white balance on another scale whole (#2669); the step at half amount for switches and choices stays (#2207); status unchanged (✅) |
 | 2026-11-09 | minor | LR-PREF-LOCALSTORAGE: the low-disk notice warns under 20 GB free, no longer under 10 % of the drive (76 GB free of a 926 GB drive warned, #4013); status unchanged |
