@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### A taller filmstrip
+- Drag the filmstrip's top edge up to make it taller, with bigger thumbnails and easier-to-read stars, as in
+  Lightroom; double-click the edge for the usual height. LightCraft remembers the height (issue #4110).
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
