@@ -105,13 +105,18 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
     if path.extension().is_none() {
         path.set_extension(LCPRESET_EXT);
     }
-    let ids = strings(p, "ids");
+    let invalid_ids = || bad("preset.export", "`ids` must be an array of preset IDs");
+    let ids = match p.get("ids") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(ids)) => Some(ids.iter().map(|id| id.as_str().ok_or_else(invalid_ids)).collect::<Result<Vec<_>>>()?),
+        Some(_) => return Err(invalid_ids()),
+    };
     let group = str_param(p, "group");
     let chosen: Vec<_> = s
         .presets
         .iter()
         .filter(|x| match (&ids, group) {
-            (Some(ids), _) => ids.contains(&x.id),
+            (Some(ids), _) => ids.contains(&x.id.as_str()),
             (None, Some(g)) => x.group == g,
             (None, None) => !x.builtin,
         })
