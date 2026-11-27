@@ -1,6 +1,6 @@
 use super::cull::cull_params;
 use super::export::export_dialog_params;
-use super::*;
+use super::{Dialog, LightcraftApp, json};
 
 /// Runs a command that creates an album and asks the Albums tree to open the folders down to it.
 fn created_in(app: &mut LightcraftApp, command: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
@@ -29,6 +29,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
                 // The filter command merges a patch; these defaults are omitted by serde.
                 filter["only"] = json!([]);
                 filter["labels"] = json!([]);
+                filter["flags"] = json!([]);
                 filter["ruleSet"] = serde_json::Value::Null;
                 app.run("library.filter", filter)?;
                 app.run("library.select", json!({"ids": [first]}))?;
@@ -55,6 +56,18 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         }
         Dialog::RenameAlbum { id, name } => app.run("album.rename", json!({"id": id, "name": name})),
         Dialog::TextPrompt { value, command, params, key, .. } => {
+            // Rename Folder opens with the folder's own name typed: confirming it unchanged renames nothing, as it always has
+            // (the engine would refuse it as a name that "already exists"). A name with spaces at its ends is the same
+            // folder when typed back as it is, so it is compared as typed as well as trimmed.
+            let kept = command == "folder.rename"
+                && params["path"].as_str().is_some_and(|path| {
+                    std::path::Path::new(path.trim_end_matches(['/', '\\']))
+                        .file_name()
+                        .is_some_and(|f| f.to_string_lossy() == value.as_str() || f.to_string_lossy() == value.trim())
+                });
+            if kept {
+                return Ok(serde_json::Value::Null);
+            }
             let mut p = params.clone();
             p[key.as_str()] = json!(value.trim());
             app.run(command, p)
@@ -164,12 +177,16 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
-        Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
-        Dialog::Cull { reject_below, pick_best, burst_gap, similarity } => {
+        Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew | Dialog::Welcome { .. } => Ok(serde_json::Value::Null),
+        Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity, reset_bursts } => {
             app.ui.cull_burst = Some((*burst_gap, *similarity));
-            app.run("photo.analyze", cull_params(*reject_below, *pick_best, *burst_gap, *similarity))
+            app.ui.cull_stack = *stack_groups;
+            let mut p = cull_params(*reject_below, *pick_best, *burst_gap, *similarity);
+            p["stackGroups"] = json!(stack_groups);
+            p["resetBursts"] = json!(reset_bursts);
+            app.run("photo.analyze", p)
         }
-        Dialog::SmartRules { id, name, rules, parent } => {
+        Dialog::SmartRules { id, name, rules, parent, .. } => {
             // refused before anything changes (not even the name)
             if let Some(problem) = rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).first() {
                 return Err(problem.to_string());
@@ -212,16 +229,22 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             if *library != app.session.library_generation() {
                 return Err(crate::i18n::tr("Another library was opened since the photos were dropped: nothing was moved").to_string());
             }
-            if *dont_ask {
+            let moved = crate::panels::left::move_photos(app, Some(ids), folder)?;
+            // only a move that began turns the question off: one refused, or that found the photos there already,
+            // leaves it as it was
+            if *dont_ask && moved > 0 {
                 app.ui.settings.ask_before_move = false;
             }
-            crate::panels::left::move_photos(app, Some(ids), folder).map(|n| json!({"moved": n}))
+            Ok(json!({"moved": moved}))
         }
         // the catalog found: no file dialog; none: File ▸ Import Lightroom Catalog… asks for it
         Dialog::LightroomCatalog { catalog, .. } => {
             app.run("file.importLightroom", catalog.as_ref().map_or_else(|| json!({}), |c| json!({"path": c})))
         }
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::confirm(app, d),
+        Dialog::LensDatabase { dir, mirrors } => {
+            crate::lens_db::download(app, std::path::Path::new(dir), mirrors.clone()).map(|()| json!({"downloading": true}))
+        }
         Dialog::SaveEffect { name, group, fields, amount, brush } => {
             crate::panels::mask_effects::save_confirm(app, name, group, fields, *amount, *brush)
         }

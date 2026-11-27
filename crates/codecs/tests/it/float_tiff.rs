@@ -44,7 +44,11 @@ fn float_tiff_nonfinite_gray_and_icc_curves_match_clipped_samples() {
         Some(icc::write_named(NamedSpace::Srgb)),
         Some(icc::write_matrix_trc(&lightcraft_color::SRGB, &Trc::Gamma(2.0))),
         Some(icc::write_matrix_trc(&lightcraft_color::SRGB, &Trc::Table(vec![0, 16384, 65535]))),
-        Some(moxcms::ColorProfile::new_gray_with_gamma(2.0).encode().unwrap()),
+        Some({
+            let mut p = craft_cms::Builtin::GrayGamma22.profile().clone();
+            p.gray_trc = Some(craft_cms::Curve::Gamma(2.0));
+            p.with_encoded_bytes().to_bytes().to_vec()
+        }),
         Some(b"invalid ICC profile".to_vec()),
     ];
     for channels in [1, 3] {
@@ -77,42 +81,43 @@ fn float_tiff_nonfinite_alpha_is_finite_and_bounded() {
     assert!(decoded.to_working().data.iter().flatten().all(|v| v.is_finite()));
 
     // Associated alpha takes the same path before unpremultiplication.
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    {
-        use tiff::encoder::{TiffEncoder, colortype};
-        let mut encoder = TiffEncoder::new(&mut cursor).unwrap();
-        let mut image = encoder.new_image::<colortype::RGBA32Float>(2, 1).unwrap();
-        image.encoder().write_tag(tiff::tags::Tag::ExtraSamples, &[1u16][..]).unwrap();
-        image.write_data(&[f32::INFINITY, f32::NAN, f32::NEG_INFINITY, 0.5, 1.0, 2.0, 3.0, 0.5]).unwrap();
+    let mut strip = Vec::new();
+    for s in [f32::INFINITY, f32::NAN, f32::NEG_INFINITY, 0.5, 1.0, 2.0, 3.0, 0.5] {
+        strip.extend_from_slice(&s.to_le_bytes());
     }
-    let decoded = decode(&cursor.into_inner(), DecodeOptions::default()).unwrap();
+    let mut ifd = craft_tiff::IfdBuilder::new()
+        .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![2]))
+        .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![1]))
+        .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![32, 32, 32, 32]))
+        .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![2]))
+        .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![4]))
+        .with(craft_tiff::tags::PLANAR_CONFIGURATION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::SAMPLE_FORMAT, craft_tiff::Value::Short(vec![3, 3, 3, 3]))
+        .with(craft_tiff::tags::EXTRA_SAMPLES, craft_tiff::Value::Short(vec![1]));
+    ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 1, strips: vec![strip] });
+    let tif = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
+    let decoded = decode(&tif, DecodeOptions::default()).unwrap();
     assert_eq!(decoded.alpha.as_ref().unwrap().data, [0.5, 0.5]);
-    assert_eq!(decoded.image.data, [[2.0, 0.0, 0.0], [2.0, 4.0, 6.0]]);
+    assert_eq!(decoded.image.data, [[1.0, 0.0, 0.0], [2.0, 4.0, 6.0]]);
 }
 
 fn lut_profile() -> Vec<u8> {
-    use moxcms::{ColorProfile, LutMultidimensionalType, LutWarehouse, Matrix3d, ToneReprCurve, Vector3d, Xyzd};
-    let mut profile = ColorProfile::new_srgb();
-    profile.cicp = None;
-    profile.red_colorant = Xyzd::default();
-    profile.green_colorant = Xyzd::default();
-    profile.blue_colorant = Xyzd::default();
-    profile.red_trc = None;
-    profile.green_trc = None;
-    profile.blue_trc = None;
+    use craft_cms::pipeline::Stage;
+    use craft_cms::profile::{Lut, LutKind};
+    let mut profile = craft_cms::Builtin::Srgb.profile().clone();
+    profile.matrix = None;
+    profile.trc = None;
+    let m: Vec<f64> = NamedSpace::Srgb.to_xyz_d50().0.iter().flatten().map(|&v| v * 32768.0 / 65535.0).collect();
+    let ident = vec![craft_cms::Curve::Identity; 3];
     // A procedural mAB profile without a CLUT: linear RGB to D50 XYZ, then identity curves.
-    profile.lut_a_to_b_colorimetric = Some(LutWarehouse::Multidimensional(LutMultidimensionalType {
-        num_input_channels: 3,
-        num_output_channels: 3,
-        grid_points: [0; 16],
-        clut: None,
-        a_curves: vec![],
-        m_curves: vec![ToneReprCurve::Parametric(vec![1.0]); 3],
-        matrix: Matrix3d { v: NamedSpace::Srgb.to_xyz_d50().0.map(|r| r.map(|v| v * 32768.0 / 65535.0)) },
-        b_curves: vec![ToneReprCurve::Parametric(vec![1.0]); 3],
-        bias: Vector3d::default(),
-    }));
-    profile.encode().unwrap()
+    profile.a2b[1] = Some(Lut {
+        kind: LutKind::Ab,
+        inputs: 3,
+        outputs: 3,
+        stages: vec![Stage::Curves(ident.clone()), Stage::Matrix { rows: 3, cols: 3, m, offset: vec![0.0; 3] }, Stage::Curves(ident)],
+    });
+    profile.with_encoded_bytes().to_bytes().to_vec()
 }
 
 #[test]

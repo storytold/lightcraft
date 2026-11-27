@@ -63,11 +63,11 @@ fn the_tabs_are_named_and_ordered_for_what_they_hold() {
 
 /// What each tab shows, by English heading name, for the page tests below.
 const SECTIONS: &[(&str, &[&str])] = &[
-    ("general", &["Startup", "Culling", "Dialogs"]),
+    ("general", &["Startup", "Culling", "Dialogs", "Lens profiles"]),
     ("library", &["Library", "Local folders"]),
     ("import", &["Raw defaults", "Other images (JPEG, PNG, TIFF, HEIC…)", "Metadata", "Dropped Files", "Cameras and Cards", "Auto Import"]),
     ("files", &["External Editing", "XMP sidecars"]),
-    ("performance", &["Rendering", "Thumbnail cache"]),
+    ("performance", &["Rendering", "Preview cache", "Prepare photos in the background"]),
     ("display", &["Monitor profile"]),
     ("interface", &["Appearance", "Filmstrip", "Grid", "Keywords", "Detail View"]),
     ("faces", &["Face recognition"]),
@@ -116,7 +116,7 @@ fn each_section_is_under_the_tab_a_person_would_look_in() {
         headings(&h)
     };
     // General is about the app as a whole
-    assert_eq!(under("general"), ["Startup", "Culling", "Dialogs"]);
+    assert_eq!(under("general"), ["Startup", "Culling", "Dialogs", "Lens profiles"]);
     // Library is the library itself: where it is, and what leaves it by itself
     assert_eq!(under("library"), ["Library", "Local folders"]);
     // Import is what happens to photos as they come in, from a camera or card or a watched folder too
@@ -127,7 +127,7 @@ fn each_section_is_under_the_tab_a_person_would_look_in() {
     // Files is what is written beside the photo files and what they are opened in
     assert_eq!(under("files"), ["External Editing", "XMP sidecars"]);
     // Performance is speed and the cache that buys it
-    assert_eq!(under("performance"), ["Rendering", "Thumbnail cache"]);
+    assert_eq!(under("performance"), ["Rendering", "Preview cache", "Prepare photos in the background"]);
     assert_eq!(under("display"), ["Monitor profile"]);
     assert_eq!(under("interface"), ["Appearance", "Filmstrip", "Grid", "Keywords", "Detail View"]);
     // Slideshow is what the slideshow looks like and how it plays, next to how LightCraft looks
@@ -156,11 +156,11 @@ fn what_is_saved_with_a_library_in_memory_says_it_will_not_last() {
     let texts = h.painted_text();
     let at = |what: &str| texts.iter().position(|text| text == what).unwrap_or_else(|| panic!("{what} is painted"));
     assert!(at("External Editing") < at("XMP sidecars") && at("XMP sidecars") < at(note), "the note follows the library setting");
-    // On Performance it follows the thumbnail cache, whose size limit is the library's
+    // On Performance it follows the preview cache, whose size limit is the library's
     show(&mut h, "performance");
     let texts = h.painted_text();
     let at = |what: &str| texts.iter().position(|text| text == what).unwrap_or_else(|| panic!("{what} is painted"));
-    assert!(at("Thumbnail cache") < at(note));
+    assert!(at("Preview cache") < at(note));
     // General, Appearance and the rest are saved on this computer, in memory or not
     for tab in ["general", "interface", "display", "slideshow"] {
         show(&mut h, tab);
@@ -217,7 +217,7 @@ fn a_library_on_disk_has_its_smart_previews_folder_under_library() {
     let _ = std::fs::remove_dir_all(&dir);
     // (where a library keeps its files is the library's; Performance keeps rendering and the cache)
     assert_eq!(on_library, ["Library", "Smart previews", "Local folders"]);
-    assert_eq!(on_performance, ["Rendering", "Thumbnail cache"]);
+    assert_eq!(on_performance, ["Rendering", "Preview cache", "Prepare photos in the background"]);
 }
 
 #[test]

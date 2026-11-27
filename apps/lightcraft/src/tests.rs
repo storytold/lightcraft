@@ -1,10 +1,175 @@
 use super::*;
 
+#[test]
+fn desktop_clear_color_stays_opaque_with_a_modal_open() {
+    let mut app = App(
+        LightcraftApp::new(Session::new(), Services::default()),
+        PrefsWriter::default(),
+        None,
+        NightlyExit::none(),
+        #[cfg(target_os = "macos")]
+        None,
+    );
+    app.0.run("app.settings", serde_json::json!({})).unwrap();
+    assert!(app.0.ui.dialog.is_some());
+    for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+        assert_eq!(eframe::App::clear_color(&app, &visuals)[3], 1.0);
+    }
+}
+
+/// The launch profile hands the files over after `--` (launch_profile::parse): a file named like
+/// an option stays a file, and nothing after `--` is read as an option again.
+#[test]
+fn the_launch_profile_hands_files_over_after_a_double_dash() {
+    let args = ["--", "--version", "--library", "--control", "-h", "photo with spaces.dng"].map(String::from);
+    assert_eq!(
+        app_command(&args, true).unwrap(),
+        AppCommand::Start(AppOptions {
+            files: ["--version", "--library", "--control", "-h", "photo with spaces.dng"].map(String::from).to_vec(),
+            seed_demo: true,
+            ..AppOptions::default()
+        })
+    );
+    // Stable and Nightly share the parser: Nightly consumes and ignores --control with its port.
+    assert_eq!(
+        app_command(&["--control".to_string(), "7000".to_string()], true).unwrap(),
+        AppCommand::Start(AppOptions { seed_demo: true, ..AppOptions::default() })
+    );
+    assert_eq!(
+        app_command(&["--control".to_string(), "7000".to_string()], false).unwrap(),
+        AppCommand::Start(AppOptions { control: Some("7000".into()), seed_demo: true, ..AppOptions::default() })
+    );
+    // The queries stay queries, and an unknown option stays a usage error.
+    assert_eq!(app_command(&["--version".to_string()], true).unwrap(), AppCommand::Version);
+    assert_eq!(app_command(&["-h".to_string()], true).unwrap(), AppCommand::Help);
+    assert!(app_command(&["--bogus".to_string()], true).unwrap_err().contains("unknown option `--bogus`"));
+}
+
 fn dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-app-prefs-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
+}
+
+fn startup_headless(
+    tag: &str,
+    startup_view: lightcraft_ui_egui::state::StartupView,
+    seed_demo: bool,
+) -> (std::path::PathBuf, lightcraft_ui_egui::headless::Headless) {
+    let root = dir(tag);
+    let mut session = Session::new().with_fs();
+    session.open_library(root.join("library"), seed_demo).unwrap();
+    let mut app = LightcraftApp::new(session, Services::default());
+    let mut ui = UiState::default();
+    ui.settings.startup_view = startup_view;
+    app.ui = ui.sanitized();
+    (root, lightcraft_ui_egui::headless::Headless::new(app, [1000.0, 700.0], 1.0))
+}
+
+fn startup_png(path: &std::path::Path, seed: u8) -> Vec<u8> {
+    let image = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[seed, 40, 90, 255]; 64] };
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(path, &bytes).unwrap();
+    bytes
+}
+
+fn start_launch_photo(h: &mut lightcraft_ui_egui::headless::Headless, path: &std::path::Path) {
+    start_launch_files(&mut h.app, vec![path.to_string_lossy().into_owned()]);
+    assert!(h.settle(std::time::Duration::from_secs(30)), "launch import did not settle");
+    assert!(h.app.import.is_none(), "launch import completed");
+}
+
+fn assert_launch_photo(h: &lightcraft_ui_egui::headless::Headless, name: &str) -> u64 {
+    let id = h.app.session.selection.active.expect("launch import selects a photo");
+    let photo = h.app.session.catalog.photo(id).expect("selected photo is in the catalog");
+    assert_eq!(photo.file_name, name);
+    id.0
+}
+
+#[test]
+fn startup_view_detail_with_new_file() {
+    use lightcraft_ui_egui::state::{StartupView, ViewMode};
+    let (root, mut h) = startup_headless("startup-detail-new", StartupView::Detail, false);
+    let file = root.join("new.png");
+    let original = startup_png(&file, 25);
+
+    start_launch_photo(&mut h, &file);
+
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    assert_eq!(h.app.session.catalog.photos().count(), 1);
+    assert_launch_photo(&h, "new.png");
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    drop(h);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn startup_view_detail_with_existing_file() {
+    use lightcraft_ui_egui::state::{StartupView, ViewMode};
+    let (root, mut h) = startup_headless("startup-detail-existing", StartupView::Grid, false);
+    let file = root.join("existing.png");
+    let original = startup_png(&file, 75);
+    start_launch_photo(&mut h, &file);
+    let original_id = assert_launch_photo(&h, "existing.png");
+
+    let mut ui = h.app.ui.clone();
+    ui.settings.startup_view = StartupView::Detail;
+    h.app.ui = ui.sanitized();
+    start_launch_photo(&mut h, &file);
+
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    assert_eq!(h.app.session.catalog.photos().count(), 1, "an existing launch argument is not duplicated");
+    assert_eq!(assert_launch_photo(&h, "existing.png"), original_id);
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    drop(h);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn startup_view_grid_with_file() {
+    use lightcraft_ui_egui::state::{StartupView, ViewMode};
+    let (root, mut h) = startup_headless("startup-grid-file", StartupView::Grid, false);
+    let file = root.join("grid.png");
+    let original = startup_png(&file, 120);
+
+    start_launch_photo(&mut h, &file);
+
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+    assert_eq!(h.app.session.catalog.photos().count(), 1);
+    assert_launch_photo(&h, "grid.png");
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    drop(h);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn startup_view_without_files_preserves_preferences() {
+    use lightcraft_ui_egui::state::{StartupView, ViewMode};
+    let (root, mut h) = startup_headless("startup-no-files", StartupView::Detail, true);
+    assert!(h.app.session.catalog.photos().count() > 0, "the launch library is populated");
+    start_launch_files(&mut h.app, Vec::new());
+    assert!(h.app.import.is_none());
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    drop(h);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn startup_view_last_with_files_preserves_current_policy() {
+    use lightcraft_ui_egui::state::{StartupView, ViewMode};
+    let (root, mut h) = startup_headless("startup-last-file", StartupView::Last, false);
+    let file = root.join("last.png");
+    let original = startup_png(&file, 170);
+
+    start_launch_photo(&mut h, &file);
+
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+    assert_eq!(h.app.session.catalog.photos().count(), 1);
+    assert_launch_photo(&h, "last.png");
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    drop(h);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Issue #374: launch arguments that would walk a whole drive or home folder are reported,
@@ -14,14 +179,54 @@ fn launch_arguments_never_walk_a_drive_or_the_home_folder() {
     let home = dir("launch");
     std::fs::create_dir_all(home.join("Trip")).unwrap();
     let args: Vec<String> = ["", "  ", ".", "Trip", &home.to_string_lossy()].iter().map(|s| s.to_string()).collect();
-    let (files, notices) = launch_imports_in(&args, Some(&home), Some(&home));
+    let LaunchArgs { files, notices, library } = launch_imports_in(&args, Some(&home), Some(&home));
+    assert_eq!(library, None);
     assert_eq!(files, [home.join("Trip").to_string_lossy().to_string()]);
     assert_eq!(notices.len(), 2, "{notices:?}");
     assert!(notices.iter().all(|n| n.contains("was not imported")), "{notices:?}");
     // the working folder is a drive root (a launcher's choice): `.` is never the whole drive
     let root = home.ancestors().last().unwrap().to_path_buf();
-    let (files, notices) = launch_imports_in(&[".".to_string()], Some(&root), None);
+    let LaunchArgs { files, notices, .. } = launch_imports_in(&[".".to_string()], Some(&root), None);
     assert!(files.iter().all(|f| f.ends_with("DCIM")) && files.len() + notices.len() == 1, "{files:?} {notices:?}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// `--library` and `LIGHTCRAFT_LIBRARY` win over a library given as an argument, which is
+/// then not remembered either.
+#[test]
+fn the_library_flag_and_variable_win_over_a_library_argument() {
+    use std::path::PathBuf;
+    let (flag, env, arg) = (PathBuf::from("flag"), PathBuf::from("env"), PathBuf::from("arg"));
+    assert_eq!(launch_library_choice(Some(flag.clone()), Some(&env), Some(arg.clone())), (Some(flag.clone()), false));
+    assert_eq!(launch_library_choice(None, Some(&env), Some(arg.clone())), (None, false), "the variable is passed on as itself");
+    assert_eq!(launch_library_choice(None, None, Some(arg.clone())), (Some(arg), true));
+    assert_eq!(launch_library_choice(None, None, None), (None, false));
+    assert_eq!(launch_library_choice(Some(flag.clone()), None, None), (Some(flag), false));
+}
+
+/// A library's catalog.snap (double-clicked in Explorer) or its folder given at
+/// launch opens that library and is never imported as photos; a second library is left with a notice.
+#[test]
+fn a_librarys_catalog_given_at_launch_opens_that_library() {
+    let home = dir("launch-library");
+    let lib = home.join("Wedding LC");
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.close_library().unwrap();
+    let snap = lib.join("catalog.snap");
+    assert!(snap.is_file(), "a library keeps its catalog.snap");
+    let other = home.join("Other LC");
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    s.open_library(&other, false).unwrap();
+    s.close_library().unwrap();
+    for arg in [snap.to_string_lossy().to_string(), lib.to_string_lossy().to_string(), "Wedding LC/catalog.snap".to_string()] {
+        let got = launch_imports_in(std::slice::from_ref(&arg), Some(&home), Some(&home.join("elsewhere")));
+        assert_eq!(got.library.as_deref(), Some(lib.as_path()), "{arg}");
+        assert!(got.files.is_empty() && got.notices.is_empty(), "{arg}: never imported: {got:?}");
+    }
+    let got = launch_imports_in(&[snap.to_string_lossy().to_string(), other.to_string_lossy().to_string()], Some(&home), None);
+    assert_eq!(got.library.as_deref(), Some(lib.as_path()), "the first one");
+    assert_eq!(got.notices.len(), 1, "{got:?}");
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -29,7 +234,7 @@ fn launch_arguments_never_walk_a_drive_or_the_home_folder() {
 /// adds to Apple Photos on a worker (headless sessions wait instead).
 #[test]
 fn the_desktop_session_adds_to_apple_photos_in_the_background() {
-    let (s, problem) = open_session(true, &Launch::Open { dir: None, alt_asks: false }, false);
+    let (s, problem) = open_session(true, &Launch::Open { dir: None, alt_asks: false, remembered: false }, false);
     assert!(problem.is_none());
     assert!(s.apple_photos_background);
     assert!(!lightcraft_engine::Session::new().apple_photos_background);
@@ -60,6 +265,74 @@ fn asking_at_launch_opens_nothing_and_still_saves_the_settings() {
     w.save(&app).unwrap();
     let saved: UiState = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved.settings.recent_libraries, ["/gone/b"]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Issue #3239: the library remembered in Settings whose folder is missing at launch (a disk or
+/// network share not connected) is reported in the library problem window. Nothing is created
+/// there (not the folder, not its parents) and no demo photos are added.
+#[test]
+fn a_remembered_library_missing_at_launch_is_reported_not_made_anew() {
+    let d = dir("missing-library");
+    let gone = d.join("gone");
+    let lib = gone.join("Lib");
+    let launch = Launch::Open { dir: Some(lib.clone()), alt_asks: true, remembered: true };
+    let (s, problem) = open_session(false, &launch, true);
+    let problem = problem.expect("the missing library is reported");
+    assert_eq!(problem.path, lib.to_string_lossy());
+    assert!(problem.can_retry, "Try Again once the drive is back");
+    assert!(problem.existing_only, "Try Again makes no library there either");
+    assert!(!gone.exists(), "nothing is created where the library was");
+    assert!(s.library.is_none() && s.catalog.is_empty(), "no library, no demo photos");
+    // a remembered folder that is there but holds no library is reported too
+    std::fs::create_dir_all(&lib).unwrap();
+    let (s, problem) = open_session(false, &launch, true);
+    assert!(problem.as_ref().is_some_and(|p| p.existing_only) && s.library.is_none() && s.catalog.is_empty(), "{problem:?}");
+    assert!(!lightcraft_engine::library::is_library(&lib), "nothing written in it");
+    // the default location (or --library) is still made when it's missing, with the demo photos
+    let fresh = d.join("fresh").join("Lib");
+    let (s, problem) = open_session(false, &Launch::Open { dir: Some(fresh.clone()), alt_asks: true, remembered: false }, true);
+    assert!(problem.is_none() && s.library.is_some() && !s.catalog.is_empty(), "{problem:?}");
+    assert!(lightcraft_engine::library::is_library(&fresh));
+    drop(s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Issue #3239: a remembered library whose folder can't be looked into (no permission) is
+/// reported as unreadable at launch, not as gone, and nothing is opened or written there.
+#[cfg(unix)]
+#[test]
+fn a_remembered_library_it_may_not_read_at_launch_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = dir("denied-library");
+    let lib = d.join("Lib");
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let names = |dir: &std::path::Path| {
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        names.sort();
+        names
+    };
+    let before = names(&lib);
+    std::fs::set_permissions(&lib, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&lib).is_ok() {
+        std::fs::set_permissions(&lib, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        lightcraft_testkit::skip!(System, "running as root: a folder with mode 000 is still readable");
+        return;
+    }
+    let launch = Launch::Open { dir: Some(lib.clone()), alt_asks: true, remembered: true };
+    let (s, problem) = open_session(false, &launch, true);
+    std::fs::set_permissions(&lib, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let problem = problem.expect("the unreadable library is reported");
+    assert!(problem.error.starts_with("This folder can't be read:"), "{}", problem.error);
+    assert!(problem.error.to_lowercase().contains("permission denied"), "{}", problem.error);
+    assert!(problem.existing_only, "Try Again makes no library there either");
+    assert!(s.library.is_none() && s.catalog.is_empty(), "no library, no demo photos");
+    assert_eq!(names(&lib), before, "nothing written there");
+    drop(s);
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -97,6 +370,42 @@ fn memory_session_leaves_a_damaged_ui_json_alone() {
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A settings file from before the startup dialog existed (no `seenVersion`) belongs to an
+/// installation that has been run: its first launch after the update shows What's New, never
+/// the first-run tour. A file this version saved before the dialog was presented carries an
+/// explicit `null` and is not migrated; only a missing file stays a first run as well.
+#[test]
+fn legacy_ui_json_shows_whats_new_not_the_first_run_tour() {
+    let d = dir("legacy-startup");
+    let path = d.join("ui.json");
+    std::fs::write(&path, br#"{"language":"en","settings":{"startupView":"detail"}}"#).unwrap();
+    let (ui, warning, keep) = load_prefs_at(&path, true);
+    assert!(warning.is_none() && !keep);
+    let ui = ui.unwrap();
+    assert_eq!(ui.seen_version.as_deref(), Some(lightcraft_ui_egui::startup::LEGACY_SEEN_VERSION));
+    assert_eq!(
+        lightcraft_ui_egui::startup::startup_dialog(ui.seen_version.as_deref(), env!("CARGO_PKG_VERSION")),
+        Some(lightcraft_ui_egui::startup::StartupDialog::WhatsNew)
+    );
+    // a file that already records the running version is migrated nowhere
+    std::fs::write(&path, format!(r#"{{"seenVersion":"{}"}}"#, env!("CARGO_PKG_VERSION"))).unwrap();
+    let (ui, warning, _) = load_prefs_at(&path, true);
+    assert!(warning.is_none());
+    assert_eq!(ui.unwrap().seen_version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    // an explicit `null` is this version's "not presented yet" (the launch chooser saves while
+    // the tour still waits): it stays a first run, not a pre-feature file
+    std::fs::write(&path, br#"{"language":"en","seenVersion":null}"#).unwrap();
+    let (ui, warning, _) = load_prefs_at(&path, true);
+    assert!(warning.is_none());
+    let ui = ui.unwrap();
+    assert_eq!(ui.seen_version, None);
+    assert_eq!(
+        lightcraft_ui_egui::startup::startup_dialog(ui.seen_version.as_deref(), env!("CARGO_PKG_VERSION")),
+        Some(lightcraft_ui_egui::startup::StartupDialog::FirstRun)
+    );
+    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
@@ -351,12 +660,15 @@ fn ui_json_is_written_atomically() {
 #[test]
 fn the_window_opens_as_it_was() {
     use lightcraft_ui_egui::window_place::{DEFAULT_SIZE, WindowPlace};
-    let fresh = as_remembered(egui::ViewportBuilder::default(), None);
+    let fresh = as_remembered(egui::ViewportBuilder::default(), None, false);
     assert_eq!((fresh.inner_size, fresh.position, fresh.maximized), (Some(egui::Vec2::from(DEFAULT_SIZE)), None, None));
-    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }));
+    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }), false);
     assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, Some(true)));
+    // Windows: built at its size, maximized once it shows
+    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }), true);
+    assert_eq!((b.inner_size, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None));
     // (not asked to un-zoom: macOS would then resize a window that fills its screen)
-    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }));
+    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }), false);
     assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, None));
 }
 
@@ -443,6 +755,8 @@ fn on_exit_ends_the_process_on_macos() {
         let mut app = App(
             app,
             PrefsWriter::default(),
+            None,
+            NightlyExit::none(),
             #[cfg(target_os = "macos")]
             None,
         );
@@ -461,4 +775,41 @@ fn on_exit_ends_the_process_on_macos() {
     assert!(out.status.success(), "{stdout}");
     assert!(stdout.contains("calling on_exit"), "the child didn't run the test: {stdout}");
     assert_eq!(stdout.contains("on_exit returned"), !cfg!(target_os = "macos"), "{stdout}");
+}
+
+/// Quitting leaves no `catalog.lock.owner` behind, though the process ends without running
+/// destructors (macOS): `on_exit` releases the library's lock itself. The child opens a library
+/// and calls `on_exit` (on macOS that ends it); the parent looks at the folder afterwards. Other
+/// systems drop the app after `on_exit`, which removes the note anyway.
+#[test]
+fn on_exit_removes_the_lock_owner_note() {
+    if let Some(dir) = std::env::var_os("LIGHTCRAFT_TEST_LOCK_DIR") {
+        let mut session = lightcraft_engine::Session::new();
+        session.open_library(&dir, false).unwrap();
+        let mut app = App(
+            LightcraftApp::new(session, Services::default()),
+            PrefsWriter::default(),
+            None,
+            NightlyExit::none(),
+            #[cfg(target_os = "macos")]
+            None,
+        );
+        eframe::App::on_exit(&mut app, None);
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("lc-app-lock-owner-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::on_exit_removes_the_lock_owner_note", "--nocapture"])
+        .env("LIGHTCRAFT_TEST_LOCK_DIR", &dir)
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(dir.join("catalog.snap").exists(), "the child didn't open and save the library: {stdout}");
+    assert!(!dir.join("catalog.lock.owner").exists(), "the owner note was left behind");
+    assert!(lightcraft_engine::Session::new().open_library(&dir, false).is_ok(), "the library is still locked");
+    let _ = std::fs::remove_dir_all(&dir);
 }

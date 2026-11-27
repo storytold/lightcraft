@@ -348,64 +348,12 @@ fn detached_history_entry_is_checked_before_unrelated_global_retirement() {
     // A private-method contract, not a UI reproduction: application reachability of two
     // simultaneous repair owners is unproven. Native move failures and follow_stuck seed
     // both records; the second owner's normal apply_rename preflight is deliberately bypassed.
-    struct NativePartial {
-        id: PhotoId,
-        original: PathBuf,
-        moved: PathBuf,
-        stem: PathBuf,
-        full: PathBuf,
-        companion: PathBuf,
-        target: PathBuf,
-    }
     let root = crate::tests_xmp::temp_dir("detached-history-preflight-contract");
     let image = lightcraft_raster::Rgba8::from_fn(4, 3, |_, _| [40, 80, 120, 255]);
     let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
     let mut s = Session::new();
     s.xmp.naming = SidecarNaming::Stem;
-    let mut native = Vec::new();
-    for (i, name) in ["first", "second"].into_iter().enumerate() {
-        let dir = root.join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        let original = dir.join("a.png");
-        let moved = dir.join("Trip.png");
-        std::fs::write(&original, &png).unwrap();
-        let stem = path(&original, SidecarNaming::Stem, false);
-        let full = path(&original, SidecarNaming::Full, true);
-        for (p, marker) in [(&stem, format!("{name}-stem")), (&full, format!("{name}-full"))] {
-            std::fs::write(p, packet(&marker)).unwrap();
-            assert_eq!(parse_sidecar(&std::fs::read_to_string(p).unwrap(), crate::crs::Target::Rendered).unwrap().rating, Some(5));
-        }
-        let id = PhotoId(i as u64 + 1);
-        let photo = Photo::new(id, Source::File { path: original.to_string_lossy().into_owned() }, "a.png", "PNG", 4, 3, "");
-        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-        let fs = Faults(vec![full.clone(), moved.clone()]);
-        if i == 0 {
-            let plans = s.plan_rename_with(&fs, &[id], "Trip", 1);
-            assert!(s.apply_rename_with(&fs, &plans).is_err());
-        } else {
-            // Register the genuine second partial move without draining the first repair.
-            let moves = vec![(original.to_string_lossy().into_owned(), moved.to_string_lossy().into_owned())];
-            let err = crate::rename::move_all(&fs, &moves).unwrap_err();
-            assert_eq!(err.stuck, moves);
-            assert_eq!(err.pending_sidecars.len(), 1);
-            let op = Op::SetFile { id, source: Source::File { path: moved.to_string_lossy().into_owned() }, file_name: "Trip.png".into() };
-            s.follow_stuck(&op, err, true);
-        }
-        assert_eq!(s.undo.len(), i + 1);
-        assert_eq!(queued(&s).len(), i + 1);
-        assert_eq!(s.catalog.photo(id).unwrap().source, Source::File { path: moved.to_string_lossy().into_owned() });
-        let decoded = lightcraft_codecs::decode(&std::fs::read(&moved).unwrap(), Default::default()).unwrap();
-        assert_eq!((decoded.width, decoded.height), (4, 3));
-        native.push(NativePartial {
-            id,
-            original,
-            companion: path(&moved, SidecarNaming::Stem, false),
-            target: path(&moved, SidecarNaming::Full, true),
-            moved,
-            stem,
-            full,
-        });
-    }
+    let native = create_native_partials(&root, &png, &mut s);
     let first = &native[0];
     let second = &native[1];
     let first_stem = std::fs::read(&first.companion).unwrap();
@@ -462,4 +410,62 @@ fn detached_history_entry_is_checked_before_unrelated_global_retirement() {
     assert!(!second.moved.exists() && !second.companion.exists() && !second.target.exists());
     drop(s);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+struct NativePartial {
+    id: PhotoId,
+    original: PathBuf,
+    moved: PathBuf,
+    stem: PathBuf,
+    full: PathBuf,
+    companion: PathBuf,
+    target: PathBuf,
+}
+
+fn create_native_partials(root: &Path, png: &[u8], s: &mut Session) -> Vec<NativePartial> {
+    let mut native = Vec::new();
+    for (i, name) in ["first", "second"].into_iter().enumerate() {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("a.png");
+        let moved = dir.join("Trip.png");
+        std::fs::write(&original, png).unwrap();
+        let stem = path(&original, SidecarNaming::Stem, false);
+        let full = path(&original, SidecarNaming::Full, true);
+        for (p, marker) in [(&stem, format!("{name}-stem")), (&full, format!("{name}-full"))] {
+            std::fs::write(p, packet(&marker)).unwrap();
+            assert_eq!(parse_sidecar(&std::fs::read_to_string(p).unwrap(), crate::crs::Target::Rendered).unwrap().rating, Some(5));
+        }
+        let id = PhotoId(i as u64 + 1);
+        let photo = Photo::new(id, Source::File { path: original.to_string_lossy().into_owned() }, "a.png", "PNG", 4, 3, "");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let fs = Faults(vec![full.clone(), moved.clone()]);
+        if i == 0 {
+            let plans = s.plan_rename_with(&fs, &[id], "Trip", 1);
+            assert!(s.apply_rename_with(&fs, &plans).is_err());
+        } else {
+            // Register the genuine second partial move without draining the first repair.
+            let moves = vec![(original.to_string_lossy().into_owned(), moved.to_string_lossy().into_owned())];
+            let err = crate::rename::move_all(&fs, &moves).unwrap_err();
+            assert_eq!(err.stuck, moves);
+            assert_eq!(err.pending_sidecars.len(), 1);
+            let op = Op::SetFile { id, source: Source::File { path: moved.to_string_lossy().into_owned() }, file_name: "Trip.png".into() };
+            s.follow_stuck(&op, err, true);
+        }
+        assert_eq!(s.undo.len(), i + 1);
+        assert_eq!(queued(s).len(), i + 1);
+        assert_eq!(s.catalog.photo(id).unwrap().source, Source::File { path: moved.to_string_lossy().into_owned() });
+        let decoded = lightcraft_codecs::decode(&std::fs::read(&moved).unwrap(), Default::default()).unwrap();
+        assert_eq!((decoded.width, decoded.height), (4, 3));
+        native.push(NativePartial {
+            id,
+            original,
+            companion: path(&moved, SidecarNaming::Stem, false),
+            target: path(&moved, SidecarNaming::Full, true),
+            moved,
+            stem,
+            full,
+        });
+    }
+    native
 }

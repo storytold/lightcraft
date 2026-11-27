@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
-use crate::activity::{Cancel, TaskGuard};
+use crate::activity::{Cancel, Lane, Request, TaskGuard};
 use crate::media::{RenderJob, THUMB_SIZES};
 use crate::{Result, Session};
 
@@ -25,12 +25,29 @@ pub struct PreviewBuild {
     /// Shared with the build's row in the activity stack (its ✕ sets it).
     pub cancel: Arc<AtomicBool>,
     pub finished: AtomicBool,
+    /// A frontend announced how it ended (the app's toast); one that ended and was not announced is kept when the next
+    /// build replaces it ([`Session::take_unreported_builds`]).
+    pub reported: AtomicBool,
     /// Damaged smart previews rebuilt (Build Smart Previews only).
     pub repaired: AtomicUsize,
     /// What is built ("" = previews; "smart previews" — Build Smart Previews runs the same way).
     pub what: &'static str,
     /// Why the whole build failed (e.g. the smart previews folder isn't there).
     pub error: std::sync::Mutex<Option<String>>,
+    /// Photos whose previews were there already (from an earlier build, the loupe or the photos
+    /// prepared ahead): counted as done, not rendered again (PERF-PREVIEW-REUSE).
+    pub skipped: AtomicUsize,
+    /// Photos left alone because another job was building them at that moment.
+    pub shared: AtomicUsize,
+    /// Started by the background preparation ([`crate::prep`]): it yields to the photo on screen,
+    /// and a build the user (or an import) asks for replaces it.
+    pub background: bool,
+    /// The photos in build order (ids), and where the user is among them: the next photo built
+    /// is the nearest one not built yet from there, in the direction of travel
+    /// ([`PreviewBuild::focus_on`]).
+    pub order: Vec<u64>,
+    pub focus: AtomicUsize,
+    pub backward: AtomicBool,
     /// Test-only: the gate this build's lanes wait at before a photo's first render (see
     /// [`test_gate`]). Captured by `build` on the calling thread; production builds never have one.
     #[cfg(test)]
@@ -47,8 +64,36 @@ impl PreviewBuild {
             "cancelled": self.cancel.load(Ordering::Relaxed),
             "what": if self.what.is_empty() { "previews" } else { self.what },
             "repaired": self.repaired.load(Ordering::Relaxed),
+            "skipped": self.skipped.load(Ordering::Relaxed),
+            "shared": self.shared.load(Ordering::Relaxed),
+            "background": self.background,
             "error": self.error(),
         })
+    }
+
+    pub fn running(&self) -> bool {
+        !self.finished.load(Ordering::Relaxed)
+    }
+
+    /// The user is at photo `id`, moving `backward` or forward: build from there on.
+    pub fn focus_on(&self, id: lightcraft_catalog::PhotoId, backward: bool) {
+        if let Some(i) = self.order.iter().position(|p| *p == id.0) {
+            self.focus.store(i, Ordering::Relaxed);
+            self.backward.store(backward, Ordering::Relaxed);
+        }
+    }
+
+    /// Index of the next photo to build in `queue` (`None`: none left): the first one still there
+    /// from the focus on in the direction of travel, then the rest the other way.
+    pub(crate) fn next_index<T>(&self, queue: &[Option<T>]) -> Option<usize> {
+        let n = queue.len();
+        let at = self.focus.load(Ordering::Relaxed).min(n.saturating_sub(1));
+        let there = |i: &usize| queue.get(*i).is_some_and(Option::is_some);
+        if self.backward.load(Ordering::Relaxed) {
+            (0..=at).rev().find(there).or_else(|| (at..n).find(there))
+        } else {
+            (at..n).find(there).or_else(|| (0..at).rev().find(there))
+        }
     }
 
     pub fn error(&self) -> Option<String> {
@@ -69,22 +114,185 @@ pub(crate) fn jobs_for(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: O
     if e >= thumb { view.into_iter().chain(grid).collect() } else { grid.into_iter().chain(view).collect() }
 }
 
-/// The build's row in the activity stack (`what` as in [`PreviewBuild::what`]).
-fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
-    let (kind, label) = match state.what {
+/// The previews the build of one photo would make are all there already, big enough: its view
+/// render at least as large as asked for (`view_cache` of the view job) and its grid thumbnail
+/// (`cache` of the thumbnail job), on disk when the cache has one: a render the loupe kept only in
+/// memory (its deferred disk write skipped) is built again, and written. Only file headers are read.
+pub(crate) fn already_built(jobs: &[RenderJob]) -> bool {
+    !jobs.is_empty()
+        && jobs.iter().all(|j| {
+            if let Some((cache, key)) = &j.view_cache {
+                let want = j.request.max_w.max(j.request.max_h) as f64;
+                cache.stored_dims(*key).is_some_and(|(w, h)| w.max(h) as f64 >= want * 0.99)
+            } else if let Some((cache, key)) = &j.cache {
+                cache.stored_dims(*key).is_some()
+            } else {
+                false
+            }
+        })
+}
+
+/// Photos some preview build is rendering right now, by (the cache they go to, photo id): two
+/// builds (a background one being replaced, and the one replacing it) never render the same photo
+/// at once.
+static BUILDING: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Holds a photo in [`BUILDING`] while it is rendered.
+struct Building((usize, u64));
+
+impl Building {
+    /// `id` of `jobs` (the cache their results go to tells sessions apart).
+    fn take(id: u64, jobs: &[RenderJob]) -> Option<Building> {
+        let cache = jobs.iter().find_map(|j| j.view_cache.as_ref().or(j.cache.as_ref())).map_or(0, |(c, _)| Arc::as_ptr(c) as usize);
+        let id = (cache, id);
+        let mut b = BUILDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if b.contains(&id) {
+            return None;
+        }
+        b.push(id);
+        Some(Building(id))
+    }
+
+    /// [`Self::take`], waiting while another build renders the photo (a build asked for replacing the
+    /// background one may meet it on the same photo): the photo is not counted until that render is over, as
+    /// built when it made the previews, else rendered here. With whether it had to wait; `None` when `cancel`
+    /// was asked for meanwhile. (On the web, with one thread, a photo held is not waited for: `Some((None, true))`.)
+    fn wait(id: u64, jobs: &[RenderJob], cancel: &AtomicBool) -> Option<(Option<Building>, bool)> {
+        if let Some(b) = Self::take(id, jobs) {
+            return Some((Some(b), false));
+        }
+        Self::wait_held(id, jobs, cancel)
+    }
+
+    /// [`Self::wait`] for a photo another build holds.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_held(id: u64, jobs: &[RenderJob], cancel: &AtomicBool) -> Option<(Option<Building>, bool)> {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if let Some(b) = Self::take(id, jobs) {
+                return Some((Some(b), true));
+            }
+        }
+    }
+
+    /// [`Self::wait`] for a photo another build holds: on the web, with one thread, it is not waited for.
+    #[cfg(target_arch = "wasm32")]
+    fn wait_held(_id: u64, _jobs: &[RenderJob], cancel: &AtomicBool) -> Option<(Option<Building>, bool)> {
+        (!cancel.load(Ordering::Relaxed)).then_some((None, true))
+    }
+}
+
+/// Tests: hold `id` of `jobs` as a build rendering it would, until the returned value is dropped.
+#[cfg(test)]
+pub(crate) fn hold_building(id: u64, jobs: &[RenderJob]) -> Option<Box<dyn std::any::Any>> {
+    Building::take(id, jobs).map(|b| Box::new(b) as Box<dyn std::any::Any>)
+}
+
+impl Drop for Building {
+    fn drop(&mut self) {
+        BUILDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|x| *x != self.0);
+    }
+}
+
+/// The row in the activity stack of a build of `what` (as in [`PreviewBuild::what`]), `background`: the background
+/// preparation's build ([`PreviewBuild::background`]): its kind and its label.
+fn row_of(what: &str, background: bool) -> (&'static str, &'static str) {
+    match what {
+        "" if background => ("previews", "Preparing photos in the background"),
         "" => ("previews", "Building previews"),
         "smart previews" => ("smartPreviews", "Building smart previews"),
         _ => ("smartPreviews", "Discarding smart previews"),
-    };
+    }
+}
+
+/// The build's row in the activity stack.
+fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
+    let (kind, label) = row_of(state.what, state.background);
     let task = s.activity.start(kind, label, Cancel::Flag(state.cancel.clone()));
     task.progress(0, state.total as u64);
     task
 }
 
+/// A build's state and its row, which go together. However the build ends (it finishes, its worker panics, or the
+/// worker can't be started) the state reads as finished first, and then the row goes: a build waiting in line starts
+/// when the row is gone, and is refused if the state still said a build runs. A build that did not mark itself
+/// finished did not end well: it says so, instead of reading as one that built nothing.
+/// (A build asked for with `row: false` has no row: the job that asked shows it.)
+struct Running {
+    state: Arc<PreviewBuild>,
+    task: Option<TaskGuard>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if !self.state.finished.load(Ordering::Relaxed) {
+            self.state
+                .error
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_or_insert_with(|| "the build stopped unexpectedly".to_string());
+        }
+        self.state.finished.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Make `state` the session's current build. A build that ended and was not announced yet ([`PreviewBuild::reported`])
+/// is kept for the frontend to announce ([`Session::take_unreported_builds`]), so that starting the next one right
+/// after it (as a build waiting in line does) does not lose its result, its failed count or its error.
+fn set_current(s: &mut Session, state: Arc<PreviewBuild>) {
+    if let Some(old) = s.preview_build.replace(state)
+        && old.finished.load(Ordering::Relaxed)
+        && !old.reported.load(Ordering::Relaxed)
+    {
+        s.keep_unreported_build(old);
+    }
+}
+
+/// What a build of `ids` was asked, as it runs later (from the line): the photos written out (the selection or the
+/// view may have changed by then), in the background (nothing waits for it then), and not queued again.
+fn request_for(command: &str, p: &Value, ids: &[lightcraft_catalog::PhotoId]) -> Request {
+    let mut params = p.as_object().cloned().unwrap_or_default();
+    for key in ["id", "queue", "wait"] {
+        params.remove(key);
+    }
+    params.insert("ids".into(), ids.iter().map(|id| id.0).collect());
+    Request { command: command.into(), params: Value::Object(params) }
+}
+
+/// The refusal of a build while another runs, unless the call asks to `queue`.
+const REFUSED: &str = "a preview build is already running";
+
+/// Builds wait in line ahead of one asked for now (not counting the line a build is being started from).
+fn line_ahead(s: &Session) -> bool {
+    !s.starting_waiting && s.activity.lane_waiting(Lane::Previews)
+}
+
+fn queue_param(p: &Value) -> bool {
+    p.get("queue").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// A build asked for with `queue`: while one runs (`busy`: one that does not give way to this one) or others already
+/// wait, this one waits in line behind them → `{queued: id, place}`. `None`: nothing is ahead of it, so it starts now.
+fn wait_in_line(s: &Session, c: &str, p: &Value, what: &str, busy: bool, request: &Request) -> Option<Result<Value>> {
+    if !busy && !s.activity.lane_waiting(Lane::Previews) {
+        return None;
+    }
+    if p.get("wait").and_then(Value::as_bool) == Some(true) {
+        return Some(Err(bad(c, "a build that waits in line can't also be waited for: leave out wait")));
+    }
+    let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
+    let (kind, label) = row_of(what, background);
+    Some(s.activity.enqueue(kind, label, request.clone()).map(|(id, place)| json!({"queued": id, "place": place})).map_err(|e| bad(c, e)))
+}
+
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
 /// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
-fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
+/// `force`: the grid thumbnail is rendered too, not taken from the cache it is written to.
+fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, force: bool) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
@@ -97,7 +305,33 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> O
         {
             j.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
         }
+        // The view render is written to the disk cache here, before the photo counts as built,
+        // not left to the cache's writer (which skips writes when it falls behind): a built
+        // preview is on disk, for this session and the next. (Taken out of the job: it would only
+        // queue the write, and would serve a smaller cached view.)
+        // A preview that isn't kept fails the photo: it is not built (a full or unwritable cache folder, or the
+        // cache discarded while the photo rendered).
+        let keep = j.view_cache.take().map(|v| (v, j.cache_generation));
+        // forced: the thumbnail job's cache is only written to, after the render (a job reads its cache first;
+        // CodeRabbit on #3577)
+        let rewrite = if force { j.cache.take().map(|c| (c, j.cache_generation)) } else { None };
         let r = j.run();
+        if let (Some(((cache, key), generation)), Ok(img)) = (rewrite, r.rendered.as_ref())
+            && !cache.put_at(generation, key, Arc::new(img.image.clone()))
+        {
+            log::warn!("building previews: the grid thumbnail could not be kept");
+            ok = false;
+        }
+        if let (Some(((cache, key), generation)), Ok(img)) = (keep, r.rendered.as_ref())
+            && !cache.put_at(generation, key, Arc::new(img.image.clone()))
+        {
+            if cache.generation() == generation {
+                log::warn!("building previews: the view preview could not be written to the cache folder");
+            } else {
+                log::warn!("building previews: the preview cache was discarded while the photo rendered");
+            }
+            ok = false;
+        }
         ok &= r.rendered.is_ok();
         if decoded.is_none() {
             decoded = r.loaded;
@@ -109,7 +343,7 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> O
 /// [`run_photo_cancellable`] for callers that render a photo without a cancel flag.
 #[cfg(test)]
 pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
-    run_photo_cancellable(jobs, None) == Some(true)
+    run_photo_cancellable(jobs, None, false) == Some(true)
 }
 
 /// How many photos render side by side: as many as an export batch for standard previews (each
@@ -224,34 +458,83 @@ pub(crate) mod test_gate {
     pub(crate) fn take() -> Option<Arc<PreviewGate>> {
         NEXT_GATE.with(|g| g.borrow_mut().take())
     }
+
+    thread_local! {
+        /// The next build started on this thread fails to start its worker (a thread the system
+        /// won't give), taken by `build`.
+        static FAIL_SPAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Have the next build started on this thread fail to start its worker.
+    pub(crate) fn fail_next_spawn() {
+        FAIL_SPAWN.with(|f| f.set(true));
+    }
+
+    /// Whether this build's worker is to fail to start (once).
+    pub(crate) fn take_fail_spawn() -> bool {
+        FAIL_SPAWN.with(std::cell::Cell::take)
+    }
 }
 
-fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, lanes: usize) {
+/// One photo's work in a build: its id and its render jobs ([`jobs_for`]).
+type PhotoJobs = (u64, Vec<RenderJob>);
+
+/// Build every photo of `jobs` on `lanes` threads. `force`: render even the photos whose previews
+/// are there. `task`: the build's own row (`None`: another job's row shows it, e.g. the import's
+/// Getting photos ready).
+fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>, lanes: usize, force: bool) {
     let total = jobs.len();
-    let queue = std::sync::Mutex::new(jobs.into_iter());
+    let queue = std::sync::Mutex::new(jobs.into_iter().map(Some).collect::<Vec<_>>());
     let work = || {
         loop {
             if state.cancel.load(Ordering::Relaxed) {
                 break;
             }
-            let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next();
-            let Some(photo_jobs) = next else { break };
+            // the background preparation waits while the photo on screen is being made
+            if state.background && crate::prep::wait_for_foreground(&state.cancel) {
+                break;
+            }
+            let next = {
+                let mut q = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.next_index(&q).and_then(|i| q.get_mut(i)).and_then(Option::take)
+            };
+            let Some((id, photo_jobs)) = next else { break };
             // A cancel accepted while this lane waited for the queue (or for another lane's
             // photo) stops before this photo's first render; a cancelled photo is not counted.
             if state.cancel.load(Ordering::Relaxed) {
                 break;
             }
-            #[cfg(test)]
-            if let Some(gate) = &state.gate {
-                gate.enter();
-            }
-            let outcome = crate::guard::catch("building previews", || run_photo_cancellable(photo_jobs, Some(&state.cancel))).unwrap_or(Some(false));
-            let Some(ok) = outcome else { break };
-            if !ok {
-                state.failed.fetch_add(1, Ordering::Relaxed);
+            if !force && already_built(&photo_jobs) {
+                state.skipped.fetch_add(1, Ordering::Relaxed);
+            } else if let Some((held, shared)) = Building::wait(id, &photo_jobs, &state.cancel) {
+                // another build was rendering this photo: what it made counts, if it made it (not
+                // for a forced build, which renders every photo itself)
+                if !force && shared && (held.is_none() || already_built(&photo_jobs)) {
+                    state.shared.fetch_add(1, Ordering::Relaxed);
+                    let done = state.done.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if let Some(task) = task {
+                        task.progress(done as u64, total as u64);
+                    }
+                    continue;
+                }
+                #[cfg(test)]
+                if let Some(gate) = &state.gate {
+                    gate.enter();
+                }
+                let outcome =
+                    crate::guard::catch("building previews", || run_photo_cancellable(photo_jobs, Some(&state.cancel), force)).unwrap_or(Some(false));
+                let Some(ok) = outcome else { break };
+                if !ok {
+                    state.failed.fetch_add(1, Ordering::Relaxed);
+                }
+            } else {
+                // cancelled while another build was rendering it: not counted
+                break;
             }
             let done = state.done.fetch_add(1, Ordering::Relaxed).saturating_add(1);
-            task.progress(done as u64, total as u64);
+            if let Some(task) = task {
+                task.progress(done as u64, total as u64);
+            }
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -272,57 +555,150 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
     state.finished.store(true, Ordering::Relaxed);
 }
 
+/// The long edge a standard preview is built at: [`STANDARD_EDGE`], or what the loupe asks for
+/// on this screen when that is more ([`Session::loupe_edge`]), so the loupe finds what was built.
+pub fn standard_edge(s: &Session) -> usize {
+    STANDARD_EDGE.max(s.loupe_edge.min(8192))
+}
+
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
     // tests: this invocation's gate, consumed here so an early error cannot attach it to a later build
     #[cfg(test)]
     let gate = test_gate::take();
     let edge = match str_param(p, "size").unwrap_or("standard") {
-        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
+        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or_else(|| standard_edge(s), |e| e.clamp(256, 8192) as usize)),
         "full" | "1:1" => None,
         other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
     };
-    if s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
-        return Err(bad(C, "a preview build is already running"));
+    let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
+    let force = p.get("force").and_then(Value::as_bool).unwrap_or(false);
+    // (`row: false`: the job that asked shows the progress in its own row)
+    let row = p.get("row").and_then(Value::as_bool).unwrap_or(true);
+    let queue = queue_param(p);
+    // the background preparation gives way to a build that was asked for; nothing replaces a build
+    // that was asked for (it carries on, and the photos it built are skipped by the next). The
+    // background one is stopped only once this request is known to be good (below): a request
+    // with bad ids leaves it running (CodeRabbit on #3544)
+    let mut gives_way = None;
+    // (a build that runs and does not give way: this one is refused, or waits in line)
+    let mut busy = false;
+    if let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
+        if b.background && !background {
+            gives_way = Some(b.cancel.clone());
+        } else {
+            busy = true;
+        }
     }
-    // explicit ids, else the selection, else everything in view
-    let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
-    let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
+    // (nor ahead of builds already waiting: the line starts them after this command, in the order asked; the build
+    // `start_waiting` is starting itself is not held back by the line it came out of)
+    if !queue && (busy || line_ahead(s)) {
+        return Err(bad(C, REFUSED));
+    }
+    s.fit_disk_cache();
+    // explicit ids, else the selected photos (more than one: as the menu says), else everything in
+    // view (a single photo selected is the one open, not a choice of photos: "Visible" in the menu)
+    let ids = if p.get("ids").is_some() || p.get("id").is_some() || (!background && s.selection.ids.len() > 1) {
+        s.targets(p)?
+    } else {
+        s.visible_cloned()
+    };
+    if queue && let Some(queued) = wait_in_line(s, C, p, "", busy, &request_for(C, p, &ids)) {
+        return queued;
+    }
+    let jobs: Vec<PhotoJobs> = ids.iter().map(|id| (id.0, jobs_for(s, *id, edge))).filter(|j| !j.1.is_empty()).collect();
+    // the background build stays the session's until this one has started (a worker that can't
+    // start leaves it running and in place: CodeRabbit on #3544)
+    let previous = s.preview_build.clone();
+    let order = jobs.iter().map(|j| j.0).collect();
+    #[cfg_attr(not(test), allow(unused_mut))]
+    let mut build_state = PreviewBuild { total: jobs.len(), background, order, ..Default::default() };
     #[cfg(test)]
-    let state = Arc::new(PreviewBuild { total: jobs.len(), gate, ..Default::default() });
-    #[cfg(not(test))]
-    let state = Arc::new(PreviewBuild { total: jobs.len(), ..Default::default() });
-    s.preview_build = Some(state.clone());
-    let task = task_for(s, &state);
-    let lanes = lanes(jobs.len(), edge.is_none());
+    {
+        build_state.gate = gate;
+    }
+    let state = Arc::new(build_state);
+    if let Some(at) = p.get("from").and_then(Value::as_u64) {
+        state.focus_on(lightcraft_catalog::PhotoId(at), p.get("backward").and_then(Value::as_bool).unwrap_or(false));
+    }
+    set_current(s, state.clone());
+    let run = Running { task: row.then(|| task_for(s, &state)), state: state.clone() };
+    // the background preparation leaves most of the machine to the photo on screen and the user
+    let lanes = if background { crate::prep::background_lanes() } else { lanes(jobs.len(), edge.is_none()) };
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
     if wait {
-        run_all(jobs, &state, &task, lanes);
+        if let Some(cancel) = gives_way {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        run_all(jobs, &run.state, run.task.as_ref(), lanes, force);
         return Ok(state.json());
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // the row stays while the worker runs (it is dropped with the closure, however that ends)
-        let st = state.clone();
-        std::thread::Builder::new()
-            .name("lc-build-previews".into())
-            .spawn(move || run_all(jobs, &st, &task, lanes))
-            .map_err(|e| bad(C, format!("could not start: {e}")))?;
+        #[cfg(test)]
+        let started = if test_gate::take_fail_spawn() {
+            drop(run);
+            Err(std::io::Error::other("no thread (test)"))
+        } else {
+            std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &run.state, run.task.as_ref(), lanes, force))
+        };
+        #[cfg(not(test))]
+        let started =
+            std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &run.state, run.task.as_ref(), lanes, force));
+        if let Err(e) = started {
+            // never started: not left "running", which would hold every later build back, and the
+            // build it was to replace carries on
+            state.finished.store(true, Ordering::Relaxed);
+            s.preview_build = previous;
+            return Err(bad(C, format!("could not start: {e}")));
+        }
+        if let Some(cancel) = gives_way {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = previous;
     Ok(state.json())
 }
 
-/// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
-/// how to load the original at preview size, whether the photo can take a preview-fitted look:
-/// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
-/// the fit changes; an older encoding makes any proxy stale).
+/// One proxy job: the photo, its path, how to load its original, and the versions that apply.
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, Ages);
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
+/// So do preview-only raws: their proxy is the embedded JPEG, read in the colour space the raw
+/// declares, which a look version bump can change too (#2654).
 #[cfg(not(target_arch = "wasm32"))]
 fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
-    photo.fitted_look() || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+    photo.fitted_look()
+        || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+        || (photo.kind == lightcraft_catalog::MediaKind::Raw && photo.preview_only.is_some())
+}
+
+/// What a photo's proxy can be out of date for: the camera-look fit, when the photo takes the per-file camera look
+/// (`camera_preview::file_local_look`, [`lightcraft_catalog::Photo::fitted_look`]), and the raw decode
+/// ([`crate::smart::SOURCE_VERSION`]), when it is a raw developed from its sensor data
+/// ([`lightcraft_catalog::Photo::develops_raw`]). Every photo can also be stale for Compact encoding.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct Ages {
+    look: bool,
+    source: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Ages {
+    fn of(p: &lightcraft_catalog::Photo) -> Ages {
+        Ages { look: preview_fitted_look(p), source: p.develops_raw() }
+    }
+    /// Whether the complete proxy at `path` is out of date in a way that applies to this photo: for the look (an older
+    /// fit, or an older encoding, [`crate::smart::is_stale_for`]) or for the raw decode. Never when any of
+    /// its versions comes from a newer build: rewriting it would take that one back (a build with all of them is the
+    /// one to bring it up to date).
+    fn stale(self, path: &std::path::Path) -> bool {
+        !crate::smart::from_newer_build(path) && (crate::smart::is_stale_for(path, self.look) || (self.source && crate::smart::source_stale(path)))
+    }
 }
 
 /// Held while one proxy is checked and (re)written, so Build Smart Previews and the opening look
@@ -338,11 +714,14 @@ struct SmartCounts {
     built: usize,
     /// Of those, damaged ones (cut short by a crash or a full drive) that were rebuilt.
     repaired: usize,
-    /// Of those, proxies written by an older camera-look fit that were rebuilt from their online originals.
+    /// Of those, proxies written by an older camera-look fit (or, for raws, raw decode) that were rebuilt from their
+    /// online originals.
     refreshed: usize,
     /// Of those kept as they were: out of date, but the original can't be read now (offline), so
     /// the stored look stays and the next run with the original online rebuilds them.
     stale_kept: usize,
+    /// Of those kept as they were: written by a newer build (a look, encode or raw decode version above this build's).
+    newer_kept: usize,
     removed: usize,
     /// `[[id, why]]`
     failed: Vec<Value>,
@@ -356,8 +735,9 @@ struct SmartCounts {
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
-        SourceRef::File { path, max_edge, loader, denoise, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None })
+        // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
+        SourceRef::File { path, max_edge, loader, denoise, outliers, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
@@ -384,7 +764,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for (id, path, source, look) in jobs {
+    for (id, path, source, ages) in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -398,13 +778,18 @@ fn smart_run(
             }
         } else {
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
-            // full drive) is (re)built, and so is one written by an older encoding or camera-look
-            // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
-            // original can be read
+            // full drive) is (re)built, and so is one written by an older encoding, camera-look
+            // fit or raw decode (see `smart::ENCODE_VERSION`, `camera_preview::LOOK_VERSION` and
+            // `smart::SOURCE_VERSION`) when its original can be read
             let damaged = path.exists();
-            let stale = damaged && crate::smart::is_stale_for(&path, look);
-            if damaged && !stale && crate::smart::is_valid(&path) {
+            let valid = damaged && crate::smart::is_valid(&path);
+            let newer = valid && crate::smart::from_newer_build(&path);
+            let stale = valid && !newer && ages.stale(&path);
+            if valid && !stale {
                 n.built += 1;
+                if newer {
+                    n.newer_kept += 1;
+                }
             } else {
                 // a stale proxy is rebuilt from the original only: never from itself (the file
                 // fallback or a source decoded from a proxy would stamp the old look as current)
@@ -471,10 +856,27 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = s.media.smart_dir.clone().ok_or_else(|| bad(C, "smart previews need a library on disk"))?;
     let discard = p.get("discard").and_then(Value::as_bool).unwrap_or(false);
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
-    if background && s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
-        return Err(bad(C, "a preview build is already running"));
+    // (as Build Previews: the photos named, or the selected ones when more than one is, else
+    // everything in view; read first, so a request with bad ids stops nothing: CodeRabbit on #3577)
+    let ids = if p.get("ids").is_some() || p.get("id").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
+    let queue = background && queue_param(p);
+    // (the background preparation gives way, as to Build Previews: once this one's worker has started)
+    let mut gives_way = None;
+    let mut busy = false;
+    if background && let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
+        if b.background {
+            gives_way = Some(b.cancel.clone());
+        } else {
+            busy = true;
+        }
     }
-    let ids = if p.get("ids").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
+    if background && !queue && (busy || line_ahead(s)) {
+        return Err(bad(C, REFUSED));
+    }
+    let what = if discard { "discarding smart previews" } else { "smart previews" };
+    if queue && let Some(queued) = wait_in_line(s, C, p, what, busy, &request_for(C, p, &ids)) {
+        return queued;
+    }
     let mut jobs: Vec<SmartJob> = Vec::new();
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
@@ -482,54 +884,67 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
-        let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, preview_fitted_look(&ph)));
+        // (a smart preview keeps the file's own colour: never built with the photo's imported camera profile, nor
+        // from a cached source developed with it)
+        let source = (!discard).then(|| s.media.source_ref_without_profile(&ph, crate::media::SourceLevel::Preview));
+        jobs.push((id, path, source, Ages::of(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
-        let what = if discard { "discarding smart previews" } else { "smart previews" };
         let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
-        s.preview_build = Some(state.clone());
-        let task = task_for(s, &state);
-        let st = state.clone();
-        std::thread::Builder::new()
-            .name("lc-smart-previews".into())
-            .spawn(move || {
-                if let Err(e) = smart_run(&dir, custom, discard, jobs, Some((&st, &task))) {
-                    log::warn!("{C}: {e}");
-                    *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
-                }
-                st.finished.store(true, Ordering::Relaxed);
-            })
-            .map_err(|e| bad(C, format!("could not start: {e}")))?;
+        let previous = s.preview_build.clone();
+        set_current(s, state.clone());
+        // (this build always has its row)
+        let run = Running { task: Some(task_for(s, &state)), state: state.clone() };
+        let work = move || {
+            if let Err(e) = smart_run(&dir, custom, discard, jobs, run.task.as_ref().map(|task| (&*run.state, task))) {
+                log::warn!("{C}: {e}");
+                *run.state.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
+            }
+            run.state.finished.store(true, Ordering::Relaxed);
+        };
+        #[cfg(test)]
+        let started = if test_gate::take_fail_spawn() {
+            drop(work);
+            Err(std::io::Error::other("no thread (test)"))
+        } else {
+            std::thread::Builder::new().name("lc-smart-previews".into()).spawn(work)
+        };
+        #[cfg(not(test))]
+        let started = std::thread::Builder::new().name("lc-smart-previews".into()).spawn(work);
+        if let Err(e) = started {
+            // never started: not left "running", and the background build it was to replace carries on
+            // (CodeRabbit on #3077)
+            state.finished.store(true, Ordering::Relaxed);
+            s.preview_build = previous;
+            return Err(bad(C, format!("could not start: {e}")));
+        }
+        if let Some(cancel) = gives_way {
+            cancel.store(true, Ordering::Relaxed);
+        }
         return Ok(state.json());
     }
     let r = smart_run(&dir, custom, discard, jobs, None).map_err(|e| bad(C, e))?;
     Ok(
-        json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "removed": r.removed, "failed": r.failed}),
+        json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "newerKept": r.newer_kept, "removed": r.removed, "failed": r.failed}),
     )
 }
 
-/// Bring smart previews up to date, once per fit-and-encoding version: when the smart previews
-/// folder has not been checked at this build's versions (its marker, [`crate::smart::look_checked`]),
-/// a worker thread (the UI never waits on the drives) looks at the proxies of the photos on disk
-/// and rebuilds the stale ones from their originals — one whose stored pixels are an older encoding
-/// (every photo), or, for a raw that takes the per-file camera look or a DNG, one written by an older fit.
-/// One whose original can't be read (offline) is kept as it is, still marked stale in its header:
-/// Build Smart Previews rebuilds it once the original is back. Only existing proxies are touched:
-/// none is built, and a missing folder is never created. Returns the thread, if started.
+/// Refresh existing proxies for the Compact encoding, preview-fitted look, and raw-source versions.
+/// Every file photo can need an encoding refresh. Vendor raws and DNGs can need a look refresh,
+/// and photos developed from sensor data can need a raw-source refresh. A worker checks the
+/// versions and reads available originals. Offline originals keep their existing proxies.
+/// The folder is never created and no missing proxy is built.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::thread::JoinHandle<()>> {
     let dir = s.media.smart_dir.clone()?;
-    if !dir.is_dir() || crate::smart::look_checked(&dir) {
+    if !dir.is_dir() || (crate::smart::look_checked(&dir) && crate::smart::source_checked(&dir)) {
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
-    let jobs: Vec<SmartJob> = photos
-        .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
-        .collect();
+    let jobs: Vec<SmartJob> =
+        photos.iter().map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref_of(p, max_edge)), Ages::of(p))).collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
         .spawn(move || refresh_stale(&dir, jobs))
@@ -542,13 +957,17 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
-        .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
+        .map(|(id, path, source, ages)| (id, crate::smart::existing_file_path(dir, path), source, ages))
+        .filter(|(_, path, _, ages)| ages.stale(path))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
         match smart_run(dir, true, false, stale, None) {
-            Ok(n) => log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept),
+            Ok(n) => log::info!(
+                "smart previews: {} refreshed to the current camera look and raw decode, {} kept (original offline)",
+                n.refreshed,
+                n.stale_kept
+            ),
             Err(e) => {
                 // not marked: the next opening tries again
                 log::warn!("smart previews: look refresh: {e}");
@@ -556,7 +975,7 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
             }
         }
     }
-    if let Err(e) = crate::smart::mark_look_checked(dir) {
+    if let Err(e) = crate::smart::mark_look_checked(dir).and_then(|()| crate::smart::mark_source_checked(dir)) {
         log::warn!("smart previews: {e}");
     }
 }
@@ -640,7 +1059,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Smart Previews",
             [],
             None,
-            "{ids?, discard?: bool, background?: bool} — build (or discard) the smart previews of the selected photos (else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews)",
+            "{ids?, discard?: bool, background?: bool, queue?: bool} — build (or discard) the smart previews of the selected photos (when more than one is selected; else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, refreshed, staleKept, newerKept, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews). A background one while a preview build runs is refused, or with queue waits in line for it, as library.buildPreviews does → {queued, place}",
             always,
             smart
         ),
@@ -667,13 +1086,43 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Previews",
             [],
             None,
-            "{size?: standard (2048 px, or `edge`) | full (1:1), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}",
+            "{size?: standard (2048 px, or the loupe's size when bigger, or `edge`) | full (1:1), ids?, wait?: bool, force?: bool, from?: id, backward?: bool, background?: bool, row?: bool, queue?: bool} — render the grid thumbnail and loupe view of the selected photos (when more than one is selected; else all in view) into the preview cache (memory and disk), in the background unless `wait`. Photos whose previews are there already (big enough) are skipped unless `force`; the photos nearest `from` go first. `background`: the background preparation's build (two lanes, waits while the photo on screen renders; a build asked for replaces it). `row: false`: no row of its own in the activity stack (the caller's row shows it) → {total, done, failed, skipped, shared, running}. One build runs at a time (this, or Build / Discard Smart Previews in the background; the background preparation gives way to a build asked for): while one runs another is refused, or with queue waits in line for it and starts by itself when the builds ahead of it end → {queued: its activity id, place: 1 = next}. It builds the photos chosen when it was asked; activity.list shows it waiting, activity.cancel takes it out of the line. Not with wait while one runs",
             always,
             build
         ),
-        cmd!(query "library.previewProgress", "Preview Build Progress", [], None, "{} → {total, done, failed, repaired, running, cancelled, what, error} | null", always, |s, _| {
+        cmd!(query "library.previewProgress", "Preview Build Progress", [], None, "{} → {total, done, failed, repaired, skipped, shared, background, running, cancelled, what, error} | null", always, |s, _| {
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
         }),
+        cmd!(query "prefs.backgroundPrep", "Background Preparation Settings", [], None, "{} → {app, library|null, settings (in use), own: bool (this library keeps its own), building} — what is prepared in the background per mode (culling | library: previews of every photo in view, ahead = photos ahead rendered for the loupe, eyeAhead = photos ahead whose eye focus strip is worked out, scope all|marked|onScreen; develop: ahead = photos kept decoded ready to edit, scope)", always, |s, _| {
+            Ok(s.prep_json())
+        }),
+        cmd!(
+            "prefs.setBackgroundPrep",
+            "Set Background Preparation",
+            [],
+            None,
+            "{settings?: partial {culling?, library?, develop?}, library?: bool (this library's own settings; else the app-wide ones), reset?: bool (this library goes back to the app-wide settings)} → as prefs.backgroundPrep",
+            always,
+            |s, p| {
+                const C: &str = "prefs.setBackgroundPrep";
+                let library = p.get("library").and_then(Value::as_bool).unwrap_or(false);
+                if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+                    s.clear_library_prep()?;
+                    return Ok(s.prep_json());
+                }
+                if library && s.library.is_none() {
+                    return Err(bad(C, "no library is open"));
+                }
+                let base = if library { s.prep.library.unwrap_or(s.prep.app) } else { s.prep.app };
+                let next = match p.get("settings") {
+                    Some(patch) if patch.is_object() => base.patched(patch).map_err(|e| bad(C, e))?,
+                    Some(_) => return Err(bad(C, "settings must be an object")),
+                    None => base,
+                };
+                s.set_prep_settings(next, library)?;
+                Ok(s.prep_json())
+            }
+        ),
         cmd!("library.cancelPreviews", "Cancel Preview Build", [], None, "{}", always, |s, _| {
             if let Some(b) = &s.preview_build {
                 b.cancel.store(true, Ordering::Relaxed);
@@ -691,6 +1140,22 @@ mod tests {
     use crate::Session;
     use crate::media::SourceRef;
 
+    // Given a preview-only raw, its proxy goes stale with the look version: the embedded JPEG's colour
+    // space can change with it (#2654); a rendered photo's proxy does not
+    #[test]
+    fn preview_only_raws_follow_the_look_version() {
+        use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.cr3".into() }, "x.cr3", "CR3", 6000, 4000, "2026-10-23T00:00:00");
+        ph.kind = MediaKind::Raw;
+        assert!(super::preview_fitted_look(&ph), "a developed CR3");
+        ph.set_preview_only(Some("unsupported".into()));
+        assert!(super::preview_fitted_look(&ph), "a preview-only CR3");
+        ph.kind = MediaKind::Image;
+        ph.format = "JPG".into();
+        ph.set_preview_only(None);
+        assert!(!super::preview_fitted_look(&ph), "a JPEG");
+    }
+
     // Given a photo's preview jobs, the grid thumbnail is made from the source the view decoded, not
     // by reading the file again (here: a thumbnail job pointing at a file that is not there)
     #[test]
@@ -700,8 +1165,16 @@ mod tests {
         let mut jobs = jobs_for(&mut s, id, Some(512));
         assert_eq!(jobs.len(), 2, "view and thumbnail");
         assert!(jobs[0].view_cache.is_some(), "the view renders first");
-        jobs[1].source =
-            SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None, reduced: None };
+        jobs[1].source = SourceRef::File {
+            path: "/nonexistent/photo.arw".into(),
+            max_edge: 512,
+            loader: None,
+            fallback: None,
+            denoise: None,
+            camera_profile: None,
+            outliers: false,
+            reduced: None,
+        };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
 
@@ -715,5 +1188,39 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+    // Given a build whose worker dies (or can't start), the build reads as finished and its row goes, so that a
+    // build waiting in line starts instead of being refused as "already running"
+    #[test]
+    fn a_build_whose_worker_dies_reads_as_finished_before_its_row_goes() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let s = Session::with_demo();
+        let state = Arc::new(super::PreviewBuild::default());
+        let run = super::Running { task: Some(super::task_for(&s, &state)), state: state.clone() };
+        assert!(s.activity.lane_busy(crate::activity::Lane::Previews));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _run = run;
+            panic!("synthetic worker panic");
+        }));
+        assert!(r.is_err());
+        assert!(state.finished.load(Ordering::Relaxed));
+        assert_eq!(state.error().as_deref(), Some("the build stopped unexpectedly"), "a crash is not a success that built nothing");
+        assert!(!s.activity.lane_busy(crate::activity::Lane::Previews));
+    }
+
+    // Given a build that marked itself finished, its row going leaves no error
+    #[test]
+    fn a_build_that_finished_leaves_no_error() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let s = Session::with_demo();
+        let state = Arc::new(super::PreviewBuild::default());
+        let run = super::Running { task: Some(super::task_for(&s, &state)), state: state.clone() };
+        state.finished.store(true, Ordering::Relaxed);
+        drop(run);
+        assert!(state.error().is_none());
     }
 }

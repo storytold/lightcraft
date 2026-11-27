@@ -13,17 +13,25 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bursts;
 pub mod dates;
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub mod fault;
 pub mod folders;
 mod index;
 pub mod journal;
 pub mod keywords;
 pub mod local;
 pub mod lock;
+#[cfg(not(target_arch = "wasm32"))]
+mod log_writer;
 pub mod model;
+pub mod opened_folder;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
+pub mod shared;
 pub mod stacks;
 pub mod store;
 pub mod tally;
@@ -33,12 +41,15 @@ use std::sync::Arc;
 
 pub use dates::{DateRun, GroupBy};
 pub use folders::{FolderNode, FolderRecord};
+use index::file_path;
+pub use index::{file_name_index_key, folder_index_key, photo_folder_index_key};
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
 use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, LocalRecords, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
+pub use opened_folder::OpenedFolder;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
 pub use rules::{Match, Rule, RuleSet};
 use serde::{Deserialize, Serialize};
@@ -65,6 +76,12 @@ pub enum CatalogError {
     /// version doesn't know). Nothing was read into the session and nothing was modified.
     #[error("this library was written by a newer version of LightCraft ({0}); update LightCraft to open it. The library was left unchanged.")]
     Newer(String),
+    /// A batch failed, and rolling back what it had applied failed too: the catalog is not as it was, and part of
+    /// the batch stays. `remaining` is what is left of the rollback (applied in order, it takes the catalog back to
+    /// where it was before the batch), so the change can still be undone, and the batch itself is the record to keep
+    /// of it: replaying the batch from the same catalog fails the same way and leaves the same changes.
+    #[error("{cause}; the change was only partly taken back, so part of it stays")]
+    PartlyApplied { cause: Box<CatalogError>, remaining: Box<Op> },
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
@@ -216,8 +233,8 @@ pub enum Op {
         /// `None` = its raw data decodes (or it isn't a raw).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview_only: Option<String>,
-        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); empty
-        /// when it is `None`.
+        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); also
+        /// retained for supported ORF files so their withdrawal recheck runs only once.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         preview_checked: String,
     },
@@ -284,8 +301,15 @@ pub struct Catalog {
     /// What the library keeps about its folders (folder identity → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, FolderRecord>,
-    /// Increments on every applied op, and when a batch fails and its rollback cannot undo it whole (the catalog
-    /// changed, so what is keyed by the revision is out of date).
+    /// Segmentation grids shared by this snapshot's masks: each distinct grid's data once, in
+    /// first-appearance order, referenced by index from the masks ([`lightcraft_develop::\
+    /// SegMask::grid`] is a position here). A serialization detail of snapshots
+    /// ([`journal`]): never held in the live catalog — [`Catalog::repair`] resolves the
+    /// references and clears the table when a snapshot is read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    grids: Vec<String>,
+    /// Increments on every applied op, and when a batch fails and part of it stays ([`CatalogError::PartlyApplied`]): the
+    /// catalog changed, so what is keyed by the revision is out of date.
     #[serde(skip)]
     pub revision: u64,
     /// Which photos the latest ops touched ([`Catalog::touched_since`]).
@@ -294,6 +318,10 @@ pub struct Catalog {
     /// Lookups derived from the above (never saved), see [`index`].
     #[serde(skip)]
     index: index::Indexes,
+    /// Each smart album's rules ready to run (cheapest rule first), worked out when first asked and
+    /// forgotten when an op adds or removes an album or changes rules.
+    #[serde(skip)]
+    plans: PlansMemo,
 }
 
 /// What of a photo an op changed: enough to tell which tallies of the library an edit leaves as they were (a
@@ -316,6 +344,9 @@ impl Aspects {
     pub const ANALYSIS: Aspects = Aspects(1 << 7);
     /// Whether it is in the library at all: added, removed, deleted, restored, taken in from Local.
     pub const PRESENCE: Aspects = Aspects(1 << 8);
+    /// The keyword list (keywords on their own and their attributes): of no photo, and read by no rule, filter or
+    /// sort, only by what lists keywords (the keyword tree, export names).
+    pub const KEYWORD_LIST: Aspects = Aspects(1 << 9);
     /// Everything: the photo may count differently for any tally.
     pub const ALL: Aspects = Aspects(u16::MAX);
 
@@ -332,6 +363,74 @@ impl Aspects {
 /// The most photos remembered as touched; older changes are then answered with "anything may have changed".
 const MAX_TOUCHED: usize = 8192;
 
+/// [`Catalog::plans`] as last worked out: derived from the albums, like [`index::Indexes`], so no
+/// part of what a catalog is; a copy starts without it.
+#[derive(Default)]
+struct PlansMemo {
+    plans: std::sync::OnceLock<std::collections::HashMap<AlbumId, query::Prepared>>,
+    guard: std::sync::OnceLock<bool>,
+}
+
+impl Clone for PlansMemo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for PlansMemo {
+    fn eq(&self, _: &PlansMemo) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for PlansMemo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PlansMemo")
+    }
+}
+
+/// What [`resolve_grids`] has made of each value with references so far: the value as read (held
+/// here so its address stays its own), what it resolved to and how many dangling references it
+/// held. Holders that shared a value before resolving share the result, whatever else is between
+/// them (a photo's settings and its last history step, with the earlier steps in between).
+type ResolvedGrids = std::collections::HashMap<*const DevelopSettings, (Arc<DevelopSettings>, Arc<DevelopSettings>, usize)>;
+
+/// Resolves the shared-grid references of one settings holder (see [`Photo::settings_holders`])
+/// against a snapshot's grid table: each referenced mask takes its
+/// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
+/// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
+/// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
+///
+/// Settings that refer to no grid (nearly all of them) are left alone, so a value shared by many
+/// holders stays shared: [`Arc::make_mut`] would copy it for each. A value with references is
+/// resolved once (`done`): every holder that held it takes the same result, which is handed to
+/// [`shared::settings`], so holders that are equal once resolved share one value too.
+fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize, done: &mut ResolvedGrids) -> usize {
+    let mut referenced = false;
+    settings.visit_seg_masks(&mut |m| referenced |= m.grid.is_some());
+    if !referenced {
+        return dangling;
+    }
+    if let Some((_, resolved, dangled)) = done.get(&Arc::as_ptr(settings)) {
+        *settings = resolved.clone();
+        return dangling + dangled;
+    }
+    let original = settings.clone();
+    let mut dangled = 0usize;
+    Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
+        if let Some(i) = m.grid.take() {
+            match (m.data.is_empty(), grids.get(i as usize)) {
+                (true, Some(data)) => m.data = data.clone(),
+                (true, None) => dangled += 1,
+                (false, _) => {}
+            }
+        }
+    });
+    *settings = shared::settings(settings.clone());
+    done.insert(Arc::as_ptr(&original), (original, settings.clone(), dangled));
+    dangling + dangled
+}
+
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
 /// follow a small edit without being worked out again from every photo.
 #[derive(Clone, Debug, Default)]
@@ -340,23 +439,35 @@ struct Changes {
     touched: std::collections::VecDeque<(u64, PhotoId, Aspects)>,
     /// What the op being applied changes of its photo.
     now: Aspects,
-    /// The latest revision made by an op that changed more than photos of its own (an album, a stack, a keyword of
-    /// the list…): what it changed for which photos is not known.
+    /// The latest revision made by an op that changed more than photos of its own (an album, a stack…): what it
+    /// changed for which photos is not known.
     broad: u64,
+    /// The latest revision made by an op that changed the keyword list ([`Aspects::KEYWORD_LIST`]).
+    keyword_list: u64,
     /// Changes up to this revision are no longer all in `touched`.
     floor: u64,
     /// The revision the last op recorded here made. When the catalog's revision is another, it was set from
     /// outside (a library just loaded takes a range of its own, so that nothing kept from another library is
     /// taken for this one's): nothing is known of how the catalog got to where it is.
     seen: u64,
-    /// A batch that failed could not be rolled back whole: what it changed stays, so what it noted must too.
-    torn: bool,
+    /// The inverses of a failed batch's ops that could not be applied when it was rolled back, in the order they
+    /// are to be applied (see [`CatalogError::PartlyApplied`]). Empty unless a rollback is under way or has just
+    /// failed; [`Catalog::apply`] hands it out.
+    leftover: Vec<Op>,
 }
 
 impl PartialEq for Changes {
     /// Two catalogs are the same catalog whatever each remembers of how it got there.
     fn eq(&self, _: &Self) -> bool {
         true
+    }
+}
+
+/// `op` and, when it is a batch, the ops in it (nested batches too), each alone and in the order the batch lists them.
+fn unbatch(op: Op, out: &mut Vec<Op>) {
+    match op {
+        Op::Batch { ops } => ops.into_iter().for_each(|op| unbatch(op, out)),
+        op => out.push(op),
     }
 }
 
@@ -442,16 +553,90 @@ impl Catalog {
     /// no smart album).
     pub fn album_contains(&self, id: AlbumId, p: &Photo) -> bool {
         match self.albums.get(&id) {
-            Some(Album { smart: Some(rules), .. }) => self.smart_album_has(id, rules, &rules.prepare_one(), p),
+            Some(Album { smart: Some(rules), .. }) => match self.plans().get(&id) {
+                Some(plan) => self.smart_album_has(id, rules, plan, p),
+                None => self.smart_album_has(id, rules, &rules.prepare_one(self), p),
+            },
             Some(a) => self.album_lists(a.id, p.id),
             None => false,
         }
     }
 
+    /// Every smart album's [`Filter::prepare_one`], worked out once for the albums as they are
+    /// (so a photo asked about does not prepare the album's rules again).
+    fn plans(&self) -> &std::collections::HashMap<AlbumId, query::Prepared> {
+        self.plans.plans.get_or_init(|| self.albums.values().filter_map(|a| a.smart.as_ref().map(|rules| (a.id, rules.prepare_one(self)))).collect())
+    }
+
+    /// Whether rules must be tested as written, not cheapest first ([`Filter::prepare`]): some smart
+    /// album tests itself (a saved or damaged catalog; the app refuses to make one), or a chain of
+    /// smart albums testing smart albums is as long as [`rules::MAX_ALBUM_DEPTH`], where the
+    /// innermost hold nothing. There an answer can depend on which album was asked first (the
+    /// answers memo keeps what was worked out under the cut), so reordering could change who
+    /// matches. Worked out once for the albums as they are.
+    pub(crate) fn keeps_written_order(&self) -> bool {
+        *self.plans.guard.get_or_init(|| {
+            self.albums.values().any(|a| a.smart.is_some() && self.album_reaches(a.id, a.id)) || self.longest_chain() >= rules::MAX_ALBUM_DEPTH
+        })
+    }
+
+    /// The most smart albums one smart album leads through, itself included, by the smart albums
+    /// its rules and album filter test. Only asked of albums that lead back to none.
+    fn longest_chain(&self) -> usize {
+        let tests = |id: &AlbumId| -> Vec<AlbumId> {
+            let tested = self.albums.get(id).and_then(|a| a.smart.as_deref()).map(Filter::albums_tested).unwrap_or_default();
+            tested.into_iter().filter(|t| self.albums.get(t).is_some_and(|a| a.smart.is_some())).collect()
+        };
+        let mut chain: std::collections::HashMap<AlbumId, usize> = std::collections::HashMap::new();
+        for root in self.albums.values().filter(|a| a.smart.is_some()).map(|a| a.id) {
+            let mut stack = vec![root];
+            while let Some(a) = stack.last().copied() {
+                if chain.contains_key(&a) {
+                    stack.pop();
+                    continue;
+                }
+                let kids = tests(&a);
+                let pending: Vec<AlbumId> = kids.iter().copied().filter(|k| !chain.contains_key(k)).collect();
+                if pending.is_empty() {
+                    chain.insert(a, 1 + kids.iter().filter_map(|k| chain.get(k)).copied().max().unwrap_or(0));
+                    stack.pop();
+                } else {
+                    stack.extend(pending);
+                }
+            }
+        }
+        chain.values().copied().max().unwrap_or(0)
+    }
+
     /// Whether smart album `id` with `rules` (as [`Filter::prepare`]d) holds `p`.
     fn smart_album_has(&self, id: AlbumId, rules: &Filter, prepared: &query::Prepared, p: &Photo) -> bool {
-        // guarded: a smart album testing smart albums can't loop or recurse without end
-        !p.deleted && rules::smart_album_holds(id, p.id, || rules.matches_in(p, self, prepared))
+        // an album on a loop holds nothing, whoever asks (see `album_on_a_loop`); beyond that, a
+        // smart album testing smart albums can't recurse without end (the guard)
+        !p.deleted && !self.looping().contains(&id) && rules::smart_album_holds(id, p.id, || rules.matches_in(p, self, prepared))
+    }
+
+    /// Whether album `id` is on a loop: a smart album that includes itself, directly or through
+    /// the smart albums it tests. Such an album holds no photos ([`Self::album_photos`],
+    /// [`Self::album_count`], [`Self::album_contains`] and the grid all agree), until its rules or
+    /// those of an album on the loop change. An album that only tests a looping album is not on
+    /// the loop: it is worked out as usual, seeing the looping album as empty.
+    pub fn album_on_a_loop(&self, id: AlbumId) -> bool {
+        self.looping().contains(&id)
+    }
+
+    /// For an album on a loop, an album it tests that leads back to it: the one to name when
+    /// saying why it is empty (itself when it tests itself and nothing else on the loop). `None`
+    /// for an album that is not on a loop.
+    pub fn album_loops_through(&self, id: AlbumId) -> Option<AlbumId> {
+        if !self.album_on_a_loop(id) {
+            return None;
+        }
+        let tested = self.albums.get(&id)?.smart.as_deref()?.albums_tested();
+        tested
+            .iter()
+            .copied()
+            .find(|b| *b != id && self.album_on_a_loop(*b) && self.album_reaches(*b, id))
+            .or_else(|| tested.contains(&id).then_some(id))
     }
 
     /// Whether smart album `from` tests `to`, directly or through the smart albums it tests (the
@@ -502,7 +687,7 @@ impl Catalog {
     pub fn album_photos(&self, id: AlbumId) -> Vec<PhotoId> {
         match self.albums.get(&id) {
             Some(Album { smart: Some(rules), .. }) => {
-                let prepared = rules.prepare();
+                let prepared = rules.prepare(self);
                 self.photos.values().filter(|p| self.smart_album_has(id, rules, &prepared, p)).map(|p| p.id).collect()
             }
             Some(a) => a.photos.clone(),
@@ -515,7 +700,7 @@ impl Catalog {
         match self.albums.get(&id) {
             // counted in place: no id list is built just for its length
             Some(Album { smart: Some(rules), .. }) => {
-                let prepared = rules.prepare();
+                let prepared = rules.prepare(self);
                 self.photos.values().filter(|p| self.smart_album_has(id, rules, &prepared, p)).count()
             }
             Some(a) => a.photos.iter().filter(|p| self.photos.get(p).is_some_and(|p| !p.deleted)).count(),
@@ -568,7 +753,10 @@ impl Catalog {
 
     fn photo_mut(&mut self, id: PhotoId) -> Result<&mut Photo> {
         self.touch(id);
-        self.photos.get_mut(&id).map(Arc::make_mut).ok_or(CatalogError::NoPhoto(id))
+        let p = self.photos.get_mut(&id).map(Arc::make_mut).ok_or(CatalogError::NoPhoto(id))?;
+        // (`Arc::make_mut` copies a photo others hold: the text kept for it goes with the copy)
+        self.index.text_moved(id, p);
+        Ok(p)
     }
 
     /// The op being applied changes photo `id` (or adds or removes it).
@@ -589,53 +777,72 @@ impl Catalog {
         if !self.remembers(revision) {
             return None;
         }
-        Some(self.changes.touched.iter().filter(|(r, _, _)| *r > revision).fold(Aspects::NONE, |all, (_, _, a)| all.with(*a)))
+        let photos = self.changes.touched.iter().filter(|(r, _, _)| *r > revision).fold(Aspects::NONE, |all, (_, _, a)| all.with(*a));
+        Some(if self.changes.keyword_list > revision { photos.with(Aspects::KEYWORD_LIST) } else { photos })
     }
 
     /// Whether every change since the catalog was at `revision` is remembered photo by photo.
     fn remembers(&self, revision: u64) -> bool {
-        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor && self.changes.broad <= revision
+        self.remembers_photos(revision) && self.changes.broad <= revision
+    }
+
+    /// Whether every change to a photo since the catalog was at `revision` is remembered.
+    fn remembers_photos(&self, revision: u64) -> bool {
+        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor
     }
 
     /// The photos changed, added or removed since the catalog was at `revision`, each once. `None` when that is not
     /// known: an op since then changed more than photos of its own, or it was too long ago. Then anything may
     /// have changed.
     pub fn touched_since(&self, revision: u64) -> Option<Vec<PhotoId>> {
-        if !self.remembers(revision) {
-            return None;
-        }
-        let mut ids: Vec<PhotoId> = self.changes.touched.iter().filter(|(r, _, _)| *r > revision).map(|(_, id, _)| *id).collect();
+        self.remembers(revision).then(|| self.touched_after(revision, Aspects::ALL))
+    }
+
+    /// The photos whose `reads` (what a tally reads of them) changed since the catalog was at
+    /// `revision`, added and removed photos included, each once; ops that change no photo of their
+    /// own (an album, a stack, the keyword list, a folder's label) and other things of a photo (a
+    /// rating, a slider) aside: for what is counted from the photos alone (the folders, days and
+    /// keywords they carry). `None` when that is not known: too long ago, or the catalog was set
+    /// from outside (a library loaded).
+    pub fn photos_changed_since(&self, revision: u64, reads: Aspects) -> Option<Vec<PhotoId>> {
+        // (every op that changes a photo says which, in `photo_mut` or as it adds or removes it:
+        // the ops `apply_inner` marks broad change no photo)
+        self.remembers_photos(revision).then(|| self.touched_after(revision, reads))
+    }
+
+    fn touched_after(&self, revision: u64, reads: Aspects) -> Vec<PhotoId> {
+        let mut ids: Vec<PhotoId> = self
+            .changes
+            .touched
+            .iter()
+            .filter(|(r, _, a)| *r > revision && (reads == Aspects::ALL || a.any_of(reads)))
+            .map(|(_, id, _)| *id)
+            .collect();
         ids.sort_unstable();
         ids.dedup();
-        Some(ids)
+        ids
     }
     fn album_mut(&mut self, id: AlbumId) -> Result<&mut Album> {
         self.albums.get_mut(&id).ok_or(CatalogError::NoAlbum(id))
     }
 
     /// Apply an op; returns its inverse. On error the catalog is as it was, the revision included, and nothing is
-    /// remembered of the op in what the latest ops touched. The one exception is a batch whose rollback fails: the
-    /// catalog did change, so the revision advances and anything may be taken to have changed.
+    /// remembered of the op in what the latest ops touched. The one exception is a batch that fails and cannot be rolled
+    /// back whole: it is [`CatalogError::PartlyApplied`], the catalog did change (the revision advances and anything may
+    /// be taken to have changed), and the caller must record the op.
     pub fn apply(&mut self, op: Op) -> Result<Op> {
         if self.changes.seen != self.revision {
             // the revision was set from outside: what is remembered is of another past
             self.changes = Changes { floor: self.revision, seen: self.revision, ..Default::default() };
         }
         let broad = self.changes.broad;
-        self.changes.torn = false;
+        let keyword_list = self.changes.keyword_list;
         let inv = match self.apply_inner(op) {
             Ok(inv) => inv,
-            Err(e) => {
+            Err(cause) => {
                 let made = self.revision.saturating_add(1);
-                if self.changes.torn {
-                    // (a batch the rollback of which failed changed something and says not what: it makes a
-                    // revision, so what is kept for the one before is dropped, and anything may have changed, as
-                    // after an op of a wider reach)
-                    self.changes.torn = false;
-                    self.changes.broad = made;
-                    self.revision = made;
-                    self.changes.seen = made;
-                } else {
+                let left = std::mem::take(&mut self.changes.leftover);
+                if left.is_empty() {
                     // (everything the failed op, or the rollback of a batch, noted was made for the revision it
                     // would have made: nothing earlier has that one. A note the cap already dropped stays
                     // dropped, which only says less than is known, as the cap does.)
@@ -643,8 +850,16 @@ impl Catalog {
                         self.changes.touched.pop_back();
                     }
                     self.changes.broad = broad;
+                    self.changes.keyword_list = keyword_list;
+                    return Err(cause);
                 }
-                return Err(e);
+                // (a batch the rollback of which failed changed something and says not what: it makes a revision, so
+                // what is kept for the one before is dropped, and anything may have changed, as after an op of a
+                // wider reach)
+                self.changes.broad = made;
+                self.revision = made;
+                self.changes.seen = made;
+                return Err(CatalogError::PartlyApplied { cause: Box::new(cause), remaining: Box::new(Op::Batch { ops: left }) });
             }
         };
         self.revision += 1;
@@ -652,10 +867,71 @@ impl Catalog {
         Ok(inv)
     }
 
+    /// [`Self::apply`] for a new edit (not an undo, a redo or the replay of a saved log, which bring
+    /// back what was): refused when it would put a smart album on a loop, one that includes itself
+    /// through the albums it tests. THE place that rule is kept, whichever command, importer or
+    /// task makes the edit, alone or in a batch. A library that already holds a loop still opens,
+    /// and an edit that puts no album on one it was not on goes through, also to an album on a loop.
+    ///
+    /// The check is made on what the edit would do to the albums, before it is done: a refused
+    /// edit never touched the library, so there is nothing to take back.
+    pub fn apply_new(&mut self, op: Op) -> Result<Op> {
+        if let Some((id, name)) = self.would_put_on_a_loop(&op) {
+            return Err(CatalogError::Invalid(format!(
+                "smart album “{name}” (album {}) would include itself: its rules lead back to it through the albums they test",
+                id.0
+            )));
+        }
+        self.apply(op)
+    }
+
+    /// The album `op` would newly put on a loop, as its id and name: the album the op is about
+    /// when that is one of them. `None` when it makes none (or changes no album's rules).
+    fn would_put_on_a_loop(&self, op: &Op) -> Option<(AlbumId, String)> {
+        if !changes_what_albums_test(op) {
+            return None;
+        }
+        let mut graph = AlbumGraph::of(self.albums.values());
+        let now = graph.on_a_loop();
+        let mut edited = Vec::new();
+        foresee(&mut graph, op, &mut edited);
+        let then = graph.on_a_loop();
+        let name_of = |id: AlbumId| self.albums.get(&id).map(|a| a.name.clone()).unwrap_or_default();
+        let new_edited = edited.iter().find(|(id, _)| then.contains(id) && !now.contains(id));
+        match new_edited {
+            Some((id, name)) => Some((*id, name.map_or_else(|| name_of(*id), str::to_string))),
+            // an album the edit is not about (it tests one that now leads back to it)
+            None => then.difference(&now).next().map(|id| (*id, name_of(*id))),
+        }
+    }
+
     fn apply_inner(&mut self, op: Op) -> Result<Op> {
-        // An op that changes one photo says which (`photo_mut`, and adding or removing it below). Every other kind
-        // can change what any photo matches or where it sorts: an album's photos or rules, a stack, a keyword's
-        // name. Listed kind by kind, so a new one has to be put on one side.
+        // a photo that comes, goes, is deleted or restored, is imported from Local or gets other content can change
+        // whether the photos with its content have the same content as another one (`index::content_key`), when
+        // anything asks
+        let photo = match &op {
+            Op::AddPhoto { photo } => Some(photo.id),
+            Op::RemovePhoto { id } | Op::SetDeleted { id, .. } | Op::SetLocal { id, .. } | Op::SetContent { id, .. } => Some(*id),
+            _ => None,
+        }
+        .filter(|_| self.follows_contents());
+        let albums = matches!(op, Op::AddAlbum { .. } | Op::RemoveAlbum { .. } | Op::SetAlbumRules { .. });
+        let before = photo.and_then(|id| self.content_of(id));
+        let inv = self.apply_op(op)?;
+        if let Some(id) = photo {
+            let after = self.content_of(id);
+            self.content_moved(id, before, after);
+        }
+        if albums {
+            self.index.albums_changed();
+        }
+        Ok(inv)
+    }
+
+    fn apply_op(&mut self, op: Op) -> Result<Op> {
+        // An op that changes one photo says which (`photo_mut`, and adding or removing it below). Most other kinds
+        // can change what any photo matches or where it sorts: an album's photos or rules, a stack. The keyword
+        // list changes only lists of keywords. Listed kind by kind, so a new one has to be put on one side.
         match &op {
             // (a photo that comes, goes, or changes what it is to the library counts for every tally; so do the
             // rare kinds whose reach nobody has to think about)
@@ -695,21 +971,28 @@ impl Catalog {
             | Op::SetStack { .. }
             | Op::SetLabelName { .. }
             | Op::SetBrowsed { .. }
-            | Op::SetKeyword { .. }
             | Op::SetFolderRecord { .. } => self.changes.broad = self.revision.saturating_add(1),
+            // (no photo matches, counts or sorts by it: only lists of keywords change)
+            Op::SetKeyword { .. } => self.changes.keyword_list = self.revision.saturating_add(1),
         }
         Ok(match op {
-            Op::AddPhoto { photo } => {
+            Op::AddPhoto { mut photo } => {
                 if self.photos.contains_key(&photo.id) {
                     return Err(CatalogError::Invalid(format!("photo {:?} exists", photo.id)));
                 }
+                photo.trim_history();
                 let id = photo.id;
                 self.next_photo = self.next_photo.max(id.0.saturating_add(1));
+                shared::photo(&mut photo);
+                self.index.file_changed(id, None, file_path(&photo.source));
                 self.photos.insert(id, Arc::new(*photo));
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
                 Op::RemovePhoto { id }
             }
             Op::RemovePhoto { id } => {
                 let p = self.photos.remove(&id).ok_or(CatalogError::NoPhoto(id))?;
+                self.index.file_changed(id, file_path(&p.source), None);
+                self.index.text_changed(id, None);
                 // album membership is restored by the batch the engine builds (see `delete_permanently`)
                 Op::AddPhoto { photo: Box::new((*p).clone()) }
             }
@@ -731,13 +1014,15 @@ impl Catalog {
             }
             Op::SetDevelop { id, settings, label, edited } => {
                 let p = self.photo_mut(id)?;
-                let old = std::mem::replace(&mut p.develop, settings);
+                let old = std::mem::replace(&mut p.develop, shared::settings(settings));
                 let old_edit = std::mem::replace(&mut p.edited, edited);
                 Op::SetDevelop { id, settings: old, label, edited: old_edit }
             }
             Op::SetMeta { id, meta } => {
                 let p = self.photo_mut(id)?;
-                Op::SetMeta { id, meta: Box::new(std::mem::replace(&mut p.meta, *meta)) }
+                let old = std::mem::replace(&mut p.meta, *meta);
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
+                Op::SetMeta { id, meta: Box::new(old) }
             }
             Op::SetDeleted { id, deleted } => {
                 let p = self.photo_mut(id)?;
@@ -747,16 +1032,27 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetLocal { id, local: std::mem::replace(&mut p.local, local) }
             }
-            Op::SetVersions { id, versions } => {
+            Op::SetVersions { id, mut versions } => {
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).versions(&mut versions);
                 Op::SetVersions { id, versions: std::mem::replace(&mut p.versions, versions) }
             }
-            Op::SetHistory { id, history } => {
+            Op::SetHistory { id, mut history } => {
                 let p = self.photo_mut(id)?;
-                Op::SetHistory { id, history: std::mem::replace(&mut p.history, history) }
+                let own = shared::Anchor::new(p.develop.clone());
+                history.iter_mut().for_each(|s| own.step(s));
+                let old = std::mem::replace(&mut p.history, history);
+                let old_cursor = p.history_cursor;
+                p.trim_history();
+                if p.history_cursor == old_cursor {
+                    Op::SetHistory { id, history: old }
+                } else {
+                    Op::Batch { ops: vec![Op::SetHistory { id, history: old }, Op::SetHistoryCursor { id, cursor: old_cursor }] }
+                }
             }
-            Op::PushHistory { id, step } => {
+            Op::PushHistory { id, mut step } => {
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).step(&mut step);
                 let old = p.history.clone();
                 let old_cursor = p.history_cursor.take();
                 // a new edit made from an earlier step drops the steps after it
@@ -779,6 +1075,8 @@ impl Catalog {
                 Op::SetHistoryCursor { id, cursor: std::mem::replace(&mut p.history_cursor, cursor) }
             }
             Op::AddAlbum { album } => {
+                self.plans = PlansMemo::default();
+                self.index.forget_loops();
                 if self.albums.contains_key(&album.id) {
                     return Err(CatalogError::Invalid(format!("album {:?} exists", album.id)));
                 }
@@ -800,6 +1098,8 @@ impl Catalog {
                 Op::RemoveAlbum { id }
             }
             Op::RemoveAlbum { id } => {
+                self.plans = PlansMemo::default();
+                self.index.forget_loops();
                 if self.albums.values().any(|a| a.parent == Some(id)) {
                     return Err(CatalogError::Invalid("folder is not empty".into()));
                 }
@@ -860,6 +1160,8 @@ impl Catalog {
                 Op::SetAlbumCover { id, cover: std::mem::replace(&mut a.cover, cover) }
             }
             Op::SetAlbumRules { id, rules } => {
+                self.plans = PlansMemo::default();
+                self.index.forget_loops();
                 self.validate_rules(&rules)?;
                 let a = self.album_mut(id)?;
                 let Some(old) = a.smart.as_mut() else {
@@ -909,10 +1211,15 @@ impl Catalog {
                 Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
             }
             Op::Relink { id, file_name, source, format } => {
+                if let Some(p) = self.photos.get(&id) {
+                    self.index.file_changed(id, file_path(&p.source), file_path(&source));
+                }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
-                Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
+                let old = Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format };
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
+                old
             }
             Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
                 let p = self.photo_mut(id)?;
@@ -928,7 +1235,7 @@ impl Catalog {
             }
             Op::SetEmbeddedLens { id, lens } => {
                 let p = self.photo_mut(id)?;
-                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens.map(|l| *l)).map(Box::new) }
+                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens) }
             }
             Op::SetAsShotWb { id, wb } => {
                 if wb.is_some_and(|(t, tint)| !(t.is_finite() && tint.is_finite())) {
@@ -941,9 +1248,14 @@ impl Catalog {
                 if file_name.trim().is_empty() {
                     return Err(CatalogError::Invalid("empty file name".into()));
                 }
+                if let Some(p) = self.photos.get(&id) {
+                    self.index.file_changed(id, file_path(&p.source), file_path(&source));
+                }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
-                Op::SetFile { id, file_name: old_name, source: std::mem::replace(&mut p.source, source) }
+                let old = Op::SetFile { id, file_name: old_name, source: std::mem::replace(&mut p.source, source) };
+                self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
+                old
             }
             Op::SetLabelName { label, name } => {
                 let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
@@ -990,12 +1302,21 @@ impl Catalog {
                     match self.apply_inner(op) {
                         Ok(inv) => inverses.push(inv),
                         Err(e) => {
-                            // roll back what was applied
-                            for inv in inverses.into_iter().rev() {
-                                if self.apply_inner(inv).is_err() {
-                                    self.changes.torn = true;
+                            // roll back what was applied: first what a batch inside this one could not take back
+                            // (it was done last), then the inverses, newest first. A batch among them (the inverse
+                            // of one that went through) goes op by op, in the order it lists them: as a whole it would
+                            // stop at the first op that cannot go yet and be kept whole, to stop there again at the
+                            // retry, while its later ops (the one that makes the first possible) never ran.
+                            let mut todo = Vec::new();
+                            let leftover = std::mem::take(&mut self.changes.leftover);
+                            leftover.into_iter().chain(inverses.into_iter().rev()).for_each(|inv| unbatch(inv, &mut todo));
+                            let mut left = Vec::new();
+                            for inv in todo {
+                                if self.apply_inner(inv.clone()).is_err() {
+                                    left.push(inv);
                                 }
                             }
+                            self.changes.leftover = left;
                             return Err(e);
                         }
                     }
@@ -1054,14 +1375,41 @@ impl Catalog {
     /// finds in them, and walks folders up to the top): every photo, album and stack carries the
     /// id it is filed under; the id counters lie past every id in use; a stack keeps only photos
     /// in the catalog, once each, and goes when fewer than two are left; an album whose parent is
-    /// missing, not a folder or inside itself moves to the top level. Returns what was changed
-    /// (nothing, for a catalog this build wrote).
+    /// missing, not a folder or inside itself moves to the top level; a photo keeps its newest
+    /// [`HISTORY_LIMIT`] History steps. Returns what was changed (nothing, for a catalog this build
+    /// wrote).
     pub fn repair(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
+        // Photos others hold are copied below (`Arc::make_mut`), which moves them in memory and strands the text kept
+        // for their address ([`index::Indexes`]), and stacks and albums change outside `apply`: nothing derived is
+        // kept across a repair, and the lookups are built again when asked.
+        self.index = index::Indexes::default();
+        // Segmentation grids shared by the snapshot this was read from (issue #2154): each
+        // reference takes its grid's data, and the table is not kept — a live catalog always
+        // stores the data inline, so masks render and serialize without the snapshot's table.
+        // Resolving is the normal way a snapshot in this format reads (not reported); a
+        // reference past the table is damage and is reported — that includes a reference into
+        // an empty table, which is always dangling, so the table being empty does not skip it.
+        let grids = std::mem::take(&mut self.grids);
+        let mut dangling = 0usize;
+        let mut done = ResolvedGrids::new();
+        for p in self.photos.values_mut() {
+            let photo = Arc::make_mut(p);
+            for settings in photo.settings_holders_mut() {
+                dangling = resolve_grids(settings, &grids, dangling, &mut done);
+            }
+        }
+        if dangling > 0 {
+            changed.push(format!("{dangling} segmentation grid reference(s) pointed past the shared table: cleared"));
+        }
         for (id, p) in self.photos.iter_mut() {
             if p.id != *id {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
                 Arc::make_mut(p).id = *id;
+            }
+            if p.history.len() > HISTORY_LIMIT {
+                let n = Arc::make_mut(p).trim_history();
+                changed.push(format!("photo {}: {n} History step(s) beyond the newest {HISTORY_LIMIT} dropped", id.0));
             }
         }
         for (id, a) in self.albums.iter_mut() {
@@ -1147,8 +1495,9 @@ impl Catalog {
             self.next_stack = self.next_stack.max(stack);
         }
         if !changed.is_empty() {
-            // stacks and albums changed outside `apply`: the lookups are built again when asked
-            self.index = index::Indexes::default();
+            // stacks and albums changed outside `apply`: what was worked out from the albums is made again (the guard of
+            // [`Self::keeps_written_order`] too)
+            self.plans = PlansMemo::default();
         }
         changed
     }
@@ -1160,7 +1509,7 @@ impl Catalog {
         for (i, line) in lines.iter().enumerate() {
             match serde_json::from_str::<Op>(line) {
                 Ok(op) => {
-                    self.apply(op)?;
+                    self.replay_op(op)?;
                     n += 1;
                 }
                 Err(e) if i + 1 == lines.len() => {
@@ -1173,10 +1522,168 @@ impl Catalog {
         Ok(n)
     }
 
+    /// Apply one op of a saved log: the one place that says which failures of a logged op are the log being replayed, not
+    /// damage (`Journal::open` and [`Self::replay`] both go through it). A batch that was only partly taken back when it
+    /// was applied is logged as it was ([`CatalogError::PartlyApplied`]) and fails the same way again, leaving the same
+    /// changes, so replaying it counts as done; any other error is the caller's to handle.
+    pub(crate) fn replay_op(&mut self, op: Op) -> Result<()> {
+        match self.apply(op) {
+            Ok(_) | Err(CatalogError::PartlyApplied { .. }) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn op_to_log_line(op: &Op) -> String {
         let mut s = serde_json::to_string(op).unwrap_or_default();
         s.push('\n');
         s
+    }
+}
+
+/// Whether `op` changes which albums a smart album tests: it adds or removes an album, or changes
+/// rules (alone or in a batch).
+fn changes_what_albums_test(op: &Op) -> bool {
+    // listed kind by kind (as in `apply_inner`), so a new kind has to be put on one side
+    match op {
+        Op::AddAlbum { .. } | Op::RemoveAlbum { .. } | Op::SetAlbumRules { .. } => true,
+        Op::Batch { ops } => ops.iter().any(changes_what_albums_test),
+        Op::AddPhoto { .. }
+        | Op::RemovePhoto { .. }
+        | Op::SetDeleted { .. }
+        | Op::SetLocal { .. }
+        | Op::SetContent { .. }
+        | Op::SetEmbeddedLens { .. }
+        | Op::SetAsShotWb { .. }
+        | Op::SetRating { .. }
+        | Op::SetFlag { .. }
+        | Op::SetLabel { .. }
+        | Op::SetMeta { .. }
+        | Op::SetCaptured { .. }
+        | Op::SetFile { .. }
+        | Op::Relink { .. }
+        | Op::SetAnalysis { .. }
+        | Op::SetDevelop { .. }
+        | Op::SetVersions { .. }
+        | Op::SetHistory { .. }
+        | Op::PushHistory { .. }
+        | Op::SetHistoryCursor { .. }
+        | Op::RenameAlbum { .. }
+        | Op::MoveAlbum { .. }
+        | Op::SetAlbumOrder { .. }
+        | Op::SetAlbumPhotos { .. }
+        | Op::SetAlbumCover { .. }
+        | Op::AddStack { .. }
+        | Op::RemoveStack { .. }
+        | Op::SetStack { .. }
+        | Op::SetLabelName { .. }
+        | Op::SetBrowsed { .. }
+        | Op::SetKeyword { .. }
+        | Op::SetFolderRecord { .. } => false,
+    }
+}
+
+/// What `op` would do to `graph`, as far as loops go (which album tests which), without the
+/// checks `apply` makes: an op it would refuse is refused there. `edited` gets the albums the op
+/// is about, with their name when the op brings it.
+fn foresee<'a>(graph: &mut AlbumGraph, op: &'a Op, edited: &mut Vec<(AlbumId, Option<&'a str>)>) {
+    match op {
+        Op::AddAlbum { album } => {
+            // an id that is taken stays as it is: `apply` refuses the add
+            if let std::collections::hash_map::Entry::Vacant(slot) = graph.leads_to.entry(album.id) {
+                slot.insert(album.smart.as_deref().map(Filter::albums_tested));
+                edited.push((album.id, Some(album.name.as_str())));
+            }
+        }
+        Op::RemoveAlbum { id } => {
+            graph.leads_to.remove(id);
+        }
+        Op::SetAlbumRules { id, rules } => {
+            // only a smart album has rules: `apply` refuses them for another
+            if let Some(tested) = graph.leads_to.get_mut(id).filter(|t| t.is_some()) {
+                *tested = Some(rules.albums_tested());
+                edited.push((*id, None));
+            }
+        }
+        Op::Batch { ops } => ops.iter().for_each(|op| foresee(graph, op, edited)),
+        _ => {}
+    }
+}
+
+/// Which album tests which: what a smart album's photos depend on beyond its own rules. Made in
+/// one look at the albums, for questions about all of them.
+struct AlbumGraph {
+    /// Every album; `Some(albums its rules test)` for a smart album, `None` for any other.
+    leads_to: std::collections::HashMap<AlbumId, Option<Vec<AlbumId>>>,
+}
+
+impl AlbumGraph {
+    fn of<'a>(albums: impl Iterator<Item = &'a Album>) -> AlbumGraph {
+        AlbumGraph { leads_to: albums.map(|a| (a.id, a.smart.as_deref().map(Filter::albums_tested))).collect() }
+    }
+
+    /// The smart albums that lead back to themselves: those in a ring of albums leading to one
+    /// another (a strongly connected part of more than one album), or testing themselves. One
+    /// walk over the albums (Tarjan's, with its own stack rather than recursion: a chain of
+    /// thousands of albums must not overflow the call stack).
+    fn on_a_loop(&self) -> std::collections::BTreeSet<AlbumId> {
+        // only what tests an album can be on a ring: number those
+        let testing: Vec<(AlbumId, &[AlbumId])> =
+            self.leads_to.iter().filter_map(|(id, tested)| tested.as_deref().filter(|t| !t.is_empty()).map(|t| (*id, t))).collect();
+        let number: std::collections::HashMap<AlbumId, usize> = testing.iter().enumerate().map(|(i, (id, _))| (*id, i)).collect();
+        let leads: Vec<Vec<usize>> = testing.iter().map(|(_, t)| t.iter().filter_map(|to| number.get(to).copied()).collect()).collect();
+        const UNSEEN: usize = usize::MAX;
+        let n = testing.len();
+        // when each was first reached, the earliest still-open album it leads back to, the open
+        // ones in the order reached, and whether each ended up on a ring
+        let (mut reached, mut back) = (vec![UNSEEN; n], vec![0usize; n]);
+        let (mut open, mut is_open, mut ringed) = (Vec::new(), vec![false; n], vec![false; n]);
+        let mut clock = 0usize;
+        for root in 0..n {
+            if reached[root] != UNSEEN {
+                continue;
+            }
+            // (album, how many of its leads were followed)
+            let mut walk: Vec<(usize, usize)> = vec![(root, 0)];
+            while let Some(&(v, followed)) = walk.last() {
+                if followed == 0 && reached[v] == UNSEEN {
+                    reached[v] = clock;
+                    back[v] = clock;
+                    clock += 1;
+                    open.push(v);
+                    is_open[v] = true;
+                }
+                if let Some(&w) = leads[v].get(followed) {
+                    if let Some(top) = walk.last_mut() {
+                        top.1 += 1;
+                    }
+                    if reached[w] == UNSEEN {
+                        walk.push((w, 0));
+                    } else if is_open[w] {
+                        back[v] = back[v].min(reached[w]);
+                    }
+                    continue;
+                }
+                // every lead of `v` followed: it closes, and with it the ring it is the first of
+                walk.pop();
+                if let Some(&(parent, _)) = walk.last() {
+                    back[parent] = back[parent].min(back[v]);
+                }
+                if back[v] == reached[v] {
+                    let mut ring = Vec::new();
+                    while let Some(w) = open.pop() {
+                        is_open[w] = false;
+                        ring.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    if ring.len() > 1 || leads[v].contains(&v) {
+                        ring.into_iter().for_each(|w| ringed[w] = true);
+                    }
+                }
+            }
+        }
+        testing.iter().zip(&ringed).filter(|(_, ringed)| **ringed).map(|((id, _), _)| *id).collect()
     }
 }
 
@@ -1189,15 +1696,21 @@ fn album_order_key(a: &Album) -> (bool, bool, u32, String, AlbumId) {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_album_loops;
+#[cfg(test)]
 mod tests_album_order;
 #[cfg(test)]
 mod tests_background;
+#[cfg(test)]
+mod tests_folder_index;
 #[cfg(test)]
 mod tests_folder_records;
 #[cfg(test)]
 mod tests_folders;
 #[cfg(test)]
 mod tests_format_version;
+#[cfg(test)]
+mod tests_grids;
 #[cfg(test)]
 mod tests_index;
 #[cfg(test)]
@@ -1206,10 +1719,22 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_log_thread;
+#[cfg(test)]
+mod tests_looping_albums;
+#[cfg(test)]
+mod tests_opened_folder;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]
+mod tests_rule_order;
+#[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_search_text;
+#[cfg(test)]
+mod tests_shared;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]

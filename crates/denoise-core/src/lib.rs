@@ -4,10 +4,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 pub mod archive;
 pub mod bayer;
+pub mod bm3d;
+pub mod builtin;
 pub mod hash;
 pub mod known;
 pub mod licence;
 pub mod manifest;
+pub mod nlm;
 pub mod product;
 pub mod run;
 pub mod tiles;

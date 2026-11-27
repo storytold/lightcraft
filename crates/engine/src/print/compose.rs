@@ -98,7 +98,7 @@ pub struct PageStyle {
     pub page_numbers: bool,
     /// The print settings (sharpening, profile, resolution) at the bottom left of each page.
     pub page_info: bool,
-    /// Marks at the corners of each photo to cut along.
+    /// Marks at the corners of each photo to cut along (the packages' Cut Guides reuse this).
     pub crop_marks: bool,
 }
 
@@ -116,7 +116,8 @@ pub fn rec2020_from_srgb8(c: [u8; 3]) -> [u16; 3] {
 }
 
 /// Whether a layout style prints the Page Options (page numbers, page info, crop marks):
-/// Lightroom offers them for Single Image and Contact Sheet; its packages have Cut Guides instead.
+/// Lightroom offers them for Single Image and Contact Sheet. Its packages have Cut Guides
+/// instead, which print whatever this says ([`PageStyle::crop_marks`]).
 pub fn has_page_options(style: Style) -> bool {
     !style.is_package()
 }
@@ -255,6 +256,15 @@ pub struct Image16 {
     pub rgb: Vec<u16>,
 }
 
+/// A rectangular image region used as a source or destination for `Image16::blit`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlitRect {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
 impl Image16 {
     pub fn filled(w: usize, h: usize, c: [u16; 3]) -> Result<Self, String> {
         let n = w.checked_mul(h).and_then(|n| n.checked_mul(3)).ok_or("image too large")?;
@@ -284,9 +294,11 @@ impl Image16 {
     }
 
     /// Copies the `w` x `h` block of `src` at (`sx`, `sy`) to (`dx`, `dy`), clipped to both images.
-    pub fn blit(&mut self, src: &Image16, sx: usize, sy: usize, dx: usize, dy: usize, w: usize, h: usize) {
-        let w = w.min(src.w.saturating_sub(sx)).min(self.w.saturating_sub(dx));
-        let h = h.min(src.h.saturating_sub(sy)).min(self.h.saturating_sub(dy));
+    pub fn blit(&mut self, src: &Image16, source: BlitRect, destination: BlitRect) {
+        let BlitRect { x: sx, y: sy, .. } = source;
+        let BlitRect { x: dx, y: dy, .. } = destination;
+        let w = source.w.min(destination.w).min(src.w.saturating_sub(sx)).min(self.w.saturating_sub(dx));
+        let h = source.h.min(destination.h).min(src.h.saturating_sub(sy)).min(self.h.saturating_sub(dy));
         for row in 0..h {
             let from = src.rgb.get(((sy + row) * src.w + sx) * 3..((sy + row) * src.w + sx + w) * 3);
             let to = self.rgb.get_mut(((dy + row) * self.w + dx) * 3..((dy + row) * self.w + dx + w) * 3);
@@ -424,7 +436,7 @@ pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &Cell
     if border > 0 {
         page.fill_rect(dx - border, dy - border, w + 2 * border, h + 2 * border, style.border);
     }
-    page.blit(&img, sx, sy, dx, dy, w, h);
+    page.blit(&img, BlitRect { x: sx, y: sy, w, h }, BlitRect { x: dx, y: dy, w, h });
     let s = style.stroke_px.min(w.min(h) / 2);
     if s > 0 {
         page.fill_rect(dx, dy, w, s, style.stroke);
@@ -441,6 +453,8 @@ struct Marks {
     crop: Option<(usize, usize, usize)>,
     numbers: bool,
     info: Option<String>,
+    /// Marks go at each cell's corners (a package's Cut Guides, outside any border), not the photo's.
+    around_cells: bool,
     ink: [u16; 3],
     text_px: f32,
     /// The printable area: the text sits in the margin below it, aligned with its sides.
@@ -453,9 +467,10 @@ impl Marks {
         let page = &settings.page;
         let px = |inches: f64| (inches * ppi).round() as usize;
         Marks {
-            crop: (on && page.crop_marks).then(|| (px(CROP_MARK_IN), px(CROP_MARK_GAP_IN), px(CROP_MARK_PT / 72.0).max(1))),
+            crop: page.crop_marks.then(|| (px(CROP_MARK_IN), px(CROP_MARK_GAP_IN), px(CROP_MARK_PT / 72.0).max(1))),
             numbers: on && page.page_numbers,
             info: (on && page.page_info).then(|| page_info_text(settings)),
+            around_cells: !on,
             ink: rec2020_from_srgb8(mark_ink(page.background)),
             text_px: (PAGE_TEXT_PT / 72.0 * ppi) as f32,
             area: settings.layout.printable().ok().and_then(|a| px_rect(&a, ppi, pw, ph)),
@@ -598,7 +613,9 @@ impl Prepared {
                     }
                 };
                 let photo = &cache.get(at).ok_or("render cache lost an entry")?.1;
-                placed.push(draw_cell(&mut page, photo, item.cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?);
+                let cell = item.cell;
+                let drawn = draw_cell(&mut page, photo, cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?;
+                placed.push(if self.marks.around_cells { cell } else { drawn });
             }
             self.marks.draw(&mut page, &placed, index + 1);
             out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb: page.rgb });

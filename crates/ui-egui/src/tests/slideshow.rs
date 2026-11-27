@@ -48,7 +48,7 @@ fn fixture_grid(count: usize, open: Rc<Cell<bool>>) -> (RenderFixture, Headless)
     // consume the wall-clock budget before the slideshow scheduling assertions begin.
     assert!(open.get(), "the native grid setup gate starts open");
     h.app.renderer.set_offload(Box::new(RenderGate::new(open)));
-    assert!(h.settle(SETTLE), "the grid renders settle before controlling slide renders");
+    assert!(h.settle(super::ui_settle_timeout()), "the grid renders settle before controlling slide renders");
     assert_eq!(h.app.session.catalog.len(), count, "the slideshow fixture photos");
     let id = h.app.session.active().expect("a photo is open");
     let photo = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -241,7 +241,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     assert_eq!(r["settings"]["manual"], true, "{r}");
     // once the first two slides are rendered, and far longer than the slide duration: the first
     // photo stays up
-    assert!(h.step_until(SETTLE, |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
     for _ in 0..120 {
         h.step();
     }
@@ -299,6 +299,315 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     eprintln!("manual-checkbox journal_after_existing_step={:?}", h.app.session.journal.get(journal_before..));
     assert!(h.app.session.slideshow.manual, "the checkbox goes through slideshow.playback");
     h.settle(SETTLE);
+}
+
+#[test]
+fn pan_and_zoom_moves_the_photo_inside_its_cell() {
+    let mut h = grid();
+    run(&mut h, "slideshow.layout", json!({"margins": 0.1, "backdropColor": "#ff0000"}));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    let r = run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "seed": 3}));
+    assert_eq!((r["settings"]["panAndZoom"].clone(), r["settings"]["panAndZoomAmount"].clone()), (json!(true), json!(1.0)), "{r}");
+    let current = photo_up(&h);
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the slide is composed and ready");
+    h.step();
+    let s = run(&mut h, "slideshow.togglePause", json!({}));
+    assert_eq!(s["panAndZoom"], true, "{s}");
+    let start = s["view"].clone();
+    let w = start.as_array().map(|v| v.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>()).unwrap_or_default();
+    assert_eq!(w.len(), 4, "{s}");
+    assert!(w[0] >= 0.0 && w[1] >= 0.0 && w[2] <= 1.0 && w[3] <= 1.0 && w[2] - w[0] < 1.0, "a window inside the photo: {s}");
+    let moving = h.paint();
+    // the backdrop stays where it is
+    for (x, y) in [(5, 5), (995, 5), (500, 30), (30, 350), (985, 350)] {
+        assert_eq!(painted(&moving, x, y), [255, 0, 0], "margin at ({x}, {y})");
+    }
+    // playing on, it moves
+    run(&mut h, "slideshow.togglePause", json!({}));
+    for _ in 0..240 {
+        h.step();
+    }
+    assert_eq!(photo_up(&h), current, "the same slide is up");
+    let s = run(&mut h, "slideshow.togglePause", json!({}));
+    assert_ne!(s["view"], start, "{s}");
+    // the photo's cell moves; with an overlay drawn into the slide, the whole slide moves, so an
+    // overlay crossing the cell's edge stays in one piece
+    let part = |h: &Headless| {
+        let tex = h.app.renderer.textures.get(&Slot::Slide(current.into())).unwrap();
+        crate::panels::slideshow::moving_part(&h.app, current.into(), tex)
+    };
+    let cell = part(&h);
+    assert!(cell.min.x > 0.05 && cell.max.x < 0.95 && cell.min.y > 0.05 && cell.max.y < 0.95, "{cell:?}");
+    run(&mut h, "slideshow.overlays", json!({"ratingStars": {"enabled": true}}));
+    assert_eq!(part(&h), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)));
+    run(&mut h, "slideshow.overlays", json!({"ratingStars": {"enabled": false}}));
+    run(&mut h, "slideshow.end", json!({}));
+    // off: the photo shows whole, so the same slide paints other pixels in its cell
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": false}));
+    run(&mut h, "library.select", json!({"ids": [current.0]}));
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true}));
+    assert_eq!(photo_up(&h), current);
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current)));
+    h.step();
+    let s = run(&mut h, "slideshow.togglePause", json!({}));
+    assert_eq!((s["panAndZoom"].clone(), s["view"].clone()), (json!(false), json!(null)), "{s}");
+    let still = h.paint();
+    let mut changed = 0;
+    for y in (100..600).step_by(4) {
+        for x in (100..900).step_by(4) {
+            if painted(&moving, x, y) != painted(&still, x, y) {
+                changed += 1;
+            }
+        }
+    }
+    assert!(changed > 500, "the zoomed photo differs from the whole one ({changed} samples)");
+    assert_eq!(painted(&still, 5, 5), [255, 0, 0]);
+    run(&mut h, "slideshow.end", json!({}));
+    // the Settings controls
+    run(&mut h, "view.slideshowOptions", json!({}));
+    h.step();
+    reveal(&mut h, "check:settings.slideshowPanAndZoom");
+    assert!(latest_widget_rect(&h, "slider:slideshowPanAndZoom").is_some(), "the Low to High slider");
+    let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowPanAndZoom"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.slideshow.pan_and_zoom, "the checkbox goes through slideshow.playback");
+    h.settle(SETTLE);
+}
+
+/// While a slide's new render (after a layout change) is on the way, the old texture moves
+/// whole: its cell is where the old settings put it, not where the new ones do.
+#[test]
+fn pan_and_zoom_moves_an_old_render_whole_until_the_new_one_lands() {
+    let mut h = grid();
+    let open = Rc::new(Cell::new(true));
+    h.app.renderer.set_offload(Box::new(RenderGate::new(open.clone())));
+    run(&mut h, "slideshow.layout", json!({"margins": 0.1}));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true, "seed": 3}));
+    let current = photo_up(&h);
+    let slot = Slot::Slide(current.into());
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current) && h.app.renderer.wanted(slot) == h.app.renderer.textures.get(&slot).map(|t| t.key)));
+    let part = |h: &Headless| {
+        let tex = h.app.renderer.textures.get(&slot).unwrap();
+        crate::panels::slideshow::moving_part(&h.app, current.into(), tex)
+    };
+    let cell = part(&h);
+    assert!(cell.min.x > 0.05 && cell.max.x < 0.95, "the photo's cell: {cell:?}");
+    // the margins change while the next render is held back
+    open.set(false);
+    let old = h.app.renderer.textures.get(&slot).map(|t| t.key);
+    run(&mut h, "slideshow.layout", json!({"margins": 0.3}));
+    h.step();
+    assert_eq!(h.app.renderer.textures.get(&slot).map(|t| t.key), old, "the old render is still drawn");
+    assert_ne!(h.app.renderer.wanted(slot), old, "a new render is on the way");
+    assert_eq!(part(&h), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), "the old texture moves whole");
+    // the new render lands: its own cell moves again
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&slot).map(|t| t.key) != old));
+    let cell = part(&h);
+    assert!(cell.min.x > 0.2 && cell.max.x < 0.8, "the new, smaller cell: {cell:?}");
+    run(&mut h, "slideshow.end", json!({}));
+    h.settle(SETTLE);
+}
+
+/// A slide's time starts only once its render is in, so while it is held back pan and zoom does
+/// not ask for every frame, only for one 16 ms later so the render is taken and shown; once the
+/// render lands, every frame is drawn.
+#[test]
+fn pan_and_zoom_draws_every_frame_only_once_its_slide_is_ready() {
+    let mut h = grid();
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(RenderGate::new(open.clone())));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "seed": 3}));
+    let current = photo_up(&h);
+    let ctx = egui::Context::default();
+    let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = delays.clone();
+    ctx.set_request_repaint_callback(move |info| seen.lock().unwrap().push(info.delay));
+    let raw = egui::RawInput::default();
+    let tick = |h: &mut Headless| {
+        let now = h.time();
+        // (the first passes of a context ask for frames at once, which would hide the slideshow's)
+        for _ in 0..3 {
+            let _ = ctx.run_logic(&raw, |ctx| crate::panels::slideshow::tick(&mut h.app, ctx, now));
+        }
+        delays.lock().unwrap().clear();
+        let _ = ctx.run_logic(&raw, |ctx| crate::panels::slideshow::tick(&mut h.app, ctx, now));
+        delays.lock().unwrap().clone()
+    };
+    assert!(!has_slide(&h, current), "the slide's render is held back");
+    assert!(play(&h).pan_zoom_moving(h.time()), "the playback counts the slide as moving");
+    let got = tick(&mut h);
+    assert!(!got.contains(&Duration::ZERO), "no frame at once while the slide is not ready: {got:?}");
+    // a 60 second slide still asks for a frame soon, for its render to be taken and shown
+    assert!(got.iter().any(|d| *d <= Duration::from_millis(16)), "a frame soon while the slide is not ready: {got:?}");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the render lands");
+    let got = tick(&mut h);
+    assert!(got.contains(&Duration::ZERO), "every frame once it is ready: {got:?}");
+    run(&mut h, "slideshow.end", json!({}));
+    h.settle(SETTLE);
+}
+
+/// A photo cropped to its cell's shape, a very narrow one (aspect 0.01) and a very wide one
+/// (aspect 50): the part that moves is the photo's visible part of the slide, so the backdrop
+/// beside it stays where it is and the photo still shows inside it.
+#[test]
+fn pan_and_zoom_moves_only_the_visible_photo_at_any_aspect() {
+    let mut h = grid();
+    run(&mut h, "slideshow.layout", json!({"margins": 0.1, "backdropColor": "#ff0000"}));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    let id = h.app.session.visible_cloned()[0];
+    let own = h.app.session.slide_photo_aspect(id).unwrap();
+    // 70 px margins around a 860 × 560 cell
+    for aspect in [860.0 / 560.0, 0.01, 50.0] {
+        let mut d = (*h.app.session.develop_of(id).expect("settings")).clone();
+        d.crop.geometry.rect = if aspect < own {
+            let f = aspect / own;
+            lightcraft_geom::Rect::new(0.5 - f / 2.0, 0.0, 0.5 + f / 2.0, 1.0)
+        } else {
+            let f = own / aspect;
+            lightcraft_geom::Rect::new(0.0, 0.5 - f / 2.0, 1.0, 0.5 + f / 2.0)
+        };
+        h.app.session.set_develop(id, d, "Test").expect("edit");
+        let shown = h.app.session.slide_photo_aspect(id).unwrap();
+        assert!((shown / aspect - 1.0).abs() < 0.01, "{aspect}: the crop shows at {shown}");
+        run(&mut h, "library.select", json!({"ids": [id.0]}));
+        run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true, "seed": 3}));
+        assert_eq!(photo_up(&h), id);
+        let slot = Slot::Slide(id.into());
+        assert!(h.step_until(SETTLE, |h| has_slide(h, id) && h.app.renderer.wanted(slot) == h.app.renderer.textures.get(&slot).map(|t| t.key)));
+        h.step();
+        let s = run(&mut h, "slideshow.togglePause", json!({}));
+        assert!(s["view"].is_array(), "{aspect}: a manual slideshow holds the photo at its start view: {s}");
+        let tex = h.app.renderer.textures.get(&slot).unwrap();
+        assert_eq!(tex.size, [1000, 700]);
+        let v = lightcraft_slideshow::layout(&h.app.session.slide_layout, shown, 1000, 700).visible;
+        let part = crate::panels::slideshow::moving_part(&h.app, id.into(), tex);
+        let px = |r: egui::Rect| [r.min.x * 1000.0, r.min.y * 700.0, r.max.x * 1000.0, r.max.y * 700.0];
+        for (got, want) in px(part).into_iter().zip([v.x0, v.y0, v.x1, v.y1]) {
+            assert!((f64::from(got) - want).abs() < 0.01, "{aspect}: moves {part:?}, the photo shows at {v:?}");
+        }
+        if aspect < 1.0 {
+            assert!(v.width() < 8.0, "{aspect}: a strip of {v:?}");
+        } else if aspect > 10.0 {
+            assert!(v.height() < 20.0, "{aspect}: a strip of {v:?}");
+        } else {
+            assert!((v.width() - 860.0).abs() <= 1.0 && (v.height() - 560.0).abs() <= 1.0, "{aspect}: fills its cell: {v:?}");
+        }
+        let img = h.paint();
+        let (cx, cy) = (((v.x0 + v.x1) / 2.0) as usize, ((v.y0 + v.y1) / 2.0) as usize);
+        assert_ne!(painted(&img, cx, cy), [255, 0, 0], "{aspect}: the photo shows in its part");
+        let (x0, y0, x1, y1) = (v.x0 as usize, v.y0 as usize, v.x1 as usize, v.y1 as usize);
+        // the backdrop just beside the photo stays (away from the top center, where the
+        // slideshow's controls draw over it)
+        let (sx, sy) = (if v.width() > 200.0 { x0 + 100 } else { cx }, if v.height() > 200.0 { y0 + 100 } else { cy });
+        let mut beside = vec![(x0 - 3, sy), (x1 + 2, sy)];
+        if v.width() > 200.0 {
+            beside.extend([(sx, y0 - 3), (sx, y1 + 2)]);
+        }
+        for (x, y) in beside {
+            assert_eq!(painted(&img, x, y), [255, 0, 0], "{aspect}: backdrop at ({x}, {y})");
+        }
+        // and no backdrop shows inside the photo's edges
+        if aspect > 1.0 && aspect < 10.0 {
+            for (x, y) in [(x0 + 3, sy), (x1 - 4, sy), (sx, y0 + 3), (sx, y1 - 4)] {
+                assert_ne!(painted(&img, x, y), [255, 0, 0], "{aspect}: photo at ({x}, {y})");
+            }
+        }
+        run(&mut h, "slideshow.end", json!({}));
+    }
+    h.settle(SETTLE);
+}
+
+/// A crop so narrow (aspect 0.001) or so wide (aspect 1000) that the photo's render is 1 px
+/// across: the slide is laid out with that render's size, not the crop's aspect, so the part that
+/// moves is the strip of the slide the photo was composed into, not the whole cell around it.
+#[test]
+fn pan_and_zoom_moves_the_composed_strip_of_an_extreme_crop() {
+    let mut h = grid();
+    h.app.renderer.keep_pixels = true;
+    run(&mut h, "slideshow.layout", json!({"margins": 0.1, "backdropColor": "#ff0000"}));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    let id = h.app.session.visible_cloned()[0];
+    let own = h.app.session.slide_photo_aspect(id).unwrap();
+    for aspect in [0.001, 1000.0] {
+        let mut d = (*h.app.session.develop_of(id).expect("settings")).clone();
+        d.crop.geometry.rect = if aspect < own {
+            let f = aspect / own;
+            lightcraft_geom::Rect::new(0.5 - f / 2.0, 0.0, 0.5 + f / 2.0, 1.0)
+        } else {
+            let f = own / aspect;
+            lightcraft_geom::Rect::new(0.0, 0.5 - f / 2.0, 1.0, 0.5 + f / 2.0)
+        };
+        h.app.session.set_develop(id, d, "Test").expect("edit");
+        run(&mut h, "library.select", json!({"ids": [id.0]}));
+        run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true, "seed": 3}));
+        assert_eq!(photo_up(&h), id);
+        let slot = Slot::Slide(id.into());
+        assert!(h.step_until(SETTLE, |h| has_slide(h, id) && h.app.renderer.wanted(slot) == h.app.renderer.textures.get(&slot).map(|t| t.key)));
+        h.step();
+        let tex = h.app.renderer.textures.get(&slot).unwrap();
+        assert_eq!(tex.size, [1000, 700]);
+        // where the photo is in the composed slide: every pixel that is not the red backdrop
+        let px = tex.pixels.as_ref().expect("the slide's pixels");
+        let [w, rows] = px.size;
+        let (mut x0, mut y0, mut x1, mut y1) = (w, rows, 0, 0);
+        for y in 0..rows {
+            for x in 0..w {
+                let c = px.pixels[y * w + x];
+                if !(c.r() > 240 && c.g() < 15 && c.b() < 15) {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+                }
+            }
+        }
+        assert!(x1 > x0 && y1 > y0, "{aspect}: the photo shows in the slide");
+        assert!((x1 - x0).min(y1 - y0) <= 2, "{aspect}: a strip of {x0}..{x1} × {y0}..{y1}");
+        let part = crate::panels::slideshow::moving_part(&h.app, id.into(), tex);
+        let got = [part.min.x * 1000.0, part.min.y * 700.0, part.max.x * 1000.0, part.max.y * 700.0];
+        for (g, want) in got.into_iter().zip([x0, y0, x1, y1]) {
+            assert!((g - want as f32).abs() <= 1.0, "{aspect}: moves {got:?}, the photo is at {:?}", [x0, y0, x1, y1]);
+        }
+        run(&mut h, "slideshow.end", json!({}));
+    }
+    h.settle(SETTLE);
+}
+
+/// The amount set on the Low to High slider is saved with the library: the slider writes the
+/// live value as it moves, which leaves `slideshow.playback` nothing to change when it ends.
+#[test]
+fn the_pan_and_zoom_amount_from_the_slider_is_there_when_the_library_reopens() {
+    struct Folder(std::path::PathBuf);
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = Folder(std::env::temp_dir().join(format!("lc-ui-pan-zoom-amount-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(&dir.0, false).unwrap();
+    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1000.0, 700.0], 1.0);
+    h.step();
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true}));
+    let before = h.app.session.slideshow.pan_and_zoom_amount;
+    run(&mut h, "view.slideshowOptions", json!({}));
+    h.step();
+    let slider = reveal(&mut h, "slider:slideshowPanAndZoom");
+    let r = h.request("ui.dragWidget", json!({"id": "slider:slideshowPanAndZoom", "toX": slider.left(), "toY": slider.center().y}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let amount = h.app.session.slideshow.pan_and_zoom_amount;
+    assert!(amount < before - 0.1, "the slider moved the amount from {before} to {amount}");
+    h.settle(SETTLE);
+    drop(h);
+    let mut again = lightcraft_engine::Session::new().with_fs();
+    again.open_library(&dir.0, false).unwrap();
+    assert!(again.slideshow.pan_and_zoom, "the checkbox's setting is saved");
+    assert_eq!(again.slideshow.pan_and_zoom_amount, amount, "the slider's amount is saved");
 }
 
 #[test]
@@ -400,6 +709,29 @@ fn playback_settings_drive_the_slideshow_and_bad_ones_are_refused() {
     h.settle(SETTLE);
 }
 
+/// The slide preview's render lands on a frame nobody can name (a worker thread); the page under it must
+/// not move when it does, or a click made in that frame lands beside the control aimed at (the gate went
+/// red on it: `playback_settings_…` clicks "Random order" and the checkbox never changed).
+#[test]
+fn the_settings_page_does_not_move_when_the_slide_preview_finishes_rendering() {
+    let mut h = grid();
+    let open = std::rc::Rc::new(std::cell::Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    // (the held render keeps the app "busy", so settle() would wait out its timeout: a second of frames instead)
+    for _ in 0..60 {
+        h.step();
+    }
+    let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap_or_else(|| panic!("{w} is on screen"));
+    let (room, check) = (rect(&h, "settings:pageRoom"), rect(&h, "check:settings.slideshowRandom"));
+    assert!(!h.app.renderer.textures.contains_key(&Slot::SlidePreview), "the render is held back");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.contains_key(&Slot::SlidePreview)), "the render lands");
+    h.settle(Duration::from_secs(5));
+    assert_eq!(rect(&h, "settings:pageRoom"), room, "the page's room is the same before and after the render");
+    assert_eq!(rect(&h, "check:settings.slideshowRandom"), check, "a control stays where it was drawn");
+}
+
 #[test]
 fn a_click_on_a_control_scrolled_out_of_the_settings_page_is_refused() {
     // A compact window leaves the lower controls of the Slideshow settings page outside the
@@ -434,7 +766,7 @@ fn a_photo_deleted_while_it_plays_does_not_stall_the_slideshow() {
     run(&mut h, "photo.delete", json!({"ids": [next.0]}));
     run(&mut h, "photo.deletePermanently", json!({"ids": [next.0]}));
     assert!(h.app.session.catalog.photo(next).is_none());
-    assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
     assert!(photos.len() > 3);
     h.settle(SETTLE);
 }
@@ -607,7 +939,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         assert!(has(&h, w), "{w}");
     }
     // the preview is the composed slide, rendered off the UI thread
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     // a checkbox goes through slideshow.layout, and its controls appear (scrolled into view)
     reveal(&mut h, "check:settings.slideshowShadow");
     let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowShadow"}), T);
@@ -618,7 +950,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
     // a changed layout renders the preview again (once it has settled)
     let before = h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key);
     run(&mut h, "slideshow.layout", json!({"margins": 0.2, "backdropColor": "#00ff00"}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
     h.step();
     // (the preview is pinned above the page: in view already)
     reveal(&mut h, "slideshow:preview");
@@ -871,20 +1203,8 @@ fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
     h.settle(SETTLE);
 }
 
-/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
-/// without changing anything, a click applies, and the user's own templates are saved, updated,
-/// renamed and deleted from the browser.
-#[test]
-fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+fn tpl_hover_previews_without_changes(h: &mut Headless) -> lightcraft_engine::slide_template::SlideLook {
     use lightcraft_engine::slide_template::SlideLook;
-    let mut h = grid();
-    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    h.app.session.slide_templates_dir = Some(dir.clone());
-    let first = h.app.session.visible_cloned()[0];
-    run(&mut h, "library.select", json!({"ids": [first.0]}));
-    run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap();
     for w in [
@@ -896,7 +1216,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
         "field:slideshowTemplateName",
         "button:slideshowTemplateSave",
     ] {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     // hover: the preview shows Gallery Wall (its light grey wall in the margin), nothing changes
     let before = SlideLook::of(&h.app.session);
@@ -915,42 +1235,55 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert!(h.step_until(SETTLE, grey), "the hovered template on the selected photo");
     assert_eq!(SlideLook::of(&h.app.session), before, "hovering changes nothing");
     assert!(h.app.session.slide_templates_previous.is_none());
+    before
+}
+
+fn tpl_click_applies_and_saves_own(h: &mut Headless, dir: &std::path::Path) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // a click applies it
-    reveal(&mut h, "template:builtin:gallery-wall");
+    reveal(h, "template:builtin:gallery-wall");
     let r = h.request("ui.clickWidget", json!({"id": "template:builtin:gallery-wall"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(h.app.session.slide_overlays.rating_stars.enabled && h.app.session.slide_layout.stroke_border);
-    assert!(has(&h, "template:previous"), "Previous settings appear");
+    assert!(has(h, "template:previous"), "Previous settings appear");
     // save as a template of our own
-    reveal(&mut h, "field:slideshowTemplateName");
+    reveal(h, "field:slideshowTemplateName");
     let r = h.request("ui.clickWidget", json!({"id": "field:slideshowTemplateName"}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Holiday / 2026"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    reveal(&mut h, "button:slideshowTemplateSave");
+    reveal(h, "button:slideshowTemplateSave");
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateSave"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(dir.join("Holiday _ 2026.json").exists(), "the separator never makes a folder");
     h.step();
-    assert!(has(&h, "template:user:Holiday _ 2026"));
+    assert!(has(h, "template:user:Holiday _ 2026"));
+}
+
+fn tpl_update_from_menu(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // update it from its menu with changed settings
-    run(&mut h, "slideshow.layout", json!({"backdropColor": "#123456"}));
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    run(h, "slideshow.layout", json!({"backdropColor": "#123456"}));
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     for w in ["button:slideshowTemplateUpdate", "button:slideshowTemplateRename", "button:slideshowTemplateExport", "button:slideshowTemplateDelete"]
     {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateUpdate"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.session.slide_template("user:Holiday _ 2026").unwrap().look.layout.backdrop_color, [0x12, 0x34, 0x56]);
+}
+
+fn tpl_rename_in_place(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // rename it in place
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -958,7 +1291,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "field:slideshowTemplateRename"));
+    assert!(has(h, "field:slideshowTemplateRename"));
     let r = h.request("ui.key", json!({"key": "a", "cmd": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Summer"}), T);
@@ -967,9 +1300,13 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+    assert!(has(h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+}
+
+fn tpl_delete_then_back_to_previous(h: &mut Headless, dir: &std::path::Path, before: &lightcraft_engine::slide_template::SlideLook) {
+    use lightcraft_engine::slide_template::SlideLook;
     // delete it (after confirming)
-    reveal(&mut h, "template:user:Summer");
+    reveal(h, "template:user:Summer");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Summer", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -983,11 +1320,32 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     h.step();
     assert!(!dir.join("Summer.json").exists());
     // back to the settings before Gallery Wall
-    reveal(&mut h, "template:previous");
+    reveal(h, "template:previous");
     let r = h.request("ui.clickWidget", json!({"id": "template:previous"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(SlideLook::of(&h.app.session).overlays, before.overlays);
+    h.settle(SETTLE);
+}
+
+/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
+/// without changing anything, a click applies, and the user's own templates are saved, updated,
+/// renamed and deleted from the browser.
+#[test]
+fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+    let mut h = grid();
+    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.app.session.slide_templates_dir = Some(dir.clone());
+    let first = h.app.session.visible_cloned()[0];
+    run(&mut h, "library.select", json!({"ids": [first.0]}));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    let before = tpl_hover_previews_without_changes(&mut h);
+    tpl_click_applies_and_saves_own(&mut h, &dir);
+    tpl_update_from_menu(&mut h);
+    tpl_rename_in_place(&mut h);
+    tpl_delete_then_back_to_previous(&mut h, &dir, &before);
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(dir);
 }

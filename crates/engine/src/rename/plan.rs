@@ -1,8 +1,8 @@
 use super::fs::{MoveFs, RealFs, folded_path};
-use super::moves::{BatchMoveError, move_all, set_file_ops_to};
+use super::moves::{BatchMoveError, move_all, rest_after_move_back, set_file_ops_to};
 use super::sidecar::{PacketVersion, retry_sidecars, retry_sidecars_for_paths};
 use super::tokens::{expand, split_ext};
-use super::*;
+use super::{CatalogError, EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
 
 /// The photos among `ids` a rename handles, in order: photos sharing one file (virtual copies)
 /// rename once. No file-system calls.
@@ -27,7 +27,7 @@ pub fn plan_rename_photos(photos: &[std::sync::Arc<Photo>], template: &str, star
 
 /// Plan renaming `photos`: `exists` says whether something answers to a path, `same_file` whether
 /// two spellings name one file (see [`MoveFs`]).
-fn plan_rename_core(
+pub(super) fn plan_rename_core(
     photos: &[std::sync::Arc<Photo>],
     template: &str,
     start: usize,
@@ -35,6 +35,9 @@ fn plan_rename_core(
     same_file: &dyn Fn(&Path, &Path) -> bool,
 ) -> Vec<RenamePlan> {
     let mut taken: HashSet<String> = HashSet::new(); // lower-case target paths/names claimed in this batch
+    // Per first-choice target: how many leading suffixes are all claimed in this batch (`taken` only grows), so the
+    // next photo with the same first choice starts after them instead of rebuilding each one.
+    let mut claimed_prefix: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut out = Vec::new();
     for (i, p) in photos.iter().enumerate() {
         let seq = start.saturating_add(i);
@@ -53,7 +56,9 @@ fn plan_rename_core(
         let (to, to_path) = match &p.source {
             Source::File { path } => {
                 let dir = Path::new(path).parent().map(Path::to_path_buf).unwrap_or_default();
-                let mut k = 0;
+                let base = folded_path(&dir.join(&want).to_string_lossy());
+                let mut k = claimed_prefix.get(&base).copied().unwrap_or(0);
+                let mut all_taken = true;
                 loop {
                     let name = candidate(k);
                     let tp = dir.join(&name).to_string_lossy().to_string();
@@ -64,18 +69,25 @@ fn plan_rename_core(
                     let same = from == to || (key == folded_path(path) && exists(to) && same_file(from, to));
                     // free: not claimed in this batch and not on disk (unless it is this very file).
                     // A file this batch moves away still counts as taken: simple and safe.
-                    if !taken.contains(&key) && (same || !exists(to)) {
+                    let claimed = taken.contains(&key);
+                    if !claimed && (same || !exists(to)) {
                         taken.insert(key);
+                        if all_taken {
+                            claimed_prefix.insert(base, k + 1);
+                        }
                         break (name, Some(tp));
                     }
+                    all_taken &= claimed;
                     k += 1;
                 }
             }
             Source::Demo { .. } => {
-                let mut k = 0;
+                let base = format!("demo:{}", want.to_lowercase());
+                let mut k = claimed_prefix.get(&base).copied().unwrap_or(0);
                 loop {
                     let name = candidate(k);
                     if taken.insert(format!("demo:{}", name.to_lowercase())) {
+                        claimed_prefix.insert(base, k + 1); // (every candidate before it was claimed: nothing but `taken` rejects a demo name)
                         break (name, None);
                     }
                     k += 1;
@@ -208,7 +220,26 @@ impl Session {
             && let Err(err) = self.commit(&label(n), op)
         {
             let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-            if let Err(e) = move_all(fs, &back) {
+            let moved_back = move_all(fs, &back);
+            if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
+                && let Some(rest) = self.undo.last().map(|step| step.op.clone())
+            {
+                // (what is left of the rollback must follow the files as far as they went back, not move them again)
+                let rest = rest_after_move_back(rest, &moved_back);
+                if let Some(step) = self.undo.last_mut() {
+                    step.op = rest;
+                }
+            }
+            if let Err(e) = moved_back {
+                // sidecars left apart from their photo are repaired later: with the partial step (undo retries them) or,
+                // when the catalog changed nothing, with the next rename
+                if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
+                    && let Some(step) = self.undo.last_mut()
+                {
+                    step.retry_sidecars.extend(e.pending_sidecars);
+                } else {
+                    self.pending_sidecar_repairs.extend(e.pending_sidecars);
+                }
                 return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
             }
             return Err(err);

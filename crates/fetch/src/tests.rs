@@ -86,6 +86,9 @@ fn handle(mut s: TcpStream, hits: &AtomicUsize) {
             b.extend_from_slice(&[7u8; 5000]);
             send(&mut s, "200 OK", "", &b)
         }
+        "signedchunk" => {
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n+5\r\nhello\r\n0\r\n\r\n");
+        }
         "chunked" => {
             let _ = s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
             for c in body.chunks(70_001) {
@@ -250,6 +253,16 @@ fn a_416_or_a_bad_complete_part_starts_over() {
 }
 
 #[test]
+fn signed_chunk_size_is_rejected() {
+    let srv = server();
+    let dir = tmp("signedchunk");
+    let f = FileSpec { name: "vocab.json", size: None, sha256: None, max: 1 << 20 };
+    let r = run(&[f], &[format!("{}/signedchunk", srv.base)], &dir, &AtomicBool::new(false)).0;
+    assert!(r.is_err(), "a chunk size of `+5` was accepted");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn chunked_bodies_and_unpinned_files() {
     let srv = server();
     let dir = tmp("chunked");
@@ -335,6 +348,10 @@ fn content_ranges() {
     assert_eq!(parse_content_range("bytes 0-0/*"), Some((0, None)));
     assert_eq!(parse_content_range("bytes 9-1/300"), None);
     assert_eq!(parse_content_range("items 1-2/3"), None);
+    assert_eq!(parse_content_range("bytes +100-+299/+300"), None);
+    assert_eq!(parse_content_range("bytes 100-+299/300"), None);
+    assert_eq!(parse_content_range("bytes 100-299/+300"), None);
+    assert_eq!(parse_content_range("bytes 1-/3"), None);
 }
 
 /// A bearer token goes only to https, only to the host the download began at, and only when there is one.
@@ -407,4 +424,136 @@ fn hostile_file_specs_are_rejected_before_touching_disk() {
         assert!(matches!(run(&specs, &[], &dir, &cancel).0, Err(DownloadError::Invalid(_))));
         assert!(!dir.exists());
     }
+}
+
+#[test]
+fn copies_from_a_local_folder_mirror_and_checks_the_hash() {
+    let src = tmp("local-src");
+    let dst = tmp("local-dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("model.bin"), payload()).unwrap();
+    // a bare absolute path and a file:// URL are both mirrors (passed as a default, which is not split on spaces
+    // or commas the way the environment's list is: the temp folder may hold either)
+    let m = mirrors(None, None, &[src.to_str().unwrap()]);
+    assert_eq!(m, vec![file_url(&src)]);
+    let (r, prog) = run(&[pinned()], &m, &dst, &AtomicBool::new(false));
+    r.unwrap();
+    assert_eq!(std::fs::read(dst.join("model.bin")).unwrap(), payload());
+    assert!(prog.last().is_some_and(|p| p.done == p.total));
+
+    // a damaged local copy is rejected and never moved into place
+    let bad = tmp("local-bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    let mut damaged = payload();
+    damaged[7] ^= 1;
+    std::fs::write(bad.join("model.bin"), damaged).unwrap();
+    let dst2 = tmp("local-dst2");
+    let (r, _) = run(&[pinned()], &[file_url(&bad)], &dst2, &AtomicBool::new(false));
+    assert!(matches!(r, Err(DownloadError::AllMirrorsFailed { .. })), "{r:?}");
+    assert!(!dst2.join("model.bin").exists() && !dst2.join("model.bin.part").exists());
+
+    // a missing folder, a relative path and a directory in place of a file are errors, not panics
+    let (r, _) = run(&[pinned()], &["file:///nonexistent/model-mirror".to_string()], &dst2, &AtomicBool::new(false));
+    assert!(r.is_err());
+    assert!(mirrors(Some("file://relative/dir"), None, &[]).is_empty());
+    std::fs::create_dir_all(src.join("dir.bin")).unwrap();
+    let dir_spec = FileSpec { name: "dir.bin", size: None, sha256: None, max: 10 };
+    let (r, _) = run(&[dir_spec], &[file_url(&src)], &dst2, &AtomicBool::new(false));
+    assert!(r.is_err());
+    for d in [&src, &dst, &bad, &dst2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// The `file://` URL of a local folder (its own `%` escaped, as [`mirrors`] does: the temp folder may hold one).
+fn file_url(p: &Path) -> String {
+    format!("file://{}", p.display().to_string().replace('%', "%25"))
+}
+
+/// A filesystem root is a usable mirror, and a file in it is found under one separator (CodeRabbit on #3010).
+#[test]
+fn a_root_folder_mirror_keeps_its_separator() {
+    assert_eq!(keep_root("file:"), "file:///");
+    assert_eq!(keep_root("file:///D:"), "file:///D:/");
+    assert_eq!(keep_root("file:///models"), "file:///models");
+    assert_eq!(file_url_in("file:///", "model.bin"), "file:///model.bin");
+    #[cfg(unix)]
+    {
+        assert_eq!(mirrors(None, None, &["/"]), ["file:///"]);
+        assert_eq!(local_path("file:///model.bin"), Some(PathBuf::from("/model.bin")));
+    }
+}
+
+/// A file name with a literal `%20` in it is copied from a local mirror under that very name, not as a space
+/// (CodeRabbit on #3010).
+#[test]
+fn a_local_mirror_keeps_a_file_names_percent_signs() {
+    let src = tmp("local-percent-src");
+    let dst = tmp("local-percent-dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("model%20.bin"), payload()).unwrap();
+    let p = payload();
+    let spec = FileSpec { name: "model%20.bin", size: Some(p.len() as u64), sha256: Some(leak(sha_hex(&p))), max: p.len() as u64 };
+    let (r, _) = run(&[spec], &[file_url(&src)], &dst, &AtomicBool::new(false));
+    r.unwrap();
+    assert_eq!(std::fs::read(dst.join("model%20.bin")).unwrap(), payload());
+    for d in [&src, &dst] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// A leftover `.part` that is a hard link to the local mirror's file is replaced, never truncated through: the
+/// mirror's file keeps its bytes (CodeRabbit on #3010).
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_part_never_empties_the_local_source() {
+    let src = tmp("local-link-src");
+    let dst = tmp("local-link-dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    std::fs::write(src.join("model.bin"), payload()).unwrap();
+    std::fs::hard_link(src.join("model.bin"), dst.join("model.bin.part")).unwrap();
+    let (r, _) = run(&[pinned()], &[file_url(&src)], &dst, &AtomicBool::new(false));
+    r.unwrap();
+    assert_eq!(std::fs::read(src.join("model.bin")).unwrap(), payload(), "the mirror's file is untouched");
+    assert_eq!(std::fs::read(dst.join("model.bin")).unwrap(), payload());
+    for d in [&src, &dst] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// A local source whose length on reading differs from the one its metadata gave (here a /proc file, whose size
+/// reads as 0: as a file rewritten after its size was checked) is not kept as a partial for the next mirror to
+/// resume (CodeRabbit on #3010).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_local_copy_that_comes_out_another_length_leaves_no_partial() {
+    let dst = tmp("local-changed-dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    let part = dst.join("status.part");
+    let r = copy_local(Path::new("/proc/self/status"), &part, 1 << 20, None, &AtomicBool::new(false), &mut |_, _| {});
+    assert!(matches!(r, Err(Fail::NextMirror(_))), "the next mirror is tried");
+    assert!(!part.exists(), "the partial is removed");
+    let _ = std::fs::remove_dir_all(&dst);
+}
+
+#[test]
+fn file_urls_are_percent_decoded_but_bare_paths_keep_their_percent_signs() {
+    // (absolute on every platform: `/models/…` has no drive on Windows, where it is not an absolute path)
+    let percent = std::env::temp_dir().join("50%20off");
+    let bare = mirrors(None, None, &[percent.to_str().unwrap()]);
+    assert_eq!(bare.len(), 1);
+    assert_eq!(local_path(&bare[0]), Some(percent));
+    let spaced = std::env::temp_dir().join("my sam3");
+    assert_eq!(local_path(&format!("file://{}", spaced.to_str().unwrap().replace('%', "%25").replace(' ', "%20"))), Some(spaced));
+    for hostile in ["file:///x%", "file:///x%2", "file:///x%zz", "file:///x%ff", "file:///x%0a"] {
+        assert_eq!(local_path(hostile), None, "{hostile}");
+    }
+}
+
+#[test]
+fn names_differing_only_in_case_are_one_file() {
+    let spec = |name| FileSpec { name, size: Some(1), sha256: None, max: 1 };
+    assert!(super::validate_files(&[spec("Model.bin")]).is_ok());
+    assert!(super::validate_files(&[spec("Model.bin"), spec("model.BIN")]).is_err());
 }

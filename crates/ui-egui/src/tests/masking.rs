@@ -119,7 +119,9 @@ fn new_brush_starts_a_separate_mask_in_paint_mode() {
     click(&mut h, "maskNew:brush");
     assert_eq!(h.app.session.active_mask, Some(2));
     assert!(!h.app.ui.brush_erase);
-    assert!(h.app.ui.mask_overlay);
+    // a new mask has no settings: its overlay shows by itself (O stays as it was)
+    assert!(!h.app.ui.mask_overlay);
+    assert_eq!(crate::panels::detail::overlay_mask(&h.app, &develop(&h)).map(|m| m.id), Some(2));
     let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     brush_at(&mut h, 0.5, 0.5);
@@ -138,11 +140,14 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     use lightcraft_pipeline::Overlay;
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
-    assert!(h.app.ui.mask_overlay);
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    // a mask without settings shows what it selects, by itself (O is off)
+    assert!(!h.app.ui.mask_overlay);
+    assert!(shown(&h), "a new mask shows its overlay");
 
     // Changing the shape needs the overlay; changing the image needs an unobscured preview.
     exec(&mut h, "mask.refine", json!({"value": 10.0}));
-    assert!(h.app.ui.mask_overlay);
+    assert!(shown(&h), "Refine Edges is the mask's shape, not a setting");
     // The dock header pushes this adjustment below the initial viewport. Exercise the
     // actual visible slider rather than sending a synthetic click outside its clipped body.
     let panel = h.app.widgets.iter().find(|(id, _)| id == "panel:right_panel").unwrap().1;
@@ -155,21 +160,28 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     assert!(panel.contains_rect(slider), "exposure is visible before clicking: {slider:?} in {panel:?}");
     let r = h.request("ui.clickWidget", json!({"id": "slider:exposure", "fx": 0.7}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(!h.app.ui.mask_overlay, "the exposure slider hides the overlay after release");
     let d = develop(&h);
     assert!(d.masks[0].adjust.exposure > 0.0);
     assert!(d.masks[0].visible, "hiding the overlay must not disable the mask");
-    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d), Overlay::None);
+    // the pointer is off the row and the pin: a mask with settings shows its effect, not the overlay
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d), Overlay::None, "a mask with settings never shows by itself");
     let mask = d.masks[0].clone();
 
     let r = h.request("ui.key", json!({"key": "o"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.app.ui.mask_overlay, "O can restore the overlay");
+    assert!(h.app.ui.mask_overlay, "O shows the overlay on request");
     assert_eq!(develop(&h).masks[0], mask, "toggling the overlay leaves the mask and its effect unchanged");
-    assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::Mask { .. }));
+    assert!(shown(&h));
+    // a slider at work hides even an overlay switched on with O; it comes back when let go
+    h.app.ui.dragging_control = Some("exposure".into());
+    assert_eq!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::None, "nothing shows while a slider is at work");
+    h.app.ui.dragging_control = None;
+    assert!(shown(&h));
 
     // Ctrl+Shift+O / Cmd+Shift+O shows every visible mask's region at once (the new command), ahead of the selected
-    // mask overlay so it is not shadowed by the always-on single-mask overlay.
+    // mask overlay so it is not shadowed by the single-mask overlay.
     exec(&mut h, "view.maskOverlayAll", json!({}));
     assert!(h.app.ui.mask_overlay_all, "the all-masks overlay command turns it on");
     assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::AllMasks { .. }));
@@ -177,49 +189,190 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     assert!(!h.app.ui.mask_overlay_all, "the all-masks overlay command toggles it off");
     assert!(!matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::AllMasks { .. }));
 
-    // Failed edits and global adjustments must not hide the mask overlay.
+    // O stays on through edits: failed ones, global adjustments and the mask's own values
     assert!(h.app.run("mask.adjust", json!({"id": 999, "values": {"exposure": 1.0}})).is_err());
     assert!(h.app.ui.mask_overlay);
     exec(&mut h, "develop.set", json!({"control": "light.exposure", "value": 0.5}));
     assert!(h.app.ui.mask_overlay);
-
-    // Numeric edits/resets and Amount use the same command path as the sliders.
     for values in [json!({"exposure": 0.0}), json!({"saturation": 20.0}), json!({"amount": 50.0})] {
-        exec(&mut h, "view.maskOverlay", json!({"show": true}));
         exec(&mut h, "mask.adjust", json!({"values": values}));
-        assert!(!h.app.ui.mask_overlay);
+        assert!(h.app.ui.mask_overlay && shown(&h), "{values}");
     }
     h.settle(SETTLE);
 }
 
-/// A slider hides the overlay (above); a new mask, an added part, a duplicate or picking a mask in
-/// the list shows it again, so the Overlay menu's mode is what the photo shows (issue #1800).
+/// One overlay rule replaces showing the overlay again on every new, picked, duplicated or extended
+/// mask (issue #1800): a mask without settings shows what it selects by itself; picking a mask that
+/// has settings, adding a part to it or duplicating it shows its effect, so it can be judged; the
+/// pointer on one of its component rows (or its pin), or O, shows its overlay on request.
 #[test]
-fn a_new_or_picked_mask_shows_the_overlay_hidden_by_a_slider() {
+fn a_mask_shows_its_overlay_by_itself_only_without_settings() {
     use lightcraft_pipeline::Overlay;
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
     let first = h.app.session.active_mask.unwrap();
-    let hide = |h: &mut Headless| {
-        exec(h, "mask.adjust", json!({"values": {"exposure": 0.5}}));
-        assert!(!h.app.ui.mask_overlay);
+    let off_rows = |h: &mut Headless| {
+        h.app.ui.mask_hover = None;
+        h.app.ui.mask_hover_prev = None;
     };
     let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
-    hide(&mut h);
+    assert!(shown(&h), "a new mask without settings shows its overlay");
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 0.5}}));
+    off_rows(&mut h);
+    assert!(!shown(&h), "with settings it shows its effect");
     exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}));
+    off_rows(&mut h);
     assert!(shown(&h), "a new mask shows its overlay");
-    hide(&mut h);
     let r = h.request("ui.clickWidget", json!({"id": format!("mask:{first}")}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.session.active_mask, Some(first));
-    assert!(shown(&h), "picking a mask in the list shows its overlay");
+    off_rows(&mut h);
+    assert!(!shown(&h), "picking a mask with settings shows its effect, not the overlay");
     for (cmd, params) in
         [("mask.addComponent", json!({"kind": "radial", "op": "add", "center": [0.6, 0.5], "rx": 0.1, "ry": 0.1})), ("mask.duplicate", json!({}))]
     {
-        hide(&mut h);
         exec(&mut h, cmd, params);
-        assert!(shown(&h), "{cmd} shows the overlay");
+        off_rows(&mut h);
+        assert!(!shown(&h), "{cmd} on a mask with settings shows its effect");
     }
+    // on request: the pointer on one of its component rows (or its pin), or O
+    h.app.ui.mask_hover = h.app.session.active().zip(h.app.session.active_mask);
+    assert!(shown(&h), "the pointer on a component row shows the overlay");
+    off_rows(&mut h);
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(shown(&h), "O shows it");
+    h.settle(SETTLE);
+}
+
+/// O hides a mask's automatic overlay until O shows it again: hiding another mask's doesn't bring
+/// the first one's back.
+#[test]
+fn each_mask_hidden_with_o_stays_hidden() {
+    use lightcraft_pipeline::Overlay;
+    let mut h = detail("panel.masking");
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    let a = h.app.session.active_mask.unwrap();
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(!shown(&h), "A hidden");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}));
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert!(shown(&h), "B, new, shows");
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(!shown(&h), "B hidden");
+    exec(&mut h, "mask.select", json!({"id": a}));
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert!(!shown(&h), "A is still hidden");
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(shown(&h), "O shows A again");
+    h.settle(SETTLE);
+}
+
+/// Which hover shows a mask's overlay (the user's test notes, 31 Oct): the mask's own row (name, eye, menu)
+/// shows none, so its eye can judge the effect with nothing over the photo; a component row under it shows the
+/// whole mask's overlay; the pin shows it; a mask without settings keeps its overlay, also over its own row; O still
+/// shows and hides it; dragging the pin hides it while it moves.
+#[test]
+fn the_mask_row_shows_no_overlay_and_a_component_row_does() {
+    use lightcraft_pipeline::Overlay;
+    let mut h = detail("panel.masking");
+    let steps = |h: &mut Headless| {
+        h.step();
+        h.step();
+    };
+    let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
+        let r = h.request(method, params.clone(), T);
+        assert_eq!(r["ok"], true, "{method} {params}: {r}");
+    };
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    let visible = |h: &Headless, id: u32| develop(h).masks.iter().find(|m| m.id == id).is_some_and(|m| m.visible);
+    let canvas = h.app.canvas_rect.expect("the loupe");
+    let away = json!({"x": canvas.left() + 6.0, "y": canvas.top() + 6.0});
+    // a mask without settings: its overlay stays, whatever is hovered
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5]}));
+    let mid = h.app.session.active_mask.expect("selected");
+    steps(&mut h);
+    ask(&mut h, "ui.hoverWidget", json!({"id": format!("mask:{mid}")}));
+    steps(&mut h);
+    assert!(shown(&h), "no settings yet: shown, also over its own row");
+    // with settings: its own row and its eye show nothing; the eye switches the effect
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+    ask(&mut h, "ui.hoverWidget", json!({"id": format!("mask:{mid}")}));
+    steps(&mut h);
+    assert!(!shown(&h), "the pointer on the mask's own row shows no overlay");
+    ask(&mut h, "ui.clickWidget", json!({"id": format!("maskVisible:{mid}")}));
+    steps(&mut h);
+    assert!(!visible(&h, mid), "the eye switched the effect off");
+    assert!(!shown(&h), "with nothing over the photo");
+    ask(&mut h, "ui.clickWidget", json!({"id": format!("maskVisible:{mid}")}));
+    steps(&mut h);
+    assert!(visible(&h, mid) && !shown(&h), "and on again, still with no overlay");
+    // a component row: the whole mask's overlay
+    exec(&mut h, "mask.addComponent", json!({"op": "subtract", "kind": "linear", "start": [0.5, 0.0], "end": [0.5, 0.3]}));
+    steps(&mut h);
+    for i in 0..2 {
+        ask(&mut h, "ui.hoverWidget", json!({"id": format!("component:{i}")}));
+        steps(&mut h);
+        assert!(shown(&h), "the pointer on component {i} shows the mask's overlay");
+        assert_eq!(h.app.ui.mask_hover.or(h.app.ui.mask_hover_prev).map(|(_, m)| m), Some(mid), "the whole mask");
+    }
+    ask(&mut h, "ui.move", away.clone());
+    steps(&mut h);
+    assert!(!shown(&h), "leaving the row hides it");
+    // the pin
+    let img = h.app.image_rect.expect("the photo on screen");
+    ask(&mut h, "ui.move", json!({"x": img.center().x, "y": img.center().y}));
+    steps(&mut h);
+    assert!(shown(&h), "the pointer on the pin shows the overlay");
+    // dragging the pin: hidden while it moves
+    pointer(&mut h, json!([{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.53, "y": 0.52}, {"kind": "drag", "x": 0.56, "y": 0.54}]));
+    steps(&mut h);
+    assert!(crate::panels::detail::mask_gesture(&h.app), "the pin is being dragged: {:?}", h.app.gesture);
+    assert!(!shown(&h), "no overlay while the pin is dragged");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.56, "y": 0.54}]));
+    steps(&mut h);
+    ask(&mut h, "ui.move", away);
+    steps(&mut h);
+    assert!(!shown(&h));
+    // O over its own row
+    ask(&mut h, "ui.hoverWidget", json!({"id": format!("mask:{mid}")}));
+    exec(&mut h, "view.maskOverlay", json!({"show": true}));
+    steps(&mut h);
+    assert!(shown(&h), "O shows it, even over its own row");
+    exec(&mut h, "view.maskOverlay", json!({"show": false}));
+    steps(&mut h);
+    assert!(!shown(&h), "and hides it");
+}
+
+/// The pointer on a mask's row, and O hiding a mask's automatic overlay, belong to that photo: on
+/// another photo a mask with the same id is another mask.
+#[test]
+fn a_mask_hovered_or_hidden_on_one_photo_says_nothing_about_another() {
+    use lightcraft_pipeline::Overlay;
+    let mut h = detail("panel.masking");
+    let first = h.app.session.active().unwrap();
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    let mask = h.app.session.active_mask.unwrap();
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    // O hides the fresh mask's overlay on this photo
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(!shown(&h));
+    assert_eq!(h.app.ui.mask_overlay_hidden, vec![(first, mask)]);
+    // another photo with a fresh mask of the same id still shows it
+    let other = h.app.session.visible_cloned().into_iter().find(|p| *p != first).unwrap();
+    exec(&mut h, "library.select", json!({"ids": [other.0]}));
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    assert_eq!(h.app.session.active(), Some(other));
+    assert_eq!(h.app.session.active_mask, Some(mask), "the same id on the other photo");
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert!(shown(&h), "hidden on the first photo only");
+    // a hover left over from the first photo doesn't count here
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 0.5}}));
+    h.app.ui.mask_hover_prev = Some((first, mask));
+    assert!(!shown(&h), "the first photo's hover is not this photo's");
     h.settle(SETTLE);
 }
 
@@ -361,6 +514,122 @@ fn mask_overlay_keys_and_pins() {
     pointer(&mut h, json!([{"kind": "down", "x": 0.5, "y": 0.6}, {"kind": "up", "x": 0.5, "y": 0.6}]));
     assert_eq!(h.app.session.active_mask, Some(2));
     h.settle(SETTLE);
+}
+
+/// Issue #3049: Show Pins draws a pin for an Object mask (at its first click) and a Describe
+/// mask (on what its segmentation found). Clicking one selects its mask; dragging it leaves the
+/// mask and the History alone, since neither can be moved.
+#[test]
+fn object_and_describe_masks_show_pins_that_select_but_do_not_move() {
+    use lightcraft_develop::SegMask;
+    use lightcraft_geom::Point;
+    let mut h = detail("panel.masking");
+    // a 16 × 16 segmentation found in columns 2..=5, rows 10..=13: centred on (0.25, 0.75)
+    let blob: Vec<f32> = (0..16 * 16).map(|i| if (2..=5).contains(&(i % 16)) && (10..=13).contains(&(i / 16)) { 8.0 } else { -8.0 }).collect();
+    let seg = SegMask::from_logits(16, &blob);
+    let object = MaskShape::Object { hint: vec![Point::new(0.6, 0.5)], exclude: vec![], seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
+    let prompt = MaskShape::Prompt { text: "the boat".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1}));
+    exec(&mut h, "mask.update", json!({"id": 1, "shape": object}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1}));
+    exec(&mut h, "mask.update", json!({"id": 2, "shape": prompt}));
+    assert_eq!(h.app.session.active_mask, Some(2));
+    // pins shown without the pointer over the photo
+    exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
+    h.settle(SETTLE);
+    let pin_at = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.center());
+    let (Some(object_pin), Some(prompt_pin)) = (pin_at(&h, "maskPin:1:0"), pin_at(&h, "maskPin:2:0")) else {
+        panic!("both masks have a pin: {:?}", h.app.widgets.iter().filter(|(w, _)| w.starts_with("maskPin:")).collect::<Vec<_>>())
+    };
+    // the Describe pin sits on what was found, right of and below the Object's
+    assert!(prompt_pin.x < object_pin.x && prompt_pin.y > object_pin.y, "{object_pin:?} {prompt_pin:?}");
+    // clicking a pin selects its mask
+    pointer(&mut h, json!([{"kind": "down", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    pointer(&mut h, json!([{"kind": "down", "x": 0.25, "y": 0.75}, {"kind": "up", "x": 0.25, "y": 0.75}]));
+    assert_eq!(h.app.session.active_mask, Some(2));
+    // dragging one changes nothing and adds no History step
+    let id = h.app.session.active().expect("active photo");
+    let before = h.app.session.catalog.photo(id).expect("photo").clone();
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.6, "y": 0.5}, {"kind": "drag", "x": 0.65, "y": 0.55}, {"kind": "drag", "x": 0.8, "y": 0.7}, {"kind": "up", "x": 0.8, "y": 0.7}]),
+    );
+    assert_eq!(h.app.session.active_mask, Some(1), "the press still selects the mask");
+    let after = h.app.session.catalog.photo(id).expect("photo").clone();
+    assert_eq!((after.develop.clone(), after.history.len()), (before.develop.clone(), before.history.len()));
+    h.settle(SETTLE);
+}
+
+/// Issue #3049: with the Object tool on, a click on another mask's pin selects that mask instead
+/// of adding an Object click to the selected one. The tool stays on for an Object mask (its
+/// clicks refine it) and goes off for a mask with no Object selection to refine.
+#[test]
+fn the_object_tool_selects_the_mask_whose_pin_is_clicked() {
+    use lightcraft_geom::Point;
+    let mut h = detail("panel.masking");
+    // no SAM 3 model here: a stray Object click would offer the download or show an error
+    let dir = std::env::temp_dir().join(format!("lc-ui-pin-object-{}", std::process::id()));
+    h.app.session.segmenter.dir = Some(dir.clone());
+    h.app.session.segmenter.mirrors_file = Some(dir.join("none.txt"));
+    let object = |at: Point| MaskShape::Object { hint: vec![at], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+    let radial = json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1});
+    exec(&mut h, "mask.add", radial.clone());
+    exec(&mut h, "mask.update", json!({"id": 1, "shape": object(Point::new(0.6, 0.5))}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.2, 0.8], "rx": 0.05, "ry": 0.05}));
+    exec(&mut h, "mask.add", radial);
+    exec(&mut h, "mask.update", json!({"id": 3, "shape": object(Point::new(0.3, 0.3))}));
+    assert_eq!(h.app.session.active_mask, Some(3));
+    exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
+    h.app.ui.tool = "object".into();
+    h.settle(SETTLE);
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone());
+    let before = develop(&h).masks;
+    // the Object mask's pin: it is selected, its clicks and the selected mask's stay as they were
+    pointer(&mut h, json!([{"kind": "down", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}]));
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active_mask, Some(1), "the pinned mask is selected");
+    assert_eq!(develop(&h).masks, before, "no Object click was added to any mask");
+    assert_eq!(h.app.ui.dialog, None, "no Object click was tried");
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.clone()).filter(|t| Some(t) != toast.as_ref()), None, "no error");
+    assert_eq!(h.app.ui.tool, "object", "the tool stays on to refine the Object mask");
+    // the Radial mask's pin: selected, and the Object tool goes off (nothing for it to refine)
+    pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.8}, {"kind": "up", "x": 0.2, "y": 0.8}]));
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active_mask, Some(2));
+    assert_eq!(develop(&h).masks, before);
+    assert_eq!(h.app.ui.tool, "", "the Object tool is off");
+    assert_eq!(h.app.ui.dialog, None);
+}
+
+/// Issue #3049: with the Object tool on, a click on the selected Object mask's own pin adds no
+/// near-copy of its first click (which would use up one of its limited Object clicks): its
+/// clicks stay as they were, it stays selected and no error is shown.
+#[test]
+fn the_object_tool_adds_no_click_on_the_selected_masks_own_pin() {
+    use lightcraft_geom::Point;
+    let mut h = detail("panel.masking");
+    // no SAM 3 model here: a stray Object click would offer the download or show an error
+    let dir = std::env::temp_dir().join(format!("lc-ui-own-pin-object-{}", std::process::id()));
+    h.app.session.segmenter.dir = Some(dir.clone());
+    h.app.session.segmenter.mirrors_file = Some(dir.join("none.txt"));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1}));
+    let object = MaskShape::Object { hint: vec![Point::new(0.6, 0.5)], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+    exec(&mut h, "mask.update", json!({"id": 1, "shape": object}));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
+    h.app.ui.tool = "object".into();
+    h.settle(SETTLE);
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone());
+    let before = develop(&h).masks;
+    // a little off the pin's centre, as a hand clicks it
+    pointer(&mut h, json!([{"kind": "down", "x": 0.601, "y": 0.501}, {"kind": "up", "x": 0.601, "y": 0.501}]));
+    h.settle(SETTLE);
+    assert_eq!(develop(&h).masks, before, "no Object click was added");
+    assert_eq!(h.app.session.active_mask, Some(1), "the mask stays selected");
+    assert_eq!(h.app.ui.dialog, None, "no Object click was tried");
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.clone()).filter(|t| Some(t) != toast.as_ref()), None, "no error");
+    assert_eq!(h.app.ui.tool, "object", "the tool stays on");
 }
 
 /// #2210: Ctrl+Shift+O (the all-masks overlay) draws the white outline of every visible
@@ -1698,6 +1967,28 @@ fn assert_close(a: &serde_json::Value, b: &serde_json::Value) {
     assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.05), "{a:?} vs {b:?}");
 }
 
+#[test]
+fn adding_radial_component_disarms_color_range_picker() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "colorRange"}));
+    h.app.ui.tool.clear();
+    click(&mut h, "button:colorPick0");
+    brush_at(&mut h, 0.25, 0.5);
+    assert_eq!(color_samples(&h).as_array().map(Vec::len), Some(1));
+
+    exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": "intersect", "center": [0.5, 0.5], "rx": 0.22, "ry": 0.22}));
+    assert!(h.app.ui.tool.is_empty(), "adding a radial component disarms colour picking");
+
+    let widget = "maskHandle:1:1:1";
+    let rect = h.app.widgets.iter().find(|(id, _)| *id == widget).unwrap().1;
+    let image = h.app.image_rect.unwrap();
+    let q = rect.center();
+    let (x, y) = ((q.x - image.left()) / image.width(), (q.y - image.top()) / image.height());
+    pointer(&mut h, json!([{"kind": "down", "x": x, "y": y}, {"kind": "drag", "x": x + 0.05, "y": y}, {"kind": "up", "x": x + 0.05, "y": y}]));
+    let MaskShape::Radial { rx, .. } = develop(&h).masks[0].components[1].shape else { panic!("radial") };
+    assert!(rx > 0.22, "dragging a radial handle resizes the component: {rx}");
+}
+
 /// Regression: the Colour Range "Pick" button armed the eyedropper, but with the Masking panel
 /// open the loupe's clicks went to the mask overlay, so no sample was ever taken.
 #[test]
@@ -1883,6 +2174,114 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
     }
 }
 
+/// What the photo shows along the centreline of [`hold_fast_stroke`]'s stroke at height `y`, away
+/// from the cursor ring at its end.
+fn stroke_centreline(h: &Headless, y: f32) -> Vec<[f32; 3]> {
+    let im = h.paint();
+    let img = h.app.image_rect.expect("the photo is on screen");
+    let ppp = h.pixels_per_point;
+    (1..=74)
+        .map(|i| {
+            let x = 0.17 + (0.85 - 0.17) * i as f32 / 80.0;
+            let (sx, sy) = (((img.left() + x * img.width()) * ppp) as usize, ((img.top() + y * img.height()) * ppp) as usize);
+            let c = im.pixels[sy * im.size[0] + sx];
+            [c.r() as f32, c.g() as f32, c.b() as f32]
+        })
+        .collect()
+}
+
+/// The fast stroke of the #517 test at height `y`, with the button still held: its centreline
+/// before painting and while painting.
+fn hold_fast_stroke(h: &mut Headless, y: f32) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+    pointer(h, json!([{"kind": "move", "x": 0.02, "y": 0.02}]));
+    h.settle(SETTLE);
+    let photo = stroke_centreline(h, y);
+    pointer(
+        h,
+        json!([{"kind": "down", "x": 0.15, "y": y}, {"kind": "drag", "x": 0.17, "y": y}, {"kind": "drag", "x": 0.5, "y": y}, {"kind": "drag", "x": 0.85, "y": y}]),
+    );
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { .. })), "still painting");
+    (photo, stroke_centreline(h, y))
+}
+
+/// The centreline points (photo, held) where the stroke being painted changes the photo.
+fn tinted(photo: &[[f32; 3]], held: &[[f32; 3]]) -> Vec<([f32; 3], [f32; 3])> {
+    photo.iter().zip(held).filter(|(p, l)| (0..3).any(|k| (p[k] - l[k]).abs() > 6.0)).map(|(p, l)| (*p, *l)).collect()
+}
+
+/// Issue #2549: with the mask overlay hidden (a mask slider hid it, or O) or a colour overlay at
+/// opacity 0, the stroke being painted doesn't tint the photo either, so dodging and burning is
+/// judged on the photo; the effect shows once the stroke is committed. The all-masks overlay still
+/// shows it, as it will the committed stroke.
+#[test]
+fn a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let r = h.request("ui.set", json!({"brushSize": 0.03, "brushFeather": 50.0, "brushFlow": 100.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // dodging: brighten the new, still empty mask first (which hides the overlay), then paint
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+    assert!(!h.app.ui.mask_overlay, "a mask slider hides the overlay");
+    let (photo, held) = hold_fast_stroke(&mut h, 0.3);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "the hidden overlay tints the stroke being painted: {} of 74 points, first {:?}", t.len(), t.first());
+    assert!(h.app.brush_live.is_none(), "nothing is drawn over the photo while painting");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.3}]));
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert!(strokes[0].points.len() >= 3, "{strokes:?}");
+    assert!(!h.app.ui.mask_overlay, "painting leaves the overlay hidden");
+    // committed: the stroke brightens the photo
+    h.settle(SETTLE);
+    let luma = |c: &[[f32; 3]]| c.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / c.len() as f32;
+    let done = stroke_centreline(&h, 0.3);
+    assert!(luma(&done) > luma(&photo) + 30.0, "committed {} vs before {}", luma(&done), luma(&photo));
+
+    // O shows the overlay again, but a colour overlay at opacity 0 shows nothing of the committed
+    // strokes, nor of the one being painted
+    let r = h.request("ui.key", json!({"key": "o"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.ui.mask_overlay, "O shows the overlay");
+    exec(&mut h, "view.maskOverlayColor", json!({"opacity": 0}));
+    let (photo, held) = hold_fast_stroke(&mut h, 0.45);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "an overlay at opacity 0 tints the stroke being painted: {} of 74 points, first {:?}", t.len(), t.first());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.45}]));
+
+    // O hides it again, at its usual opacity
+    exec(&mut h, "view.maskOverlayColor", json!({"opacity": 50}));
+    let r = h.request("ui.key", json!({"key": "o"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!h.app.ui.mask_overlay, "O hides the overlay");
+    let (photo, held) = hold_fast_stroke(&mut h, 0.6);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "the overlay hidden with O tints the stroke being painted: {} of 74 points, first {:?}", t.len(), t.first());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.6}]));
+
+    // the all-masks overlay shows every mask's region, so the stroke being painted is tinted as it
+    // will be once committed
+    exec(&mut h, "view.maskOverlayAll", json!({}));
+    assert!(h.app.ui.mask_overlay_all && !h.app.ui.mask_overlay);
+    let (photo, held) = hold_fast_stroke(&mut h, 0.75);
+    let [r0, g0, b0] = h.app.ui.mask_overlay_color.map(|v| v as f32);
+    let op = h.app.ui.mask_overlay_opacity / 100.0;
+    for (p, got) in photo.iter().zip(&held) {
+        let want = [p[0] + (r0 - p[0]) * op, p[1] + (g0 - p[1]) * op, p[2] + (b0 - p[2]) * op];
+        assert!((0..3).all(|k| (got[k] - want[k]).abs() <= 12.0), "the all-masks overlay tints the stroke: {got:?} vs {want:?}");
+    }
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.75}]));
+    assert_eq!(develop(&h).masks.len(), 1, "every stroke went into the one mask");
+
+    // a hidden mask isn't in the all-masks overlay: nor is the stroke being painted into it
+    let id = develop(&h).masks[0].id;
+    exec(&mut h, "mask.visible", json!({"id": id, "visible": false}));
+    let (photo, held) = hold_fast_stroke(&mut h, 0.9);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "the all-masks overlay tints a stroke into a hidden mask: {} of 74 points, first {:?}", t.len(), t.first());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.9}]));
+}
+
 #[test]
 fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let mut h = detail("panel.masking");
@@ -1908,4 +2307,472 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let a = develop(&h).masks.last().expect("a mask").adjust;
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
+}
+
+/// A mask O hid stays hidden after O shows another mask: selecting it again doesn't bring it back.
+#[test]
+fn a_mask_hidden_with_o_stays_hidden_after_o_shows_another() {
+    use lightcraft_pipeline::Overlay;
+    let mut h = detail("panel.masking");
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    let a = h.app.session.active_mask.unwrap();
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(!shown(&h), "A hidden");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}));
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 0.5}}));
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert!(!shown(&h), "B has settings: its effect shows");
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(shown(&h), "O shows B's overlay");
+    exec(&mut h, "mask.select", json!({"id": a}));
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert!(!shown(&h), "A is still hidden");
+    h.settle(SETTLE);
+}
+
+/// The all-masks overlay waits while an AI selection is computed: its stand-in would look like the
+/// result.
+#[test]
+fn the_all_masks_overlay_waits_for_an_ai_selection() {
+    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let component = |shape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+    let linear = component(MaskShape::Linear { start: Point::new(0.5, 0.2), end: Point::new(0.5, 0.7) });
+    let mut d = lightcraft_develop::DevelopSettings::default();
+    d.masks.push(Mask { id: 1, components: vec![linear], visible: true, ..Default::default() });
+    assert!(crate::panels::detail::all_masks_showable(&d, true));
+    let object = component(MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: Vec::new(), seg: None, detail: Vec::new(), edge: 0.0 });
+    d.masks.push(Mask { id: 2, components: vec![object], visible: true, ..Default::default() });
+    assert!(!crate::panels::detail::all_masks_showable(&d, true), "an Object selection is being computed");
+    assert!(crate::panels::detail::all_masks_showable(&d, false), "nothing is computing");
+}
+
+/// A deleted mask's id goes to the next new mask: O having hid the deleted one's overlay says nothing about the
+/// new one (CodeRabbit on #2920).
+#[test]
+fn a_new_mask_with_a_deleted_masks_id_shows_its_overlay() {
+    use lightcraft_pipeline::Overlay;
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    let mask = h.app.session.active_mask.unwrap();
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(!shown(&h));
+    crate::panels::masking::delete_mask(&mut h.app, None);
+    assert!(h.app.ui.mask_overlay_hidden.is_empty(), "forgotten with the mask");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}));
+    assert_eq!(h.app.session.active_mask, Some(mask), "the same id again");
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert!(shown(&h), "the new mask shows");
+    h.settle(SETTLE);
+}
+
+/// Undo taking a new mask away frees its id the same way: O having hid its overlay says nothing about the next
+/// new mask (CodeRabbit on #2920).
+#[test]
+fn a_new_mask_after_undoing_a_hidden_one_shows_its_overlay() {
+    use lightcraft_pipeline::Overlay;
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    let mask = h.app.session.active_mask.unwrap();
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(!shown(&h));
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(develop(&h).masks.iter().all(|m| m.id != mask), "the mask is undone");
+    assert!(h.app.ui.mask_overlay_hidden.is_empty(), "forgotten with the mask");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}));
+    assert_eq!(h.app.session.active_mask, Some(mask), "the same id again");
+    h.app.ui.mask_hover = None;
+    h.app.ui.mask_hover_prev = None;
+    assert!(shown(&h), "the new mask shows");
+    h.settle(SETTLE);
+}
+
+/// Painting on a mask that has settings shows its effect as it is painted (the stroke goes to the
+/// photo live, one undo step), never the red stroke; a mask without settings, or O, still shows the
+/// red stroke while painting (found in an evening of real editing).
+#[test]
+fn painting_a_mask_with_settings_shows_its_effect_not_red() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    h.app.ui.brush_auto_mask = false;
+    let strokes = |h: &Headless, mid: u32| -> Vec<usize> {
+        develop(h)
+            .masks
+            .iter()
+            .find(|m| m.id == mid)
+            .map(|m| {
+                m.components.iter().filter_map(|c| if let MaskShape::Brush { strokes } = &c.shape { Some(strokes.len()) } else { None }).collect()
+            })
+            .unwrap_or_default()
+    };
+    // no settings: the red stroke while painting
+    pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.5}, {"kind": "drag", "x": 0.25, "y": 0.5}, {"kind": "drag", "x": 0.3, "y": 0.5}]));
+    assert!(h.app.brush_live.is_some(), "a mask without settings shows the red stroke");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.5}]));
+    let mid = h.app.session.active_mask.expect("the brush mask");
+    assert_eq!(strokes(&h, mid), vec![1]);
+    // with settings: no red; the stroke is on the photo while painted, one undo step
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+    assert_eq!(h.app.ui.tool, "brush", "the brush stays armed on its mask");
+    pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.7}, {"kind": "drag", "x": 0.25, "y": 0.7}, {"kind": "drag", "x": 0.3, "y": 0.7}]));
+    assert!(h.app.brush_live.is_none(), "no red stroke on a mask with settings");
+    assert_eq!(strokes(&h, mid), vec![2], "the stroke shows its effect on the photo while painted");
+    assert!(h.app.session.interaction.is_some(), "one undo step stays open while painting");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.7}]));
+    h.step();
+    assert_eq!(strokes(&h, mid), vec![2]);
+    assert!(h.app.session.interaction.is_none());
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(strokes(&h, mid), vec![1], "one undo removes the whole stroke");
+    // O shows the overlay on purpose: the red stroke again
+    exec(&mut h, "view.maskOverlay", json!({"show": true}));
+    pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.3}, {"kind": "drag", "x": 0.25, "y": 0.3}, {"kind": "drag", "x": 0.3, "y": 0.3}]));
+    assert!(h.app.brush_live.is_some(), "O: the overlay colour while painting");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.3}]));
+    h.settle(SETTLE);
+}
+
+/// A live stroke the photo refused (here: more pressure values than points) is not live: the release
+/// adds it as a new stroke instead of replacing the mask's previous one (CodeRabbit on #2920).
+#[test]
+fn a_refused_live_stroke_does_not_replace_the_previous_stroke() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    h.app.ui.brush_auto_mask = false;
+    brush_at(&mut h, 0.2, 0.5);
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+    let before = develop(&h).masks.last().map(|m| m.components.clone());
+    let p = |x: f64| lightcraft_geom::Point::new(x, 0.7);
+    h.app.gesture = Some(crate::panels::detail::Gesture::Brush { points: vec![p(0.2), p(0.3)], pressure: vec![1.0; 3], live: None });
+    h.step();
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { live: None, .. })), "a refused stroke must not count as live");
+    assert!(h.app.session.interaction.is_none(), "the refused stroke's undo step is closed");
+    assert_eq!(develop(&h).masks.last().map(|m| m.components.clone()), before, "the previous stroke is untouched");
+    h.app.gesture = None;
+    h.settle(SETTLE);
+}
+
+/// Another tool chosen while a live Brush stroke is open (a gradient's key mid-stroke) ends the stroke first: the
+/// new mask is a step of its own, not folded into the "Brush" step (CodeRabbit on #2920).
+#[test]
+fn a_gradient_chosen_mid_stroke_is_its_own_undo_step() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    h.app.ui.brush_auto_mask = false;
+    brush_at(&mut h, 0.2, 0.5);
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+    pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.7}, {"kind": "drag", "x": 0.25, "y": 0.7}, {"kind": "drag", "x": 0.3, "y": 0.7}]));
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { live: Some(_), .. })), "a live stroke");
+    let masks = develop(&h).masks.len();
+    exec(&mut h, "tool.linear", json!({}));
+    assert!(h.app.gesture.is_none(), "the stroke ended");
+    assert!(h.app.session.interaction.is_none(), "its undo step closed");
+    assert_eq!(develop(&h).masks.len(), masks + 1);
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).masks.len(), masks, "one undo takes the gradient alone");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.7}]));
+    h.settle(SETTLE);
+}
+
+/// A stroke that never went live (its mask has no settings) still ends when another tool is chosen
+/// mid-stroke: back on the brush, the next stroke starts afresh instead of carrying on from it
+/// (CodeRabbit on #2920).
+#[test]
+fn a_tool_chosen_mid_stroke_drops_a_stroke_that_was_not_live() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    h.app.ui.brush_auto_mask = false;
+    pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.5}, {"kind": "drag", "x": 0.25, "y": 0.5}, {"kind": "drag", "x": 0.3, "y": 0.5}]));
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { live: None, .. })), "a stroke, not live");
+    exec(&mut h, "tool.linear", json!({}));
+    assert!(h.app.gesture.is_none(), "the stroke is dropped");
+    assert!(h.app.brush_live.is_none());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.5}]));
+    exec(&mut h, "tool.brush", json!({}));
+    pointer(&mut h, json!([{"kind": "down", "x": 0.6, "y": 0.4}, {"kind": "drag", "x": 0.65, "y": 0.4}]));
+    let first = match &h.app.gesture {
+        Some(crate::panels::detail::Gesture::Brush { points, .. }) => points.first().map(|p| p.x),
+        _ => None,
+    };
+    assert!(first.is_some_and(|x| x > 0.5), "the next stroke starts where it was painted: {first:?}");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.65, "y": 0.4}]));
+    h.settle(SETTLE);
+}
+
+/// The overlay falls back to the last frame's hovered mask while this frame's panels set the new one, so a frame in
+/// which the hovered row or pin changed (or the pointer left them) asks for one more: the overlay follows the
+/// pointer at once, not at the next input (CodeRabbit on #2920).
+#[test]
+fn a_frame_whose_hovered_mask_changed_asks_for_another() {
+    let mut h = detail("panel.masking");
+    let row = Some((lightcraft_catalog::PhotoId(1), 1));
+    let asks = |h: &mut Headless, now, before| {
+        h.app.ui.mask_hover = now;
+        h.app.ui.mask_hover_prev = before;
+        // (a settled context: its own first frames asked for, so only this frame's request counts)
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+        }
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = asked.clone();
+        ctx.set_request_repaint_callback(move |_| seen.store(true, std::sync::atomic::Ordering::Relaxed));
+        h.app.repaint_on_mask_hover_change(&ctx);
+        asked.load(std::sync::atomic::Ordering::Relaxed)
+    };
+    assert!(asks(&mut h, row, None), "onto a row");
+    assert!(asks(&mut h, None, row), "off it");
+    assert!(asks(&mut h, Some((lightcraft_catalog::PhotoId(1), 2)), row), "onto another");
+    assert!(!asks(&mut h, row, row), "resting on the same row");
+    assert!(!asks(&mut h, None, None), "nowhere near");
+}
+
+/// Picking another mask or another photo (also with the arrow keys), Undo, or a Brush request that makes a new mask
+/// while a live Brush stroke is held ends the stroke first: its next live update or its release can't replace the
+/// picked mask's strokes, the stroke before the undone one, or start a mask on the new photo, and the pointer
+/// still held paints nothing more until it is let go (CodeRabbit on #2920).
+#[test]
+fn picking_another_mask_or_photo_mid_stroke_ends_the_stroke() {
+    let stroke_count = |h: &Headless, id: u32| -> usize {
+        develop(h)
+            .masks
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.components.iter().map(|c| if let MaskShape::Brush { strokes } = &c.shape { strokes.len() } else { 0 }).sum())
+            .unwrap_or(0)
+    };
+    for pick in ["mask", "photo", "next", "undo", "new"] {
+        let mut h = detail("panel.masking");
+        h.settle(SETTLE);
+        exec(&mut h, "tool.brush", json!({"new": true}));
+        h.app.ui.brush_auto_mask = false;
+        brush_at(&mut h, 0.2, 0.5);
+        exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+        let first = h.app.session.active_mask.expect("the first mask");
+        exec(&mut h, "tool.brush", json!({"new": true}));
+        brush_at(&mut h, 0.6, 0.5);
+        exec(&mut h, "mask.adjust", json!({"values": {"exposure": -1.0}}));
+        let second = h.app.session.active_mask.expect("the second mask");
+        assert_ne!(first, second);
+        let second_before = develop(&h).masks.iter().find(|m| m.id == second).cloned();
+        // a live stroke on the second mask (it has settings: its effect shows while painting)
+        pointer(&mut h, json!([{"kind": "down", "x": 0.6, "y": 0.7}, {"kind": "drag", "x": 0.65, "y": 0.7}, {"kind": "drag", "x": 0.7, "y": 0.7}]));
+        h.step();
+        assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { live: Some(_), .. })), "{pick}: a live stroke");
+        let photo = h.app.session.active().expect("a photo");
+        let (first_strokes, masks) = (stroke_count(&h, first), develop(&h).masks.len());
+        match pick {
+            "mask" => {
+                exec(&mut h, "mask.select", json!({"id": first}));
+            }
+            "photo" => {
+                let other = h.app.session.visible_cloned().into_iter().find(|p| *p != photo).expect("another photo");
+                exec(&mut h, "library.select", json!({"ids": [other.0]}));
+            }
+            "next" => {
+                exec(&mut h, "library.next", json!({}));
+                assert_ne!(h.app.session.active(), Some(photo), "stepped to the next photo");
+            }
+            "undo" => {
+                exec(&mut h, "edit.undo", json!({}));
+            }
+            _ => {
+                exec(&mut h, "tool.brush", json!({"new": true}));
+            }
+        }
+        let (third, second_now) = (h.app.session.active_mask, stroke_count(&h, second));
+        assert!(h.app.gesture.is_none(), "{pick}: the stroke ended");
+        assert!(h.app.session.interaction.is_none(), "{pick}: its undo step closed");
+        // the pointer carries on and lets go: nothing lands on what was picked
+        pointer(&mut h, json!([{"kind": "drag", "x": 0.75, "y": 0.7}, {"kind": "drag", "x": 0.8, "y": 0.7}, {"kind": "up", "x": 0.8, "y": 0.7}]));
+        h.step();
+        h.step();
+        match pick {
+            "mask" => {
+                assert_eq!(stroke_count(&h, first), first_strokes, "the picked mask's strokes are untouched");
+                assert_eq!(develop(&h).masks.len(), masks, "no new mask");
+            }
+            "undo" => {
+                let second_after = develop(&h).masks.iter().find(|m| m.id == second).cloned();
+                assert_eq!(second_after, second_before, "the stroke before the undone one is kept as it was");
+            }
+            "new" => {
+                assert_ne!(third, Some(second), "a new mask");
+                assert_eq!(stroke_count(&h, second), second_now, "what was painted stays on its mask, nothing more");
+                assert_eq!(third.map_or(0, |m| stroke_count(&h, m)), 0, "nothing of the old stroke lands on the new mask");
+            }
+            _ => assert!(develop(&h).masks.is_empty(), "{pick}: no mask started on the new photo: {:?}", develop(&h).masks.len()),
+        }
+        // and the next press paints again (the brush armed again: picking a mask or photo puts it down)
+        exec(&mut h, "tool.brush", json!({}));
+        h.step();
+        pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "drag", "x": 0.35, "y": 0.3}, {"kind": "up", "x": 0.35, "y": 0.3}]));
+        h.step();
+        assert!(!develop(&h).masks.is_empty(), "{pick}: a new press paints");
+        h.settle(SETTLE);
+    }
+}
+
+/// Lens Blur Brush Refinement: Focus / Blur pick a brush that paints on the photo from the Edit
+/// panel (one `lensBlur.brushStroke` per drag, with the brush's settings); ⌥ erases; Reset clears.
+#[test]
+fn lens_blur_focus_and_blur_brushes_paint_on_the_photo() {
+    // (`panel.edit` toggles the panel, which a session opens on: set it instead)
+    let mut h = detail("panel.masking");
+    // tall enough for the Lens Blur section under the closed sections
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 1400}), T)["ok"], true);
+    let r = h.request("ui.set", json!({"right": "edit", "openSections": ["lensBlur"], "histogram": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // off: the brushes don't paint
+    click(&mut h, "button:lensBlurFocus");
+    assert_eq!(h.app.ui.tool, "", "no brush while the blur is off");
+    click(&mut h, "check:lensBlur.enabled");
+    assert!(develop(&h).lens_blur.enabled);
+    click(&mut h, "button:lensBlurFocus");
+    assert_eq!(h.app.ui.tool, "lensBlurFocus");
+    h.app.ui.lens_blur_brush_amount = 60.0;
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.3, "y": 0.5}, {"kind": "drag", "x": 0.4, "y": 0.5}, {"kind": "drag", "x": 0.5, "y": 0.5}, {"kind": "up", "x": 0.5, "y": 0.5}]),
+    );
+    let b = develop(&h).lens_blur;
+    assert_eq!(b.focus_strokes.len(), 1, "{b:?}");
+    assert!(b.focus_strokes[0].points.len() >= 2 && b.focus_strokes[0].density == 60.0 && b.blur_strokes.is_empty());
+    assert!((b.focus_strokes[0].size - h.app.ui.brush_size as f64).abs() < 1e-6, "the shared brush's size");
+    click(&mut h, "button:lensBlurBlur");
+    assert_eq!(h.app.ui.tool, "lensBlurBlur");
+    brush_at(&mut h, 0.6, 0.4);
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.7, "y": 0.4}, {"kind": "up", "x": 0.7, "y": 0.4}], "alt": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let b = develop(&h).lens_blur;
+    assert_eq!(b.blur_strokes.len(), 2);
+    assert!(!b.blur_strokes[0].erase && b.blur_strokes[1].erase, "⌥ erases");
+    click(&mut h, "button:lensBlurBrushReset");
+    let b = develop(&h).lens_blur;
+    assert!(b.focus_strokes.is_empty() && b.blur_strokes.is_empty());
+    // switching the blur off puts the brush down
+    click(&mut h, "check:lensBlur.enabled");
+    assert_eq!(h.app.ui.tool, "");
+    h.settle(SETTLE);
+}
+
+/// Lens Blur focus shape: without a focus mask a button per shape sets it; with one they're gone.
+#[test]
+fn lens_blur_shape_buttons_pick_the_focus_shape() {
+    use lightcraft_develop::FocusShape;
+    let mut h = detail("panel.masking");
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 1400}), T)["ok"], true);
+    let r = h.request("ui.set", json!({"right": "edit", "openSections": ["lensBlur"], "histogram": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    click(&mut h, "check:lensBlur.enabled");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Auto);
+    click(&mut h, "lensBlurShape:wide");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Wide);
+    click(&mut h, "lensBlurShape:tall");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Tall);
+    click(&mut h, "lensBlurShape:auto");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Auto);
+    // a focus mask: the shape is the mask's, no buttons
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    let id = develop(&h).masks[0].id;
+    exec(&mut h, "develop.merge", json!({"settings": {"lens_blur": {"focus_mask": id}}}));
+    let r = h.request("ui.set", json!({"right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.clickWidget", json!({"id": "lensBlurShape:round"}), T);
+    assert_eq!(r["ok"], false, "no shape buttons with a focus mask: {r}");
+    h.settle(SETTLE);
+}
+
+/// While Apply is off the focus controls don't respond; on, Move & Resize drags the fixed shape on
+/// the photo (one undo step per drag) and a shape button puts it back in the middle.
+#[test]
+fn lens_blur_focus_controls_follow_apply_and_the_shape_moves() {
+    use lightcraft_develop::FocusShape;
+    let mut h = detail("panel.masking");
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 1400}), T)["ok"], true);
+    let r = h.request("ui.set", json!({"right": "edit", "openSections": ["lensBlur"], "histogram": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // off: shape buttons, Find Subject and In Focus are inert
+    let before = develop(&h).lens_blur;
+    click(&mut h, "lensBlurShape:wide");
+    click(&mut h, "button:lensBlurFindSubject");
+    click(&mut h, "dropdown:lensBlurFocus");
+    let r = h.request("ui.clickWidget", json!({"id": "lensBlurFocus:subject"}), T);
+    assert_eq!(r["ok"], false, "the In Focus menu doesn't open: {r}");
+    assert_eq!(develop(&h).lens_blur, before, "nothing changes while Apply is off");
+    // on: a round shape, then Move & Resize
+    click(&mut h, "check:lensBlur.enabled");
+    click(&mut h, "lensBlurShape:round");
+    assert_eq!(develop(&h).lens_blur.shape, FocusShape::Round);
+    click(&mut h, "button:lensBlurEditShape");
+    assert_eq!(h.app.ui.tool, "lensBlurShape");
+    // drag the middle of the photo (the shape's centre) to the right
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.55, "y": 0.5}, {"kind": "drag", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}]),
+    );
+    let a = develop(&h).lens_blur.area.expect("moved");
+    assert!(a.center.x > 0.57 && (a.center.y - 0.5).abs() < 0.02, "{a:?}");
+    assert!((a.rx - 0.22).abs() < 1e-9 && (a.ry - 0.22).abs() < 1e-9, "same size");
+    // one drag, one undo step
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(develop(&h).lens_blur.area.is_none(), "{:?}", develop(&h).lens_blur.area);
+    exec(&mut h, "edit.redo", json!({}));
+    assert!(develop(&h).lens_blur.area.is_some());
+    // the preset button puts it back in the middle
+    click(&mut h, "lensBlurShape:round");
+    assert!(develop(&h).lens_blur.area.is_none());
+    // switching the blur off puts the tool down
+    click(&mut h, "check:lensBlur.enabled");
+    assert_eq!(h.app.ui.tool, "");
+    h.settle(SETTLE);
+}
+
+/// A mask's Lens Blur is a block of its own under the mask's sliders: which side it blurs, its
+/// sliders, an eye that switches it off (its controls then inert) and a header that folds it.
+#[test]
+fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
+    let mut h = detail("panel.masking");
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 3200}), T)["ok"], true);
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    h.settle(SETTLE);
+    let adjust = |h: &Headless| develop(h).masks[0].adjust;
+    // the block's own sliders, not one more in the list
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "section:maskLensBlur"));
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "slider:lens_blur_transition"));
+    // blurring the outside starts with a visible amount
+    click(&mut h, "button:maskLensBlurSide-outside");
+    let a = adjust(&h);
+    assert!(a.lens_blur_outside && a.lens_blur == 50.0, "{a:?}");
+    let r = h.request("ui.clickWidget", json!({"id": "slider:lens_blur_boost", "fx": 0.6}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(adjust(&h).lens_blur_boost > 30.0, "{:?}", adjust(&h));
+    // the eye (shown over the header) switches it off and keeps the values
+    h.request("ui.hoverWidget", json!({"id": "section:maskLensBlur"}), T);
+    h.settle(SETTLE);
+    click(&mut h, "sectionEye:maskLensBlur");
+    let off = adjust(&h);
+    assert!(off.lens_blur_off && off.lens_blur == 50.0 && off.lens_blur_outside, "{off:?}");
+    // off: its controls don't respond
+    click(&mut h, "button:maskLensBlurSide-inside");
+    assert_eq!(adjust(&h), off);
+    // on again
+    click(&mut h, "sectionEye:maskLensBlur");
+    assert!(!adjust(&h).lens_blur_off);
+    // the header folds it
+    click(&mut h, "section:maskLensBlur");
+    assert!(h.app.ui.section_folded("maskLensBlur"));
+    click(&mut h, "section:maskLensBlur");
+    assert!(!h.app.ui.section_folded("maskLensBlur"));
+    h.settle(SETTLE);
 }

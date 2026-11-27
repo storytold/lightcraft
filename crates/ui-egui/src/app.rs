@@ -1,7 +1,13 @@
 use super::clock::{AppClock, monotonic_ms};
 use super::services::Services;
 use super::state::{GestureFrame, InjectedDrop, InjectedPress};
-use super::*;
+use super::{
+    AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
+    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
+    SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
+    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
+    merge, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+};
 
 mod control;
 mod frame;
@@ -50,6 +56,7 @@ impl LightcraftApp {
             max_texture_side: MAX_TEXTURE_SIDE,
             clock: AppClock::new(),
             accesskit_language: None,
+            selection_seen: (0, 0),
             slideshow_hidden_at: None,
             slideshow_auto_paused: false,
             dropped_files: vec![],
@@ -58,13 +65,19 @@ impl LightcraftApp {
             ui_passes: 0,
             #[cfg(test)]
             library_passes: vec![],
+            #[cfg(test)]
+            prep_ticks: 0,
+            #[cfg(test)]
+            missing_count_test_delay: None,
             shadow: None,
+            drawing_offscreen: false,
             synthetic: vec![],
             pointer_cleanup: false,
             drop_hover: vec![],
             drop_pending: vec![],
             copied: None,
             pending_picks: vec![],
+            missing: Default::default(),
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
             host_mods: egui::Modifiers::NONE,
@@ -82,8 +95,12 @@ impl LightcraftApp {
             next_widgets: vec![],
             next_widget_hits: vec![],
             gesture: None,
+            space_hand: None,
             brush_live: None,
             loupe_shown: None,
+            loupe_timing: Default::default(),
+            prep_synced: false,
+            look_ahead: Default::default(),
             region_view: None,
             region_before_view: None,
             size_hold: Default::default(),
@@ -93,9 +110,13 @@ impl LightcraftApp {
             compare_windows: [None; 2],
             compare_tiles: Default::default(),
             compare_hold_until: f64::NEG_INFINITY,
+            survey_motion: Default::default(),
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            scans_stopping: Default::default(),
+            waiting_import: Default::default(),
+            review_listed: None,
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
@@ -103,6 +124,7 @@ impl LightcraftApp {
             lightroom_last: None,
             lightroom_result: None,
             review_pending: None,
+            review_pending_listed: None,
             shown_library: None,
             export: None,
             tasks: Default::default(),
@@ -112,17 +134,21 @@ impl LightcraftApp {
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_notice: false,
+            disk_space_notice: false,
+            disk_notice: None,
             memory_applied: None,
+            hot_pixels_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,
             screen_profile_read: None,
+            system_reduce_motion: None,
+            system_reduce_motion_read: None,
             library_problem: None,
             library_window_input: Default::default(),
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
-            model_setup: Default::default(),
         }
     }
 
@@ -175,6 +201,19 @@ impl LightcraftApp {
         }
     }
 
+    /// End a Brush stroke being painted, if one is: what already went to the photo stays (its undo step is
+    /// closed), what didn't is dropped. The pointer still held paints nothing more until it is let go.
+    /// Other gestures are left alone.
+    pub(crate) fn cancel_brush_gesture(&mut self) {
+        let Some(crate::panels::detail::Gesture::Brush { live, .. }) = &self.gesture else { return };
+        let went_live = live.is_some();
+        self.gesture = None;
+        self.brush_live = None;
+        if went_live {
+            let _ = self.session.execute("develop.endInteraction", &serde_json::json!({}));
+        }
+    }
+
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.run_typed(id, params).map_err(|e| e.message)
@@ -183,9 +222,36 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
-        if let Some(result) = model_setup::intercept(self, id, &params) {
-            return result.map_err(CommandError::from);
+        // a brush stroke being painted belongs to the mask and photo it started on: picking another (also by
+        // stepping through the photos with the arrow keys) ends it first, so its next live update or its release
+        // can't land on the one picked; so does Undo, which takes the live stroke away (the next update would
+        // otherwise replace the stroke before it)
+        if brush_stroke_ends_before(id) {
+            self.cancel_brush_gesture();
         }
+        // (seen before and after each command, so a selection changed and changed back between two
+        // UI passes still counts as changed)
+        self.selection_changes();
+        let r = self.run_command(id, params);
+        // the panel a command left on show is noted now, not at the next frame, success or not: the next command
+        // of the same frame (a script, queued shortcuts) sees it (Close Panel, B, Done = the column stays hidden)
+        self.ui.note_right();
+        self.selection_changes();
+        r
+    }
+
+    /// How many times the selection has been seen to change, counting a change to other photos and
+    /// back as two. Each command and each finished UI pass looks at the selection.
+    pub(crate) fn selection_changes(&mut self) -> u64 {
+        let s = &self.session.selection;
+        let key = if s.ids.is_empty() { crate::key_of(s.active.as_slice()) } else { crate::key_of(s.ids.as_slice()) };
+        if key != self.selection_seen.0 {
+            self.selection_seen = (key, self.selection_seen.1.wrapping_add(1));
+        }
+        self.selection_seen.1
+    }
+
+    fn run_command(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
@@ -221,15 +287,16 @@ impl LightcraftApp {
             // menu), it must not keep a search that no longer applies (issue #1648)
             self.ui.search.clear();
         }
-        if r.is_ok() && id == "mask.adjust" {
-            // Judge local adjustments on the photo, without the selection overlay obscuring them.
-            // Keep it hidden after release; O / the overlay eye can show it again.
-            self.ui.mask_overlay = false;
+        if r.is_ok() && id == "mask.addComponent" && params.get("kind").and_then(Value::as_str) != Some("colorRange") && self.ui.tool == "colorRange"
+        {
+            self.ui.tool.clear();
         }
-        if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate" | "mask.select") {
-            // A new or newly picked mask shows its overlay again, as in Lightroom: hidden by a slider
-            // drag above, it stayed hidden while the Overlay menu still named a mode (issue #1800).
-            self.ui.mask_overlay = true;
+        // (a mask's sliders don't switch the overlay off, and creating or picking a mask doesn't
+        // switch it on: one rule decides when it shows, see `panels::detail::overlay_mask`)
+        if r.is_ok() && !self.ui.mask_overlay_hidden.is_empty() {
+            // a mask an undo, a history step or pasted settings took away frees its id for the next new
+            // mask: whether O hid its overlay goes with it
+            crate::panels::masking::forget_missing_overlays(self);
         }
         if r.is_ok() {
             // These commands finish synchronously, so their completion would otherwise
@@ -245,8 +312,9 @@ impl LightcraftApp {
                 self.ui.toast = Some((message, now + TOAST_SECONDS, None));
             }
         }
-        if r.is_ok() && id == "photo.label" {
-            let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse);
+        if r.is_ok() && matches!(id, "photo.label" | "photo.clearLabel") {
+            // Clear Color Label takes no colour: whatever `label` it is given, the photo's label is cleared
+            let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse).filter(|_| id == "photo.label");
             let text = match label {
                 Some(label) => {
                     let name =
@@ -307,6 +375,33 @@ impl LightcraftApp {
         }
     }
 
+    /// The box the crop tool shows on an untouched photo with a remembered ratio (issue #3029): fitted
+    /// as `begin_crop` (and Return) will apply it, so the box matches the dropdown before any edit.
+    pub(crate) fn crop_tool_preview(&self) -> Option<lightcraft_geom::CropGeometry> {
+        let photo = self.session.active()?;
+        let d = self.session.develop_of(photo)?;
+        if d.crop != lightcraft_develop::Crop::default() || !matches!(self.ui.crop_default_aspect, Some(Value::Array(_))) {
+            return None;
+        }
+        let (aw, ah) = self.crop_tool_aspect()?;
+        let p = self.session.catalog.photo(photo)?;
+        let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+        let (w, h) = if d.orientation.swaps_axes() { (h, w) } else { (w, h) };
+        // turned like the photo's full-frame crop, as `crop.aspect` with `orientation: "crop"` does
+        let (aw, ah) = if (aw >= ah) != (w >= h) { (ah, aw) } else { (aw, ah) };
+        Some(lightcraft_geom::crop_fit_angle(w, h, d.crop.geometry.angle, Some(f64::from(aw) / f64::from(ah.max(1)))))
+    }
+
+    /// Return on an untouched photo crops it to the remembered ratio's box the tool showed.
+    pub(crate) fn apply_crop_preview(&mut self) {
+        if self.crop_tool_preview().is_some()
+            && let Some(aspect) = self.ui.crop_default_aspect.clone()
+            && let Err(e) = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect, "orientation": "crop"}))
+        {
+            self.ui.status = e.to_string();
+        }
+    }
+
     /// Called only after a crop gesture begins, inside its undo transaction.
     pub(crate) fn begin_crop(&mut self) -> Result<(), String> {
         // nothing chosen yet: the photo's own shape, as `crop_tool_aspect` shows it
@@ -355,32 +450,48 @@ impl LightcraftApp {
         panels::slideshow::tick(self, ctx, now);
     }
 
-    /// Announce the end of a Build Previews run.
+    /// A task waiting in line whose lane freed while nothing was asked starts now (commands start them too); then the
+    /// run in progress is looked at, so that one started here is polled for its end from this frame on.
+    pub(crate) fn tick_preview_builds(&mut self, ctx: &egui::Context) {
+        self.session.start_waiting();
+        self.preview_build_status(ctx);
+    }
+
+    /// Announce the end of a Build Previews run, and of those a build waiting in line replaced before it was announced
+    /// (in one toast, oldest first). A build is announced once: its `reported` flag says so, not where it lives.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
-        let Some(b) = self.session.preview_build.clone() else { return };
-        let key = std::sync::Arc::as_ptr(&b) as usize;
-        if b.finished.load(Ordering::Relaxed) {
-            if self.ui.preview_build_seen != Some((key, true)) {
-                self.ui.preview_build_seen = Some((key, true));
-                let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
-                let plural = if done == 1 { "" } else { "s" };
-                let mut msg = match (b.error(), b.what) {
-                    (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
-                    (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
-                    (None, what) => {
-                        crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
-                    }
-                };
-                if failed > 0 {
-                    msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
-                }
-                self.toast(ctx, msg);
+        let mut ended = self.session.take_unreported_builds();
+        match self.session.preview_build.clone() {
+            Some(b) if b.finished.load(Ordering::Relaxed) => ended.push(b),
+            Some(_) => {
+                // The activity stack shows the run while it works; poll for the end.
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
-        } else {
-            // The activity stack shows the run while it works; poll for the end.
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            None => {}
         }
+        let msgs: Vec<String> = ended.iter().filter(|b| !b.reported.swap(true, Ordering::Relaxed)).map(|b| Self::build_message(b)).collect();
+        if !msgs.is_empty() {
+            self.toast(ctx, msgs.join("; "));
+        }
+    }
+
+    /// How a finished Build Previews run ended, as the toast words it.
+    fn build_message(b: &lightcraft_engine::cmd::previews::PreviewBuild) -> String {
+        use std::sync::atomic::Ordering;
+        let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
+        let plural = if done == 1 { "" } else { "s" };
+        let mut msg = match (b.error(), b.what) {
+            (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
+            (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
+            (None, what) => {
+                crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
+            }
+        };
+        if failed > 0 {
+            msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
+        }
+        msg
     }
 
     /// Announce when saving the library starts failing (changes then live only in memory and are
@@ -445,6 +556,41 @@ impl LightcraftApp {
         }
     }
 
+    /// The app-wide background preparation settings live with the app settings (`ui.json`): taken
+    /// into the session once, then a change made through `prefs.setBackgroundPrep` is saved with
+    /// them. Run at the start of every logic pass, before any command of that pass (also before
+    /// the fonts are ready and the window is drawn).
+    fn sync_prep_settings(&mut self) {
+        if !self.prep_synced {
+            self.session.prep.app = self.ui.settings.background_prep.sanitized();
+            self.prep_synced = true;
+        } else if self.session.prep.app != self.ui.settings.background_prep {
+            self.ui.settings.background_prep = self.session.prep.app;
+        }
+    }
+
+    /// Preparing photos in the background ([`lightcraft_engine::prep`]): the whole view's previews
+    /// once the user is culling in the loupe, built from the photo on screen in the direction of travel.
+    /// Advanced on every logic pass, the hidden ones too (a minimised window keeps preparing).
+    fn background_prep(&mut self, ctx: &egui::Context) {
+        #[cfg(test)]
+        {
+            self.prep_ticks += 1;
+        }
+        let mode = panels::detail::prep_mode(self);
+        let loupe = self.ui.fullscreen || self.ui.view == state::ViewMode::Detail;
+        let at = if loupe { self.session.active() } else { None };
+        let backward = self.look_ahead.backward();
+        self.session.prep_tick(mode, at, backward);
+        if self.session.preview_build.as_ref().is_some_and(|b| b.running()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        // a build that couldn't start tries again at its time, also when nothing else draws a frame
+        if let Some(wait) = self.session.prep_retry_in() {
+            ctx.request_repaint_after(wait);
+        }
+    }
+
     /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
     /// show their errors; start a zoomed-in detail pass once the clicking stops
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
@@ -454,8 +600,8 @@ impl LightcraftApp {
             ctx.request_repaint();
         }
         if let Some(mask) = polled.refine {
-            // a new selection from a click or a description: show it, as `run` does for new masks
-            self.ui.mask_overlay = true;
+            // (a new selection from a click or a description shows by the overlay rule while its
+            // mask has no settings: `panels::detail::overlay_mask`)
             self.ui.detail_due = Some((now + 0.3, mask));
         }
         if let Some(e) = polled.messages.into_iter().last() {
@@ -541,6 +687,7 @@ impl LightcraftApp {
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.sync_prep_settings();
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and
@@ -571,6 +718,7 @@ impl LightcraftApp {
             frame_rate::forget(ctx);
         }
         panels::edit::wheel_pointer_frame_end(ctx);
+        panels::right::forget_stale_enter_keywords(self, ctx);
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {
@@ -581,6 +729,31 @@ impl LightcraftApp {
         self.perf.frame_ms = monotonic_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+    }
+
+    /// Ends drags that must not go on, before any panel or dialog sees the frame: Esc gives up a
+    /// drag and is taken, so a dialog open over it doesn't also close; and a drag outlives its
+    /// button in no layout (full screen and the slideshow don't run the panels that end it).
+    /// The frame a button is released in is left to the drop targets, except in full screen, which has none.
+    fn end_drags(&mut self, ctx: &egui::Context) {
+        if self.drawing_offscreen || !self.ui.drag_active() {
+            return;
+        }
+        let (esc, down, released) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.pointer.any_down(), i.pointer.any_released()));
+        // a release is left to the drop targets, except in full screen, where there are none: the
+        // drag ends on that frame, so an Esc on the next one can't find it still going
+        if !esc && (down || (released && !self.ui.fullscreen)) {
+            return;
+        }
+        if esc {
+            widgets::take_escape(ctx);
+        }
+        if self.ui.dragging_album.take().is_some() {
+            panels::left::forget_hover(self, ctx);
+        }
+        self.ui.dragging_photos = None;
+        self.ui.dragging_section = None;
+        self.ui.dragging_keyword = None;
     }
 
     /// Lay out the whole window: input/setup for the known UI phase, then presentation, then the
@@ -624,4 +797,22 @@ pub(crate) fn sam_download_ended(download: &lightcraft_engine::segment::Download
         None if download.finished => Some((crate::i18n::tr("The SAM 3 model is installed: Object and Describe masks are ready.").to_string(), true)),
         None => None,
     }
+}
+
+/// Commands that end a Brush stroke being painted before they run ([`LightcraftApp::run_typed`]): the ones that pick
+/// another mask or photo, and Undo / Redo, which change the strokes under it.
+pub(crate) fn brush_stroke_ends_before(id: &str) -> bool {
+    matches!(
+        id,
+        "mask.select"
+            | "library.select"
+            | "library.next"
+            | "library.previous"
+            | "library.up"
+            | "library.down"
+            | "slideshow.next"
+            | "slideshow.previous"
+            | "edit.undo"
+            | "edit.redo"
+    )
 }

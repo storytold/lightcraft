@@ -44,6 +44,30 @@ fn psd_probe_reads_embedded_capture_time_gps_and_title() {
 use super::*;
 use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
 
+#[test]
+fn crw_probes_name_their_camera_from_the_ciff_records() {
+    // no Exif in a CRW: the camera and capture time come from the decoder's records, and the catalog's camera
+    // string decides the white-balance scale (the D60 has chart-measured matrices, the 10D none)
+    let dir = std::env::var_os("LIGHTCRAFT_CORPUS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+        .join("raw");
+    for (name, camera, kelvin) in [("crw-canon-eos-d60.crw", "Canon Canon EOS D60", true), ("crw-canon-eos-10d-a.crw", "Canon Canon EOS 10D", false)]
+    {
+        let Ok(bytes) = std::fs::read(dir.join(name)) else {
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
+            continue;
+        };
+        assert!(lightcraft_meta::extract(&bytes).model.is_none(), "{name}: no Exif to read");
+        let info = probe_bytes(name, &bytes).unwrap();
+        assert_eq!(info.meta.camera, camera, "{name}");
+        assert!(info.captured.is_some(), "{name}");
+        assert_eq!(lightcraft_catalog::relative_wb_camera(&info.format, &info.meta.camera), !kelvin, "{name}");
+        let (t, _) = info.as_shot_wb.unwrap();
+        assert_eq!(t != 6500.0, kelvin, "{name}: {t}");
+    }
+}
+
 /// Which white-balance scale a raw gets (issue #730): a file with matrices of its own is absolute from them; a
 /// fitted-look file is absolute through its camera's measured matrices, which only read the as-shot
 /// multipliers as Kelvin; any other raw stays relative (6500 / 0 = as shot). The catalog's decision from the
@@ -110,6 +134,17 @@ fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
     assert!(other.relative && other.scale_white.is_none());
     let unknown = WbScaleOf::new(RawFormat::Nef, &ColorData::default(), mul, &lightcraft_meta::Metadata::default());
     assert!(unknown.relative && unknown.as_shot(d65) == (6500.0, 0.0));
+    // CRW: no matrices in the file. The EOS D60 has chart-measured matrices: Kelvin through them, its multipliers
+    // for the sun its D50 matrix was measured under reading as D50; another body stays relative, so its
+    // JPEG-fitted look applies
+    let d60 = WbScaleOf::new(RawFormat::Crw, &ColorData::default(), Some([2.362, 1.0, 1.298]), &meta("Canon", "Canon EOS D60"));
+    assert!(!d60.own_matrix && !d60.relative && d60.legacy_relative && d60.scale_white.is_some());
+    let ((t, tint), (t50, tint50)) = (d60.as_shot(d65), xy_to_temp_tint(lightcraft_color::D50));
+    assert!((t - t50).abs() < 50.0 && (tint - tint50).abs() < 2.0, "{t} {tint} vs D50 {t50} {tint50}");
+    assert!(!lightcraft_catalog::relative_wb_camera("CRW", "Canon Canon EOS D60"));
+    let crw = WbScaleOf::new(RawFormat::Crw, &ColorData::default(), mul, &meta("Canon", "Canon EOS 10D"));
+    assert!(crw.relative && !crw.legacy_relative && crw.scale_white.is_none());
+    assert!(lightcraft_catalog::relative_wb_camera("CRW", "Canon Canon EOS 10D"));
     // a file with matrices of its own (DNG): absolute from them, no matter whose camera
     let own = ColorData { illuminant: [21, 0], color_matrix: [Some(lightcraft_color::Mat3::IDENTITY), None], ..Default::default() };
     let dng = WbScaleOf::new(RawFormat::Dng, &own, mul, &meta("SONY", "ILCE-7M3"));
@@ -117,6 +152,26 @@ fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
     let xy = lightcraft_color::cct::temp_tint_to_xy(4200.0, 12.0);
     assert_eq!(dng.as_shot(xy), (4200.0, 12.0));
     assert!(!lightcraft_catalog::relative_wb_camera("DNG", "SONY ILCE-7M3"));
+}
+
+/// A Fujifilm X-Trans III body reads Kelvin through the neutral pair its RAF stores (issue #730); without the pair
+/// in the file, or on a body with matrices (X-T3), nothing changes.
+#[test]
+fn a_fujifilm_x_trans_iii_raf_reads_kelvin_through_its_neutral_pair() {
+    use lightcraft_raw::{ColorData, RawFormat};
+    let meta = |make: &str, model: &str| lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+    let a = [366.0f32 / 302.0, 1.0, 866.0 / 302.0];
+    let d65 = [646.0f32 / 302.0, 1.0, 498.0 / 302.0];
+    let pair = lightcraft_raw::kelvin_presets::KelvinPresets::from_neutral_pair(a, d65);
+    assert!(pair.is_some());
+    let with = ColorData { kelvin_presets: pair, ..Default::default() };
+    let xt20 = WbScaleOf::new(RawFormat::Raf, &with, Some(d65), &meta("FUJIFILM", "X-T20"));
+    assert!(!xt20.relative && xt20.scale_white.is_some());
+    let (t, tint) = xt20.as_shot(lightcraft_color::cct::temp_tint_to_xy(6500.0, 0.0));
+    assert!((6000.0..7000.0).contains(&t) && tint.abs() < 25.0, "{t} {tint}");
+    assert!(!lightcraft_catalog::relative_wb_camera("RAF", "FUJIFILM X-T20"));
+    let bare = WbScaleOf::new(RawFormat::Raf, &ColorData::default(), Some(d65), &meta("FUJIFILM", "X-T20"));
+    assert!(bare.scale_white.is_none());
 }
 
 /// A merged DNG (Photo Merge) of a raw without colour matrices shows the As Shot temperature and tint its source
@@ -226,7 +281,7 @@ fn tiff_with_preview_strip(strip: &[u8], tail: usize, what: Fixture) -> Vec<u8> 
 /// [`tiff_with_preview_strip`] that also keeps the `smaller` JPEGs in sub-IFDs of IFD0, as an ARW keeps its
 /// 1616 px preview beside the full-size one.
 fn tiff_with_preview_strips(strip: &[u8], smaller: &[&[u8]], tail: usize, what: Fixture) -> Vec<u8> {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut preview = IfdBuilder::new();
     if what.dng {
         preview.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
@@ -414,8 +469,16 @@ fn undated_files_take_the_file_date() {
     let path = dir.join("export.jpg");
     std::fs::write(&path, &jpeg).unwrap();
     let path = path.to_string_lossy().to_string();
+    // The case reported in issue #2284: a JPEG that went through a messenger keeps no capture
+    // date, only a modification time, here 2026-10-18 20:15:11 in UTC-5. Pinning it also dates
+    // the file in the other half of the year from "now", so a zone with summer time is read at
+    // the right instant and not at today's offset.
+    let shot = lightcraft_meta::DateTime::parse_iso("2026-10-19T01:15:11Z").unwrap().unix_seconds();
+    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::try_from(shot).unwrap());
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
     let mtime = std::fs::metadata(&path).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let want = crate::import::civil(mtime as i64);
+    assert_eq!(mtime as i64, shot, "the file date is the one the test set");
+    let want = crate::import::local_civil(mtime as i64);
     let (_, probe) = fs_hooks();
     let info = probe(&path).unwrap();
     assert_eq!(info.captured, None, "the file itself has no date");
@@ -424,6 +487,27 @@ fn undated_files_take_the_file_date() {
     let r = crate::import::import(&mut s, &[path], crate::import::ImportMode::Add).unwrap();
     let id = lightcraft_catalog::PhotoId(r.imported[0]);
     assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some(want.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The probe opens the file once and says the same thing as before about one that can't be read:
+/// its path, then the system's words (a missing file, a folder).
+#[test]
+fn a_probe_of_a_file_that_cannot_be_read_names_the_path_and_the_cause() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-probe-errors-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (_, probe) = fs_hooks();
+    for path in [dir.join("no-such-file.jpg"), dir.clone()] {
+        let path = path.to_string_lossy().to_string();
+        let e = probe(&path).unwrap_err();
+        // a folder is refused as "not a regular file" before any read, so only the path and a cause are pinned
+        assert!(e.starts_with(&format!("{path}: ")), "{e}");
+    }
+    // the system's own words for it, whatever the platform says
+    let missing = dir.join("no-such-file.jpg");
+    let want = std::fs::read(&missing).unwrap_err().to_string();
+    let got = probe(&missing.to_string_lossy()).unwrap_err();
+    assert_eq!(got.strip_prefix(&format!("{}: ", missing.to_string_lossy())), Some(want.as_str()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -500,6 +584,227 @@ fn coarse_binning_keeps_specular_points_neutral() {
     assert!(worst < 1.12, "green speckles: green {worst:.2}× the other channels");
 }
 
+/// A neutral scene (`level` white balanced, at sub-pixel positions) as `tests_xmp::synthetic_dng_of`'s RGGB DNG
+/// (as-shot neutral 0.5 : 1 : 0.7) records it: through a lens (each pixel the mean of its area, then a binomial
+/// blur of about a pixel), divided by the white balance, clipped at the white level.
+fn photographed_dng(w: usize, h: usize, level: impl Fn(f32, f32) -> f32) -> Vec<u8> {
+    let wb = [2.0, 1.0, 1.0 / 0.7];
+    let cfa = lightcraft_raw::Cfa::bayer("RGGB").unwrap();
+    let area: Vec<f32> = (0..w * h)
+        .map(|i| {
+            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            (0..16).map(|k| level(x + ((k % 4) as f32 + 0.5) / 4.0, y + ((k / 4) as f32 + 0.5) / 4.0)).sum::<f32>() / 16.0
+        })
+        .collect();
+    let blur = |v: &[f32], dx: isize, dy: isize| -> Vec<f32> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as isize, (i / w) as isize);
+                let at = |k: isize| v[(y + k * dy).clamp(0, h as isize - 1) as usize * w + (x + k * dx).clamp(0, w as isize - 1) as usize];
+                (at(-2) + 4.0 * at(-1) + 6.0 * at(0) + 4.0 * at(1) + at(2)) / 16.0
+            })
+            .collect()
+    };
+    let light = blur(&blur(&area, 1, 0), 0, 1);
+    let data = (0..w * h)
+        .map(|i| {
+            let v = (light[i] / wb[cfa.color_at(i % w, i / w) as usize]).min(1.0);
+            (256.0 + v * (16000.0 - 256.0)).round() as u16
+        })
+        .collect();
+    crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, None, Default::default())
+}
+
+/// Issue #1328: full-size decodes (exports, 1:1) of neutral specular points of 1 to 3 px on a dark neutral
+/// surface, bright enough to clip green (the brightest every channel). The pixels around them must come out
+/// nearly neutral: every channel within 0.4 to 1.6 of the pixel's mean. Demosaiced before white balance, red beside a point
+/// fell to zero (green and cyan rims: 153 of these 549 pixels had a channel below half the mean, most at zero).
+/// Now the lowest is one channel at 0.498, a pixel the clip mask has rebuilt beside a 3 px point.
+#[test]
+fn full_size_specular_points_have_no_coloured_rims() {
+    let (w, h) = (96usize, 72usize);
+    let mut points = Vec::new();
+    for (i, level) in [2.0f32, 4.0, 8.0].into_iter().enumerate() {
+        for (j, size) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+            for k in 0..2 {
+                points.push((8.0 + j as f32 * 30.0 + k as f32 * 12.6, 9.0 + i as f32 * 22.0 + k as f32 * 7.3, size, level));
+            }
+        }
+    }
+    let lit = |x: f32, y: f32| points.iter().find(|&&(px, py, s, _)| (px..px + s).contains(&x) && (py..py + s).contains(&y)).map(|p| p.3);
+    let bytes = photographed_dng(w, h, |x, y| lit(x, y).unwrap_or(0.04));
+    let (img, _) = load_bytes(&bytes, 4096).unwrap();
+    assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+    // within 2 px of a point, and not on it
+    let rim = |x: usize, y: usize| {
+        let (fx, fy) = (x as f32, y as f32);
+        let near = points.iter().any(|&(px, py, s, _)| fx + 3.0 > px && fx < px + s + 2.0 && fy + 3.0 > py && fy < py + s + 2.0);
+        near && (-1..=1).all(|d| lit(fx + 0.5 + d as f32, fy + 0.5).is_none() && lit(fx + 0.5, fy + 0.5 + d as f32).is_none())
+    };
+    let coloured = |p: [f32; 3]| {
+        let mean = (p[0] + p[1] + p[2]) / 3.0;
+        p.iter().any(|&v| v < 0.4 * mean || v > 1.6 * mean)
+    };
+    assert!(coloured([1.0, 3.0, 1.0]), "a strongly green rim must fail the neutrality check");
+    let (mut n, mut bad) = (0, Vec::new());
+    for y in 0..h {
+        for x in 0..w {
+            if !rim(x, y) {
+                continue;
+            }
+            n += 1;
+            let p = img.get(x, y);
+            if coloured(p) {
+                bad.push((x, y, p));
+            }
+        }
+    }
+    assert!(n > 300, "{n} rim pixels");
+    assert!(bad.is_empty(), "{} of {n} rim pixels coloured, e.g. {:?}", bad.len(), &bad[..bad.len().min(4)]);
+}
+
+/// Issue #1328: full-size decodes of sharp neutral white-on-dark edges (straight, diagonal, round, a 1 px line),
+/// nothing clipped, stay nearly neutral along the edges. Demosaiced before white balance they had yellow,
+/// green, cyan and magenta outlines.
+#[test]
+fn full_size_sharp_neutral_edges_stay_neutral() {
+    let (w, h) = (96usize, 80usize);
+    let (dark, bright) = (0.03f32, 0.85f32);
+    let shape = |x: f32, y: f32| {
+        let disc = (x - 70.0).powi(2) + (y - 24.0).powi(2) < 13.5f32.powi(2);
+        let bar = (10.0..30.0).contains(&x) && (8.0..40.0).contains(&y);
+        let slant = y > 46.0 && x * 0.6 + y > 70.0 && x < 60.0;
+        disc || bar || slant || ((80.0..81.0).contains(&x) && y > 46.0)
+    };
+    let bytes = photographed_dng(w, h, |x, y| if shape(x, y) { bright } else { dark });
+    let (img, _) = load_bytes(&bytes, 4096).unwrap();
+    assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+    let inside = |x: usize, y: usize| shape(x as f32 + 0.5, y as f32 + 0.5);
+    let (mut n, mut worst, mut sum) = (0, 0f32, 0f32);
+    for y in 2..h - 2 {
+        for x in 2..w - 2 {
+            if !(x - 1..=x + 1).any(|xx| (y - 1..=y + 1).any(|yy| inside(xx, yy) != inside(x, y))) {
+                continue;
+            }
+            let p = img.get(x, y);
+            // the colour model renders the white-balanced neutral [1, 1, 1] at about 1
+            let spread = (p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2])) / (bright - dark);
+            worst = worst.max(spread);
+            sum += spread;
+            n += 1;
+        }
+    }
+    let mean = sum / n as f32;
+    assert!(n > 600, "{n} edge pixels");
+    assert!(mean < 0.03 && worst < 0.2, "edge colour spread mean {mean:.3}, worst {worst:.3} of the edge's contrast");
+}
+
+/// Review of #1328: full-size decodes of dark twigs and wires against a clipped sky keep the level their own
+/// samples measured. With every colour within 2 px of a clipped sample taken as clipped, the pixel's own measured
+/// channel included, the lines' pixels were rebuilt as the brightest neutral (a 0.1 green became 1.77, rendered
+/// white).
+#[test]
+fn full_size_dark_lines_against_a_clipped_sky_keep_their_level() {
+    let (w, h) = (96usize, 72usize);
+    let dark = |x: f32, y: f32| {
+        (20.0..23.0).contains(&x)
+            || (30.0..34.0).contains(&y)
+            || ((x - y * 0.5 - 50.0).abs() < 3.0 && y < 60.0)
+            || (x - 78.0).powi(2) + (y - 56.0).powi(2) < 25.0
+    };
+    let level = |x: f32, y: f32| if dark(x, y) { 0.05 } else { 3.0 };
+    let bytes = photographed_dng(w, h, level);
+    let (img, _) = load_bytes(&bytes, 4096).unwrap();
+    assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+    // the level the lens let through, from the scene itself (as `photographed_dng` blurs it)
+    let lit = |x: usize, y: usize| {
+        let k = [1.0f32, 4.0, 6.0, 4.0, 1.0];
+        let mut s = 0.0;
+        for (j, ky) in k.iter().enumerate() {
+            for (i, kx) in k.iter().enumerate() {
+                let (sx, sy) = ((x + i).saturating_sub(2).min(w - 1), (y + j).saturating_sub(2).min(h - 1));
+                s +=
+                    kx * ky * (0..16).map(|q| level(sx as f32 + ((q % 4) as f32 + 0.5) / 4.0, sy as f32 + ((q / 4) as f32 + 0.5) / 4.0)).sum::<f32>()
+                        / 16.0;
+            }
+        }
+        s / 256.0
+    };
+    let (mut n, mut lifted) = (0, Vec::new());
+    for y in 3..h - 3 {
+        for x in 3..w - 3 {
+            let l = lit(x, y);
+            if l > 0.5 {
+                continue;
+            }
+            n += 1;
+            let p = img.get(x, y);
+            let mean = (p[0] + p[1] + p[2]) / 3.0;
+            if mean > 2.0 * l + 0.05 {
+                lifted.push((x, y, l, p));
+            }
+        }
+    }
+    assert!(n > 400, "{n} line pixels");
+    assert!(lifted.is_empty(), "{} of {n} dark pixels lifted, e.g. {:?}", lifted.len(), &lifted[..lifted.len().min(3)]);
+}
+
+/// Issue #1328: full-size decodes of large clipped areas (a lamp, a patch of sky: every channel clipped) on bright
+/// and on dark neutral surfaces. The pixels around them must stay neutral. The channels interpolated from clipped
+/// samples are only lower bounds; told as clipped by value alone, they kept the clipped samples' colour
+/// difference (magenta rims), and demosaiced before white balance they fell below zero.
+#[test]
+fn full_size_clipped_areas_have_no_coloured_rims() {
+    let (w, h) = (96usize, 72usize);
+    let lamp = |x: f32, y: f32| (x - 30.0).powi(2) + (y - 36.0).powi(2) < 14.0f32.powi(2) || ((62.0..80.0).contains(&x) && (20.0..52.0).contains(&y));
+    let bytes = photographed_dng(w, h, |x, y| {
+        if lamp(x, y) {
+            6.0
+        } else if x < 48.0 {
+            0.7
+        } else {
+            0.05
+        }
+    });
+    let (img, _) = load_bytes(&bytes, 4096).unwrap();
+    assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+    let inside = |x: usize, y: usize| lamp(x as f32 + 0.5, y as f32 + 0.5);
+    let (mut n, mut worst, mut sum) = (0, 0f32, 0f32);
+    for y in 2..h - 2 {
+        for x in 2..w - 2 {
+            if inside(x, y)
+                || !(x.saturating_sub(3)..=(x + 3).min(w - 1)).any(|xx| (y.saturating_sub(3)..=(y + 3).min(h - 1)).any(|yy| inside(xx, yy)))
+            {
+                continue;
+            }
+            let p = img.get(x, y);
+            let mean = (p[0] + p[1] + p[2]) / 3.0;
+            let spread = (p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2])) / mean.max(1e-3);
+            worst = worst.max(spread);
+            sum += spread;
+            n += 1;
+        }
+    }
+    let mean = sum / n as f32;
+    assert!(n > 600, "{n} rim pixels");
+    // (main: mean 0.45, worst 1.8; the white-balanced demosaic without the clip mask: mean 0.22, worst 1.3)
+    assert!(mean < 0.05 && worst < 0.8, "colour spread around the clipped area mean {mean:.3}, worst {worst:.3} of the pixel's mean");
+}
+
+/// The wrappers used by the full-size path agree with each other (covers the non-`take` APIs).
+#[test]
+fn develop_balanced_wrappers_agree() {
+    let bytes = photographed_dng(32, 24, |x, y| if (x - 16.0).powi(2) + (y - 12.0).powi(2) < 36.0 { 0.85 } else { 0.04 });
+    let mut raw = lightcraft_raw::decode(&bytes).unwrap();
+    let wb = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw)).wb;
+    let plain = raw.develop_balanced(lightcraft_raw::Method::Ahd, wb).unwrap();
+    let (masked, mask) = raw.develop_balanced_masked(lightcraft_raw::Method::Ahd, wb, super::HIGHLIGHT_CLIP).unwrap();
+    let (taken, taken_mask) = raw.take_develop_balanced_masked(lightcraft_raw::Method::Ahd, wb, super::HIGHLIGHT_CLIP).unwrap();
+    assert_eq!(plain.data, masked.data);
+    assert_eq!(masked.data, taken.data);
+    assert_eq!(mask, taken_mask);
+}
+
 #[test]
 fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_raw() {
     use lightcraft_denoise::product;
@@ -512,22 +817,72 @@ fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_r
     raw.color.profile.look_table =
         Some(HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[23.0, 0.65, 0.8]; 2], srgb_value: false });
     let bytes = write_dng(&raw, &DngWriteOptions::default()).unwrap();
-    let decoded = lightcraft_raw::decode(&bytes).unwrap();
+    let mut decoded = lightcraft_raw::decode(&bytes).unwrap();
     assert!(decoded.color.profile.look_table.is_some());
-    // A cache containing the ordinary demosaic must undergo the identical downstream finish.
-    let camera_rgb = decoded.develop(Method::Ahd).unwrap();
+    // A cache containing the ordinary demosaic (of the mosaic white balanced as shot) must undergo the identical
+    // downstream finish.
+    let (_, tr, _) = crate::camera_preview::starting_colour(&mut decoded, &bytes, None, None);
+    let (camera_rgb, _) = decoded.take_develop_balanced_masked(Method::Ahd, tr.wb, super::HIGHLIGHT_CLIP).unwrap();
     let key = "synthetic-color-finish";
     let path = dir.join("same.lcdn");
     product::write(&path, &camera_rgb, key).unwrap();
     let spec = DenoiseSpec { product: path, key: key.into(), make: None };
     let (ordinary, _) = load_bytes(&bytes, 2048).unwrap();
-    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec).unwrap();
+    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec, Default::default()).unwrap();
     assert_eq!(plain.data, ordinary.data, "requesting a twin must not change the ordinary path");
     let cached = cached.unwrap();
     assert_eq!((plain.width, plain.height), (24, 32));
     assert_eq!((cached.width, cached.height), (plain.width, plain.height));
     let worst = plain.data.iter().zip(&cached.data).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs())).fold(0.0f32, f32::max);
     assert!(worst < 0.002, "color finish differs beyond cache half-float rounding: {worst}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Production highlight protection writes a uniform RGB cell (the same value at every photosite of
+/// a clipped Bayer cell). The ordinary demosaic's directional mask must not reach that twin: it
+/// would preserve different channels at different sensor positions and put a Bayer pattern into
+/// the uniform cell. Value-based reconstruction leaves the below-threshold cell unchanged.
+#[test]
+fn unbinned_denoised_twin_keeps_a_cell_protected_highlight() {
+    use lightcraft_denoise::product;
+    use lightcraft_raw::{Method, decode};
+    let (w, h) = (16usize, 16usize);
+    // Mid tones, plus one RGGB cell whose blue photosite is at the white level (clipped).
+    let mut data: Vec<u16> = vec![2000; w * h];
+    let (cx, cy) = (4usize, 4usize); // R at (4,4), G (5,4), G (4,5), B (5,5)
+    data[(cy + 1) * w + (cx + 1)] = 16000;
+    let bytes = crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, None, Default::default());
+    let mut raw = decode(&bytes).unwrap();
+    let (_, tr, _) = crate::camera_preview::starting_colour(&mut raw, &bytes, None, None);
+    let (mut camera_rgb, mask) = raw.take_develop_balanced_masked(Method::Ahd, tr.wb, super::HIGHLIGHT_CLIP).unwrap();
+    assert!(mask.is_some(), "the clipped photosite must produce a sensor mask");
+    // Production cell protection: the same RGB at all four positions of the cell.
+    let protected = [0.20, 0.60, 0.20];
+    for dy in 0..2 {
+        for dx in 0..2 {
+            camera_rgb.data[(cy + dy) * w + (cx + dx)] = protected;
+        }
+    }
+    let dir = crate::tests_xmp::temp_dir("denoise-twin-mask");
+    let key = "cell-protected";
+    let path = dir.join("twin.lcdn");
+    product::write(&path, &camera_rgb, key).unwrap();
+    let spec = DenoiseSpec { product: path, key: key.into(), make: None };
+    let (_, twin, _) = load_vec_pair(bytes, 2048, &spec, Default::default()).unwrap();
+    let twin = twin.expect("denoised twin");
+    let mut cell = Vec::new();
+    for dy in 0..2 {
+        for dx in 0..2 {
+            cell.push(twin.data[(cy + dy) * w + (cx + dx)]);
+        }
+    }
+    let spread = (0..3)
+        .map(|c| {
+            let vs: Vec<f32> = cell.iter().map(|p| p[c]).collect();
+            vs.iter().cloned().fold(f32::NEG_INFINITY, f32::max) - vs.iter().cloned().fold(f32::INFINITY, f32::min)
+        })
+        .fold(0.0f32, f32::max);
+    assert!(spread < 0.02, "Bayer pattern in a uniform protected cell: {cell:?} spread {spread}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -586,7 +941,7 @@ fn corpus_a7cr_warp_keeps_coordinates_after_orientation_and_resizing() {
         let Ok(mut bytes) = std::fs::read(root.join("raw").join(name)) else { continue };
         let off = lightcraft_raw::probe_info(&bytes).unwrap();
         assert!(embedded_lens(&off).is_none());
-        let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+        let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
         let at = tiff.find(0x7036).unwrap().offset as usize;
         let mut enabled = Vec::new();
         tiff.order.put_u16(&mut enabled, 17);
@@ -888,6 +1243,40 @@ fn yellowing_look() -> lightcraft_color::Mat3 {
     lightcraft_color::Mat3([[0.42, 0.548, 0.04], [0.246, 0.728, 0.033], [-0.247, 0.679, 0.447]])
 }
 
+/// Decoding passes finite values through, negative ones included, and zeroes NaN and infinities.
+#[test]
+fn decoding_keeps_negative_channels_and_zeroes_non_finite_ones() {
+    assert_eq!(finite([0.6, 0.05, -0.04]), [0.6, 0.05, -0.04]);
+    assert_eq!(finite([f32::NAN, -0.1, f32::INFINITY]), [0.0, -0.1, 0.0]);
+}
+
+/// Dark sensor noise through a saturating camera matrix (a NIKON D780 profile's) averages to a neutral colour: the
+/// per-channel clamp at zero decoding had kept red's and blue's wider positive halves and turned it magenta.
+#[test]
+fn dark_noise_through_a_saturating_matrix_stays_neutral() {
+    let matrix = lightcraft_color::Mat3([[3.48, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]]);
+    let colour = CameraColourModel { wb: [1.0; 3], matrix, gain: 1.0, tables: None, hue_sat: None };
+    // a grey 0.002 above black with ±0.004 of noise per channel (a deterministic sequence)
+    let mut state = 12345u32;
+    let mut noise = || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    let mut img = Rgb32f::new(200, 200);
+    for p in img.data.iter_mut() {
+        *p = [0.002 + noise(), 0.002 + noise(), 0.002 + noise()];
+    }
+    colour.apply(&mut img);
+    let mut mean = [0.0f64; 3];
+    for p in &img.data {
+        for (m, v) in mean.iter_mut().zip(p) {
+            *m += f64::from(*v);
+        }
+    }
+    let (hi, lo) = (mean[0].max(mean[1]).max(mean[2]), mean[0].min(mean[1]).min(mean[2]));
+    assert!(lo > 0.0 && hi / lo < 1.2, "mean {mean:?} is tinted");
+}
+
 /// A fitted camera look applied in lanes, on rows that aren't a whole number of them, gives the bits of the
 /// pixel-by-pixel path, awkward pixels (black, negative, huge, NaN, infinite) included.
 #[test]
@@ -1144,8 +1533,8 @@ fn corpus_clipped_sky_beside_a_tree_has_no_coloured_halo() {
 /// copy's samples are much brighter than the image's here, so a picture says which one it came from.
 #[test]
 fn exports_never_develop_a_dngs_reduced_copy() {
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     use serde_json::json;
     let linear = |subfile: u32, w: u32, h: u32, sample: u16| {
         let mut ifd = IfdBuilder::new();
@@ -1185,10 +1574,10 @@ fn exports_never_develop_a_dngs_reduced_copy() {
     let mean = |img: &lightcraft_raster::Rgba8| img.data.iter().map(|p| p[1] as f64).sum::<f64>() / img.data.len().max(1) as f64;
 
     // the loaders: only the thumbnail's develops the copy, and only when it covers the size
-    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512).unwrap();
+    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512, Default::default()).unwrap();
     assert!(used, "a thumbnail develops the copy");
-    assert!(!load_vec_reduced(bytes.clone(), 1024).unwrap().2, "no copy covers 1024 px");
-    let (full, _) = load_vec(bytes.clone(), 512).unwrap();
+    assert!(!load_vec_reduced(bytes.clone(), 1024, Default::default()).unwrap().2, "no copy covers 1024 px");
+    let (full, _) = load_vec(bytes.clone(), 512, Default::default()).unwrap();
     assert!(g(&copy) > 4.0 * g(&full), "the fixture's copy is much brighter: {} vs {}", g(&copy), g(&full));
 
     let dir = std::env::temp_dir().join(format!("lc-reduced-export-{}", std::process::id()));
@@ -1222,10 +1611,10 @@ fn exports_never_develop_a_dngs_reduced_copy() {
 /// heuristic would never look) is used; a matte with an unknown name is ignored.
 #[test]
 fn dng_sky_matte_drives_the_sky_mask() {
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
     use lightcraft_pipeline::{RenderRequest, render};
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     let (w, h) = (16u32, 8u32);
     let image = |ifd: &mut IfdBuilder, w: u32, h: u32, cpp: u16, bits: u16, data: Vec<u8>| {
         ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
@@ -1460,7 +1849,7 @@ fn unsupported_raw_imports_as_preview_only_and_survives_reopen() {
 /// A raw whose TIFF shell holds only a small RGB image (IFD0) next to a private block, as Exif
 /// declares a picture 25x its size.
 fn tiff_shell(w: u32, h: u32, shell: bool) -> Vec<u8> {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
     ifd0.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
@@ -1501,7 +1890,7 @@ fn thumbnail_only_tiff_raw_is_preview_only_not_a_plain_image() {
 
     // TIFFs preserving camera Make tags (SONY, NIKON, etc.) are ordinary images, not raws (#281)
     for make in ["SONY", "NIKON CORPORATION", "PENTAX", "RICOH", "SAMSUNG"] {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![24]));
         ifd0.set(t::IMAGE_LENGTH, Value::Long(vec![16]));
@@ -1545,7 +1934,7 @@ fn undecodable_container_with_a_preview_imports_as_preview_only() {
 /// holds the preview) imports as a raw shown from its preview, not as a greyscale image of the mosaic.
 #[test]
 fn uncompressed_leaf_mos_imports_as_a_preview_only_raw() {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let px: Vec<u8> = (0..40 * 30).flat_map(|i| [(i % 251) as u8, 128, 200]).collect();
     let jpeg = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
     let mos = |leaf_data: bool| {
@@ -1576,7 +1965,7 @@ fn uncompressed_leaf_mos_imports_as_a_preview_only_raw() {
 /// headers; loading it says what is wrong instead of naming a bare TIFF compression number.
 #[test]
 fn gopro_vc5_dng_imports_and_fails_to_load_with_a_clear_reason() {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut ifd = IfdBuilder::new();
     ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
@@ -1605,7 +1994,7 @@ fn decode_failures_of_recognised_raws_may_fall_back_to_the_preview() {
     assert_eq!(preview_reason(b"x", RawError::Unsupported("x".into())), Ok("x".to_string()));
     assert!(preview_reason(b"x", RawError::Corrupt("bad strip".into())).is_ok_and(|w| w.contains("bad strip")));
     assert!(preview_reason(b"x", RawError::Limit("too big")).is_ok());
-    assert!(preview_reason(b"x", RawError::Tiff(lightcraft_tiff::TiffError::MissingTag(256))).is_ok());
+    assert!(preview_reason(b"x", RawError::Tiff(craft_tiff::TiffError::MissingTag(256))).is_ok());
     assert!(preview_reason(b"x", RawError::NotRaw).is_err());
     assert!(preview_reason(cr3, RawError::Corrupt("bad".into())).is_ok_and(|w| w.starts_with("CR3 ")));
 }
@@ -1670,8 +2059,8 @@ fn a_quick_thumbnail_without_an_embedded_preview_renders_the_raw() {
 /// A Sony ARW of `model`: a 64 × 48 uncompressed 14-bit CFA strip in a SubIFD (as `crates/raw/tests/it/vendor_robust.rs`
 /// lays it out) whose IFD carries the full-frame 16–35 mm distortion table (tag 0x7037).
 fn sony_arw(model: &str) -> Vec<u8> {
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     // 3:2, the aspect Sony's lens opcodes are limited to
     let (w, h) = (72u32, 48u32);
     let mut raw = IfdBuilder::new();
@@ -1723,7 +2112,7 @@ fn rw2_and_dng_defaults_unchanged() {
             let name = format!("x.{format}");
             let mut p = Photo::new(PhotoId(1), Source::File { path: format!("/{name}") }, &name, format, 64, 48, "");
             p.kind = MediaKind::Raw;
-            p.embedded_lens = embedded;
+            p.embedded_lens = embedded.map(Box::new);
             crate::import::apply_import_defaults(&s, &mut p);
             assert_eq!(p.develop.optics.lens_profile, embedded.is_some(), "{format} {embedded:?}");
         }
@@ -1773,4 +2162,74 @@ fn existing_photo_settings_are_not_rewritten() {
     assert!(!s.catalog.photo(old).unwrap().is_edited(), "still as imported");
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn imported_shutter_times_survive_catalog_and_export_metadata() {
+    use lightcraft_catalog::{Catalog, Photo, PhotoId};
+    for (t, shown) in [
+        (0.3, "0.3"),
+        (0.4, "0.4"),
+        (0.6, "0.6"),
+        (0.8, "0.8"),
+        (1.3, "1.3"),
+        (1.6, "1.6"),
+        (2.5, "2.5"),
+        (3.2, "3.2"),
+        (30.0, "30"),
+        (0.625, "0.625"),
+        (1.0 / 2.8, "0.3571"),
+        (1.0 / 3.0, "1/3"),
+        (0.003, "0.003"),
+        (1.0 / 250.0, "1/250"),
+        (1.0 / 8000.0, "1/8000"),
+    ] {
+        let original = lightcraft_meta::Metadata { exposure_time: Some(t), ..Default::default() };
+        let (meta, _) = meta_of(&original);
+        // the catalog shows a short shutter speed, never the raw f64 (`0.35714285714285715`)
+        assert_eq!(meta.shutter, shown, "{t}");
+        // Exercise the persisted catalog JSON, not a value kept alongside it in memory.
+        let meta: Meta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        let mut photo = Photo::new(PhotoId(1), lightcraft_catalog::Source::Demo { scene: 0 }, "capture.jpg", "JPEG", 2, 2, "");
+        photo.meta = meta;
+        let exported = crate::export::export_metadata(&photo, &Catalog::new(), &crate::export::ExportOptions::default()).unwrap();
+        assert_eq!(exported.exposure_time, Some(t));
+        let bytes =
+            crate::export::encode_with_metadata(&lightcraft_raster::Rgba8::new(2, 2), &crate::export::ExportOptions::default(), Some(&exported))
+                .unwrap();
+        let back = lightcraft_meta::extract(&bytes);
+        assert!((back.exposure_time.unwrap() - t).abs() < 0.000001, "{t}: {:?}", back.exposure_time);
+    }
+}
+
+/// Issue #1632: a DNG's `ProfileToneCurve` is the finish stage's camera curve, so process V5 extends
+/// it past its last point (the sensor's white, scene 1.0) with the stop roll-off as well. A curve
+/// that reaches white there renders as under V4 up to it and white past it; one that ends below
+/// white (here 0.9) keeps what Exposure lifts past the sensor's white apart instead of reaching
+/// 8-bit 255 within a stop.
+#[test]
+fn v5_extends_a_dng_tone_curve_past_white_in_stops() {
+    use lightcraft_color::transfer::linear_to_srgb;
+    use lightcraft_develop::{DevelopSettings, Process};
+    use lightcraft_pipeline::SourceInfo;
+    let code = |curve: &[f64], process: Process, y: f32| {
+        let tone = lightcraft_raw::profile::ToneCurve::from_tag(curve).and_then(|c| super::dng_tone_curve(&c));
+        let info = SourceInfo { raw: true, camera_tone: Some(tone.expect("a valid curve")), ..SourceInfo::default() };
+        let s = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
+        let o = lightcraft_pipeline::finish::base_tone(&s, &info, 1.0).apply(y);
+        (linear_to_srgb(o.clamp(0.0, 1.0)) * 255.0).round()
+    };
+    let to_white = [0.0, 0.0, 0.03, 0.09, 0.18, 0.4, 0.5, 0.78, 1.0, 1.0];
+    for y in [0.01, 0.05, 0.18, 0.5, 0.9] {
+        assert_eq!(code(&to_white, Process::V5, y), code(&to_white, Process::V4, y), "{y}");
+    }
+    for y in [1.0, 2.0, 4.0] {
+        assert_eq!((code(&to_white, Process::V4, y), code(&to_white, Process::V5, y)), (255.0, 255.0), "{y}");
+    }
+    let below_white = [0.0, 0.0, 0.03, 0.09, 0.18, 0.4, 0.5, 0.72, 1.0, 0.9];
+    let at = |process, ev: f32| code(&below_white, process, ev.exp2());
+    assert_eq!(at(Process::V5, 0.0), at(Process::V4, 0.0));
+    assert_eq!(at(Process::V4, 1.0), 255.0, "V4 is frozen");
+    let (white, beyond) = (at(Process::V5, 0.0), at(Process::V5, 1.0));
+    assert!(beyond < 254.0 && beyond - white >= 3.0, "{white} then {beyond} a stop past the sensor's white");
 }

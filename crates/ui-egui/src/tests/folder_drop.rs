@@ -28,6 +28,11 @@ fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 /// The photos at `paths` in the catalog (`local`: browsed, not in the library), in the grid with
 /// the sidebar out, tall enough for the Folders section.
 fn app(paths: &[(PathBuf, bool)]) -> Headless {
+    app_prepared(paths, |_| {})
+}
+
+/// [`app`], with `prepare` run on the app before its first frame.
+fn app_prepared(paths: &[(PathBuf, bool)], prepare: impl FnOnce(&mut LightcraftApp)) -> Headless {
     use lightcraft_catalog::{Op, Photo, Source};
     let mut session = lightcraft_engine::Session::new().with_fs();
     for (path, local) in paths {
@@ -37,7 +42,9 @@ fn app(paths: &[(PathBuf, bool)]) -> Headless {
         p.local = *local;
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1300.0, 1600.0], 1.0);
+    let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    prepare(&mut app);
+    let mut h = Headless::new(app, [1300.0, 1600.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true, "sidebar": ["folders"]}), std::time::Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
     for _ in 0..6 {
@@ -131,7 +138,7 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     let target = folder_row(&h, &home).expect("held over, the folder opened");
     // When it is brought over home: the label says where it will go
     glide(&mut h, parent.center(), target.center());
-    assert_eq!(hint(&h).as_deref(), Some("Move 1 photo to “home”"));
+    assert_eq!(hint(&h).as_deref(), Some("Move 1 file to “home”"));
     // and released there: it asks first, nothing moved yet
     release(&mut h, target.center());
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { .. })), "{:?}", h.app.ui.dialog);
@@ -142,11 +149,26 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     assert!(home.join("beach.png").is_file() && !trip.join("beach.png").exists(), "moved on disk");
     let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).unwrap();
     assert!(matches!(&photo.source, lightcraft_catalog::Source::File { path } if Path::new(path) == home.join("beach.png")));
-    assert!(toast(&h).starts_with("Moved 1 photo to “home”. Edit → Undo moves them back."), "{}", toast(&h));
+    assert!(toast(&h).starts_with("Moved 1 file to “home”. Edit → Undo moves them back."), "{}", toast(&h));
     assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
     // and one Undo moves it back
     h.app.run("edit.undo", json!({})).unwrap();
     assert!(trip.join("beach.png").is_file() && !home.join("beach.png").exists(), "back where it was");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A selection set with a repeated id holds each photo once, so the drag carries it once.
+#[test]
+fn a_drag_after_selecting_with_a_repeated_id_carries_each_photo_once() {
+    let (root, trip, home) = folders("dedupe");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let (beach, garden) = (id_of(&h, "beach.png"), id_of(&h, "garden.png"));
+    h.app.run("library.select", json!({"ids": [beach, garden, beach], "active": beach})).unwrap();
+    let from = widget(&h, &format!("thumb:{beach}")).unwrap().center();
+    press(&mut h, from);
+    glide(&mut h, from, from + egui::vec2(60.0, 60.0));
+    assert_eq!(h.app.ui.dragging_photos, Some(vec![beach, garden]));
+    release(&mut h, from);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -197,7 +219,6 @@ fn photos_already_in_the_folder_stay_put() {
     release(&mut h, toggle.center());
     let target = folder_row(&h, &home).expect("opened");
     let garden = id_of(&h, "garden.png");
-    h.app.ui.dragging_photos = Some(vec![garden]);
     h.app.synthetic.push(egui::Event::PointerMoved(target.center()));
     h.app.synthetic.push(egui::Event::PointerButton {
         pos: target.center(),
@@ -206,12 +227,106 @@ fn photos_already_in_the_folder_stay_put() {
         modifiers: egui::Modifiers::NONE,
     });
     h.step();
+    h.step();
+    // a drag exists only with a button down: the photos are picked up once it is
+    h.app.ui.dragging_photos = Some(vec![garden]);
+    h.step();
     assert_eq!(hint(&h).as_deref(), Some("Already in “home”"));
     let undo = h.app.session.undo.len();
     release(&mut h, target.center());
     assert!(home.join("garden.png").is_file());
     assert_eq!(h.app.session.undo.len(), undo, "nothing done");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Open the folder holding `home`, add `extra_copies` photos at `trip/beach.png` (virtual copies of
+/// the same file), hold the ids `pick` chooses over `home` and say what the label reads.
+fn hint_over_home(tag: &str, extra_copies: usize, demo: bool, pick: impl Fn(&Headless) -> Vec<u64>) -> Option<String> {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let (root, trip, home) = folders(tag);
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    for _ in 0..extra_copies {
+        let id = h.app.session.catalog.alloc_photo_id();
+        let p =
+            Photo::new(id, Source::File { path: trip.join("beach.png").to_string_lossy().into() }, "beach.png", "PNG", 8, 8, "2026-01-01T10:00:00");
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    if demo {
+        let id = h.app.session.catalog.alloc_photo_id();
+        let p = Photo::new(id, Source::Demo { scene: 1 }, "demo.jpg", "JPEG", 8, 8, "2026-01-01T10:00:00");
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let toggle = widget(&h, &format!("libraryFolderToggle:{}", folder_key(&root))).unwrap();
+    press(&mut h, toggle.center());
+    release(&mut h, toggle.center());
+    let target = folder_row(&h, &home).expect("opened");
+    press(&mut h, target.center());
+    h.step();
+    // a drag exists only with a button down: the photos are picked up once it is
+    h.app.ui.dragging_photos = Some(pick(&h));
+    h.step();
+    let text = hint(&h);
+    let _ = std::fs::remove_dir_all(&root);
+    text
+}
+
+#[test]
+fn the_label_counts_only_the_photos_a_drop_moves() {
+    // one already in home, one outside it
+    let text = hint_over_home("count", 0, false, |h| vec![id_of(h, "garden.png"), id_of(h, "beach.png")]);
+    assert_eq!(text.as_deref(), Some("Move 1 file to “home”"));
+}
+
+#[test]
+fn a_photo_without_a_file_is_refused_not_moved_or_already_there() {
+    let text = hint_over_home("demo", 0, true, |h| vec![id_of(h, "demo.jpg")]);
+    assert_eq!(text.as_deref(), Some("Can't be moved here"));
+}
+
+#[test]
+fn virtual_copies_of_one_file_count_once() {
+    // the master and a virtual copy of beach.png: one file moves
+    let text =
+        hint_over_home("copies", 1, false, |h| h.app.session.catalog.photos().filter(|p| p.file_name == "beach.png").map(|p| p.id.0).collect());
+    assert_eq!(text.as_deref(), Some("Move 1 file to “home”"));
+}
+
+/// What the question asked after the photos `pick` chooses are dropped on `home` says it moves.
+fn question_over_home(tag: &str, extra_copies: usize, pick: impl Fn(&Headless) -> Vec<u64>) -> String {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let (root, trip, home) = folders(tag);
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    assert!(h.app.ui.settings.ask_before_move);
+    for _ in 0..extra_copies {
+        let id = h.app.session.catalog.alloc_photo_id();
+        let p =
+            Photo::new(id, Source::File { path: trip.join("beach.png").to_string_lossy().into() }, "beach.png", "PNG", 8, 8, "2026-01-01T10:00:00");
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let target = folder_row(&h, &home).expect("opened");
+    press(&mut h, target.center());
+    h.step();
+    h.app.ui.dragging_photos = Some(pick(&h));
+    h.step();
+    release(&mut h, target.center());
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { .. })), "{:?}", h.app.ui.dialog);
+    let text = h.painted_text().into_iter().find(|t| t.starts_with("Move ") && t.ends_with('?')).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&root);
+    text
+}
+
+#[test]
+fn the_question_counts_virtual_copies_of_one_file_once_like_the_label() {
+    let text = question_over_home("q-copies", 1, |h| h.app.session.catalog.photos().filter(|p| p.file_name == "beach.png").map(|p| p.id.0).collect());
+    assert_eq!(text, "Move 1 file to “home”?");
+}
+
+#[test]
+fn the_question_leaves_out_a_photo_already_in_the_folder_like_the_label() {
+    let text = question_over_home("q-count", 0, |h| vec![id_of(h, "garden.png"), id_of(h, "beach.png")]);
+    assert_eq!(text, "Move 1 file to “home”?");
 }
 
 #[test]
@@ -302,11 +417,20 @@ fn cancelling_the_question_moves_nothing() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Issue #3822: the folder rows are read for the second drop only once the sidebar settled. The
+/// first move changes the Missing Photos count, which a worker takes: a count that was running
+/// when the photo moved finds its old place empty and adds the Missing Photos row, and the
+/// recount takes it away again. Each moves every folder row below it, so on a busy machine a drop
+/// aimed at the row read before the count landed went to the folder above. The slow count here
+/// doesn't make the drop miss by itself: it makes the rows move after the first move on every
+/// run, and the test checks that `home` stays put once the sidebar settled.
 #[test]
 fn dont_ask_again_moves_the_next_drop_at_once() {
+    let count = std::time::Duration::from_secs(1);
     let (root, trip, home) = folders("dont-ask");
     std::fs::copy(trip.join("beach.png"), trip.join("dunes.png")).unwrap();
-    let mut h = app(&[(trip.join("beach.png"), false), (trip.join("dunes.png"), false), (home.join("garden.png"), false)]);
+    let photos = [(trip.join("beach.png"), false), (trip.join("dunes.png"), false), (home.join("garden.png"), false)];
+    let mut h = app_prepared(&photos, |app| app.missing_count_test_delay = Some(count));
     click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
     let target = folder_row(&h, &home).unwrap();
     let beach = id_of(&h, "beach.png");
@@ -320,11 +444,68 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     // the next drop goes at once
     let dunes = id_of(&h, "dunes.png");
     h.app.session.selection = lightcraft_engine::Selection::single(lightcraft_catalog::PhotoId(dunes));
-    h.step();
+    assert!(h.settle(std::time::Duration::from_secs(120)), "the sidebar settles after the move");
     let target = folder_row(&h, &home).unwrap();
-    drop_beach(&mut h, dunes, target);
+    // nothing moves the folder rows once settled, however long the count takes
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < count {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(folder_row(&h, &home), Some(target), "home stays where the drop aims");
+    let from = widget(&h, &format!("thumb:{dunes}")).unwrap().center();
+    press(&mut h, from);
+    glide(&mut h, from, target.center());
+    // (synthetic pointer events reach the app one a frame, the press's two included: one more
+    // frame brings the pointer to the end of the glide)
+    h.step();
+    assert_eq!(hint(&h).as_deref(), Some("Move 1 file to “home”"), "over home");
+    release(&mut h, target.center());
+    h.step();
     assert!(h.app.ui.dialog.is_none(), "not asked");
-    assert!(home.join("dunes.png").is_file(), "moved at once");
+    // the move runs within the frame of the drop: a file not there now never moves, and the
+    // toast says why
+    assert!(home.join("dunes.png").is_file(), "moved without a question (toast: {:?})", toast(&h));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dont_ask_again_is_kept_only_when_the_move_began() {
+    let (root, trip, home) = folders("dont-ask-refused");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let target = folder_row(&h, &home).unwrap();
+    let beach = id_of(&h, "beach.png");
+    // a file of that name is in the folder already (not in the library): the move is refused
+    std::fs::copy(trip.join("beach.png"), home.join("beach.png")).unwrap();
+    drop_beach(&mut h, beach, target);
+    click(&mut h, "check:moveDontAsk");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { dont_ask: true, .. })), "ticked");
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_none(), "the refusal closes the question");
+    assert!(trip.join("beach.png").is_file(), "nothing moved");
+    assert!(h.app.ui.settings.ask_before_move, "a refused move leaves the question on");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A confirmation that finds the photos in the folder already (they were moved there while the question was
+/// open, or a folder synchronization relinked them) moves nothing, so it doesn't turn the question off either.
+#[test]
+fn dont_ask_again_is_kept_only_when_a_photo_moved() {
+    let (root, trip, home) = folders("dont-ask-already");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let target = folder_row(&h, &home).unwrap();
+    let beach = id_of(&h, "beach.png");
+    drop_beach(&mut h, beach, target);
+    click(&mut h, "check:moveDontAsk");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { dont_ask: true, .. })), "ticked");
+    // the photo gets there some other way while the question is open
+    h.app.run("photo.moveToFolder", json!({"folder": home.to_string_lossy(), "ids": [beach]})).unwrap();
+    assert!(home.join("beach.png").is_file());
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_none());
+    assert!(h.app.ui.settings.ask_before_move, "nothing moved: the question stays on");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -344,5 +525,52 @@ fn a_question_left_open_while_another_library_opens_moves_nothing() {
     assert_eq!(r["ok"], false, "{r}");
     assert!(r["error"].as_str().unwrap_or_default().contains("Another library was opened"), "{r}");
     assert!(trip.join("beach.png").is_file() && !home.join("beach.png").exists(), "nothing moved");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Folders `a/home` and `b/home` (two of one name) and `trip`, with a photo in each.
+fn twin_folders(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let root = std::env::temp_dir().join(format!("lc-folder-twin-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (trip, a, b) = (root.join("trip"), root.join("a").join("home"), root.join("b").join("home"));
+    for (dir, file) in [(&trip, "beach.png"), (&a, "one.png"), (&b, "two.png")] {
+        std::fs::create_dir_all(dir).unwrap();
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 160, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join(file), png).unwrap();
+    }
+    (root, trip, a, b)
+}
+
+#[test]
+fn two_folders_with_one_name_are_told_apart_in_the_label_the_question_and_the_toast() {
+    let (root, trip, a, b) = twin_folders("label");
+    let mut h = app(&[(trip.join("beach.png"), false), (a.join("one.png"), false), (b.join("two.png"), false)]);
+    let toggle = widget(&h, &format!("libraryFolderToggle:{}", folder_key(&root))).unwrap();
+    press(&mut h, toggle.center());
+    release(&mut h, toggle.center());
+    let beach = id_of(&h, "beach.png");
+    let from = widget(&h, &format!("thumb:{beach}")).unwrap().center();
+    press(&mut h, from);
+    // When the photo is brought over each of the two: the label names the folder each one is in
+    let (row_a, row_b) = (folder_row(&h, &a).expect("a/home"), folder_row(&h, &b).expect("b/home"));
+    glide(&mut h, from, row_a.center());
+    // (the label is read from the pointer as the frame before saw it)
+    h.step();
+    let label_a = hint(&h).expect("a label over a/home");
+    glide(&mut h, row_a.center(), row_b.center());
+    h.step();
+    let label_b = hint(&h).expect("a label over b/home");
+    assert!(label_a.starts_with("Move 1 file to “home (") && label_a.ends_with("/a)”"), "{label_a}");
+    assert!(label_b.starts_with("Move 1 file to “home (") && label_b.ends_with("/b)”"), "{label_b}");
+    // and the question asked on the release says the same
+    release(&mut h, row_b.center());
+    let Some(crate::state::Dialog::MovePhotos { name, .. }) = &h.app.ui.dialog else { panic!("{:?}", h.app.ui.dialog) };
+    assert!(name.starts_with("home (") && name.ends_with("/b)"), "{name}");
+    // and so does the toast
+    h.step();
+    click(&mut h, "button:dialogOk");
+    assert!(toast(&h).starts_with("Moved 1 file to “home (") && toast(&h).contains("/b)”"), "{}", toast(&h));
+    assert!(b.join("beach.png").is_file(), "moved into the one that was asked about");
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +19,7 @@ pub enum ViewMode {
 }
 
 /// The right-hand tool/panel shown next to the tool strip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RightPanel {
     #[default]
@@ -35,9 +35,17 @@ pub enum RightPanel {
     Info,
     /// The profile browser (part of Edit).
     Profiles,
+    /// Assisted Culling's bursts, to arrange by hand (Window ▸ Bursts).
+    Bursts,
 }
 
 impl RightPanel {
+    /// A tool that takes the panel's place while it is used (Crop, Remove, Masking, Red Eye): on
+    /// closing, the panel shown before it comes back ([`UiState::leave_tool`]).
+    pub fn is_tool(self) -> bool {
+        matches!(self, RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
+    }
+
     pub fn is_edit_tool(self) -> bool {
         matches!(self, RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
     }
@@ -175,7 +183,7 @@ impl InfoOverlay {
     }
 }
 
-/// One line of the loupe's info overlay, chosen in View ▸ View Options (Lightroom Classic's Loupe
+/// One line of the loupe's info overlay, chosen in View ▸ Loupe Overlay ▸ View Options… (Lightroom Classic's Loupe
 /// Info 1 / Loupe Info 2). A line with nothing to show for a photo is left out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -367,11 +375,13 @@ pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 270.0, max
 /// The photo area the side panels always leave free (as far as their minimum widths allow).
 pub const MIN_PHOTO_WIDTH: f32 = 360.0;
 
-/// What the Keywording box shows: the keywords (chips to edit), them with the keywords containing
-/// them, or what exported files will carry (read only).
+/// What the Keywording box shows: the keywords as text to edit (Enter Keywords), the keywords
+/// (chips to edit), them with the keywords containing them, or what exported files will carry
+/// (read only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum KeywordingView {
+    Enter,
     #[default]
     Keywords,
     Containing,

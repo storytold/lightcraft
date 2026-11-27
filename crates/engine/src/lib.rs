@@ -9,6 +9,7 @@
 //! of decoded source proxies. Rendering is done by [`RenderJob`]s that are `Send` so frontends can
 //! run them off the UI thread.
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Model/cache types remain available without linking the optional inference crate.
 #[cfg(not(feature = "denoise"))]
@@ -28,6 +29,7 @@ pub mod crs_masks;
 pub mod demo;
 pub mod denoise;
 pub mod devices;
+pub mod disk_space;
 pub mod display;
 pub mod doc_path;
 mod errors;
@@ -46,8 +48,10 @@ pub mod guard;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
+pub mod lensfun_download;
 pub mod library;
 mod lightroom_archive;
+pub mod lightroom_backup;
 pub mod lightroom_catalog;
 pub mod lightroom_folder;
 pub mod lightroom_job;
@@ -60,6 +64,7 @@ mod model_download;
 pub mod open_path;
 pub mod originals;
 mod pdf;
+pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -68,6 +73,8 @@ pub mod print_color;
 pub mod print_pdf;
 pub mod profile_refs;
 pub mod proof;
+pub(crate) mod read_file;
+pub mod relocate;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -79,6 +86,7 @@ pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
+mod sync_same;
 pub mod text;
 mod view;
 pub mod walk;
@@ -88,7 +96,7 @@ use std::sync::Arc;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
-use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
+use lightcraft_catalog::{Catalog, CatalogError, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
@@ -115,7 +123,7 @@ pub enum EngineError {
     /// The folder (or file) asked for is a Lightroom Classic catalog or part of one, not a
     /// LightCraft library (issue #891): nothing was created or opened. `catalog`: the `.lrcat`
     /// to import with `library.importLightroom`, when one was found.
-    #[error("{} is a Lightroom Classic catalog, not a LightCraft library; import it into a LightCraft library with File ▸ Import Lightroom Catalog…{}", path.display(), catalog.as_ref().map_or(String::new(), |c| format!(" ({})", c.display())))]
+    #[error("{} is a Lightroom Classic catalog, not a LightCraft library; import it into a LightCraft library with File → Import Lightroom Catalog…{}", path.display(), catalog.as_ref().map_or(String::new(), |c| format!(" ({})", c.display())))]
     LightroomCatalog { path: std::path::PathBuf, catalog: Option<std::path::PathBuf> },
     /// The work was cancelled (by the person, an agent or a newer request): not a failure.
     #[error("{0}")]
@@ -136,7 +144,8 @@ pub struct UndoEntry {
     pub label: String,
     pub op: Op,
     /// A folder to rename on disk (`from` → `to`) before `op` is applied: Rename / Move Folder
-    /// (whose `op` relinks the photos inside). Never overwrites; refused when `to` exists. An
+    /// (whose `op` relinks the photos inside; a located folder, `on_disk: false`, renames nothing
+    /// and only follows). Never overwrites; refused when `to` exists. An
     /// empty `to` removes the (empty) folder `from`, an empty `from` creates `to` (Create Folder).
     pub folder: Option<FolderMove>,
     /// Inverses of logged path corrections from a partially failed history step.
@@ -167,16 +176,20 @@ fn single_photo(op: &Op, depth: usize) -> Option<PhotoId> {
     }
 }
 
-/// A folder renamed or moved on disk as part of an undo step.
+/// A folder renamed or moved on disk as part of an undo step, or (`on_disk: false`) a folder
+/// located where it already is, which moves no file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderMove {
     pub from: String,
     pub to: String,
+    /// The step renames the folder on disk. `false` for a folder located where it already is
+    /// (`folder.updateLocation`): only the photos and the view follow, no file is touched.
+    pub on_disk: bool,
 }
 
 impl FolderMove {
     fn reversed(&self) -> Self {
-        Self { from: self.to.clone(), to: self.from.clone() }
+        Self { from: self.to.clone(), to: self.from.clone(), on_disk: self.on_disk }
     }
 }
 
@@ -284,6 +297,11 @@ pub struct Session {
     pub face_models_dir: Option<std::path::PathBuf>,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
+    /// The lens database download ([`lensfun_download`]).
+    pub lensfun: lensfun_download::Download,
+    /// The host may offer the lens database at its start, and fetch it after the user's yes
+    /// ([`Session::with_lens_auto_download`]; when: [`lensfun_download::fetch_on_start`]).
+    pub lens_auto_download: bool,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
     pub place_names: cmd::geocode::PlaceNames,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
@@ -321,6 +339,8 @@ pub struct Session {
     /// Current time provider (ISO 8601); injectable for tests and wasm.
     pub clock: Box<dyn Fn() -> String + Send>,
     depth: u32,
+    /// [`Session::start_waiting`] is starting tasks (the commands it runs don't start more themselves).
+    starting_waiting: bool,
     /// Selected mask (Masking panel), by mask id.
     pub active_mask: Option<u32>,
     /// AI masks (SAM 3): the model and the last photo prepared for it.
@@ -346,6 +366,9 @@ pub struct Session {
     pub print: print::template::PrintSettings,
     /// Saved print templates (`print.template.*`), persisted in prefs.json.
     pub print_templates: Vec<print::template::PrintTemplate>,
+    /// The Template Browser's folders besides [`print::template::DEFAULT_FOLDER`], sorted by name
+    /// (`print.template.folder.*`), persisted in prefs.json.
+    pub print_template_folders: Vec<String>,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -353,6 +376,8 @@ pub struct Session {
     /// The user's point-curve presets (`curve.*`; built-ins: [`cmd::curves::builtin_presets`]),
     /// persisted in prefs.json.
     pub curve_presets: Vec<cmd::curves::CurvePreset>,
+    /// Imported camera profiles (`.dcp`).
+    pub dcp_profiles: Vec<cmd::dcp_profiles::DcpEntry>,
     /// Mask effect presets (the Masking panel's Effect menu).
     pub mask_effects: Vec<cmd::mask_effects::MaskEffect>,
     /// The effect a new mask of each kind (`brush`, `linear`…) starts with: the one last applied
@@ -389,10 +414,21 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Preparing photos in the background: settings (app-wide and this library's) and the build
+    /// it runs ([`prep`]).
+    pub prep: prep::PrepState,
+    /// The long edge (px) the loupe renders at on this screen, as the frontend last said
+    /// (0: not known). Standard previews are built at least this big, so the loupe can use them.
+    pub loupe_edge: usize,
+    /// Builds that ended and were replaced by the next one before a frontend announced them
+    /// ([`Session::take_unreported_builds`]).
+    unreported_builds: Vec<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
     pub cache_mb: u32,
+    /// The once-per-session alert for a drive running low under the preview cache ([`disk_space`]).
+    pub(crate) disk_alert: disk_space::DiskAlertState,
     /// Slideshow playback settings (`slideshow.playback`; persisted in prefs.json).
     pub slideshow: slideshow::PlaybackSettings,
     /// Slideshow slide layout: Layout, Options and Backdrop (`slideshow.layout`; persisted in
@@ -476,6 +512,8 @@ impl Session {
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
+            lensfun: Default::default(),
+            lens_auto_download: false,
             place_names: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -496,6 +534,7 @@ impl Session {
             media: media::MediaCache::default(),
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
             depth: 0,
+            starting_waiting: false,
             active_mask: None,
             segmenter: segment::Segmenter::default(),
             active_spot: None,
@@ -507,9 +546,11 @@ impl Session {
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
+            print_template_folders: Vec::new(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),
+            dcp_profiles: Vec::new(),
             mask_effects: Vec::new(),
             mask_tool_effects: Default::default(),
             label_sets: Vec::new(),
@@ -525,9 +566,13 @@ impl Session {
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
+            prep: Default::default(),
+            loupe_edge: 0,
+            unreported_builds: Vec::new(),
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
+            disk_alert: Default::default(),
             slideshow: slideshow::PlaybackSettings::default(),
             slide_layout: slide::SlideSettings::default(),
             slide_overlays: slide_overlay::OverlaySettings::default(),
@@ -556,6 +601,15 @@ impl Session {
 
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let r = self.dispatch(id, params, true);
+        // a task this command freed the lane of starts now, not at the next frame
+        self.start_waiting();
+        r
+    }
+
+    /// [`Session::execute`] without starting waiting tasks; `journal`: record the call when the command is journaled
+    /// (not for a task that waited: the call that asked for it is recorded already).
+    fn dispatch(&mut self, id: &str, params: &Value, journal: bool) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // a command that validates the photos a call names isn't held back by the selection
         if !(spec.explicit_targets && cmd::names_photos(params)) {
@@ -563,11 +617,47 @@ impl Session {
         }
         let empty = Value::Object(Default::default());
         let params = if params.is_null() { &empty } else { params };
-        self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
+        self.run_command(id, (journal && spec.journal).then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
             // a shared parameter check ([`Session::targets`]) names the command it ran for
             EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
             e => e,
         })
+    }
+
+    /// A build that ended is replaced by the next one before a frontend announced it: keep it (at most 16; the oldest
+    /// goes first) for [`Session::take_unreported_builds`].
+    pub(crate) fn keep_unreported_build(&mut self, build: std::sync::Arc<cmd::previews::PreviewBuild>) {
+        const KEEP: usize = 16;
+        if self.unreported_builds.len() >= KEEP {
+            self.unreported_builds.remove(0);
+        }
+        self.unreported_builds.push(build);
+    }
+
+    /// The builds that ended and were replaced before a frontend announced them, oldest first, once. The frontend
+    /// announces each (and sets its `reported`) like the current build's end.
+    pub fn take_unreported_builds(&mut self) -> Vec<std::sync::Arc<cmd::previews::PreviewBuild>> {
+        std::mem::take(&mut self.unreported_builds)
+    }
+
+    /// Start the tasks waiting in line whose lane is free ([`crate::activity`]), each by running the command it was
+    /// asked with. One that can't start is logged and the next in line goes on. Every frontend gets this after each
+    /// command; the app also calls it every frame, for a lane that frees while nothing is asked.
+    pub fn start_waiting(&mut self) {
+        if self.depth > 0 || self.starting_waiting {
+            return;
+        }
+        self.starting_waiting = true;
+        // (bounded: each turn takes one task out of a line that is at most this long)
+        for _ in 0..activity::MAX_WAITING {
+            let Some(w) = self.activity.take_ready() else { break };
+            let r = self.dispatch(&w.request.command, &w.request.params, false);
+            self.activity.started();
+            if let Err(e) = r {
+                log::warn!("{}: a task that waited could not start: {e}", w.request.command);
+            }
+        }
+        self.starting_waiting = false;
     }
 
     /// Run `f` as command `id` with what [`Session::execute`] does around every command: the
@@ -606,7 +696,8 @@ impl Session {
             }
         }
         if self.depth == 0 && self.library.is_some() {
-            // Make the command durable before reporting success. When the command's own records
+            // Make the command durable before reporting success (natively: handed to the catalog
+            // log's own thread, which syncs it right after and holds it until it can). When the command's own records
             // can't be appended, it fails with `NotSaved`: the change stays applied in memory and
             // queued, and the next save (any later command, or the frame loop) retries it. Other
             // persistence trouble (a failed compaction, an older queued change still unwritten by
@@ -628,10 +719,23 @@ impl Session {
 
     // ---------------------------------------------------------------- ops, undo
 
-    /// Apply an op as one undoable step.
+    /// Apply an op as one undoable step. A new edit: one that would make a smart album include
+    /// itself is refused here, whichever command, task or caller asked ([`Catalog::apply_new`]);
+    /// undo, redo and opening a library bring back what was and are not held to that.
+    ///
+    /// A batch that fails and cannot be rolled back whole ([`CatalogError::PartlyApplied`]) did change the catalog, so
+    /// it is journaled all the same (replaying it leaves the same changes), and what is left of its rollback is the
+    /// undo step: undoing it finishes the rollback. The error still reaches the caller.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_catalog(op)?;
+        let (inv, failure) = match self.apply_through(op, Catalog::apply_new) {
+            Ok(inv) => (inv, None),
+            Err(EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining })) => {
+                let remaining = *remaining;
+                (remaining.clone(), Some(EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining: Box::new(remaining) })))
+            }
+            Err(e) => return Err(e),
+        };
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -642,10 +746,17 @@ impl Session {
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
+    /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
+        self.apply_through(op, Catalog::apply)
+    }
+
+    /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
+    /// was), then forget what the session cached of the photos it replaced.
+    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -664,7 +775,11 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = self.catalog.apply(op)?;
+        // (a batch that was only partly taken back changed the catalog all the same: what hangs on its photos goes too)
+        let applied = apply(&mut self.catalog, op);
+        if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+            return applied.map_err(Into::into);
+        }
         for id in invalidated {
             self.media.forget(id);
         }
@@ -674,17 +789,20 @@ impl Session {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
-        Ok(inv)
+        Ok(applied?)
     }
 
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
     /// step renames it back (`folder` is the undo direction: current place → old place).
     pub(crate) fn commit_with_folder(&mut self, label: &str, op: Op, folder: FolderMove) -> Result<()> {
-        self.commit(label, op)?;
-        if let Some(e) = self.undo.last_mut() {
+        let result = self.commit(label, op);
+        // (a batch only partly taken back is journaled and has its undo step too: that step moves the folder back)
+        if (result.is_ok() || matches!(result, Err(EngineError::Catalog(CatalogError::PartlyApplied { .. }))))
+            && let Some(e) = self.undo.last_mut()
+        {
             e.folder = Some(folder);
         }
-        Ok(())
+        result
     }
 
     /// The box to cut a face's picture from: the detector's, when the scan has looked at the face (every face is then shown
@@ -703,8 +821,12 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        self.catalog.apply(op)?;
-        self.pending_log.push(fwd);
+        let applied = self.catalog.apply(op);
+        if applied.is_ok() || matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+            // (a batch only partly taken back changed the catalog all the same: the journal has to say so)
+            self.pending_log.push(fwd);
+        }
+        applied?;
         Ok(())
     }
 
@@ -775,7 +897,12 @@ impl Session {
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
-                self.undo.push(e);
+                // (a step that was only partly applied cannot be tried again: what is left of it goes to the other
+                // stack, where taking it back returns the catalog to where it was before the attempt)
+                match self.rest_of_partial_step(&mut e, &err) {
+                    Some(rest) => self.redo.push(rest),
+                    None => self.undo.push(e),
+                }
                 return Err(err);
             }
         };
@@ -791,6 +918,24 @@ impl Session {
         Ok(e.label)
     }
 
+    /// The step that takes back what an undo or redo step (`e`) left in the catalog when it failed part-way
+    /// ([`CatalogError::PartlyApplied`]); `None` when it failed without changing anything. The step itself cannot be
+    /// tried again from where the catalog now is, so its sidecars to repair are handed on.
+    fn rest_of_partial_step(&mut self, e: &mut UndoEntry, err: &EngineError) -> Option<UndoEntry> {
+        let EngineError::Catalog(CatalogError::PartlyApplied { remaining, .. }) = err else { return None };
+        self.pending_sidecar_repairs.append(&mut e.retry_sidecars);
+        // (the inverses of path corrections it kept come after what is left, as when a step succeeds)
+        let op = match (**remaining).clone() {
+            op if e.retry_inverse.is_empty() => op,
+            Op::Batch { mut ops } => {
+                ops.append(&mut e.retry_inverse);
+                Op::Batch { ops }
+            }
+            op => Op::Batch { ops: std::iter::once(op).chain(std::mem::take(&mut e.retry_inverse)).collect() },
+        };
+        Some(UndoEntry { label: e.label.clone(), op, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() })
+    }
+
     pub fn redo_step(&mut self) -> Result<String> {
         self.redo_step_with(&rename::RealFs)
     }
@@ -800,7 +945,10 @@ impl Session {
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
-                self.redo.push(e);
+                match self.rest_of_partial_step(&mut e, &err) {
+                    Some(rest) => self.undo.push(rest),
+                    None => self.redo.push(e),
+                }
                 return Err(err);
             }
         };
@@ -844,17 +992,19 @@ impl Session {
         rename::validate_sidecars(fs, &entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         // Repair discarded file steps before another path change can stale their exact paths.
         // Unrelated metadata history must remain usable while a sidecar is still unwritable.
-        if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+        // the folder to rename on disk, if the step has one
+        let on_disk = entry.folder.as_ref().filter(|f| f.on_disk);
+        if on_disk.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
             self.repair_sidecars_with(fs).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         }
         rename::retry_sidecars(fs, &mut entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         let op = &entry.op;
         let folder = entry.folder.as_ref();
-        if let Some(f) = folder {
+        if let Some(f) = on_disk {
             cmd::browse::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
         }
         let undo_folder = || {
-            if let Some(f) = folder {
+            if let Some(f) = on_disk {
                 let _ = cmd::browse::folder_on_disk(&f.to, &f.from);
             }
         };
@@ -873,8 +1023,10 @@ impl Session {
         }
         match self.apply_catalog(op.clone()) {
             Ok(inv) => {
-                if let Some(f) = folder {
-                    cmd::browse::follow_folder(self, &f.from, &f.to);
+                match folder {
+                    Some(f) if f.on_disk => cmd::browse::follow_folder(self, &f.from, &f.to),
+                    Some(f) => relocate::follow_located(self, &f.from, &f.to),
+                    None => {}
                 }
                 if entry.retry_inverse.is_empty() {
                     Ok(inv)
@@ -888,10 +1040,32 @@ impl Session {
                 }
             }
             Err(e) => {
+                if matches!(e, EngineError::Catalog(CatalogError::PartlyApplied { .. })) {
+                    // the step changed the catalog in part: the journal has to say so
+                    self.pending_log.push(entry.op.clone());
+                }
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-                if let Err(mut be) = rename::move_all(fs, &back) {
+                let moved_back = rename::move_all(fs, &back);
+                // (what is left of a rollback that failed part-way must follow the files as far as they went back,
+                // not move them again)
+                let e = match e {
+                    EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => EngineError::Catalog(CatalogError::PartlyApplied {
+                        cause,
+                        remaining: Box::new(rename::rest_after_move_back(*remaining, &moved_back)),
+                    }),
+                    e => e,
+                };
+                if let Err(mut be) = moved_back {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
-                    return Err(EngineError::Other(format!("{e}; the files could not all be moved back: {}", be.message)));
+                    let moved = format!("the files could not all be moved back: {}", be.message);
+                    return Err(match e {
+                        // (what is left of the rollback must reach the undo and redo stacks all the same)
+                        EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => EngineError::Catalog(CatalogError::PartlyApplied {
+                            cause: Box::new(CatalogError::Invalid(format!("{cause}; {moved}"))),
+                            remaining,
+                        }),
+                        e => EngineError::Other(format!("{e}; {moved}")),
+                    });
                 }
                 undo_folder();
                 Err(e)
@@ -929,8 +1103,9 @@ impl Session {
             i.crop_edited |= crop_edited;
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
+        let own_auto = self.own_auto_wb(id, &requested, label);
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &requested, label));
+        ops.extend(self.auto_sync_ops(id, &requested, label, &own_auto));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
@@ -960,7 +1135,7 @@ impl Session {
             photo.height.max(1) as usize,
             &d,
             true,
-            photo.embedded_lens.as_ref(),
+            photo.embedded_lens.as_deref(),
         );
         d.crop.geometry.rect = frame.crop.rect;
         d
@@ -971,18 +1146,18 @@ impl Session {
     /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
     /// (Sync doesn't carry it either), nor history / snapshot restores. Constrain Crop then fits each
     /// photo's own crop: the active photo's fitted crop is never copied over another's.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
-        if !self.auto_sync
-            || self.active() != Some(id)
-            || self.selection.ids.len() < 2
-            || label.starts_with("History:")
-            || label.starts_with("Restore ")
-        {
+    ///
+    /// White balance goes on each photo as the active photo's mode or value on the photo's own
+    /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
+    /// its pixels), a Temp or Tint the same number, only the slider that moved.
+    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
+        if !self.auto_sync_applies(id, label) {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let mut old_json = old.to_json();
-        let mut new_json = new.to_json();
+        // (Remove Hot Pixels, omitted when off, is stated: switching it off is a change)
+        let mut old_json = old.to_json_for_merge();
+        let mut new_json = new.to_json_for_merge();
         // False is omitted from stored profile JSON. Keep it explicit for this comparison so
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
@@ -999,21 +1174,62 @@ impl Session {
                 return Vec::new();
             }
         }
+        let ainfo = self.source_info(id);
+        let wb_changed = old.wb != new.wb;
         self.selection
             .ids
             .iter()
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
+                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                if wb_changed {
+                    sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
+                }
+                let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
     }
 
+    /// Auto Sync carries an edit of photo `id` labelled `label` to the other selected photos: it is
+    /// on, `id` is the active photo of a selection of two or more, and the edit is not a History or
+    /// snapshot restore.
+    fn auto_sync_applies(&self, id: PhotoId, label: &str) -> bool {
+        self.auto_sync
+            && self.active() == Some(id)
+            && self.selection.ids.len() >= 2
+            && !label.starts_with("History:")
+            && !label.starts_with("Restore ")
+    }
+
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
     pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
+        let mut settings = settings;
+        // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on:
+        // masks this edit kept, under the photo's settings before it (a geometry edit then moves
+        // the photo, not them); masks it brought in (paste, sync, a preset, a history step, a
+        // sidecar), under the settings they came with, where they render now. Kept masks also
+        // turn with an orientation change the edit makes (a sync or paste of the Crop group).
+        let before = match &self.interaction {
+            Some(i) if i.photo == id => Some(i.original.clone()),
+            _ => self.develop_of(id),
+        };
+        let turn = before.as_ref().and_then(|b| orientation_change(b.orientation, settings.orientation));
+        if settings.masks.iter().any(|m| !m.on_photo) || turn.is_some() {
+            let kept_frame = before.as_ref().and_then(|b| self.mask_frame(id, b));
+            let new_frame = self.mask_frame(id, &settings);
+            for m in &mut settings.masks {
+                let kept = before.as_ref().is_some_and(|b| b.masks.contains(m));
+                if let Some(f) = if kept { kept_frame.as_ref() } else { new_frame.as_ref() } {
+                    lightcraft_pipeline::mask_space::attach(m, f);
+                }
+                if let (true, Some(t)) = (kept, turn) {
+                    lightcraft_pipeline::mask_space::turn(m, t);
+                }
+            }
+        }
         let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
         Some(Op::Batch {
@@ -1021,11 +1237,45 @@ impl Session {
         })
     }
 
+    /// Put the old masks of `d` (on the corrected frame, `Mask::on_photo` false) on photo `id`
+    /// before the warp, from the frame of `drawn` (the settings they were drawn under): they
+    /// render where they did and from then on stay on their content when lens corrections,
+    /// Upright or Transform change.
+    pub fn attach_masks(&self, id: PhotoId, drawn: &DevelopSettings, d: &mut DevelopSettings) {
+        if d.masks.iter().all(|m| m.on_photo) {
+            return;
+        }
+        let Some(frame) = self.mask_frame(id, drawn) else { return };
+        for m in &mut d.masks {
+            lightcraft_pipeline::mask_space::attach(m, &frame);
+        }
+    }
+
+    /// The uncropped frame of photo `id` under settings `d`, with its lens: where mask
+    /// coordinates go through its warp ([`lightcraft_pipeline::geometry::Frame::for_mask`]).
+    pub(crate) fn mask_frame(&self, id: PhotoId, d: &DevelopSettings) -> Option<lightcraft_pipeline::geometry::Frame> {
+        let p = self.catalog.photo(id)?;
+        Some(lightcraft_pipeline::geometry::Frame::with_lens(
+            p.width.max(1) as usize,
+            p.height.max(1) as usize,
+            &d.effective(),
+            false,
+            p.embedded_lens.as_deref(),
+        ))
+    }
+
     pub fn begin_interaction(&mut self, label: &str) -> Result<()> {
         if self.interaction.is_some() {
             self.end_interaction()?;
         }
         let id = self.active().ok_or_else(|| EngineError::Other("no active photo".into()))?;
+        // old masks go onto the photo before a drag moves the frame under them (they then stay on
+        // their content while it does, not only once it ends)
+        if let Some(d) = self.develop_of(id).filter(|d| d.masks.iter().any(|m| !m.on_photo)) {
+            let mut on = (*d).clone();
+            self.attach_masks(id, &d, &mut on);
+            self.apply_silent(Op::SetDevelop { id, settings: Arc::new(on), label: label.into(), edited: None })?;
+        }
         let original = self.develop_of(id).unwrap_or_default();
         self.interaction = Some(Interaction { label: label.into(), photo: id, original, crop_edited: false });
         Ok(())
@@ -1358,9 +1608,30 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 }
 
 #[cfg(test)]
+mod lightroom_fixture;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 use tests::face_recognize as tests_face_recognize;
 #[cfg(test)]
 use tests::xmp as tests_xmp;
+
+/// The turn or flip that takes orientation `from` to `to` (`None` when they are the same): what the
+/// masks, on the oriented photo, must follow ([`lightcraft_pipeline::mask_space::turn`]).
+pub(crate) fn orientation_change(from: lightcraft_geom::Orientation, to: lightcraft_geom::Orientation) -> Option<lightcraft_geom::Orientation> {
+    use lightcraft_geom::Orientation;
+    if from == to {
+        return None;
+    }
+    let inv = from.inverse();
+    let probes = [(0.2, 0.3), (0.7, 0.1), (0.4, 0.9)];
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+    (0..8u8).map(|k| Orientation::from_parts(k >= 4, k % 4)).find(|t| {
+        probes.iter().all(|&(x, y)| {
+            let (rx, ry) = inv.map(x, y, 1.0, 1.0);
+            let (tx, ty) = from.map(rx, ry, 1.0, 1.0);
+            close(t.map(tx, ty, 1.0, 1.0), to.map(rx, ry, 1.0, 1.0))
+        })
+    })
+}

@@ -29,11 +29,7 @@ impl Display {
     /// Load the ICC profile at `path`.
     pub fn load(path: &str) -> Result<Display, String> {
         let path = path.trim();
-        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.len() > MAX_PROFILE_BYTES as u64 {
-            return Err(format!("{path}: too large for an ICC profile"));
-        }
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = crate::read_file::read_regular(path, MAX_PROFILE_BYTES as u64).map_err(|e| format!("{path}: {e} (an ICC profile)"))?;
         Display::from_bytes(path, &bytes)
     }
 
@@ -150,6 +146,25 @@ mod tests {
             assert_eq!(full.unwrap(), sampled.unwrap(), "{w}x{h}");
             assert_eq!(a, b);
         }
+    }
+
+    /// Alt-drag previews on a profiled display (issue #937): the histogram stays the photo's (not
+    /// the preview's), and the clipping view is tested and drawn in sRGB, so it stays black and white.
+    #[test]
+    fn diagnostic_views_keep_the_photos_histogram() {
+        use lightcraft_pipeline::Overlay;
+        let mut session = crate::Session::with_demo();
+        let id = session.visible_cloned()[0];
+        let d = std::sync::Arc::new(p3());
+        let mut run = |o| session.loupe_job(id, 320, 240, true).unwrap().with_display(Some(d.clone())).with_overlay(o).run().rendered.unwrap();
+        let plain = run(Overlay::None);
+        let clip = run(Overlay::ClipShadows);
+        let (a, b) = (plain.histogram.mean_luma(), clip.histogram.mean_luma());
+        assert!((a - b).abs() < 0.02, "the photo's histogram: {a} vs {b}");
+        let px = &clip.image.data;
+        // (the profile may round white to 254)
+        let binary = px.iter().filter(|p| p[..3].iter().all(|v| *v <= 2 || *v >= 253)).count();
+        assert!(binary as f64 > 0.99 * px.len() as f64, "{binary} of {}", px.len());
     }
 
     #[test]

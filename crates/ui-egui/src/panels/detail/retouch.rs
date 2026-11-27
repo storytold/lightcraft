@@ -1,11 +1,51 @@
 use super::geometry::CanvasMap;
 use super::masks::{pin, pins_live};
-use super::*;
+use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect, Stroke, ToolOverlay, json, register, vec2};
+use crate::panels::spot_outline;
+use lightcraft_develop::SpotMode;
 
 // ------------------------------------------------------------------------ remove
 
+/// What of each Remove spot can be grabbed, as last drawn: `(spot, is source, screen points of
+/// its stroke, radius)`, the selected spot and the photo's long edge on screen (for [`grab_radius`]).
+/// `brush_wheel` finds the spot under the pointer in it.
+#[derive(Clone, Debug, Default)]
+pub(super) struct SpotBodies {
+    pub(super) bodies: Vec<(usize, bool, Vec<Pos2>, f32)>,
+    pub(super) active: Option<usize>,
+    pub(super) long: f64,
+}
+
+/// How far from its stroke a spot is drawn (its outline) and can be grabbed, on a photo whose long edge is `long` on screen.
+pub(super) fn grab_radius(s: &lightcraft_develop::Spot, long: f64) -> f32 {
+    feather_band(s.mode == SpotMode::Fill, (s.size * long) as f32, s.feather as f32).1 + OUTLINE_GAP
+}
+pub(super) const SPOT_BODIES: &str = "remove-spot-bodies";
+
+/// The target or source among `bodies` under `q` (its pin or anywhere along its stroke) as `(spot, is
+/// source, distance)`: the selected spot's first, then the nearest.
+pub(super) fn spot_under(bodies: &[(usize, bool, Vec<Pos2>, f32)], active: Option<usize>, q: Pos2) -> Option<(usize, bool, f32)> {
+    bodies
+        .iter()
+        .filter_map(|(spot, source, pts, r)| Some((*spot, *source, spot_outline::grab_distance(pts, q, r.max(8.0))?)))
+        .min_by(|a, b| (Some(a.0) != active, a.2).partial_cmp(&(Some(b.0) != active, b.2)).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+/// The `spot.add` mode the Remove panel's Mode paints with, or `None` while no brush is chosen
+/// (Mode ▸ None, or another tool): then the photo takes no new spots, by pointer or by keyboard.
+pub(crate) fn spot_brush(tool: &str) -> Option<&'static str> {
+    match tool {
+        "remove" => Some("remove"),
+        "fill" => Some("fill"),
+        "heal" => Some("heal"),
+        "clone" => Some("clone"),
+        _ => None,
+    }
+}
+
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
-/// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
+/// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one
+/// (only while a brush is chosen: with Mode ▸ None nothing is painted and no brush circle shows).
 /// The Tool Overlay mode (Shift+H) says which spots show; a hidden spot can't be grabbed, so a
 /// click there adds a new one.
 pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
@@ -14,62 +54,71 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     let (mode, live) = (app.ui.tool_overlay, pins_live(app, resp, map));
     // Auto also hides them while a new spot is painted
     let painting = mode == ToolOverlay::Auto && matches!(app.gesture, Some(Gesture::Spot { .. }));
+    // while a spot's target or source is dragged, its target's outline is hidden, so the edge being matched shows
+    let moving = match app.gesture {
+        Some(Gesture::SpotMove { spot, .. }) => Some(spot),
+        _ => None,
+    };
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
     let mut pins = p.clone();
     if painting {
         pins.set_invisible();
     }
-    // (spot, is source, screen centre, radius) of everything that can be grabbed
+    // (spot, is source, screen centre, radius) of every pin: the keyboard handles
     let mut grips: Vec<(usize, bool, Pos2, f32)> = Vec::new();
+    // (spot, is source, screen points of the stroke, radius) of everything that can be grabbed: the pin, and
+    // anywhere within the radius of the stroke's points (the source's, shifted by its offset, for the selected spot)
+    let mut bodies: Vec<(usize, bool, Vec<Pos2>, f32)> = Vec::new();
+    let clip = p.clip_rect();
     for (i, s) in d.spots.iter().enumerate() {
-        let r = (s.size * long) as f32;
+        let band = feather_band(s.mode == SpotMode::Fill, (s.size * long) as f32, s.feather as f32);
+        let r = grab_radius(s, long);
         let sel = Some(i) == active;
         if !mode.shows(sel, live) {
             continue;
         }
         let p = &pins;
-        let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
-        for q in &s.points {
-            p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+        let target: Vec<Pos2> = s.points.iter().map(|q| map.screen(*q)).collect();
+        let light = if sel { Stroke::new(1.25, Color32::from_white_alpha(230)) } else { Stroke::new(1.0, Color32::from_white_alpha(120)) };
+        if touches(&target, r, clip) && moving != Some(i) {
+            draw_spot(p, &target, band, light, false, sel);
         }
-        let Some(&t) = s.points.first() else { continue };
-        let tq = map.screen(t);
+        let Some(&tq) = target.first() else { continue };
         if let Some(o) = s.source_offset.filter(|_| sel) {
-            let sq = map.screen(Point::new(t.x + o.x, t.y + o.y));
-            for q in &s.points {
-                p.circle_stroke(map.screen(Point::new(q.x + o.x, q.y + o.y)), r, Stroke::new(1.0, Color32::from_white_alpha(170)));
+            let source: Vec<Pos2> = s.points.iter().map(|q| map.screen(Point::new(q.x + o.x, q.y + o.y))).collect();
+            if touches(&source, r, clip) {
+                draw_spot(p, &source, band, Stroke::new(1.0, Color32::from_white_alpha(150)), true, false);
             }
+            let sq = source[0];
             let dir = (tq - sq).normalized();
-            p.arrow(sq + dir * r, (tq - sq) - dir * (2.0 * r).min((tq - sq).length()), Stroke::new(1.0, Color32::from_white_alpha(200)));
+            let (from, by) = (sq + dir * r, (tq - sq) - dir * (2.0 * r).min((tq - sq).length()));
+            p.arrow(from, by, Stroke::new(2.5, Color32::from_black_alpha(110)));
+            p.arrow(from, by, Stroke::new(1.0, Color32::from_white_alpha(200)));
             register(ui, format!("spotSource:{i}"), Rect::from_center_size(sq, vec2(14.0, 14.0)));
             grips.push((i, true, sq, r));
+            bodies.push((i, true, source, r));
         }
         pin(p, tq, sel);
         register(ui, format!("spotPin:{i}"), Rect::from_center_size(tq, vec2(14.0, 14.0)));
         grips.push((i, false, tq, r));
+        bodies.push((i, false, target, r));
     }
     if spot_keys(app, ui, map, d, &grips) {
         return;
     }
     let r = (app.ui.remove_size as f64 * long) as f32;
-    // a target or source under `q`: the selected spot's first, then the nearest pin
-    let hit = |q: Pos2| {
-        grips
-            .iter()
-            .filter(|g| g.2.distance(q) < g.3.max(8.0))
-            .min_by(|a, b| {
-                (Some(a.0) != active, a.2.distance(q)).partial_cmp(&(Some(b.0) != active, b.2.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .copied()
-    };
+    let band = feather_band(app.ui.tool == "fill", r, app.ui.remove_feather);
+    let hit = |q: Pos2| spot_under(&bodies, active, q);
     let hover = resp.hover_pos().and_then(hit);
+    // the mouse wheel resizes the spot under the pointer instead of the brush (`brush_wheel`, next frame)
+    ui.data_mut(|m| m.insert_temp(egui::Id::unique(SPOT_BODIES), SpotBodies { bodies: bodies.clone(), active, long }));
+    let brush = spot_brush(&app.ui.tool);
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        } else {
+        } else if brush.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-            p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
-            p.circle_stroke(h, r * (1.0 - app.ui.remove_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(110)));
+            brush_circles(&p, h, spot_band(band));
         }
     }
     let press = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
@@ -104,29 +153,31 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let _ = app.run("spot.select", json!({"index": spot}));
         return;
     }
-    if let Some(q) = resp.interact_pointer_pos()
-        && (resp.drag_started() || resp.dragged() || resp.clicked())
+    if brush.is_some()
+        && let Some(q) = resp.interact_pointer_pos()
+        // the release ends the stroke where it is, but only the left button's: a middle drag pans
+        && (resp.drag_started() || resp.dragged() || resp.clicked() || resp.drag_stopped_by(egui::PointerButton::Primary))
     {
         let n = map.norm(q);
         match &mut app.gesture {
-            Some(Gesture::Spot { points }) => points.push(n),
+            // a point every r/4 of movement; a held pointer stores nothing, and the release adds where it ended
+            Some(Gesture::Spot { points }) => {
+                let last = points.last().map(|l| map.screen(*l));
+                if last.is_none_or(|l| spot_outline::adds_point(l, q, r, resp.drag_stopped_by(egui::PointerButton::Primary))) {
+                    points.push(n);
+                }
+            }
             _ => app.gesture = Some(Gesture::Spot { points: vec![n] }),
         }
     }
     if let Some(Gesture::Spot { points }) = &app.gesture {
-        for q in points {
-            p.circle_filled(map.screen(*q), r, Color32::from_white_alpha(60));
-        }
+        let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
+        draw_spot(&p, &screen, band, Stroke::new(1.25, Color32::from_white_alpha(230)), false, true);
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
+        && let Some(mode) = brush
     {
-        let mode = match app.ui.tool.as_str() {
-            "heal" => "heal",
-            "clone" => "clone",
-            "fill" => "fill",
-            _ => "remove",
-        };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         let _ = app.run(
             "spot.add",
@@ -135,9 +186,64 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     }
 }
 
+/// Whether the discs of radius `r` at `pts` can show in `clip`.
+fn touches(pts: &[Pos2], r: f32, clip: Rect) -> bool {
+    pts.iter().any(|q| clip.expand(r).contains(*q))
+}
+
+/// Where a spot of radius `r` starts and stops blending into the photo, as `pipeline::spots` does it: Heal and
+/// Clone feather inside the radius (over its outer 80 % at full feather), Fill replaces all of it and feathers
+/// outside, up to 0.3 radii further.
+pub(super) fn feather_band(outside: bool, r: f32, feather: f32) -> (f32, f32) {
+    let f = (feather / 100.0).clamp(0.0, 1.0);
+    if outside { (r, r * (1.0 + 0.3 * f)) } else { (r * (1.0 - 0.8 * f), r) }
+}
+
+/// How far outside the blend a spot's outline runs (screen points), so the line never covers the edge being matched.
+const OUTLINE_GAP: f32 = 3.0;
+
+/// A spot over `pts` blending across `band`: its outline just outside the blend and, with `feather`, a faint
+/// dashed line where the blend is full, so the feather between the two shows.
+fn draw_spot(p: &egui::Painter, pts: &[Pos2], band: (f32, f32), light: Stroke, dashed: bool, feather: bool) {
+    draw_outline(p, &spot_outline::union_outline(pts, band.1 + OUTLINE_GAP), light, dashed);
+    if feather && band.1 - band.0 >= 3.0 && band.0 >= 2.0 {
+        for l in spot_outline::union_outline(pts, band.0) {
+            p.extend(egui::Shape::dashed_line(&l, Stroke::new(1.0, Color32::from_white_alpha(110)), 3.0, 3.0));
+        }
+    }
+}
+
+/// A Remove brush's `band` as its cursor shows it: the outer circle where a spot's outline will run.
+pub(super) fn spot_band(band: (f32, f32)) -> (f32, f32) {
+    (band.0, band.1 + OUTLINE_GAP)
+}
+
+/// The brush cursor: a solid circle at the outer edge of `band`, a faint one at its inner edge (where the blend is full).
+pub(super) fn brush_circles(p: &egui::Painter, at: Pos2, band: (f32, f32)) {
+    for (rr, col) in [(band.1, Color32::WHITE), (band.0.max(1.0), Color32::from_white_alpha(140))] {
+        p.circle_stroke(at, rr, Stroke::new(2.0, Color32::from_black_alpha(90)));
+        p.circle_stroke(at, rr, Stroke::new(1.0, col));
+    }
+}
+
+/// A spot's outline in `light`, over a dark under-stroke so a thin line stays visible on light and dark areas alike.
+fn draw_outline(p: &egui::Painter, lines: &[Vec<Pos2>], light: Stroke, dashed: bool) {
+    let dark = Stroke::new(light.width + 1.0, Color32::from_black_alpha(90));
+    for stroke in [dark, light] {
+        for l in lines {
+            if dashed {
+                p.extend(egui::Shape::dashed_line(l, stroke, 6.0, 4.0));
+            } else {
+                p.add(egui::Shape::line(l.clone(), stroke));
+            }
+        }
+    }
+}
+
 /// Keyboard stand-ins for the Remove tool: each spot's target and source (an arrow press moves
 /// it a step, one undo step; Return selects the spot), and a placement point that the arrows move
-/// and Return turns into a new spot of the brush's size there. True when a spot was added.
+/// and Return turns into a new spot of the brush's size there (only while a brush is chosen, as
+/// with the pointer: with none the placement point is not offered). True when a spot was added.
 fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings, grips: &[(usize, bool, Pos2, f32)]) -> bool {
     for &(spot, source, q, _) in grips {
         let at = map.norm(q);
@@ -155,6 +261,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             let _ = app.run("develop.endInteraction", json!({}));
         }
     }
+    let Some(mode) = spot_brush(&app.ui.tool) else { return false };
     // where a new spot goes: the photo's centre at first, then wherever the arrows took it
     let key = egui::Id::unique("lc-spot-placement");
     let place: (f64, f64) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5));
@@ -175,12 +282,6 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         ui.painter().circle_stroke(q, r, Stroke::new(1.0, Color32::WHITE));
     }
     if keys.activated {
-        let mode = match app.ui.tool.as_str() {
-            "heal" => "heal",
-            "clone" => "clone",
-            "fill" => "fill",
-            _ => "remove",
-        };
         let _ = app.run(
             "spot.add",
             json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
