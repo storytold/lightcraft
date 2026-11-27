@@ -391,9 +391,10 @@ fn select_by_offers_exact_ratings() {
     assert_eq!(app.session.selection.ids, want);
 }
 
-/// #3311: the exact-rating rows are translated like "and higher" ones, not left in English.
+/// #3311: an exact-rating row is labelled apart from the "and higher" row for the same stars, through
+/// the translatable "{} only" key (its translations follow in storytold/craft-i18n).
 #[test]
-fn select_by_exact_rating_rows_are_translated() {
+fn select_by_exact_rating_rows_are_labelled_apart_from_and_higher() {
     fn label_of(nodes: &[MenuNode], want: &serde_json::Value) -> Option<String> {
         nodes.iter().find_map(|n| match n {
             MenuNode::Item { id, params, label, .. } if id == "library.selectBy" && params == want => Some(label.clone()),
@@ -402,12 +403,12 @@ fn select_by_exact_rating_rows_are_translated() {
         })
     }
     let app = app();
-    crate::i18n::set_language(crate::i18n::Locale::De);
     let bar = menu_bar(&app);
-    crate::i18n::set_language(crate::i18n::Locale::En);
     let edit = &bar.iter().find(|(t, _)| t == "Edit").unwrap().1;
-    assert_eq!(label_of(edit, &json!({"rating": 3, "ratingOp": "eq"})).as_deref(), Some("nur ★★★"));
-    assert_eq!(label_of(edit, &json!({"rating": 3})).as_deref(), Some("★★★ und höher"));
+    let only = label_of(edit, &json!({"rating": 3, "ratingOp": "eq"})).expect("the three-star-only row");
+    let higher = label_of(edit, &json!({"rating": 3})).expect("the three-star-and-higher row");
+    assert_eq!(only, crate::i18n::tr_format!("{} only", "★★★"));
+    assert_ne!(only, higher);
 }
 
 #[test]
