@@ -153,6 +153,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 };
                 let stack = app.session.catalog.stack_of(*id).map(|st| (st.id, st.position(*id).unwrap_or(0)));
                 let overlay = crate::thumb::Thumb {
+                    // the marks grow with the strip, as its thumbnails do (#4110)
+                    marks_scale: (r.height() / crate::state::FILM_HEIGHT_MIN).max(1.0),
                     surface: crate::thumb::Surface::Film,
                     photo: &photo,
                     rect: photo_rect,

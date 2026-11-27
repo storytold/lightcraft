@@ -30,11 +30,10 @@ pub(crate) enum Surface {
 /// The sizes, in points, of a surface's marks.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Metrics {
-    /// A star's side and the distance between two, and the shared rating drawing of that size (its
-    /// side and step are the same numbers).
+    /// A star's side and the distance between two (at the surface's own size, those of the shared rating drawing:
+    /// the grid's is `RatingSize::Medium`, the filmstrip's `RatingSize::Small`).
     star: f32,
     star_pitch: f32,
-    rating: crate::rating::RatingSize,
     /// The room a digit takes in a compact rating.
     digit: f32,
     /// The flag's icon, and the room it takes (a gap to what is left of it included).
@@ -68,13 +67,36 @@ pub(crate) struct Metrics {
     band: bool,
 }
 
+impl Metrics {
+    /// The marks row (stars, flag, edited mark, label dot, the row itself and its text) `k` times its size: a taller
+    /// filmstrip grows its marks with its thumbnails (issue #4110). The corner badges keep theirs.
+    pub(crate) fn marks_scaled(self, k: f32) -> Metrics {
+        let k = if k.is_finite() { k.max(1.0) } else { 1.0 };
+        Metrics {
+            star: self.star * k,
+            star_pitch: self.star_pitch * k,
+            digit: self.digit * k,
+            flag_icon: self.flag_icon * k,
+            flag: self.flag * k,
+            edited_icon: self.edited_icon * k,
+            edited: self.edited * k,
+            dot: self.dot * k,
+            label: self.label * k,
+            bar: self.bar * k,
+            pad: self.pad * k,
+            gap: self.gap * k,
+            font: self.font * k,
+            ..self
+        }
+    }
+}
+
 impl Surface {
     pub(crate) fn metrics(self) -> Metrics {
         match self {
             Surface::Grid => Metrics {
                 star: 12.0,
                 star_pitch: 13.0,
-                rating: crate::rating::RatingSize::Medium,
                 digit: 7.0,
                 flag_icon: 14.0,
                 flag: 18.0,
@@ -99,7 +121,6 @@ impl Surface {
             Surface::Film => Metrics {
                 star: 8.0,
                 star_pitch: 9.0,
-                rating: crate::rating::RatingSize::Small,
                 digit: 5.0,
                 flag_icon: 10.0,
                 flag: 12.0,
@@ -423,13 +444,22 @@ pub(crate) struct Thumb<'a> {
     /// Whether the surface tints the cell around the photo with its colour label (the square grid
     /// and the filmstrip do; the justified grid has no surround).
     pub surround: bool,
+    /// How much bigger than the surface's own the marks row is drawn (1: as ever; a taller filmstrip's is more).
+    pub marks_scale: f32,
+}
+
+impl Thumb<'_> {
+    /// The sizes this thumbnail's marks are drawn at.
+    fn metrics(&self) -> Metrics {
+        self.surface.metrics().marks_scaled(self.marks_scale)
+    }
 }
 
 /// Draws the overlay; returns the stack badge's response, which covers part of the cell, so that
 /// its caller can give it the cell's context menu.
 pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, th: &Thumb) -> Option<egui::Response> {
     let t = Tokens::get(ui.ctx());
-    let m = th.surface.metrics();
+    let m = th.metrics();
     let photo = th.photo;
     let p = clipped(ui, th);
     let rect = th.rect;
@@ -500,7 +530,7 @@ fn marks_row(ctx: &egui::Context, p: &Painter, t: &Tokens, m: &Metrics, th: &Thu
     match layout.stars {
         Stars::None => {}
         Stars::Row(n) => {
-            let width = crate::rating::paint_rating(p, pos2(x, y), n, m.rating, t.star);
+            let width = crate::rating::paint_stars(p, pos2(x, y), n, (m.star, m.star_pitch), t.star);
             mark("stars", Rect::from_min_size(pos2(x, y - m.star / 2.0), vec2(width, m.star)));
             x += width;
         }
@@ -541,7 +571,7 @@ fn marks_row(ctx: &egui::Context, p: &Painter, t: &Tokens, m: &Metrics, th: &Thu
 /// its icon, then the `i/` of `i/n`, on a narrow photo, and is never painted outside the photo.
 /// Returns the badge's rectangle (as laid out, before clipping) and its response.
 fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, th: &Thumb, t: &Tokens, sid: StackId, pos: usize) -> Option<(Rect, egui::Response)> {
-    let m = th.surface.metrics();
+    let m = th.metrics();
     let st = app.session.catalog.stack(sid)?;
     let (n, collapsed) = (st.photos.len(), st.collapsed);
     let id = th.photo.id;
@@ -581,7 +611,7 @@ fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, th: &Thumb, t: &Token
 /// The virtual-copy tag at the photo's top right, so that a copy and its master tell apart.
 /// Returns where it is, when it is drawn.
 fn copy_tag(ui: &mut egui::Ui, th: &Thumb, t: &Tokens, name: &str, stack_w: Option<f32>) -> Option<Rect> {
-    let m = th.surface.metrics();
+    let m = th.metrics();
     let p = clipped(ui, th);
     let g = p.layout_no_wrap(name.to_string(), t.semibold(m.micro + 1.0), Color32::WHITE);
     let mode = copy_tag_layout(th.rect.width(), stack_w, g.size().x, &m);
@@ -610,7 +640,7 @@ fn copy_tag(ui: &mut egui::Ui, th: &Thumb, t: &Tokens, name: &str, stack_w: Opti
 /// A raw shown from its embedded JPEG: a small amber "Preview" pill above the marks row, always
 /// shown (it changes what editing does) wherever it fits clear of the other marks.
 fn preview_pill(ui: &mut egui::Ui, th: &Thumb, t: &Tokens, why: &str, stack: Option<Rect>, hard: &[Rect], soft: &[Rect]) {
-    let m = th.surface.metrics();
+    let m = th.metrics();
     let p = clipped(ui, th);
     let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(m.micro), Color32::WHITE);
     let place = preview_pill_place(th.rect, g.size().x, stack, hard, soft, &m);

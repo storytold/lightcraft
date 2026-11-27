@@ -813,6 +813,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, view: 
         crate::state::GridBadges::Never => (false, false),
     };
     let overlay = crate::thumb::Thumb {
+        marks_scale: 1.0,
         surface: crate::thumb::Surface::Grid,
         photo: &photo,
         rect: photo_rect,

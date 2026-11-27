@@ -65,13 +65,18 @@ pub fn paint_star(painter: &Painter, rect: Rect, filled: bool, color: Color32) {
 /// Paint `rating` filled stars in a row, the first one's left edge at `pos.x` and its vertical centre
 /// at `pos.y`. Returns the width the row takes (0 for no stars), so the caller can lay out what follows.
 pub fn paint_rating(painter: &Painter, pos: Pos2, rating: u8, size: RatingSize, color: Color32) -> f32 {
+    paint_stars(painter, pos, rating, (size.icon(), size.step()), color)
+}
+
+/// [`paint_rating`] with stars `side` points wide every `step` points (a surface that grows its marks, as a taller
+/// filmstrip does).
+pub fn paint_stars(painter: &Painter, pos: Pos2, rating: u8, (side, step): (f32, f32), color: Color32) -> f32 {
     let n = rating.min(STARS);
-    let side = size.icon();
     for i in 0..n {
-        let left = pos.x + f32::from(i) * size.step();
+        let left = pos.x + f32::from(i) * step;
         paint_star(painter, Rect::from_min_size(pos2(left, pos.y - side / 2.0), vec2(side, side)), true, color);
     }
-    f32::from(n) * size.step()
+    f32::from(n) * step
 }
 
 /// What the stars show once hovering is taken into account: the hovered star's rating previews over

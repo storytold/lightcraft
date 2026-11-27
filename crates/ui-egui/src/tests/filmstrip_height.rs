@@ -39,7 +39,12 @@ fn dragging_the_filmstrips_top_edge_makes_it_and_its_thumbnails_bigger() {
     let mut h = loupe();
     let first = h.app.session.visible_cloned()[0].0;
     let cell = format!("film:{first}");
+    // a rating, so the strip draws stars on the first photo
+    let r = h.request("engine.execute", json!({"command": "photo.rate", "params": {"ids": [first], "rating": 3}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
     let (strip0, cell0, canvas0) = (widget(&h, "filmstrip"), widget(&h, &cell), h.app.canvas_rect.expect("the canvas"));
+    let stars0 = widget(&h, &format!("film:badge:stars:{first}"));
     assert_eq!(h.app.ui.film_height, FILM_HEIGHT_MIN, "the usual height to start with");
     // up by 100 points: the strip grows by that much, the photo's canvas shrinks by it, the cells grow
     drag_edge(&mut h, -100.0);
@@ -48,6 +53,10 @@ fn dragging_the_filmstrips_top_edge_makes_it_and_its_thumbnails_bigger() {
     assert!((strip1.height() - strip0.height() - 100.0).abs() < 1.0, "{strip0:?} → {strip1:?}");
     assert!((canvas0.height() - canvas1.height() - 100.0).abs() < 1.0, "{canvas0:?} → {canvas1:?}");
     assert!(cell1.width() > cell0.width() * 1.5 && cell1.height() > cell0.height() * 1.5, "bigger thumbnails: {cell0:?} → {cell1:?}");
+    // and bigger rating stars on them, for the high-resolution screens of #4110
+    let stars = |h: &Headless| widget(h, &format!("film:badge:stars:{first}"));
+    let stars1 = stars(&h);
+    assert!(stars1.height() > stars0.height() * 1.5 && stars1.width() > stars0.width() * 1.5, "bigger stars: {stars0:?} → {stars1:?}");
     // far up: it stops at 40 % of the view (or the most it can be), the photo keeps the rest
     drag_edge(&mut h, -500.0);
     let full = canvas0.height() + FILM_HEIGHT_MIN;
