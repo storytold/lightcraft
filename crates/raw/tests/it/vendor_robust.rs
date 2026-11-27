@@ -1,7 +1,7 @@
 //! Malformed vendor raw files (NEF, ARW, PEF, ORF, RW2 of every raw format, CR2, RAF, CRW) must decode to an error, never panic.
 
-use lightcraft_tiff::tags as t;
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+use craft_tiff::tags as t;
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use proptest::prelude::*;
 
 const W: u32 = 32;
@@ -124,7 +124,11 @@ fn rw2_of(format: u16, bits: u16, n: usize) -> Vec<u8> {
     };
     let off = build(0).len();
     let mut b = build(off as u32);
-    b.extend((0..n).map(|i| (i * 89 % 253) as u8));
+    if format == 8 {
+        b.extend((0..n).map(|i| [0xDF, 0xF7, 0x7D][i % 3]));
+    } else {
+        b.extend((0..n).map(|i| (i * 89 % 253) as u8));
+    }
     b
 }
 
