@@ -283,6 +283,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if let Some(why) = &app.caches.denoise.rejected {
         hint(ui, t, why);
     }
+    manifest_help(ui, t);
     if all.is_empty() {
         hint(
             ui,
@@ -306,6 +307,41 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
     work_section(app, ui, t, &list);
+}
+
+const MANIFEST_EXAMPLE: &str = r#"{
+  "id": "my-bayer-model",
+  "name": "My Bayer model",
+  "version": "1",
+  "domain": "bayerToRgb",
+  "tile": 512,
+  "overlap": 64,
+  "gain": { "kind": "none" }
+}"#;
+
+#[cfg(test)]
+mod manifest_help_tests {
+    #[test]
+    fn copied_example_is_accepted_by_the_model_manifest_parser() {
+        let model = lightcraft_denoise::manifest::parse(super::MANIFEST_EXAMPLE.as_bytes()).unwrap();
+        assert_eq!(model.tile, 512);
+        assert_eq!(model.overlap, 64);
+    }
+}
+
+fn manifest_help(ui: &mut egui::Ui, t: &Tokens) {
+    let help = egui::CollapsingHeader::new(tr("Model manifest help")).id_salt("denoiseManifestHelp").show(ui, |ui| {
+        hint(ui, t, "Save denoise-model.json beside the ONNX file. This example describes the format; tile, overlap and gain must match your model. A manifest cannot make an incompatible ONNX model compatible.");
+        hint(ui, t, "Required: id, name, version, domain, tile, overlap and gain. Use a unique id of 1–64 lowercase letters, digits, dots, underscores or hyphens, starting with a letter or digit. Do not use builtin. name allows 1–80 characters; version allows 1–40.");
+        hint(ui, t, "domain must be bayerToRgb: packed Bayer input, RGB output. tile is the model's input size in packed cells: a multiple of 16 from 64 to 2048. overlap must be even, at least 16 and less than half of tile.");
+        hint(ui, t, "gain uses kind: none when output and input have the same scale. For matchMean, supply nominal (0.000001–1000000000000) and max_deviation (0–0.5). These values describe the model, not the desired denoising strength.");
+        hint(ui, t, "Optional: licence, source, sha256, sizeBytes and provenance. source must be an HTTPS address; sha256 is 64 lowercase hexadecimal digits; sizeBytes is the ONNX file size, up to 2 GiB. The JSON file may be at most 64 KiB.");
+        ui.label(RichText::new(MANIFEST_EXAMPLE).monospace());
+        if crate::button::Button::new("Copy JSON example").widget("denoise:copyManifestExample").show(ui).clicked() {
+            ui.ctx().copy_text(MANIFEST_EXAMPLE.to_owned());
+        }
+    });
+    register(ui, "denoise:manifestHelp", help.header_response.rect);
 }
 
 /// What the cache holds, its limit, and what is being made.
