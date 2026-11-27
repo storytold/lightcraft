@@ -54,6 +54,7 @@ mod tests {
     use super::{QueuedDrops, drain_ready, drops_wait};
     use lightcraft_engine::Session;
     use lightcraft_ui_egui::panels::library_problem::LibraryProblem;
+    use lightcraft_ui_egui::pick::PickResult;
     use lightcraft_ui_egui::state::Dialog;
     use lightcraft_ui_egui::{LightcraftApp, Services};
 
@@ -65,7 +66,7 @@ mod tests {
         }
     }
 
-    type Asked = std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<Vec<String>>>>>;
+    type Asked = std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<PickResult>>>>;
 
     fn app_with_library(tag: &str) -> Result<(Scratch, LightcraftApp), String> {
         let dir = std::env::temp_dir().join(format!("lc-web-drop-gate-{tag}-{}", std::process::id()));

@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::pick::PickRequest;
+use crate::pick::{PickRequest, PickResult};
 use crate::state::Dialog;
 use crate::{LightcraftApp, Services};
 
@@ -66,7 +66,7 @@ fn app(dir: &Scratch) -> Headless {
 
 /// Folder dialogs the host shows "elsewhere": each request is recorded with the sender that
 /// answers it, so a test can cancel or choose after the app has moved on to its next UI pass.
-type Asked = Arc<Mutex<Vec<(PickRequest, Sender<Vec<String>>)>>>;
+type Asked = Arc<Mutex<Vec<(PickRequest, Sender<PickResult>)>>>;
 
 /// A no-library window whose New Library and Open Another… folder dialogs are asynchronous, as on
 /// the desktop hosts that run pickers off the UI thread (and in the browser).
@@ -96,7 +96,7 @@ fn asked_dialogs(asked: &Asked) -> usize {
 /// Answer the oldest folder dialog: `paths` empty cancels it.
 fn answer_picker(asked: &Asked, paths: Vec<String>) {
     let sender = asked.lock().unwrap().remove(0).1;
-    sender.send(paths).unwrap();
+    sender.send(Ok(paths)).unwrap();
 }
 
 /// A library folder that can be chosen by Open Another…, made outside the no-library app.

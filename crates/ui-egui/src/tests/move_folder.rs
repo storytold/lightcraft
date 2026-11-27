@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::pick::{PickKind, PickRequest};
+use crate::pick::{PickKind, PickRequest, PickResult};
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -44,7 +44,7 @@ fn write_png(path: &str, seed: u8) {
     std::fs::write(path, bytes).unwrap();
 }
 
-type Asked = Arc<Mutex<Vec<(PickRequest, Sender<Vec<String>>)>>>;
+type Asked = Arc<Mutex<Vec<(PickRequest, Sender<PickResult>)>>>;
 
 /// The app with `trip/a.png` imported, a host that shows dialogs elsewhere (each request is
 /// recorded with the sender that answers it), and a synchronous folder dialog that only counts
@@ -116,7 +116,7 @@ fn move_folder_to_asks_off_the_ui_thread_and_moves_with_the_answer() {
     }
     assert!(std::path::Path::new(&dir.path("trip/a.png")).exists(), "nothing moves before the answer");
     // the user chooses the destination: the folder moves there and its photo follows
-    asked.lock().unwrap()[0].1.send(vec![dir.path("dest")]).unwrap();
+    asked.lock().unwrap()[0].1.send(Ok(vec![dir.path("dest")])).unwrap();
     h.settle(SETTLE);
     assert!(h.app.pending_picks.is_empty());
     assert!(std::path::Path::new(&dir.path("dest/trip/a.png")).exists(), "moved on disk");
@@ -140,7 +140,7 @@ fn move_folder_to_asks_off_the_ui_thread_and_moves_with_the_answer() {
     h.step();
     assert_eq!(blocking.load(Ordering::Relaxed), 0);
     assert_eq!(asked.lock().unwrap().len(), 2, "its own dialog");
-    asked.lock().unwrap()[1].1.send(vec![dir.0.to_string_lossy().to_string()]).unwrap();
+    asked.lock().unwrap()[1].1.send(Ok(vec![dir.0.to_string_lossy().to_string()])).unwrap();
     h.settle(SETTLE);
     assert!(std::path::Path::new(&dir.path("trip/a.png")).exists(), "moved back");
 }
@@ -165,7 +165,7 @@ fn no_library_switch_while_move_folder_to_waits_for_its_destination() {
     assert!(e.contains("Move Folder To…"), "{e}");
     assert_eq!(library(&h), Some(first.clone()), "the first library stays open");
     // the answer moves the folder there, and its photo follows
-    asked.lock().unwrap()[0].1.send(vec![dir.path("dest")]).unwrap();
+    asked.lock().unwrap()[0].1.send(Ok(vec![dir.path("dest")])).unwrap();
     h.settle(SETTLE);
     assert!(h.app.pending_picks.is_empty());
     assert!(std::path::Path::new(&dir.path("dest/trip/a.png")).exists(), "moved on disk");
@@ -199,7 +199,7 @@ fn move_folder_to_waits_for_open_library_to_finish() {
     assert!(!h.app.pending_picks.iter().any(|p| p.command == "folder.move"), "nothing waits to move");
     assert!(std::path::Path::new(&dir.path("trip/a.png")).exists(), "the folder stays");
     // the Open Library dialog is cancelled: Move Folder To… asks for its destination again
-    asked.lock().unwrap()[0].1.send(vec![]).unwrap();
+    asked.lock().unwrap()[0].1.send(Ok(vec![])).unwrap();
     h.settle(SETTLE);
     assert!(h.app.pending_picks.is_empty());
     open_row_menu(&mut h, &format!("source:libfolder:{}", dir.path("trip")));
