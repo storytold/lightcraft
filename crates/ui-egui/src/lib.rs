@@ -98,9 +98,9 @@ mod services;
 
 #[cfg(test)]
 use app::{import_tick_allowed, sam_download_ended, shot_ready};
-pub(crate) use caches::key_of;
 use caches::{AlbumCounts, AlbumRecount};
 pub use caches::{FilterValues, LibraryCounts, RulesView};
+pub(crate) use caches::{key_of, people_scope};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
 #[cfg(target_os = "linux")]
@@ -638,7 +638,8 @@ pub struct Caches {
     /// The Keyword List's tick boxes, by library revision and selection.
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
-    people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
+    /// The People view's cards, by library revision and what the view shows ([`people_scope`]).
+    people: Option<(u64, String, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
@@ -688,8 +689,9 @@ pub struct Caches {
     pub face_hints: Option<(u64, u64, u64, std::sync::Arc<panels::faces::Hints>)>,
     /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
     pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
-    /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
-    pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
+    /// The unnamed faces: (catalog revision, what the view shows ([`people_scope`]), faces indexed, when it was
+    /// asked for, the list).
+    pub unnamed: Option<(u64, String, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The most photos the face scan has had left at once since it last finished (the progress bar's whole).
     pub faces_peak: u64,
     person_names: Option<(u64, std::sync::Arc<Vec<String>>)>,

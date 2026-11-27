@@ -91,6 +91,7 @@ mod offline;
 mod open_lightroom;
 mod panel_restore;
 pub(super) mod panels;
+mod people_scope;
 mod preset_favorites;
 mod preset_import;
 mod preview_limit;

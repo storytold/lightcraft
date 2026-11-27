@@ -49,6 +49,13 @@ pub struct RulesView {
     pub albums: Vec<album_picker::AlbumEntry>,
 }
 
+/// What the People view lists people and unnamed faces from, as a cache key: the source, the folder it shows and the
+/// filter bar (its person aside), read from the session without looking through the library.
+pub(crate) fn people_scope(s: &lightcraft_engine::Session) -> String {
+    let filter = lightcraft_catalog::Filter { person: None, ..s.filter.clone() };
+    format!("{:?}|{:?}|{:?}|{filter:?}", s.source, s.browse, s.library_folder)
+}
+
 pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
@@ -179,19 +186,16 @@ impl Caches {
             }
         }
     }
-    /// The people named on faces among the photos the filter lets through (its own `person` aside),
-    /// with photo counts.
-    pub fn people(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        filter: &lightcraft_catalog::Filter,
-    ) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
-        let key = lightcraft_catalog::Filter { person: None, ..filter.clone() };
+    /// The people named on faces among the photos the view shows (its source and filter bar, the
+    /// filter's own `person` aside: [`lightcraft_engine::Session::people_filter`]), with photo counts.
+    pub fn people(&mut self, s: &lightcraft_engine::Session) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
+        let key = people_scope(s);
         match &self.people {
-            Some((r, f, t)) if *r == cat.revision && *f == key => t.clone(),
+            Some((r, k, t)) if *r == s.catalog.revision && *k == key => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(cat.people_in(&key));
-                self.people = Some((cat.revision, key, t.clone()));
+                // (asked only when something changed: Recently Added looks through the library for its start)
+                let t = std::sync::Arc::new(s.catalog.people_in(&s.people_filter()));
+                self.people = Some((s.catalog.revision, key, t.clone()));
                 t
             }
         }

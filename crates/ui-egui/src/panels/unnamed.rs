@@ -26,7 +26,7 @@ pub struct UnnamedFace {
 /// What `faces.unnamed` said.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Unnamed {
-    /// Unnamed faces in the library (more than are listed when the list was cut).
+    /// Unnamed faces in the photos the view shows (more than are listed when the list was cut).
     pub total: usize,
     pub faces: Vec<UnnamedFace>,
     /// Look-alikes are next to each other.
@@ -58,22 +58,24 @@ pub fn parse(v: &Value) -> Unnamed {
     }
 }
 
-/// The unnamed faces, asked for again only when the catalog changed, or (while the scan runs and learns more faces) at
-/// most every few seconds, since putting look-alikes together looks at every pair.
+/// The unnamed faces in the photos the view shows (its source and filter bar), asked for again only when the catalog or
+/// the view changed, or (while the scan runs and learns more faces) at most every few seconds, since putting look-alikes
+/// together looks at every pair.
 pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
-    let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
-    if let Some((r, i, at, list)) = &app.caches.unnamed
+    let (rev, scope, indexed) = (app.session.catalog.revision, crate::people_scope(&app.session), app.caches.faces_indexed);
+    if let Some((r, k, i, at, list)) = &app.caches.unnamed
         && *r == rev
+        && *k == scope
         && (*i == indexed || now - *at < 3.0)
     {
         return list.clone();
     }
-    let v = app.session.execute("faces.unnamed", &json!({})).unwrap_or(Value::Null);
+    let v = app.session.execute("faces.unnamed", &json!({"scope": "view"})).unwrap_or(Value::Null);
     let list = Arc::new(parse(&v));
     // what was selected and has since been named (or removed) is no longer selected
     let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
     app.ui.unnamed_selected.retain(|k| present.contains(k));
-    app.caches.unnamed = Some((rev, indexed, now, list.clone()));
+    app.caches.unnamed = Some((rev, scope, indexed, now, list.clone()));
     list
 }
 
@@ -118,7 +120,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     // the name the named faces suggest, when every selected face has the same one
     let suggested: Option<String> = {
-        let list = app.caches.unnamed.as_ref().map(|c| c.3.clone());
+        let list = app.caches.unnamed.as_ref().map(|c| c.4.clone());
         list.and_then(|l| {
             let names: std::collections::BTreeSet<Option<&str>> =
                 l.faces.iter().filter(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index))).map(|f| f.suggestion.as_deref()).collect();

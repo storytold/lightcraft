@@ -928,6 +928,14 @@
 
 ## 2026-10-22
 
+### The People view follows the folder or album you are in
+- People lists the named people and unnamed faces of the photos the view shows: the folder, album, Picks or Recently
+  Added chosen in the sidebar, narrowed by the filter bar (issue #2516). The source's name follows the Named People
+  title. Before, the cards only followed the filter bar and Unnamed faces listed the whole library, so naming the faces
+  of one shoot meant scrolling past everyone else, and Show photos for someone from another shoot gave an empty grid.
+  All Photos, Missing Photos and Recently Deleted list everyone in the library, narrowed by the filter bar, which now
+  narrows Unnamed faces too.
+
 ### Exports don't create a photo's sidecar
 - Saving an export, a preset or any other file as `IMG_1.xmp` or `IMG_1.jpg.xmp` in the folder of the library photo
   `IMG_1.jpg` is now refused when no sidecar is there yet, as writing over an existing one already was. The library
