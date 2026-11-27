@@ -92,6 +92,10 @@ pub fn paper_names() -> impl Iterator<Item = &'static str> {
 /// as `x`, so `L判`, `L判。`, `l-size` and `（l）` are one name and `4 × 6` is `4x6`.
 fn normalize_paper(name: &str) -> String {
     name.chars()
+        .map(|c| match c {
+            '０'..='９' | 'Ａ'..='Ｚ' | 'ａ'..='ｚ' => char::from_u32(u32::from(c) - 0xfee0).unwrap_or(c),
+            _ => c,
+        })
         .filter_map(|c| match c {
             '×' | '*' => Some('x'),
             c if c.is_alphanumeric() => Some(c),
