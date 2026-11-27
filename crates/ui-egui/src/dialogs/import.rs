@@ -26,7 +26,7 @@ use crate::widgets::register;
 mod body;
 mod scan;
 mod tags;
-mod task;
+pub(crate) mod task;
 
 #[cfg(test)]
 pub(crate) use body::grid_height;

@@ -220,7 +220,7 @@ fn a_photo_never_culled_is_refused() {
     let commits = h.app.session.commits();
     release(&mut h, to);
     assert_eq!(h.app.session.commits(), commits);
-    let toast = h.app.ui.toast.as_ref().map(|(t, _, _)| t.clone()).unwrap_or_default();
+    let toast = h.app.ui.toast.as_ref().map(|(t, _, _, _)| t.clone()).unwrap_or_default();
     assert!(toast.contains("Assisted Culling"), "{toast}");
 }
 
