@@ -40,9 +40,9 @@ fn click_whats_new(answer: Result<(), String>) -> (Headless, Arc<Mutex<Vec<Strin
         html_url: RELEASE.into(),
         ..Default::default()
     });
-    for _ in 0..4 {
-        h.step();
-    }
+    // the prompt shows once the updater's own thread has looked at how this copy is installed (on Windows that reads
+    // the installer's registry entries, which takes a while on a busy runner)
+    assert!(h.step_until(SETTLE, |h| text_rect(h, "What's new").is_some()), "the update prompt shows its What's new link");
     let link = text_rect(&h, "What's new").expect("the update prompt shows its What's new link");
     let at = link.center();
     h.app.synthetic.push(egui::Event::PointerMoved(at));
