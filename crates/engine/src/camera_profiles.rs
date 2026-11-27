@@ -184,6 +184,8 @@ fn cache() -> &'static Mutex<Cache> {
 
 /// The profile for camera `model`: from [`dir`], else built in; read once per process.
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
+    // Capture the process fingerprint before a profile can enter the lookup cache.
+    stable_profile_key();
     get_from(model, dir().as_deref())
 }
 
@@ -223,7 +225,7 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
             let mut ranked: Vec<(u8, PathBuf)> = Vec::new();
             for e in &entries {
                 let path = e.path();
-                if !path.extension().is_some_and(|x| x == "json") || !path.is_file() {
+                if path.extension().is_none_or(|x| x != "json") || !path.is_file() {
                     continue;
                 }
                 let rank = if path.file_stem().is_some_and(|s| normalize_for_local_match(&s.to_string_lossy()) == needle) { 1 } else { 2 };
@@ -243,11 +245,20 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     profile
 }
 
-/// Changes when the profiles folder's contents change (per process): part of the render cache
-/// keys, so thumbnails rendered before a profile existed are not reused after.
+/// Identity of the camera-profile lookup cache and of the currently loaded lens database.
+/// The camera profiles already loaded by this process outlive file changes on disk. A lens
+/// reload changes only the lens part of the key used by thumbnails and rendered views.
 pub fn cache_key() -> u64 {
+    cache_key_with_lens(stable_profile_key(), crate::lens_profiles::cache_key())
+}
+
+fn stable_profile_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
     *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+}
+
+fn cache_key_with_lens(profile_key: u64, lens_key: u64) -> u64 {
+    lightcraft_preview::Hasher128::new().str("camera-profiles-with-lens-v2").u64(profile_key).u64(lens_key).finish().0 as u64
 }
 
 fn cache_key_for(directory: Option<&Path>) -> u64 {
@@ -316,10 +327,11 @@ impl Pool {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
         // the warp the camera applied to its JPEG)
+        let correction = crate::camera_preview::correspondence_correction(&raw, bytes);
         let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
-        let Some(samples) = crate::camera_preview::profile_samples(&raw, bytes, lens.as_ref()) else { return Ok(None) };
+        let Some(samples) = crate::camera_preview::profile_samples(&raw, bytes, lens.as_ref(), correction.as_ref()) else { return Ok(None) };
         let entry = self.models.entry(model.to_owned()).or_default();
         let colour = !samples.colour.is_empty();
         if colour {
@@ -373,6 +385,71 @@ mod tests {
     fn profile() -> CameraProfile {
         let table = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[5.0, 1.2, 1.0]; 8], srgb_value: false };
         CameraProfile::new("ILCE-7M4", 12, 3456, Mat3([[1.6, -0.5, -0.1], [-0.2, 1.3, -0.1], [-0.1, -0.2, 1.3]]), Some(table))
+    }
+
+    #[test]
+    fn public_cache_key_includes_the_configured_lens_database() {
+        const CHILD: &str = "LIGHTCRAFT_TEST_CAMERA_CACHE_KEY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = std::env::temp_dir().join(format!("lc-camera-key-wiring-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("lens.xml"),
+                r#"<lensdatabase><lens><maker>Test</maker><model>18mm</model><mount>T</mount><cropfactor>1.5</cropfactor>
+                <calibration><distortion model="poly3" focal="18" k1="-0.03" /></calibration></lens></lensdatabase>"#,
+            )
+            .unwrap();
+            // The loaded snapshots and configured camera-profile folder belong to the child only.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "camera_profiles::tests::public_cache_key_includes_the_configured_lens_database", "--nocapture"])
+                .env(CHILD, "1")
+                .env(crate::lens_profiles::ENV, &dir)
+                .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+                .env("LIGHTCRAFT_CAMERA_PROFILES", &dir)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        assert!(crate::lens_profiles::database().is_some(), "fixture database was loaded by the public loader");
+        let lens_key = crate::lens_profiles::cache_key();
+        assert_ne!(lens_key, 0);
+        let directory = dir().unwrap();
+        let profile = profile();
+        save(&profile, &directory).unwrap();
+        assert_eq!(get(&profile.model).as_deref(), Some(&profile));
+        let profile_key = cache_key_for(Some(&directory));
+        let first = cache_key();
+        assert_eq!(first, cache_key_with_lens(profile_key, lens_key));
+        assert_ne!(first, cache_key_with_lens(profile_key, 0), "public camera key must forward the loaded lens key");
+        // The culling path now reuses rendered views before decoding. Their identity
+        // must follow the same loaded lens snapshot as camera fitting and thumbnails.
+        let mut session = crate::Session::with_demo();
+        let id = session.active().unwrap();
+        let view = session.loupe_job(id, 64, 64, true).unwrap();
+        let (views, view_key) = view.view_cache.as_ref().unwrap();
+        views.put_memory(*view_key, std::sync::Arc::new(lightcraft_raster::Rgba8::from_fn(64, 64, |_, _| [7, 19, 31, 255])));
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_some());
+        let mut replacement = profile.clone();
+        replacement.samples *= 100;
+        save(&replacement, &directory).unwrap();
+        assert_ne!(cache_key_for(Some(&directory)), profile_key, "a fresh process sees a different camera profile fingerprint");
+        assert_eq!(get(&profile.model).as_deref(), Some(&profile), "the loaded profile stays cached");
+
+        let file = directory.join("lens.xml");
+        let xml = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, xml.replace("-0.03", "-0.05")).unwrap();
+        assert_eq!(cache_key(), first, "unreloaded files do not change the loaded database");
+        crate::lens_profiles::replaced();
+        assert_ne!(cache_key(), first, "camera keys follow runtime lens replacements too");
+        let new_lens_key = crate::lens_profiles::cache_key();
+        assert_eq!(cache_key(), cache_key_with_lens(profile_key, new_lens_key));
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_none(), "a view from the old snapshot is not reused");
+        std::fs::write(&file, xml).unwrap();
+        crate::lens_profiles::reload();
+        assert_eq!(cache_key(), first, "restored semantic data restores the camera key");
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_some(), "restoring the snapshot restores its view identity");
     }
 
     #[test]
@@ -469,6 +546,13 @@ mod tests {
         // assert_eq!(file_name("Nikon Z8"), file_name("NIKON Z 8"));
 
         // Staleness test uses fixed version 13 (tested in smart/tests.rs)
+    }
+
+    #[test]
+    fn lens_database_identity_invalidates_camera_render_cache() {
+        assert_ne!(cache_key_with_lens(1234, 0), cache_key_with_lens(1234, 123));
+        assert_ne!(cache_key_with_lens(1234, 123), cache_key_with_lens(1234, 456));
+        assert_eq!(cache_key_with_lens(1234, 123), cache_key_with_lens(1234, 123));
     }
 
     #[test]

@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Select by a single star rating
+- Edit ▸ Select by now lists each rating on its own (★ only through ★★★★★ only) below the “and higher” rows,
+  next to Unrated. Choosing ★★★ only selects the photos in view rated exactly three stars, where before the menu
+  could only select three stars and up (#3311).
+
 ## Unreleased
 
 ### Shift+Tab hides all the panels
@@ -8,6 +15,12 @@
   hidden stays hidden. Showing a panel by hand in between starts over, and with no panel shown and nothing to bring
   back it shows the usual panels. A keymap that gives Shift+Tab to another command
   keeps it, and in a text field Shift+Tab still moves the keyboard focus (carries #1195).
+
+### Pressing at the search box's edge no longer moves the window
+- On macOS the top bar is the window's title bar, and the search box's padding around its text still belonged to
+  it: a press there, where a text selection often starts, dragged the whole window instead. The whole box is now
+  the search field's. A click anywhere in it puts the cursor in the field, and only the bar's empty space moves the
+  window (#2807).
 
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
@@ -191,6 +204,11 @@
   the selected image in Detail after the asynchronous import completes. Grid and Last continue to open launch files in
   Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
+
+### ↑ and ↓ keep the Survey together
+- In Survey (N) and Compare (C), ↑ and ↓ now step through the photos on screen, as → and ← do. Before, they ran the
+  grid's Photo Below and Photo Above, which selected a single photo, so the survey shrank to that one photo
+  (issue #3640).
 
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
