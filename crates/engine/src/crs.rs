@@ -104,6 +104,35 @@ const NON_ADJUSTMENT: &[&str] = &[
     "crs:LensProfileSetup",
     // a crop tool option (keep the crop inside the photo), not the crop itself
     "crs:CropConstrainToUnitSquare",
+    // how the file was written, which auto-defaults apply, and where the preview cache goes:
+    // none of it changes this photo's rendering
+    "crs:ClipboardAspectRatio",
+    "crs:ClipboardOrientation",
+    "crs:Converter",
+    "crs:DNGIgnoreSidecars",
+    "crs:JPEGHandling",
+    "crs:TIFFHandling",
+    "crs:DefaultAutoGray",
+    "crs:DefaultAutoTone",
+    "crs:DefaultsSpecificToISO",
+    "crs:DefaultsSpecificToSerial",
+    "crs:AutoWhiteVersion",
+    "crs:What",
+    "crs:NegativeCacheLargePreviewSize",
+    "crs:NegativeCacheMaximumSize",
+    "crs:NegativeCachePath",
+    // how Lightroom matched the profile it names; only `LensProfileEnable` carries over
+    "crs:LensProfileMatchKeyCameraModelName",
+    "crs:LensProfileMatchKeyExifMake",
+    "crs:LensProfileMatchKeyExifModel",
+    "crs:LensProfileMatchKeyIsRaw",
+    "crs:LensProfileMatchKeyLensID",
+    "crs:LensProfileMatchKeyLensInfo",
+    "crs:LensProfileMatchKeyLensName",
+    "crs:LensProfileMatchKeySensorFormatFactor",
+    // the crop's unit labels; its edges are normalized, so the units change nothing
+    "crs:CropUnit",
+    "crs:CropUnits",
 ];
 
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
@@ -200,6 +229,12 @@ fn curve(props: &Props, k: &str) -> Option<Value> {
 ///
 /// `target` decides how the white balance is read (see [`Target`]).
 pub fn to_partial(props: &Props, target: Target) -> Value {
+    to_partial_with_as_shot(props, target, None)
+}
+
+/// [`to_partial`] with the photo's own as-shot white as the white-balance anchor when the
+/// packet carries no `AsShotTemperature` of its own (#4432).
+pub fn to_partial_with_as_shot(props: &Props, target: Target, as_shot: Option<(f64, f64)>) -> Value {
     let mut out = Value::Object(Map::new());
     let o = &mut out;
     let n = |o: &mut Value, crs: &str, path: &str| {
@@ -264,15 +299,19 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         .map(|t| (rel_to_kelvin(t), num(props, "crs:IncrementalTint")));
     // A Kelvin value for something we develop relative to its as-shot look: the other app's
     // as-shot white (`AsShotTemperature` / `AsShotTint`, written next to the edit) is the
-    // reference, so the edit is the same mired shift from ours (issue #510).
+    // reference, so the edit is the same mired shift from ours (issue #510); without that
+    // reference in the packet, the photo's own as-shot white from the file anchors the same
+    // shift (#4432)
     let shifted = || {
         let (t, tint) = abs?;
-        let as_shot = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0)?;
+        let packet = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0).map(|k| (k, num(props, "crs:AsShotTint").unwrap_or(0.0)));
+        let photo = as_shot.filter(|(k, tint)| k.is_finite() && *k > 0.0 && tint.is_finite());
+        let (anchor, anchor_tint) = packet.or(photo)?;
         if t <= 0.0 {
             return None;
         }
-        let r = (1e6 / as_shot - 1e6 / t) / 0.8;
-        let tint = tint.map(|v| v - num(props, "crs:AsShotTint").unwrap_or(0.0));
+        let r = (1e6 / anchor - 1e6 / t) / 0.8;
+        let tint = tint.map(|v| v - anchor_tint);
         Some((rel_to_kelvin(r), tint))
     };
     let wb = match target {
@@ -449,6 +488,10 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         Some(true) => {
             let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
             let (l, t, r, b) = (e("Left", 0.0), e("Top", 0.0), e("Right", 1.0), e("Bottom", 1.0));
+            // other tools write the cropped result's output dimensions beside the crop; the
+            // edges carry the rect, so these are consumed with it and their values ignored
+            note("crs:CropHeight");
+            note("crs:CropWidth");
             if r > l && b > t {
                 put(
                     o,
@@ -470,9 +513,21 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
 /// ([`crate::crs_masks`]; radial masks fitted to `aspect` = width / height); components that
 /// can't be carried over are reported as `Mask: <kind>`.
 pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values>, target: Target, aspect: f64) -> (Value, Vec<String>) {
+    to_partial_report_with_as_shot(props, values, target, aspect, None)
+}
+
+/// [`to_partial_report`] with the photo's own as-shot white as the white-balance anchor when
+/// the packet carries no `AsShotTemperature` of its own (#4432).
+pub fn to_partial_report_with_as_shot(
+    props: &Props,
+    values: Option<&crate::crs_masks::Values>,
+    target: Target,
+    aspect: f64,
+    as_shot: Option<(f64, f64)>,
+) -> (Value, Vec<String>) {
     READ.with(|r| *r.borrow_mut() = Some(Default::default()));
     SKIPPED.with(|r| *r.borrow_mut() = Some(Vec::new()));
-    let mut out = to_partial(props, target);
+    let mut out = to_partial_with_as_shot(props, target, as_shot);
     let mut read = READ.with(|r| r.borrow_mut().take()).unwrap_or_default();
     let mut mask_skips = SKIPPED.with(|r| r.borrow_mut().take()).unwrap_or_default();
     if let Some(values) = values {
@@ -502,9 +557,14 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             || k.starts_with("ToneCurveName")
             || k == "AutoTone"
             || k == "AutoGrayscaleMix"
+            // the auto adjustments' result already lives in the tonal fields beside them
+            || matches!(k, "AutoBrightness" | "AutoContrast" | "AutoExposure" | "AutoShadows")
             || (k == "PointColors" && value_is(k, &empty_points))
-            // the lens profile's strength, written at its default (100 %) next to every profile
-            || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale") && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
+            // the lens profile's strengths, written at their default (100 %) next to every
+            // profile; Lightroom writes no CA scale at all in a real sidecar set, so its
+            // default comes from the same strength family
+            || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale" | "LensProfileChromaticAberrationScale")
+                && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
     };
     let mut unmapped: Vec<String> = props
         .keys()
@@ -550,6 +610,9 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
     Some(Preset { id, name, group, settings, favorite: false, builtin: false })
 }
+
+/// Adobe's `crs:` namespace and our import decision for every field of it.
+pub mod registry;
 
 #[cfg(test)]
 mod tests;

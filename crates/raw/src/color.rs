@@ -46,6 +46,13 @@ pub fn as_shot_white_of(c: &ColorData, wb_multipliers: Option<[f32; 3]>) -> Xy {
     crate::bridge::from_craft_xy(craft_develop::sensor::color::as_shot_white_of(&crate::bridge::to_craft_color_data(c), wb_multipliers))
 }
 
+/// Whether the file itself names an as-shot white (the same sources and validity rules as
+/// [`as_shot_white_xy`]): without one that function synthesizes D65, which must not pass for a
+/// white the file recorded (#4432).
+pub fn names_as_shot_white(c: &ColorData, wb_multipliers: Option<[f32; 3]>) -> bool {
+    c.as_shot_white_xy.is_some() || c.as_shot_neutral.is_some() || wb_multipliers.is_some_and(|m| m.iter().all(|v| *v > 0.0 && v.is_finite()))
+}
+
 pub fn camera_to_xyz_d50(color: &ColorData, white: Xy) -> Mat3 {
     crate::bridge::from_craft_mat3(craft_develop::sensor::color::camera_to_xyz_d50(
         &crate::bridge::to_craft_color_data(color),
@@ -107,4 +114,22 @@ pub fn camera_to_rec2020(raw: &RawImage, wb_xy: Xy) -> (Mat3, [f32; 3]) {
 
 pub fn grey_world(img: &lightcraft_raster::Rgb32f) -> [f32; 3] {
     craft_develop::sensor::color::grey_world(&crate::bridge::to_craft_rgb32f(img))
+}
+
+#[cfg(test)]
+mod tests {
+    use lightcraft_color::D65;
+
+    use super::*;
+
+    /// A file that names no white must not pass D65 off as its as-shot white (#4432).
+    #[test]
+    fn names_as_shot_white_needs_a_source_in_the_file() {
+        let none = ColorData::default();
+        assert!(!names_as_shot_white(&none, None));
+        assert!(!names_as_shot_white(&none, Some([-1.0, 1.0, 1.0])), "invalid multipliers are no white");
+        assert!(names_as_shot_white(&none, Some([2.2, 1.0, 1.6])));
+        let named = ColorData { as_shot_white_xy: Some(D65), ..Default::default() };
+        assert!(names_as_shot_white(&named, None));
+    }
 }

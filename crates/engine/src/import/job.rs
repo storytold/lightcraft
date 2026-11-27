@@ -451,11 +451,13 @@ impl ImportJob {
             let mut embedded_sidecar = if skip_sidecar {
                 None
             } else {
-                info.xmp.as_deref().filter(|_| has_embedded_xmp).and_then(|x| match crate::sidecar::parse_sidecar(x, target) {
-                    Ok(sc) => Some(sc),
-                    Err(e) => {
-                        log::warn!("import {path}: embedded XMP: {e}");
-                        None
+                info.xmp.as_deref().filter(|_| has_embedded_xmp).and_then(|x| {
+                    match crate::sidecar::parse_sidecar_with_as_shot(x, target, info.as_shot_physical) {
+                        Ok(sc) => Some(sc),
+                        Err(e) => {
+                            log::warn!("import {path}: embedded XMP: {e}");
+                            None
+                        }
                     }
                 })
             };
@@ -468,11 +470,13 @@ impl ImportJob {
             let external_sidecar = if skip_sidecar {
                 None
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
-                    Ok(sc) => Some(sc),
-                    Err(e) => {
-                        log::warn!("import {path}: XMP: {e}");
-                        None
+                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|x| {
+                    match crate::sidecar::parse_sidecar_with_as_shot(&x, target, info.as_shot_physical) {
+                        Ok(sc) => Some(sc),
+                        Err(e) => {
+                            log::warn!("import {path}: XMP: {e}");
+                            None
+                        }
                     }
                 })
             };
@@ -618,6 +622,7 @@ impl Session {
         p.kind = c.kind;
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
+            p.as_shot_physical = info.as_shot_physical;
             p.embedded_lens = info.embedded_lens.map(Box::new);
             p.preview_only = info.preview_only.clone();
         }
