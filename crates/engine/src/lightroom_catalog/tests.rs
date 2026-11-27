@@ -82,6 +82,89 @@ fn a_catalog_original_that_is_not_a_photo_file_is_not_imported() {
     assert!(warnings.contains("image 4: not imported"), "the virtual copy of the refused original goes with it: {warnings}");
 }
 
+/// `sample()` (or its master alone) plus a photo `id` whose original is refused, and the
+/// import's report.
+fn import_with_refused(with_copy: bool, id: i64) -> (crate::Session, Value) {
+    let mut data = sample();
+    if !with_copy {
+        data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+        data.members.retain(|m| number(m, "image") != 2);
+    }
+    let mut far = data.photos[data.photos.len() - 1].clone();
+    far.source_id = id;
+    far.uuid = format!("image-{id}");
+    far.path = "//server/share/far.ARW".into();
+    far.image = row(json!({"id_local": id, "fileFormat": "ARW"}));
+    far.original = Original::Refused("it is on another computer".into());
+    data.photos.push(far);
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap_or_else(|e| panic!("with_copy {with_copy}, refused id {id}: {e:?}"));
+    (s, r)
+}
+
+/// The sample's master (rating 5) has its catalog record, its virtual copy (rating 2) has one when
+/// `with_copy`, and no record is the refused photo's.
+fn assert_only_the_sample_imported(s: &crate::Session, r: &Value, with_copy: bool) {
+    let mut mapped: Vec<_> = r["mapping"].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default();
+    mapped.sort();
+    let kept: &[&str] = if with_copy { &["1", "2"] } else { &["1"] };
+    assert_eq!(mapped, kept, "the sample's master (and its copy) are imported: {r}");
+    assert_eq!(s.catalog.len(), kept.len(), "{r}");
+    let master = s.catalog.photos().find(|p| p.copy_of.is_none()).unwrap_or_else(|| panic!("no master record: {r}"));
+    assert!(matches!(&master.source, Source::File { path } if path == "/missing/test.ARW"), "{:?}", master.source);
+    assert_eq!(master.rating, 5, "the master's catalog data arrived");
+    let copies: Vec<_> = s.catalog.photos().filter(|p| p.copy_of == Some(master.id)).map(|p| (p.copy_name.clone(), p.rating)).collect();
+    let expected = if with_copy { vec![(Some("Mono".to_string()), 2)] } else { Vec::new() };
+    assert_eq!(copies, expected, "{r}");
+    assert!(
+        s.catalog.photos().all(|p| !matches!(&p.source, Source::File { path } if path.ends_with("far.ARW"))),
+        "the refused photo became a record"
+    );
+}
+
+/// A refused photo whose id reads as 0 (a malformed catalog) refuses only itself: `masterImage`
+/// is 0 for every master, so every master was skipped with it and got no catalog record.
+#[test]
+fn a_refused_photo_with_id_zero_refuses_only_itself() {
+    let (s, r) = import_with_refused(false, 0);
+    assert_only_the_sample_imported(&s, &r, false);
+    assert!(r["missing"].as_array().is_some_and(|m| m.contains(&json!("//server/share/far.ARW"))), "the refused photo is listed as missing: {r}");
+}
+
+/// The same with a virtual copy: its master was skipped, so the copy failed the import with
+/// "virtual copy 2: missing master".
+#[test]
+fn a_refused_photo_with_id_zero_leaves_other_virtual_copies_their_master() {
+    let (s, r) = import_with_refused(true, 0);
+    assert_only_the_sample_imported(&s, &r, true);
+}
+
+/// A virtual copy of a refused original has no original of its own, so it is refused with it,
+/// even when the catalog gives the copy a path of its own that isn't refused.
+#[test]
+fn a_virtual_copy_of_a_refused_original_is_refused_with_it() {
+    let mut data = sample();
+    let mut far = data.photos[1].clone();
+    far.source_id = 3;
+    far.uuid = "image-3".into();
+    far.path = "//server/share/far.ARW".into();
+    far.image = row(json!({"id_local": 3, "fileFormat": "ARW"}));
+    far.original = Original::Refused("it is on another computer".into());
+    let mut far_copy = far.clone();
+    far_copy.source_id = 4;
+    far_copy.uuid = "image-4".into();
+    far_copy.image = row(json!({"id_local": 4, "masterImage": 3, "copyName": "Far copy"}));
+    far_copy.path = "/missing/far-copy.ARW".into();
+    far_copy.original = Original::Local;
+    // the copy comes before its master, as a catalog's table order may have it
+    data.photos.insert(0, far_copy);
+    data.photos.push(far);
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_only_the_sample_imported(&s, &r, true);
+    assert!(s.catalog.photos().all(|p| p.copy_name.as_deref() != Some("Far copy")), "the refused original's copy became a record: {r}");
+}
+
 #[test]
 fn offline_local_master_and_copy_join_library_with_one_undo_step() {
     let mut s = crate::Session::new();
