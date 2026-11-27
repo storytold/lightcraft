@@ -268,3 +268,29 @@ fn a_cut_to_the_synced_length_removes_bytes_a_failed_sync_left() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Review of #2637: the log thread reads the journal as the synchronous store does. A link put at `catalog.log` while the
+/// thread holds it is refused, the file it points to is not read, and the records handed over are still held for the
+/// next write (none is lost); with the real file back they are all there.
+#[cfg(unix)]
+#[test]
+fn the_log_thread_never_reads_through_a_link_at_the_journal() {
+    use std::os::unix::fs::symlink;
+    let dir = temp_dir("read-link");
+    let mut store = FsStore::open(&dir).unwrap();
+    store.append(LOG, b"0\n").unwrap();
+    store.flush().unwrap();
+    let victim = dir.join("victim.txt");
+    std::fs::write(&victim, b"private\n").unwrap();
+    let real = dir.join("real.log");
+    std::fs::rename(dir.join(LOG), &real).unwrap();
+    symlink(&victim, dir.join(LOG)).unwrap();
+    let e = store.read(LOG).unwrap_err();
+    assert!(e.to_string().contains("not a regular file"), "{e}");
+    std::fs::remove_file(dir.join(LOG)).unwrap();
+    std::fs::rename(&real, dir.join(LOG)).unwrap();
+    assert_eq!(store.read(LOG).unwrap().unwrap(), b"0\n", "the real journal, read again");
+    assert_eq!(std::fs::read(&victim).unwrap(), b"private\n", "nothing written to the link's target");
+    drop(store);
+    let _ = std::fs::remove_dir_all(&dir);
+}

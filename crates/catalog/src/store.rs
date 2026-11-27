@@ -331,9 +331,10 @@ impl Store for FsStore {
             if self.log.is_none() && self.sync_log.is_none() && !crate::fault::on_caller(&self.dir) {
                 self.folder.check()?;
                 check_regular_directory_entry(&self.path(name))?;
-                if !self.path(name).exists() {
-                    // created here, so the open's errors are this append's and its entry is durable
-                    std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
+                // made here when missing, so the open's errors are this append's and its entry is durable; never
+                // through a link at the name (#2552)
+                let (_, created) = crate::safe_file::open_or_create_regular(&self.path(name), std::fs::OpenOptions::new().append(true))?;
+                if created {
                     self.sync_dir();
                 }
                 let expected = if name == crate::journal::LOG { self.known_log_len } else { None };
@@ -348,18 +349,18 @@ impl Store for FsStore {
         // A note-bearing copy can pass the folder check while an old handle still names the
         // moved-away folder. As the log thread does, reopen the current path for every batch.
         check_regular_directory_entry(&self.path(name))?;
-        let existed = self.path(name).exists();
         // Windows append-only handles cannot truncate their own failed write. For LOG,
         // match the native writer's writable handle and seek to the checked length.
         let mut options = std::fs::OpenOptions::new();
-        options.create(true).truncate(false);
+        options.truncate(false);
         if name == crate::journal::LOG {
             options.write(true);
         } else {
             options.append(true);
         }
-        let mut f = options.open(self.path(name))?;
-        if !existed {
+        // never through a link at the name, made when missing (#2552)
+        let (mut f, created) = crate::safe_file::open_or_create_regular(&self.path(name), &options)?;
+        if created {
             self.sync_dir();
         }
         if name == crate::journal::LOG {

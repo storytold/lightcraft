@@ -98,7 +98,7 @@ bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
 libm = "0.2" # pure-Rust maths for lightcraft-film (target-independent results)
-libc = "0.2" # dev-only: process CPU time in benches
+libc = "0.2" # O_NOFOLLOW for lightcraft-catalog's own files (Unix); process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
 # The host's time zone: the catalog stores local civil times, so a file's modification time and
