@@ -110,7 +110,7 @@ pub fn is_missing(cat: &Catalog, avail: &crate::availability::Availability, id: 
 
 pub(crate) fn relink_op(id: PhotoId, path: &str) -> Op {
     let file_name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-    Op::Relink { id, file_name, source: Source::File { path: path.to_string() }, format: None }
+    Op::Relink { id, file_name, source: Source::File { path: path.to_string() }, format: None, kind: None }
 }
 
 fn relink(s: &mut Session, p: &Value) -> Result<Value> {
@@ -131,14 +131,32 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     if s.media.file_probe.is_some()
         && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
     {
-        ops.extend(crate::cmd::convert::content_op(id, ph, info));
+        let known_type = !info.format.is_empty();
+        if known_type && let Some(Op::Relink { format, kind, .. }) = ops.first_mut() {
+            *format = Some(info.format.clone());
+            *kind = (ph.kind != info.kind).then_some(info.kind);
+        }
+        let format = if known_type { &info.format } else { &ph.format };
+        ops.extend(crate::cmd::convert::content_facts_op(id, ph, format, &info));
+        let camera = if info.meta.camera.is_empty() { &ph.meta.camera } else { &info.meta.camera };
+        let make = if info.meta.make.is_empty() { &ph.meta.make } else { &info.meta.make };
+        let lens = if info.meta.lens.is_empty() { &ph.meta.lens } else { &info.meta.lens };
+        let lens_make = if info.meta.lens_make.is_empty() { &ph.meta.lens_make } else { &info.meta.lens_make };
+        if *camera != ph.meta.camera || *make != ph.meta.make || *lens != ph.meta.lens || *lens_make != ph.meta.lens_make {
+            let mut meta = ph.meta.clone();
+            meta.camera.clone_from(camera);
+            meta.make.clone_from(make);
+            meta.lens.clone_from(lens);
+            meta.lens_make.clone_from(lens_make);
+            ops.push(Op::SetMeta { id, meta: Box::new(meta) });
+        }
+        let same_path = matches!(&ph.source, Source::File { path } if *path == abs);
+        ops.extend(crate::cmd::convert::reload_wb_op(ph, &info, camera, same_path));
+        if info.embedded_lens.as_ref() != ph.embedded_lens.as_deref() {
+            ops.push(Op::SetEmbeddedLens { id, lens: info.embedded_lens.map(Box::new) });
+        }
     }
-    let op = match <[Op; 1]>::try_from(ops) {
-        Ok([op]) => op,
-        Err(ops) => Op::Batch { ops },
-    };
-    s.commit("Relink Photo", op)?;
-    s.media.forget(id);
+    s.commit("Relink Photo", Op::Batch { ops })?;
     Ok(json!({"id": id.0, "path": abs}))
 }
 
@@ -152,7 +170,7 @@ pub(crate) fn stored_hash(p: &Photo) -> Option<&str> {
 pub(crate) fn file_hash(path: &str) -> Option<String> {
     use std::io::Read;
     // the opened file must be regular (a FIFO or device would never end), and no more than its size at open is read
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::read_file::open_for_read(path).ok()?;
     let meta = file.metadata().ok().filter(|m| m.is_file())?;
     hash_reader(file.take(meta.len()))
 }

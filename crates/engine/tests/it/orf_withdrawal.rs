@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use lightcraft_catalog::{APP_VERSION, MediaKind, Op, Photo, PhotoId, Source};
+use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_engine::{Session, cmd::recheck, media::content_key};
 use lightcraft_pipeline::SourceInfo;
 use lightcraft_preview::Hash128;
@@ -74,6 +74,7 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
 /// Apply the same-byte capability transition that Reload or the background recheck records.
 fn mark_orf_preview_only(s: &mut Session) {
     let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let preview_only = Some("Olympus compressed ORF".into());
     s.catalog
         .apply(Op::SetContent {
             id: p.id,
@@ -81,8 +82,8 @@ fn mark_orf_preview_only(s: &mut Session) {
             height: p.height,
             file_size: p.file_size,
             content_hash: p.content_hash.clone(),
-            preview_only: Some("Olympus compressed ORF".into()),
-            preview_checked: lightcraft_catalog::APP_VERSION.into(),
+            preview_checked: p.preview_stamp(&preview_only),
+            preview_only,
         })
         .unwrap();
     s.media.forget(p.id);
@@ -163,7 +164,7 @@ fn legacy_compressed_orf_and_copies_become_preview_only_without_losing_edits() {
     for id in [x.id, copy] {
         let p = x.s.catalog.photo(id).unwrap();
         assert_eq!(p.preview_only.as_deref(), Some("Olympus compressed ORF"));
-        assert_eq!(p.preview_checked, APP_VERSION);
+        assert_ne!(p.preview_checked, before.preview_checked, "the legacy support stamp is refreshed");
         assert!(!p.develops_raw());
         assert_eq!(*p.develop, *before.develop);
     }
@@ -173,24 +174,25 @@ fn legacy_compressed_orf_and_copies_become_preview_only_without_losing_edits() {
     x.s = Session::new();
     x.s.open_library(&x.lib, false).unwrap();
     assert!(x.s.catalog.photo(x.id).unwrap().preview_only.is_some());
-    assert!(recheck::stale(&x.s.catalog, false).is_empty());
+    assert!(recheck::stale(&mut x.s, false).is_empty());
 }
 
 /// Supported uncompressed ORF is checked once and never reported as newly recovered sensor support.
 #[test]
 fn legacy_uncompressed_orf_is_stamped_once_without_a_false_recovery_notice() {
     let mut x = legacy_orf("supported", None);
+    let before = x.s.catalog.photo(x.id).unwrap().preview_checked.clone();
     let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
     assert_eq!(r, json!({"checked": 1, "updated": [x.id.0], "cleared": []}));
     let p = x.s.catalog.photo(x.id).unwrap();
     assert!(p.develops_raw());
-    assert_eq!(p.preview_checked, APP_VERSION);
-    assert!(recheck::stale(&x.s.catalog, false).is_empty());
-    assert_eq!(recheck::stale(&x.s.catalog, true).len(), 1);
+    assert_ne!(p.preview_checked, before, "the legacy support stamp is refreshed");
+    assert!(recheck::stale(&mut x.s, false).is_empty());
+    assert_eq!(recheck::stale(&mut x.s, true).len(), 1);
     x.s.persist().unwrap();
     x.s = Session::new();
     x.s.open_library(&x.lib, false).unwrap();
-    assert!(recheck::stale(&x.s.catalog, false).is_empty());
+    assert!(recheck::stale(&mut x.s, false).is_empty());
     assert!(x.s.catalog.photo(x.id).unwrap().develops_raw());
 }
 
@@ -203,5 +205,5 @@ fn unavailable_legacy_orf_is_unchanged_and_retried() {
     let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
     assert_eq!(r, json!({"checked": 1, "updated": [], "cleared": []}));
     assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
-    assert_eq!(recheck::stale(&x.s.catalog, false).len(), 1);
+    assert_eq!(recheck::stale(&mut x.s, false).len(), 1);
 }

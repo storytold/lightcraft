@@ -247,6 +247,7 @@ fn changes_under_a_running_job_are_respected() {
             file_name: "moved.ARW".into(),
             source: Source::File { path: moved.to_string_lossy().into() },
             format: None,
+            kind: None,
         })?;
         let mut meta = s.catalog.photo(PhotoId(3)).unwrap().meta.clone();
         meta.focus = Some(mine.clone());

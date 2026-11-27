@@ -160,6 +160,7 @@ fn as_written_elsewhere(s: &mut Session, dir: &Scratch, root: &str, sep: &str) {
                     file_name: p.file_name.clone(),
                     source: Source::File { path: format!("{root}{}", rel.join(sep)) },
                     format: None,
+                    kind: None,
                 })
             }
             _ => None,

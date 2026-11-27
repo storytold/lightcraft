@@ -727,8 +727,13 @@ impl Session {
     /// it is journaled all the same (replaying it leaves the same changes), and what is left of its rollback is the
     /// undo step: undoing it finishes the rollback. The error still reaches the caller.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
+        self.commit_with_read_invalidation(label, op, true)
+    }
+
+    /// A completed source read must leave newer pending reads usable.
+    pub(crate) fn commit_with_read_invalidation(&mut self, label: &str, op: Op, invalidate_reads: bool) -> Result<()> {
         let fwd = op.clone();
-        let (inv, failure) = match self.apply_through(op, Catalog::apply_new) {
+        let (inv, failure) = match self.apply_through(op, Catalog::apply_new, invalidate_reads) {
             Ok(inv) => (inv, None),
             Err(EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining })) => {
                 let remaining = *remaining;
@@ -751,36 +756,70 @@ impl Session {
 
     /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
-        self.apply_through(op, Catalog::apply)
+        self.apply_through(op, Catalog::apply, true)
     }
 
     /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
     /// was), then forget what the session cached of the photos it replaced.
-    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>) -> Result<Op> {
-        // Retain only cache IDs while the catalog consumes the operation. Cloning an import
-        // batch here also cloned every photo, although commit already keeps the journal copy.
+    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, CatalogError>, invalidate_reads: bool) -> Result<Op> {
+        // Retain only the affected IDs while the catalog consumes the operation. Cloning an
+        // import batch here would clone every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
         // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
         let mut replaced = Vec::new();
         let mut pending = vec![&op];
         while let Some(op) = pending.pop() {
             match op {
-                Op::SetContent { id, .. } => {
+                Op::SetContent { id, width, height, file_size, content_hash, preview_only, .. } => {
                     invalidated.push(*id);
-                    replaced.push(*id);
+                    if self.catalog.photo(*id).is_some_and(|p| {
+                        (p.width, p.height, p.file_size, &p.content_hash, p.preview_only.is_some())
+                            != (*width, *height, *file_size, content_hash, preview_only.is_some())
+                    }) {
+                        replaced.push(*id);
+                    }
                 }
-                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
+                Op::Relink { id, kind, .. } => {
+                    invalidated.push(*id);
+                    if let Some(kind) = kind
+                        && self.catalog.photo(*id).is_some_and(|p| p.kind != *kind)
+                    {
+                        replaced.push(*id);
+                    }
+                }
+                Op::SetFile { id, .. }
+                | Op::RemovePhoto { id }
+                | Op::SetAsShotWb { id, .. }
+                | Op::SetSourceWb { id, .. }
+                | Op::SetEmbeddedLens { id, .. } => invalidated.push(*id),
+                Op::SetMeta { id, meta } if self.catalog.photo(*id).is_some_and(|p| cmd::convert::source_metadata_changed(&p.meta, meta)) => {
+                    invalidated.push(*id);
+                }
+                Op::SetCaptured { id, captured } if self.catalog.photo(*id).is_some_and(|p| p.captured != *captured) => {
+                    invalidated.push(*id);
+                }
                 Op::AddPhoto { photo } => invalidated.push(photo.id),
                 Op::Batch { ops } => pending.extend(ops),
                 _ => {}
             }
         }
         // (a batch that was only partly taken back changed the catalog all the same: what hangs on its photos goes too)
+        #[cfg(not(target_arch = "wasm32"))]
+        let retention = self.preview_build.as_ref().filter(|b| b.running()).and_then(|b| b.discard_retention.as_ref());
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut discard = retention.filter(|_| !invalidated.is_empty()).map(|r| r.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let applied = apply(&mut self.catalog, op);
         if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
             return applied.map_err(Into::into);
         }
         for id in invalidated {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(retention) = &mut discard {
+                retention.update(id, self.catalog.photo(id).map(|p| &**p));
+            }
+            if invalidate_reads {
+                self.reload_tickets.invalidate(id);
+            }
             self.media.forget(id);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -821,8 +860,8 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let applied = self.catalog.apply(op);
-        if applied.is_ok() || matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+        let applied = self.apply_through(op, Catalog::apply, false);
+        if applied.is_ok() || matches!(applied, Err(EngineError::Catalog(CatalogError::PartlyApplied { .. }))) {
             // (a batch only partly taken back changed the catalog all the same: the journal has to say so)
             self.pending_log.push(fwd);
         }

@@ -133,24 +133,23 @@ pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
     Hasher128::new().str("embedded-thumb").u64((k.0 >> 64) as u64).u64(k.0 as u64).finish()
 }
 
-/// ORF decoding changed when compressed sensor support was withdrawn. Keep its old renders
-/// out even before catalog rechecking finishes, and distinguish sensor from preview-only
-/// pixels after Reload. Other formats keep their existing keys. This is deliberately not
-/// part of `content_key`: smart previews and denoise products identify the original file.
-pub(super) fn decoder_key(p: &Photo) -> u64 {
+/// ORF sensor decoding now comes from the shared implementation. Exclude older renders even
+/// before catalog rechecking finishes, and distinguish sensor from preview-only pixels after
+/// Reload. Other formats keep their existing keys. This is deliberately not
+/// part of `content_key`: source-file and denoise identities stay stable across decoder changes.
+pub(crate) fn decoder_key(p: &Photo) -> u64 {
     if !p.format.eq_ignore_ascii_case("ORF") {
         return 0;
     }
     // Spread the status bit: this salt is XORed with frontend dimensions, so adjacent
     // integers could cancel a small resize occurring at the same time as a recheck.
-    let h = Hasher128::new().str("orf-withdrawal-v1").u64(u64::from(p.preview_only.is_some())).finish();
+    let h = Hasher128::new().str(lightcraft_raw::ORF_DECODER_VERSION).u64(u64::from(p.preview_only.is_some())).finish();
     ((h.0 as u64) ^ ((h.0 >> 64) as u64)) | 1
 }
 
-/// Which decode of a photo a loaded source is: its file's content, decoder identity and database lens profile
-/// ([`lens_key`]; the decode fits the starting colour through it). A job's source is kept only when this still
-/// matches when the job finishes ([`super::Session::accept`]), so a decode started before a profile change never
-/// returns to the cache after `cmd::lens_refresh` has dropped the photo's sources.
+/// Which decode of a photo a loaded source is: its file's content, decoder and source metadata.
+/// A result is kept only while these still match, so a decode started before a metadata refresh
+/// cannot repopulate the cache with the old source.
 pub fn source_identity(p: &Photo) -> Hash128 {
     let mut k = Hasher128::new();
     k.str(&content_key(p));
@@ -158,9 +157,12 @@ pub fn source_identity(p: &Photo) -> Hash128 {
     if decoder != 0 {
         k.str("decoder").u64(decoder);
     }
-    let lens = lens_key(p);
-    if lens != 0 {
-        k.u64(lens);
+    if let Some(raw) = crate::smart::raw_interpretation(p) {
+        k.str("raw-interpretation").u64(u64::from(raw));
+    }
+    let metadata = source_metadata_key(p);
+    if metadata != 0 {
+        k.u64(metadata);
     }
     k.finish()
 }
@@ -173,19 +175,31 @@ pub fn content_key(p: &Photo) -> String {
     }
 }
 
-/// What a photo's lens profile adds to its render and thumbnail keys: a database profile (0 without one), with the
-/// correction on or off: a raw's starting colour is fitted through the profile's vignetting either way
-/// (`camera_preview::starting_colour`), so the decoded picture depends on it. When a database update gives the
-/// photo another profile, its cached renders and thumbnails no longer match. (The file's own correction changes only with the file, which the content
-/// key covers, so it adds nothing and existing thumbnails stay valid.)
-pub fn lens_key(p: &Photo) -> u64 {
-    match &p.embedded_lens {
-        Some(l) if l.source == lightcraft_develop::LensSource::Database => {
-            let k = Hasher128::new().str("lens").str(&format!("{l:?}")).finish();
-            (k.0 as u64) ^ ((k.0 >> 64) as u64) | 1
-        }
-        _ => 0,
+/// Source facts that affect pixels and can change when the source bytes stay the same.
+/// Include lens data even with the correction off: fitting a raw's starting colour uses the profile.
+pub(super) fn source_metadata_key(p: &Photo) -> u64 {
+    let raw = p.develops_raw();
+    let kelvin = raw && !p.relative_wb();
+    let wb = p.as_shot_wb.filter(|_| kelvin);
+    if !raw && p.embedded_lens.is_none() && wb.is_none() {
+        return 0;
     }
+    let mut key = Hasher128::new();
+    key.str("source-mode").u64(u64::from(raw));
+    if kelvin && wb.is_none() {
+        key.str("kelvin-white-balance");
+    }
+    if kelvin && p.fitted_look() {
+        key.str("legacy-relative-white-balance");
+    }
+    if let Some(lens) = &p.embedded_lens {
+        key.str("lens").str(&format!("{lens:?}"));
+    }
+    if let Some((temp, tint)) = wb {
+        key.str("as-shot-wb").u64(temp.to_bits()).u64(tint.to_bits());
+    }
+    let k = key.finish();
+    (k.0 as u64) ^ ((k.0 >> 64) as u64) | 1
 }
 
 pub fn source_info(p: &Photo) -> SourceInfo {

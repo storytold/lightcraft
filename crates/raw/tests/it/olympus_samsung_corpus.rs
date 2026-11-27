@@ -8,7 +8,7 @@
 //! pinned only (its small JPEG gives r 0.59); its render was inspected by eye.
 //! Missing files are reported as skipped.
 
-use lightcraft_raw::{RawData, RawError, RawFormat, decode, embedded_preview, probe, probe_info};
+use lightcraft_raw::{RawData, RawFormat, decode, embedded_preview, probe, probe_info};
 use std::path::{Path, PathBuf};
 
 fn corpus() -> PathBuf {
@@ -110,10 +110,10 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
     eprintln!("Olympus / Samsung bodies checked on {seen} files");
 }
 
-/// The withdrawn compressed decoder must stay out of both sensor-decode and import-probe paths.
-/// Camera JPEG extraction is independent of sensor decoding and remains available for preview-only imports.
+/// The shared decoder's sensor facts survive the app adapter and normalization, while camera
+/// JPEG extraction stays available independently for preview rendering and fallback.
 #[test]
-fn compressed_olympus_bodies_are_unsupported_with_embedded_previews() {
+fn shared_compressed_olympus_bodies_normalize_with_embedded_previews() {
     for name in ["orf-olympus-em1.orf", "orf-olympus-em10iii.orf"] {
         let path = corpus().join("raw").join(name);
         let Ok(bytes) = std::fs::read(&path) else {
@@ -121,8 +121,12 @@ fn compressed_olympus_bodies_are_unsupported_with_embedded_previews() {
             continue;
         };
         assert_eq!(probe(&bytes), Some(RawFormat::Orf), "{name}");
-        assert!(matches!(decode(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
-        assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
+        let raw = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(raw.info(), probe_info(&bytes).unwrap(), "{name}: header adapter differs from sensor decode");
+        let normalized = raw.normalized().unwrap();
+        assert!(normalized.cfa.is_some(), "{name}: Bayer data survives the app adapter");
+        assert!(normalized.data.iter().all(|v| v.is_finite()), "{name}: normalized values are finite");
+        assert!(normalized.data.iter().any(|v| *v > 0.01), "{name}: normalized sensor signal is present");
         let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
         assert!(jpeg.starts_with(&[0xff, 0xd8]) && jpeg.ends_with(&[0xff, 0xd9]), "{name}: invalid camera JPEG");
     }

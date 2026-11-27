@@ -241,7 +241,7 @@ impl DecodedSource {
 /// catalog still holds but the decode no longer finds (the original was replaced) is not restored. A database profile
 /// is never taken from the decode, so a cached render, a fresh decode and the Optics panel all use the one profile the photo holds, and a
 /// change to it (a database update looked up again, `cmd::lens_refresh`) changes the render keys
-/// ([`super::quick::lens_key`]).
+/// ([`super::quick::source_metadata_key`]).
 pub(crate) fn pinned_lens(
     decoded: Option<lightcraft_develop::EmbeddedLens>,
     catalog: Option<lightcraft_develop::EmbeddedLens>,
@@ -272,7 +272,7 @@ pub enum SourceRef {
         loader: Option<FileLoader>,
         /// The photo's smart preview, used when the original can't be read (offline drive). The
         /// UI thread never checks whether the original is there; the render worker finds out.
-        fallback: Option<std::path::PathBuf>,
+        fallback: Option<crate::smart::PreviewPath>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
         /// The photo's imported camera profile (id and profile): its raw file is developed with it.
@@ -284,7 +284,7 @@ pub enum SourceRef {
     },
     /// A smart preview standing in for a missing original.
     Smart {
-        path: std::path::PathBuf,
+        path: crate::smart::PreviewPath,
     },
 }
 
@@ -293,6 +293,7 @@ impl SourceRef {
         self.load_source().map(|s| s.image)
     }
 
+    /// Resolve this reference to pixels and decoder facts, trying a compatible proxy when its original cannot be read.
     pub fn load_source(&self) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
@@ -358,14 +359,14 @@ impl SourceRef {
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 return match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) && crate::smart::is_valid(sp) => {
-                        crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}"))
+                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) => {
+                        sp.load().map_err(|e2| format!("{e}; smart preview: {e2}"))
                     }
                     (r, _) => r,
                 };
             }
             #[cfg(not(target_arch = "wasm32"))]
-            SourceRef::Smart { path } => return crate::smart::load(path),
+            SourceRef::Smart { path } => return path.load(),
             #[cfg(target_arch = "wasm32")]
             SourceRef::Smart { .. } => return Err("smart previews are not available here".into()),
         };
