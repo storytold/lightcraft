@@ -298,7 +298,7 @@ fn compare_zoom_window_tracks_the_zoomed_pane() {
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.app.ui.zoom = Zoom::Percent(100.0);
-    h.settle(SETTLE);
+    h.settle(super::ui_settle_timeout());
     let candidate = vis[1];
     let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(candidate)).cloned().expect("photo");
     let frame = lightcraft_pipeline::geometry::Frame::with_lens(
@@ -306,7 +306,7 @@ fn compare_zoom_window_tracks_the_zoomed_pane() {
         photo.height.max(1) as usize,
         &photo.develop,
         true,
-        photo.embedded_lens.as_ref(),
+        photo.embedded_lens.as_deref(),
     );
     let aspect = frame.aspect() as f32;
     let native = crate::panels::detail::output_px(&frame);
@@ -485,6 +485,110 @@ fn survey_command_click_takes_the_photo_out() {
     assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
 }
 
+/// A photo taken out of the survey leaves the others to glide to their new cells, so it shows
+/// which photo went where: a frame later a tile is between its old and new place, then it lands.
+#[test]
+fn survey_tiles_glide_to_their_new_cells() {
+    let mut h = demo();
+    let [a, _, c] = survey_of_three(&mut h);
+    let tile = |h: &Headless| h.app.widgets.iter().find(|(w, _)| *w == format!("cull:{c}")).map(|(_, r)| *r).expect("the tile is laid out");
+    let before = tile(&h);
+    h.app.run("library.select", json!({"ids": [a], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let moving = tile(&h);
+    assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
+    h.settle(SETTLE);
+    let after = tile(&h);
+    assert!(!h.app.survey_motion.moving(h.time()));
+    assert_ne!(before, after, "the photo has a new cell");
+    assert!(moving != before && moving != after, "between {before:?} and {after:?}: {moving:?}");
+}
+
+/// A photo that joins the survey makes room: the tiles already there glide to their new cells too.
+#[test]
+fn survey_tiles_glide_when_a_photo_joins() {
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let joining = h.app.session.visible_cloned().iter().map(|p| p.0).find(|p| !ids.contains(p)).expect("a fourth photo");
+    let tile = |h: &Headless, id: u64| h.app.widgets.iter().find(|(w, _)| *w == format!("cull:{id}")).map(|(_, r)| *r).expect("the tile is laid out");
+    let before = ids.map(|id| tile(&h, id));
+    h.app.run("library.select", json!({"ids": [joining], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let moving = ids.map(|id| tile(&h, id));
+    assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
+    h.settle(SETTLE);
+    let after = ids.map(|id| tile(&h, id));
+    let moved: Vec<usize> = (0..3).filter(|&i| before[i] != after[i]).collect();
+    assert!(!moved.is_empty(), "a photo joining changes the grid: {before:?} → {after:?}");
+    for i in moved {
+        assert!(moving[i] != before[i] && moving[i] != after[i], "tile {i} between {:?} and {:?}: {:?}", before[i], after[i], moving[i]);
+    }
+}
+
+/// A photo that joins takes its cell at once, so it asks for its own render while the others are
+/// still gliding (it doesn't wait on the thumbnail until they land).
+#[test]
+fn a_photo_that_joins_renders_while_the_others_glide() {
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let joining = h.app.session.visible_cloned().into_iter().find(|p| !ids.contains(&p.0)).expect("a fourth photo");
+    h.app.run("library.select", json!({"ids": [joining.0], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let now = h.time();
+    assert!(h.app.survey_motion.moving(now), "the others are on their way");
+    assert!(!h.app.survey_motion.gliding(joining, now), "the photo that joined stays put");
+    let slot = h.app.survey_motion.slot(joining).expect("the photo that joined has a slot");
+    assert!(h.app.renderer.wanted(crate::render::Slot::Compare(slot)).is_some(), "its render is asked for");
+}
+
+/// Photo ids are local to a library: opening another one forgets the survey's tiles, so a photo
+/// there with the same id doesn't glide from a cell of the library left.
+#[test]
+fn opening_another_library_forgets_the_survey_tiles() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-survey-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let tracked = |h: &Headless| ids.iter().filter(|id| h.app.survey_motion.tracks(lightcraft_catalog::PhotoId(**id))).count();
+    assert_eq!(tracked(&h), 3);
+    let r = h.app.run("app.openLibrary", json!({"path": dir.join("second").to_string_lossy()}));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(tracked(&h), 0, "nothing of the library left is remembered");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every surveyed photo gets its own render, and keeps it when another photo leaves the survey
+/// (each photo keeps its render slot, so the tiles that move don't fall back to thumbnails).
+#[test]
+fn survey_tiles_keep_their_renders_when_a_photo_leaves() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let rendered = |h: &Headless, ids: &[u64]| {
+        ids.iter().all(|id| h.app.renderer.textures.iter().any(|(s, t)| matches!(s, crate::render::Slot::Compare(_)) && t.photo.0 == *id))
+    };
+    assert!(h.step_until(SETTLE, |h| rendered(h, &[a, b, c])), "each tile shows its render");
+    let slot_of = |h: &Headless, id: u64| {
+        h.app.renderer.textures.iter().find(|(s, t)| matches!(s, crate::render::Slot::Compare(_)) && t.photo.0 == id).map(|(s, _)| *s)
+    };
+    let c_slot = slot_of(&h, c).expect("c is rendered");
+    let c_tex = h.app.renderer.textures.get(&c_slot).map(|t| t.tex.id()).expect("c's texture");
+    h.app.run("library.select", json!({"ids": [a], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    assert!(h.app.survey_motion.moving(h.time()));
+    let drawn = h.view.painted_shapes().iter().any(|s| match s {
+        egui::epaint::Shape::Rect(r) => r.fill_texture_id() == c_tex,
+        egui::epaint::Shape::Mesh(m) => m.texture_id == c_tex,
+        _ => false,
+    });
+    assert!(drawn, "c's render is drawn while it moves, not its thumbnail");
+    assert!(h.step_until(SETTLE, |h| rendered(h, &[b, c])));
+}
+
 /// Hover photo `id`'s survey tile, as a person does, so its × appears; then click the × in its corner.
 fn click_x(h: &mut Headless, id: u64) {
     let name = format!("cull:{id}");
@@ -528,4 +632,88 @@ fn survey_command_click_on_the_active_photo_activates_the_last_one() {
     click_tile(&mut h, a, egui::Modifiers::COMMAND);
     let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
     assert_eq!((sel, h.app.session.selection.active.map(|p| p.0)), (vec![b, c], Some(c)));
+}
+
+/// Issue #3640: ↑ / ↓ in Survey step through its photos like → / ←; they used to run the grid's
+/// Photo Below / Above, which selected one photo and left the other two out of the survey.
+#[test]
+fn survey_up_and_down_step_through_its_photos() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let sel = |h: &Headless| h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<u64>>();
+    for (key, want) in [("down", c), ("down", c), ("up", b), ("up", a), ("right", b), ("left", a)] {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!((sel(&h), h.app.session.selection.active.map(|p| p.0)), (vec![a, b, c], Some(want)), "after {key}");
+    }
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Survey);
+}
+
+/// The same keys in Compare: ↓ / ↑ change the candidate as → / ← do, and the select stays (#3640).
+#[test]
+fn compare_up_and_down_step_the_candidate() {
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
+    h.settle(SETTLE);
+    let press = |h: &mut Headless, key: &str| {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        h.app.ui.compare
+    };
+    let after_right = press(&mut h, "right");
+    assert!(after_right.is_some_and(|(s, c)| s == sel && c != cand), "{after_right:?}");
+    assert_eq!(press(&mut h, "left"), Some((sel, cand)));
+    assert_eq!(press(&mut h, "down"), after_right, "↓ steps like →");
+    assert_eq!(press(&mut h, "up"), Some((sel, cand)), "↑ steps like ←");
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Compare);
+}
+
+/// Outside Survey and Compare, ↑ / ↓ keep the grid's Photo Below / Above (#3640 only changed the
+/// culling views): from two selected photos in the grid, ↓ selects the one photo it moves to (the
+/// Survey path would have kept both selected), and ↑ comes back.
+#[test]
+fn grid_up_and_down_still_move_to_one_photo() {
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    let r = h.request("ui.set", json!({"view": "photoGrid"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    h.settle(SETTLE);
+    let key = |h: &mut Headless, k: &str| {
+        let r = h.request("ui.key", json!({"key": k}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    key(&mut h, "down");
+    let below = h.app.session.selection.active.map(|p| p.0).expect("an active photo");
+    assert_ne!(below, vis[0], "↓ moved");
+    assert_eq!(h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(), vec![below], "one photo selected, as Photo Below does");
+    key(&mut h, "up");
+    assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(vis[0]), "↑ comes back");
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
+}
+
+/// With the pointer over a slider, ↑ / ↓ nudge the slider in Survey and Compare too, and don't step to another
+/// photo first: the nudge would then edit a photo the user didn't pick (review of #3648).
+#[test]
+fn up_and_down_over_a_slider_stay_on_the_photo_in_survey() {
+    let mut h = demo();
+    let [_, b, _] = survey_of_three(&mut h);
+    let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
+    assert_eq!(active(&h), Some(b));
+    let slider = h.app.widgets.iter().find(|(id, _)| id.starts_with("slider:")).map(|(id, r)| (id.clone(), r.center()));
+    let Some((id, at)) = slider else { panic!("a slider in Survey: {:?}", h.app.widgets.iter().map(|(w, _)| w).collect::<Vec<_>>()) };
+    h.app.synthetic.push(egui::Event::PointerMoved(at));
+    h.settle(SETTLE);
+    for key in ["down", "up"] {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(active(&h), Some(b), "{key} over {id} stays on the photo");
+    }
 }

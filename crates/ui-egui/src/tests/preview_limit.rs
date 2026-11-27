@@ -162,7 +162,7 @@ mod in_the_loupe {
         let mut h = Headless::new(app, size, 1.0);
         let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settle(super::super::ui_settle_timeout());
         let native = {
             let id = h.app.session.active().expect("a photo is open");
             let p = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -233,13 +233,16 @@ mod in_the_loupe {
         }
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
         h.app.ui.pan = (0.3, 0.4);
+        // (a mask without settings shows its overlay by itself: O hides it for that mask)
         h.app.ui.mask_overlay = false;
+        h.app.ui.mask_overlay_hidden = h.app.session.active().zip(h.app.session.active_mask).into_iter().collect();
         h.settle(SETTLE);
         let (zoom, pan) = (h.app.ui.zoom, h.app.ui.pan);
         assert_eq!(zoom, crate::state::Zoom::Percent(100.0));
         let plain = h.app.region_view.expect("a window render without the overlay");
 
         h.app.ui.mask_overlay = true;
+        h.app.ui.mask_overlay_hidden.clear();
         h.settle(SETTLE);
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
@@ -253,6 +256,7 @@ mod in_the_loupe {
         assert_ne!(shown.settings, plain.settings, "the overlay is part of the window's look");
 
         h.app.ui.mask_overlay = false;
+        h.app.ui.mask_overlay_hidden = h.app.session.active().zip(h.app.session.active_mask).into_iter().collect();
         h.settle(SETTLE);
         assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "hiding it keeps them too");
         assert_eq!(h.app.region_view.map(|r| r.settings), Some(plain.settings), "back to the plain window");
@@ -748,7 +752,7 @@ mod in_the_loupe {
     #[test]
     fn pinch_display_fit_keeps_the_request_key_until_the_hold_expires() {
         let (mut h, native) = demo_detail_in([1400.0, 900.0]);
-        assert!(h.settle(SETTLE), "the starting render must be complete");
+        assert!(h.settle(super::super::ui_settle_timeout()), "the starting render must be complete");
         let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
         let (original_key, original_size) = (main.key, main.size);
         let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
@@ -811,7 +815,7 @@ mod in_the_loupe {
     fn pinch_display_fit_refreshes_main_and_before_after_a_short_pinch() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(super::super::ui_settle_timeout()));
         let slots = [Slot::Main, Slot::Before];
         let keys = slots.map(|slot| h.app.renderer.wanted(slot).unwrap());
         let initial_fit = drawn_fit(&h);
@@ -848,7 +852,7 @@ mod in_the_loupe {
     #[test]
     fn pinch_display_fit_does_not_follow_the_old_photo() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(super::super::ui_settle_timeout()));
         let old = h.app.session.active().unwrap();
         let next = h.app.session.visible_cloned().into_iter().find(|id| *id != old).unwrap();
         let initial_fit = drawn_fit(&h);
@@ -874,7 +878,7 @@ mod in_the_loupe {
     fn pinch_display_fit_is_shared_with_a_hover_during_the_hold() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
         assert_eq!(h.request("engine.execute", json!({"command": "panel.profiles"}), T)["ok"], true);
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(super::super::ui_settle_timeout()));
         let initial_fit = drawn_fit(&h);
         let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
         h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));

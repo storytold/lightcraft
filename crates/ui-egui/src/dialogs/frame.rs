@@ -146,6 +146,65 @@ pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &
     });
 }
 
+/// A labelled row with a borderless dropdown ([`crate::widgets::menu_dropdown`]) for one of
+/// `options` (value, label, key): `dropdown:{id}`, items `{id}:{key}`.
+pub(super) fn choice_menu<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str, &str)], value: &mut V) {
+    field(ui, label, |ui| {
+        if let Some(v) = crate::widgets::menu_dropdown(ui, id, label, "", options, *value) {
+            *value = v;
+        }
+    });
+}
+
+/// A labelled row with a boxed dropdown (as Resize to has) for one of `options` (value, label,
+/// key): `combo:{id}`, items `{id}:{key}`. True when the value changed.
+pub(super) fn choice_combo<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str, &str)], value: &mut V) -> bool {
+    let before = *value;
+    field(ui, label, |ui| {
+        let shown = options.iter().find(|o| o.0 == *value).or(options.first()).map_or("", |o| crate::i18n::tr(o.1));
+        let mut picked = false;
+        let c = crate::widgets::combo_box(id).width(150.0).selected_text(shown).show_ui(ui, |ui| {
+            for (v, l, key) in options {
+                let item = ui.selectable_label(*value == *v, crate::i18n::tr(l));
+                crate::widgets::register(ui, format!("{id}:{key}"), item.rect);
+                if item.clicked() {
+                    *value = *v;
+                    picked = true;
+                    ui.close();
+                }
+            }
+        });
+        if picked {
+            // as `widgets::picked`: the menu closed, the focus goes back to the combo box
+            c.response.request_focus();
+        }
+        crate::widgets::name_combo(&c.response, crate::i18n::tr(label));
+        let open = craft_ui::ComboBox::is_open(ui.ctx(), c.response.id);
+        ui.ctx().accesskit_node_builder(c.response.id, |node| node.set_expanded(open));
+        crate::widgets::register(ui, format!("combo:{id}"), c.response.rect);
+    });
+    *value != before
+}
+
+/// [`choices`] laid out as a grid of `cols` columns, row by row (ids `button:{id}-{index}`).
+pub(super) fn choice_grid<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str)], cols: usize, value: &mut V) {
+    field(ui, label, |ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            for (r, row) in options.chunks(cols.max(1)).enumerate() {
+                ui.horizontal(|ui| {
+                    for (c, (v, l)) in row.iter().enumerate() {
+                        let i = r * cols.max(1) + c;
+                        if crate::widgets::text_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() {
+                            *value = *v;
+                        }
+                    }
+                });
+            }
+        });
+    });
+}
+
 /// Dialogs that Return confirms with nothing focused (those with text fields confirm from the
 /// field: `dialog_field`).
 pub(super) fn return_confirms(dlg: &Dialog) -> bool {
