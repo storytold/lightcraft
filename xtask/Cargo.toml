@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 serde_json = { workspace = true }
+# the RAM `ci` sizes build jobs and test threads for, cgroup limits included (no dependencies)
+lightcraft-sysmem = { workspace = true }
 # corpus download checksums
 sha2 = { workspace = true }
 # precompressed web bundle (`cargo xtask web`); pure Rust
