@@ -3,7 +3,8 @@
 #
 #   $DIST/lightcraft-<version>-freebsd-<arch>.tar.gz   (arch: x86_64 or aarch64) a /usr/local-style tree:
 #       lightcraft-<version>-freebsd-<arch>/{bin, share/applications, share/icons, share/mime,
-#       share/metainfo, share/doc/lightcraft}
+#       share/metainfo, share/doc/lightcraft, share/man/man1}, and the bash, zsh and fish completions of
+#       lightcraft-cli
 #
 # Install by copying the tree's contents into /usr/local:
 #   tar -xzf lightcraft-<version>-freebsd-<arch>.tar.gz --strip-components 1 -C /usr/local
@@ -58,6 +59,10 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif \
     ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"})
+  # The man-and-completions example writes lightcraft-cli's man pages and shell completions below. It is
+  # built apart from the binaries (their features would otherwise be unified with its dev-dependencies')
+  # and for the host, since a cross build cannot run it.
+  (cd "$ROOT" && env -u CARGO_BUILD_TARGET cargo build --release --locked -p lightcraft-cli --example man-and-completions)
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
@@ -83,6 +88,26 @@ mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" \
   "$STAGE/share/metainfo" "$STAGE/share/icons" "$STAGE/share/doc/lightcraft"
 install -m 755 "$BIN/lightcraft" "$BIN/lightcraft-cli" "$STAGE/bin/"
 strip "$STAGE/bin/lightcraft" "$STAGE/bin/lightcraft-cli" 2>/dev/null || true
+# lightcraft-cli's man pages and bash, zsh and fish completions (RFC-0018 rule 1.9), written from its clap
+# definition by the example built above (a dry run uses stub files).
+CLI_DOCS="$WORK/cli-docs"
+mkdir -p "$CLI_DOCS"
+if [[ "$DRY_RUN" = 1 ]]; then
+  for f in lightcraft-cli.1 lightcraft-cli.bash _lightcraft-cli lightcraft-cli.fish; do : >"$CLI_DOCS/$f"; done
+else
+  GENERATOR="$CARGO_TARGET_DIR/release/examples/man-and-completions"
+  if [[ ! -x "$GENERATOR" ]]; then
+    echo "error: $GENERATOR is not built (cargo build --release -p lightcraft-cli --example man-and-completions)" >&2
+    exit 1
+  fi
+  "$GENERATOR" "$CLI_DOCS" lightcraft-cli
+fi
+mkdir -p "$STAGE/share/man/man1" "$STAGE/share/bash-completion/completions" \
+  "$STAGE/share/zsh/site-functions" "$STAGE/share/fish/vendor_completions.d"
+for page in "$CLI_DOCS"/*.1; do install -m 644 "$page" "$STAGE/share/man/man1/"; done
+install -m 644 "$CLI_DOCS/lightcraft-cli.bash" "$STAGE/share/bash-completion/completions/lightcraft-cli"
+install -m 644 "$CLI_DOCS/_lightcraft-cli" "$STAGE/share/zsh/site-functions/_lightcraft-cli"
+install -m 644 "$CLI_DOCS/lightcraft-cli.fish" "$STAGE/share/fish/vendor_completions.d/lightcraft-cli.fish"
 # The desktop entry, MIME type, metainfo and icons are the freedesktop files Linux ships.
 install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 install -m 644 "$LINUX/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"
@@ -93,7 +118,9 @@ copy_docs "$STAGE/share/doc/lightcraft"
 
 for f in bin/lightcraft bin/lightcraft-cli "share/applications/$APP_ID.desktop" \
   "share/icons/hicolor/256x256/apps/$APP_ID.png" "share/icons/hicolor/scalable/apps/$APP_ID.svg" \
-  share/doc/lightcraft/LICENSE-MIT share/doc/lightcraft/LICENSE-APACHE; do
+  share/doc/lightcraft/LICENSE-MIT share/doc/lightcraft/LICENSE-APACHE share/man/man1/lightcraft-cli.1 \
+  share/bash-completion/completions/lightcraft-cli share/zsh/site-functions/_lightcraft-cli \
+  share/fish/vendor_completions.d/lightcraft-cli.fish; do
   if [[ ! -e "$STAGE/$f" ]]; then echo "error: $f is missing from the package" >&2; exit 1; fi
 done
 

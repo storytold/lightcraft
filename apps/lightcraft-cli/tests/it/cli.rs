@@ -241,8 +241,8 @@ fn non_utf8_argument_fails_without_a_panic() {
     let _ = std::fs::remove_file(&out);
     let output = Command::new(binary()).arg("render").arg(OsString::from_vec(b"bad-\xff.png".to_vec())).arg("-o").arg(&out).output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("argument 2"), "{stderr}");
+    // A usage error, exit 2, naming the file (RFC-0018): the engine takes text, so a path that is not Unicode is refused before any work.
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("is not valid Unicode"), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
     assert!(!out.exists());
@@ -260,8 +260,8 @@ fn non_unicode_argument_fails_without_a_panic_on_windows() {
     let name: Vec<u16> = "bad-".encode_utf16().chain([0xD800]).chain(".png".encode_utf16()).collect();
     let output = Command::new(binary()).arg("render").arg(OsString::from_wide(&name)).arg("-o").arg(&out).output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("argument 2"), "{stderr}");
+    // A usage error, exit 2, naming the file (RFC-0018): the engine takes text, so a path that is not Unicode is refused before any work.
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("is not valid Unicode"), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
     assert!(!out.exists());
@@ -1081,8 +1081,10 @@ fn snapshot_rejects_invalid_dimensions_before_creating_an_image() {
     {
         let image = tmp(&format!("invalid-viewport-{index}.png"));
         let output = Command::new(binary()).args(["snapshot", "--size", size, "--scale", scale, "-o"]).arg(&image).output().unwrap();
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("snapshot: bad --size/--scale"), "{}", String::from_utf8_lossy(&output.stderr));
+        // A usage error (exit 2): clap refuses a scale that is not finite, the command a viewport the renderer can't make.
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("snapshot: bad --size/--scale") || stderr.contains("--scale"), "{stderr}");
         assert!(!image.exists());
     }
 }

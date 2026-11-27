@@ -28,11 +28,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+use crate::args::BenchCullArgs;
+use crate::error::CliError;
+use crate::io::Io;
 use lightcraft_engine::Session;
 use lightcraft_engine::catalog::PhotoId;
 use serde_json::{Value, json};
-
-const USAGE: &str = "lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]";
 
 /// Threads the app renders thumbnails with (`Renderer::default`: cores âˆ’ 1, at most 6).
 fn render_threads() -> usize {
@@ -59,9 +60,9 @@ fn ms_since(t: Instant) -> f64 {
 }
 
 /// Print one result line the way `xtask bench` parses it (`name: X ms wall`).
-fn line(name: &str, s: &Value) {
+fn line(io: &mut Io, name: &str, s: &Value) {
     if let Some(p50) = s.get("p50").and_then(Value::as_f64) {
-        println!("{name}: {p50:.1} ms wall  (p95 {} ms, n {})", s["p95"], s["n"]);
+        outln!(io, "{name}: {p50:.1} ms wall  (p95 {} ms, n {})", s["p95"], s["n"]);
     }
 }
 
@@ -165,51 +166,10 @@ fn library(dir: &Path) -> Result<Session, String> {
     Ok(s)
 }
 
-pub fn run(args: &[String]) -> Result<(), String> {
-    let mut folder = None;
-    let mut n = 2000usize;
-    let mut copy = 200usize;
-    let mut work = None;
-    let mut json_out = None;
-    let mut files = None;
-    let mut i = 0;
-    while i < args.len() {
-        let value = |i: usize| args.get(i + 1).cloned().ok_or_else(|| format!("{} needs a value\n{USAGE}", args[i]));
-        match args[i].as_str() {
-            "--n" => {
-                n = value(i)?.parse().map_err(|_| "--n needs a number".to_string())?;
-                i += 1;
-            }
-            "--copy" => {
-                copy = value(i)?.parse().map_err(|_| "--copy needs a number".to_string())?;
-                i += 1;
-            }
-            "--files" => {
-                files = Some(value(i)?.parse::<usize>().map_err(|_| "--files needs a number".to_string())?);
-                i += 1;
-            }
-            "--work" => {
-                work = Some(PathBuf::from(value(i)?));
-                i += 1;
-            }
-            "--json" => {
-                json_out = Some(PathBuf::from(value(i)?));
-                i += 1;
-            }
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                return Ok(());
-            }
-            a if a.starts_with("--") => return Err(format!("unknown option {a}\n{USAGE}")),
-            // (a second folder would replace the first and be timed in its place: CodeRabbit on #3583)
-            a if folder.is_some() => return Err(format!("{a}: one FOLDER only\n{USAGE}")),
-            a => folder = Some(PathBuf::from(a)),
-        }
-        i += 1;
-    }
-    let folder = folder.ok_or_else(|| USAGE.to_string())?;
+pub fn run(io: &mut Io, args: BenchCullArgs) -> Result<(), CliError> {
+    let BenchCullArgs { folder, files, n, copy, work, json: json_out } = args;
     if !folder.is_dir() {
-        return Err(format!("{}: not a folder", folder.display()));
+        return Err(format!("{}: not a folder", folder.display()).into());
     }
     let work = work.unwrap_or_else(|| std::env::temp_dir().join(format!("lightcraft-bench-cull-{}", std::process::id())));
     check_outputs(&folder, json_out.as_deref(), &work)?;
@@ -243,7 +203,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
     let browse_ms = ms_since(t);
     let what = if files.is_some() { "first files" } else { "whole folder" };
-    println!("browse {photos} photos ({what}): {browse_ms:.1} ms wall");
+    outln!(io, "browse {photos} photos ({what}): {browse_ms:.1} ms wall");
     out["browse"] = json!({"ms": round(browse_ms), "photos": photos, "perPhotoMs": round(browse_ms / photos.max(1) as f64)});
     let paths: Vec<String> = ids
         .iter()
@@ -253,7 +213,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         })
         .collect();
     if paths.is_empty() {
-        return Err(format!("{}: no photos", folder.display()));
+        return Err(format!("{}: no photos", folder.display()).into());
     }
     let loader = s.media.preview_loader.clone().ok_or("no preview loader")?;
 
@@ -281,9 +241,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let first = per.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
     let all = per.iter().map(|p| p.1).fold(0.0, f64::max);
     let each = stats(&per.iter().map(|p| p.0).collect::<Vec<_>>());
-    println!("grid: first thumbnail: {first:.1} ms wall");
-    println!("grid: {} thumbnails: {all:.1} ms wall", per.len());
-    line("grid: one 512 px thumbnail", &each);
+    outln!(io, "grid: first thumbnail: {first:.1} ms wall");
+    outln!(io, "grid: {} thumbnails: {all:.1} ms wall", per.len());
+    line(io, "grid: one 512 px thumbnail", &each);
     out["thumbs"] = json!({"firstMs": round(first), "allMs": round(all), "count": per.len(), "each": each});
 
     // --- camera previews at loupe sizes, one at a time (what a step costs without look-ahead) -----
@@ -299,7 +259,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .collect();
         let name = if edge == usize::MAX { "camera preview full size (100 %)".to_string() } else { format!("camera preview {edge} px") };
         let st = stats(&ms);
-        line(&name, &st);
+        line(io, &name, &st);
         out[if edge == usize::MAX { "cameraFull".to_string() } else { format!("camera{edge}") }] = st;
     }
 
@@ -315,7 +275,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         })
         .collect();
     let st = stats(&ms);
-    line("loupe render 2560 px (cold)", &st);
+    line(io, "loupe render 2560 px (cold)", &st);
     out["loupeRender"] = st;
 
     // --- rating: a culling pass of keypresses ---------------------------------------------------
@@ -332,13 +292,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
         })
         .collect();
     let st = stats(&ms);
-    line("rate one photo (journal written)", &st);
+    line(io, "rate one photo (journal written)", &st);
     out["rate"] = st;
     drop(s);
 
     // --- import: add in place, then copy ----------------------------------------------------------
     if n == 0 {
-        return finish(out, json_out);
+        return finish(io, out, json_out);
     }
     let add: Vec<String> = paths.iter().take(n).cloned().collect();
     let mut s = library(&fresh_dir(&work, "lib-add")?)?;
@@ -346,7 +306,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let r = s.execute("library.import", &json!({"paths": add, "mode": "add"})).map_err(|e| e.to_string())?;
     let add_ms = ms_since(t);
     let added = r["imported"].as_array().map(Vec::len).unwrap_or(0);
-    println!("import {added} photos in place: {add_ms:.1} ms wall");
+    outln!(io, "import {added} photos in place: {add_ms:.1} ms wall");
     out["importAdd"] = json!({"ms": round(add_ms), "photos": added, "perPhotoMs": round(add_ms / added.max(1) as f64)});
     drop(s);
     if copy > 0 {
@@ -359,19 +319,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         let copy_ms = ms_since(t);
         let copied = r["imported"].as_array().map(Vec::len).unwrap_or(0);
-        println!("import {copied} photos by copying: {copy_ms:.1} ms wall");
+        outln!(io, "import {copied} photos by copying: {copy_ms:.1} ms wall");
         out["importCopy"] = json!({"ms": round(copy_ms), "photos": copied, "perPhotoMs": round(copy_ms / copied.max(1) as f64)});
         drop(s);
         let _ = std::fs::remove_dir_all(&lib);
     }
-    finish(out, json_out)
+    finish(io, out, json_out)
 }
 
-fn finish(out: Value, json_out: Option<PathBuf>) -> Result<(), String> {
+fn finish(io: &mut Io, out: Value, json_out: Option<PathBuf>) -> Result<(), CliError> {
     if let Some(p) = json_out {
         write_replacing(&p, serde_json::to_string_pretty(&out).unwrap_or_default().as_bytes())?;
     }
-    println!("{}", serde_json::to_string(&out).unwrap_or_default());
+    outln!(io, "{}", serde_json::to_string(&out).unwrap_or_default());
     Ok(())
 }
 
@@ -402,12 +362,6 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_second_folder_is_an_error() {
-        let e = run(&["a".to_string(), "b".to_string()]).unwrap_err();
-        assert!(e.starts_with("b: one FOLDER only"), "{e}");
-    }
 
     /// `--work` may hold anything: a run makes a new folder of its own there and never deletes
     /// what is already in it (it used to remove `lib-browse`, `lib-add` and `lib-copy` there).
@@ -528,7 +482,7 @@ mod tests {
             lightcraft_testkit::skip!(System, "can't make a hard link here ({e})");
             return;
         }
-        finish(json!({"browse": 1}), Some(report.clone())).unwrap();
+        finish(&mut Io { out: &mut std::io::sink(), err: &mut std::io::sink() }, json!({"browse": 1}), Some(report.clone())).unwrap();
         assert_eq!(std::fs::read(&photo).unwrap(), b"photo", "the photo is unchanged");
         let written: Value = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
         assert_eq!(written["browse"], 1);

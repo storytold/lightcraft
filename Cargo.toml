@@ -83,6 +83,9 @@ lightcraft-testkit = { path = "crates/testkit" }
 
 # foundation
 thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
