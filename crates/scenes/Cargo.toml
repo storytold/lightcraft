@@ -2,6 +2,7 @@
 name = "lightcraft-scenes"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "Procedurally generated photographic demo scenes (HDR, linear Rec.2020) for LightCraft demos and tests (L1)"
 

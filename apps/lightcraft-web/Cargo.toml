@@ -2,6 +2,7 @@
 name = "lightcraft-web"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 publish = false
 description = "LightCraft in the browser: the egui UI compiled to WASM (build with `cargo xtask web`)"

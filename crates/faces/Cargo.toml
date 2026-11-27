@@ -2,6 +2,7 @@
 name = "lightcraft-faces"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft faces (L1): bounded ONNX CPU inference, face-model manifests, validation and detection"
 

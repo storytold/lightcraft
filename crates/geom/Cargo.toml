@@ -2,6 +2,7 @@
 name = "lightcraft-geom"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft geom (L0)"
 

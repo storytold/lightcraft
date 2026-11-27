@@ -2,6 +2,7 @@
 name = "lightcraft-raster"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft raster (L0)"
 
