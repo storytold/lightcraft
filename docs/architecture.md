@@ -73,8 +73,42 @@ module per file (`cargo test -p <crate> --test it <module>::`); a test that chan
 whole process (a global allocator, closing the GPU) keeps a binary of its own in `tests/`. The WASM
 build is one `cargo check --target wasm32-unknown-unknown --keep-going` over the wasm-safe crates.
 
+`ci`'s resource caps (build jobs by available RAM, at most 4 test threads, line-table debuginfo) and
+its one-run-per-machine slot (`xtask/src/ci_lock.rs`) also cover `cargo xtask test [-p PKG]…
+[--keep-going] [--doc] [-- ARGS]` (`xtask/src/test.rs`), the way to run the tests alone: subcommands
+opt into the caps with `use_ci_caps`. It builds every workspace test target once, as `ci` does, and
+runs each test binary, or the `-p` packages' binaries, itself (`test::run_binary`, which `ci --quick`
+uses too); `--keep-going` runs every binary and names each that failed instead of stopping at the
+first.
+
+What these runs wait on after the build is bounded (`xtask/src/deadline.rs`, #3060). Stable libtest
+has no per-test timeout, so each test binary gets `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30; `0`
+for none): timed from its start when xtask runs it (`test::run_binary`), and from cargo's `Running` /
+`Doc-tests` line for it, and again from its own first `running N tests` line, when `cargo test` runs it (the
+full `ci`'s test and HEIF steps; the build before isn't bounded; cargo runs with
+`CARGO_TERM_QUIET=false` and without `-q` so it prints those lines). The output streams through and is
+read for libtest's lines, keeping a bounded amount. On timeout the binary and the processes it started
+that xtask can find are killed, and no process xtask didn't start. On Linux that is the binary, its process
+tree and every process whose `/proc/<pid>/environ` holds the run's exact marker entry
+(`LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`, inherited by all it starts; the nonce is random per xtask
+process), which finds those that outlived their parent (one that also cleared its environment isn't
+found and may keep running). Each is held by a pidfd and signalled only through it, so a pid reused
+meanwhile is never signalled. They are frozen with SIGSTOP, then killed; one whose SIGKILL fails twice
+is continued with SIGCONT rather than left stopped, and the report names it. Without pidfds (other
+Unix, Linux before 5.3) only xtask's own child is killed (the test binary, or under the full `ci`
+cargo, whose test binary may then keep running) and the report says so; Windows uses `taskkill /T`. The child stays in xtask's process group, so Ctrl-C
+still reaches it. The run reports `timed out after N min: <binary>`, what
+the kill found, the tests still running (libtest's "has been running for over 60 seconds" warnings,
+or the test a single-threaded run started) and those that never reported a result (`--list`, itself
+bounded in time and size). Under nextest, xtask sets `NEXTEST_PROFILE=xtask` (unless the caller set
+one), and that profile's `slow-timeout` in `.config/nextest.toml` kills a test after 30 minutes
+instead, whatever `LIGHTCRAFT_TEST_BINARY_TIMEOUT` says (xtask notes that when it is set); a plain
+`cargo nextest run` uses the default profile and keeps nextest's own defaults. The wait for the CI slot gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes
+(default 240, three full runs at the 80 minutes GitHub's gate allows one; `0` for no limit) with an error naming the run that holds it.
+
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
-`gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask
+`gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build, each
+test binary it starts bounded by 5 minutes, and skipped once a test binary timed out; xtask
 has no wgpu), the corpus and `CRAFT_FONTS_DIR`. Tests
 that need what is missing call `lightcraft_testkit::skip!(need, reason)`, which appends a JSON line to
 the file `LIGHTCRAFT_SKIP_LOG` names. The run ends with the machine and the skips by need and reason,
@@ -87,6 +121,12 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | minor | Quality gates: nextest's 30-minute limit per test is in an `xtask` profile that `ci` and `xtask test` pick, so a plain `cargo nextest run` keeps nextest's defaults |
+| 2026-11-20 | minor | Quality gates: the wait for the CI slot (`LIGHTCRAFT_CI_LOCK_WAIT`) defaults to 240 minutes, room for two or three full runs queued on a shared machine |
+| 2026-11-03 | minor | Quality gates: a test run's output is forwarded outside the lock its clock is checked under, and not (but for a write under way) after the run ends; only a binary's first `running N tests` line restarts its clock; the slot wait never sleeps past its limit |
+| 2026-11-03 | minor | Quality gates: a timed-out test run's processes are signalled through pidfds on Linux (never a reused pid; without pidfds only xtask's own child is killed), and one that can't be killed is continued rather than left stopped |
+| 2026-10-26 | minor | Quality gates: each test binary's run (`LIGHTCRAFT_TEST_BINARY_TIMEOUT`) and the wait for the CI slot (`LIGHTCRAFT_CI_LOCK_WAIT`) have a time limit |
+| 2026-10-26 | minor | Quality gates: `cargo xtask test` runs the tests with `ci`'s caps and slot, and can keep going past a failing binary |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |
