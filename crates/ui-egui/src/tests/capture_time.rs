@@ -174,3 +174,50 @@ fn set_mode_does_not_start_from_an_unreadable_time() {
     );
     assert!(painted(&h, "Enter a date"), "alone, the photo will get the time typed, so the preview asks for one: {:?}", h.painted_text());
 }
+
+/// Issue #4205: with several photos selected, Set date & time moves them all by the active photo's change
+/// (as Lightroom does), and "Give every selected photo this time" gives each of them the time typed instead.
+#[test]
+fn every_selected_photo_can_get_the_same_time() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let ids: Vec<_> = h.app.session.visible_cloned().into_iter().take(3).collect();
+    let times = ["2026-01-01T10:00:00", "2026-01-02T08:30:00", "2026-02-10T18:45:00"];
+    let reset = |h: &mut Headless| {
+        for (id, t) in ids.iter().zip(times) {
+            set_captured(h, *id, t);
+        }
+    };
+    let captured = |h: &Headless| -> Vec<String> {
+        ids.iter().map(|id| h.app.session.catalog.photo(*id).and_then(|p| p.captured.clone()).unwrap_or_default()).collect()
+    };
+    let set = |h: &mut Headless, each: bool| {
+        open(h, &ids, ids[0]);
+        match &mut h.app.ui.dialog {
+            Some(Dialog::CaptureTime { mode, time, .. }) => {
+                *mode = "set".into();
+                *time = "2026-05-05 12:00:00".into();
+            }
+            other => panic!("Edit Capture Time is not open: {other:?}"),
+        }
+        h.settle(SETTLE);
+        assert!(painted(h, "All 3 selected photos move by the same amount."), "{:?}", h.painted_text());
+        if each {
+            let r = h.request("ui.clickWidget", json!({"id": "captureTimeEach"}), T);
+            assert_eq!(r["ok"], true, "the option is offered with several photos: {r}");
+            h.settle(SETTLE);
+            assert!(painted(h, "All 3 selected photos get this time."), "{:?}", h.painted_text());
+        }
+        let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    // as before: the active photo gets the time, the others move by the same amount (+124 days 2 h)
+    reset(&mut h);
+    set(&mut h, false);
+    assert_eq!(captured(&h), ["2026-05-05T12:00:00", "2026-05-06T10:30:00", "2026-06-14T20:45:00"]);
+    // with the option: every photo gets the time typed
+    reset(&mut h);
+    set(&mut h, true);
+    assert_eq!(captured(&h), ["2026-05-05T12:00:00"; 3]);
+}
