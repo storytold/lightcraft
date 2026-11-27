@@ -252,6 +252,9 @@ pub fn compose_with(
         });
     }
     behind(&mut out, &l);
+    if !has_photo {
+        return (out, l);
+    }
     // cast shadow: a blurred rectangle (separable: the product of two blurred steps)
     if let Some((r, sigma)) = l.shadow {
         let op = s.shadow_opacity as f32;
@@ -273,9 +276,7 @@ pub fn compose_with(
     if l.frame != l.visible {
         fill(&mut out, &l.frame, s.stroke_color);
     }
-    if has_photo {
-        draw_image(&mut out, photo, &l.photo, &l.cell, 1.0);
-    }
+    draw_image(&mut out, photo, &l.photo, &l.cell, 1.0);
     (out, l)
 }
 
@@ -485,6 +486,24 @@ mod tests {
         assert_eq!(seen, Some(l), "the hook gets the layout the slide is drawn with");
         assert_eq!(px(&img, 2, 2), RED, "the hook's paint stays on the backdrop");
         assert_eq!(px(&img, 100, 50), GREEN, "and the photo covers it");
+    }
+
+    #[test]
+    fn an_empty_photo_draws_the_backdrop_without_a_frame() {
+        let s = SlideSettings {
+            backdrop_color: RED,
+            margin_left: 0.25,
+            stroke_border: true,
+            stroke_color: GREEN,
+            stroke_width: 0.05,
+            cast_shadow: true,
+            shadow_opacity: 1.0,
+            ..SlideSettings::default()
+        };
+        let mut drew_behind = false;
+        let (img, _) = compose_with(&Rgba8::new(0, 0), None, &s, 40, 24, &mut |_, _| drew_behind = true);
+        assert!(drew_behind);
+        assert!(img == solid(40, 24, RED), "photo effects changed the backdrop");
     }
 
     #[test]
