@@ -1604,12 +1604,23 @@ fn rating_exactly_or_at_most_zero_shows_the_unrated_photos() {
     assert_eq!(s.visible_cloned().len(), ids.len(), "at least no stars is every photo");
     assert!(crate::filter_chips(&s.filter, &s.catalog).is_empty());
 
-    // a smart album of rated photos, viewed with "= no stars": the view saves "= 0", not "= 3"
-    let r = s.execute("album.createSmart", &json!({"name": "Rated", "rules": {"rating": 3}})).unwrap();
-    s.execute("library.source", &json!({"kind": "album", "id": r["id"]})).unwrap();
-    s.execute("library.filter", &json!({"rating": 0, "ratingOp": "exactly"})).unwrap();
-    let saved = s.view_rules();
-    assert_eq!((saved.rating, saved.rating_op), (0, lightcraft_catalog::RatingOp::Exactly));
+    // A saved zero-star view must not widen an album that already excludes unrated photos.
+    for (name, rating, album_op, bar_op, expected) in [
+        ("Rated", 1, "atLeast", "exactly", 0),
+        ("Existing high scalar", 7, "exactly", "atMost", 0),
+        ("Includes unrated", 3, "atMost", "exactly", unrated),
+    ] {
+        let r = s.execute("album.createSmart", &json!({"name": name, "rules": {"rating": rating, "ratingOp": album_op}})).unwrap();
+        s.execute("library.source", &json!({"kind": "album", "id": r["id"]})).unwrap();
+        s.execute("library.filter", &json!({"rating": 0, "ratingOp": bar_op})).unwrap();
+        let expected_ids = s.visible_cloned();
+        assert_eq!(expected_ids.len(), expected, "{name}: active view");
+        let saved = s.execute("album.createSmart", &json!({"name": format!("Saved {name}")})).unwrap();
+        assert_eq!(saved["count"], json!(expected), "{name}: save from filter");
+        s.execute("library.clearFilter", &json!({})).unwrap();
+        s.execute("library.source", &json!({"kind": "album", "id": saved["id"]})).unwrap();
+        assert_eq!(s.visible_cloned(), expected_ids, "{name}: reopen saved view");
+    }
 }
 
 #[test]

@@ -186,12 +186,24 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             p["resetBursts"] = json!(reset_bursts);
             app.run("photo.analyze", p)
         }
-        Dialog::SmartRules { id, name, rules, parent, .. } => {
+        Dialog::SmartRules { id, name, rules, parent, allow_matching, .. } => {
+            let name = if name.trim().is_empty() { "Smart Album".to_string() } else { name.trim().to_string() };
+            if let Some(id) = *id
+                && super::no_match_album(app, Some(id)).is_some()
+            {
+                if *allow_matching {
+                    // Patch the no-match flag without replacing the album's original filters.
+                    return app.run("album.setRules", json!({"id": id, "name": name, "rules": {"onlyNone": false}}));
+                }
+                if app.session.catalog.album(lightcraft_catalog::AlbumId(id)).is_some_and(|a| a.name != name) {
+                    app.run("album.rename", json!({"id": id, "name": name}))?;
+                }
+                return Ok(json!({"count": 0}));
+            }
             // refused before anything changes (not even the name)
             if let Some(problem) = rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).first() {
                 return Err(problem.to_string());
             }
-            let name = if name.trim().is_empty() { "Smart Album".to_string() } else { name.trim().to_string() };
             match id {
                 // the name and the rules together: one undo step, both or neither
                 Some(id) => app.run("album.setRules", json!({"id": id, "name": name, "replace": true, "rules": {"ruleSet": rules}})),

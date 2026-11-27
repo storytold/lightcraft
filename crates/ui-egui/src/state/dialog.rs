@@ -20,7 +20,7 @@ impl Dialog {
 
     /// A new smart album rules dialog: a fresh one, whatever rules it holds.
     pub fn smart_rules(id: Option<u64>, name: String, rules: lightcraft_catalog::RuleSet, parent: Option<u64>) -> Dialog {
-        Dialog::SmartRules { id, name, rules, parent, instance: new_smart_rules_instance() }
+        Dialog::SmartRules { id, name, rules, parent, allow_matching: false, instance: new_smart_rules_instance() }
     }
 }
 
@@ -222,6 +222,9 @@ pub enum Dialog {
         id: Option<u64>,
         name: String,
         rules: lightcraft_catalog::RuleSet,
+        /// For an explicit no-match album, allow its original saved criteria to match again.
+        #[serde(skip)]
+        allow_matching: bool,
         /// The folder a new smart album is created in (ignored when editing).
         #[serde(default)]
         parent: Option<u64>,

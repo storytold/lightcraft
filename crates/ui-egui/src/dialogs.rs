@@ -25,8 +25,8 @@ use export::{
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choice_grid, choices, clicked_backdrop, dialog_body, dialog_field, field,
-    just_opened, num, only_shows, return_confirms, trailing_button_row,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choice_combo, choice_grid, choice_menu, choices, clicked_backdrop, dialog_body,
+    dialog_field, field, just_opened, num, only_shows, return_confirms, trailing_button_row,
 };
 pub(crate) use rename::rename_preview;
 use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
@@ -659,8 +659,8 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
         dlg,
         Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
     );
-    let bad_rules =
-        matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
+    let bad_rules = matches!(dlg, Dialog::SmartRules { id, rules, .. }
+        if no_match_album(app, *id).is_none() && !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
     !rename_blocked && (informational || (!waiting && !bad_rules))
 }
 
@@ -1026,15 +1026,37 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     });
 }
 
+/// A saved view that matches nothing regardless of its stored criteria.
+fn no_match_album(app: &LightcraftApp, id: Option<u64>) -> Option<&lightcraft_catalog::Filter> {
+    id.and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)))
+        .and_then(|album| album.smart.as_deref())
+        .filter(|filter| filter.only_none)
+}
+
 /// The body of the SmartRules dialog.
 fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::SmartRules { id, name, rules, instance, .. } = dlg else { return };
+    let Dialog::SmartRules { id, name, rules, instance, allow_matching, .. } = dlg else { return };
     let r = crate::widgets::named(
         ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY)),
         crate::i18n::tr("Name"),
     );
     crate::widgets::register(ui, "field:smartName", r.rect);
     ui.add_space(6.0);
+    if let Some(mut saved) = no_match_album(app, *id).cloned() {
+        let allow = ui.checkbox(allow_matching, crate::i18n::tr("Allow saved rules to match photos"));
+        crate::widgets::register(ui, "field:smartAllowMatching", allow.rect);
+        let preview = if *allow_matching {
+            saved.only_none = false;
+            let n = smart_filter_preview_count(app, &saved);
+            crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n)
+        } else {
+            crate::i18n::tr("Only 0 photos").to_string()
+        };
+        // Keep one live node across both states: the screen reader gets changed text without moving focus.
+        let status = ui.push_id("smartRulesMatchStatus", |ui| ui.label(preview)).inner;
+        ui.ctx().accesskit_node_builder(status.id, |node| node.set_live(egui::accesskit::Live::Polite));
+        return;
+    }
     // the folder an album made from a folder view carries is not in the editor, but it counts
     let folder = id
         .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)))
@@ -1064,6 +1086,19 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     }
 }
 
+fn smart_filter_preview_count(app: &mut LightcraftApp, rules: &lightcraft_catalog::Filter) -> usize {
+    if rules.only_none {
+        return 0;
+    }
+    // counted when the library or the rules change (or, for "in the last…" rules, the minute), not every frame
+    let now = (app.session.clock)();
+    let minute = if rules.depends_on_now() { now.get(..16).unwrap_or(&now) } else { "" };
+    app.caches.dialog_count(&app.session.catalog, ("smartAlbum", format!("{rules:?}"), minute), || {
+        lightcraft_catalog::rules::set_now(Some(now.clone()));
+        app.session.catalog.query(rules, &Default::default()).len()
+    })
+}
+
 /// The body of the NewSmartAlbum dialog.
 fn new_smart_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut Dialog) {
     let Dialog::NewSmartAlbum { name, .. } = dlg else { return };
@@ -1071,13 +1106,7 @@ fn new_smart_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, 
         *confirm = true;
     }
     let rules = app.session.view_rules();
-    // counted when the library or the rules change (or, for "in the last…" rules, the minute), not every frame
-    let now = (app.session.clock)();
-    let minute = if rules.depends_on_now() { now.get(..16).unwrap_or(&now) } else { "" };
-    let n = app.caches.dialog_count(&app.session.catalog, ("smartAlbum", format!("{rules:?}"), minute), || {
-        lightcraft_catalog::rules::set_now(Some(now.clone()));
-        app.session.catalog.query(&rules, &Default::default()).len()
-    });
+    let n = smart_filter_preview_count(app, &rules);
     ui.label(
         egui::RichText::new(crate::i18n::tr_format!("Matches: {}", crate::i18n::filter_label(&rules, &app.session.catalog))).color(t.text_label),
     );
@@ -1403,9 +1432,15 @@ fn contact_sheet_summary(n: usize, pages: usize) -> String {
     crate::i18n::tr_format!("{n} selected photo{} · {pages} page{}", crate::i18n::plural_s(n), crate::i18n::plural_s(pages), n = n, pages = pages)
 }
 
+/// The width of the Export dialog's options.
+const EXPORT_BODY_W: f32 = 581.0;
+
 /// The body of the Export dialog.
 fn export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } = dlg else { return };
+    // as wide as when Format was a row of buttons: its dropdowns would leave the sliders, the
+    // watermark preview and the folder path narrow
+    ui.set_min_width(EXPORT_BODY_W);
     let n = app.session.selection.ids.len().max(1);
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
     export_preset_row(app, ui, opts, full_size, resize, limit_kb);
@@ -1472,20 +1507,20 @@ fn export_format_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
     let before = opts.format;
     // "Rendered DNG" is a DNG option (below), not a format of its own in this list
     let mut shown = if opts.format == F::RenderedDng { F::Dng } else { opts.format };
-    choices(
+    choice_menu(
         ui,
         "Format",
         "exportFormat",
         &[
-            (F::Jpeg, "JPEG"),
-            (F::Png, "PNG"),
-            (F::Tiff, "TIFF"),
-            (F::Psd, "PSD"),
-            (F::Webp, "WebP"),
-            (F::Avif, "AVIF"),
-            (F::Jxl, "JPEG XL"),
-            (F::Dng, "DNG"),
-            (F::Original, "Original files"),
+            (F::Jpeg, "JPEG", "jpeg"),
+            (F::Png, "PNG", "png"),
+            (F::Tiff, "TIFF", "tiff"),
+            (F::Psd, "PSD", "psd"),
+            (F::Webp, "WebP", "webp"),
+            (F::Avif, "AVIF", "avif"),
+            (F::Jxl, "JPEG XL", "jxl"),
+            (F::Dng, "DNG", "dng"),
+            (F::Original, "Original files", "original"),
         ],
         &mut shown,
     );
@@ -1550,11 +1585,17 @@ fn export_color_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
     } else {
         use lightcraft_engine::export::OutputSpace as C;
-        choices(
+        choice_combo(
             ui,
             "Color space",
             "exportColorSpace",
-            &[(C::Srgb, "sRGB"), (C::DisplayP3, "P3"), (C::AdobeRgb, "Adobe RGB"), (C::ProPhoto, "ProPhoto"), (C::Rec2020, "Rec.2020")],
+            &[
+                (C::Srgb, "sRGB", "srgb"),
+                (C::DisplayP3, "P3", "p3"),
+                (C::AdobeRgb, "Adobe RGB", "adobeRgb"),
+                (C::ProPhoto, "ProPhoto", "proPhoto"),
+                (C::Rec2020, "Rec.2020", "rec2020"),
+            ],
             &mut opts.color_space,
         );
         if opts.effective_space() != opts.color_space {
@@ -1594,21 +1635,22 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
 /// Export dialog: sharpening, metadata and the watermark of a rendered photo.
 fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions, full_size: bool, resize: Resize) {
     use lightcraft_engine::export::{MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
-    choices(
+    choice_combo(
         ui,
         "Sharpen",
         "exportSharpen",
-        &[(S::None, "None"), (S::Screen, "Screen"), (S::Matte, "Matte"), (S::Glossy, "Glossy")],
+        &[(S::None, "None", "none"), (S::Screen, "Screen", "screen"), (S::Matte, "Matte", "matte"), (S::Glossy, "Glossy", "glossy")],
         &mut opts.sharpen,
     );
     if opts.sharpen != S::None {
-        choices(ui, "Amount", "exportSharpenAmount", &[(A::Low, "Low"), (A::Standard, "Standard"), (A::High, "High")], &mut opts.sharpen_amount);
+        let amounts = [(A::Low, "Low", "low"), (A::Standard, "Standard", "standard"), (A::High, "High", "high")];
+        choice_menu(ui, "Amount", "exportSharpenAmount", &amounts, &mut opts.sharpen_amount);
     }
-    choices(
+    choice_menu(
         ui,
         "Metadata",
         "exportMetadata",
-        &[(M::All, "All"), (M::AllExceptCamera, "No camera"), (M::Copyright, "Copyright"), (M::None, "None")],
+        &[(M::All, "All", "all"), (M::AllExceptCamera, "No camera", "noCamera"), (M::Copyright, "Copyright", "copyright"), (M::None, "None", "none")],
         &mut opts.metadata,
     );
     if !matches!(opts.metadata, M::None | M::Copyright) {
