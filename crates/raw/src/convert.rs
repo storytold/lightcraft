@@ -134,6 +134,7 @@ pub(crate) fn color(c: craft_raw::ColorData) -> ColorData {
         baseline_sharpness: c.baseline_sharpness,
         profile: c.profile,
         kelvin_presets: c.kelvin_presets.and_then(|k| kelvin_presets(&k)),
+        balanced_with: None,
     }
 }
 

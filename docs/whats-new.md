@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### White balance on Sony M and S size raws
+- Sony's downsized lossless raws (RAW size M or S) open at the camera's As Shot white balance, and Temp and Tint move it
+  as on a full-size file. They opened at about 1700 K / -190 with both sliders stuck at the left, and any change turned
+  the photo magenta (issue #4078). These files come already white-balanced; LightCraft now reads As Shot from the white
+  they were balanced to.
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
