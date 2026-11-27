@@ -1,4 +1,4 @@
-use super::frame::{field, num};
+use super::frame::{choice_combo, num};
 use super::{ControlSpec, LightcraftApp, Section, SettingsGroup, Tokens, Track};
 
 /// The Export dialog's watermark preview: the first exported photo, as wide as the dialog whatever
@@ -220,42 +220,32 @@ const PPI: ControlSpec = spec("export.ppi", "Resolution (ppi)", 1.0, 1200.0, 240
 /// Image Sizing: full size, or a resize mode and its value(s), don't enlarge, ppi.
 pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::export::Resize, ppi: &mut u16) {
     use lightcraft_engine::export::ResizeMode as R;
-    const MODES: [(R, &str); 8] = [
-        (R::LongEdge, "Long Edge"),
-        (R::ShortEdge, "Short Edge"),
-        (R::Width, "Width"),
-        (R::Height, "Height"),
-        (R::WidthHeight, "Width & Height"),
-        (R::Dimensions, "Dimensions"),
-        (R::Megapixels, "Megapixels"),
-        (R::Percent, "Percentage"),
+    const MODES: [(R, &str, &str); 8] = [
+        (R::LongEdge, "Long Edge", "longEdge"),
+        (R::ShortEdge, "Short Edge", "shortEdge"),
+        (R::Width, "Width", "width"),
+        (R::Height, "Height", "height"),
+        (R::WidthHeight, "Width & Height", "widthHeight"),
+        (R::Dimensions, "Dimensions", "dimensions"),
+        (R::Megapixels, "Megapixels", "megapixels"),
+        (R::Percent, "Percentage", "percent"),
     ];
     let r_full = ui.checkbox(full, crate::i18n::tr("Full size"));
     crate::widgets::register(ui, "check:exportFullSize", r_full.rect);
     if !*full {
-        field(ui, "Resize to", |ui| {
-            let cur = MODES.iter().find(|m| m.0 == r.mode).map_or("Long Edge", |m| m.1);
-            let before = r.mode;
-            let c = crate::widgets::combo_box("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (m, l) in MODES {
-                    ui.selectable_value(&mut r.mode, m, crate::i18n::tr(l));
-                }
-            });
-            crate::widgets::name_combo(&c.response, crate::i18n::tr("Resize"));
-            crate::widgets::register(ui, "combo:exportResizeMode", c.response.rect);
-            if r.mode != before {
-                // a sensible value for the new unit
-                r.value = match r.mode {
-                    R::Megapixels => 12.0,
-                    R::Percent => 50.0,
-                    _ if matches!(before, R::Megapixels | R::Percent) => 2048.0,
-                    _ => r.value,
-                };
-                if matches!(r.mode, R::Dimensions | R::WidthHeight) && r.height == 0 {
-                    r.height = r.value as u32;
-                }
+        let before = r.mode;
+        if choice_combo(ui, "Resize to", "exportResizeMode", &MODES, &mut r.mode) {
+            // a sensible value for the new unit
+            r.value = match r.mode {
+                R::Megapixels => 12.0,
+                R::Percent => 50.0,
+                _ if matches!(before, R::Megapixels | R::Percent) => 2048.0,
+                _ => r.value,
+            };
+            if matches!(r.mode, R::Dimensions | R::WidthHeight) && r.height == 0 {
+                r.height = r.value as u32;
             }
-        });
+        }
         let mut v = r.value as f64;
         let spec = match r.mode {
             R::Megapixels => &SIZE_MP,
