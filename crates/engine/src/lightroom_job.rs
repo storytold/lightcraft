@@ -346,10 +346,12 @@ fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(V
         if !seen.insert(key.clone()) {
             continue;
         }
-        if photo.original_is_file() {
-            paths.push(photo.path.clone());
-        } else {
+        if !photo.original_is_file() {
             missing.insert(key);
+        } else if !lightroom_catalog::is_catalog_video(photo) {
+            // Catalog videos are references. The image probe reads the entire
+            // file before rejecting it, even though its catalog entry is added.
+            paths.push(photo.path.clone());
         }
     }
     Ok((paths, missing))

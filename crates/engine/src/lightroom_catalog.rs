@@ -728,7 +728,7 @@ fn drop_copies_of(data: &mut CatalogImport, masters: &HashSet<i64>) {
 
 /// A video the catalog lists with the format `VIDEO` and a video extension. Videos aren't image
 /// types, but they become video records (never opened by the system opener), so they pass.
-fn is_catalog_video(p: &CatalogPhoto) -> bool {
+pub(crate) fn is_catalog_video(p: &CatalogPhoto) -> bool {
     const EXTENSIONS: [&str; 12] = ["mp4", "mov", "m4v", "avi", "mts", "m2ts", "3gp", "mkv", "webm", "wmv", "mpg", "mpeg"];
     text(&p.image, "fileFormat").eq_ignore_ascii_case("VIDEO")
         && Path::new(&p.path).extension().and_then(|e| e.to_str()).is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))

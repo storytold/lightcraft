@@ -1636,6 +1636,7 @@ fn native_video_import_is_visible_in_video_filter() {
     std::fs::write(&path, native_catalog(&tables)).unwrap();
     let mut s = crate::Session::new();
     let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+    assert_eq!(imported["missing"], json!([dir.join("Photos/clip.MOV")]));
     let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
     assert_eq!(s.catalog.photo(id).unwrap().kind, lightcraft_catalog::MediaKind::Video);
     s.execute("library.filter", &json!({"kind": "video"})).unwrap();
@@ -1647,6 +1648,31 @@ fn native_video_import_is_visible_in_video_filter() {
     s.execute("edit.redo", &json!({})).unwrap();
     s.execute("library.filter", &json!({"kind": "video"})).unwrap();
     assert_eq!(s.visible(), &[id]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native_catalog_links_present_video_without_an_image_probe_failure() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-video-link-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let path = dir.join("videos.lrcat");
+    let clip = dir.join("Photos/clip.MPG");
+    std::fs::write(&clip, b"opaque movie bytes").unwrap();
+    let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+    tables[2].2[2] = SqlValue::Text("clip.MPG".into());
+    tables[3].2[3] = SqlValue::Text("VIDEO".into());
+    std::fs::write(&path, native_catalog(&tables)).unwrap();
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(Arc::new(|_| Err("unsupported image format".into())));
+
+    let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+
+    assert_eq!(imported["failed"], json!([]));
+    assert_eq!(imported["missing"], json!([]));
+    let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Video);
+    assert_eq!(photo.source, Source::File { path: clip.to_str().unwrap().into() });
     std::fs::remove_dir_all(dir).unwrap();
 }
 
