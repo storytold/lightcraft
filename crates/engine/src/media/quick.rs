@@ -59,6 +59,7 @@ impl QuickJob {
             quick: None,
             display: None,
             frame: None,
+            slide_photo: None,
         })
     }
 
@@ -77,6 +78,7 @@ impl QuickJob {
             quick,
             display: None,
             frame: None,
+            slide_photo: None,
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
@@ -207,7 +209,7 @@ fn header_info(p: &Photo) -> SourceInfo {
             raw: true,
             as_shot_temp: temp,
             as_shot_tint: tint,
-            lens: p.embedded_lens,
+            lens: p.embedded_lens.as_deref().copied(),
             relative_wb: relative,
             // (a fitted-look raw edited in Kelvin: its camera's matrices give the scale, see `files::WbScaleOf`)
             legacy_relative_wb: p.fitted_look() && !relative,
