@@ -122,11 +122,11 @@ fn tiny_gif_and_bmp_declaring_a_gigapixel_canvas_are_refused_before_allocating()
 fn large_gif_and_bmp_sizes_come_from_the_header() {
     let (w, h) = (2_100u32, 2_000u32);
     let rgb = vec![90u8; (w * h * 3) as usize];
-    let mut bmp = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut bmp).encode(&rgb, w, h, image::ExtendedColorType::Rgb8).unwrap();
-    let mut gif = Vec::new();
-    let frame = image::RgbaImage::from_pixel(w, h, image::Rgba([90, 90, 90, 255]));
-    image::codecs::gif::GifEncoder::new(&mut gif).encode_frame(image::Frame::new(frame)).unwrap();
+    let bmp_img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, rgb).unwrap();
+    let bmp = craft_image_codecs::encode(&bmp_img, craft_image_codecs::Format::Bmp, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let rgba = [90, 90, 90, 255].repeat((w * h) as usize);
+    let gif_img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, rgba).unwrap();
+    let gif = craft_image_codecs::encode(&gif_img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
     for (name, bytes) in [("bmp", bmp), ("gif", gif)] {
         let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!((header.width, header.height, header.orientation), (w, h, 1), "{name}");
@@ -289,6 +289,43 @@ fn thumbnail_respects_configured_source_pixel_limit() {
     assert!(matches!(decode_thumbnail_with(&bytes, &opts), Err(Error::TooLarge(3, 2))));
     opts.max_pixels = 6;
     assert_eq!(decode_thumbnail_with(&bytes, &opts).unwrap().image.width, 1);
+}
+
+/// A header claiming zero width or height is an error, never a decoded image with no pixels
+/// (downstream filters index into it).
+#[test]
+// End-to-end no-panic check: headers claiming a zero dimension are errors. The JPEG and PNG
+// readers already refuse these; `decode_unguarded`'s own final-output guard is tested directly in
+// the crate's unit tests.
+fn zero_size_headers_are_refused() {
+    let jpeg = seeds()[0].clone();
+    let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+    for at in [sof + 5, sof + 7] {
+        let mut j = jpeg.clone();
+        j[at..at + 2].copy_from_slice(&[0, 0]);
+        assert!(decode_unguarded(&j, Format::Jpeg, &small_opts()).is_err());
+    }
+    let png = seeds()[1].clone();
+    for at in [16, 20] {
+        let mut p = png.clone();
+        p[at..at + 4].copy_from_slice(&[0; 4]);
+        // repair the IHDR CRC so the dimension, not the checksum, is what gets refused
+        let crc = crc32(&p[12..29]);
+        p[29..33].copy_from_slice(&crc.to_be_bytes());
+        assert!(decode_unguarded(&p, Format::Png, &small_opts()).is_err());
+    }
+}
+
+/// CRC-32 (IEEE), as PNG chunks use.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut c = !0u32;
+    for &b in bytes {
+        c ^= u32::from(b);
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+    }
+    !c
 }
 
 fn seeds() -> &'static Vec<Vec<u8>> {
