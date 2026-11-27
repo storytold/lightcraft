@@ -82,13 +82,28 @@ pub fn apply(base: &mut [[f32; 3]], width: usize, height: usize, gain: &GainImag
     for (index, pixel) in base.iter_mut().enumerate() {
         let x = (index % width) as f32 + 0.5;
         let y = (index / width) as f32 + 0.5;
-        let code = gain.sample(x * scale_x, y * scale_y, 0) / 255.0;
+        let code = sample(gain, x * scale_x, y * scale_y) / 255.0;
         let multiplier = 1.0 + (headroom - 1.0) * code.powf(2.2);
         for value in pixel {
             *value *= multiplier;
         }
     }
     Ok(())
+}
+
+/// Bilinear code of a one-channel map at map coordinates (`x`, `y`) (pixel centres at +0.5), the
+/// edges clamped: `craft-gainmap` keeps its own sampler private.
+fn sample(gain: &GainImage, x: f32, y: f32) -> f32 {
+    let (w, h) = (gain.width, gain.height);
+    let fx = (x - 0.5).clamp(0.0, (w - 1) as f32);
+    let fy = (y - 0.5).clamp(0.0, (h - 1) as f32);
+    let (x0, y0) = (fx as usize, fy as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let at = |x: usize, y: usize| f32::from(gain.data.get(y * w + x).copied().unwrap_or(0));
+    let a = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+    let b = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+    a + (b - a) * ty
 }
 
 #[cfg(test)]
