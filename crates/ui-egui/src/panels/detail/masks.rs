@@ -931,6 +931,11 @@ fn grip_gestures(
 /// on drawing it, all one undo step, and the tool is put down. `op` makes it a component of the
 /// selected mask. For the keyboard, a stand-in at the photo's centre: Return places the gradient
 /// where `mask.add` puts one by default.
+/// Memory key: a gradient tool was picked while a press was down, so that press draws nothing.
+pub(crate) fn gradient_wait_release() -> egui::Id {
+    egui::Id::unique("lc-gradient-wait-release")
+}
+
 fn draw_gradient(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, kind: &str, op: Option<&str>) {
     let name = if kind == "linear" { "New linear gradient (Return adds it)" } else { "New radial gradient (Return adds it)" };
     let keys = crate::canvas_keys::handle(
@@ -955,6 +960,15 @@ fn draw_gradient(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respon
     }
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    // the tool was picked with a press already down: that press draws nothing, the next one does
+    let wait = gradient_wait_release();
+    if ui.ctx().data(|d| d.get_temp::<bool>(wait)).unwrap_or(false) {
+        if ui.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        ui.ctx().data_mut(|d| d.remove::<bool>(wait));
+        return;
     }
     // a click that never moved makes nothing either: say again how to draw one
     if resp.clicked() {

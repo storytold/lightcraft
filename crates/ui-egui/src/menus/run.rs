@@ -1250,6 +1250,11 @@ fn ui_commands_8(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = op.map_or_else(|| tool.to_string(), |op| format!("{tool}:{op}"));
+                    // a press already down (a gradient's key in the middle of a Brush stroke) draws nothing:
+                    // the drag that draws starts with a press after the pick
+                    if ctx.input(|i| i.pointer.any_down()) {
+                        ctx.data_mut(|d| d.insert_temp(crate::panels::detail::gradient_wait_release(), true));
+                    }
                     app.toast(ctx, crate::i18n::tr("Drag on the photo to draw the gradient · Esc cancels"));
                 }
                 "wbPicker" => {

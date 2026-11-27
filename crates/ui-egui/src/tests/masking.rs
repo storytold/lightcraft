@@ -2638,7 +2638,8 @@ fn a_refused_live_stroke_does_not_replace_the_previous_stroke() {
 }
 
 /// Another tool chosen while a live Brush stroke is open (a gradient's key mid-stroke) ends the stroke first: the
-/// new mask is a step of its own, not folded into the "Brush" step (CodeRabbit on #2920).
+/// gradient drawn next is a step of its own, not folded into the "Brush" step (CodeRabbit on #2920). The press that
+/// was down draws nothing (#2311: a gradient is drawn by a drag that starts after it is picked).
 #[test]
 fn a_gradient_chosen_mid_stroke_is_its_own_undo_step() {
     let mut h = detail("panel.masking");
@@ -2653,10 +2654,17 @@ fn a_gradient_chosen_mid_stroke_is_its_own_undo_step() {
     exec(&mut h, "tool.linear", json!({}));
     assert!(h.app.gesture.is_none(), "the stroke ended");
     assert!(h.app.session.interaction.is_none(), "its undo step closed");
-    assert_eq!(develop(&h).masks.len(), masks + 1);
+    pointer(&mut h, json!([{"kind": "drag", "x": 0.4, "y": 0.7}, {"kind": "up", "x": 0.4, "y": 0.7}]));
+    assert_eq!(develop(&h).masks.len(), masks, "the press that was down draws nothing");
+    let stroked = develop(&h).masks.clone();
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.3, "y": 0.2}, {"kind": "drag", "x": 0.4, "y": 0.4},
+        {"kind": "drag", "x": 0.6, "y": 0.6}, {"kind": "up", "x": 0.6, "y": 0.6}]),
+    );
+    assert_eq!(develop(&h).masks.len(), masks + 1, "the next drag draws the gradient");
     exec(&mut h, "edit.undo", json!({}));
-    assert_eq!(develop(&h).masks.len(), masks, "one undo takes the gradient alone");
-    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.7}]));
+    assert_eq!(develop(&h).masks, stroked, "one undo takes the gradient alone");
     h.settle(SETTLE);
 }
 

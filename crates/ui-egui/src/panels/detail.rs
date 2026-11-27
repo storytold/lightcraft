@@ -22,7 +22,7 @@ mod info;
 mod lens_blur;
 mod look_ahead;
 mod masks;
-pub(crate) use masks::gradient_tool;
+pub(crate) use masks::{gradient_tool, gradient_wait_release};
 mod retouch;
 mod window;
 
