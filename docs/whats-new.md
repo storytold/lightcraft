@@ -16,6 +16,12 @@
   kept, so switching it off and on or moving Amount is instant, and an export makes it if it is missing. See
   [AI Defringe](ai-defringe.md).
 
+### Face suggestions match the same person more often
+- Each face is now read both as it is and mirrored, and the two are averaged before it is compared with the faces you
+  have named. On the LFW benchmark with AuraFace, about 1 in 6 of a person's photos that used to miss the match bar now
+  reach it, and more for small faces in group photos, with no more strangers matched (issue #1920). Recognising a face takes about
+  twice as long, and the faces already scanned are scanned once more, in the background.
+
 ### Pressing at the search box's edge no longer moves the window
 - On macOS the top bar is the window's title bar, and the search box's padding around its text still belonged to
   it: a press there, where a text selection often starts, dragged the whole window instead. The whole box is now
