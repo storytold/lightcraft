@@ -862,6 +862,22 @@ fn auto_sync_carries_the_denoise_switch_to_the_other_selected_photos() {
     assert_eq!(other.enhance.denoise, 50.0);
     x.s.execute("denoise.toggle", &json!({"id": ids[0], "enabled": false})).unwrap();
     assert!(!x.s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap().enhance.denoise_enabled());
+    // turning it on carries the active photo's Amount, not the other photo's own
+    x.s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    for (i, amount) in [(0usize, 80.0), (1, 20.0)] {
+        let id = lightcraft_catalog::PhotoId(ids[i]);
+        let mut d = (*x.s.develop_of(id).unwrap()).clone();
+        d.enhance.denoise = amount;
+        d.enhance.denoise_on = Some(false);
+        x.s.set_develop(id, d, "Setup").unwrap();
+    }
+    x.s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    x.s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    x.s.execute("denoise.toggle", &json!({"id": ids[0], "enabled": true})).unwrap();
+    let other = x.s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    assert!(other.enhance.denoise_enabled(), "{:?}", other.enhance);
+    assert_eq!(other.enhance.denoise, 80.0);
+    assert_eq!(other.enhance.denoise_on, Some(true));
     drop(x.s);
     let _ = std::fs::remove_dir_all(x.dir);
 }

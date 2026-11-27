@@ -586,7 +586,10 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         s.end_interaction()?;
         d.enhance.denoise = amount;
         d.enhance.denoise_on = Some(on);
-        s.set_develop(id, d, "AI Denoise")?;
+        // Turning the switch on carries this photo's Amount to the other selected photos even
+        // when the Amount itself did not change here (otherwise they would keep their own).
+        let carry = on.then(|| json!({"enhance": {"denoise": amount}}));
+        s.set_develop_carrying(id, d, "AI Denoise", carry.as_ref())?;
     }
     if on {
         s.denoise_enqueue(&[id], true, false);
