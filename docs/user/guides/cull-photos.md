@@ -2,7 +2,7 @@
 title: Rate, flag and label photos
 description: Sort a shoot with star ratings, pick and reject flags and colour labels, from the keyboard or the Photo menu.
 order: 20
-verified: 0.7.1
+verified: 0.21.1
 ---
 
 Select photos in **Photo Grid** or **Square Grid**, then press a key: `1` to `5` for stars, `P` to pick, `X` to reject, `6` to `9` for a colour label. The same actions are in the **Photo** menu.
@@ -10,7 +10,7 @@ Select photos in **Photo Grid** or **Square Grid**, then press a key: `1` to `5`
 ## Steps
 
 1. Open the library in **View** > **Photo Grid** or **View** > **Square Grid**.
-2. Click a photo to select it. Click more photos to build a selection, or use **Edit** > **Select All**.
+2. Click a photo to select it. Hold **Command** on macOS or **Ctrl** on Windows and Linux while clicking to add or remove individual photos. Hold **Shift** while clicking to add a range from the active photo. Use **Edit** > **Select All** to select every photo in the current view.
 3. Press a key:
 
    | Key                | Action                                                  |
@@ -23,14 +23,14 @@ Select photos in **Photo Grid** or **Square Grid**, then press a key: `1` to `5`
    | `X`                | Flag as rejected                                        |
    | `U`                | Clear the flag                                          |
 
-4. To move on faster, hold `Shift` with a key. It applies the action and selects the next photo. Or turn on **Photo** > **Auto Advance** to move forward after every action.
+4. Hold **Shift** with a number key (`0` to `9`), `P`, `X` or `U` to apply the action and select the next photo. Turn on **Photo** > **Auto Advance** to move forward after each rating, flag or label change.
 5. For purple, or to clear a colour label, use **Photo** > **Set Color Label** or the photo's right-click menu.
 
 Rating, flag and label changes apply to every selected photo, and you can undo them with **Edit** > **Undo**.
 
 ## Compare photos
 
-Choose **View** > **Compare** to see two photos side by side with synced zoom and pan, or **View** > **Survey** to see the selected photos tiled. The keys above then apply to the active photo only.
+Choose **View** > **Compare** to see two photos side by side with synced zoom and pan, or **View** > **Survey** to see the selected photos tiled. The number keys and `P`, `X` and `U` apply to the active photo only.
 
 ## Good to know
 
