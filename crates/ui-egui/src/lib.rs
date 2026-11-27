@@ -98,9 +98,9 @@ mod services;
 
 #[cfg(test)]
 use app::{import_tick_allowed, sam_download_ended, shot_ready};
-pub(crate) use caches::{key_of, people_scope};
 use caches::{AlbumCounts, AlbumRecount};
 pub use caches::{FilterValues, LibraryCounts, RulesView};
+pub(crate) use caches::{key_of, people_scope};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
 #[cfg(target_os = "linux")]

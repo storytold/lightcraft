@@ -72,8 +72,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let title = if narrowed {
         let source = fit(ui.painter(), &crate::i18n::source_title(&app.session), t.font(13.0), 260.0);
         let r = ui.painter().text(pos2(title.right() + 8.0, head.center().y), Align2::LEFT_CENTER, format!("· {source}"), t.font(13.0), t.text_dim);
-        register(ui.ctx(), "people:source", r);
-        ui.interact(r, egui::Id::new("people-source"), Sense::hover())
+        register(ui, "people:source", r);
+        ui.interact(r, egui::Id::unique("people-source"), Sense::hover())
             .on_hover_text(crate::i18n::tr("The people in the photos this view shows. Choose All Photos to see everyone."));
         title.union(r)
     } else {
