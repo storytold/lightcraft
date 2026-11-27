@@ -1092,6 +1092,13 @@ impl Session {
     /// Change a photo's develop settings. During an interaction the change is previewed without an
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
+        self.set_develop_carrying(id, settings, label, None)
+    }
+
+    /// [`Self::set_develop`], with `carry` merged into the Auto Sync delta: settings that must
+    /// reach the other selected photos even when this photo's own value did not change (the AI
+    /// Denoise switch turning on carries its Amount).
+    pub(crate) fn set_develop_carrying(&mut self, id: PhotoId, settings: DevelopSettings, label: &str, carry: Option<&Value>) -> Result<()> {
         let now = (self.clock)();
         // Auto Sync carries the edit as asked; each photo then fits its own crop (review of #1990)
         let requested = settings;
@@ -1105,7 +1112,7 @@ impl Session {
         }
         let own_auto = self.own_auto_wb(id, &requested, label);
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &requested, label, &own_auto));
+        ops.extend(self.auto_sync_ops(id, &requested, label, &own_auto, carry));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
@@ -1149,8 +1156,16 @@ impl Session {
     ///
     /// White balance goes on each photo as the active photo's mode or value on the photo's own
     /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
-    /// its pixels), a Temp or Tint the same number, only the slider that moved.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
+    /// its pixels), a Temp or Tint the same number, only the slider that moved. `carry` adds
+    /// settings that must travel even when this photo's own value did not change.
+    fn auto_sync_ops(
+        &self,
+        id: PhotoId,
+        new: &DevelopSettings,
+        label: &str,
+        own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>,
+        carry: Option<&Value>,
+    ) -> Vec<Op> {
         if !self.auto_sync_applies(id, label) {
             return Vec::new();
         }
@@ -1165,7 +1180,13 @@ impl Session {
         // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
         old_json["hdr"] = serde_json::json!(old.hdr);
         new_json["hdr"] = serde_json::json!(new.hdr);
-        let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
+        let mut delta = match json_delta(&old_json, &new_json) {
+            Some(d) => d,
+            None => Value::Object(Default::default()),
+        };
+        if let Some(carry) = carry {
+            lightcraft_develop::presets::deep_merge(&mut delta, carry);
+        }
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
