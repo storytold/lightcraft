@@ -1,4 +1,8 @@
 //! Software updates, background check at startup, and startup prompt modal.
+//!
+//! Nightly is updated by the ArtCraft Launcher, never by this app's stable release feed: every entry
+//! point below returns early on [`crate::channel::is_nightly`], so no check runs, no result dialog
+//! opens and a ready stable update is never installed under a Nightly build.
 
 use serde_json::Value;
 
@@ -57,6 +61,9 @@ impl LightcraftApp {
     /// in `on_exit` when the process ends there without dropping the app.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn start_pending_update(&mut self) {
+        if crate::channel::is_nightly() {
+            return;
+        }
         self.updates_rt.updater.start_pending_update();
     }
 }
@@ -65,7 +72,7 @@ impl LightcraftApp {
 pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        app.updates_rt.updater.prompt_open()
+        !crate::channel::is_nightly() && app.updates_rt.updater.prompt_open()
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -77,6 +84,10 @@ pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
 pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if crate::channel::is_nightly() {
+            // Also keeps a command-palette or shortcut invocation from asking the stable feed.
+            return Err("LightCraft Nightly is updated by the ArtCraft Launcher".into());
+        }
         app.updates_rt.check_requested = true;
         if let Some(ctx) = &app.updates_rt.repaint {
             ctx.request_repaint();
@@ -94,6 +105,9 @@ pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
 pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if crate::channel::is_nightly() {
+            return;
+        }
         let rt = &mut app.updates_rt;
         rt.repaint = Some(ctx.clone());
         if std::mem::take(&mut rt.check_requested) {
@@ -118,6 +132,9 @@ fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if crate::channel::is_nightly() {
+            return;
+        }
         // The close for a ready update waits until nothing is unsaved.
         let clean = app.session.unsaved().is_none();
         match app.updates_rt.updater.show_if(ctx, clean) {
@@ -185,6 +202,32 @@ mod tests {
         }
     }
 
+    /// Offers `release` and returns once its prompt is open. The updater reads the installed
+    /// files for an offer on a thread of its own. That thread sends its answer and then asks the
+    /// first context the updater was ticked with for a repaint, so the tick after that repaint
+    /// reads the answer and opens the prompt. `updater` must not have been ticked before, or the
+    /// repaint goes to another context. The test fails when the launcher manages this copy or
+    /// when the answered offer opens no prompt.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offer_and_wait(updater: &mut Updater, release: craft_update::Release) {
+        let ctx = egui::Context::default();
+        let (answered, wait) = std::sync::mpsc::channel();
+        ctx.set_repaint_observer(move |info| {
+            if info.delay.is_zero() {
+                let _ = answered.send(());
+            }
+        });
+        // Keeps `ctx` for the offer's thread.
+        updater.tick(&ctx);
+        updater.offer(release);
+        assert!(updater.managed().is_none(), "the launcher manages this copy, so it ignored the offer");
+        if !updater.prompt_open() {
+            wait.recv().unwrap();
+            updater.tick(&ctx);
+        }
+        assert!(updater.prompt_open(), "the answered offer opened no prompt");
+    }
+
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn startup_prompt_shows_and_closes() {
@@ -197,7 +240,10 @@ mod tests {
             html_url: "https://github.com/storytold/lightcraft/releases/tag/v99.0.0".into(),
             ..Default::default()
         };
-        app.updates_rt.updater.offer(release);
+        // A missing pins file means stable releases, whatever the launcher on this machine chose.
+        let no_pins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("no-launcher-pins.json");
+        app.updates_rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_pins_path(no_pins);
+        offer_and_wait(&mut app.updates_rt.updater, release);
 
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             show(&mut app, ui.ctx());

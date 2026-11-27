@@ -28,12 +28,16 @@ const ABOVE_MARGIN: f32 = 0.01;
 const NEIGHBOURHOOD: usize = 64;
 
 // CR3 gain-normalized saturation can occupy several nearby codes, rather than one exact value.
+#[cfg(test)]
 const CR3_BINS: usize = 256;
+#[cfg(test)]
 const CR3_PLATEAU_BINS: usize = 8;
+#[cfg(test)]
 const CR3_MIN_SAMPLES: u64 = 64;
 
 /// The lower edge of a terminal pile-up, ignoring a few brighter outliers. A continuous
 /// highlight distribution has comparable density below it and therefore has no plateau.
+#[cfg(test)]
 fn cr3_plateau(hist: &[[u64; 3]; CR3_BINS], first: &[[u16; 3]; CR3_BINS], colour: usize, from: usize, white: f32) -> Option<f32> {
     let (start, end, count) = (from + 1..=CR3_BINS)
         .map(|end| {
@@ -64,7 +68,7 @@ impl RawImage {
         let black = self.black.mean();
         // a hostile file can state any levels: NaN, negative or inverted ones are left alone
         let levels_ok = black.is_finite() && white.is_finite() && black >= 0.0 && white > black && white <= 65535.0;
-        if self.cpp != 1 || !cfa.valid() || self.width.checked_mul(self.height) != Some(d.len()) || !levels_ok {
+        if self.cpp != 1 || !crate::cfa_valid(cfa) || self.width.checked_mul(self.height) != Some(d.len()) || !levels_ok {
             return none;
         }
         let a = self.active_area;
@@ -135,6 +139,7 @@ impl RawImage {
     /// coarse bins so gain-spread saturation (e.g. R100) is found too. With enough above-white
     /// data but no clear pile-up, the bit-depth ceiling keeps all that unclipped headroom.
     /// One shared range and its compensating baseline EV preserve lower tones and colour ratios.
+    #[cfg(test)]
     pub(crate) fn extend_cr3_white(&mut self) -> bool {
         if self.format != crate::RawFormat::Cr3 || !self.color.baseline_exposure.is_finite() || !(1..=16).contains(&self.bits) {
             return false;
@@ -143,7 +148,7 @@ impl RawImage {
         let (old, black) = (self.white_at(0), self.black.mean());
         let ceiling = ((1u32 << self.bits) - 1) as f32;
         if self.cpp != 1
-            || !cfa.valid()
+            || !crate::cfa_valid(cfa)
             || self.width.checked_mul(self.height) != Some(data.len())
             || !black.is_finite()
             || !old.is_finite()

@@ -45,6 +45,8 @@ const EMBEDDED: &[(&str, &[&str])] = &[
     ("xtask/src/raw_samples.rs", &["lightcraft-raw"]),
     ("crates/ui-egui/src/menus.rs", &["xtask"]),
     ("crates/ui-egui/src/menus/", &["xtask"]),
+    ("crates/catalog/src/fixtures/v6-catalog.snap.json", &["lightcraft-engine"]),
+    ("crates/catalog/src/fixtures/v6-catalog.log.jsonl", &["lightcraft-engine"]),
 ];
 
 /// The packages that compile in `path` from outside their own directory.
@@ -271,6 +273,12 @@ mod tests {
         assert!(!p.packages.contains("lightcraft-ui-egui"));
         let p = plan(&[ch("assets/ATTRIBUTION.md"), ch("docs/raw-parity.md")], &pkgs(), "b".into());
         assert!(!p.rust(), "only files something compiles in");
+    }
+
+    #[test]
+    fn app_icon_changes_retest_both_hosts_and_the_update_prompt() {
+        let users: Vec<_> = embedders("assets/app-icon/hicolor/128x128/apps/ai.storyteller.lightcraft.png").collect();
+        assert_eq!(users, ["lightcraft", "lightcraft-ui-egui"]);
     }
 
     /// Every `include_str!` / `include_bytes!` of a file outside its package, and every `"../…"`
