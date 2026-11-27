@@ -301,7 +301,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // each view stays in its pane: zoomed in, a photo reaches past it (and would cover the
         // other view's margins with its whole-frame render, magnified and blurred)
         let br = before_img;
-        draw(Slot::Before, br, areas[0]);
+        // an edited photo has no stand-in for Before (#2248): its pane says why it is empty (its own
+        // render's failure, or that it is rendering), as the After pane does
+        let before_shown = draw(Slot::Before, br, areas[0]);
+        none_message(app, &p, &t, areas[0], id, (Slot::Before, before_shown));
         shown = draw(Slot::Main, img_rect, main_area);
         split_labels(&p, &t, [(br, areas[0]), (img_rect, main_area)]);
     } else if show_before {

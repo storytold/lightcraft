@@ -436,3 +436,46 @@ fn an_empty_before_view_says_it_is_rendering() {
     open.set(true);
     assert!(h.step_until(SETTLE, |h| !says(h)), "gone once the render lands");
 }
+
+/// Review of #3993: in Side by Side and Top/Bottom, a Before render that fails while the After one succeeds shows
+/// its error in the Before pane, and no edited stand-in takes its place.
+#[test]
+fn a_failed_before_render_says_so_in_its_pane() {
+    use crate::render::RenderOffload;
+    use lightcraft_engine::RenderJob;
+    use lightcraft_engine::media::RenderResult;
+    /// Runs every job, except that a Before render fails.
+    struct BeforeFails(Vec<(Slot, RenderResult, f64)>);
+    impl RenderOffload for BeforeFails {
+        fn try_start(&mut self, slot: Slot, job: RenderJob) -> Option<RenderJob> {
+            let mut r = job.run();
+            if slot == Slot::Before {
+                r.rendered = Err("the test's Before render fails".into());
+            }
+            self.0.push((slot, r, 0.0));
+            None
+        }
+        fn finished(&mut self) -> Vec<(Slot, RenderResult, f64)> {
+            std::mem::take(&mut self.0)
+        }
+    }
+    let text = |h: &Headless, want: &str| h.view.shapes.iter().any(|c| matches!(&c.shape, egui::epaint::Shape::Text(t) if t.galley.text() == want));
+    for mode in [BeforeAfter::SideBySide, BeforeAfter::TopBottom] {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+        let id = h.app.session.visible_cloned()[2];
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.5}}), T);
+        h.app.renderer.set_offload(Box::new(BeforeFails(Vec::new())));
+        h.app.ui.view = ViewMode::Detail;
+        h.app.ui.before_after = mode;
+        assert!(
+            h.step_until(SETTLE, |h| h.app.renderer.failure_of(Slot::Before, id).is_some()
+                && h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id)),
+            "{mode:?}: the Before render failed and the After one landed"
+        );
+        h.step();
+        assert!(text(&h, "the test's Before render fails"), "{mode:?}: the Before pane shows its error");
+        assert!(h.app.renderer.textures.get(&Slot::Before).is_none_or(|t| t.photo != id), "{mode:?}: no Before image of the photo");
+    }
+}
