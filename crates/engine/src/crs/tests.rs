@@ -329,6 +329,37 @@ fn channel_curves_need_the_master_and_all_channel_curves() {
     assert!(["/curve/master", "/curve/red", "/curve/green", "/curve/blue"].iter().all(|p| all.pointer(p).is_some()), "{all}");
 }
 
+/// A `ToneCurvePV2012` read from a sidecar renders as Lightroom Classic draws it: a cubic spline
+/// through the points, rising past them where they ask for it and cut off at black and white.
+#[test]
+fn an_imported_point_curve_is_interpolated_like_lightroom_does() {
+    use lightcraft_pipeline::{RenderRequest, SourceInfo, render};
+    // the eight points of a Lightroom Classic capture, as its sidecar writes them (levels)
+    let points = [(0, 0), (63, 63), (70, 113), (133, 144), (162, 142), (166, 74), (234, 95), (255, 255)];
+    let li: String = points.iter().map(|(x, y)| format!("<rdf:li>{x}, {y}</rdf:li>")).collect();
+    let packet = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:ToneCurveName2012="Custom">
+          <crs:ToneCurvePV2012><rdf:Seq>{li}</rdf:Seq></crs:ToneCurvePV2012>
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let s = apply_partial(&DevelopSettings::default(), &to_partial(&props(&packet), Target::Any), 1.0);
+    assert_eq!(s.curve.master.len(), 8);
+    // every 8-bit level in, the level out
+    let src = lightcraft_raster::Rgb32f::from_fn(256, 1, |x, _| [lightcraft_color::transfer::srgb_to_linear(x as f32 / 255.0); 3]);
+    let out: Vec<i32> = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(256, 1)).image.data.iter().map(|p| p[1] as i32).collect();
+    assert_eq!(out.len(), 256);
+    // it passes through the points ...
+    for (x, y) in points {
+        assert!((out[x] - y).abs() <= 1, "level {x}: {} instead of {y}", out[x]);
+    }
+    // ... swings past them (a monotone curve stays within 113..144 and 142..144 there) ...
+    assert!(out[70..=133].iter().max() > Some(&150), "{:?}", &out[70..=133]);
+    assert!(out[133..=162].iter().max() > Some(&210), "{:?}", &out[133..=162]);
+    // ... and is cut off at black where it would dip below 0 between (166, 74) and (234, 95)
+    assert!(out[176..=218].iter().all(|&v| v == 0), "{:?}", &out[170..=225]);
+}
+
 fn unmapped(x: &str) -> Vec<String> {
     to_partial_report(&props(x), None, Target::Any, 1.5).1
 }
