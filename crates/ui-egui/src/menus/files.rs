@@ -105,12 +105,6 @@ pub(super) fn show_in_folders(app: &mut LightcraftApp, id: Option<lightcraft_cat
     Ok(json!({"path": path}))
 }
 
-/// Photo ▸ Edit In: render a copy of each selected photo with its edits (stacked on its original)
-/// as Settings ▸ External Editing asks for that editor, then open them there. `p` may override the
-/// file (`format`, `colorSpace`, `bitDepth`); its `app` may only name that editor again or
-/// PhotoCraft. The editor is checked first, so a refused or missing one leaves no copy behind.
-/// Once the copies exist, an editor that won't open them is reported in the result's `failed`
-
 /// The editor an Edit In command starts: the one set in Settings ▸ External Editing
 /// (`configured`). `p`'s `app` may name it again, or PhotoCraft, never another program: a control
 /// or MCP client must not choose what runs (#2551).
@@ -123,6 +117,11 @@ fn requested_editor(p: &Value, configured: String) -> Result<String, String> {
     }
 }
 
+/// Photo ▸ Edit In: render a copy of each selected photo with its edits (stacked on its original)
+/// as Settings ▸ External Editing asks for that editor, then open them there. `p` may override the
+/// file (`format`, `colorSpace`, `bitDepth`); its `app` may only name that editor again or
+/// PhotoCraft. The editor is checked first, so a refused or missing one leaves no copy behind.
+/// Once the copies exist, an editor that won't open them is reported in the result's `failed`
 /// (and a toast), not as an error.
 pub(super) fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: bool) -> Result<Value, String> {
     // every way in (menu, shortcut, context menu, the control channel) says why nothing opened
