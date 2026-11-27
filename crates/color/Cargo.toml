@@ -9,6 +9,7 @@ description = "LightCraft color (L0)"
 workspace = true
 
 [dependencies]
+craft-color-transform = { workspace = true }
 serde = { workspace = true }
 lightcraft-geom = { workspace = true }
 

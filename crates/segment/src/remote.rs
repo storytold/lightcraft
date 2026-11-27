@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 const CONTROL_LIMIT: usize = 16 * 1024;
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(9 * 60);
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 pub const ENV: &str = "LIGHTCRAFT_SAM3_REMOTE";
 
 #[derive(Serialize, Deserialize)]
@@ -17,6 +18,9 @@ pub enum Operation {
     Prepare,
     Clicks(Vec<[f32; 3]>),
     Text(String),
+    /// The photo's subject among its people and animals ([`Sam3::segment_subject`]), from where
+    /// the camera focused (normalized `[x, y]`) when the file records it.
+    Subject(Option<[f32; 2]>),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -36,7 +40,8 @@ impl Request {
             return Err("detail pass requires an image".into());
         }
         match &self.operation {
-            Operation::Prepare => {}
+            Operation::Prepare | Operation::Subject(None) => {}
+            Operation::Subject(Some(f)) if f.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) => {}
             Operation::Text(text) if text.len() <= 4096 && text.split([',', ';']).any(|p| !p.trim().is_empty()) => {}
             Operation::Clicks(clicks)
                 if !clicks.is_empty()
@@ -131,6 +136,11 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
             Ok(None)
         }
         Operation::Text(text) => text_logits(model, enc, &text).map_err(|e| e.to_string()),
+        // (the reference score threshold, as a local Find Subject uses)
+        Operation::Subject(focus) => {
+            let p = model.segment_subject(enc, focus.map(|f| (f[0], f[1])), 0.5).map_err(|e| e.to_string())?;
+            Ok(p.map(|p| p.logits))
+        }
         Operation::Clicks(points) => {
             let clicks: Vec<_> = points.into_iter().map(|p| Click { x: p[0], y: p[1], positive: p[2] == 1.0 }).collect();
             Ok(Some(model.segment_clicks(enc, &clicks).map_err(|e| e.to_string())?.logits))
@@ -185,6 +195,30 @@ fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device)
     }
 }
 
+fn serve_connections<I, C, H, S>(incoming: I, mut handle_client: H, mut retry_sleep: S)
+where
+    I: IntoIterator<Item = io::Result<C>>,
+    H: FnMut(&mut C) -> Result<(), String>,
+    S: FnMut(Duration),
+{
+    for connection in incoming {
+        let mut stream = match connection {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!("SAM3 accept failed: {error}");
+                retry_sleep(ACCEPT_RETRY_DELAY);
+                continue;
+            }
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_client(&mut stream)));
+        match result {
+            Ok(Err(error)) => eprintln!("SAM3 session closed: {error}"),
+            Err(_) => eprintln!("SAM3 session panicked; model released"),
+            Ok(Ok(())) => {}
+        }
+    }
+}
+
 pub fn serve(address: SocketAddr, dir: &Path, device: candle_core::Device) -> Result<(), String> {
     if !address.ip().is_loopback() || !device.is_metal() {
         return Err("SAM worker requires a loopback address and a Metal device".into());
@@ -194,14 +228,97 @@ pub fn serve(address: SocketAddr, dir: &Path, device: candle_core::Device) -> Re
     }
     let listener = TcpListener::bind(address).map_err(|e| e.to_string())?;
     eprintln!("SAM3 worker listening on {address}; device=Metal; idle unload=600s");
-    for stream in listener.incoming() {
-        let mut stream = stream.map_err(|e| e.to_string())?;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve_client(&mut stream, dir, device.clone())));
-        match result {
-            Ok(Err(error)) => eprintln!("SAM3 session closed: {error}"),
-            Err(_) => eprintln!("SAM3 session panicked; model released"),
-            Ok(Ok(())) => {}
-        }
-    }
+    serve_connections(listener.incoming(), |stream| serve_client(stream, dir, device.clone()), std::thread::sleep);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn accept_error<T>() -> io::Result<T> {
+        Err(io::Error::new(io::ErrorKind::ConnectionAborted, "injected accept failure"))
+    }
+
+    #[test]
+    fn sam_accept_error_before_client_keeps_serving() {
+        let mut handled = Vec::new();
+        serve_connections(
+            [accept_error(), Ok(1_u8)],
+            |stream| {
+                handled.push(*stream);
+                Ok(())
+            },
+            |_| {},
+        );
+
+        assert_eq!(handled, [1]);
+    }
+
+    #[test]
+    fn sam_accept_error_between_clients_keeps_serving() {
+        let mut handled = Vec::new();
+        serve_connections(
+            [Ok(1_u8), accept_error(), Ok(2_u8)],
+            |stream| {
+                handled.push(*stream);
+                Ok(())
+            },
+            |_| {},
+        );
+
+        assert_eq!(handled, [1, 2]);
+    }
+
+    #[test]
+    fn sam_accept_repeated_errors_back_off() {
+        let mut handled = Vec::new();
+        let mut delays = Vec::new();
+        serve_connections(
+            [accept_error(), accept_error(), Ok(1_u8)],
+            |stream| {
+                handled.push(*stream);
+                Ok(())
+            },
+            |delay| delays.push(delay),
+        );
+
+        assert_eq!(handled, [1]);
+        assert_eq!(delays, [Duration::from_millis(100), Duration::from_millis(100)]);
+    }
+
+    #[test]
+    fn sam_accept_client_failure_keeps_serving() {
+        let mut handled = Vec::new();
+        let mut delays = Vec::new();
+        serve_connections(
+            [Ok(1_u8), Ok(2_u8)],
+            |stream| {
+                handled.push(*stream);
+                if *stream == 1 { Err("injected client failure".into()) } else { Ok(()) }
+            },
+            |delay| delays.push(delay),
+        );
+
+        assert_eq!(handled, [1, 2]);
+        assert!(delays.is_empty());
+    }
+
+    #[test]
+    fn sam_accept_client_panic_keeps_serving() {
+        let mut handled = Vec::new();
+        serve_connections(
+            [Ok(1_u8), Ok(2_u8)],
+            |stream| {
+                handled.push(*stream);
+                if *stream == 1 {
+                    std::panic::resume_unwind(Box::new("injected client panic"));
+                }
+                Ok(())
+            },
+            |_| {},
+        );
+
+        assert_eq!(handled, [1, 2]);
+    }
 }
