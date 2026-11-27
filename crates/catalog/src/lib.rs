@@ -89,6 +89,18 @@ pub type Result<T> = std::result::Result<T, CatalogError>;
 /// Maximum History entries kept per photo.
 pub const HISTORY_LIMIT: usize = 200;
 
+/// The label of the History step a photo's first edit adds at the bottom of its History: the photo as it was before
+/// any edit, to go back to (#4203). Trimming to [`HISTORY_LIMIT`] keeps it and drops the oldest edits after it.
+pub const IMPORT_STEP: &str = "Import";
+
+/// The History steps to drop so that `history` keeps [`HISTORY_LIMIT`]: the oldest, except an [`IMPORT_STEP`] at the
+/// bottom, which stays (with a limit of at least two, there is always an edit to drop instead).
+pub(crate) fn history_overflow(history: &[HistoryStep]) -> std::ops::Range<usize> {
+    let n = history.len().saturating_sub(HISTORY_LIMIT);
+    let from = usize::from(n > 0 && history.first().is_some_and(|s| s.label == IMPORT_STEP));
+    from..from + n
+}
+
 /// Every catalog mutation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -1060,10 +1072,8 @@ impl Catalog {
                     p.history.truncate(c.saturating_add(1));
                 }
                 p.history.push(step);
-                if p.history.len() > HISTORY_LIMIT {
-                    let n = p.history.len() - HISTORY_LIMIT;
-                    p.history.drain(..n);
-                }
+                let drop = history_overflow(&p.history);
+                p.history.drain(drop);
                 if old_cursor.is_none() {
                     Op::SetHistory { id, history: old }
                 } else {
