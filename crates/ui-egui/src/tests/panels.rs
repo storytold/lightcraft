@@ -2086,6 +2086,78 @@ fn settling_waits_for_a_recount_owed_during_a_timed_refresh() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A photo moved to another folder while a count of Missing Photos runs is not counted at its
+/// old place: the count, which listed the photos before the move and checked the files after it,
+/// doesn't bring up a Missing Photos row that the recount then takes away again. That row moved
+/// every folder row below it for a moment, so a photo dragged onto a folder just then landed in
+/// the folder above.
+#[test]
+fn a_photo_moved_during_a_count_is_not_missing_at_its_old_place() {
+    use lightcraft_catalog::{Op, PhotoId, Source};
+    let delay = Duration::from_secs(1);
+    let dir = std::env::temp_dir().join(format!("lc-ui-missing-moved-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (trip, home) = (dir.join("trip"), dir.join("home"));
+    std::fs::create_dir_all(&trip).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let (old, new) = (trip.join("a.jpg"), home.join("a.jpg"));
+    std::fs::write(&old, b"photo").unwrap();
+    std::fs::write(home.join("b.jpg"), b"photo").unwrap();
+    let services = Services { png: None, ..Default::default() };
+    let paths = [old.to_string_lossy().to_string(), home.join("b.jpg").to_string_lossy().to_string()];
+    let mut h = folders_app_prepared(&[&paths[0], &paths[1]], [1400.0, 900.0], services, |app| app.missing_count_test_delay = Some(delay));
+    assert!(!has(&h, "source:missing"), "nothing is missing");
+    let id = h.app.session.catalog.photos().find(|p| p.source == Source::File { path: paths[0].clone() }).map(|p| p.id).unwrap();
+    // no count running (a timed refresh started while settling has ended), then one starts for an edit
+    std::thread::sleep(delay + delay / 2);
+    h.app.session.catalog.apply(Op::SetRating { id: PhotoId(id.0), rating: 3 }).unwrap();
+    h.step();
+    // while it runs, the photo moves to home: its file first, then the library
+    std::fs::rename(&old, &new).unwrap();
+    let source = Source::File { path: new.to_string_lossy().into() };
+    h.app.session.catalog.apply(Op::SetFile { id, file_name: "a.jpg".into(), source }).unwrap();
+    // the count lands, then the recount the move asked for
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < delay * 3 {
+        h.step();
+        assert!(!has(&h, "source:missing"), "the moved photo is not missing at {:?}", t0.elapsed());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(h.settle(Duration::from_secs(30)), "the sidebar settles");
+    assert!(!has(&h, "source:missing"), "nothing is missing after the recount");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A count that lands after the library changed still shows the files it found gone that are
+/// still the library's: while edits keep coming (an import, a batch of ratings), every count is
+/// one the catalog has moved past, and the Missing Photos row must not wait for them to stop.
+#[test]
+fn a_count_overtaken_by_edits_still_shows_a_file_that_is_gone() {
+    use lightcraft_catalog::{Op, PhotoId};
+    let delay = Duration::from_millis(300);
+    let dir = std::env::temp_dir().join(format!("lc-ui-missing-overtaken-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a.jpg");
+    std::fs::write(&file, b"photo").unwrap();
+    let services = Services { png: None, ..Default::default() };
+    let mut h = folders_app_prepared(&[&file.to_string_lossy()], [1400.0, 900.0], services, |app| app.missing_count_test_delay = Some(delay));
+    assert!(!has(&h, "source:missing"), "nothing is missing yet");
+    let id = h.app.session.catalog.photos().next().map(|p| p.id).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    // an edit every frame: each count is out of date by the time it lands
+    let t0 = std::time::Instant::now();
+    let mut rating = 0u8;
+    while !has(&h, "source:missing") {
+        assert!(t0.elapsed() < Duration::from_secs(30), "the Missing Photos row never came while edits kept coming");
+        rating = (rating + 1) % 5;
+        h.app.session.catalog.apply(Op::SetRating { id: PhotoId(id.0), rating }).unwrap();
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Right-click a folder ▸ Set Color Label ▸ a colour: the folder's row shows the label's dot (a
 /// row without a label shows none), and None takes it off again.
 #[test]
