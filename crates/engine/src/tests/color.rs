@@ -125,7 +125,31 @@ fn targeted_adjustment_on_curve_and_mixer() {
     assert!(!o.is_empty() && o.keys().all(|k| k.starts_with("mixer.") && k.ends_with(".sat")), "{r}");
     assert!(o.values().any(|v| v.as_f64() == Some(-30.0)), "{r}");
     assert!(o.values().all(|v| v.as_f64().unwrap() < 0.0));
+    let top_band = |o: &serde_json::Map<String, serde_json::Value>| {
+        let (k, _) = o.iter().max_by(|a, b| a.1.as_f64().unwrap().abs().total_cmp(&b.1.as_f64().unwrap().abs())).unwrap();
+        k.split('.').nth(1).unwrap().to_string()
+    };
+    let sky_band = top_band(o);
     assert!(s.execute("develop.targeted", &json!({"target": "nope", "x": 0.5, "y": 0.5, "delta": 1})).is_err());
+    // a B&W profile's photo: the Luminance targeted adjustment moves its B&W mix, as the panel shows
+    s.execute("develop.profile", &json!({"id": "lc.bw.mono-rich"})).unwrap();
+    let r = s.execute("develop.targeted", &json!({"target": "lum", "x": 0.5, "y": 0.1, "delta": 10})).unwrap();
+    let o = r.as_object().unwrap();
+    assert!(!o.is_empty() && o.keys().all(|k| k.starts_with("bw.")), "{r}");
+    // ... the band of the sky's own colour, not of the grey the profile renders
+    assert_eq!(top_band(o), sky_band, "{r}");
+    // the B&W mix comes after the colour mixer: a mixer hue shift moves the colour the B&W mix sees there, so the
+    // same drag shares itself out over the bands differently
+    let neutral = o.clone();
+    let zero: serde_json::Map<String, serde_json::Value> = neutral.keys().map(|k| (k.clone(), json!(0))).collect();
+    s.execute("develop.set", &json!({ "values": zero })).unwrap();
+    let shift: serde_json::Map<String, serde_json::Value> =
+        lightcraft_develop::MIXER_BANDS.iter().map(|b| (format!("mixer.{b}.hue"), json!(100))).collect();
+    s.execute("develop.set", &json!({ "values": shift })).unwrap();
+    let r = s.execute("develop.targeted", &json!({"target": "lum", "x": 0.5, "y": 0.1, "delta": 10})).unwrap();
+    let shifted = r.as_object().unwrap();
+    assert!(shifted.keys().all(|k| k.starts_with("bw.")), "{r}");
+    assert_ne!(shifted, &neutral, "the mixer's hue shift is part of what the B&W mix sees");
 }
 
 /// Issue #730: on a raw whose camera has measured colour matrices the white-balance commands write Kelvin, mark
@@ -469,4 +493,117 @@ fn one_field_wb_preset_apply_keeps_the_other_field_on_its_scale() {
     s.execute("preset.apply", &json!({"id": made.id})).unwrap();
     let back = (*s.develop_of(kelvin).unwrap()).clone();
     assert_eq!(back.wb, look.wb, "a preset made from the photo puts its whole white balance back: {:?} vs {:?}", back.wb, look.wb);
+}
+
+/// A preset applied to a photo goes through one function whether it is the `preset.apply` command, a thumbnail or
+/// hover preview, or an import: a hand-written preset naming one white balance number (either one, on either
+/// scale) gives the same settings in all three, on a photo edited in Kelvin and on one edited relative to its
+/// as-shot white. Before, the previews (`Session::preset_applied`) and import called the source-free
+/// `Preset::apply_on` / `Preset::apply` directly, which stored the number without the photo's as-shot white.
+#[test]
+fn one_field_wb_preset_gives_the_same_result_in_command_preview_and_import() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    use lightcraft_develop::{Preset, WbMode, WbScale};
+    let as_shot = (4986.0, -2.0);
+    let photo = |camera: &str| {
+        let mut p = Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            Source::File { path: "/photos/one-field.arw".into() },
+            "one-field.arw",
+            "ARW",
+            64,
+            64,
+            "2026-01-01T00:00:00",
+        );
+        p.kind = MediaKind::Raw;
+        p.meta.camera = camera.into();
+        p.as_shot_wb = Some(as_shot);
+        p.develop = std::sync::Arc::new(p.camera_defaults());
+        p
+    };
+    let one_field = |name: &str, wb: serde_json::Value| Preset {
+        id: format!("user.{name}"),
+        name: name.into(),
+        group: "User".into(),
+        settings: json!({ "wb": wb }),
+        favorite: false,
+        builtin: false,
+    };
+    let presets = [
+        one_field("temp-only", json!({"temp": 5800.0})),
+        one_field("tint-only", json!({"tint": 9.0})),
+        // the reverse scale: numbers written in Kelvin on a photo edited relative to as shot, and the relative
+        // scale named outright on a photo edited in Kelvin
+        one_field("kelvin-temp", json!({"scale": "kelvin", "temp": 6500.0})),
+        one_field("kelvin-tint", json!({"scale": "kelvin", "tint": 6.0})),
+        one_field("relative-temp", json!({"scale": "legacy", "temp": 6800.0})),
+    ];
+    for (camera, kelvin_photo) in [("SONY ILCE-7M3", true), ("Nobody X1", false)] {
+        assert_eq!(photo(camera).relative_wb(), !kelvin_photo, "{camera}");
+        for preset in &presets {
+            let mut s = Session::new();
+            let p = photo(camera);
+            let id = p.id;
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+            s.presets.push(preset.clone());
+            let why = format!("{camera}, {}", preset.name);
+            let before = (*s.develop_of(id).unwrap()).clone();
+            assert_eq!(before.wb.mode, WbMode::AsShot, "{why}");
+
+            // preview / hover
+            let preview = s.preset_applied(id, preset, 1.0).unwrap();
+            // command
+            s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+            s.execute("preset.apply", &json!({"id": preset.id})).unwrap();
+            let command = (*s.develop_of(id).unwrap()).clone();
+            // import (the photo is not in a catalog yet)
+            let mut imported = p;
+            s.import_defaults.raw_preset = Some(preset.id.clone());
+            crate::import::apply_import_defaults(&s, &mut imported);
+
+            assert_eq!(preview, command, "{why}: preview and command");
+            assert_eq!(*imported.develop, command, "{why}: import and command");
+            assert_eq!(command.wb.mode, WbMode::Custom, "{why}: the preset's number replaces As Shot: {:?}", command.wb);
+            // a photo edited in Kelvin ends there; a relative one keeps the scale the preset names (as `develop.merge` does)
+            let want_scale = if kelvin_photo || preset.name.starts_with("kelvin") { WbScale::Kelvin } else { WbScale::Legacy };
+            assert_eq!(command.wb.scale, want_scale, "{why}: the photo stays on the scale it is edited on: {:?}", command.wb);
+            assert_ne!(command.wb, before.wb, "{why}");
+        }
+    }
+}
+
+/// Zero Amount changes nothing, and not by being applied and undone: the photo keeps As Shot mode and every
+/// setting, through the command and the preview, even for a preset whose preparation would write Custom values.
+#[test]
+fn zero_amount_preset_keeps_as_shot_mode_and_settings() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    use lightcraft_develop::{Preset, WbMode};
+    let mut s = Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/photos/zero.arw".into() }, "zero.arw", "ARW", 64, 64, "2026-01-01T00:00:00");
+    p.kind = MediaKind::Raw;
+    p.meta.camera = "SONY ILCE-7M3".into();
+    p.as_shot_wb = Some((4986.0, -2.0));
+    p.develop = std::sync::Arc::new(p.camera_defaults());
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let preset = Preset {
+        id: "user.zero".into(),
+        name: "Zero".into(),
+        group: "User".into(),
+        settings: json!({"wb": {"temp": 5800.0}, "light": {"exposure": 1.0}}),
+        favorite: false,
+        builtin: false,
+    };
+    s.presets.push(preset.clone());
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let before = (*s.develop_of(id).unwrap()).clone();
+    assert_eq!(before.wb.mode, WbMode::AsShot);
+    for amount in [0.0, -1.0, f64::NAN] {
+        assert_eq!(crate::presets::apply_preset_to_photo(&preset, &before, None, amount, &s.source_info(id)), before, "preview at {amount}");
+        assert_eq!(s.preset_applied(id, &preset, amount).unwrap(), before, "panel preview at {amount}");
+    }
+    s.execute("preset.apply", &json!({"id": preset.id, "amount": 0})).unwrap();
+    let after = (*s.develop_of(id).unwrap()).clone();
+    assert_eq!(after, before);
+    assert_eq!(after.wb.mode, WbMode::AsShot);
 }

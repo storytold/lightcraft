@@ -346,6 +346,30 @@ pub struct DeepImage {
 }
 
 impl DeepImage {
+    /// The `w × h` part of the image at (`x`, `y`), clamped to the image (at least 1 × 1 when the
+    /// image has pixels). Samples are RGB, three per pixel, row-major.
+    pub fn crop(&self, x: usize, y: usize, w: usize, h: usize) -> DeepImage {
+        let x = x.min(self.width.saturating_sub(1));
+        let y = y.min(self.height.saturating_sub(1));
+        let w = w.min(self.width.saturating_sub(x)).max(usize::from(self.width > 0));
+        let h = h.min(self.height.saturating_sub(y)).max(usize::from(self.height > 0));
+        fn cut<T: Copy>(v: &[T], width: usize, x: usize, y: usize, w: usize, h: usize) -> Vec<T> {
+            let mut out = Vec::with_capacity(w.saturating_mul(h).saturating_mul(3));
+            for row in y..y + h {
+                let start = row.saturating_mul(width).saturating_add(x).saturating_mul(3);
+                if let Some(r) = v.get(start..start.saturating_add(w * 3)) {
+                    out.extend_from_slice(r);
+                }
+            }
+            out
+        }
+        let samples = match &self.samples {
+            DeepSamples::U16(v) => DeepSamples::U16(cut(v, self.width, x, y, w, h)),
+            DeepSamples::F32(v) => DeepSamples::F32(cut(v, self.width, x, y, w, h)),
+        };
+        DeepImage { width: w, height: h, space: self.space, samples }
+    }
+
     /// The same image reduced to 8 bits, display-encoded with the space's curve.
     pub fn to_rgba8(&self) -> lightcraft_raster::Rgba8 {
         let mut out = lightcraft_raster::Rgba8::new(self.width, self.height);
@@ -364,27 +388,6 @@ impl DeepImage {
         }
         out
     }
-
-    /// Crop to `[x0, x0+w) × [y0, y0+h)` (clamped to the image).
-    pub fn crop(&self, x0: usize, y0: usize, w: usize, h: usize) -> Self {
-        let x0 = x0.min(self.width);
-        let y0 = y0.min(self.height);
-        let w = w.min(self.width - x0);
-        let h = h.min(self.height - y0);
-        fn rows<T: Copy>(v: &[T], width: usize, x0: usize, y0: usize, w: usize, h: usize) -> Vec<T> {
-            let mut out = Vec::with_capacity(3 * w * h);
-            for y in y0..y0 + h {
-                let at = 3 * (y * width + x0);
-                out.extend_from_slice(v.get(at..at + 3 * w).unwrap_or_default());
-            }
-            out
-        }
-        let samples = match &self.samples {
-            DeepSamples::U16(v) => DeepSamples::U16(rows(v, self.width, x0, y0, w, h)),
-            DeepSamples::F32(v) => DeepSamples::F32(rows(v, self.width, x0, y0, w, h)),
-        };
-        Self { width: w, height: h, space: self.space, samples }
-    }
 }
 
 trait IntoRgba {
@@ -400,6 +403,23 @@ impl IntoRgba for [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A crop keeps the right pixels and never reads past the image, whatever the request.
+    #[test]
+    fn deep_crop_keeps_the_window_and_clamps() {
+        // 4 × 3, pixel (x, y) holds x + 10 y in every channel
+        let v: Vec<u16> = (0..3).flat_map(|y| (0..4).flat_map(move |x| [x + 10 * y; 3])).collect();
+        let d = DeepImage { width: 4, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::U16(v) };
+        let c = d.crop(1, 1, 2, 2);
+        assert_eq!((c.width, c.height), (2, 2));
+        assert_eq!(c.samples, DeepSamples::U16(vec![11, 11, 11, 12, 12, 12, 21, 21, 21, 22, 22, 22]));
+        for (x, y, w, h) in [(9, 9, 5, 5), (0, 0, usize::MAX, usize::MAX), (3, 2, 0, 0)] {
+            let c = d.crop(x, y, w, h);
+            let DeepSamples::U16(s) = &c.samples else { panic!("a U16 image crops to U16") };
+            assert!(c.width >= 1 && c.height >= 1 && c.width <= 4 && c.height <= 3);
+            assert_eq!(s.len(), c.width * c.height * 3, "{x} {y} {w} {h}");
+        }
+    }
 
     #[test]
     fn trcs_invert() {

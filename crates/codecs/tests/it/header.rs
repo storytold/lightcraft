@@ -13,16 +13,20 @@ fn meta(exif: &Option<Vec<u8>>) -> EncodeMeta<'_> {
     EncodeMeta { exif: exif.as_deref(), xmp: Some("<x/>"), ..Default::default() }
 }
 
-/// A TIFF with an Orientation tag (`encode_tiff` writes none), via the `tiff` crate's encoder.
+/// A TIFF with an Orientation tag (`encode_tiff` writes none), via `craft-tiff`.
 fn tiff_oriented(img: &Rgba8, orientation: u16) -> Vec<u8> {
-    use tiff::encoder::{TiffEncoder, colortype};
     let rgb: Vec<u8> = img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
-    let mut cur = std::io::Cursor::new(Vec::new());
-    let mut enc = TiffEncoder::new(&mut cur).unwrap();
-    let mut im = enc.new_image::<colortype::RGB8>(img.width as u32, img.height as u32).unwrap();
-    im.encoder().write_tag(tiff::tags::Tag::Orientation, orientation).unwrap();
-    im.write_data(&rgb).unwrap();
-    cur.into_inner()
+    let mut ifd = craft_tiff::IfdBuilder::new()
+        .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![img.width as u32]))
+        .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![img.height as u32]))
+        .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8, 8, 8]))
+        .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![2]))
+        .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![3]))
+        .with(craft_tiff::tags::PLANAR_CONFIGURATION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::ORIENTATION, craft_tiff::Value::Short(vec![orientation]));
+    ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: img.height as u32, strips: vec![rgb] });
+    craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap()
 }
 
 /// A minimal 8-bit RGB PSD (raw or PackBits-literal merged data) with an EXIF resource.
@@ -99,8 +103,8 @@ fn fixtures(w: usize, h: usize) -> Vec<(String, Vec<u8>)> {
     }
     out.push(("tiff lzw".into(), encode_tiff(&e, TiffCompression::Lzw, &EncodeMeta::default()).unwrap()));
     out.push(("tiff packbits".into(), encode_tiff(&e, TiffCompression::PackBits, &EncodeMeta::default()).unwrap()));
-    let mut bmp = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut bmp).encode(&rgb, w as u32, h as u32, image::ExtendedColorType::Rgb8).unwrap();
+    let bmp_img = craft_image_codecs::Image::from_u8(w as u32, h as u32, craft_image_codecs::ChannelLayout::Rgb, rgb).unwrap();
+    let bmp = craft_image_codecs::encode(&bmp_img, craft_image_codecs::Format::Bmp, &craft_image_codecs::EncodeOptions::default()).unwrap();
     out.push(("bmp".into(), bmp));
     out
 }
@@ -122,6 +126,31 @@ fn header_matches_decode() {
     }
     let o = |name: &str| fixtures(16, 8).into_iter().find(|f| f.0 == name).map(|f| read_header(&f.1).unwrap().orientation).unwrap();
     assert_eq!((o("jpeg 420 o6"), o("png rgba o8"), o("webp o6"), o("psd o8"), o("tiff o6"), o("jpeg 444 o0")), (6, 8, 6, 8, 6, 1));
+}
+
+/// The header probe's colour/compression policy is unchanged by the Clippy repair (#4264).
+/// These are header-only fixtures, not compressed image streams for the decoder.
+#[test]
+fn tiff_header_colour_and_compression_policy() {
+    for photometric in [0, 1, 2, 3, 4, 5, 6, 8, u16::MAX] {
+        for compression in [1, 4, 5, 6, 7, 8, 32773, 32946, u16::MAX] {
+            let mut ifd = craft_tiff::IfdBuilder::new()
+                .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![1]))
+                .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![1]))
+                .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8, 8, 8]))
+                .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![3]))
+                .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![compression]))
+                .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![photometric]));
+            ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 1, strips: vec![vec![0; 3]] });
+            let bytes = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
+            let accepted = match photometric {
+                0 | 1 | 2 | 3 | 5 => [1, 4, 5, 7, 8, 32773, 32946].contains(&compression),
+                6 => compression == 7, // YCbCr is supported only with JPEG compression.
+                _ => false,
+            };
+            assert_eq!(read_header(&bytes).is_ok(), accepted, "photometric={photometric}, compression={compression}");
+        }
+    }
 }
 
 /// Whenever the decode the probe used to run accepts a file (here: every cut of every fixture),

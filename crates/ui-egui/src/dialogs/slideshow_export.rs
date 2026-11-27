@@ -1,4 +1,4 @@
-//! View ▸ Export Slideshow…: the dialog's choices go to `app.slideshowExport`, which asks where
+//! View ▸ Slideshow ▸ Export Slideshow…: the dialog's choices go to `app.slideshowExport`, which asks where
 //! to write (a PDF or video file, or the folder of a JPEG sequence) and starts the engine's
 //! `slideshow.export` in the background. The export's row in the activity stack shows its
 //! progress and ✕ (the engine owns the row); [`poll`] tells the user how it ended.
@@ -74,7 +74,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// A labelled row (fixed label column).
-/// View ▸ Export Slideshow…: what to write (PDF, JPEG sequence, video) and how big; where comes
+/// View ▸ Slideshow ▸ Export Slideshow…: what to write (PDF, JPEG sequence, video) and how big; where comes
 /// after (a save dialog).
 pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &mut lightcraft_engine::slideshow_export::ExportSettings) {
     use lightcraft_engine::slideshow_export::{ExportSettings, Format};

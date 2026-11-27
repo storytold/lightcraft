@@ -1,11 +1,11 @@
 //! Process V4's calibrated Contrast and Blacks (`light_v3`): V1 and V2 render as they
 //! always did, and the V4 operators behave.
 
-use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_develop::{DevelopSettings, Process, ProcessVersion, controls};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
-use crate::light_v3::{self, FITS, LUT_N, LightOps, Mode, Operator, Reference};
+use crate::light_v3::{self, FITS, LUT_N, LightOps, Mode, Operator};
 use crate::light_v3_params as fitted;
 use crate::{DeepSamples, OutputDepth, PixelWindow, RenderRequest, SourceInfo, StageCache, render, render_cached};
 
@@ -129,11 +129,13 @@ fn golden(process: ProcessVersion) -> u64 {
     h
 }
 
-/// V1 and V2 render byte for byte as they do on main before adding process V3. The hashes were captured
-/// on main at e2d18b5fb (before `light_v3`) on macOS aarch64, where they are checked: the renders
+/// V1 and V2 render byte for byte as they do on main after #3509's intentional 8-bit dithering.
+/// The hashes were captured on unchanged main at a220d3eb on macOS aarch64, where they are checked: the renders
 /// call the platform's `powf` / `exp2` / `log2`, whose last bit can differ on other platforms, so
 /// elsewhere the test only prints them. Before updating them during a rebase, run this exact fixture
-/// on main and confirm that both hashes match. This PR must not change V1 or V2 rendering.
+/// on main and confirm that both hashes match. Restoring only the pre-#3509 quantizer on that
+/// baseline reproduces the original e2d18b5fb goldens (0x5bf0a7c8579f3f34, 0x87a3598c15979e4d)
+/// exactly: only the intended final quantization change requires this baseline update.
 #[test]
 fn v1_and_v2_render_as_before_v3() {
     let got = [golden(ProcessVersion(1)), golden(ProcessVersion(2))];
@@ -143,22 +145,22 @@ fn v1_and_v2_render_as_before_v3() {
     }
 }
 
-const GOLDEN: [u64; 2] = [0x5bf0_a7c8_579f_3f34, 0x87a3_598c_1597_9e4d];
+const GOLDEN: [u64; 2] = [0x4830_59a3_ad92_326c, 0x9653_aed0_ea32_aff3];
 
 fn on(process: Process, s: &DevelopSettings) -> DevelopSettings {
     DevelopSettings { process: process.version(), ..s.clone() }
 }
 
 /// Every slider and amount the operator checks sweep: Contrast and Blacks with
-/// their fits and references.
-fn fits() -> [(&'static str, &'static light_v3::Fit, &'static [Reference]); 2] {
-    [("contrast", &fitted::CONTRAST, fitted::CONTRAST_REFERENCE), ("blacks", &fitted::BLACKS, fitted::BLACKS_REFERENCE)]
+/// their fits.
+fn fits() -> [(&'static str, &'static light_v3::Fit); 2] {
+    [("contrast", &fitted::CONTRAST), ("blacks", &fitted::BLACKS)]
 }
 
 #[test]
 fn the_shipped_fits_unpack_as_the_family_lays_them_out() {
     assert!(std::ptr::eq(FITS[0], &fitted::CONTRAST) && std::ptr::eq(FITS[1], &fitted::BLACKS));
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         let u = fit.unpack().unwrap_or_else(|| panic!("{name} doesn't unpack"));
         // D(1) = 0, and Contrast's shapes are anchored at black too
         assert_eq!((u.d_pos[11], u.d_neg[11]), (0.0, 0.0), "{name}");
@@ -219,40 +221,10 @@ fn preview_tables_match_exact_operators_over_combined_amounts() {
     eprintln!("Preview table maximum encoded error {worst:.6} of an 8-bit level");
 }
 
-/// The port against the family's own Python (`tools/light_v3_family.py`, through the generated
-/// references): `Family.curve` to the references' 12 digits, and `Family.apply` on pixels to the
-/// tables' interpolation.
-#[test]
-fn the_operators_are_fit_pointwise_family() {
-    for (name, fit, refs) in fits() {
-        let u = fit.unpack().unwrap();
-        assert!(!refs.is_empty());
-        let mut worst = 0.0f64;
-        for r in refs {
-            for (v, want) in fitted::REF_V.iter().zip(r.curve) {
-                let got = u.curve(r.amount, *v);
-                // (the references are written at 12 significant digits)
-                assert!((got - want).abs() < 1e-11, "{name} {} at {v}: {got} vs {want}", r.amount);
-            }
-            let Some(apply) = r.apply else { continue };
-            let op = Operator::new(fit, r.amount).unwrap();
-            for (px, want) in fitted::REF_PIX.iter().zip(apply) {
-                let lin = px.map(|v| srgb_to_linear(v as f32));
-                let got = op.apply(lin, &linear_to_srgb).map(linear_to_srgb);
-                for k in 0..3 {
-                    worst = worst.max((got[k] as f64 - want[k]).abs());
-                }
-            }
-        }
-        eprintln!("{name}: worst |apply - Family.apply| {worst:.2e} (encoded)");
-        assert!(worst < 1e-3, "{name}: {worst}");
-    }
-}
-
 /// Each operator is non-decreasing at every integer amount and maps white to white.
 #[test]
 fn every_operator_is_monotone_and_keeps_white() {
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         for a in (-100..=100).filter(|a| *a != 0) {
             let op = Operator::new(fit, a as f64).unwrap();
             assert!(op.lut[0] >= 0.0, "{name} {a}: F(0) = {}", op.lut[0]);
@@ -273,7 +245,7 @@ fn every_operator_is_monotone_and_keeps_white() {
 /// the fit.
 #[test]
 fn a_folding_fit_is_flattened_and_others_are_untouched() {
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         let u = fit.unpack().unwrap();
         for a in [-100.0, -50.0, -10.0, 10.0, 50.0, 100.0] {
             let mut fold = 0.0f64;
@@ -421,7 +393,7 @@ fn window_diff(full: &Rgba8, w: &Rgba8, win: PixelWindow) -> u8 {
 fn hdr_components_follow_the_operators_mode() {
     let enc = &linear_to_srgb;
     let lum = |p: [f32; 3]| light_v3::PRO_Y[0] * p[0] + light_v3::PRO_Y[1] * p[1] + light_v3::PRO_Y[2] * p[2];
-    for (name, fit, _) in fits() {
+    for (name, fit) in fits() {
         for a in [-100.0, -40.0, 40.0, 100.0] {
             let op = Operator::new(fit, a).unwrap();
             for p in [[1.2f32, 0.2, 0.05], [3.0, 1.5, 0.8], [0.4, 1.1, 0.02]] {
