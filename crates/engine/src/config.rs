@@ -44,7 +44,38 @@ pub fn config_dir() -> Option<PathBuf> {
     } else {
         Platform::Other
     };
-    config_dir_with(platform, |name| std::env::var_os(name), portable_dir)
+    config_dir_from(profile_root(), platform, |name| std::env::var_os(name), portable_dir)
+}
+
+/// The Nightly desktop's private root, selected once before any host service reads a folder.
+/// `None` for Stable, which keeps every rule below unchanged.
+static PROFILE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Select the private Nightly root. The caller has validated it (it is inside no Stable folder);
+/// this refuses only a second selection or a relative path.
+pub fn set_profile_root(root: PathBuf) -> Result<(), String> {
+    if !root.is_absolute() {
+        return Err("the Nightly profile root must be absolute".into());
+    }
+    PROFILE_ROOT.set(root).map_err(|_| "the Nightly profile root was already selected".to_string())
+}
+
+pub fn profile_root() -> Option<&'static Path> {
+    PROFILE_ROOT.get().map(PathBuf::as_path)
+}
+
+/// [`config_dir`] with the selected profile made explicit, so the rules are testable without a
+/// process-wide selection: a Nightly profile keeps its settings in `<profile>/Settings`.
+fn config_dir_from(
+    profile: Option<&Path>,
+    platform: Platform,
+    env: impl Fn(&str) -> Option<OsString>,
+    portable: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    match profile {
+        Some(root) => Some(root.join("Settings")),
+        None => config_dir_with(platform, env, portable),
+    }
 }
 
 /// `portable` is asked only without an override, so an isolated run never probes beside the executable.
@@ -99,7 +130,8 @@ fn portable_dir_in(exe_dir: &Path) -> Result<Option<PathBuf>, String> {
 }
 
 /// Create `dir` and prove a file can be written in it (a folder can exist yet be read-only).
-fn ensure_writable(dir: &Path) -> std::io::Result<()> {
+/// The Nightly root validator uses this same exclusive probe rather than a second rule.
+pub fn ensure_writable(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let probe = dir.join(format!(".write-test-{}", std::process::id()));
     std::fs::write(&probe, b"")?;
@@ -132,17 +164,40 @@ fn sam3_dir(var: Option<std::ffi::OsString>, config: Option<PathBuf>) -> Option<
 }
 
 impl Session {
-    /// Look for the SAM 3 model in the shared default folder ([`default_sam3_dir`]), and for the user's
-    /// download mirrors in `<config>/models/sam3-mirrors.txt`.
+    /// Look for the SAM 3 model in the shared default folder ([`default_sam3_dir`]), for the user's
+    /// download mirrors in `<config>/models/sam3-mirrors.txt` and for where it runs in
+    /// `<config>/models/sam3-settings.json`.
     pub fn with_default_sam3_model(mut self) -> Self {
         self.segmenter.dir = default_sam3_dir();
         self.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
+        self.segmenter.settings_file = config_dir().map(|d| d.join("models").join("sam3-settings.json"));
+        self.segmenter.load_settings();
         self
     }
 
     /// Keep face models in the shared default folder ([`default_face_models_dir`]).
     pub fn with_default_face_models(mut self) -> Self {
         self.face_models_dir = default_face_models_dir();
+        self
+    }
+
+    /// Read lens profiles from the app's own copy of the lens database ([`crate::lensfun_download::default_dir`],
+    /// unless `LIGHTCRAFT_LENSFUN_DIR` names another) when it is there. Every host with a file system selects it
+    /// (desktop, CLI, headless MCP), so the same raw gets the same profile everywhere; it never fetches anything
+    /// ([`Self::with_lens_auto_download`] is that permission).
+    pub fn with_default_lens_database(self) -> Self {
+        let dir = crate::lensfun_download::default_dir();
+        if let Some(d) = &dir {
+            crate::lensfun_download::recover(d);
+        }
+        crate::lens_profiles::use_dir(dir);
+        self
+    }
+
+    /// Let the host offer the lens database at its start, and fetch it there once the user said yes
+    /// ([`crate::lensfun_download::fetch_on_start`] decides). Separate from selecting a database that is already there ([`Self::with_default_lens_database`]).
+    pub fn with_lens_auto_download(mut self) -> Self {
+        self.lens_auto_download = true;
         self
     }
 
@@ -239,6 +294,22 @@ mod config_tests {
                 None
             );
         }
+    }
+
+    /// A selected Nightly profile keeps settings (ui.json, logs, models, lensfun, geonames) inside
+    /// it, and none of the Stable environment or portable rules are consulted.
+    #[test]
+    fn a_nightly_profile_owns_the_settings_folder() {
+        let root = PathBuf::from("nightly/profile");
+        for platform in [Platform::Mac, Platform::Windows, Platform::Other] {
+            let actual =
+                config_dir_from(Some(root.as_path()), platform, |_| panic!("a Nightly profile must not read Stable variables"), no_portable_probe);
+            assert_eq!(actual, Some(root.join("Settings")));
+        }
+        assert_eq!(
+            config_dir_from(None, Platform::Windows, |name| (name == "APPDATA").then(|| OsString::from("/roaming")), || None),
+            Some(PathBuf::from("/roaming/LightCraft"))
+        );
     }
 
     #[test]

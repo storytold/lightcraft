@@ -27,6 +27,10 @@ pub(crate) fn line_x(img: &Rgba8, y: usize, x0: f64, win: f64) -> f64 {
     let (a, b) = ((x0 - win).max(0.0) as usize, ((x0 + win) as usize).min(img.width - 1));
     let row: Vec<f64> = (a..=b).map(|x| img.get(x, y)[1] as f64).collect();
     let max = row.iter().cloned().fold(0.0, f64::max);
+    let min = row.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return (a as f64 + b as f64) / 2.0 + 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in row.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);
@@ -41,6 +45,10 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
     let (a, b) = ((y0 - win).max(0.0) as usize, ((y0 + win) as usize).min(img.height - 1));
     let col: Vec<f64> = (a..=b).map(|y| img.get(x, y)[1] as f64).collect();
     let max = col.iter().cloned().fold(0.0, f64::max);
+    let min = col.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return (a as f64 + b as f64) / 2.0 + 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in col.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);
@@ -52,6 +60,20 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
 
 fn spread(v: &[f64]) -> f64 {
     v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
+}
+
+/// Asserts that a vertical edge with contrast > 1 LSB exists in row `y` around `x0 ± win`.
+fn assert_vertical_edge(img: &Rgba8, y: usize, x0: f64, win: f64) {
+    let (a, b) = ((x0 - win).max(0.0) as usize, ((x0 + win) as usize).min(img.width - 1));
+    let values: Vec<f64> = (a..=b).map(|x| img.get(x, y)[1] as f64).collect();
+    assert!(spread(&values) > 1.0, "no vertical edge near x={x0} on row {y}");
+}
+
+/// Asserts that a horizontal edge with contrast > 1 LSB exists in column `x` around `y0 ± win`.
+fn assert_horizontal_edge(img: &Rgba8, x: usize, y0: f64, win: f64) {
+    let (a, b) = ((y0 - win).max(0.0) as usize, ((y0 + win) as usize).min(img.height - 1));
+    let values: Vec<f64> = (a..=b).map(|y| img.get(x, y)[1] as f64).collect();
+    assert!(spread(&values) > 1.0, "no horizontal edge near y={y0} on column {x}");
 }
 
 /// Barrel distortion with coefficient `k` (< 0): distorted radius = r·(1 + k·r²), r in half-diagonal units.
@@ -213,6 +235,7 @@ fn manual_vertical_keystone_widens_the_top() {
     assert!(lb.y - lt.y > rb.y - rt.y, "left side enlarged");
 }
 
+/// Verifies manual geometry corrections straighten a keystoned grid test fixture.
 #[test]
 fn manual_transforms_straighten_known_keystone() {
     let (w, h) = (480usize, 320usize);
@@ -226,6 +249,12 @@ fn manual_transforms_straighten_known_keystone() {
         let src = keystoned_grid(w, h, fwd, 40.0);
         let s = DevelopSettings { geometry: g.clone(), ..Default::default() };
         let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+        for &y in &[60usize, 150, 260] {
+            assert_vertical_edge(&img, y, 200.0, 15.0);
+        }
+        for &x in &[60usize, 220, 420] {
+            assert_horizontal_edge(&img, x, 200.0, 15.0);
+        }
         let xs: Vec<f64> = [60usize, 150, 260].iter().map(|&y| line_x(&img, y, 200.0, 15.0)).collect();
         let ys: Vec<f64> = [60usize, 220, 420].iter().map(|&x| line_y(&img, x, 200.0, 15.0)).collect();
         assert!(spread(&xs) < 1.0 && (xs[0] - 200.0).abs() < 1.0, "{g:?}: vertical line at {xs:?}");
@@ -258,6 +287,26 @@ fn constrain_crop_removes_blank_areas() {
     let c = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
     assert_eq!((c.width, c.height), (free.width, free.height), "constrain keeps the aspect");
     assert!(blank_fraction(&c) < 0.002, "constrained: {}", blank_fraction(&c));
+}
+
+/// Issue #2361: lens corrections never show the blank past the photo's edge, with or without
+/// Constrain Crop, in every colour plane; perspective alone still needs Constrain Crop.
+#[test]
+fn lens_corrections_leave_no_blank_corners() {
+    let src = Rgb32f::from_fn(300, 200, |x, y| [0.05 + 0.002 * x as f32, 0.1 + 0.002 * y as f32, 0.3]);
+    for (distortion, ca) in [(-80.0, 0.0), (80.0, 0.0), (-40.0, 100.0), (0.0, -100.0)] {
+        let mut s = DevelopSettings::default();
+        s.optics.distortion = distortion;
+        s.optics.ca_red = ca;
+        s.optics.ca_blue = -ca;
+        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+        assert!(blank_fraction(&r) < 0.002, "distortion {distortion}, CA {ca}: {}", blank_fraction(&r));
+    }
+    let mut s = DevelopSettings::default();
+    s.optics.distortion = -60.0;
+    s.geometry.vertical = -60.0;
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+    assert!(blank_fraction(&r) > 0.03, "the keystone keeps its corners: {}", blank_fraction(&r));
 }
 
 #[test]
@@ -432,6 +481,28 @@ fn upright_analysis_is_resolution_independent() {
     assert_eq!(lazy.data, stored.data);
 }
 
+/// Raw decoding keeps negative channels; Upright analyses a dark noisy frame as it did when decoding clipped them at
+/// zero (resampled as they are, they lowered the luminance and changed the correction found).
+#[test]
+fn upright_analysis_clips_negative_channels_first() {
+    let shot = lightcraft_develop::Geometry { vertical: 30.0, rotate: 1.5, ..Default::default() };
+    let grid = keystoned_grid(1200, 800, crate::transform::manual(&shot), 80.0);
+    // ±0.04 of noise per channel, a hash of the position
+    let noise = |i: usize, c: usize| {
+        let h = ((i * 7919 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.08 - 0.04
+    };
+    let mut signed = grid.clone();
+    for (i, p) in signed.data.iter_mut().enumerate() {
+        *p = std::array::from_fn(|c| p[c] * 0.02 + noise(i, c));
+    }
+    let clipped = signed.map(|p| p.map(|v| v.max(0.0)));
+    assert!(signed.data.iter().flatten().filter(|v| **v < 0.0).count() > signed.data.len() / 4, "the frame has few negatives");
+    let (info, s) = (SourceInfo::default(), DevelopSettings::default());
+    let (a, b) = (crate::upright::analysis_plane(&signed, &info, &s), crate::upright::analysis_plane(&clipped, &info, &s));
+    assert!(a.data == b.data, "negative channels change Upright's analysis image");
+}
+
 /// Regression: Upright Auto must not invent perspective in natural scenes (conical trees, ridgelines, a level
 /// water line) — the demo library has no buildings, so Auto should stay close to identity everywhere.
 #[test]
@@ -469,12 +540,12 @@ fn debug_upright_scene() {
     }
 }
 
-/// Sign convention for Auto straighten: a horizon descending 6° to the right needs crop angle −6°,
+/// Sign convention for Auto straighten: a horizon descending 4° to the right needs crop angle −4°,
 /// which `level_degrees` must report (the crop panel uses it as the crop angle directly).
 #[test]
 fn level_degrees_sign_matches_crop_angle() {
     let (w, h) = (900usize, 600usize);
-    let t = 6f32.to_radians().tan();
+    let t = 4f32.to_radians().tan();
     let src = Rgb32f::from_fn(w, h, |x, y| {
         let yh = h as f32 / 2.0 + (x as f32 - w as f32 / 2.0) * t;
         if (y as f32) < yh {
@@ -486,7 +557,7 @@ fn level_degrees_sign_matches_crop_angle() {
         }
     });
     let deg = crate::upright::level_degrees(&src, &SourceInfo::default(), &DevelopSettings::default()).expect("lines found");
-    assert!((deg + 6.0).abs() < 0.5, "{deg}");
+    assert!((deg + 4.0).abs() < 0.5, "{deg}");
 }
 
 /// A "horizon" of `deg` degrees: sky above, below it bands of `band` px (0: one edge only).
@@ -505,22 +576,443 @@ fn tilted_scene(deg: f32, band: f32) -> Rgb32f {
     })
 }
 
-/// Auto straighten acts on several agreeing lines only: one edge (the frame of a window, a branch)
-/// turned straight photos in a measurement on real ones, so it is left alone.
-#[test]
-fn auto_straighten_needs_more_than_one_line() {
-    let level = |src: &Rgb32f| crate::upright::level_degrees(src, &SourceInfo::default(), &DevelopSettings::default());
-    assert_eq!(level(&tilted_scene(4.0, 0.0)), None, "one edge");
-    let deg = level(&tilted_scene(4.0, 30.0)).expect("a horizon and the bands below it");
-    assert!((deg + 4.0).abs() < 0.5, "{deg}");
+fn auto_level(src: &Rgb32f) -> Option<f64> {
+    crate::upright::level_degrees(src, &SourceInfo::default(), &DevelopSettings::default())
 }
 
-/// Auto straighten turns by at most `STRAIGHTEN_MAX_DEGREES`: larger "levels" came from texture
-/// (planks, a bird's wing) on photos that were straight.
+/// Thick dark lines on a light ground, each from `a` to `b` in centred coordinates (half the long
+/// edge = 1).
+fn line_drawing(lines: &[((f32, f32), (f32, f32))]) -> Rgb32f {
+    let (w, h) = (900usize, 600usize);
+    let half = w as f32 / 2.0;
+    Rgb32f::from_fn(w, h, |x, y| {
+        let p = ((x as f32 - w as f32 / 2.0) / half, (y as f32 - h as f32 / 2.0) / half);
+        let near = lines.iter().any(|&((ax, ay), (bx, by))| {
+            let (dx, dy) = (bx - ax, by - ay);
+            let t = (((p.0 - ax) * dx + (p.1 - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            let (qx, qy) = (ax + t * dx - p.0, ay + t * dy - p.1);
+            qx.hypot(qy) * half < 3.0
+        });
+        if near { [0.05, 0.05, 0.05] } else { [0.8, 0.8, 0.8] }
+    })
+}
+
+/// A single short line (the frame of a window, a branch) levels nothing: it turned straight
+/// photos in a measurement on real ones.
+#[test]
+fn auto_straighten_ignores_a_single_short_line() {
+    let t = 4f32.to_radians().tan();
+    assert_eq!(auto_level(&line_drawing(&[((-0.3, -0.3 * t), (0.3, 0.3 * t))])), None, "one short line");
+    // a horizon is one straight edge too, but across the whole width
+    let deg = auto_level(&tilted_scene(4.0, 0.0)).expect("a horizon");
+    assert!((deg + 4.0).abs() < 0.3, "{deg}");
+}
+
+/// Auto straighten turns by at most `straighten::MAX_DEGREES` (5°): none of 113 photos
+/// straightened by hand needed more than 6.1°, and larger "levels" came from texture.
 #[test]
 fn auto_straighten_leaves_steep_lines_alone() {
-    let level = |src: &Rgb32f| crate::upright::level_degrees(src, &SourceInfo::default(), &DevelopSettings::default());
-    assert_eq!(level(&tilted_scene(20.0, 30.0)), None, "20° is not a horizon to level");
-    let deg = level(&tilted_scene(8.0, 30.0)).expect("8° is");
-    assert!((deg + 8.0).abs() < 0.5, "{deg}");
+    assert_eq!(auto_level(&tilted_scene(20.0, 30.0)), None, "20° is not a horizon to level");
+    assert_eq!(auto_level(&tilted_scene(8.0, 30.0)), None, "nor is 8°");
+    let deg = auto_level(&tilted_scene(4.0, 30.0)).expect("4° is");
+    assert!((deg + 4.0).abs() < 0.3, "{deg}");
+}
+
+/// A sea horizon among ripples: the short, randomly tilted edges of the water outnumber the
+/// horizon, which the line consensus took for no answer (or the ripples' angle), but the horizon
+/// runs across the whole width and levels the photo.
+#[test]
+fn auto_straighten_finds_a_sea_horizon_among_ripples() {
+    let (w, h) = (900usize, 600usize);
+    let t = 2f32.to_radians().tan();
+    let mut seed = 7u32;
+    let mut rnd = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    // ripples: short bright dashes tilted up to ±12°
+    let ripples: Vec<(f32, f32, f32, f32)> =
+        (0..400).map(|_| (rnd() * w as f32, rnd() * h as f32, (rnd() - 0.5) * 0.4, 8.0 + rnd() * 25.0)).collect();
+    let src = Rgb32f::from_fn(w, h, |x, y| {
+        let (x, y) = (x as f32, y as f32);
+        let yh = h as f32 * 0.4 + (x - w as f32 / 2.0) * t;
+        if y < yh {
+            return [0.75, 0.8, 0.9];
+        }
+        let lit = ripples.iter().any(|&(rx, ry, slope, len)| {
+            let dx = x - rx;
+            dx.abs() < len && (y - ry - slope * dx).abs() < 1.2 && ry > yh + 4.0
+        });
+        if lit { [0.5, 0.55, 0.6] } else { [0.1, 0.15, 0.25] }
+    });
+    let deg = auto_level(&src).expect("the horizon");
+    assert!((deg + 2.0).abs() < 0.3, "{deg}");
+}
+
+/// A building shot upward and rolled 3°: its verticals converge on a vanishing point above the
+/// frame. Their mean tilt depends on where in the frame they stand (here all right of centre);
+/// the vanishing point gives the roll.
+#[test]
+fn auto_straighten_takes_the_roll_from_converging_verticals() {
+    let roll = 3f32.to_radians();
+    let vp = (6.0 * roll.sin(), -6.0 * roll.cos());
+    let lines: Vec<_> = (0..12)
+        .map(|i| {
+            let x = 0.05 + i as f32 * 0.07;
+            let bottom = (x, 0.6);
+            // two thirds of the way from the bottom towards the vanishing point, ending in the frame
+            let top_t = (0.6 + 0.6) / (0.6 - vp.1);
+            (bottom, (x + (vp.0 - x) * top_t, 0.6 + (vp.1 - 0.6) * top_t))
+        })
+        .collect();
+    let deg = auto_level(&line_drawing(&lines)).expect("the vanishing point");
+    assert!((deg + 3.0).abs() < 0.3, "{deg}");
+}
+
+/// The Upright analysis cache tells apart what changes the analysis image: another lens (`info.lens`)
+/// or the optics section switched off (review of #2809).
+#[test]
+fn the_analysis_cache_tells_lenses_and_optics_apart() {
+    let src = tilted_scene(2.0, 30.0);
+    let s = DevelopSettings::default();
+    let plain = SourceInfo::default();
+    let vignette = lightcraft_develop::EmbeddedVignette::default();
+    let lens =
+        SourceInfo { lens: Some(lightcraft_develop::EmbeddedLens { vignette: Some(vignette), ..Default::default() }), ..SourceInfo::default() };
+    let key = crate::upright::analysis_key;
+    assert_eq!(key(&src, &plain, &s), key(&src, &plain.clone(), &s), "the same source, settings and lens");
+    assert_ne!(key(&src, &plain, &s), key(&src, &lens, &s), "another lens");
+    let mut off = s.clone();
+    off.disabled_sections.push("optics".into());
+    assert!(!off.section_enabled("optics"));
+    assert_ne!(key(&src, &plain, &s), key(&src, &plain, &off), "the optics section off");
+}
+
+/// A ceremony aisle under a pavilion, shot from below and slightly rolled. Two thick white posts,
+/// left and right, clipped by the frame's top and bottom, converge; a level hedge line; in the middle, people and
+/// a dress whose edges are near-vertical but point nowhere in common; tree texture behind. Upright Vertical / Auto
+/// did nothing on such a photo.
+fn pavilion(w: usize, h: usize, fwd: lightcraft_geom::Homography) -> Rgb32f {
+    let l = w.max(h) as f64 / 2.0;
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    // cheap deterministic noise
+    let noise = |x: f64, y: f64| {
+        let n = ((x * 12.9898 + y * 78.233).sin() * 43758.5453).fract().abs();
+        n as f32
+    };
+    synth(
+        w,
+        h,
+        move |p| {
+            let q = fwd.apply(Point::new((p.x - cx) / l, (p.y - cy) / l));
+            Point::new(q.x, q.y)
+        },
+        move |q| {
+            let (x, y) = (q.x, q.y);
+            // posts: thick, bright, the whole height
+            for px in [-0.78, 0.8] {
+                if (x - px).abs() < 0.045 {
+                    return [0.95; 3];
+                }
+            }
+            // people in the middle: tilted shapes (a dress, suits), near-vertical edges in every direction
+            let people: [(f64, f64, f64, f64, f32); 6] = [
+                (-0.32, 0.25, 0.09, 9.0, 0.08),
+                (-0.12, 0.2, 0.13, -11.0, 0.92),
+                (0.05, 0.22, 0.08, 14.0, 0.1),
+                (0.22, 0.28, 0.07, -7.0, 0.85),
+                (0.38, 0.3, 0.06, 18.0, 0.15),
+                (-0.5, 0.33, 0.05, -16.0, 0.12),
+            ];
+            for (px, py, half_w, tilt, v) in people {
+                let (s, c) = tilt.to_radians().sin_cos();
+                let (dx, dy) = (x - px, y - py);
+                let (u, t) = (dx * c - dy * s, dx * s + dy * c);
+                // a body from py − 0.35 (head) to py + 0.35, wider at the bottom (a dress)
+                if t.abs() < 0.35 && u.abs() < half_w * (1.0 + 0.8 * (t + 0.35)) {
+                    return [v; 3];
+                }
+            }
+            if y < -0.12 {
+                // sky (bright, but not as bright as the white posts)
+                [0.62 - 0.05 * y.abs() as f32; 3]
+            } else if y < 0.08 {
+                // trees: dark, textured
+                [0.18 + 0.12 * noise((x * 90.0).floor(), (y * 90.0).floor()); 3]
+            } else {
+                // lawn, below a level hedge line
+                [0.42 + 0.06 * noise((x * 140.0).floor(), (y * 140.0).floor()); 3]
+            }
+        },
+    )
+}
+
+#[test]
+fn upright_corrects_converging_posts_among_people() {
+    let (w, h) = (900usize, 600usize);
+    let shot = lightcraft_develop::Geometry { vertical: 30.0, rotate: -1.5, ..Default::default() };
+    let src = pavilion(w, h, crate::transform::manual(&shot));
+    let a = crate::upright::analyze_source(&src, &SourceInfo::default(), &DevelopSettings::default());
+    assert!(a.vertical_vp.is_some(), "the posts give a vertical vanishing point: {:?}", a.vertical_why);
+    // the middle of the bright post in a quarter of the frame, on a row (centroid of the white pixels)
+    let post_x = |img: &Rgba8, y: usize, right: bool| {
+        let (a, b) = if right { (img.width * 3 / 4, img.width) } else { (0, img.width / 4) };
+        let (mut s, mut n) = (0.0f64, 0.0f64);
+        for x in a..b {
+            if img.get(x, y)[1] > 225 {
+                s += x as f64;
+                n += 1.0;
+            }
+        }
+        assert!(n > 0.0, "a post is visible on row {y}");
+        s / n
+    };
+    let lean = |img: &Rgba8, right: bool| post_x(img, img.height / 6, right) - post_x(img, img.height * 5 / 6, right);
+    let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+    assert!(lean(&raw, false).abs() > 8.0 && lean(&raw, true).abs() > 8.0, "the posts lean in the photo: {} {}", lean(&raw, false), lean(&raw, true));
+    for mode in [Upright::Vertical, Upright::Auto] {
+        let img = upright_render(&src, mode);
+        for right in [false, true] {
+            assert!(
+                lean(&img, right).abs() < 2.5,
+                "{mode:?}: the {} post still leans {} px",
+                if right { "right" } else { "left" },
+                lean(&img, right)
+            );
+        }
+    }
+}
+
+/// A ceremony under a white gazebo, shot level with a long lens but rolled 1.6°
+/// (portrait). Two white posts stand up the whole frame; the deck's boards run away to the horizon (they meet
+/// inside the photo); two drapes hang diagonally from the roof; a couple stands between the posts. Upright
+/// Vertical said "the straight lines point in different directions" and did nothing.
+fn gazebo(w: usize, h: usize, fwd: lightcraft_geom::Homography) -> Rgb32f {
+    let l = w.max(h) as f64 / 2.0;
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    synth(
+        w,
+        h,
+        move |p| fwd.apply(Point::new((p.x - cx) / l, (p.y - cy) / l)),
+        move |q| {
+            let (x, y) = (q.x, q.y);
+            for px in [-0.47, 0.47] {
+                if (x - px).abs() < 0.035 {
+                    return [0.95; 3];
+                }
+            }
+            // drapes from the roof's middle out and down, thin bright bands
+            for (x0, x1) in [(-0.05, -0.3), (0.05, 0.3)] {
+                let (y0, y1) = (-1.0, 0.25);
+                if y > y0 && y < y1 {
+                    let t = (y - y0) / (y1 - y0);
+                    if (x - (x0 + (x1 - x0) * t)).abs() < 0.02 {
+                        return [0.7; 3];
+                    }
+                }
+            }
+            // the couple: a dark suit and a white gown, a little tilted
+            for (px, half_w, tilt, v) in [(-0.1, 0.07, 6.0f64, 0.85f32), (0.1, 0.06, -5.0, 0.08)] {
+                let (s, c) = tilt.to_radians().sin_cos();
+                let (dx, dy) = (x - px, y - 0.25);
+                let (u, t) = (dx * c - dy * s, dx * s + dy * c);
+                if t.abs() < 0.4 && u.abs() < half_w * (1.0 + 0.8 * (t + 0.4)) {
+                    return [v; 3];
+                }
+            }
+            if y > 0.3 {
+                // deck boards running to a point on the horizon (inside the photo)
+                let a = x.atan2(y + 0.1);
+                if (a * 14.0).rem_euclid(1.0) < 0.12 {
+                    return [0.15; 3];
+                }
+                return [0.55; 3];
+            }
+            // sky, a railing line
+            if (y - 0.05).abs() < 0.01 { [0.3; 3] } else { [0.62; 3] }
+        },
+    )
+}
+
+#[test]
+fn upright_vertical_follows_the_posts_not_the_deck_or_the_drapes() {
+    let (w, h) = (600usize, 900usize);
+    let shot = lightcraft_develop::Geometry { rotate: 1.6, ..Default::default() };
+    let src = gazebo(w, h, crate::transform::manual(&shot));
+    let a = crate::upright::analyze_source(&src, &SourceInfo::default(), &DevelopSettings::default());
+    assert!(a.vertical_vp.is_some(), "the posts give a vertical vanishing point: {:?}", a.vertical_why);
+    let post_x = |img: &Rgba8, y: usize, right: bool| {
+        let (a, b) = if right { (img.width * 3 / 4, img.width) } else { (0, img.width / 4) };
+        let (mut s, mut n) = (0.0f64, 0.0f64);
+        for x in a..b {
+            if img.get(x, y)[1] > 235 {
+                s += x as f64;
+                n += 1.0;
+            }
+        }
+        assert!(n > 0.0, "a post is visible on row {y}");
+        s / n
+    };
+    let lean = |img: &Rgba8, right: bool| post_x(img, img.height / 8, right) - post_x(img, img.height * 5 / 8, right);
+    let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+    assert!(lean(&raw, false).abs() > 6.0 && lean(&raw, true).abs() > 6.0, "the posts lean: {} {}", lean(&raw, false), lean(&raw, true));
+    for mode in [Upright::Vertical, Upright::Auto] {
+        let img = upright_render(&src, mode);
+        for right in [false, true] {
+            assert!(
+                lean(&img, right).abs() < 2.0,
+                "{mode:?}: the {} post still leans {} px",
+                if right { "right" } else { "left" },
+                lean(&img, right)
+            );
+        }
+    }
+}
+
+/// Do no harm: a gown's folds spreading to the floor point at a far point too, but they are short and there is
+/// no post, wall or door among them: Upright Vertical leaves such a photo alone.
+#[test]
+fn upright_vertical_leaves_a_gown_without_structure_alone() {
+    let (w, h) = (600usize, 900usize);
+    let l = 450.0;
+    let src = synth(
+        w,
+        h,
+        |p| Point::new((p.x - 300.0) / l, (p.y - 450.0) / l),
+        |q| {
+            let (x, y) = (q.x, q.y);
+            // the gown: from the waist (y = −0.1) to the floor (y = 0.9), widening
+            if y > -0.1 && y < 0.9 && x.abs() < 0.08 + 0.45 * (y + 0.1) {
+                // folds: soft, wavy dark lines that all aim at a point far below (y = 3)
+                let a = x.atan2(3.0 - y) + 0.012 * (y * 23.0).sin();
+                let band = (a * 40.0).rem_euclid(1.0) < 0.15;
+                let piece = ((y * 9.0).floor() as i64 + (a * 40.0).floor() as i64).rem_euclid(3) == 0;
+                return if band && piece { [0.55; 3] } else { [0.92; 3] };
+            }
+            // a plain, soft background
+            [0.35 + 0.05 * (x as f32); 3]
+        },
+    );
+    let a = crate::upright::analyze_source(&src, &SourceInfo::default(), &DevelopSettings::default());
+    assert!(a.vertical_vp.is_none(), "folds are not structure: {:?}", a.vertical_vp);
+    assert!(crate::upright::shortfall(Upright::Vertical, &a).is_some(), "and it says why");
+}
+
+/// Auto's note follows what Auto did: a tilted horizon it won't fix (over 5°) and a vertical correction too steep
+/// to make both say why, while a level horizon it accepts says nothing.
+#[test]
+fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
+    use crate::upright::{Analysis, Reject, Segment, shortfall, solve};
+    use lightcraft_develop::Upright;
+    use lightcraft_geom::Homography;
+    let line = |deg: f64, y: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        Segment { a: Point::new(-0.4 * c, y - 0.4 * s), b: Point::new(0.4 * c, y + 0.4 * s) }
+    };
+    // a level horizon: Auto accepts a zero-degree correction, so it has nothing to explain
+    let level = Analysis { horizontal: vec![line(0.0, -0.2), line(0.0, 0.2)], ..Analysis::default() };
+    assert_eq!(shortfall(Upright::Auto, &level), None);
+    // a horizon 10° off: Auto leaves it alone, and says so
+    let tilted = Analysis { horizontal: vec![line(10.0, -0.2), line(10.0, 0.2)], ..Analysis::default() };
+    assert_eq!(solve(Upright::Auto, &tilted), Homography::IDENTITY);
+    assert_eq!(shortfall(Upright::Auto, &tilted), Some(Reject::TooTilted.message()), "too tilted, not too few lines");
+    assert_ne!(solve(Upright::Level, &tilted), Homography::IDENTITY, "Level still fixes it");
+    // lines meeting just below the photo: too steep for Auto, which says so; Vertical still corrects them
+    let steep = Analysis { vertical_vp: Some([0.0, 0.3, 1.0]), ..Analysis::default() };
+    assert_eq!(solve(Upright::Auto, &steep), Homography::IDENTITY);
+    assert_eq!(shortfall(Upright::Auto, &steep), Some(Reject::TooSteep.message()));
+    assert_ne!(solve(Upright::Vertical, &steep), Homography::IDENTITY);
+    // Level with no lines at all says there are too few, not that they disagree
+    assert_eq!(shortfall(Upright::Level, &Analysis::default()), Some(Reject::TooFew.message()));
+}
+
+/// A mode that falls back to a lesser correction says which one it applied, and "no correction" is kept for no
+/// correction at all (CodeRabbit on #2966).
+#[test]
+fn upright_note_names_the_fallback_it_applied() {
+    use crate::upright::{Analysis, Segment, fallback, shortfall, solve};
+    use lightcraft_develop::Upright;
+    use lightcraft_geom::Homography;
+    let line = |deg: f64, y: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        Segment { a: Point::new(-0.4 * c, y - 0.4 * s), b: Point::new(0.4 * c, y + 0.4 * s) }
+    };
+    // no verticals, a tilted horizon: Vertical and Full both level it, and say so
+    let tilted = Analysis { horizontal: vec![line(4.0, -0.2), line(4.0, 0.2)], ..Analysis::default() };
+    for m in [Upright::Vertical, Upright::Full] {
+        assert!(shortfall(m, &tilted).is_some());
+        assert_ne!(solve(m, &tilted), Homography::IDENTITY);
+        assert_eq!(fallback(m, &tilted), Some("Levelled the photo instead"), "{m:?}");
+    }
+    // a vertical vanishing point but no horizontal one: Full straightens the verticals
+    let vertical = Analysis { vertical_vp: Some([0.0, 3.0, 1.0]), ..Analysis::default() };
+    assert!(shortfall(Upright::Full, &vertical).is_some());
+    assert_ne!(solve(Upright::Full, &vertical), Homography::IDENTITY);
+    assert_eq!(fallback(Upright::Full, &vertical), Some("Straightened the vertical lines instead"));
+    assert_eq!(fallback(Upright::Vertical, &vertical), None, "Vertical did what it says");
+    // verticals already along the image's y axis: Full stores no correction, so it names no fallback
+    let straight = Analysis { vertical_vp: Some([0.0, 1.0, 0.0]), ..Analysis::default() };
+    assert!(shortfall(Upright::Full, &straight).is_some());
+    assert_eq!(solve(Upright::Full, &straight), Homography::IDENTITY);
+    assert_eq!(fallback(Upright::Full, &straight), None);
+    // nothing at all to go by: no fallback, the note says there was no correction
+    for m in [Upright::Vertical, Upright::Full, Upright::Level] {
+        assert_eq!(fallback(m, &Analysis::default()), None);
+        assert_eq!(solve(m, &Analysis::default()), Homography::IDENTITY);
+    }
+}
+
+/// The Guided hint says what to draw: Full needs two guides of each family (Guided uses only the guides drawn, and
+/// one of a kind only levels), Vertical two vertical ones, and Level a single line.
+#[test]
+fn upright_hint_asks_for_the_lines_guided_needs() {
+    use crate::upright::{Analysis, Segment, guided_hint};
+    use lightcraft_develop::Upright;
+    let none = Analysis::default();
+    assert_eq!(guided_hint(Upright::Full, &none), "two lines along what should be vertical and two along what should be horizontal");
+    assert_eq!(guided_hint(Upright::Vertical, &none), "two lines along what should be vertical");
+    assert_eq!(guided_hint(Upright::Level, &none), "a line along what should be level or upright");
+    // Auto with no usable lines: either kind of guide can help
+    assert_eq!(guided_hint(Upright::Auto, &none), "two lines along what should be vertical, or one line along what should be level");
+    // Auto stopped by a horizon over 5°: one level line fixes it (solve_guided_levels_one_guide_of_each_family_only)
+    let line = |deg: f64, y: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        Segment { a: Point::new(-0.4 * c, y - 0.4 * s), b: Point::new(0.4 * c, y + 0.4 * s) }
+    };
+    let tilted = Analysis { horizontal: vec![line(10.0, -0.2), line(10.0, 0.2)], ..Analysis::default() };
+    assert_eq!(guided_hint(Upright::Auto, &tilted), "one line along what should be level");
+    // the same tilt found from vertical lines only (posts 10° off, no horizon): one upright line, as
+    // one vertical guide levels too (CodeRabbit, #2966)
+    let leaning = Analysis { vertical: vec![line(100.0, -0.2), line(100.0, 0.2)], ..Analysis::default() };
+    assert_eq!(guided_hint(Upright::Auto, &leaning), "one line along what should be upright");
+    // Auto stopped by converging posts too steep for it: a level line can't straighten them (CodeRabbit, #2966)
+    let steep = Analysis { vertical_vp: Some([0.0, 0.3, 1.0]), ..Analysis::default() };
+    assert_eq!(guided_hint(Upright::Auto, &steep), "two lines along what should be vertical");
+}
+
+/// What the hints promise is what Guided does: one vertical and one horizontal guide only level (the horizontal one
+/// becomes level, the vertical one keeps its lean, so Full's hint asks for two of each), and the single level line
+/// Auto's hint offers fixes the horizon Auto leaves alone for being more than 5° off.
+#[test]
+fn solve_guided_levels_one_guide_of_each_family_only() {
+    use crate::upright::{Analysis, Reject, Segment, shortfall, solve_guided};
+    use lightcraft_develop::Upright;
+    let vertical = Segment { a: Point::new(0.1, -0.5), b: Point::new(0.19, 0.5) };
+    let horizontal = Segment { a: Point::new(-0.5, 0.1), b: Point::new(0.5, 0.12) };
+    let h = solve_guided(&[vertical, horizontal]);
+    let (p, q) = (h.apply(horizontal.a), h.apply(horizontal.b));
+    assert!((p.y - q.y).abs() < 1e-9, "the horizontal guide is levelled: {p:?} {q:?}");
+    let (p, q) = (h.apply(vertical.a), h.apply(vertical.b));
+    assert!((p.x - q.x).abs() > 0.03, "the vertical guide keeps its lean (no full correction): {p:?} {q:?}");
+    // a horizon 10° off: too tilted for Auto, levelled by the one line its hint asks for
+    let (s, c) = 10f64.to_radians().sin_cos();
+    let horizon = Segment { a: Point::new(-0.4 * c, -0.4 * s), b: Point::new(0.4 * c, 0.4 * s) };
+    let tilted = Analysis {
+        horizontal: vec![horizon, Segment { a: Point::new(horizon.a.x, 0.2 + horizon.a.y), b: Point::new(horizon.b.x, 0.2 + horizon.b.y) }],
+        ..Analysis::default()
+    };
+    assert_eq!(shortfall(Upright::Auto, &tilted), Some(Reject::TooTilted.message()));
+    let h = solve_guided(&[horizon]);
+    let (p, q) = (h.apply(horizon.a), h.apply(horizon.b));
+    assert!((p.y - q.y).abs() < 1e-9, "one level guide fixes it: {p:?} {q:?}");
 }
