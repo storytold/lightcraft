@@ -71,6 +71,9 @@ is empty (Lightroom leaves these behind and ignores them), is skipped together w
 copies instead of failing the whole import. The result lists them as data (`skipped`: each
 image id with its reason, `missingFile`, `missingFolder`, `missingRoot`, `incompletePath` or
 `masterSkipped`), also in `library.inspectLightroom`, and the desktop result window says how many in the UI language.
+A `rootFile`, `folder` or `rootFolder` that is not a whole number (NULL, text or a fraction) names no record, so its
+image is skipped with the same reasons; it does not resolve to the record whose id is 0 (or 1 for 1.5) and merge
+into that record's photo.
 Virtual copies count as added records too; reimport reports zero additions when all
 records already exist. Existing LightCraft
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Persistent import
