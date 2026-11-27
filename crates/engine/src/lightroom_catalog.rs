@@ -508,8 +508,9 @@ pub fn read_source(
     total: &AtomicUsize,
     done: &AtomicUsize,
 ) -> Result<CatalogImport, String> {
-    // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
-    total.store(14, Ordering::Relaxed);
+    // 13 catalog tables, the optional IPTC table (captions, #4043) and one validation stage; ImportJob adds one unit
+    // per original path.
+    total.store(15, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
     if crate::lightroom_backup::is_backup(path) {

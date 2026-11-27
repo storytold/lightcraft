@@ -530,7 +530,7 @@ impl Serialize for PhotoRef<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
         let skip = (!self.1).then_some("text");
-        let mut out = serializer.serialize_struct("CatalogPhotoArchive", 8)?;
+        let mut out = serializer.serialize_struct("CatalogPhotoArchive", 9)?;
         out.serialize_field("source_id", &p.source_id)?;
         out.serialize_field("uuid", &p.uuid)?;
         out.serialize_field("path", &p.path)?;
@@ -540,6 +540,8 @@ impl Serialize for PhotoRef<'_> {
         out.serialize_field("keywords", &p.keywords)?;
         out.serialize_field("history", &RowSeq(&p.history, skip))?;
         out.serialize_field("snapshots", &RowSeq(&p.snapshots, skip))?;
+        // a caption only Lightroom's IPTC table holds is in no other column: the recovery copy keeps it (#4043)
+        out.serialize_field("caption", &p.caption)?;
         out.end()
     }
 }
@@ -607,7 +609,7 @@ mod tests {
             history: vec![BTreeMap::from([("text".into(), serde_json::json!("step")), ("curve".into(), serde_json::json!([0, 128, 255]))])],
             snapshots: vec![BTreeMap::from([("name".into(), serde_json::json!("before"))])],
             original: crate::lightroom_catalog::Original::Local,
-            caption: String::new(),
+            caption: "Only in IPTC".into(),
         };
         CatalogImport {
             source: "source.lrcat".into(),
@@ -769,6 +771,9 @@ mod tests {
         assert_eq!(decoded["photos"][0]["history"].as_array().unwrap().len(), 1);
         assert_eq!(decoded["photos"][0]["history"][0]["curve"], serde_json::json!([0, 128, 255]));
         assert_eq!(decoded["photos"][0]["snapshots"].as_array().unwrap().len(), 1);
+        // the caption from Lightroom's IPTC table, read back as the photo had it (review of #4293)
+        let photo: CatalogPhoto = serde_json::from_value(decoded["photos"][0].clone()).unwrap();
+        assert_eq!(photo.caption, "Only in IPTC");
         assert_eq!(decoded["collections"].as_array().unwrap().len(), 1);
         assert_eq!(decoded["collections"][0]["name"], serde_json::json!("Keepers"));
         assert_eq!(decoded["members"].as_array().unwrap().len(), 1);
