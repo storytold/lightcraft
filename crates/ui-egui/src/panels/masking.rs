@@ -131,6 +131,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.painter().galley(at, g, t.text_dim);
                 let resp = if elided { resp.on_hover_text(label) } else { resp };
                 if resp.clicked() {
+                    // a gradient picked before and not drawn is put down: another choice here replaces it, or
+                    // the next drag on the photo would still draw that gradient
+                    if crate::panels::detail::gradient_tool(&app.ui.tool).is_some() {
+                        app.ui.tool.clear();
+                    }
                     match *kind {
                         "colorRange" => {
                             // an empty colour range; clicking the photo samples it
@@ -146,7 +151,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         // picked with the pointer, a drag on the photo draws it (#2311); by keyboard
                         // or a screen reader, it is placed at once and its handles move with the arrows
                         "linear" | "radial" if resp.clicked_by(egui::PointerButton::Primary) => {
-                            let _ = app.run(&format!("tool.{kind}"), json!({}));
+                            let _ = app.run(&format!("tool.{kind}"), json!({"draw": true}));
                         }
                         "linear" | "radial" => {
                             app.ui.tool.clear();
@@ -949,7 +954,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
                 let _ = app.run("tool.brush", json!({"op": op}));
             } else if matches!(kind, "linear" | "radial") && b.clicked_by(egui::PointerButton::Primary) {
                 // drawn by dragging on the photo, as from Create New Mask
-                let _ = app.run(&format!("tool.{kind}"), json!({"op": op}));
+                let _ = app.run(&format!("tool.{kind}"), json!({"op": op, "draw": true}));
             } else {
                 // placed at once (from the keyboard): a gradient tool picked before is put down,
                 // or the next drag on the photo would draw another component

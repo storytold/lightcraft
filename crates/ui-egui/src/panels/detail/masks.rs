@@ -271,6 +271,7 @@ fn seg_center(seg: &lightcraft_develop::SegMask) -> Option<Point> {
 /// kind, and the operation when it is a component of the selected mask (`tool` = `linear`,
 /// `radial`, `linear:subtract`, …).
 pub(crate) fn gradient_tool(tool: &str) -> Option<(&str, Option<&str>)> {
+    let tool = tool.strip_prefix("draw:")?;
     let (kind, op) = match tool.split_once(':') {
         Some((kind, op)) => (kind, Some(op)),
         None => (tool, None),
@@ -931,6 +932,24 @@ fn grip_gestures(
 /// on drawing it, all one undo step, and the tool is put down. `op` makes it a component of the
 /// selected mask. For the keyboard, a stand-in at the photo's centre: Return places the gradient
 /// where `mask.add` puts one by default.
+/// A primary press inside `rect` and its release, both among this frame's events (a drag faster than a frame, which
+/// egui reports as neither a click nor a drag): where each happened.
+fn flick(ui: &egui::Ui, rect: egui::Rect) -> Option<(egui::Pos2, egui::Pos2)> {
+    ui.input(|i| {
+        let mut down = None;
+        for e in &i.events {
+            if let egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } = e {
+                if *pressed {
+                    down = rect.contains(*pos).then_some(*pos);
+                } else if let Some(a) = down {
+                    return Some((a, *pos));
+                }
+            }
+        }
+        None
+    })
+}
+
 /// Memory key: a gradient tool was picked while a press was down, so that press draws nothing.
 pub(crate) fn gradient_wait_release() -> egui::Id {
     egui::Id::unique("lc-gradient-wait-release")
@@ -975,9 +994,19 @@ fn draw_gradient(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respon
         app.toast(ui.ctx(), crate::i18n::tr("Drag on the photo to draw the gradient · Esc cancels"));
         return;
     }
-    // a press held still makes nothing until the pointer moves
-    let (Some(a), Some(b)) = (ui.input(|i| i.pointer.press_origin()), resp.interact_pointer_pos()) else { return };
-    if !resp.dragged() || a.distance(b) < 2.0 {
+    // a press held still makes nothing until the pointer moves. A drag can also begin and end within one host
+    // frame (a fast flick): it is drawn whole, from the press to the release, and ends there
+    let (a, b, stopped) = match flick(ui, resp.rect) {
+        Some((a, b)) => (a, b, true),
+        None => {
+            let (Some(a), Some(b)) = (ui.input(|i| i.pointer.press_origin()), resp.interact_pointer_pos()) else { return };
+            if !resp.dragged() {
+                return;
+            }
+            (a, b, false)
+        }
+    };
+    if a.distance(b) < 2.0 {
         return;
     }
     app.ui.tool.clear();
@@ -1012,8 +1041,8 @@ fn draw_gradient(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respon
         Some((mid, m.components.len().checked_sub(1)?, m.components.last()?.shape.clone()))
     });
     match made {
-        Some((mask, comp, original_shape)) => app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape }),
-        None => {
+        Some((mask, comp, original_shape)) if !stopped => app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape }),
+        _ => {
             let _ = app.run("develop.endInteraction", json!({}));
         }
     }

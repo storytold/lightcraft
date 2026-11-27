@@ -2317,7 +2317,7 @@ fn a_gradient_is_drawn_by_dragging_on_the_photo() {
     let mut h = detail("panel.masking");
     click(&mut h, "maskNew:linear");
     assert!(develop(&h).masks.is_empty(), "picking the tool places no mask");
-    assert_eq!(h.app.ui.tool, "linear");
+    assert_eq!(h.app.ui.tool, "draw:linear");
     pointer(
         &mut h,
         json!([{"kind": "down", "x": 0.3, "y": 0.2}, {"kind": "drag", "x": 0.4, "y": 0.4},
@@ -2368,7 +2368,7 @@ fn a_click_without_a_drag_says_how_to_draw_the_gradient() {
         h.app.ui.toast = None;
         pointer(&mut h, json!([{"kind": "down", "x": 0.4, "y": 0.4}, {"kind": "up", "x": 0.4, "y": 0.4}]));
         assert!(develop(&h).masks.is_empty(), "{kind}: a click makes no gradient");
-        assert_eq!(h.app.ui.tool, kind, "{kind}: the tool stays picked");
+        assert_eq!(h.app.ui.tool, format!("draw:{kind}"), "{kind}: the tool stays picked");
         assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.clone()), Some(hint.clone()), "{kind}");
         exec(&mut h, "tool.none", json!({}));
     }
@@ -2415,16 +2415,22 @@ fn modifier_keys_draw_gradients_as_lightroom_does() {
     assert_eq!(develop(&h).masks.len(), 4, "a mask for each drag");
 }
 
-/// #2311: L / R and Add / Subtract ▸ Linear or Radial Gradient pick the tool too; a drag draws the component into the
-/// selected mask, and Esc puts the tool down.
+/// #2311: Add / Subtract ▸ Linear or Radial Gradient pick the tool too; a drag draws the component into the
+/// selected mask, and Esc puts the tool down. `tool.linear` (L) without `draw` places a gradient at once, as before,
+/// and answers with it, so scripts that read `activeMask` keep working (review of #3988).
 #[test]
 fn gradient_shortcuts_and_components_wait_for_a_drag() {
     use lightcraft_develop::MaskOp;
     let mut h = detail("panel.masking");
-    let r = h.request("ui.key", json!({"key": "l"}), T);
+    let r = h.request("engine.execute", json!({"command": "tool.linear", "params": {}}), T);
     assert_eq!(r["ok"], true, "{r}");
+    let placed = develop(&h).masks.first().map(|m| m.id).expect("tool.linear places a gradient at once");
+    assert_eq!(r["result"]["activeMask"], json!(placed), "{r}");
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(develop(&h).masks.is_empty());
+    exec(&mut h, "tool.linear", json!({"draw": true}));
     h.step();
-    assert_eq!(h.app.ui.tool, "linear", "L picks the tool");
+    assert_eq!(h.app.ui.tool, "draw:linear", "`draw` picks the tool");
     assert!(develop(&h).masks.is_empty(), "and places nothing");
     h.request("ui.key", json!({"key": "escape"}), T);
     h.step();
@@ -2436,7 +2442,7 @@ fn gradient_shortcuts_and_components_wait_for_a_drag() {
     click(&mut h, "button:maskMinus:1");
     click(&mut h, "maskComp:subtract:linear");
     assert_eq!(develop(&h).masks[0].components.len(), 1, "picking it adds nothing yet");
-    assert_eq!(h.app.ui.tool, "linear:subtract");
+    assert_eq!(h.app.ui.tool, "draw:linear:subtract");
     pointer(
         &mut h,
         json!([{"kind": "down", "x": 0.5, "y": 0.1}, {"kind": "drag", "x": 0.5, "y": 0.3},
@@ -2454,7 +2460,7 @@ fn gradient_shortcuts_and_components_wait_for_a_drag() {
 
     // a bad op, and one that isn't a string at all, are refused before the tool changes
     for op in [json!("xor"), json!(5), json!(true)] {
-        let r = h.request("engine.execute", json!({"command": "tool.radial", "params": {"op": op}}), T);
+        let r = h.request("engine.execute", json!({"command": "tool.radial", "params": {"op": op, "draw": true}}), T);
         assert_eq!(r["ok"], false, "{op}: {r}");
         assert!(h.app.ui.tool.is_empty(), "{op}: a bad op picks nothing");
     }
@@ -2638,8 +2644,7 @@ fn a_refused_live_stroke_does_not_replace_the_previous_stroke() {
 }
 
 /// Another tool chosen while a live Brush stroke is open (a gradient's key mid-stroke) ends the stroke first: the
-/// gradient drawn next is a step of its own, not folded into the "Brush" step (CodeRabbit on #2920). The press that
-/// was down draws nothing (#2311: a gradient is drawn by a drag that starts after it is picked).
+/// new mask is a step of its own, not folded into the "Brush" step (CodeRabbit on #2920).
 #[test]
 fn a_gradient_chosen_mid_stroke_is_its_own_undo_step() {
     let mut h = detail("panel.masking");
@@ -2654,17 +2659,10 @@ fn a_gradient_chosen_mid_stroke_is_its_own_undo_step() {
     exec(&mut h, "tool.linear", json!({}));
     assert!(h.app.gesture.is_none(), "the stroke ended");
     assert!(h.app.session.interaction.is_none(), "its undo step closed");
-    pointer(&mut h, json!([{"kind": "drag", "x": 0.4, "y": 0.7}, {"kind": "up", "x": 0.4, "y": 0.7}]));
-    assert_eq!(develop(&h).masks.len(), masks, "the press that was down draws nothing");
-    let stroked = develop(&h).masks.clone();
-    pointer(
-        &mut h,
-        json!([{"kind": "down", "x": 0.3, "y": 0.2}, {"kind": "drag", "x": 0.4, "y": 0.4},
-        {"kind": "drag", "x": 0.6, "y": 0.6}, {"kind": "up", "x": 0.6, "y": 0.6}]),
-    );
-    assert_eq!(develop(&h).masks.len(), masks + 1, "the next drag draws the gradient");
+    assert_eq!(develop(&h).masks.len(), masks + 1);
     exec(&mut h, "edit.undo", json!({}));
-    assert_eq!(develop(&h).masks, stroked, "one undo takes the gradient alone");
+    assert_eq!(develop(&h).masks.len(), masks, "one undo takes the gradient alone");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.7}]));
     h.settle(SETTLE);
 }
 
@@ -2960,4 +2958,50 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     click(&mut h, "section:maskLensBlur");
     assert!(!h.app.ui.section_folded("maskLensBlur"));
     h.settle(SETTLE);
+}
+
+/// Review of #3988: a drag whose press, move and release arrive in one host frame still draws the gradient, from the
+/// press to the release.
+#[test]
+fn a_gradient_drag_within_one_host_frame_draws_it() {
+    let mut h = detail("panel.masking");
+    click(&mut h, "maskNew:linear");
+    let img = h.app.image_rect.unwrap();
+    let at = |x: f32, y: f32| egui::pos2(img.left() + x * img.width(), img.top() + y * img.height());
+    let (a, b) = (at(0.3, 0.3), at(0.7, 0.7));
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.events.extend([egui::Event::PointerMoved(a), button(a, true), egui::Event::PointerMoved(b), button(b, false)]);
+    h.step();
+    h.step();
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), 1, "the drag drew a gradient");
+    let MaskShape::Linear { start, end } = d.masks[0].components[0].shape.clone() else { panic!("linear") };
+    assert!(start.x < end.x && start.y < end.y, "from the press towards the release: {start:?} {end:?}");
+    assert!((end.x - 0.7).abs() < 0.02 && (end.y - 0.7).abs() < 0.02, "it ends at the release: {end:?}");
+}
+
+/// Review of #3988: a gradient picked with the pointer and then left for another new mask (Luminance, from the same
+/// grid) is put down: a drag on the photo afterwards draws no gradient. The same holds for a component placed from
+/// Add ▸ Luminance Range after Add ▸ Linear Gradient was picked.
+#[test]
+fn another_new_mask_puts_down_a_picked_gradient() {
+    let mut h = detail("panel.masking");
+    click(&mut h, "maskNew:linear");
+    assert_eq!(h.app.ui.tool, "draw:linear");
+    click(&mut h, "maskNew:luminanceRange");
+    assert_eq!(develop(&h).masks.len(), 1, "the Luminance mask");
+    assert!(crate::panels::detail::gradient_tool(&h.app.ui.tool).is_none(), "the gradient is put down: {}", h.app.ui.tool);
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "drag", "x": 0.5, "y": 0.5}, {"kind": "up", "x": 0.5, "y": 0.5}]));
+    let d = develop(&h);
+    assert_eq!((d.masks.len(), d.masks[0].components.len()), (1, 1), "the drag drew no gradient");
+
+    click(&mut h, "button:maskPlus:1");
+    click(&mut h, "maskComp:add:linear");
+    assert_eq!(h.app.ui.tool, "draw:linear:add");
+    click(&mut h, "button:maskPlus:1");
+    click(&mut h, "maskComp:add:luminanceRange");
+    assert!(crate::panels::detail::gradient_tool(&h.app.ui.tool).is_none(), "put down: {}", h.app.ui.tool);
+    let before = develop(&h).masks[0].components.len();
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "drag", "x": 0.5, "y": 0.5}, {"kind": "up", "x": 0.5, "y": 0.5}]));
+    assert_eq!(develop(&h).masks[0].components.len(), before, "the drag drew no gradient component");
 }

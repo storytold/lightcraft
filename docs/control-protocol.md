@@ -177,6 +177,11 @@ painting on the current mask. `{"new": true}` creates a separate brush mask; `{"
 `{"op": "subtract"}` appends a brush component to the selected mask. Creating either starts in
 paint mode with the overlay visible. Brush Erase (or Alt while painting) removes strokes' coverage
 within that brush component; it is distinct from subtracting the component from the whole mask.
+`tool.linear` and `tool.radial` place a gradient at once and reply with `mask.add`'s result (`activeMask`), as
+before. With `{"draw": true}` they instead pick the gradient for drawing, as a click on its tile in Create New
+Mask does: nothing is made until a drag on the photo draws it (from the press to the release), and `{"draw": true,
+"op": "add" | "subtract" | "intersect"}` draws a component of the selected mask. Esc puts the picked gradient
+down. `mask.add` and `mask.addComponent` with a `kind` of `linear` or `radial` place one without a drag.
 
 ### When the library can't be saved
 

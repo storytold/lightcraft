@@ -1237,11 +1237,17 @@ fn ui_commands_8(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = "brush".into();
                 }
+                // a gradient placed at once, as ever: the result is `mask.add`'s (`activeMask`)
+                "linear" | "radial" if p.get("draw").and_then(Value::as_bool) != Some(true) => {
+                    app.ui.right = RightPanel::Masking;
+                    app.ui.view = ViewMode::Detail;
+                    app.ui.tool = tool.into();
+                    return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                }
                 "linear" | "radial" => {
-                    // {op?: add | subtract | intersect}: nothing is made yet; the next drag on the photo
-                    // draws a new mask (or, with `op`, a component of the selected one), as in Lightroom
-                    // (#2311). `mask.add` / `mask.addComponent` place one without a drag. A bad `op` is
-                    // refused before anything changes.
+                    // {draw: true, op?: add | subtract | intersect}: nothing is made yet; the next drag on the
+                    // photo draws a new mask (or, with `op`, a component of the selected one), as in Lightroom
+                    // (#2311). A bad `op` is refused before anything changes.
                     let op = match p.get("op") {
                         None | Some(Value::Null) => None,
                         Some(Value::String(op)) if matches!(op.as_str(), "add" | "subtract" | "intersect") => Some(op.as_str()),
@@ -1249,7 +1255,7 @@ fn ui_commands_8(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                     };
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
-                    app.ui.tool = op.map_or_else(|| tool.to_string(), |op| format!("{tool}:{op}"));
+                    app.ui.tool = op.map_or_else(|| format!("draw:{tool}"), |op| format!("draw:{tool}:{op}"));
                     // a press already down (a gradient's key in the middle of a Brush stroke) draws nothing:
                     // the drag that draws starts with a press after the pick
                     if ctx.input(|i| i.pointer.any_down()) {

@@ -180,10 +180,11 @@ fn gradients_are_placed_by_keyboard() {
     let MaskShape::Linear { start, end } = d.masks[0].components[0].shape.clone() else { panic!("linear") };
     assert_eq!((start.x, start.y, end.x, end.y), (0.5, 0.25, 0.5, 0.6), "where mask.add puts it");
     assert!(h.app.ui.tool.is_empty(), "no tool left waiting for a drag");
-    // Radial Gradient (R, or Window ▸ Tools) picks the tool and places nothing; Return on its stand-in places the ellipse
-    exec(&mut h, "tool.radial", json!({}));
+    // Radial Gradient armed for drawing (`draw`, as a pointer pick in the panel does) places nothing; Return on its
+    // stand-in places the ellipse
+    exec(&mut h, "tool.radial", json!({"draw": true}));
     h.step();
-    assert_eq!((h.app.ui.tool.as_str(), develop(&h).masks.len()), ("radial", 1));
+    assert_eq!((h.app.ui.tool.as_str(), develop(&h).masks.len()), ("draw:radial", 1));
     focus(&mut h, "mask:new");
     key(&mut h, "enter", false);
     let d = develop(&h);
