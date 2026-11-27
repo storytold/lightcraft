@@ -209,7 +209,7 @@ fn sharpen_increases_edge_contrast() {
     assert!(img.data[3][0] < 80 && img.data[4][0] > 170);
 }
 
-/// Output sharpening's pixels for every target and amount, pinned (its box blurs run row-parallel, which must not
+/// Output sharpening's pixels for every target and amount, pinned (its separable passes run row-parallel, which must not
 /// change a bit), on 8- and 16-bit images; with no target the image is left as it is.
 #[test]
 fn sharpened_pixels_are_pinned() {
@@ -234,16 +234,65 @@ fn sharpened_pixels_are_pinned() {
     assert_eq!(img, test_image());
 }
 const SHARPENED: [u64; 9] = [
-    0x1494_273e_0bdc_a61c,
-    0x3fbb_40c4_74f4_b0c3,
-    0xa27f_8ff5_82a0_99f9,
-    0x6550_6571_a38d_4d9f,
-    0x5e28_f4f3_fc8a_9685,
-    0xdc2b_6f65_9138_3b1d,
-    0x8ce6_f0b8_d8ed_8026,
-    0x92d8_12e7_4b2e_81fe,
-    0x139f_6d78_b1f2_a910,
+    0x1a04_82d5_edaa_37c8,
+    0xcb78_18b7_938e_beda,
+    0x0490_bb9e_2b64_3d00,
+    0x1662_0293_b8a2_2538,
+    0xa3f7_7957_1af3_1b39,
+    0x30b0_919c_7c6a_705b,
+    0x27ef_4e5b_42e6_d1ed,
+    0x1dc3_3b96_b2f9_c1b6,
+    0xdab7_1280_a47a_ffeb,
 ];
+
+/// Output sharpening (#2970): each step crisper than the one before, Screen / Standard roughly a
+/// typical web export's, and no wide light or dark rim along a strong edge (overshoot stays
+/// within a tenth of the edge's contrast). Colour is left alone: a grey edge stays grey.
+#[test]
+fn sharpen_steps_are_crisper_without_halos() {
+    let edge = || {
+        let mut img = Rgba8::new(32, 8);
+        for (i, p) in img.data.iter_mut().enumerate() {
+            let v = if i % 32 < 16 { 40 } else { 220 };
+            *p = [v, v, v, 255];
+        }
+        img
+    };
+    let mut last = 0u8;
+    for amount in [SharpenAmount::Low, SharpenAmount::Standard, SharpenAmount::High] {
+        let mut img = edge();
+        output_sharpen(&mut img, SharpenFor::Screen, amount);
+        let (dark, light) = (img.data[15], img.data[16]);
+        let spread = (40 - dark[0]).max(light[0] - 220);
+        assert!(spread >= last && spread > 0, "{amount:?}: {dark:?} {light:?}");
+        assert!(dark[0] >= 40 - 18 && light[0] <= 220 + 18, "{amount:?}: {dark:?} {light:?}");
+        assert!(dark[0] == dark[1] && dark[1] == dark[2] && light[0] == light[2], "grey stays grey");
+        assert_eq!(img.data[0][0], 40, "{amount:?}: flat areas untouched");
+        last = spread;
+    }
+    let mut none = edge();
+    output_sharpen(&mut none, SharpenFor::None, SharpenAmount::High);
+    assert_eq!(none.data, edge().data);
+}
+
+/// Output sharpening of a float image with NaN and infinite samples does not panic (#2970 review):
+/// they are sharpened as black and every result is finite.
+#[test]
+fn sharpen_deep_survives_non_finite_samples() {
+    let (nan, inf) = (f32::NAN, f32::INFINITY);
+    let mut samples = vec![0.5f32; 27];
+    samples[..9].copy_from_slice(&[nan, nan, nan, inf, inf, inf, -inf, nan, inf]);
+    samples[12] = nan;
+    samples[20] = inf;
+    for target in [SharpenFor::Screen, SharpenFor::Glossy, SharpenFor::Matte] {
+        let mut img = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(samples.clone()) };
+        output_sharpen_deep(&mut img, target, SharpenAmount::High);
+        let DeepSamples::F32(out) = &img.samples else { panic!("expected F32 samples") };
+        assert!(out.iter().all(|v| v.is_finite() && *v >= 0.0), "{target:?}: {out:?}");
+    }
+    let mut all_nan = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(vec![nan; 27]) };
+    output_sharpen_deep(&mut all_nan, SharpenFor::Screen, SharpenAmount::Standard);
+}
 
 /// Exported files carry keywords as Lightroom Classic writes them: names flat in `dc:subject`
 /// (with the keywords containing them), full paths in `lr:hierarchicalSubject`, and nothing of
@@ -1524,6 +1573,114 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(1000 * 500, 1000, SourceLevel::Preview, 0), 1000 * 500 * 12);
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
+}
+
+/// A raw's linear Rec.2020 near black as decoding leaves it since it stopped clamping channels at zero: a flat dark
+/// patch with sensor noise through a saturating camera matrix (a NIKON D780 profile's), so many channels are
+/// negative, and a few strongly out-of-gamut pixels. `clamped` is the same frame as decoding left it before.
+fn dark_frame_with_negative_channels(clamped: bool) -> lightcraft_raster::Rgb32f {
+    let m = [[3.48f32, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]];
+    // ±0.004 of noise per channel, a hash of the position
+    let noise = |x: usize, y: usize, c: usize| {
+        let h = ((x * 7919 + y * 104_729 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    lightcraft_raster::Rgb32f::from_fn(192, 128, |x, y| {
+        let rgb = if (x * 3 + y) % 97 == 0 {
+            [-0.05, 0.01, -0.02]
+        } else {
+            let cam: [f32; 3] = std::array::from_fn(|c| 0.002 + noise(x, y, c));
+            std::array::from_fn(|i| m[i][0] * cam[0] + m[i][1] * cam[1] + m[i][2] * cam[2])
+        };
+        if clamped { rgb.map(|v: f32| v.max(0.0)) } else { rgb }
+    })
+}
+
+/// Exports `src` pushed +4 EV at half its size, rendered as an export renders it (the options' depth and colour
+/// space, a separate HDR render for a gain map JPEG) and written by the export's own encoders.
+fn export_dark_frame(src: &lightcraft_raster::Rgb32f, o: &ExportOptions) -> Vec<u8> {
+    let info = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+    let mut s = lightcraft_develop::DevelopSettings::default();
+    s.light.exposure = 4.0;
+    s.hdr.enabled = o.hdr;
+    let render = |depth| {
+        let req = lightcraft_pipeline::RenderRequest { depth, space: o.effective_space(), ..lightcraft_pipeline::RenderRequest::fit(96, 96) };
+        lightcraft_pipeline::render(src, &info, &s, &req)
+    };
+    let r = render(o.effective_depth());
+    if o.hdr_output() && o.format == ExportFormat::Jpeg {
+        let hdr = render(OutputDepth::F32Hdr).deep.expect("an HDR render has float samples");
+        encode_gain_map_jpeg(&r.image, &hdr, o, None).unwrap()
+    } else {
+        encode_rendered(&r, o, None).unwrap()
+    }
+}
+
+/// Mean 8-bit sRGB of a decoded export.
+fn mean_srgb8(d: &lightcraft_codecs::Decoded) -> [f64; 3] {
+    let img = d.to_srgb8();
+    let n = img.data.len().max(1) as f64;
+    std::array::from_fn(|c| img.data.iter().map(|p| f64::from(p[c])).sum::<f64>() / n)
+}
+
+/// Negative channels from decoding reach the export encoders: a dark frame pushed +4 EV exports in every rendered
+/// format, depth and HDR mode as a file that decodes to the right size with finite samples (AVIF, which LightCraft
+/// can't decode, and the linear DNG are checked for their structure), and comes out less tinted than the same frame
+/// with its channels clamped at decoding. (At full size the white-balance clamp before noise reduction still zeroes
+/// them, #2598; the half-size export averages them first.)
+#[test]
+fn dark_frame_with_negative_channels_exports_in_every_format() {
+    let src = dark_frame_with_negative_channels(false);
+    assert!(src.data.iter().flatten().filter(|v| **v < 0.0).count() > src.data.len() / 4, "the source has few negatives");
+    let cases = [
+        (ExportFormat::Jpeg, None, false),
+        (ExportFormat::Jpeg, None, true),
+        (ExportFormat::Png, Some(8), false),
+        (ExportFormat::Png, Some(16), false),
+        (ExportFormat::Png, None, true),
+        (ExportFormat::Tiff, Some(8), false),
+        (ExportFormat::Tiff, Some(16), false),
+        (ExportFormat::Tiff, Some(32), false),
+        (ExportFormat::Tiff, Some(32), true),
+        (ExportFormat::Psd, Some(8), false),
+        (ExportFormat::Psd, Some(16), false),
+        (ExportFormat::Webp, None, false),
+        (ExportFormat::Avif, Some(8), false),
+        (ExportFormat::Avif, Some(10), false),
+        (ExportFormat::Avif, None, true),
+        (ExportFormat::Jxl, Some(8), false),
+        (ExportFormat::Jxl, Some(16), false),
+        (ExportFormat::Jxl, None, true),
+        (ExportFormat::RenderedDng, None, false),
+        (ExportFormat::RenderedDng, None, true),
+    ];
+    for (format, bit_depth, hdr) in cases {
+        let what = format!("{format:?}, {bit_depth:?} bits, HDR {hdr}");
+        let bytes = export_dark_frame(&src, &ExportOptions { format, bit_depth, hdr, ..Default::default() });
+        match format {
+            ExportFormat::Avif => assert_eq!(bytes.get(4..8), Some(&b"ftyp"[..]), "{what}"),
+            ExportFormat::RenderedDng => {
+                let dng = lightcraft_raw::decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!((dng.width, dng.height), (96, 64), "{what}");
+            }
+            _ => {
+                let d = lightcraft_codecs::decode(&bytes, Default::default()).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!((d.width, d.height), (96, 64), "{what}");
+                assert!(d.image.data.iter().flatten().all(|v| v.is_finite()), "{what}: non-finite samples");
+                if format == ExportFormat::Jpeg && hdr {
+                    let gm = lightcraft_codecs::gainmap::read_jpeg(&bytes).unwrap_or_else(|| panic!("{what}: no gain map"));
+                    assert!(gm.meta.alternate_headroom.is_finite(), "{what}: gain map headroom");
+                }
+            }
+        }
+    }
+    let jpeg = ExportOptions::default();
+    let tint = |src| {
+        let m = mean_srgb8(&lightcraft_codecs::decode(&export_dark_frame(src, &jpeg), Default::default()).unwrap());
+        m.iter().copied().fold(f64::MIN, f64::max) - m.iter().copied().fold(f64::MAX, f64::min)
+    };
+    let (kept, clamped) = (tint(&src), tint(&dark_frame_with_negative_channels(true)));
+    assert!(kept < clamped / 2.0, "kept negatives tint the export by {kept:.1} codes, clamped ones by {clamped:.1}");
 }
 
 /// A catalog's file name never adds a folder level through the empty-naming fallback or the original's extension.
