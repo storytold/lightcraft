@@ -144,6 +144,11 @@ pub fn parse(md: &str) -> Doc {
         }
         let spans = code_spans(line);
         let cmds = spans.iter().filter_map(|s| s.strip_prefix("cmd:")).filter(|id| concrete(id)).map(str::to_string).collect();
+        for key in ["headless:", "reach:"] {
+            if spans.iter().filter(|s| s.starts_with(key)).count() > 1 {
+                doc.errors.push(format!("{DOC}:{n}: {id}: `{key}` appears more than once"));
+            }
+        }
         let field = |key: &str| spans.iter().find_map(|s| s.strip_prefix(key)).map(str::to_string);
         doc.rows.push(Row {
             id: id.to_string(),
@@ -696,6 +701,16 @@ old
             let errs = check_headless(&parse(&row(evidence)), &engine);
             assert!(errs.iter().any(|e| e.contains(want)), "{evidence}: {errs:?}");
         }
+    }
+
+    #[test]
+    fn repeated_headless_or_reach_marks_are_refused() {
+        let row = |evidence: &str| format!("## S\n\n| LR-S-X | x | P0 | ✅ | {evidence} | |\n");
+        for evidence in ["`cmd:view.detail` `headless:no` `reach:window` `headless:yes`", "`cmd:view.detail` `headless:no` `reach:window` `reach:desk`"] {
+            let errs = parse(&row(evidence)).errors;
+            assert!(errs.iter().any(|e| e.contains("appears more than once")), "{evidence}: {errs:?}");
+        }
+        assert!(parse(&row("`cmd:view.detail` `headless:no` `reach:window`")).errors.is_empty());
     }
 
     #[test]
