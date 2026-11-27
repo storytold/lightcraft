@@ -178,57 +178,76 @@ impl Session {
     /// from an XMP sidecar or a catalog import, which record none) composes them on its current
     /// settings instead, since the camera defaults are not its import state. Either way, the
     /// settings the preset does not name keep the photo's values (issue #2159). The `preset.apply`
-    /// command and the UI's hover previews share this, so hovering shows exactly what a click commits.
+    /// command and the UI's hover previews and thumbnails share this, so hovering shows exactly what
+    /// a click commits, white balance preparation included ([`apply_preset_to_photo`]).
     pub fn preset_applied(&self, id: PhotoId, preset: &Preset, amount: f64) -> Option<DevelopSettings> {
         let current = self.develop_of(id)?;
         let photo = self.catalog.photo(id)?;
         // The original is read only below 100 %: the panel asks for every visible row at 100 % on
         // every frame, and then neither the import state nor a copy of the photo's settings is built.
-        let look;
-        let original: &DevelopSettings = match &photo.import_look {
-            Some(_) if (amount - 1.0).abs() >= 1e-9 => {
-                look = photo.import_defaults();
-                &look
-            }
-            _ => &current,
-        };
-        Some(preset.apply_on(&current, original, amount))
+        let original = photo.import_look.as_ref().filter(|_| (amount - 1.0).abs() >= 1e-9).map(|_| photo.import_defaults());
+        // the photo's source is read only for a preset that needs it (one white balance number):
+        // the panel asks for every visible row on every frame
+        let info = if crate::cmd::wb_partial_names_one_field(&preset.settings) { self.source_info(id) } else { Default::default() };
+        Some(apply_preset_to_photo(preset, &current, original.as_ref(), amount, &info))
     }
 
     /// Add imported presets. Identical presets (same name, group and settings) already present are
     /// skipped; id clashes get a fresh id. Returns the ids added.
     pub fn add_presets(&mut self, presets: Vec<Preset>) -> Vec<String> {
+        self.add_presets_each(presets).into_iter().flatten().collect()
+    }
+
+    /// [`Self::add_presets`] reporting per preset, in order: its id, or `None` when it was skipped
+    /// as already present. One call indexes the library once, so an importer adds a whole file's
+    /// presets through it rather than one at a time.
+    pub fn add_presets_each(&mut self, presets: Vec<Preset>) -> Vec<Option<String>> {
         use std::collections::{HashMap, HashSet};
         // indexed: a collection of 10 000+ presets was quadratic (minutes) to import
         let mut ids: HashSet<String> = self.presets.iter().map(|q| q.id.clone()).collect();
-        let mut by_name: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        for (i, q) in self.presets.iter().enumerate() {
-            by_name.entry((q.name.clone(), q.group.clone())).or_default().push(i);
-        }
-        let mut added = Vec::new();
+        // (name, group, settings): a preset is looked up rather than compared with every namesake.
+        // Every number is keyed as an f64 with -0.0 folded into 0.0: `0` and `0.0` are unequal
+        // `Value`s with equal hashes, so a crafted file of them would collide in one bucket.
+        // shortcut: integers past 2^53 lose precision in the key, so two such presets are one
+        let key_of = |p: &Preset| (p.name.clone(), p.group.clone(), canonical_numbers(&p.settings));
+        let mut present: HashSet<(String, String, serde_json::Value)> = self.presets.iter().map(key_of).collect();
+        // the next suffix to try per generated id, so a batch of clashes doesn't probe from 2 each time
+        let mut next_suffix: HashMap<String, u32> = HashMap::new();
+        let mut added = Vec::with_capacity(presets.len());
         for mut p in presets {
-            let key = (p.name.clone(), p.group.clone());
-            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings)));
-            if same {
+            let key = key_of(&p);
+            if present.contains(&key) {
+                added.push(None);
                 continue;
             }
             if p.id.trim().is_empty() || p.id.starts_with("lc.") || ids.contains(&p.id) {
                 let base = format!("user.{}", slug(&format!("{}-{}", p.group, p.name)));
                 let mut id = base.clone();
-                let mut n = 2;
+                let n = next_suffix.entry(base.clone()).or_insert(2);
                 while ids.contains(&id) {
                     id = format!("{base}-{n}");
-                    n += 1;
+                    *n += 1;
                 }
                 p.id = id;
             }
             p.builtin = false;
             ids.insert(p.id.clone());
-            by_name.entry(key).or_default().push(self.presets.len());
-            added.push(p.id.clone());
+            present.insert(key);
+            added.push(Some(p.id.clone()));
             self.presets.push(p);
         }
         added
+    }
+}
+
+/// `v` with every number replaced by its f64 (`-0.0` as `0.0`), so equal numbers hash and compare alike.
+fn canonical_numbers(v: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Number(n) => n.as_f64().and_then(|f| serde_json::Number::from_f64(f + 0.0)).map_or_else(|| v.clone(), Value::Number),
+        Value::Array(a) => Value::Array(a.iter().map(canonical_numbers).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), canonical_numbers(x))).collect()),
+        _ => v.clone(),
     }
 }
 
@@ -610,6 +629,41 @@ impl Session {
             "groups": groups,
         })
     }
+}
+
+/// Apply `preset` to a photo's settings `current` at `amount` (1.0 = 100 %), composing on
+/// `original` (the photo's import state; `None`: `current` itself, see [`Preset::apply_on`]): the
+/// one path every caller that puts a preset on a photo takes (the `preset.apply` command,
+/// thumbnails and hover previews through [`Session::preset_applied`], importing with a preset,
+/// import defaults), so all of them show and store the same result.
+///
+/// `info` is the photo's source: a hand-written preset may name one white balance number only, and
+/// then it means what a one-field partial means (`prepare_photo_for_wb_partial`, shared with
+/// `develop.merge`, issue #2910): the photo (and its original) are brought onto the preset's scale
+/// with the photo's own as-shot white first, and the result is put back on the scale the photo is
+/// edited on. Without an import state a zero (or negative) `amount` returns `current` exactly as it
+/// was, before any preparation, so a preview at nothing never turns As Shot into Custom; with one,
+/// 0 % is the import state's value for each setting the preset names ([`Preset::apply_on`]). A NaN
+/// `amount` changes nothing.
+pub fn apply_preset_to_photo(
+    preset: &Preset,
+    current: &DevelopSettings,
+    original: Option<&DevelopSettings>,
+    amount: f64,
+    info: &lightcraft_pipeline::SourceInfo,
+) -> DevelopSettings {
+    if amount.is_nan() || (amount <= 0.0 && original.is_none()) {
+        return current.clone();
+    }
+    let prepared = crate::cmd::prepare_photo_for_wb_partial(current, &preset.settings, info);
+    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+    let base = prepared.as_ref().unwrap_or(current);
+    let prepared_original = original.map(|o| crate::cmd::prepare_photo_for_wb_partial(o, &preset.settings, info).unwrap_or_else(|| o.clone()));
+    let mut next = preset.apply_on(base, prepared_original.as_ref().unwrap_or(base), amount);
+    if on_kelvin_scale {
+        lightcraft_pipeline::local::normalize_wb(&mut next, info);
+    }
+    next
 }
 
 #[cfg(test)]

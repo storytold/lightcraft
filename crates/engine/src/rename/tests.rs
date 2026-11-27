@@ -50,6 +50,10 @@ pub(crate) struct FakeFs {
     pub ci: bool,
     pub files: RefCell<Vec<(String, Vec<u8>)>>,
     pub fail: RefCell<Vec<String>>,
+    /// Renames made so far, and the numbers (from 0) of the ones that fail: a failure at a given moment, which a
+    /// source path alone cannot name (a file moved back is renamed from the path it was first moved from).
+    pub renames: std::cell::Cell<usize>,
+    pub fail_renames: RefCell<Vec<usize>>,
 }
 
 impl FakeFs {
@@ -58,6 +62,8 @@ impl FakeFs {
             ci,
             files: RefCell::new(files.iter().map(|(p, c)| (p.to_string(), c.as_bytes().to_vec())).collect()),
             fail: RefCell::new(Vec::new()),
+            renames: std::cell::Cell::new(0),
+            fail_renames: RefCell::new(Vec::new()),
         }
     }
     /// The model volume spells paths with `/`; the code under test joins them with the host's separator.
@@ -94,7 +100,9 @@ impl MoveFs for FakeFs {
         self.idx(a).is_some() && self.idx(a) == self.idx(b)
     }
     fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-        if self.fail.borrow().iter().any(|f| Self::norm(a).contains(&f.replace('\\', "/"))) {
+        let nth = self.renames.get();
+        self.renames.set(nth + 1);
+        if self.fail_renames.borrow().contains(&nth) || self.fail.borrow().iter().any(|f| Self::norm(a).contains(&f.replace('\\', "/"))) {
             return Err(std::io::Error::other("injected failure"));
         }
         if self.exists(b) {
@@ -621,4 +629,15 @@ fn photos_sharing_a_target_name_do_not_rescan_the_suffixes_already_claimed() {
     names.dedup();
     assert_eq!(names.len(), 300);
     assert!(checks.get() <= 3 * 300, "{} disk checks", checks.get());
+}
+
+/// A token repeated many times with a long value is cut at the expansion cap, not multiplied into gigabytes.
+#[test]
+fn token_expansion_stops_at_the_output_cap() {
+    let mut p = sample_photo();
+    p.meta.title = "é".repeat(100_000);
+    let out = expand_tokens(&"{title}".repeat(10_000), &p, 1, 1);
+    assert!(out.len() <= tokens::MAX_EXPANDED_BYTES && out.len() > tokens::MAX_EXPANDED_BYTES - 2, "{}", out.len());
+    p.meta.title = "Harbour".into();
+    assert_eq!(expand_tokens("a-{title}-b", &p, 1, 1), "a-Harbour-b", "ordinary templates are unchanged");
 }

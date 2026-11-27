@@ -14,6 +14,7 @@ pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
 mod develop;
+pub(crate) use develop::{prepare_photo_for_wb_partial, wb_partial_names_one_field};
 mod edit;
 mod export;
 pub(crate) mod face_detect;
@@ -358,6 +359,16 @@ mod tests {
         {
             assert!(index_req(&json!({"index": u64::from(u32::MAX) + 1}), "index", "test").is_err());
             assert_eq!(index_req(&json!({"index": f64::from(u32::MAX)}), "index", "test").unwrap(), usize::MAX);
+        }
+    }
+}
+
+#[cfg(test)]
+mod feature_name_tests {
+    #[test]
+    fn perspective_labels_keep_existing_command_ids() {
+        for (id, label) in [("geometry.upright", "Perspective Correction"), ("geometry.guides", "Perspective Guides")] {
+            assert_eq!(super::find_command(id).expect("existing command").label, label);
         }
     }
 }

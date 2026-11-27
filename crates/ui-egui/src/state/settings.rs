@@ -30,7 +30,7 @@ pub enum LaunchLibrary {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GridBadges {
-    /// On hover, on the selection, and on rated or flagged photos.
+    /// Flags and colour labels always; stars and the edited mark on hover and on the selection.
     #[default]
     Auto,
     Always,
@@ -166,7 +166,7 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
-    /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
+    /// View ▸ Loupe Overlay ▸ View Options… ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
     /// Settings ▸ Performance ▸ Prepare photos in the background, app-wide (a library may keep its
@@ -191,18 +191,22 @@ pub struct AppSettings {
     /// The Keywording box: whole keyword paths, or grouped by the keyword they are inside.
     #[serde(deserialize_with = "lenient")]
     pub keyword_chips: KeywordChips,
-    /// View ▸ Focus Point: draw the box the camera focused on (`view.focusPoint`).
+    /// View ▸ Loupe Overlay ▸ Focus Point: draw the box the camera focused on (`view.focusPoint`).
     pub focus_point: bool,
-    /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
+    /// View ▸ Loupe Overlay ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
     pub zoom_to_focus: bool,
-    /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
+    /// View ▸ Loupe Overlay ▸ View Options…: the lines the loupe's info overlay shows in Info 1 and Info 2.
     #[serde(deserialize_with = "lenient")]
     pub loupe_info: LoupeInfo,
     /// File ▸ Import Lightroom Catalog…: ask whether the catalog merges into the open library or
     /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
     #[serde(deserialize_with = "lenient")]
     pub lightroom_import: LightroomImport,
+    /// Settings ▸ Interface ▸ Reduce motion: things that move or turn stand still; fades stay
+    /// (`view.reduceMotion`; see [`crate::motion`]). `None`: follow the system's Reduce Motion until
+    /// the user chooses.
+    pub reduce_motion: Option<bool>,
     /// The answer to the first-launch offer of the lens database (Download / Not Now; Settings ▸ General ▸ Lens
     /// profiles changes it). A value this version doesn't read asks again.
     #[serde(deserialize_with = "lenient")]
@@ -259,6 +263,7 @@ impl Default for AppSettings {
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
+            reduce_motion: None,
             lens_database: Default::default(),
         }
     }
