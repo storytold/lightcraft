@@ -225,16 +225,22 @@ pub(crate) fn check_staging(folder: &OpenedFolder, path: &Path, file: &std::fs::
 }
 
 impl Store for FsStore {
+    /// Never through a link at the name, nor from a FIFO or a device (issue #2552): a `prefs.json`
+    /// linked to a private file would be read as damaged and copied into the library.
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(w) = self.log_for(name) {
             // what was handed over, written or still held
             return w.read();
         }
-        let bytes = match std::fs::read(self.path(name)) {
-            Ok(b) => Some(b),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e),
+        let bytes = match crate::safe_file::open_regular(&self.path(name), std::fs::OpenOptions::new().read(true))? {
+            Some(mut f) => {
+                use std::io::Read;
+                let mut b = Vec::new();
+                f.read_to_end(&mut b)?;
+                Some(b)
+            }
+            None => None,
         };
         if name == crate::journal::LOG && self.known_log_len.is_none() {
             self.known_log_len = Some(bytes.as_ref().map_or(0, |b| b.len() as u64));
@@ -325,9 +331,10 @@ impl Store for FsStore {
             if self.log.is_none() && self.sync_log.is_none() && !crate::fault::on_caller(&self.dir) {
                 self.folder.check()?;
                 check_regular_directory_entry(&self.path(name))?;
-                if !self.path(name).exists() {
-                    // created here, so the open's errors are this append's and its entry is durable
-                    std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
+                // made here when missing, so the open's errors are this append's and its entry is durable; never
+                // through a link at the name (#2552)
+                let (_, created) = crate::safe_file::open_or_create_regular(&self.path(name), std::fs::OpenOptions::new().append(true))?;
+                if created {
                     self.sync_dir();
                 }
                 let expected = if name == crate::journal::LOG { self.known_log_len } else { None };
@@ -342,18 +349,18 @@ impl Store for FsStore {
         // A note-bearing copy can pass the folder check while an old handle still names the
         // moved-away folder. As the log thread does, reopen the current path for every batch.
         check_regular_directory_entry(&self.path(name))?;
-        let existed = self.path(name).exists();
         // Windows append-only handles cannot truncate their own failed write. For LOG,
         // match the native writer's writable handle and seek to the checked length.
         let mut options = std::fs::OpenOptions::new();
-        options.create(true).truncate(false);
+        options.truncate(false);
         if name == crate::journal::LOG {
             options.write(true);
         } else {
             options.append(true);
         }
-        let mut f = options.open(self.path(name))?;
-        if !existed {
+        // never through a link at the name, made when missing (#2552)
+        let (mut f, created) = crate::safe_file::open_or_create_regular(&self.path(name), &options)?;
+        if created {
             self.sync_dir();
         }
         if name == crate::journal::LOG {
@@ -393,12 +400,10 @@ impl Store for FsStore {
         {
             rollback_torn(&mut log.torn, log.good)?;
         }
-        check_regular_directory_entry(&self.path(name))?;
-        let f = match std::fs::OpenOptions::new().write(true).open(self.path(name)) {
-            Ok(f) => f,
+        // a link at the name is refused, not cut: a log linked elsewhere would empty that file (issue #2552)
+        let Some(f) = crate::safe_file::open_regular(&self.path(name), std::fs::OpenOptions::new().write(true))? else {
             // nothing to cut (an append that failed before creating the file)
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e),
+            return Ok(());
         };
         if name == crate::journal::LOG
             && let Some(good) = self.sync_log.as_ref().map(|log| log.good).or(self.known_log_len)
@@ -545,6 +550,43 @@ mod tests_staging {
         store.write_atomic_with("catalog.log", &mut |w| w.write_all(b"[1]")).unwrap();
         assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
         assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"[1]");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A link planted at a catalog name is refused, never read, cut back or appended through: the file it points to
+    /// keeps its bytes, a dangling link makes nothing at its target, and the library is refused with a message
+    /// instead of having its log's target emptied (issue #2552).
+    #[cfg(unix)]
+    #[test]
+    fn links_at_catalog_names_are_never_read_cut_or_appended_through() {
+        use crate::journal::{Journal, LOG};
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("lc-store-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = FsStore::open(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"keep").unwrap();
+        // not a record: the journal would cut the log back to its last good record, here 0 bytes
+        symlink(&victim, dir.join(LOG)).unwrap();
+        let opened = Journal::open(Box::new(FsStore::open(&dir).unwrap()));
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep", "the log's target was cut back");
+        let Err(e) = opened else { panic!("a library with a linked {LOG} was opened") };
+        assert!(e.to_string().contains("is a link or not a regular file"), "{e}");
+
+        symlink(&victim, dir.join("x.log")).unwrap();
+        assert!(store.read("x.log").is_err());
+        assert!(store.append("x.log", b"z").is_err());
+        assert!(store.truncate("x.log", 0).is_err());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        let target = dir.join("made-through-link");
+        symlink(&target, dir.join("y.log")).unwrap();
+        assert!(store.append("y.log", b"z").is_err());
+        assert!(!target.exists(), "a dangling link's target was created");
+        // real files as before (the append handle kept between appends included)
+        store.append("z.log", b"ab").unwrap();
+        store.append("z.log", b"cd").unwrap();
+        store.truncate("z.log", 2).unwrap();
+        assert_eq!(store.read("z.log").unwrap().unwrap(), b"ab");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

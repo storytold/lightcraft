@@ -198,7 +198,8 @@ impl Writer {
         }
         // (a link or a device planted at the name meanwhile is refused, as at the first append)
         crate::store::check_regular_directory_entry(&self.path)?;
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&self.path)?;
+        // the system's no-follow open, and the handle checked to be a regular file (#2552)
+        let (mut f, _) = crate::safe_file::open_or_create_regular(&self.path, std::fs::OpenOptions::new().write(true).truncate(false))?;
         let len = f.metadata()?.len();
         let good = match self.good {
             None => len,
@@ -254,7 +255,9 @@ impl Writer {
         self.folder.check()?;
         crate::store::rollback_torn(&mut self.torn, good)?;
         crate::store::check_regular_directory_entry(&self.path)?;
-        let f = std::fs::OpenOptions::new().write(true).open(&self.path)?;
+        let Some(f) = crate::safe_file::open_regular(&self.path, std::fs::OpenOptions::new().write(true))? else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, format!("{} is gone", self.path.display())));
+        };
         if f.metadata()?.len() != good {
             self.foreign = true;
             return Err(io::Error::other("the log changed before truncate: a snapshot must replace it"));
@@ -298,11 +301,15 @@ impl Writer {
     }
 
     fn read(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let mut bytes = match std::fs::read(&self.path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == io::ErrorKind::NotFound && self.held.is_empty() => return Ok(None),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e),
+        // as the synchronous store reads it: never through a link at the name, a regular file only (review of #2637)
+        let mut bytes = match crate::safe_file::open_regular(&self.path, std::fs::OpenOptions::new().read(true))? {
+            Some(mut f) => {
+                let mut b = Vec::new();
+                io::Read::read_to_end(&mut f, &mut b)?;
+                b
+            }
+            None if self.held.is_empty() => return Ok(None),
+            None => Vec::new(),
         };
         if let Some(g) = self.good {
             bytes.truncate(usize::try_from(g).unwrap_or(usize::MAX));

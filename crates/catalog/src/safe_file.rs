@@ -25,6 +25,9 @@
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
 //!   volume serial number + file index on Windows,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
+//! - [`open_regular`] / [`open_or_create_regular`] open a library file in place (to read, append
+//!   or cut it), never through a link planted at its name, nor a FIFO or a device (issue #2552).
+//!   The replacing writes above are safe already: a rename replaces a link, it doesn't follow it.
 
 use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
@@ -319,6 +322,107 @@ fn compare_files(a: &Path, b: &Path, strict: bool) -> io::Result<bool> {
     }
 }
 
+/// Open the regular file `path` in place with `opts`, never through a link at that name: a library
+/// folder may come from a share, a sync or an archive, and a link planted there would have a write
+/// land in, or a read take, a file elsewhere (issue #2552). A link, a FIFO (whose open would block),
+/// a device or a folder at the name is refused with a message saying what to do; nothing there is
+/// `None`. `opts` must not create or truncate: [`open_or_create_regular`] makes a missing file.
+///
+/// On Unix the opened file is checked to be the one looked at (same device and inode) before
+/// anything is read or written through it, so a link swapped in meanwhile is refused too.
+pub fn open_regular(path: &Path, opts: &OpenOptions) -> io::Result<Option<File>> {
+    let not_regular = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a link or not a regular file; LightCraft won't read or write a library file through one. Remove it or put the real file there.",
+                path.display()
+            ),
+        )
+    };
+    // looked at first, so that a FIFO (whose open would block) or a device is never opened
+    let before = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if !before.file_type().is_file() {
+        return Err(not_regular());
+    }
+    // the open itself never follows a link put there since (review of #2637): it fails on Unix, and on
+    // Windows it opens the link, which the check of the handle below refuses
+    let f = match no_follow(opts).open(path) {
+        Ok(f) => f,
+        // removed since it was looked at
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if is_link_refused(&e) => return Err(not_regular()),
+        Err(e) => return Err(e),
+    };
+    // what was opened, by its handle: a regular file, nothing else, before anything is read or written through it
+    let after = f.metadata()?;
+    if !after.file_type().is_file() {
+        return Err(not_regular());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (after.dev(), after.ino()) != (before.dev(), before.ino()) {
+            return Err(io::Error::other(format!("{} changed while it was being opened; try again", path.display())));
+        }
+    }
+    Ok(Some(f))
+}
+
+/// `opts` with the system's own no-follow open: `O_NOFOLLOW` on Unix (an open of a link fails with `ELOOP`), and on
+/// Windows `FILE_FLAG_OPEN_REPARSE_POINT` (the link itself is opened, not what it points to; its handle is no regular
+/// file). `opts` itself is left as it is.
+fn no_follow(opts: &OpenOptions) -> OpenOptions {
+    let o = opts.clone();
+    #[cfg(unix)]
+    let o = {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut o = o;
+        o.custom_flags(libc::O_NOFOLLOW);
+        o
+    };
+    #[cfg(windows)]
+    let o = {
+        use std::os::windows::fs::OpenOptionsExt;
+        /// winbase.h's `FILE_FLAG_OPEN_REPARSE_POINT`.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let mut o = o;
+        o.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        o
+    };
+    o
+}
+
+/// The open failed because a link is at the name (`O_NOFOLLOW`'s `ELOOP` on Unix).
+fn is_link_refused(e: &io::Error) -> bool {
+    #[cfg(unix)]
+    return e.raw_os_error() == Some(libc::ELOOP);
+    #[cfg(not(unix))]
+    {
+        let _ = e;
+        false
+    }
+}
+
+/// [`open_regular`], or, when nothing is at `path`, a new file made exclusively (`create_new`),
+/// which neither follows a link planted there meanwhile nor creates its target. `true` when this
+/// call made the file.
+pub fn open_or_create_regular(path: &Path, opts: &OpenOptions) -> io::Result<(File, bool)> {
+    if let Some(f) = open_regular(path, opts)? {
+        return Ok((f, false));
+    }
+    match no_follow(opts).create_new(true).open(path) {
+        Ok(f) => Ok((f, true)),
+        // made by another program since: opened by the same rules
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => open_regular(path, opts)?.map(|f| (f, false)).ok_or(e),
+        Err(e) => Err(e),
+    }
+}
+
 /// The volume serial number and file index of `a` and `b`, read while both files are open.
 #[cfg(windows)]
 fn file_ids(a: &Path, b: &Path) -> io::Result<((u64, u64), (u64, u64))> {
@@ -447,6 +551,22 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    /// Review of #2637: the open itself is the system's no-follow open, so a link put at the name after it was looked
+    /// at is refused by the open, not only by the look before it.
+    #[cfg(unix)]
+    #[test]
+    fn the_open_itself_does_not_follow_a_link() {
+        let d = temp("no-follow");
+        let target = d.join("target.txt");
+        fs::write(&target, b"x").unwrap();
+        let link = d.join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let e = super::no_follow(fs::OpenOptions::new().read(true)).open(&link).unwrap_err();
+        assert!(super::is_link_refused(&e), "{e}");
+        assert!(super::no_follow(fs::OpenOptions::new().read(true)).open(&target).is_ok(), "a regular file opens");
+        let _ = fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn same_file_sees_a_hard_link_under_another_name() {
         let d = temp("same-link");
@@ -483,6 +603,29 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    /// Issue #2552: only a regular file is opened in place. A link (even to a regular file), a
+    /// folder, a FIFO or a device at the name is refused without being opened, and a missing file
+    /// is `None` until `open_or_create_regular` makes it.
+    #[cfg(unix)]
+    #[test]
+    fn only_regular_files_are_opened_in_place() {
+        let d = temp("regular");
+        let p = d.join("catalog.log");
+        assert!(open_regular(&p, OpenOptions::new().read(true)).unwrap().is_none());
+        assert!(open_or_create_regular(&p, OpenOptions::new().append(true)).unwrap().1, "a missing file is made");
+        assert!(!open_or_create_regular(&p, OpenOptions::new().append(true)).unwrap().1, "an existing one is opened");
+        assert!(open_regular(&p, OpenOptions::new().read(true)).unwrap().is_some());
+        std::os::unix::fs::symlink(&p, d.join("link.log")).unwrap();
+        fs::create_dir_all(d.join("folder.log")).unwrap();
+        let fifo = d.join("fifo.log");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        for refused in [d.join("link.log"), d.join("folder.log"), fifo, PathBuf::from("/dev/null")] {
+            let e = open_regular(&refused, OpenOptions::new().read(true)).unwrap_err();
+            assert!(e.to_string().contains("is a link or not a regular file"), "{}: {e}", refused.display());
+            assert!(open_or_create_regular(&refused, OpenOptions::new().append(true)).is_err(), "{}", refused.display());
+        }
+        let _ = fs::remove_dir_all(&d);
+    }
     #[test]
     fn strict_comparison_reports_a_path_it_cannot_query() {
         let d = temp("strict-query");
