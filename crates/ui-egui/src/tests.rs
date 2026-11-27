@@ -86,6 +86,7 @@ mod menubar;
 mod merge_preview;
 mod missing_sweep;
 mod mode_dropdowns;
+mod mouse_nav;
 mod move_folder;
 mod offline;
 mod open_lightroom;

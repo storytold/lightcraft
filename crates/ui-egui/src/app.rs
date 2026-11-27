@@ -72,6 +72,7 @@ impl LightcraftApp {
             shadow: None,
             drawing_offscreen: false,
             synthetic: vec![],
+            nav_buttons: vec![],
             pointer_cleanup: false,
             drop_hover: vec![],
             drop_pending: vec![],

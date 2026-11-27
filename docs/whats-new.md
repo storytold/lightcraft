@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### The mouse's Back and Forward buttons go to the previous and next photo
+- The side buttons of a mouse now do what ← and → do: Forward shows the next photo and Back the previous one, in
+  Loupe and Develop as in the grids and slideshows. Before, LightCraft ignored them. Like the arrow keys, they do
+  nothing while a dialog or a text field has the keyboard. Pressed over a slider or another control, they only
+  change the photo: the control under the pointer is left as it was.
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
