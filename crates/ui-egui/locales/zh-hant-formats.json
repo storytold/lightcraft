@@ -335,6 +335,5 @@
   "Add “{keyword}” to {n} photo{}": "將「{keyword}」加入 {n} 張照片{:.0}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "規則 {n}/{m}：{what}。用方向鍵移動",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "群組 {n}/{m}：符合{mode}，內含 {count} 項。用方向鍵移動",
-  ", rating {} of 5": "，評分：{}/5",
-  "Opening library “{name}”…": "正在開啟照片庫「{name}」…"
+  ", rating {} of 5": "，評分：{}/5"
 }

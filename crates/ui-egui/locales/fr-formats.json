@@ -335,6 +335,5 @@
   "Add “{keyword}” to {n} photo{}": "Ajouter « {keyword} » à {n} photo{}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Règle {n} sur {m} : {what}. Déplacer avec les flèches",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Groupe {n} sur {m} : correspondre à {mode}, {count} à l’intérieur. Déplacer avec les flèches",
-  ", rating {} of 5": ", note : {} sur 5",
-  "Opening library “{name}”…": "Ouverture de la bibliothèque « {name} »…"
+  ", rating {} of 5": ", note : {} sur 5"
 }

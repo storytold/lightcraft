@@ -331,6 +331,5 @@
   "{n} already there": "jo albumissa: {n}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Sääntö {n}/{m}: {what}. Siirrä nuolinäppäimillä",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Ryhmä {n}/{m}: täsmää {mode}, sisällä: {count}. Siirrä nuolinäppäimillä",
-  ", rating {} of 5": ", luokitus: {} / 5",
-  "Opening library “{name}”…": "Avataan kirjastoa ”{name}”…"
+  ", rating {} of 5": ", luokitus: {} / 5"
 }

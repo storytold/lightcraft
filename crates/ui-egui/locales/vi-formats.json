@@ -331,6 +331,5 @@
   "{n} already there": "{n} đã có sẵn",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Quy tắc {n}/{m}: {what}. Di chuyển bằng phím mũi tên",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Nhóm {n}/{m}: khớp {mode}, bên trong: {count}. Di chuyển bằng phím mũi tên",
-  ", rating {} of 5": ", xếp hạng: {} trên 5",
-  "Opening library “{name}”…": "Đang mở thư viện «{name}»…"
+  ", rating {} of 5": ", xếp hạng: {} trên 5"
 }

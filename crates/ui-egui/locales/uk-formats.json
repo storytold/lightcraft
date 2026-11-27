@@ -335,6 +335,5 @@
   "Add “{keyword}” to {n} photo{}": "Додати «{keyword}» до фото: {n}{:.0}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Правило {n} з {m}: {what}. Переміщення стрілками",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Група {n} з {m}: збіг {mode}, усередині {count}. Переміщення стрілками",
-  ", rating {} of 5": ", оцінка: {} з 5",
-  "Opening library “{name}”…": "Відкривається бібліотека «{name}»…"
+  ", rating {} of 5": ", оцінка: {} з 5"
 }

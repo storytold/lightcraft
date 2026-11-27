@@ -335,6 +335,5 @@
   "Add “{keyword}” to {n} photo{}": "Добавить «{keyword}» к фото: {n}{:.0}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Условие {n} из {m}: {what}. Перемещение стрелками",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Группа {n} из {m}: совпадение {mode}, внутри {count}. Перемещение стрелками",
-  ", rating {} of 5": ", оценка: {} из 5",
-  "Opening library “{name}”…": "Открывается библиотека «{name}»…"
+  ", rating {} of 5": ", оценка: {} из 5"
 }

@@ -343,6 +343,5 @@
   "{n} already there": "redan i albumet: {n}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Regel {n} av {m}: {what}. Flytta med piltangenterna",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grupp {n} av {m}: matcha {mode}, antal i gruppen: {count}. Flytta med piltangenterna",
-  ", rating {} of 5": ", betyg: {} av 5",
-  "Opening library “{name}”…": "Öppnar biblioteket ”{name}”…"
+  ", rating {} of 5": ", betyg: {} av 5"
 }

@@ -334,6 +334,5 @@
   "Add “{keyword}” to {n} photo{}": "Aggiungi “{keyword}” a {n} foto{:.0}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Regola {n} di {m}: {what}. Sposta con le frecce",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Gruppo {n} di {m}: corrispondenza {mode}, {count} all’interno. Sposta con le frecce",
-  ", rating {} of 5": ", valutazione: {} su 5",
-  "Opening library “{name}”…": "Apertura della libreria “{name}”…"
+  ", rating {} of 5": ", valutazione: {} su 5"
 }

@@ -334,6 +334,5 @@
   "Add “{keyword}” to {n} photo{}": "Přidat „{keyword}“ k fotografiím: {n}{:.0}",
   "Rule {n} of {m}: {what}. Move with the arrow keys": "Pravidlo {n} z {m}: {what}. Přesun pomocí šipek",
   "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Skupina {n} z {m}: shoda {mode}, uvnitř {count}. Přesun pomocí šipek",
-  ", rating {} of 5": ", hodnocení: {} z 5",
-  "Opening library “{name}”…": "Otevírá se knihovna „{name}“…"
+  ", rating {} of 5": ", hodnocení: {} z 5"
 }

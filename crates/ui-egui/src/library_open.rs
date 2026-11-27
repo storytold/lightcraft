@@ -16,7 +16,7 @@ pub struct Pending {
     /// "Opening library “name”…", in the UI language.
     pub message: String,
     /// Frames drawn with the message.
-    painted: u8,
+    pub(crate) painted: u8,
 }
 
 /// Frames the message is drawn before the library opens: the frame of the click still draws the
@@ -57,7 +57,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let t = crate::theme::Tokens::get(ctx);
     let screen = ctx.content_rect();
     egui::Area::new(egui::Id::unique("library-opening")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
-        let (all, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click_and_drag());
+        let (all, resp) = ui.allocate_exact_size(screen.size(), egui::Sense::click_and_drag());
+        // a status a screen reader announces as it appears (once per open: it goes when the library is open)
+        ui.ctx().accesskit_node_builder(resp.id, |node| {
+            node.set_role(egui::accesskit::Role::Status);
+            node.set_label(pending.message.clone());
+            node.set_live(egui::accesskit::Live::Polite);
+        });
         let p = ui.painter();
         p.rect_filled(all, 0.0, egui::Color32::from_black_alpha(120));
         let galley = p.layout(pending.message.clone(), t.font(15.0), t.text, (all.width() - 80.0).clamp(200.0, 720.0));

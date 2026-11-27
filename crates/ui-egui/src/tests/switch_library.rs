@@ -382,3 +382,28 @@ fn page_title_names_the_active_photo_and_unsaved_changes() {
     assert_eq!(empty.page_title(false), "LightCraft");
     assert_eq!(empty.page_title(true), "LightCraft •");
 }
+
+/// #2718: the opening message is a status screen readers announce, with the same words the window shows.
+#[test]
+fn the_opening_message_is_announced_to_screen_readers() {
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+    let message = crate::i18n::tr_format!("Opening library “{name}”…", name = "second");
+    app.opening_library = Some(crate::library_open::Pending { params: json!({"path": "/nowhere/second"}), message: message.clone(), painted: 0 });
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    ctx.enable_accesskit();
+    let mut status = None;
+    for _ in 0..2 {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| crate::library_open::show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        if let Some(update) = out.platform_output.accesskit_update.take() {
+            status = update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == egui::accesskit::Role::Status)
+                .map(|(_, n)| (n.label().unwrap_or_default().to_string(), n.live()));
+        }
+    }
+    assert_eq!(status, Some((message, Some(egui::accesskit::Live::Polite))));
+}
