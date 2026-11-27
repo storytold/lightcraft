@@ -60,6 +60,7 @@ mod launch;
 mod launch_profile;
 mod nightly_session;
 mod platform;
+mod pen_bridge;
 mod prefs;
 mod process_identity;
 mod profile_root;
@@ -207,6 +208,7 @@ impl eframe::App for App {
     /// modal/prompt input barriers and queued synthetic or dropped input ahead of the panels.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.0.raw_input_hook(ctx, raw);
+    pen_bridge::inject(raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
@@ -443,6 +445,7 @@ fn main() -> eframe::Result {
         logging::record_panics(logger);
     }
     alloc_release::install();
+    pen_bridge::start();
     let nightly = launch_profile::current().is_nightly();
     // Nightly has no control server: an inherited port variable or flag must not open a socket the
     // Launcher did not agree to (the options are still accepted and ignored, so the CLI help stays true).
