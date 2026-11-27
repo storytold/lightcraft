@@ -80,7 +80,7 @@ fn the_aspect_button_names_a_saved_ratio() {
 #[test]
 fn a_saved_ratio_is_in_the_menu_and_locks_the_crop() {
     let mut h = crop_panel();
-    exec(&mut h, "crop.saveAspect", json!({"name": "Instagram Portrait", "aspect": [4, 5]}));
+    exec(&mut h, "crop.customAspect.save", json!({"name": "Instagram Portrait", "aspect": [4, 5]}));
     open_menu(&mut h);
     assert_eq!(widgets(&mut h, "cropAspectSaved:"), ["cropAspectSaved:0"]);
     click(&mut h, "cropAspectSaved:0");
@@ -91,7 +91,7 @@ fn a_saved_ratio_is_in_the_menu_and_locks_the_crop() {
 #[test]
 fn a_hidden_built_in_ratio_leaves_the_menu() {
     let mut h = crop_panel();
-    exec(&mut h, "crop.hideAspect", json!({"aspect": "16x9"}));
+    exec(&mut h, "crop.builtinAspect.hide", json!({"aspect": "16x9"}));
     open_menu(&mut h);
     let shown = widgets(&mut h, "cropAspectPreset:");
     assert!(shown.iter().any(|w| w == "cropAspectPreset:1x1"), "{shown:?}");
@@ -147,7 +147,7 @@ fn a_custom_save_that_fails_says_why_and_keeps_the_menu_open() {
 fn edit_list_reorders_deletes_and_hides_without_closing_the_menu() {
     let mut h = crop_panel();
     for (name, w, hgt) in [("A4", 210, 297), ("Print", 7, 5), ("Banner", 3, 1)] {
-        exec(&mut h, "crop.saveAspect", json!({"name": name, "aspect": [w, hgt]}));
+        exec(&mut h, "crop.customAspect.save", json!({"name": name, "aspect": [w, hgt]}));
     }
     open_menu(&mut h);
     click(&mut h, "button:cropAspectEdit");
@@ -179,4 +179,48 @@ fn the_aspect_button_names_the_exact_saved_ratio_first() {
     ];
     assert_eq!(crate::panels::right::aspect_label(Some((150, 100)), None, &custom), "Exact");
     assert_eq!(crate::panels::right::aspect_label(Some((100, 150)), None, &custom), "Exact", "either orientation");
+}
+
+/// Review of #3762: two saved ratios of the same shape are two choices. Picking the second shows its own name, also when
+/// the photo itself has that shape (not the first of them, nor Original).
+#[test]
+fn the_second_of_two_equal_saved_ratios_shows_its_own_name() {
+    let mut h = crop_panel();
+    let id = h.app.session.active().expect("a photo");
+    let (w, hh) = h.app.session.catalog.photo(id).map(|p| (p.width, p.height)).unwrap();
+    // two names for the photo's own shape, so Original could claim it too
+    exec(&mut h, "crop.customAspect.save", json!({"name": "Client A", "aspect": [w, hh]}));
+    exec(&mut h, "crop.customAspect.save", json!({"name": "Client B", "aspect": [w, hh]}));
+    let shows = |h: &Headless, text: &str| h.view.shapes.iter().any(|c| matches!(&c.shape, egui::epaint::Shape::Text(t) if t.galley.text() == text));
+    open_menu(&mut h);
+    click(&mut h, "cropAspectSaved:1");
+    h.step();
+    assert!(shows(&h, "Client B"), "the aspect button shows the ratio picked");
+    assert!(!shows(&h, "Client A") && !shows(&h, crate::i18n::tr("Original")), "not another name for the same shape");
+    // a built-in picked next drops the name
+    open_menu(&mut h);
+    click(&mut h, "cropAspectPreset:1x1");
+    h.step();
+    assert!(!shows(&h, "Client B"));
+}
+
+/// Issue #1854: the list is app-wide, kept in the app's settings (ui.json): what is saved reaches them, and an app
+/// started with them hands them to its session.
+#[test]
+fn the_aspect_list_is_kept_with_the_app_settings() {
+    let mut h = crop_panel();
+    exec(&mut h, "crop.customAspect.save", json!({"name": "Story", "aspect": [9, 16]}));
+    exec(&mut h, "crop.builtinAspect.hide", json!({"aspect": "5x7"}));
+    h.step();
+    let kept = h.app.ui.settings.crop_aspects.clone();
+    assert_eq!(kept.custom.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Story"]);
+    assert_eq!(kept.hidden, ["5x7"]);
+    // a new app (a restart) with those settings, read back from ui.json's JSON
+    let json = serde_json::to_value(&h.app.ui.settings).unwrap();
+    let settings: crate::state::AppSettings = serde_json::from_value(json).unwrap();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.ui.settings = settings;
+    let mut h2 = Headless::new(app, [1200.0, 800.0], 1.0);
+    h2.step();
+    assert_eq!(h2.app.session.crop_aspects, kept, "the session starts with the app's list");
 }

@@ -1,6 +1,7 @@
 //! The crop tool's aspect-ratio list (issue #1854): the built-in ratios, which of them the user
 //! hid, and the ratios the user saved under a name (as many as they like, in their own order),
-//! kept with the library preferences. Picking one is `crop.aspect` with its value.
+//! app-wide: the session holds them for the host to keep (the app in its `ui.json`), and opening a library leaves
+//! them as they are. Picking one is `crop.aspect` with its value.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -25,7 +26,7 @@ pub const BUILTIN_ASPECTS: [(&str, &str); 10] = [
 /// The longest name a saved ratio may have, in characters.
 pub const MAX_NAME_CHARS: usize = 64;
 
-/// A ratio the user saved under a name (`[width, height]`): it passes [`valid_ratio`], as `crop.saveAspect` and
+/// A ratio the user saved under a name (`[width, height]`): it passes [`valid_ratio`], as `crop.customAspect.save` and
 /// [`CropAspects::sanitized`] check (finite, positive, 1:20 to 20:1, neither side rounding to zero hundredths).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -44,7 +45,7 @@ pub struct CropAspects {
     pub hidden: Vec<String>,
 }
 
-/// A list read entry by entry: one that doesn't read (a hand-edited prefs.json, a ratio that isn't two numbers) is
+/// A list read entry by entry: one that doesn't read (a hand-edited ui.json, a ratio that isn't two numbers) is
 /// left out instead of failing the whole file, which holds the other presets too. Not a list at all reads as empty.
 fn each_that_reads<'de, D, T>(d: D) -> std::result::Result<Vec<T>, D::Error>
 where
@@ -59,7 +60,7 @@ where
 }
 
 impl CropAspects {
-    /// Only what the commands would have accepted: a hand-edited prefs.json can't add a ratio
+    /// Only what the commands would have accepted: a hand-edited ui.json can't add a ratio
     /// `crop.aspect` refuses, an empty, built-in or duplicate name, or hide Free / Original.
     pub fn sanitized(self) -> CropAspects {
         let mut custom: Vec<CustomAspect> = Vec::new();
@@ -153,18 +154,13 @@ fn list(s: &Session) -> Value {
     json!({"aspects": v})
 }
 
-/// Write prefs.json after a change to the saved ratios, and the new list. When the write fails the
-/// change is undone (`before`), so the menu never shows a ratio prefs.json doesn't hold.
-fn persist(s: &mut Session, before: CropAspects) -> Result<Value> {
-    if let Err(e) = s.save_prefs() {
-        s.crop_aspects = before;
-        return Err(e);
-    }
+/// The list after a change: the host keeps it (the app's `ui.json`), so nothing is written here.
+fn persist(s: &mut Session, _before: CropAspects) -> Result<Value> {
     Ok(list(s))
 }
 
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
-    const C: &str = "crop.saveAspect";
+    const C: &str = "crop.customAspect.save";
     let before = s.crop_aspects.clone();
     let name = name_param(p, C)?;
     check_name(&name).map_err(|e| bad(C, e))?;
@@ -178,11 +174,11 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
-    const C: &str = "crop.deleteAspect";
+    const C: &str = "crop.customAspect.delete";
     let before = s.crop_aspects.clone();
     let name = name_param(p, C)?;
     if is_builtin_name(&name) {
-        return Err(bad(C, "built-in ratios can't be deleted (crop.hideAspect hides them)"));
+        return Err(bad(C, "built-in ratios can't be deleted (crop.builtinAspect.hide hides them)"));
     }
     let i = position(s, &name).ok_or_else(|| bad(C, format!("no saved ratio `{name}`")))?;
     s.crop_aspects.custom.remove(i);
@@ -190,7 +186,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
-    const C: &str = "crop.moveAspect";
+    const C: &str = "crop.customAspect.move";
     let before = s.crop_aspects.clone();
     let name = name_param(p, C)?;
     let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(C, "missing `to` (a position from 0)"))?;
@@ -202,7 +198,7 @@ fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn hide(s: &mut Session, p: &Value) -> Result<Value> {
-    const C: &str = "crop.hideAspect";
+    const C: &str = "crop.builtinAspect.hide";
     let before = s.crop_aspects.clone();
     let key = str_param(p, "aspect").ok_or_else(|| bad(C, "missing `aspect` (a built-in ratio's key, like \"4x5\")"))?;
     if !hideable(key) {
@@ -232,17 +228,17 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| Ok(list(s))
         ),
         cmd!(
-            "crop.saveAspect",
+            "crop.customAspect.save",
             "Save Crop Aspect Ratio",
             [],
             None,
-            "{name, aspect: [w, h] | \"WxH\"} — adds a ratio to the aspect menu under a name (any number of them; the same name replaces it in place), saved with the library",
+            "{name, aspect: [w, h] | \"WxH\"} — adds a ratio to the aspect menu under a name (any number of them; the same name replaces it in place), kept app-wide",
             always,
             save
         ),
-        cmd!("crop.deleteAspect", "Delete Crop Aspect Ratio", [], None, "{name} — removes a saved ratio from the aspect menu", always, delete),
+        cmd!("crop.customAspect.delete", "Delete Crop Aspect Ratio", [], None, "{name} — removes a saved ratio from the aspect menu", always, delete),
         cmd!(
-            "crop.moveAspect",
+            "crop.customAspect.move",
             "Move Crop Aspect Ratio",
             [],
             None,
@@ -251,7 +247,7 @@ pub fn specs() -> Vec<CommandSpec> {
             move_to
         ),
         cmd!(
-            "crop.hideAspect",
+            "crop.builtinAspect.hide",
             "Hide Crop Aspect Ratio",
             [],
             None,

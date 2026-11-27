@@ -6,6 +6,17 @@ use lightcraft_engine::cmd::crop_aspects::{BUILTIN_ASPECTS, CustomAspect};
 /// "Original" for the photo's own shape, else the name of a ratio the user saved, else a built-in
 /// ratio's name, when the ratio matches one in either orientation; otherwise the ratio as
 /// `1.37 : 1`.
+/// The saved ratio picked last by name ([`crate::state::UiState::crop_aspect_picked`]), while it is still saved and the
+/// crop is locked to its shape (in either orientation): the name the menu shows, before any other of that shape.
+fn picked_label(app: &LightcraftApp) -> Option<String> {
+    let name = app.ui.crop_aspect_picked.as_deref()?;
+    let (w, h) = app.crop_tool_aspect()?;
+    let a = app.session.crop_aspects.custom.iter().find(|a| a.name == name)?;
+    let hundredths = |v: f64| (v * 100.0).round();
+    let (x, y) = (hundredths(a.aspect[0]), hundredths(a.aspect[1]));
+    ((x, y) == (f64::from(w), f64::from(h)) || (x, y) == (f64::from(h), f64::from(w))).then(|| a.name.clone())
+}
+
 pub(crate) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>, custom: &[CustomAspect]) -> String {
     let Some((w, h)) = aspect else { return "Free".into() };
     if w == 0 || h == 0 {
@@ -38,7 +49,7 @@ pub(crate) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>, cu
 }
 
 /// "Custom" rows of the aspect menu: width × height with Apply (`crop.aspect` `[w, h]`), and a
-/// name with Save, which keeps the ratio in the menu (`crop.saveAspect`) and applies it.
+/// name with Save, which keeps the ratio in the menu (`crop.customAspect.save`) and applies it.
 fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let key = egui::Id::unique("crop-custom-aspect");
     let (mut w, mut h, mut name): (String, String, String) =
@@ -67,7 +78,7 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok();
     let done = match (num(&w), num(&h)) {
         (Some(x), Some(y)) if lightcraft_engine::cmd::crop_aspects::valid_ratio(x, y) => {
-            let saved = if save { app.run("crop.saveAspect", json!({"name": name.trim(), "aspect": [x, y]})) } else { Ok(json!(null)) };
+            let saved = if save { app.run("crop.customAspect.save", json!({"name": name.trim(), "aspect": [x, y]})) } else { Ok(json!(null)) };
             match saved.and_then(|_| app.run("crop.aspect", json!({"aspect": [x, y]}))) {
                 Ok(_) => true,
                 Err(e) => {
@@ -118,7 +129,7 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let r = ui.checkbox(&mut shown, crate::i18n::tr(label));
                 register(ui, format!("check:cropAspectShow:{key}"), r.rect);
                 if r.changed()
-                    && let Err(e) = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown}))
+                    && let Err(e) = app.run("crop.builtinAspect.hide", json!({"aspect": key, "hidden": !shown}))
                 {
                     app.toast_error(ui.ctx(), e);
                 }
@@ -126,6 +137,7 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let r = ui.button(crate::i18n::tr(label));
                 register(ui, format!("cropAspectPreset:{key}"), r.rect);
                 if r.clicked() {
+                    app.ui.crop_aspect_picked = None;
                     let _ = app.run("crop.aspect", json!({"aspect": key}));
                     ui.close();
                 }
@@ -142,19 +154,19 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.label(&a.name);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked()
-                            && let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name}))
+                            && let Err(e) = app.run("crop.customAspect.delete", json!({"name": a.name}))
                         {
                             app.toast_error(ui.ctx(), e);
                         }
                         if i < last
                             && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked()
-                            && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}))
+                            && let Err(e) = app.run("crop.customAspect.move", json!({"name": a.name, "to": i + 1}))
                         {
                             app.toast_error(ui.ctx(), e);
                         }
                         if i > 0
                             && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked()
-                            && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}))
+                            && let Err(e) = app.run("crop.customAspect.move", json!({"name": a.name, "to": i - 1}))
                         {
                             app.toast_error(ui.ctx(), e);
                         }
@@ -164,7 +176,8 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let r = ui.button(&a.name);
                 register(ui, format!("cropAspectSaved:{i}"), r.rect);
                 if r.clicked() {
-                    let _ = app.run("crop.aspect", json!({"aspect": a.aspect}));
+                    // the name goes with it: another saved ratio of the same shape is not this one
+                    app.ui.crop_aspect_picked = app.run("crop.aspect", json!({"aspect": a.aspect})).ok().map(|_| a.name.clone());
                     ui.close();
                 }
             }
@@ -190,7 +203,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("Aspect Ratio"));
-            let cur = aspect_label(app.crop_tool_aspect(), original, &app.session.crop_aspects.custom);
+            let cur = picked_label(app).unwrap_or_else(|| aspect_label(app.crop_tool_aspect(), original, &app.session.crop_aspects.custom));
             let t = Tokens::get(ui.ctx());
             // a saved ratio's name is the user's own words: not looked up for a translation
             let saved = app.session.crop_aspects.custom.iter().any(|a| a.name == cur);

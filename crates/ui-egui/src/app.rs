@@ -500,9 +500,16 @@ impl LightcraftApp {
     fn sync_prep_settings(&mut self) {
         if !self.prep_synced {
             self.session.prep.app = self.ui.settings.background_prep.sanitized();
+            // the crop tool's aspect list too: app-wide, the same in every library (#1854)
+            self.session.crop_aspects = self.ui.settings.crop_aspects.clone().sanitized();
             self.prep_synced = true;
-        } else if self.session.prep.app != self.ui.settings.background_prep {
-            self.ui.settings.background_prep = self.session.prep.app;
+        } else {
+            if self.session.prep.app != self.ui.settings.background_prep {
+                self.ui.settings.background_prep = self.session.prep.app;
+            }
+            if self.session.crop_aspects != self.ui.settings.crop_aspects {
+                self.ui.settings.crop_aspects.clone_from(&self.session.crop_aspects);
+            }
         }
     }
 
