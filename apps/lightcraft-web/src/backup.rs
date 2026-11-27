@@ -9,10 +9,11 @@
 //!   name so an unzipped backup is browsable;
 //! - `README.txt`.
 //!
-//! Restoring never deletes anything: the library files go to a new library folder in browser
-//! storage, originals that aren't stored yet are added (they're named by content, so existing
-//! ones are identical; a restored one must match its content hash, see [`verify_original`]),
-//! and only then does a small pointer file ([`ACTIVE_LIBRARY`]) switch to the restored library.
+//! Restoring preserves existing libraries: metadata goes to a new browser-storage folder.
+//! Missing originals are added; corrupt or oversized stored copies are repaired only from
+//! archive bytes verified against their content hash (see [`verify_original`]). Verified stored
+//! copies are kept, and unrelated storage read errors abort restore. Only after staging succeeds
+//! does a small pointer file ([`ACTIVE_LIBRARY`]) switch to the restored library.
 //! The library that was there before stays in storage.
 //!
 //! No zip64: a backup holds at most [`MAX_BYTES`] and 65 535 entries.
@@ -25,6 +26,9 @@ pub const DEFAULT_LIBRARY_DIR: &str = "library";
 
 /// Largest backup (offsets are 32-bit without zip64).
 pub const MAX_BYTES: u64 = 0xFFFF_FFFF - (64 << 20);
+
+/// Optional provider transport cap, including local headers and the complete ZIP directory.
+pub const PROVIDER_MAX_BYTES: usize = 80 * 1024 * 1024;
 
 const LOCAL_SIG: u32 = 0x0403_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;
@@ -82,6 +86,59 @@ pub fn restore_key(entry: &str, dir: &str) -> Option<String> {
     valid_hash(hash).then(|| format!("originals/{hash}"))
 }
 
+/// Stage first, then permanently stop the previous session before changing ACTIVE_LIBRARY.
+/// Reload can be blocked, cancelled or accepted without immediately replacing the page. None
+/// permits the old session to resume saving. An activation error can also mean an uncertain
+/// pointer commit, so only staging failure leaves the previous saving policy untouched.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) async fn restore_for_reload<Stage, Activate, Commit, Reload>(
+    frozen: &std::cell::Cell<bool>,
+    stage: Stage,
+    activate: Activate,
+    reload: Reload,
+) -> Result<String, String>
+where
+    Stage: std::future::Future<Output = Result<String, String>>,
+    Activate: FnOnce(String) -> Commit,
+    Commit: std::future::Future<Output = Result<(), String>>,
+    Reload: FnOnce() -> Result<(), String>,
+{
+    let dir = stage.await?;
+    frozen.set(true);
+    activate(dir.clone()).await?;
+    reload()?;
+    Ok(dir)
+}
+
+/// Remove only a failed restore's private metadata. Content-addressed originals remain shared.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) async fn discard_staged_library<F, Fut>(dir: &str, active: Option<&[u8]>, mut remove: F) -> Result<(), String>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let private = dir.len() <= 128
+        && dir
+            .strip_prefix("library-restored-")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'));
+    if !private || active == Some(dir.as_bytes()) {
+        return Err("refusing to remove an active or non-staged library".into());
+    }
+    let mut problem = None;
+    for name in crate::files::LIBRARY_FILES {
+        if let Err(error) = remove(format!("{dir}/{name}")).await
+            && problem.is_none()
+        {
+            problem = Some(error);
+        }
+    }
+    if let Some(error) = problem {
+        return Err(error);
+    }
+    // OPFS removes this only when empty; IndexedDB has no directory entry. Never recurse.
+    remove(dir.to_string()).await
+}
+
 fn u16le(v: &mut Vec<u8>, x: u16) {
     v.extend_from_slice(&x.to_le_bytes());
 }
@@ -102,6 +159,63 @@ struct Central {
 pub struct ZipWriter {
     entries: Vec<Central>,
     offset: u64,
+}
+
+/// A native backup assembled within the provider's byte cap. Checks include the future tail,
+/// so rejecting an entry never needs to grow or partially append the output buffer.
+pub struct ProviderZip {
+    zip: ZipWriter,
+    data: Vec<u8>,
+    central_bytes: usize,
+    entries: usize,
+    limit: usize,
+}
+
+impl Default for ProviderZip {
+    fn default() -> Self {
+        Self { zip: ZipWriter::default(), data: Vec::new(), central_bytes: 0, entries: 0, limit: PROVIDER_MAX_BYTES }
+    }
+}
+
+impl ProviderZip {
+    /// Maximum payload for one more entry, after reserving every header and end record.
+    pub fn remaining_for(&self, name: &str) -> Result<usize, String> {
+        if name.len() > usize::from(u16::MAX) || self.entries >= usize::from(u16::MAX) {
+            return Err("too many files or an overlong filename in provider backup".into());
+        }
+        let overhead = name
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(30 + 46 + 22))
+            .and_then(|n| n.checked_add(self.central_bytes))
+            .and_then(|n| n.checked_add(self.data.len()))
+            .ok_or("provider backup size overflow")?;
+        self.limit.checked_sub(overhead).ok_or_else(|| "library backup exceeds the 80 MiB provider limit".into())
+    }
+
+    pub fn entry(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+        if data.len() > self.remaining_for(name)? {
+            return Err("library backup exceeds the 80 MiB provider limit".into());
+        }
+        let additional = 30usize.checked_add(name.len()).and_then(|n| n.checked_add(data.len())).ok_or("provider backup size overflow")?;
+        self.data.try_reserve_exact(additional).map_err(|_| "not enough memory for a provider backup")?;
+        let header = self.zip.entry(name, data)?;
+        self.data.extend_from_slice(&header);
+        self.data.extend_from_slice(data);
+        self.central_bytes = self.central_bytes.checked_add(46).and_then(|n| n.checked_add(name.len())).ok_or("provider backup size overflow")?;
+        self.entries += 1;
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<Vec<u8>, String> {
+        let tail = self.zip.finish()?;
+        if self.data.len().checked_add(tail.len()).is_none_or(|n| n > self.limit) {
+            return Err("library backup exceeds the 80 MiB provider limit".into());
+        }
+        self.data.try_reserve_exact(tail.len()).map_err(|_| "not enough memory for a provider backup")?;
+        self.data.extend_from_slice(&tail);
+        Ok(self.data)
+    }
 }
 
 impl ZipWriter {
@@ -277,8 +391,13 @@ pub fn verify(entry: &ZipEntry, data: &[u8]) -> Result<(), String> {
 /// under their content hash, and a restore that kept bytes under another photo's hash would
 /// give that photo's catalog record a different image (the zip checksum can't tell).
 pub fn verify_original(entry: &ZipEntry, hash: &str, data: &[u8]) -> Result<(), String> {
+    verify_original_bytes(&entry.name, hash, data)
+}
+
+/// Verify a referenced original before it is packaged or admitted to browser storage.
+pub fn verify_original_bytes(name: &str, hash: &str, data: &[u8]) -> Result<(), String> {
     if crate::store::content_hash(data) != hash {
-        return Err(format!("{}: the file doesn't match its content hash (damaged or altered backup)", entry.name));
+        return Err(format!("{name}: the file doesn't match its content hash (damaged or altered backup)"));
     }
     Ok(())
 }
@@ -292,6 +411,33 @@ pub fn restored_dir_name(now_ms: f64) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn provider_zip_reserves_the_complete_directory_before_accepting_payload() {
+        let mut zip = ProviderZip { limit: 104, ..Default::default() };
+        // A one-byte name costs 30+1 local + 46+1 central + 22 end bytes.
+        assert_eq!(zip.remaining_for("a").unwrap(), 4);
+        assert!(zip.entry("a", &[0; 5]).is_err());
+        assert!(zip.data.is_empty());
+        zip.entry("a", &[1, 2, 3, 4]).unwrap();
+        let data = zip.finish().unwrap();
+        assert_eq!(data.len(), 104);
+        let (offset, size) = find_central(&data).unwrap();
+        let entries = parse_central(&data[offset as usize..(offset + size) as usize]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a");
+        verify(&entries[0], &[1, 2, 3, 4]).unwrap();
+    }
+
+    #[test]
+    fn provider_zip_rejects_later_headers_before_growing_a_full_buffer() {
+        let mut zip = ProviderZip { limit: 104, ..Default::default() };
+        zip.entry("a", &[1, 2, 3, 4]).unwrap();
+        let bytes = zip.data.clone();
+        assert!(zip.entry("b", &[]).is_err());
+        assert_eq!(zip.data, bytes);
+        assert_eq!(zip.finish().unwrap().len(), 104);
+    }
+
     fn build(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = ZipWriter::default();
         let mut out = Vec::new();
@@ -301,6 +447,251 @@ mod tests {
         }
         out.extend(w.finish().unwrap());
         out
+    }
+
+    fn run_ready<F: std::future::Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(result) => result,
+            std::task::Poll::Pending => panic!("the synthetic storage callback must finish synchronously"),
+        }
+    }
+
+    // Original synthetic ZIP/storage fixtures use the real ZIP reader/CRC/key mapping and
+    // Files snapshots. Browser File I/O and actual navigation remain WASM integration concerns.
+    fn stage_restore_fixture(
+        zip: &[u8],
+        disk: &std::cell::RefCell<std::collections::BTreeMap<String, Vec<u8>>>,
+        dir: &str,
+    ) -> Result<String, String> {
+        let (offset, size) = find_central(zip)?;
+        let entries = parse_central(&zip[offset as usize..(offset + size) as usize])?;
+        for entry in entries {
+            let start = data_offset(&entry, &zip[entry.header as usize..entry.header as usize + 30])? as usize;
+            let bytes = &zip[start..start + entry.size as usize];
+            verify(&entry, bytes)?;
+            if let Some(key) = restore_key(&entry.name, dir) {
+                disk.borrow_mut().insert(key, bytes.to_vec());
+            }
+        }
+        Ok(dir.into())
+    }
+
+    #[test]
+    fn restore_reload_holds_previous_writer_after_activation_until_page_replacement() {
+        for reload_accepted in [false, true] {
+            let frozen = std::cell::Cell::new(false);
+            let source = crate::files::Files::default();
+            source.preload("catalog.snap", b"previous catalog".to_vec());
+            source.write("catalog.log", b"captured previous edit");
+            let captured = source.snapshot().unwrap();
+            let disk = std::cell::RefCell::new(std::collections::BTreeMap::from([
+                (ACTIVE_LIBRARY.to_string(), b"library".to_vec()),
+                ("library/catalog.snap".into(), b"previous catalog".to_vec()),
+                ("library/catalog.log".into(), b"stored previous checkpoint".to_vec()),
+                ("originals/shared123".into(), vec![0, 20, 255]),
+            ]));
+            let zip = build(&[("library/catalog.snap", b"restored catalog"), ("library/catalog.log", b"restored checkpoint")]);
+            let activations = std::cell::Cell::new(0);
+            let reloads = std::cell::Cell::new(0);
+            let result = run_ready(restore_for_reload(
+                &frozen,
+                async {
+                    assert!(!frozen.get(), "staging must not stop the still-selected previous library");
+                    stage_restore_fixture(&zip, &disk, "library-restored-freeze-1")
+                },
+                |dir| {
+                    let (frozen, activations, disk) = (&frozen, &activations, &disk);
+                    async move {
+                        assert!(frozen.get(), "the old writer must stop before changing the active pointer");
+                        activations.set(activations.get() + 1);
+                        disk.borrow_mut().insert(ACTIVE_LIBRARY.into(), dir.into_bytes());
+                        Ok(())
+                    }
+                },
+                || {
+                    reloads.set(reloads.get() + 1);
+                    assert!(frozen.get());
+                    assert_eq!(disk.borrow().get(ACTIVE_LIBRARY).map(Vec::as_slice), Some(b"library-restored-freeze-1".as_slice()));
+                    // A synchronous callback can edit the still-live old mirror. It must not
+                    // alter the immutable capture, retarget it or grant permission to autosave.
+                    source.append("catalog.log", b"; later previous-library edit");
+                    if reload_accepted { Ok(()) } else { Err("synthetic reload request failure".into()) }
+                },
+            ));
+            if reload_accepted {
+                assert_eq!(result.unwrap(), "library-restored-freeze-1");
+            } else {
+                assert_eq!(result.unwrap_err(), "synthetic reload request failure");
+            }
+            assert_eq!((activations.get(), reloads.get()), (1, 1));
+            assert!(frozen.get(), "an accepted reload may still be cancelled before replacing this page");
+            assert!(source.is_dirty(), "pausing must not drain or mark previous edits saved");
+            let later = source.snapshot().unwrap();
+            assert!(later.generation > captured.generation);
+            assert!(captured.entries.iter().any(|(name, bytes)| name == "catalog.log" && bytes == b"captured previous edit"));
+            assert!(
+                later.entries.iter().any(|(name, bytes)| name == "catalog.log" && bytes == b"captured previous edit; later previous-library edit")
+            );
+            assert_eq!(disk.borrow().get("library/catalog.log").map(Vec::as_slice), Some(b"stored previous checkpoint".as_slice()));
+            assert_eq!(disk.borrow().get("library-restored-freeze-1/catalog.snap").map(Vec::as_slice), Some(b"restored catalog".as_slice()));
+            assert_eq!(disk.borrow().get("library-restored-freeze-1/catalog.log").map(Vec::as_slice), Some(b"restored checkpoint".as_slice()));
+            assert_eq!(disk.borrow().get("originals/shared123"), Some(&vec![0, 20, 255]));
+        }
+    }
+
+    #[test]
+    fn restore_staging_failure_preserves_previous_freeze_and_storage() {
+        for previous in [false, true] {
+            let frozen = std::cell::Cell::new(previous);
+            let source = crate::files::Files::default();
+            source.write("catalog.snap", b"unsaved previous catalog");
+            let captured = source.snapshot().unwrap();
+            let disk = std::cell::RefCell::new(std::collections::BTreeMap::from([
+                (ACTIVE_LIBRARY.to_string(), b"library".to_vec()),
+                ("library/catalog.snap".into(), b"stored previous catalog".to_vec()),
+            ]));
+            let before = disk.borrow().clone();
+            let activated = std::cell::Cell::new(false);
+            let reloaded = std::cell::Cell::new(false);
+            assert!(
+                run_ready(restore_for_reload(
+                    &frozen,
+                    async { stage_restore_fixture(b"not a backup ZIP", &disk, "library-restored-invalid") },
+                    |_| {
+                        activated.set(true);
+                        std::future::ready(Ok(()))
+                    },
+                    || {
+                        reloaded.set(true);
+                        Ok(())
+                    },
+                ))
+                .is_err()
+            );
+            assert!(!activated.get() && !reloaded.get());
+            assert_eq!(frozen.get(), previous, "a prior storage-read freeze must not be cleared");
+            assert_eq!(*disk.borrow(), before);
+            assert_eq!(source.snapshot().unwrap(), captured);
+            assert!(source.is_dirty());
+        }
+    }
+
+    #[test]
+    fn restore_activation_error_keeps_previous_writer_frozen_with_uncertain_commit() {
+        for previous in [false, true] {
+            for committed_before_error in [false, true] {
+                let frozen = std::cell::Cell::new(previous);
+                let disk = std::cell::RefCell::new(std::collections::BTreeMap::from([
+                    (ACTIVE_LIBRARY.to_string(), b"library".to_vec()),
+                    ("library/catalog.snap".into(), b"previous catalog".to_vec()),
+                    ("originals/shared123".into(), vec![7, 8, 9]),
+                ]));
+                let zip = build(&[("library/catalog.snap", b"restored catalog")]);
+                let reloaded = std::cell::Cell::new(false);
+                let result = run_ready(restore_for_reload(
+                    &frozen,
+                    async { stage_restore_fixture(&zip, &disk, "library-restored-uncertain-1") },
+                    |dir| {
+                        let (frozen, disk) = (&frozen, &disk);
+                        async move {
+                            assert!(frozen.get());
+                            if committed_before_error {
+                                disk.borrow_mut().insert(ACTIVE_LIBRARY.into(), dir.as_bytes().to_vec());
+                            }
+                            let active = disk.borrow().get(ACTIVE_LIBRARY).cloned();
+                            let cleanup = discard_staged_library(&dir, active.as_deref(), |key| {
+                                disk.borrow_mut().remove(&key);
+                                std::future::ready(Ok(()))
+                            })
+                            .await;
+                            if committed_before_error {
+                                assert!(cleanup.is_err(), "cleanup must preserve a folder whose activation may have committed");
+                            } else {
+                                cleanup.unwrap();
+                            }
+                            Err("synthetic pointer write error".into())
+                        }
+                    },
+                    || {
+                        reloaded.set(true);
+                        Ok(())
+                    },
+                ));
+                assert_eq!(result.unwrap_err(), "synthetic pointer write error");
+                assert!(!reloaded.get());
+                assert!(frozen.get(), "an error is not proof that the active pointer stayed unchanged");
+                assert_eq!(disk.borrow().get("library/catalog.snap").map(Vec::as_slice), Some(b"previous catalog".as_slice()));
+                assert_eq!(disk.borrow().get("originals/shared123"), Some(&vec![7, 8, 9]));
+                assert_eq!(disk.borrow().contains_key("library-restored-uncertain-1/catalog.snap"), committed_before_error);
+                let expected = if committed_before_error { b"library-restored-uncertain-1".as_slice() } else { b"library".as_slice() };
+                assert_eq!(disk.borrow().get(ACTIVE_LIBRARY).map(Vec::as_slice), Some(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn failed_staged_cleanup_removes_only_private_metadata_and_keeps_shared_originals() {
+        let dir = "library-restored-test-1";
+        let mut disk = std::collections::BTreeMap::from([
+            (format!("{dir}/catalog.snap"), vec![1]),
+            (format!("{dir}/prefs.json"), vec![2]),
+            ("library/catalog.snap".into(), vec![9]),
+            ("originals/abc123".into(), vec![7]),
+        ]);
+        assert!(disk.contains_key(&format!("{dir}/catalog.snap")));
+        let mut removed = Vec::new();
+        run_ready(discard_staged_library(dir, Some(b"library"), |key| {
+            removed.push(key.clone());
+            disk.remove(&key);
+            std::future::ready(Ok(()))
+        }))
+        .unwrap();
+        assert_eq!(disk.len(), 2);
+        assert_eq!(disk.get("library/catalog.snap"), Some(&vec![9]));
+        assert_eq!(disk.get("originals/abc123"), Some(&vec![7]));
+        assert_eq!(removed.len(), crate::files::LIBRARY_FILES.len() + 1);
+        assert!(removed.iter().all(|key| key == dir || key.starts_with(&format!("{dir}/"))));
+    }
+
+    #[test]
+    fn staged_cleanup_refuses_active_or_foreign_library_paths() {
+        for dir in ["library", "library-restored-", "../library-restored-other", "library-restored-other/../library"] {
+            let mut removed = Vec::new();
+            assert!(
+                run_ready(discard_staged_library(dir, None, |key| {
+                    removed.push(key);
+                    std::future::ready(Ok(()))
+                }))
+                .is_err()
+            );
+            assert!(removed.is_empty());
+        }
+        let dir = "library-restored-active-1";
+        let mut removed = Vec::new();
+        assert!(
+            run_ready(discard_staged_library(dir, Some(dir.as_bytes()), |key| {
+                removed.push(key);
+                std::future::ready(Ok(()))
+            }))
+            .is_err()
+        );
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn staged_cleanup_attempts_remaining_private_files_after_one_removal_fails() {
+        let mut attempted = Vec::new();
+        let error = run_ready(discard_staged_library("library-restored-test-2", None, |key| {
+            let failed = key.ends_with("/catalog.snap");
+            attempted.push(key);
+            std::future::ready(if failed { Err("entry is locked".into()) } else { Ok(()) })
+        }))
+        .unwrap_err();
+        assert_eq!(error, "entry is locked");
+        assert_eq!(attempted.len(), crate::files::LIBRARY_FILES.len());
+        assert!(attempted.iter().all(|key| key.starts_with("library-restored-test-2/")));
     }
 
     #[test]

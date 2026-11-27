@@ -360,6 +360,7 @@ impl LightcraftApp {
         if !std::mem::take(&mut self.pointer_cleanup) {
             return;
         }
+        crate::widgets::library_input::cancel_pointer(ctx);
         ctx.input_mut(|input| input.pointer = egui::PointerState::default());
         ctx.stop_dragging();
         if self.synthetic_mods != egui::Modifiers::NONE {
