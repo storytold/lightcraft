@@ -24,13 +24,25 @@ log = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
+# the SAM 3 backbone kernels (`sam` feature) implement `lightcraft_segment::BackboneAccel`
+lightcraft-segment = { workspace = true, optional = true }
 
 [features]
 default = []
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime"]
+# SAM 3's vision backbone on the GPU (`sam3`); the engine's `sam` feature turns it on
+sam = ["dep:lightcraft-segment"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 lightcraft-scenes = { workspace = true }
 lightcraft-raw = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# the SAM 3 backbone test and benchmark compare against the candle backbone
+candle-core = { workspace = true }
+
+[[example]]
+name = "sam3_backbone_bench"
+required-features = ["sam"]
