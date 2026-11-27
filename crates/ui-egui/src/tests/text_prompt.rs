@@ -53,7 +53,7 @@ fn confirm(h: &mut Headless, dialog: Dialog) {
 }
 
 fn toast(h: &Headless) -> String {
-    h.app.ui.toast.as_ref().map(|(t, _, _)| t.clone()).unwrap_or_default()
+    h.app.ui.toast.as_ref().map(|(t, _, _, _)| t.clone()).unwrap_or_default()
 }
 
 fn assert_stays_open(h: &Headless, value: &str, reason: &str) {
