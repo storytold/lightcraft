@@ -24,6 +24,11 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
   is unverified) · ⬜ missing · 🚫 out of scope / not applicable.
 - **Evidence**: `cmd:<id>` = command id (engine `command_specs()` or UI `UI_COMMANDS`), `ctl:<id>` = develop control
   id (`lightcraft-cli controls`), plus source files. A trailing `*` matches a prefix (`ctl:mixer.*`).
+- **Headless** ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md)): a ✅ or 🟡
+  row is `yes` when it cites a `cmd:` and every `cmd:` it cites is an engine command, which `lightcraft-cli` and the MCP
+  server reach. `UI_COMMANDS` ids don't count. Any other row can carry `` `headless:no` `` or `` `headless:partial` ``
+  with `` `reach:window` ``, `` `reach:os` `` or `` `reach:engine-gap` `` in its notes; without one it is `unknown`.
+  Never write `headless:yes`. `cargo xtask parity` checks the marks and `--write` refreshes the count.
 - Feature names and notes are our own words. No Adobe text, screenshots or assets belong here.
 
 ## Summary
@@ -61,6 +66,8 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | **Total** | 417 | 74 | 56 | 35 | 192/203 (95%) | 146/163 (90%) |
 
 Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.0%** of 547 in-scope rows — P0 97.3% of 203 · P1 93.9% of 163 · P2 56.9% of 180.
+
+Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md), computed from the `cmd:` references): **201 yes**, 0 no (window 0, os 0, engine-gap 0), 0 partial, 381 unknown of 582 rows.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
