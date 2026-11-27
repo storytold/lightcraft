@@ -380,14 +380,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         ))
                         .clicked()
                     {
-                        match app.run("develop.autoDefringe", json!({})) {
-                            Ok(r) if r["found"] == true => app.toast(ui.ctx(), crate::i18n::tr("Purple fringes found and removed")),
-                            Ok(r) if r["removeCa"] == true => {
-                                app.toast(ui.ctx(), crate::i18n::tr("Chromatic aberration removed; no purple fringes found"))
-                            }
-                            Ok(_) => app.toast(ui.ctx(), crate::i18n::tr("No purple fringes found")),
-                            Err(e) => app.toast_error(ui.ctx(), e),
-                        }
+                        auto_defringe(app, ui.ctx());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let mut protect = d.optics.defringe_protect;
@@ -437,5 +430,39 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
         let _ = app.run("develop.reset", json!({}));
+    }
+}
+
+/// Optics ▸ Defringe ▸ Auto: the measuring (a 2048 px render and colour passes over it) runs on a worker with a row in
+/// the activity stack, so the window keeps going; its result goes to the photo it was asked for, as one undo step, when
+/// it arrives. A second press while one measures does nothing.
+fn auto_defringe(app: &mut LightcraftApp, ctx: &egui::Context) {
+    const LABEL: &str = "Finding fringes";
+    if app.tasks.is_running(LABEL) {
+        return;
+    }
+    let Some(id) = app.session.active() else { return };
+    let job = match app.session.auto_defringe_job(id) {
+        Ok(job) => job,
+        Err(e) => return app.toast_error(ctx, e.to_string()),
+    };
+    let started = crate::tasks::spawn(
+        app,
+        LABEL,
+        Some("defringe"),
+        move || job.measure(),
+        move |app, ctx, found| {
+            let r = found
+                .and_then(|found| app.session.execute_fn("develop.autoDefringe", |s| s.auto_defringe_apply(id, found)).map_err(|e| e.to_string()));
+            match r {
+                Ok(r) if r["found"] == true => app.toast(ctx, crate::i18n::tr("Purple fringes found and removed")),
+                Ok(r) if r["removeCa"] == true => app.toast(ctx, crate::i18n::tr("Chromatic aberration removed; no purple fringes found")),
+                Ok(_) => app.toast(ctx, crate::i18n::tr("No purple fringes found")),
+                Err(e) => app.toast_error(ctx, e),
+            }
+        },
+    );
+    if let Err(e) = started {
+        app.toast_error(ctx, e);
     }
 }

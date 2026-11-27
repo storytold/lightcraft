@@ -788,30 +788,9 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _p| {
                 const C: &str = "develop.autoDefringe";
                 let id = active(s, C)?;
-                // fringes are a few pixels wide: measured on the preview, not a thumbnail
-                let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad(C, e))?;
-                let info = s.source_info(id);
-                let d = s.develop_of(id).unwrap_or_default();
-                let req = lightcraft_pipeline::RenderRequest::fit(2048, 2048);
-                let found = lightcraft_pipeline::auto_defringe(&src, &info, &d, &req);
-                let ca = !d.optics.remove_ca;
-                if found.is_none() && !ca {
-                    return Ok(json!({"found": false, "removeCa": false}));
-                }
-                edit(s, C, "Auto Defringe", |d| {
-                    d.optics.remove_ca = true;
-                    if let Some(f) = found {
-                        f.apply(d);
-                    }
-                    Ok(())
-                })?;
-                let mut out = json!({"found": found.is_some(), "removeCa": ca});
-                if let Some(f) = found {
-                    out["purpleAmount"] = json!(f.purple_amount);
-                    out["purpleHueLo"] = json!(f.purple_hue_lo);
-                    out["purpleHueHi"] = json!(f.purple_hue_hi);
-                }
-                Ok(out)
+                // in place, for scripts; the app measures on a worker ([`AutoDefringeJob`]) and applies the result after
+                let found = s.auto_defringe_job(id)?.measure().map_err(|e| bad(C, e))?;
+                s.auto_defringe_apply(id, found)
             }
         ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
@@ -1606,6 +1585,59 @@ fn has_history_after(s: &Session) -> std::result::Result<(), String> {
         Ok(())
     } else {
         Err("at the latest History step".into())
+    }
+}
+
+/// Auto Defringe's measurement of one photo, taken off the UI thread: what it reads is gathered here
+/// ([`Session::auto_defringe_job`]), the measuring ([`AutoDefringeJob::measure`]: the 2048 px render and its colour passes)
+/// runs on any thread, and [`Session::auto_defringe_apply`] sets the result on that photo as one undo step.
+pub struct AutoDefringeJob {
+    pub photo: PhotoId,
+    source: crate::media::SourceRef,
+    info: lightcraft_pipeline::SourceInfo,
+    settings: std::sync::Arc<DevelopSettings>,
+}
+
+impl AutoDefringeJob {
+    /// The purple fringes found (`None`: none), measured on the photo's preview: fringes are a few pixels wide, so not
+    /// on a thumbnail.
+    pub fn measure(&self) -> std::result::Result<Option<lightcraft_pipeline::optics::DefringeSliders>, String> {
+        let src = self.source.load()?;
+        let req = lightcraft_pipeline::RenderRequest::fit(2048, 2048);
+        Ok(lightcraft_pipeline::auto_defringe(&src, &self.info, &self.settings, &req))
+    }
+}
+
+impl Session {
+    /// What Auto Defringe needs to measure photo `id` ([`AutoDefringeJob`]).
+    pub fn auto_defringe_job(&mut self, id: PhotoId) -> Result<AutoDefringeJob> {
+        const C: &str = "develop.autoDefringe";
+        let p = self.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.clone();
+        let source = self.media.source_ref(&p, SourceLevel::Preview);
+        Ok(AutoDefringeJob { photo: id, source, info: self.source_info(id), settings: self.develop_of(id).unwrap_or_default() })
+    }
+
+    /// Set what [`AutoDefringeJob::measure`] found on photo `id` (whichever photo is active now), as one undo step: Remove
+    /// Chromatic Aberration on, and the purple Defringe sliders with Protect Colours when fringes were found. Nothing
+    /// changes when there were none and Remove Chromatic Aberration was already on.
+    pub fn auto_defringe_apply(&mut self, id: PhotoId, found: Option<lightcraft_pipeline::optics::DefringeSliders>) -> Result<Value> {
+        let mut d = (*self.develop_of(id).ok_or_else(|| bad("develop.autoDefringe", "no such photo"))?).clone();
+        let ca = !d.optics.remove_ca;
+        if found.is_none() && !ca {
+            return Ok(json!({"found": false, "removeCa": false}));
+        }
+        d.optics.remove_ca = true;
+        if let Some(f) = found {
+            f.apply(&mut d);
+        }
+        self.set_develop(id, d, "Auto Defringe")?;
+        let mut out = json!({"found": found.is_some(), "removeCa": ca});
+        if let Some(f) = found {
+            out["purpleAmount"] = json!(f.purple_amount);
+            out["purpleHueLo"] = json!(f.purple_hue_lo);
+            out["purpleHueHi"] = json!(f.purple_hue_hi);
+        }
+        Ok(out)
     }
 }
 

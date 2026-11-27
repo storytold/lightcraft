@@ -13,7 +13,7 @@ mod cull;
 pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
-mod develop;
+pub(crate) mod develop;
 pub(crate) use develop::{prepare_photo_for_wb_partial, wb_partial_names_one_field};
 mod edit;
 mod export;
